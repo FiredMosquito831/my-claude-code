@@ -1364,6 +1364,75 @@ const ROUTES = {
     ],
     harnesses: {},
   },
+  // The Proxying page. One provider that already has a chain of two proxies
+  // plus Direct, and one subscription-login provider that has none -- the two
+  // states the card has to render differently.
+  "/admin/api/proxy-chains": {
+    vocabulary: {
+      policies: [
+        { id: "single", help: "Always the first entry that is not paused." },
+        { id: "round_robin", help: "Spreads requests across every healthy entry. This is the one that multiplies a per-address allowance." },
+        { id: "least_used", help: "Picks the entry with the fewest requests so far." },
+        { id: "failover", help: "Pins to the first healthy entry and moves only after a failure you selected. Four proxies still use one address until it fails." },
+      ],
+      default_policy: "failover",
+      kinds: [
+        { id: "invalid_request", state: "selectable", reason: "The request body is the problem." },
+        { id: "model_rejected", state: "selectable", reason: "The model does not exist on that endpoint." },
+        { id: "context_length", state: "selectable", reason: "A larger context window is the fix." },
+        { id: "authentication", state: "refused", reason: "A new address does not fix a rejected key." },
+        { id: "permission", state: "refused", reason: "A new address does not fix a refused scope." },
+        { id: "quota", state: "recommended", reason: "" },
+        { id: "rate_limit", state: "recommended", reason: "" },
+        { id: "overloaded", state: "selectable", reason: "The provider is busy." },
+        { id: "timeout", state: "recommended", reason: "" },
+        { id: "upstream", state: "selectable", reason: "A fault on the provider's side." },
+        { id: "unavailable", state: "selectable", reason: "A dead or refused connection." },
+      ],
+      default_kinds: ["quota", "rate_limit", "timeout"],
+      scopes: ["provider", "credential"],
+      max_entries: 12,
+      switch_bound: { min: 1, max: 5, default: 2 },
+    },
+    providers: [
+      {
+        provider_id: "nvidia_nim",
+        display_name: "NVIDIA NIM",
+        group: "inference",
+        custom: false,
+        oauth: false,
+        key_count: 2,
+        env_var: "NVIDIA_NIM_PROXY",
+        inherited_label: "203.0.113.7:1080",
+        inherited_scheme: "socks5h",
+        chain: {
+          enabled: true,
+          policy: "failover",
+          scope: "provider",
+          max_switches: 2,
+          on: ["quota", "rate_limit", "timeout"],
+          oauth_acknowledged: false,
+          entries: [
+            { proxy: "px_aaaa1111", paused: false, direct: false, label: "203.0.113.7:1080", scheme: "socks5h", source: "manual", source_count: 1 },
+            { proxy: "px_bbbb2222", paused: false, direct: false, label: "198.51.100.9:8080", scheme: "http", source: "manual", source_count: 1 },
+            { proxy: "", paused: false, direct: true, label: "", scheme: "", source: "", source_count: 0 },
+          ],
+        },
+      },
+      {
+        provider_id: "chatgpt_oauth",
+        display_name: "ChatGPT (OAuth)",
+        group: "subscription",
+        custom: false,
+        oauth: true,
+        key_count: 1,
+        env_var: "CHATGPT_OAUTH_PROXY",
+        inherited_label: "",
+        inherited_scheme: "",
+        chain: null,
+      },
+    ],
+  },
   "/admin/api/desktop-apps": {
     apps: [
       { id: "codex_desktop", display_name: "Codex desktop",
@@ -2088,6 +2157,103 @@ for (const link of navLinks) {
     text: view ? (view.textContent || "").replace(/\s+/g, " ").trim().length : 0,
   };
 }
+
+// --------------------------------------------------------------- proxying
+// The Proxying cards, and the three gestures that change one without a save:
+// reorder, the recommended-set reset, and a per-entry pause. The refused chips
+// are checked for being genuinely inert rather than merely styled as such.
+const proxyingView = doc.querySelector('.admin-view[data-view="proxying"]');
+const proxyCards = proxyingView
+  ? Array.from(proxyingView.querySelectorAll(".proxy-card"))
+  : [];
+// Re-queried on every call, never held: each gesture re-renders the whole
+// list, so a card captured before one is a detached node whose contents never
+// change again -- which would make every assertion after a click vacuous.
+const proxyCardFor = (id) =>
+  proxyingView
+    ? proxyingView.querySelector(`.proxy-card[data-provider="${id}"]`)
+    : null;
+const proxyEntryLabels = (card) =>
+  Array.from(card.querySelectorAll(".proxy-entry-label")).map((node) =>
+    node.textContent.trim(),
+  );
+const proxyChipState = (card) =>
+  Array.from(card.querySelectorAll(".proxy-chip")).map((chip) => ({
+    id: chip.textContent.trim(),
+    on: chip.getAttribute("aria-pressed") === "true",
+    disabled: Boolean(chip.disabled),
+  }));
+const proxyButton = (card, text) =>
+  Array.from(card.querySelectorAll("button")).find(
+    (button) => button.textContent.trim() === text,
+  ) || null;
+
+const proxying = { present: Boolean(proxyingView), cards: proxyCards.length };
+const withChain = proxyCardFor("nvidia_nim");
+if (withChain) {
+  proxying.honesty = (
+    doc.querySelector("#proxyingHonesty")?.textContent || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+  proxying.order = proxyEntryLabels(withChain);
+  proxying.chips = proxyChipState(withChain);
+  proxying.policyHelp = (
+    withChain.querySelector(".proxy-policy-help")?.textContent || ""
+  ).trim();
+  proxying.inherited = (
+    withChain.querySelector(".proxy-inherited")?.textContent || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // A refused chip must not toggle when clicked, not merely look refused.
+  const refused = Array.from(withChain.querySelectorAll(".proxy-chip")).find(
+    (chip) => chip.disabled,
+  );
+  if (refused) refused.click();
+  proxying.chipsAfterRefusedClick = proxyChipState(proxyCardFor("nvidia_nim"));
+
+  const firstRow = proxyCardFor("nvidia_nim").querySelector(".proxy-entry");
+  const down = proxyButton(firstRow, "Move down");
+  if (down) down.click();
+  proxying.orderAfterMoveDown = proxyEntryLabels(proxyCardFor("nvidia_nim"));
+  proxying.announcementAfterMove = (
+    doc.querySelector("#proxyingStatus")?.textContent || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const reset = proxyButton(proxyCardFor("nvidia_nim"), "Recommended set");
+  if (reset) reset.click();
+  proxying.chipsAfterReset = proxyChipState(proxyCardFor("nvidia_nim"));
+
+  const pause = proxyButton(proxyCardFor("nvidia_nim"), "Pause");
+  if (pause) pause.click();
+  proxying.pausedRows = Array.from(
+    proxyCardFor("nvidia_nim").querySelectorAll(".proxy-entry-paused"),
+  ).length;
+
+  const save = proxyButton(proxyCardFor("nvidia_nim"), "Save");
+  if (save) save.click();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  proxying.saved =
+    fetchBodies.filter((entry) => entry.path === "/admin/api/proxy-chains").pop() ||
+    null;
+}
+
+// The subscription-login card: its rail is inert until the acknowledgement.
+const oauthCard = proxyCardFor("chatgpt_oauth");
+proxying.oauth = oauthCard
+  ? {
+      note: (oauthCard.querySelector(".proxy-oauth-note p")?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim(),
+      acknowledged: Boolean(
+        oauthCard.querySelector(".proxy-oauth-ack")?.checked,
+      ),
+    }
+  : null;
 
 const docsView = doc.querySelector('.admin-view[data-view="docs"]');
 const docs = docsView
@@ -5069,6 +5235,7 @@ console.log(
       themePicker,
       customProviders,
       codingAgents,
+      proxying,
       desktopApps,
       rtkToggles,
       anthropicOAuthCard,

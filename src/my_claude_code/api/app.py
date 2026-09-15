@@ -32,6 +32,7 @@ from .admin_custom_routes import router as admin_custom_router
 from .admin_desktop_app_routes import router as admin_desktop_app_router
 from .admin_export_routes import router as admin_export_router
 from .admin_harness_routes import router as admin_harness_router
+from .admin_proxy_routes import router as admin_proxy_router
 from .admin_routes import router as admin_router
 from .admin_server_routes import router as admin_server_router
 from .admin_websearch_routes import router as admin_websearch_router
@@ -59,6 +60,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_custom_router)
     app.include_router(admin_claude_config_router)
     app.include_router(admin_harness_router)
+    app.include_router(admin_proxy_router)
     app.include_router(admin_desktop_app_router)
     app.include_router(admin_server_router)
     app.include_router(admin_websearch_router)

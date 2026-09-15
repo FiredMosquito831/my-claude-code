@@ -162,6 +162,17 @@ const VIEW_GROUPS = [
     containerId: "providersSections",
   },
   {
+    // Egress: which addresses each configured provider may go out through.
+    // Backed by ~/.mcc/proxy_chains.json rather than settings keys, so it
+    // claims no manifest section and `containerId` stays null -- the same
+    // shape the Coding agents Tiers section uses over harness_tiers.json.
+    id: "proxying",
+    label: "Proxying",
+    title: "Proxying",
+    sections: [],
+    containerId: null,
+  },
+  {
     id: "claude",
     label: "Configure Claude Code",
     title: "Configure Claude Code",
@@ -502,6 +513,756 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "docs") {
     loadDocsView().catch((error) => showMessage(error.message, "error"));
   }
+
+  if (activeView.id === "proxying") {
+    loadProxying().catch((error) => showMessage(error.message, "error"));
+  }
+}
+
+/* --------------------------------------------------------------- proxying
+   One card per configured provider: the ordered list of addresses it may go
+   out through, the policy that picks between them, and the failures that move
+   it along. Backed by ~/.mcc/proxy_chains.json through
+   /admin/api/proxy-chains -- not by settings keys, so nothing here goes
+   through changedValues() or the Apply button.
+
+   Edits are local until Save. A reorder, a pause and a chip are all the same
+   kind of change to the same list, and a page that wrote each one as it
+   happened would make "put that back" impossible without an undo stack.
+
+   Nothing in this block uses innerHTML: every label on this page can contain
+   an address somebody else's feed supplied. */
+
+const proxyState = {
+  data: null,
+  // provider_id -> the chain being edited, or null while it follows the
+  // provider's static <PROVIDER>_PROXY. Cleared on every reload so a saved
+  // card cannot keep showing a draft the server rejected.
+  drafts: new Map(),
+  loading: false,
+};
+
+async function loadProxying() {
+  if (proxyState.loading) return;
+  proxyState.loading = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains");
+    proxyState.drafts.clear();
+  } finally {
+    proxyState.loading = false;
+  }
+  renderProxying();
+}
+
+function announceProxy(sentence) {
+  const target = byId("proxyingStatus");
+  if (!target) return;
+  target.textContent = "";
+  if (!sentence) {
+    target.hidden = true;
+    return;
+  }
+  target.hidden = false;
+  const lead = document.createElement("p");
+  lead.textContent = sentence;
+  target.appendChild(lead);
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "secondary-button route-status-button";
+  dismiss.textContent = "Dismiss";
+  dismiss.addEventListener("click", () => {
+    target.textContent = "";
+    target.hidden = true;
+  });
+  target.appendChild(dismiss);
+}
+
+function proxyVocabulary() {
+  return (proxyState.data && proxyState.data.vocabulary) || {};
+}
+
+/** The chain being edited for one provider, created on first touch.
+ *
+ * A provider with no chain gets one seeded from its <PROVIDER>_PROXY, which
+ * is the whole upgrade story: pressing Add proxy on a provider that already
+ * has a static proxy keeps that address as entry 1 instead of silently
+ * dropping it. The .env key itself is never rewritten.
+ */
+function proxyDraft(provider) {
+  if (proxyState.drafts.has(provider.provider_id)) {
+    return proxyState.drafts.get(provider.provider_id);
+  }
+  const vocabulary = proxyVocabulary();
+  const chain = provider.chain;
+  const draft = chain
+    ? {
+        enabled: Boolean(chain.enabled),
+        policy: chain.policy,
+        scope: chain.scope,
+        max_switches: chain.max_switches,
+        on: (chain.on || []).slice(),
+        oauth_acknowledged: Boolean(chain.oauth_acknowledged),
+        entries: (chain.entries || []).map((entry) => ({ ...entry })),
+        existing: true,
+      }
+    : {
+        enabled: false,
+        policy: vocabulary.default_policy || "failover",
+        scope: "provider",
+        max_switches: (vocabulary.switch_bound || {}).default || 2,
+        on: (vocabulary.default_kinds || []).slice(),
+        oauth_acknowledged: false,
+        entries: [],
+        existing: false,
+      };
+  proxyState.drafts.set(provider.provider_id, draft);
+  return draft;
+}
+
+function renderProxying() {
+  const list = byId("proxyingList");
+  const empty = byId("proxyingEmpty");
+  if (!list) return;
+  list.textContent = "";
+  const providers = (proxyState.data && proxyState.data.providers) || [];
+  if (empty) empty.hidden = providers.length > 0;
+  providers.forEach((provider) => list.appendChild(proxyCard(provider)));
+}
+
+function proxyCard(provider) {
+  const draft = proxyDraft(provider);
+  const card = document.createElement("article");
+  card.className = "proxy-card";
+  card.dataset.provider = provider.provider_id;
+
+  card.appendChild(proxyCardHead(provider, draft));
+  card.appendChild(proxyPolicyHelp(draft));
+  if (provider.oauth) card.appendChild(proxyOauthNote(provider, draft));
+  card.appendChild(proxyInheritedNote(provider, draft));
+  card.appendChild(proxyTriggers(provider, draft));
+  card.appendChild(proxyEntryList(provider, draft));
+  card.appendChild(proxyAddRow(provider, draft));
+  card.appendChild(proxyCardFoot(provider, draft));
+  return card;
+}
+
+function proxyCardHead(provider, draft) {
+  // A plain flex row, deliberately not a grid: an explicit-column grid row
+  // wraps the moment a card grows a control, and 6.21.0 shipped exactly that
+  // with 462 green tests behind it.
+  const head = document.createElement("div");
+  head.className = "proxy-card-head";
+
+  const title = document.createElement("div");
+  title.className = "proxy-card-title";
+  const name = document.createElement("h4");
+  name.className = "proxy-card-name";
+  name.textContent = provider.display_name;
+  const id = document.createElement("code");
+  id.className = "proxy-card-id";
+  id.textContent = provider.provider_id;
+  title.append(name, id);
+
+  const controls = document.createElement("div");
+  controls.className = "proxy-card-controls";
+
+  const policyLabel = document.createElement("label");
+  policyLabel.className = "proxy-control";
+  const policyText = document.createElement("span");
+  policyText.textContent = "Rotation";
+  const policy = document.createElement("select");
+  policy.className = "proxy-policy";
+  (proxyVocabulary().policies || []).forEach((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.id;
+    option.textContent = entry.id;
+    policy.appendChild(option);
+  });
+  policy.value = draft.policy;
+  policy.addEventListener("change", () => {
+    draft.policy = policy.value;
+    renderProxying();
+  });
+  policyLabel.append(policyText, policy);
+
+  const enableLabel = document.createElement("label");
+  enableLabel.className = "proxy-control";
+  const enable = document.createElement("input");
+  enable.type = "checkbox";
+  enable.className = "proxy-enable";
+  enable.checked = draft.enabled;
+  enable.addEventListener("change", () => {
+    draft.enabled = enable.checked;
+  });
+  const enableText = document.createElement("span");
+  enableText.textContent = "Enabled";
+  enableLabel.append(enable, enableText);
+
+  controls.append(policyLabel, enableLabel);
+  head.append(title, controls);
+  return head;
+}
+
+function proxyPolicyHelp(draft) {
+  // The practical difference between failover and round_robin is the whole
+  // point of the feature for a provider metered by address, and it is the one
+  // thing four policy names do not say on their own. It sits under the select
+  // and changes with it rather than in a help modal nobody opens.
+  const help = document.createElement("p");
+  help.className = "proxy-policy-help";
+  const entry = (proxyVocabulary().policies || []).find(
+    (item) => item.id === draft.policy,
+  );
+  help.textContent = entry ? entry.help : "";
+  return help;
+}
+
+function proxyOauthNote(provider, draft) {
+  const note = document.createElement("div");
+  note.className = "proxy-oauth-note";
+  const text = document.createElement("p");
+  const lead = document.createElement("strong");
+  lead.textContent = "Subscription login. ";
+  text.append(lead);
+  text.append(
+    document.createTextNode(
+      `${provider.display_name} uses your personal subscription rather than an ` +
+        "API key. Changing source IP between requests is more likely to be " +
+        "flagged here than on a pay-as-you-go key.",
+    ),
+  );
+  note.appendChild(text);
+
+  const label = document.createElement("label");
+  label.className = "proxy-control";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = "proxy-oauth-ack";
+  box.checked = draft.oauth_acknowledged;
+  box.addEventListener("change", () => {
+    draft.oauth_acknowledged = box.checked;
+    renderProxying();
+  });
+  const boxText = document.createElement("span");
+  boxText.textContent = "I understand, give this provider a chain";
+  label.append(box, boxText);
+  note.appendChild(label);
+  return note;
+}
+
+function proxyInheritedNote(provider, draft) {
+  const note = document.createElement("p");
+  note.className = "proxy-inherited";
+  if (draft.entries.length) {
+    note.textContent = provider.env_var
+      ? `This chain replaces ${provider.env_var} while it has entries. ` +
+        `${provider.env_var} keeps its value and is never rewritten.`
+      : "This chain replaces this provider's stored proxy while it has entries.";
+    return note;
+  }
+  if (provider.inherited_label) {
+    note.textContent = provider.env_var
+      ? `Inherited from ${provider.env_var}: ${provider.inherited_label}` +
+        `${provider.inherited_scheme ? ` (${provider.inherited_scheme})` : ""}. ` +
+        "Add a proxy to turn it into a chain; the first entry is that address."
+      : `Inherited from this provider's stored proxy: ${provider.inherited_label}.`;
+    return note;
+  }
+  note.textContent =
+    "No proxy configured. Requests go out on this machine's own address.";
+  return note;
+}
+
+function proxyTriggers(provider, draft) {
+  const block = document.createElement("div");
+  block.className = "proxy-triggers";
+
+  const intro = document.createElement("p");
+  intro.className = "field-description";
+  intro.textContent = "Switch when the provider says:";
+  block.appendChild(intro);
+
+  const row = document.createElement("div");
+  row.className = "proxy-chip-row";
+  (proxyVocabulary().kinds || []).forEach((kind) => {
+    row.appendChild(proxyChip(kind, draft));
+  });
+  block.appendChild(row);
+
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.className = "ghost-button proxy-chip-reset";
+  reset.textContent = "Recommended set";
+  reset.addEventListener("click", () => {
+    draft.on = (proxyVocabulary().default_kinds || []).slice();
+    renderProxying();
+    announceProxy(
+      `${provider.display_name}: the recommended set is ${draft.on.join(", ")}.`,
+    );
+  });
+  block.appendChild(reset);
+  // The non-configurable rule that goes with these chips is stated once, at
+  // the top of the page, rather than under every card: five copies of one
+  // sentence is how a page teaches a reader to stop reading it.
+  return block;
+}
+
+function proxyChip(kind, draft) {
+  const chip = document.createElement("button");
+  chip.type = "button";
+  const refused = kind.state === "refused";
+  const on = draft.on.includes(kind.id);
+  chip.className = refused
+    ? "proxy-chip proxy-chip-refused"
+    : on
+      ? "proxy-chip proxy-chip-on"
+      : "proxy-chip";
+  chip.textContent = kind.id;
+  chip.disabled = refused;
+  chip.setAttribute("aria-pressed", refused ? "false" : String(on));
+  if (kind.reason) chip.title = kind.reason;
+  if (refused) {
+    chip.setAttribute("aria-disabled", "true");
+  } else {
+    chip.addEventListener("click", () => {
+      draft.on = on
+        ? draft.on.filter((name) => name !== kind.id)
+        : draft.on.concat([kind.id]);
+      renderProxying();
+    });
+  }
+  return chip;
+}
+
+function proxyEntryList(provider, draft) {
+  const list = document.createElement("ol");
+  list.className = "proxy-entries";
+  if (!draft.entries.length) {
+    const empty = document.createElement("li");
+    empty.className = "proxy-empty";
+    empty.textContent =
+      "No entries yet. Add an address, or add Direct to keep this machine's " +
+      "own IP in the rotation.";
+    list.appendChild(empty);
+    return list;
+  }
+  draft.entries.forEach((entry, index) => {
+    list.appendChild(proxyEntryRow(provider, draft, entry, index));
+  });
+  return list;
+}
+
+function proxyEntryRow(provider, draft, entry, index) {
+  const row = document.createElement("li");
+  row.className = entry.paused ? "proxy-entry proxy-entry-paused" : "proxy-entry";
+  row.dataset.index = String(index);
+
+  // A real <button>, so the keyboard entry point to the reorder is the same
+  // element the pointer uses rather than a second mechanism bolted on -- the
+  // rule the Model Config rails' grip already follows. Pointer events, never
+  // the HTML5 drag API: jsdom has neither of the two objects that API needs,
+  // so an implementation built on it could be written here and never covered
+  // by a test, and it would be a second drag idiom on an adjacent page.
+  const handle = document.createElement("button");
+  handle.type = "button";
+  handle.className = "proxy-entry-handle";
+  handle.textContent = "\u283F";
+  handle.setAttribute(
+    "aria-label",
+    `Reorder ${entry.direct ? "Direct" : entry.label || entry.proxy}`,
+  );
+  handle.addEventListener("pointerdown", (event) =>
+    startProxyDrag(provider, draft, row, event),
+  );
+  handle.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowUp" && index > 0) {
+      event.preventDefault();
+      proxyMoveEntry(provider, draft, index, index - 1);
+    } else if (event.key === "ArrowDown" && index < draft.entries.length - 1) {
+      event.preventDefault();
+      proxyMoveEntry(provider, draft, index, index + 1);
+    }
+  });
+
+  const position = document.createElement("span");
+  position.className = "proxy-entry-index";
+  position.textContent = String(index + 1);
+
+  const label = document.createElement("span");
+  label.className = "proxy-entry-label";
+  label.textContent = entry.direct ? "Direct (no proxy)" : entry.label || entry.proxy;
+
+  const scheme = document.createElement("span");
+  scheme.className = "proxy-entry-scheme";
+  scheme.textContent = entry.direct ? "this machine" : entry.scheme || "";
+
+  const state = document.createElement("span");
+  state.className = "proxy-entry-state";
+  // Live per-proxy health is the next release's half of this feature. Saying
+  // "not checked yet" is the honest reading of a store that has never had a
+  // checker run against it; a green dot here would be a measurement nobody
+  // took.
+  state.textContent = entry.paused ? "paused" : "not checked yet";
+
+  const actions = document.createElement("div");
+  actions.className = "proxy-entry-actions";
+  actions.appendChild(
+    proxyEntryButton("Move up", index > 0, () => {
+      proxyMoveEntry(provider, draft, index, index - 1);
+    }),
+  );
+  actions.appendChild(
+    proxyEntryButton("Move down", index < draft.entries.length - 1, () => {
+      proxyMoveEntry(provider, draft, index, index + 1);
+    }),
+  );
+  actions.appendChild(
+    proxyEntryButton(entry.paused ? "Resume" : "Pause", true, () => {
+      entry.paused = !entry.paused;
+      renderProxying();
+      announceProxy(
+        `${label.textContent} is ${entry.paused ? "paused" : "back in the chain"}` +
+          " for " +
+          `${provider.display_name}. Press Save to keep it.`,
+      );
+    }),
+  );
+  actions.appendChild(
+    proxyEntryButton("Remove", true, () => {
+      draft.entries.splice(index, 1);
+      renderProxying();
+      announceProxy(
+        `Removed ${label.textContent} from ${provider.display_name}. ` +
+          "Press Save to keep it.",
+      );
+    }),
+  );
+
+  row.append(handle, position, label, scheme, state, actions);
+  return row;
+}
+
+/* A pointer drag over one card's entry list.
+ *
+ * The rows are moved in the DOM as the pointer passes them and the draft array
+ * is kept in step, rather than re-rendering per step: a re-render would
+ * destroy the captured element mid-gesture and the drag would end on its first
+ * move. One render happens at the end, which is also where the reorder is
+ * announced. */
+const proxyDrag = { provider: null, draft: null, from: -1, node: null };
+
+function startProxyDrag(provider, draft, row, event) {
+  // A touch that did not begin on the grip is a scroll, not a drag, so the
+  // card still moves under a finger. The same guard the route rails use, and
+  // the reason neither page needs a `touch-action` rule of its own.
+  if (
+    event.pointerType === "touch" &&
+    !(
+      event.target.classList &&
+      event.target.classList.contains("proxy-entry-handle")
+    )
+  ) {
+    return;
+  }
+  if (typeof event.button === "number" && event.button !== 0) return;
+  if (draft.entries.length < 2) return;
+  event.preventDefault();
+  proxyDrag.provider = provider;
+  proxyDrag.draft = draft;
+  proxyDrag.node = row;
+  proxyDrag.from = Number(row.dataset.index);
+  row.classList.add("proxy-entry-dragging");
+  try {
+    // Capture keeps the grip receiving moves once the pointer leaves it. A
+    // synthetic event carries no tracked pointer id and throws here, so the
+    // drag must not depend on it: the window listeners below do the work.
+    event.target.setPointerCapture(event.pointerId);
+  } catch {
+    // No capture: the window-level listeners still see every move.
+  }
+  window.addEventListener("pointermove", continueProxyDrag);
+  window.addEventListener("pointerup", endProxyDrag);
+  window.addEventListener("pointercancel", endProxyDrag);
+}
+
+function continueProxyDrag(event) {
+  if (!proxyDrag.node) return;
+  const under = document.elementFromPoint(event.clientX, event.clientY);
+  const row = under && under.closest ? under.closest(".proxy-entry") : null;
+  if (!row || row === proxyDrag.node) return;
+  const list = proxyDrag.node.parentElement;
+  if (!list || row.parentElement !== list) return;
+  const to = Array.prototype.indexOf.call(list.children, row);
+  if (to < 0 || to === proxyDrag.from) return;
+  const [moved] = proxyDrag.draft.entries.splice(proxyDrag.from, 1);
+  proxyDrag.draft.entries.splice(to, 0, moved);
+  list.insertBefore(
+    proxyDrag.node,
+    to > proxyDrag.from ? row.nextSibling : row,
+  );
+  proxyDrag.from = to;
+}
+
+function endProxyDrag() {
+  window.removeEventListener("pointermove", continueProxyDrag);
+  window.removeEventListener("pointerup", endProxyDrag);
+  window.removeEventListener("pointercancel", endProxyDrag);
+  if (!proxyDrag.node) return;
+  const { provider, draft, from } = proxyDrag;
+  proxyDrag.node.classList.remove("proxy-entry-dragging");
+  proxyDrag.node = null;
+  proxyDrag.from = -1;
+  renderProxying();
+  const moved = draft.entries[from];
+  if (!moved) return;
+  announceProxy(
+    `${moved.direct ? "Direct" : moved.label || moved.proxy} is now entry ` +
+      `${from + 1} of ${draft.entries.length} for ${provider.display_name}. ` +
+      "Press Save to keep it.",
+  );
+}
+
+function proxyEntryButton(text, enabled, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost-button proxy-entry-button";
+  button.textContent = text;
+  button.disabled = !enabled;
+  if (enabled) button.addEventListener("click", action);
+  return button;
+}
+
+function proxyMoveEntry(provider, draft, from, to) {
+  if (from === to || from < 0 || to < 0) return;
+  if (from >= draft.entries.length || to >= draft.entries.length) return;
+  const [moved] = draft.entries.splice(from, 1);
+  draft.entries.splice(to, 0, moved);
+  renderProxying();
+  announceProxy(
+    `${moved.direct ? "Direct" : moved.label || moved.proxy} is now entry ` +
+      `${to + 1} of ${draft.entries.length} for ${provider.display_name}. ` +
+      "Press Save to keep it.",
+  );
+}
+
+function proxyAddRow(provider, draft) {
+  const row = document.createElement("div");
+  row.className = "proxy-add";
+  const full = draft.entries.length >= (proxyVocabulary().max_entries || 12);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "proxy-url-input";
+  input.placeholder = "socks5h://user:pass@203.0.113.7:1080";
+  input.setAttribute("aria-label", `Proxy address for ${provider.display_name}`);
+  input.disabled = full;
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "secondary-button";
+  add.textContent = "Add proxy";
+  add.disabled = full;
+  add.addEventListener("click", () => {
+    const url = input.value.trim();
+    if (!url) {
+      announceProxy("Type a proxy address first, with its scheme.");
+      return;
+    }
+    // The URL is held only until Save; the page never reads one back from the
+    // server, so what is on screen from here is the masked host:port.
+    draft.entries.push({
+      proxy: "",
+      url,
+      direct: false,
+      paused: false,
+      label: proxyMaskedLabel(url),
+      scheme: proxyScheme(url),
+    });
+    input.value = "";
+    renderProxying();
+    announceProxy(
+      `Added ${proxyMaskedLabel(url)} to ${provider.display_name} as entry ` +
+        `${draft.entries.length}. Press Save to keep it.`,
+    );
+  });
+
+  const direct = document.createElement("button");
+  direct.type = "button";
+  direct.className = "secondary-button";
+  direct.textContent = "Add Direct";
+  direct.disabled = full;
+  direct.addEventListener("click", () => {
+    draft.entries.push({ proxy: "", url: "", direct: true, paused: false, label: "" });
+    renderProxying();
+    announceProxy(
+      `Added Direct to ${provider.display_name}: when the chain reaches it, ` +
+        "the request goes out on this machine's own address.",
+    );
+  });
+
+  // Seeded from <PROVIDER>_PROXY the first time, so turning a static proxy
+  // into a chain cannot lose it. The entry carries `inherit` rather than a
+  // URL: the page has never been told that address, and the server resolves
+  // it on save -- which is how the upgrade works without the password ever
+  // crossing the wire in either direction.
+  if (!draft.entries.length && provider.inherited_label) {
+    const seed = document.createElement("button");
+    seed.type = "button";
+    seed.className = "secondary-button";
+    seed.textContent = `Start from ${provider.inherited_label}`;
+    seed.addEventListener("click", () => {
+      draft.entries.push({
+        proxy: "",
+        url: "",
+        inherit: true,
+        direct: false,
+        paused: false,
+        label: provider.inherited_label,
+        scheme: provider.inherited_scheme,
+      });
+      renderProxying();
+      announceProxy(
+        `${provider.inherited_label} is entry 1 for ${provider.display_name}. ` +
+          `${provider.env_var || "The stored proxy"} keeps its value; the ` +
+          "chain is what gets used once you save.",
+      );
+    });
+    row.append(input, add, direct, seed);
+  } else {
+    row.append(input, add, direct);
+  }
+
+  if (full) {
+    const note = document.createElement("p");
+    note.className = "proxy-note";
+    note.textContent = `A chain holds at most ${
+      proxyVocabulary().max_entries || 12
+    } entries.`;
+    row.appendChild(note);
+  }
+  return row;
+}
+
+function proxyCardFoot(provider, draft) {
+  const foot = document.createElement("div");
+  foot.className = "proxy-card-foot";
+
+  const bound = proxyVocabulary().switch_bound || { min: 1, max: 5 };
+  const boundLabel = document.createElement("label");
+  boundLabel.className = "proxy-control";
+  const boundText = document.createElement("span");
+  boundText.textContent = "Switches per request";
+  const boundInput = document.createElement("input");
+  boundInput.type = "number";
+  boundInput.className = "proxy-bound-input";
+  boundInput.min = String(bound.min);
+  boundInput.max = String(bound.max);
+  boundInput.value = String(draft.max_switches);
+  boundInput.addEventListener("change", () => {
+    draft.max_switches = Number(boundInput.value);
+  });
+  boundLabel.append(boundText, boundInput);
+
+  const scopeLabel = document.createElement("label");
+  scopeLabel.className = "proxy-control";
+  const scopeText = document.createElement("span");
+  scopeText.textContent = "Quota is metered per";
+  const scope = document.createElement("select");
+  scope.className = "proxy-scope";
+  (proxyVocabulary().scopes || []).forEach((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name === "provider" ? "address" : "address and key";
+    scope.appendChild(option);
+  });
+  scope.value = draft.scope;
+  scope.addEventListener("change", () => {
+    draft.scope = scope.value;
+  });
+  scopeLabel.append(scopeText, scope);
+
+  const actions = document.createElement("div");
+  actions.className = "proxy-card-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "primary-button";
+  save.textContent = "Save";
+  save.addEventListener("click", () => saveProxyChain(provider, draft, save));
+  actions.appendChild(save);
+
+  if (provider.chain) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost-button";
+    remove.textContent = "Remove chain";
+    remove.addEventListener("click", () =>
+      saveProxyChain(provider, draft, remove, true),
+    );
+    actions.appendChild(remove);
+  }
+
+  foot.append(boundLabel, scopeLabel, actions);
+  return foot;
+}
+
+async function saveProxyChain(provider, draft, button, remove = false) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains", {
+      method: "PUT",
+      body: JSON.stringify({
+        provider: provider.provider_id,
+        remove,
+        enabled: draft.enabled,
+        policy: draft.policy,
+        scope: draft.scope,
+        max_switches: draft.max_switches,
+        on: draft.on,
+        oauth_acknowledged: draft.oauth_acknowledged,
+        entries: draft.entries.map((entry) => ({
+          proxy: entry.proxy || "",
+          url: entry.url || "",
+          inherit: Boolean(entry.inherit),
+          direct: Boolean(entry.direct),
+          paused: Boolean(entry.paused),
+        })),
+      }),
+    });
+    // Only this card's draft. Saving one provider must not silently discard
+    // an order somebody is halfway through arranging on another: they are
+    // separate documents on the server and separate edits on the page.
+    proxyState.drafts.delete(provider.provider_id);
+    renderProxying();
+    announceProxy(
+      remove
+        ? `${provider.display_name} follows its stored proxy again.`
+        : `Saved ${provider.display_name}. Stored only -- this release does ` +
+            "not route through the chain yet.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+function proxyScheme(url) {
+  const match = /^([a-z0-9]+):\/\//i.exec(String(url).trim());
+  return match ? match[1].toLowerCase() : "";
+}
+
+/** host:port for a URL the operator just typed, with any user:pass removed.
+ *
+ * The client-side twin of config.credentials.mask_proxy_label, and it exists
+ * for the same reason: the password in that box must not reach a label, a
+ * title attribute or the announcement region. The server never sends one
+ * back, so this is the only place on the page a raw URL is ever seen.
+ */
+function proxyMaskedLabel(url) {
+  const withoutScheme = String(url).trim().replace(/^[a-z0-9]+:\/\//i, "");
+  const authority = withoutScheme.split("/")[0];
+  const at = authority.lastIndexOf("@");
+  return at >= 0 ? authority.slice(at + 1) : authority;
 }
 
 /* ------------------------------------------------------------------- docs

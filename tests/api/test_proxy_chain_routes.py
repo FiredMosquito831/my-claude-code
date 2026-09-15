@@ -1,0 +1,362 @@
+"""The two routes behind the Proxying page.
+
+A chain is an ordered list of egress addresses with a per-entry pause, which
+is not expressible as a flat env-key-to-string map, so it writes a JSON
+document rather than settings keys -- the same argument the harness tier
+routes make, and the same reason it cannot go through
+``/admin/api/config/apply``.
+
+The sharp edge these tests exist for is the one the store cannot close on its
+own: a proxy URL may carry a password, and this is the surface that would leak
+it.
+"""
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from my_claude_code.config.settings import Settings
+from tests.api.support import create_test_app
+
+SECRET_URL = "socks5h://alice:hunter2@203.0.113.7:1080"
+SECOND_URL = "http://198.51.100.9:8080"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_chain_store(monkeypatch, tmp_path: Path):
+    """Never the real config directory: these routes write a file."""
+
+    from my_claude_code.config import proxy_chains
+
+    path = tmp_path / "proxy_chains.json"
+    monkeypatch.setattr(proxy_chains, "proxy_chains_path", lambda: path)
+    proxy_chains.reset_proxy_chains_cache()
+    yield path
+    proxy_chains.reset_proxy_chains_cache()
+
+
+def _settings(proxy: str = "") -> Settings:
+    # One configured provider is enough for every assertion here, and keeping
+    # the install small keeps the payload readable when one fails. The proxy is
+    # passed by its env alias because that is the only name the field accepts.
+    return Settings.model_validate(
+        {
+            "model": "nvidia_nim/primary",
+            "nvidia_nim_api_key": "nim-key",
+            "NVIDIA_NIM_PROXY": proxy,
+        }
+    )
+
+
+def _client(settings: Settings | None = None) -> TestClient:
+    # Loopback, as every admin route requires: the check is on the client host
+    # and TestClient's default is not one.
+    return TestClient(
+        create_test_app(settings or _settings()), client=("127.0.0.1", 50000)
+    )
+
+
+def _provider(payload: dict, provider_id: str = "nvidia_nim") -> dict:
+    match = [
+        entry for entry in payload["providers"] if entry["provider_id"] == provider_id
+    ]
+    assert match, f"{provider_id} is not on the page: " + ", ".join(
+        entry["provider_id"] for entry in payload["providers"]
+    )
+    return match[0]
+
+
+def test_the_page_lists_only_configured_providers() -> None:
+    """Fifty-six cards for the four providers an operator uses is not a page.
+
+    And a chain on a provider with no credential could never route anything,
+    so it is not a chain, it is a text box that lies.
+    """
+
+    payload = _client().get("/admin/api/proxy-chains").json()
+    listed = {entry["provider_id"] for entry in payload["providers"]}
+
+    assert "nvidia_nim" in listed
+    assert "anthropic" not in listed
+    assert "open_router" not in listed
+
+
+def test_the_vocabulary_offers_the_four_rotation_policies_and_no_fifth() -> None:
+    payload = _client().get("/admin/api/proxy-chains").json()
+
+    assert [policy["id"] for policy in payload["vocabulary"]["policies"]] == [
+        "single",
+        "round_robin",
+        "least_used",
+        "failover",
+    ]
+    assert payload["vocabulary"]["default_policy"] == "failover"
+    # The one thing four names do not say on their own, and the point of the
+    # feature for a provider metered by address.
+    help_text = {
+        policy["id"]: policy["help"] for policy in payload["vocabulary"]["policies"]
+    }
+    assert "multiplies" in help_text["round_robin"]
+    assert "until it fails" in help_text["failover"]
+
+
+def test_all_eleven_kinds_are_offered_and_exactly_two_are_refused() -> None:
+    payload = _client().get("/admin/api/proxy-chains").json()
+    kinds = payload["vocabulary"]["kinds"]
+
+    assert len(kinds) == 11
+    refused = {kind["id"] for kind in kinds if kind["state"] == "refused"}
+    recommended = [kind["id"] for kind in kinds if kind["state"] == "recommended"]
+    assert refused == {"authentication", "permission"}
+    assert recommended == ["quota", "rate_limit", "timeout"]
+    assert all(kind["reason"] for kind in kinds if kind["state"] == "refused")
+
+
+def test_the_get_never_returns_a_proxy_password() -> None:
+    """The whole response body is searched, not just the field it should be in.
+
+    A leak that reaches a label, a title or a debug field is the same leak.
+    """
+
+    client = _client()
+    client.put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "enabled": True,
+            "entries": [{"url": SECRET_URL}],
+        },
+    ).raise_for_status()
+
+    response = client.get("/admin/api/proxy-chains")
+    body = response.text
+
+    assert "hunter2" not in body
+    assert "alice" not in body
+    entry = _provider(response.json())["chain"]["entries"][0]
+    assert entry["label"] == "203.0.113.7:1080"
+    assert entry["scheme"] == "socks5h"
+    assert entry["proxy"].startswith("px_")
+
+
+def test_an_unedited_entry_travels_back_by_id_and_keeps_its_url() -> None:
+    """Referencing by id *is* the "unchanged" sentinel.
+
+    The page never holds the URL, so there is no code path that needs the
+    password on the client -- and therefore none that can leak it.
+    """
+
+    client = _client()
+    first = client.put(
+        "/admin/api/proxy-chains",
+        json={"provider": "nvidia_nim", "entries": [{"url": SECRET_URL}]},
+    ).json()
+    proxy_id = _provider(first)["chain"]["entries"][0]["proxy"]
+
+    second = client.put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "enabled": True,
+            "entries": [{"proxy": proxy_id}, {"direct": True}],
+        },
+    ).json()
+
+    chain = _provider(second)["chain"]
+    assert chain["enabled"] is True
+    assert [entry["proxy"] for entry in chain["entries"]] == [proxy_id, ""]
+    assert chain["entries"][1]["direct"] is True
+
+    from my_claude_code.config.proxy_chains import load_proxy_chains
+
+    endpoint = load_proxy_chains().endpoint(proxy_id)
+    assert endpoint is not None
+    assert endpoint.url == SECRET_URL
+
+
+def test_the_env_proxy_becomes_entry_one_without_ever_being_sent_to_the_page() -> None:
+    """The upgrade story, and the reason it needs a server-side sentinel.
+
+    "Start from your existing proxy" cannot be a URL the page posts back: the
+    page has never been told that URL, deliberately, and telling it so that it
+    could echo it would undo the whole point. So the entry says `inherit` and
+    the server resolves it from the settings it already holds. The `.env` key
+    keeps its value either way.
+    """
+
+    client = _client(_settings(proxy=SECRET_URL))
+
+    payload = client.put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "enabled": True,
+            "entries": [{"inherit": True}, {"direct": True}],
+        },
+    ).json()
+
+    chain = _provider(payload)["chain"]
+    assert chain["entries"][0]["label"] == "203.0.113.7:1080"
+    assert chain["entries"][0]["scheme"] == "socks5h"
+
+    from my_claude_code.config.proxy_chains import load_proxy_chains
+
+    stored = load_proxy_chains()
+    endpoint = stored.endpoint(chain["entries"][0]["proxy"])
+    assert endpoint is not None
+    assert endpoint.url == SECRET_URL
+
+
+def test_inheriting_a_proxy_a_provider_does_not_have_is_refused() -> None:
+    response = _client().put(
+        "/admin/api/proxy-chains",
+        json={"provider": "nvidia_nim", "entries": [{"inherit": True}]},
+    )
+
+    assert response.status_code == 422
+    assert "has none" in response.json()["detail"]
+
+
+def test_a_chain_longer_than_the_cap_is_refused() -> None:
+    """Each entry is a separate client, rate limiter and recovery ladder."""
+
+    response = _client().put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "entries": [{"url": SECOND_URL}] * 13,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "at most 12" in response.json()["detail"]
+
+
+def test_a_destructive_trigger_is_refused_with_its_reason() -> None:
+    """Rotating on a 401 burns the whole chain and benches every proxy in it.
+
+    The store drops the word silently because it is also reached by a file a
+    human edited; the API is a contract with a page that cannot send it, so
+    anything that does is a caller worth telling.
+    """
+
+    response = _client().put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "on": ["quota", "authentication"],
+            "entries": [{"url": SECOND_URL}],
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "authentication" in detail
+    assert "burns the whole chain" in detail
+
+
+def test_an_unusable_proxy_url_names_the_entry_that_is_wrong() -> None:
+    response = _client().put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "entries": [{"url": SECOND_URL}, {"url": "203.0.113.7:1080"}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Entry 2" in response.json()["detail"]
+
+
+def test_the_switch_bound_is_refused_outside_the_one_to_five_range() -> None:
+    for bound in (0, 6):
+        response = _client().put(
+            "/admin/api/proxy-chains",
+            json={
+                "provider": "nvidia_nim",
+                "max_switches": bound,
+                "entries": [{"url": SECOND_URL}],
+            },
+        )
+        assert response.status_code == 422, bound
+        assert "between 1 and 5" in response.json()["detail"]
+
+
+def test_a_provider_with_no_credential_can_not_be_given_a_chain() -> None:
+    response = _client().put(
+        "/admin/api/proxy-chains",
+        json={"provider": "anthropic", "entries": [{"url": SECOND_URL}]},
+    )
+
+    assert response.status_code == 404
+    assert "configured provider" in response.json()["detail"]
+
+
+def test_removing_a_chain_puts_the_provider_back_on_its_env_proxy() -> None:
+    """Removal is a third state, not an empty chain.
+
+    "This provider uses ``<PROVIDER>_PROXY`` exactly as it always has" and
+    "this provider has a chain that is switched off" are different answers and
+    the card has to be able to render both.
+    """
+
+    client = _client(_settings(proxy="http://198.51.100.9:8080"))
+    client.put(
+        "/admin/api/proxy-chains",
+        json={"provider": "nvidia_nim", "entries": [{"url": SECOND_URL}]},
+    ).raise_for_status()
+    assert _provider(client.get("/admin/api/proxy-chains").json())["chain"]
+
+    payload = client.put(
+        "/admin/api/proxy-chains", json={"provider": "nvidia_nim", "remove": True}
+    ).json()
+    provider = _provider(payload)
+
+    assert provider["chain"] is None
+    assert provider["inherited_label"] == "198.51.100.9:8080"
+    assert provider["env_var"] == "NVIDIA_NIM_PROXY"
+
+
+def test_the_env_proxy_is_reported_as_a_label_and_never_as_a_url() -> None:
+    """A static ``<PROVIDER>_PROXY`` can carry a password too."""
+
+    client = _client(_settings(proxy=SECRET_URL))
+
+    response = client.get("/admin/api/proxy-chains")
+
+    assert "hunter2" not in response.text
+    provider = _provider(response.json())
+    assert provider["inherited_label"] == "203.0.113.7:1080"
+    assert provider["inherited_scheme"] == "socks5h"
+
+
+def test_saving_a_chain_does_not_republish_the_provider_generation() -> None:
+    """This release stores and shows chains; it does not route through them.
+
+    A provider-generation replace resets the credential pools' counters, so
+    key health reads zeros right afterwards. Spending that on a change with no
+    effect on the request path would be a visible cost for nothing. The
+    release that adds the runtime seam adds the republish with it.
+    """
+
+    import inspect
+
+    from my_claude_code.api import admin_proxy_routes
+
+    source = inspect.getsource(admin_proxy_routes)
+    assert "replace(" not in source
+    assert "ProviderRuntimeManager" not in source
+    assert "background_refresh" not in source
+
+
+def test_the_routes_are_loopback_only() -> None:
+    off_box = TestClient(create_test_app(_settings()), client=("10.0.0.9", 50000))
+
+    assert off_box.get("/admin/api/proxy-chains").status_code == 403
+    assert (
+        off_box.put(
+            "/admin/api/proxy-chains", json={"provider": "nvidia_nim"}
+        ).status_code
+        == 403
+    )

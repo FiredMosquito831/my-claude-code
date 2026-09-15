@@ -909,6 +909,37 @@ def test_config_mirrors_the_failure_kinds_it_cannot_import():
     assert {kind.value for kind in FailureKind} == FAILURE_KIND_NAMES
 
 
+def test_config_mirrors_the_rotation_policies_it_cannot_import():
+    """The proxy chain store rotates on the credential engine's own four names.
+
+    ``config`` may not import ``providers`` either, so the names are repeated
+    in ``config.constants`` and pinned here in both directions. The failure
+    this guards against is not a crash: it is two rotation controls on the
+    same dashboard, one for credentials and one for proxies, quietly meaning
+    different things by the same word.
+
+    Also pinned: the trigger vocabulary the chain store offers is exactly the
+    failure kinds ``config`` knows about, in the enum's own declaration order,
+    so the Proxying page can never show ten chips or twelve.
+    """
+    from my_claude_code.config.constants import (
+        FAILURE_KIND_NAMES,
+        ROTATION_POLICY_ALIASES,
+        ROTATION_POLICY_ORDER,
+    )
+    from my_claude_code.config.proxy_chains import TRIGGER_KIND_ORDER
+    from my_claude_code.core.failures import FailureKind
+    from my_claude_code.providers.runtime.config import CREDENTIAL_ROTATION_POLICIES
+
+    assert (
+        set(ROTATION_POLICY_ORDER) | set(ROTATION_POLICY_ALIASES)
+        == CREDENTIAL_ROTATION_POLICIES
+    )
+    assert set(ROTATION_POLICY_ALIASES.values()) <= set(ROTATION_POLICY_ORDER)
+    assert set(TRIGGER_KIND_ORDER) == FAILURE_KIND_NAMES
+    assert tuple(kind.value for kind in FailureKind) == TRIGGER_KIND_ORDER
+
+
 def test_config_mirrors_the_tier_vocabulary_it_cannot_import():
     """Same leaf-package rule, same both-directions pin.
 
