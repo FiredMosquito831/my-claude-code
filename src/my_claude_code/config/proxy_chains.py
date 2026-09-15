@@ -75,10 +75,17 @@ from my_claude_code.config.constants import (
     ROTATION_POLICY_ORDER,
 )
 from my_claude_code.config.paths import proxy_chains_path
+from my_claude_code.config.proxy_feeds import known_feed_ids
 
 VERSION_KEY = "version"
 PROXIES_KEY = "proxies"
 CHAINS_KEY = "chains"
+#: Addresses a feed offered that no chain has taken. Absent from a document
+#: written before ingestion shipped, which reads back as "none on offer" and
+#: needs no migration.
+CANDIDATES_KEY = "candidates"
+#: The feeds this install has been told it may read. Absent means none.
+FEEDS_KEY = "feeds"
 DOCUMENT_VERSION = 1
 
 #: Schemes ``httpx[socks]`` and ``requests[socks]`` can actually dial. The same
@@ -153,6 +160,15 @@ DEFAULT_SCOPE = "provider"
 SCOPES: tuple[str, ...] = ("provider", "credential")
 
 SOURCE_MANUAL = "manual"
+#: An address that arrived from a named feed. It is a *candidate* and nothing
+#: more: it sits in :attr:`ProxyChains.candidates` until an operator moves it
+#: into a chain, and it cannot carry a credential before then.
+SOURCE_FEED = "feed"
+
+#: The most addresses the candidate list holds. Ingestion merges seven feeds
+#: that between them publish tens of thousands of endpoints; what an operator
+#: can actually read and choose from is two screens of them, ranked.
+MAX_CANDIDATES = 60
 
 #: What the checker learned about the destination's certificate through this
 #: address's tunnel. ``strict`` is an ordinary verified handshake. ``unknown``
@@ -308,13 +324,82 @@ class ProxyCheckRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ProxyFeedFacts:
+    """What the feeds said about one address, normalised.
+
+    The §6.2 field list, minus the two that are the address itself. None of it
+    is a measurement this product took: it is a summary of other people's
+    claims, kept beside the address so the page can say where it came from and
+    what was said about it, and so the operator can tell a four-feed agreement
+    from a single scraper's guess. The checker's own verdict lives in
+    :class:`ProxyCheckRecord` and is the only thing here that was measured from
+    this machine.
+    """
+
+    protocol: str = ""
+    country: str = ""
+    anonymity: str = ""
+    https_ok: bool = False
+    latency_ms: int | None = None
+    uptime_pct: float | None = None
+    last_checked: str = ""
+    asn: str = ""
+
+    def as_document(self) -> dict[str, Any]:
+        return {
+            "protocol": self.protocol,
+            "country": self.country,
+            "anonymity": self.anonymity,
+            "https_ok": self.https_ok,
+            "latency_ms": self.latency_ms,
+            "uptime_pct": self.uptime_pct,
+            "last_checked": self.last_checked,
+            "asn": self.asn,
+        }
+
+    @classmethod
+    def from_document(cls, raw: object) -> Self | None:
+        if not isinstance(raw, Mapping):
+            return None
+        return cls(
+            protocol=str(raw.get("protocol") or "").strip(),
+            country=str(raw.get("country") or "").strip(),
+            anonymity=str(raw.get("anonymity") or "").strip(),
+            https_ok=bool(raw.get("https_ok")),
+            latency_ms=_optional_int(raw.get("latency_ms")),
+            uptime_pct=_optional_float(raw.get("uptime_pct")),
+            last_checked=str(raw.get("last_checked") or "").strip(),
+            asn=str(raw.get("asn") or "").strip(),
+        )
+
+
+def _optional_int(value: object) -> int | None:
+    if not isinstance(value, int | float | str):
+        return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
+
+def _optional_float(value: object) -> float | None:
+    if not isinstance(value, int | float | str):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
 class ProxyEndpoint:
     """One address in the catalogue.
 
     ``source_count`` is how many independent feeds listed this ``ip:port`` in
-    the same window. Nothing sets it above ``1`` yet -- ingestion is manual --
-    and it is carried from the first release precisely so the release that adds
-    feeds needs no migration.
+    the same window, and ``sources`` names them. It is the one quality signal
+    that costs nothing: an address four feeds agree on is a materially better
+    bet than one from a single scraper, and knowing *which* four is what lets
+    an operator see where an address in front of their credential came from.
     """
 
     url: str
@@ -322,6 +407,11 @@ class ProxyEndpoint:
     added_at: str = ""
     source: str = SOURCE_MANUAL
     source_count: int = 1
+    #: The feed ids that listed this address in the pass that added it, in
+    #: catalogue order. Empty for an address the operator typed.
+    sources: tuple[str, ...] = ()
+    #: What those feeds published about it. ``None`` for a typed address.
+    feed: ProxyFeedFacts | None = None
     #: The checker's last verdict, or ``None`` for an address nothing has
     #: checked. ``None`` and "checked and failed" are different states and the
     #: page says which it is looking at.
@@ -341,6 +431,10 @@ class ProxyEndpoint:
             "source": self.source,
             "source_count": self.source_count,
         }
+        if self.sources:
+            document["sources"] = list(self.sources)
+        if self.feed is not None:
+            document["feed"] = self.feed.as_document()
         if self.last_check is not None:
             document["last_check"] = self.last_check.as_document()
         return document
@@ -363,12 +457,20 @@ class ProxyEndpoint:
             )
         except ValueError:
             source_count = 1
+        raw_sources = raw.get("sources")
+        sources = (
+            tuple(str(name).strip() for name in raw_sources if str(name).strip())
+            if isinstance(raw_sources, Sequence) and not isinstance(raw_sources, str)
+            else ()
+        )
         return cls(
             url=url,
             label=str(raw.get("label") or "").strip(),
             added_at=str(raw.get("added_at") or "").strip(),
             source=str(raw.get("source") or SOURCE_MANUAL).strip() or SOURCE_MANUAL,
-            source_count=source_count,
+            source_count=max(source_count, len(sources)),
+            sources=sources,
+            feed=ProxyFeedFacts.from_document(raw.get("feed")),
             last_check=ProxyCheckRecord.from_document(raw.get("last_check")),
         )
 
@@ -479,10 +581,23 @@ class ProxyChains:
 
     proxies: Mapping[str, ProxyEndpoint] = field(default_factory=dict)
     chains: Mapping[str, ProxyChain] = field(default_factory=dict)
+    #: Addresses a feed offered and nobody has chosen yet, best first.
+    #:
+    #: **A candidate is not a chain member.** It is in the catalogue so it can
+    #: be shown, ranked and tested; it is in no provider's ``entries``, so no
+    #: credential goes through it and nothing in the runtime can select it.
+    #: Moving one into a chain is an operator pressing a button on a row, and
+    #: it goes through the same checker and the same ``TLS intercepted``
+    #: refusal a typed address does.
+    candidates: tuple[str, ...] = ()
+    #: Which named feeds this install has been told to read. Empty on a fresh
+    #: install and empty until an operator ticks one: it is the switch that
+    #: decides whether this product ever contacts a third party at all.
+    feeds: tuple[str, ...] = ()
 
     @property
     def is_empty(self) -> bool:
-        return not self.chains and not self.proxies
+        return not self.chains and not self.proxies and not self.feeds
 
     def chain(self, provider_id: str | None) -> ProxyChain | None:
         """Return one provider's chain, or ``None`` for "behaves as today"."""
@@ -513,6 +628,64 @@ class ProxyChains:
             added_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         )
         return replace(self, proxies=proxies), proxy_id
+
+    def with_feeds(self, feed_ids: Iterable[str]) -> ProxyChains:
+        """Return a copy naming the feeds this install may read."""
+
+        return replace(self, feeds=tuple(dict.fromkeys(feed_ids)))
+
+    def with_candidates(
+        self, offered: Sequence[tuple[str, ProxyEndpoint]]
+    ) -> ProxyChains:
+        """Return a copy whose candidate list is exactly ``offered``.
+
+        A replacement rather than a merge: a pass over the feeds is a fresh
+        answer to "what is on offer right now", and an address that has dropped
+        off every feed since the last pass should leave the list rather than
+        linger as a row nobody can account for. An address already in a chain
+        is untouched by this -- chains and candidates are different tables and
+        a promoted address has stopped being on offer.
+        """
+
+        chained = {
+            proxy_id for chain in self.chains.values() for proxy_id in chain.proxy_ids()
+        }
+        proxies = {
+            proxy_id: endpoint
+            for proxy_id, endpoint in self.proxies.items()
+            if proxy_id in chained
+        }
+        candidates: list[str] = []
+        for proxy_id, endpoint in offered[:MAX_CANDIDATES]:
+            if proxy_id in proxies:
+                # Already in a chain. It is no longer on offer, and the copy
+                # the operator chose keeps its own label and health.
+                continue
+            previous = self.proxies.get(proxy_id)
+            if previous is not None and previous.last_check is not None:
+                # Carry the checker's verdict across the pass. A candidate
+                # already found to be terminating TLS must come back refused
+                # rather than as a fresh unknown row: the refusal is the one
+                # piece of state here that is a security control.
+                endpoint = replace(endpoint, last_check=previous.last_check)
+            proxies[proxy_id] = endpoint
+            candidates.append(proxy_id)
+        return replace(self, proxies=proxies, candidates=tuple(candidates))
+
+    def without_candidate(self, proxy_id: str) -> ProxyChains:
+        """Return a copy with one address no longer merely on offer.
+
+        Called when an operator moves a candidate into a chain: the address
+        stays in the catalogue, keeping its provenance and its health record,
+        and stops being listed as something nobody has chosen.
+        """
+
+        if proxy_id not in self.candidates:
+            return self
+        return replace(
+            self,
+            candidates=tuple(item for item in self.candidates if item != proxy_id),
+        )
 
     def with_check(self, proxy_id: str, record: ProxyCheckRecord) -> ProxyChains:
         """Return a copy carrying one address's latest check.
@@ -560,7 +733,7 @@ class ProxyChains:
         record worth keeping and no way back onto the page.
         """
 
-        referenced: set[str] = set()
+        referenced: set[str] = set(self.candidates)
         for chain in self.chains.values():
             referenced.update(chain.proxy_ids())
         if referenced == set(self.proxies):
@@ -585,6 +758,8 @@ class ProxyChains:
                 provider_id: chain.as_document()
                 for provider_id, chain in self.chains.items()
             },
+            CANDIDATES_KEY: list(self.candidates),
+            FEEDS_KEY: list(self.feeds),
         }
 
     @classmethod
@@ -635,12 +810,25 @@ class ProxyChains:
         elif raw_chains is not None:
             logger.warning("PROXY CHAINS: '{}' is not an object", CHAINS_KEY)
 
+        raw_candidates = document.get(CANDIDATES_KEY)
+        candidates = (
+            tuple(
+                proxy_id
+                for proxy_id in (str(value).strip() for value in raw_candidates)
+                if proxy_id in proxies
+            )
+            if isinstance(raw_candidates, Sequence)
+            and not isinstance(raw_candidates, str)
+            else ()
+        )
+
         # Prune here rather than through ``pruned()``: the classmethod has to
         # return ``Self``, and a copy made by ``dataclasses.replace`` is only
         # ever the base class.
-        referenced = {
+        referenced = set(candidates)
+        referenced.update(
             proxy_id for chain in chains.values() for proxy_id in chain.proxy_ids()
-        }
+        )
         return cls(
             proxies={
                 proxy_id: endpoint
@@ -648,6 +836,8 @@ class ProxyChains:
                 if proxy_id in referenced
             },
             chains=chains,
+            candidates=candidates,
+            feeds=known_feed_ids(document.get(FEEDS_KEY)),
         )
 
 
@@ -736,6 +926,7 @@ def current_proxy_chains(path: Path | None = None) -> ProxyChains:
 
 
 __all__ = [
+    "CANDIDATES_KEY",
     "CHAINS_KEY",
     "DEFAULT_POLICY",
     "DEFAULT_SCOPE",
@@ -745,6 +936,8 @@ __all__ = [
     "DOCUMENT_VERSION",
     "EMPTY_CHAIN",
     "EMPTY_PROXY_CHAINS",
+    "FEEDS_KEY",
+    "MAX_CANDIDATES",
     "MAX_SWITCHES_DEFAULT",
     "MAX_SWITCHES_MAX",
     "MAX_SWITCHES_MIN",
@@ -755,6 +948,7 @@ __all__ = [
     "REFUSED_TRIGGER_KINDS",
     "SCOPES",
     "SELECTABLE_TRIGGER_KINDS",
+    "SOURCE_FEED",
     "SOURCE_MANUAL",
     "TLS_INTERCEPTED",
     "TLS_STRICT",
@@ -766,6 +960,7 @@ __all__ = [
     "ProxyChains",
     "ProxyCheckRecord",
     "ProxyEndpoint",
+    "ProxyFeedFacts",
     "clamp_max_switches",
     "current_proxy_chains",
     "is_valid_proxy_url",

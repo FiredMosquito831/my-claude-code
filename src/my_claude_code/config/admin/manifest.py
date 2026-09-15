@@ -1912,6 +1912,44 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_FEED_REFRESH_ENABLED",
+        "Refresh proxy feeds in the background",
+        "credential_health",
+        "boolean",
+        settings_attr="proxy_feed_refresh_enabled",
+        default="false",
+        restart_required=True,
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Re-read the public proxy lists you switched on, on a timer, so "
+            "the candidate list on the Proxying page stays current. This is "
+            "only half the switch: which lists may be read at all is chosen "
+            "on that page and nothing is selected on a fresh install, so "
+            "turning this on by itself still contacts nobody. A candidate is "
+            "never used for anything until you move it into a chain by hand."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_FEED_REFRESH_MINUTES",
+        "Minutes between proxy feed refreshes",
+        "credential_health",
+        "number",
+        settings_attr="proxy_feed_refresh_minutes",
+        default="60",
+        restart_required=True,
+        advanced=True,
+        affects_providers=False,
+        minimum=0,
+        maximum=10080,
+        description=(
+            "How often the enabled feeds are re-read. One request per feed "
+            "per pass. Anything under 30 minutes is treated as 30: these are "
+            "other people's servers and their lists do not change faster than "
+            "that. 0 switches the loop off even when the setting above is on."
+        ),
+    ),
+    ConfigFieldSpec(
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
         "Route around a rate-limited model",
         "credential_health",

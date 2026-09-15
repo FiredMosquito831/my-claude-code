@@ -84,6 +84,7 @@ from my_claude_code.providers.runtime.reasoning_probe import (
 from .discovery_timer import ProviderDiscoveryTimer, resolve_refresh_interval
 from .provider_manager import ProviderRuntimeManager
 from .proxy_check_timer import ProxyCheckTimer
+from .proxy_feed_timer import ProxyFeedTimer
 
 RestartCallback = Callable[[], Awaitable[None] | None]
 
@@ -240,6 +241,15 @@ class ApplicationRuntime:
             lambda: self.settings.proxy_check_enabled,
             lambda: self.settings.proxy_check_exit_ip_url,
         )
+        # The optional feed refresh. Off unless the operator asked for it, and
+        # a pass over zero enabled feeds is a pass that makes no request at
+        # all -- which is what every install has until somebody ticks a feed.
+        # It writes the candidate list and nothing else: no chain, no provider,
+        # no generation.
+        self._proxy_feed_timer = ProxyFeedTimer(
+            lambda: self.settings.proxy_feed_refresh_minutes,
+            lambda: self.settings.proxy_feed_refresh_enabled,
+        )
 
     @property
     def settings(self) -> Settings:
@@ -294,6 +304,7 @@ class ApplicationRuntime:
             state.mark("proxy-refusals")
             await asyncio.to_thread(arm_refusals_from_store)
             self._proxy_check_timer.start()
+            self._proxy_feed_timer.start()
             state.mark("messaging")
             await self._start_messaging_if_configured()
             # One read of the models.dev cache, on a worker thread, and that is
@@ -993,6 +1004,7 @@ class ApplicationRuntime:
         # is abandoned rather than racing the shutdown that asked for it.
         await self._discovery_timer.close()
         await self._proxy_check_timer.close()
+        await self._proxy_feed_timer.close()
         await best_effort(
             "learned_facts.flush",
             self._learned_facts.close(),
