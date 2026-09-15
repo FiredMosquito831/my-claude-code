@@ -33,6 +33,7 @@ on:
       - "CONTRIBUTING.md"
       - "assets/**"
       - "mkdocs.yml"
+      - "overrides/**"
       - "scripts/build_docs_site.py"
       - ".github/workflows/docs-site.yml"
   pull_request:
@@ -42,6 +43,7 @@ on:
       - "CONTRIBUTING.md"
       - "assets/**"
       - "mkdocs.yml"
+      - "overrides/**"
       - "scripts/build_docs_site.py"
       - ".github/workflows/docs-site.yml"
   workflow_dispatch:
@@ -88,8 +90,13 @@ jobs:
       - name: Build
         # `--strict` fails on a broken internal link or a page absent from the
         # nav. mkdocs-material is a build-time tool and deliberately not a
-        # project dependency: nothing MCC ships imports it.
-        run: uvx --with mkdocs-material mkdocs build --strict
+        # project dependency: nothing MCC ships imports it, and the same is
+        # true of mkdocs-glightbox -- the lightbox that makes the 1500 px
+        # screenshots readable inside a 720 px column. Both are named here
+        # because `mkdocs.yml` cannot install its own plugins.
+        run: >-
+          uvx --with mkdocs-material --with mkdocs-glightbox
+          mkdocs build --strict
 
       - name: Prove the SEO surfaces exist and name the right host
         # The three things this site is for.

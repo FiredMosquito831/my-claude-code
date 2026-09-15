@@ -1,7 +1,7 @@
 # The documentation site, built from a staged copy of `docs/`.
 #
 #   uv run --offline python scripts/build_docs_site.py --out build/docs-src
-#   uvx --with mkdocs-material mkdocs build --strict
+#   uvx --with mkdocs-material --with mkdocs-glightbox mkdocs build --strict
 #
 # `docs_dir` is the STAGED directory, never `docs/` itself: the committed
 # Markdown keeps the relative links that GitHub and the in-dashboard Docs page
@@ -52,6 +52,11 @@ theme:
   name: material
   logo: assets/app-icon.png
   favicon: assets/app-icon.png
+  # One template: `404.html`. GitHub Pages serves `/404.html` for an unknown
+  # path, that file comes from the theme's `static_templates` rather than from
+  # any Markdown page, and Material's own says "404 - Not found" and nothing
+  # else. See the comment at the top of `overrides/404.html`.
+  custom_dir: overrides
   # Dark by default, matching the dashboard the docs describe, with a light
   # scheme reachable for anyone who wants it.
   palette:
@@ -73,18 +78,66 @@ theme:
     - navigation.instant
     - navigation.tracking
     - navigation.top
+    # The nav has five top-level groups and a flat sidebar buries them: on a
+    # site whose longest page is 345 KB, the sidebar is mostly that page's own
+    # sections and the other four groups scroll out of sight. Tabs put the five
+    # across the header and leave the sidebar to the group you are in.
+    - navigation.tabs
     - navigation.sections
+    # A section whose first child is its own index page becomes a clickable
+    # section rather than a label that does nothing when you click it.
+    - navigation.indexes
+    # The footer's previous/next pair. The Usage Guide is a sequence and the
+    # tutorials inside it are read in order; a reader who finishes one should
+    # not have to go back to the sidebar to find the next.
+    - navigation.footer
     - search.highlight
     - search.suggest
+    # A search result is the thing worth sending someone, more often than the
+    # page is: it carries the query as well as the page.
+    - search.share
     - content.code.copy
+    # Numbered annotations inside a code block, for the `.env` and config
+    # samples where the explanation currently has to repeat the line first.
+    - content.code.annotate
     - content.action.edit
     - toc.follow
+    # Picking "Windows" in one tabbed block picks it in every tabbed block on
+    # the page, and remembers it. The install block on the home page is
+    # per-OS, and a Windows reader should not have to choose five times.
+    - content.tabs.link
 
 extra_css:
   - assets/site.css
 
 plugins:
   - search
+  # Click a screenshot, get the screenshot. The corpus is captured at 1500 px
+  # and the content column is about 720 px wide, so every dashboard shot on
+  # this site is rendered at roughly half size -- legible as a picture of a
+  # page, unreadable as the page. This is the single biggest usability win
+  # available to a docs site that is mostly pictures.
+  #
+  # A plugin, so it also has to be on the `uvx --with` line in
+  # `.github/workflows/docs-site.yml`; nothing else here needs one.
+  - glightbox:
+      # The theme's own images -- the header logo, the social icons -- are not
+      # content and must not open a lightbox. They are outside `.md-typeset`,
+      # which the plugin already respects; this skips the one class of content
+      # image that is a diagram rather than a screenshot only if it is ever
+      # marked as such.
+      skip_classes:
+        - no-lightbox
+      # The alt text is written for a screen reader and is a sentence long;
+      # printing it over the image as a caption would cover the thing the
+      # reader clicked to see.
+      auto_caption: false
+      touchNavigation: true
+      draggable: true
+      # BRAND.md §8: subtle motion only, and `prefers-reduced-motion` is
+      # honoured by GLightbox's own CSS for the open/close transition.
+      effect: fade
+      slide_effect: slide
 
 markdown_extensions:
   - admonition
@@ -102,12 +155,37 @@ markdown_extensions:
       anchor_linenums: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
+  # `alternate_style` is the only style `content.tabs.link` works with. Used by
+  # the site's home page; the committed Markdown under `docs/` deliberately
+  # does not use it, because `=== "Windows"` renders as literal text on GitHub
+  # and in the dashboard's Docs page, and those two readers come first.
+  - pymdownx.tabbed:
+      alternate_style: true
+  # Deliberately NOT `pymdownx.emoji` with Material's icon index: its
+  # configuration needs `!!python/name:` tags, and
+  # `tests/contracts/test_docs_site_contract.py` reads this file with
+  # `yaml.safe_load`, which refuses them. Material's grid cards work without
+  # icons; the test that pins the published host does not work without
+  # safe_load.
 
 # Spelled out rather than inferred, so the order is the reading order rather
 # than the alphabet, and so a new page in `docs/` is a deliberate addition
 # here instead of appearing unannounced at the bottom of the menu.
+# Each top-level entry below is a TAB, so there are five of them and they are
+# named for what a reader wants rather than for how the repository is laid out.
+#
+# `index.md` is generated from `docs/_site_home.md` and `documentation.md` is
+# `docs/README.md` -- see the staging script's docstring for why the site's
+# home page is not the documentation index any more.
+#
+# BRAND and RELEASE-CHECKLIST are written for whoever BUILDS MCC, not whoever
+# runs it, and the alternative was to drop them from the site entirely. They
+# stay, under Project, for one reason: both are live URLs today and both are in
+# the sitemap, and deleting an indexed page to tidy a menu trades a real 404
+# for a cosmetic gain. The Project tab already keeps them out of the reader's
+# path, which is all the separation they needed.
 nav:
-  - Documentation: index.md
+  - Home: index.md
   - Usage Guide: USAGE.md
   - Connect a client:
       - Clients: CLIENTS.md
@@ -119,6 +197,7 @@ nav:
       - Anthropic subscription: ANTHROPIC-SUBSCRIPTION.md
       - Web search: WEB-SEARCH.md
   - Project:
+      - All documentation: documentation.md
       - Architecture: ARCHITECTURE.md
       - Contributing: CONTRIBUTING.md
       - Brand: BRAND.md

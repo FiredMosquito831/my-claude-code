@@ -17,6 +17,7 @@ existence.
 
 import importlib.util
 import pathlib
+import posixpath
 import re
 from urllib.parse import urlparse
 
@@ -77,6 +78,55 @@ def test_the_staged_site_declares_the_same_host_three_ways(tmp_path) -> None:
     site_url = _mkdocs_config()["site_url"]
     assert isinstance(site_url, str)
     assert urlparse(site_url).netloc == cname
+
+
+def test_no_staged_page_points_at_an_image_that_is_not_there(tmp_path) -> None:
+    """Every ``<img src>`` on the site resolves to a file the site serves.
+
+    ``mkdocs build --strict`` validates Markdown links and says nothing at all
+    about the ``src`` of a raw HTML ``<img>`` -- and every screenshot in these
+    pages is a raw ``<img>``, because the committed Markdown centres them in a
+    ``<div align="center">`` for GitHub's benefit.
+
+    So the two screenshots the screenshot corpus added to ``ARCHITECTURE.md`` shipped
+    broken and stayed broken. That file lives at the repository root, so its
+    images are written ``assets/x.png``; the page is served from
+    ``/ARCHITECTURE/``; the browser asked for ``/ARCHITECTURE/assets/x.png``
+    and got a 404, on the live site, past a green build. The pages under
+    ``docs/`` were only ever correct by coincidence -- ``../assets`` from
+    ``/USAGE/`` happens to be ``/assets`` -- and a coincidence is not a
+    contract, so this is the check that makes it one.
+    """
+
+    stager = _stager_module()
+    out = tmp_path / "docs-src"
+    stager.build(out)
+
+    served = {
+        path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file()
+    }
+    dangling = []
+    for page in sorted(out.rglob("*.md")):
+        relative = page.relative_to(out).as_posix()
+        # `use_directory_urls`: `USAGE.md` is served at `/USAGE/`, so a
+        # relative `src` on it resolves against that directory and not against
+        # the file's own place in the staged tree.
+        stem = posixpath.basename(relative).removesuffix(".md")
+        url_dir = posixpath.dirname(relative)
+        if stem != "index":
+            url_dir = posixpath.join(url_dir, stem)
+        for src in re.findall(
+            r'<img\b[^>]*?\bsrc="(?!https?://|data:)([^"]+)"',
+            page.read_text(encoding="utf-8"),
+        ):
+            target = posixpath.normpath(posixpath.join(url_dir, src.partition("#")[0]))
+            if target not in served:
+                dangling.append(f"{relative} -> {src} (would be /{target})")
+
+    assert not dangling, (
+        "these pages reference an image the built site does not serve:\n  "
+        + "\n  ".join(dangling)
+    )
 
 
 def _workflow_host() -> str:
