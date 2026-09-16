@@ -24,13 +24,12 @@ below, and it is rendered on the page beside the address, by name, so the
 operator can see where what they are about to put in front of a credential
 came from.
 
-**TLS-strict first.** Databay publishes an ``ssl=strict`` filter -- verified,
-see :mod:`~my_claude_code.config.proxy_feeds` -- which selects for exactly the
-property this product needs: a tunnel that carries HTTPS without breaking the
-destination's certificate validation. Where a feed offers that, the feed URL
-asks for it, and an address any feed marked HTTPS-capable outranks one none
-did. It is the feed-side analogue of the checker, and it is a preference, not a
-verdict: only the checker actually finds out.
+**HTTPS-capable first.** Some lists publish a filter that selects for exactly
+the property this product needs: a tunnel that carries HTTPS without breaking
+the destination's certificate checks. Where an operator pointed a feed at such
+a URL, an address any feed marked HTTPS-capable outranks one none did. It is
+the feed-side analogue of the checker, and it is a preference, not a verdict:
+only the checker actually finds out.
 """
 
 import asyncio
@@ -53,16 +52,19 @@ from my_claude_code.config.proxy_chains import (
     save_proxy_chains,
 )
 from my_claude_code.config.proxy_feeds import (
-    CATALOGUE,
     FEED_MAX_BYTES,
-    FEEDS_BY_ID,
     FeedEndpoint,
+    ParserTrial,
     ProxyFeed,
+    detect_parser,
+    parser_shape,
+    proposed_parser,
 )
 
-#: How long one feed has to answer. Short on purpose: seven feeds at sixty
-#: seconds each would be a seven-minute button, and a public list that cannot
-#: answer in fifteen seconds is not the one to build a chain on.
+#: How long one feed has to answer. Short on purpose: a pass is serial, so a
+#: minute per feed would make the Fetch button unbounded in the number of feeds
+#: the operator added -- and a public list that cannot answer in fifteen
+#: seconds is not the one to build a chain on.
 FEED_TIMEOUT_SECONDS = 15.0
 
 #: What MCC calls itself when it asks. These are other people's servers and an
@@ -223,6 +225,110 @@ async def fetch_feed(
     return FeedResult(feed.id, feed.name, ok=True, count=len(endpoints)), endpoints
 
 
+@dataclass(frozen=True, slots=True)
+class FeedDetection:
+    """What one trial fetch of a URL the operator just typed found.
+
+    ``parser`` is a **proposal**. The page shows the picker either way, pre-set
+    to this, and stores whatever the operator left it on -- so a detection that
+    is wrong costs one click, and a detection that finds nothing costs none of
+    the operator's ability to add the feed anyway.
+    """
+
+    ok: bool
+    detail: str = ""
+    trials: tuple[ParserTrial, ...] = ()
+    parser: str = ""
+
+    @property
+    def count(self) -> int:
+        """How many addresses the proposed reader got out of the body."""
+
+        return next(
+            (trial.count for trial in self.trials if trial.parser == self.parser), 0
+        )
+
+    def as_document(self) -> dict[str, object]:
+        return {
+            "ok": self.ok,
+            "detail": self.detail,
+            "parser": self.parser,
+            "count": self.count,
+            "trials": [trial.as_document() for trial in self.trials],
+        }
+
+
+async def detect_feed(
+    url: str,
+    *,
+    timeout: float = FEED_TIMEOUT_SECONDS,
+    client: httpx.AsyncClient | None = None,
+) -> FeedDetection:
+    """Fetch ``url`` once and propose the reader that made most of it.
+
+    **One outbound request, to a URL the operator typed into the form and
+    pressed a button about.** That is the consent, and it is the same shape as
+    the Test button's: nothing else here fetches, and the feed makes no further
+    request until it is saved *and* enabled *and* somebody presses Fetch.
+
+    Never raises, and a failure is still a useful answer: a URL that cannot be
+    reached today is reported as unreachable and the operator can still add it,
+    because a list that 404s this afternoon may be back tomorrow and a form
+    that refuses to record it would be enforcing a guess about somebody else's
+    uptime.
+
+    TLS is ordinary and strict, the same as :func:`fetch_feed` -- this is a
+    public list over HTTPS and there is no reason for one to need a certificate
+    this machine does not already trust.
+    """
+
+    owned = client is None
+    session = client or httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers={"user-agent": FEED_USER_AGENT},
+    )
+    try:
+        response = await session.get(url)
+        if response.status_code >= 400:
+            return FeedDetection(
+                ok=False, detail=f"The URL answered {response.status_code}."
+            )
+        body = response.text
+        if len(body.encode("utf-8", "ignore")) > FEED_MAX_BYTES:
+            body = body[: FEED_MAX_BYTES // 2]
+    except Exception as exc:
+        return FeedDetection(
+            ok=False, detail=f"Could not read the URL: {type(exc).__name__}: {exc}"
+        )
+    finally:
+        if owned:
+            await session.aclose()
+
+    trials = detect_parser(body)
+    proposal = proposed_parser(trials)
+    if not proposal:
+        return FeedDetection(
+            ok=True,
+            detail=(
+                "The URL answered, but none of the formats MCC reads "
+                "recognised it. Pick one anyway if you know what this list is "
+                "-- nothing is fetched again until you switch the feed on."
+            ),
+            trials=trials,
+        )
+    shape = parser_shape(proposal)
+    count = next(trial.count for trial in trials if trial.parser == proposal)
+    return FeedDetection(
+        ok=True,
+        detail=(
+            f"{shape} A trial read found {count} address{'' if count == 1 else 'es'}."
+        ),
+        trials=trials,
+        parser=proposal,
+    )
+
+
 def rank(merged: Iterable[_Merged]) -> list[_Merged]:
     """Best first.
 
@@ -304,15 +410,19 @@ def candidate_id(address: str) -> str:
 
 
 def enabled_feeds(store: ProxyChains) -> tuple[ProxyFeed, ...]:
-    """The feeds this install has been told to read, in catalogue order.
+    """The feeds this install has been told to read, in the operator's order.
 
-    Empty on a fresh install, and empty is the point: it is what makes "no
-    outbound request the operator did not choose" a property of the code rather
-    than a promise in a docstring.
+    Empty on a fresh install, and empty is the point: MCC ships no feed of its
+    own, so "no outbound request the operator did not choose" is a property of
+    the code -- there is nothing here to choose *from* until somebody adds one.
+
+    A feed whose reader this install no longer ships is skipped rather than
+    fetched: there would be nothing to do with the body.
     """
 
-    chosen = set(store.feeds)
-    return tuple(feed for feed in CATALOGUE if feed.id in chosen)
+    return tuple(
+        feed.as_proxy_feed() for feed in store.feeds if feed.enabled and feed.readable
+    )
 
 
 async def ingest(
@@ -347,8 +457,8 @@ async def ingest(
             results.append(result)
             if endpoints:
                 harvest.append((feed.id, endpoints))
-            # One yield per feed, so a pass over seven of them cannot sit in
-            # front of a request even when every one of them is slow.
+            # One yield per feed, so a pass cannot sit in front of a request
+            # even when every feed the operator added is slow.
             await asyncio.sleep(0)
 
     merged = rank(merge(harvest))
@@ -379,36 +489,59 @@ async def ingest(
     return run
 
 
-def feed_catalogue_payload(store: ProxyChains) -> list[dict[str, object]]:
-    """Every feed this install ships, and whether it has been switched on."""
+def feed_payload(store: ProxyChains) -> list[dict[str, object]]:
+    """Every feed the operator has added, and what MCC makes of each.
 
-    chosen = set(store.feeds)
+    The URL travels back in full, unlike a proxy URL: a feed URL is a public
+    list the operator typed themselves and they have to be able to see and edit
+    it, where a proxy URL can carry ``user:pass`` and is masked everywhere.
+
+    ``readable`` is the honest reading of a row whose parser this install does
+    not ship -- a hand-edited file, or a reader retired in a later release. It
+    renders as a row asking for a format rather than as a feed that silently
+    stopped offering anything.
+    """
+
     return [
         {
             "id": feed.id,
             "name": feed.name,
-            "homepage": feed.homepage,
+            "url": feed.url,
+            "parser": feed.parser,
+            "parser_shape": parser_shape(feed.parser),
+            "readable": feed.readable,
             "observed": feed.observed,
             "tls_strict": feed.tls_strict,
-            "enabled": feed.id in chosen,
+            "enabled": feed.enabled,
         }
-        for feed in CATALOGUE
+        for feed in store.feeds
     ]
 
 
-def known_feed_name(feed_id: str) -> str:
-    feed = FEEDS_BY_ID.get(feed_id)
+def known_feed_name(store: ProxyChains, feed_id: str) -> str:
+    """The display name of the feed that supplied an address, or its id.
+
+    Falling back to the id matters more than it used to: a candidate outlives
+    the feed that offered it -- removing a feed deliberately keeps the
+    addresses it supplied -- so this is routinely asked about a feed that is no
+    longer in the store, and "px_… came from databay" is a better answer than
+    an empty cell.
+    """
+
+    feed = store.feed(feed_id)
     return feed.name if feed is not None else feed_id
 
 
 __all__ = [
     "FEED_TIMEOUT_SECONDS",
     "FEED_USER_AGENT",
+    "FeedDetection",
     "FeedResult",
     "IngestRun",
     "candidate_id",
+    "detect_feed",
     "enabled_feeds",
-    "feed_catalogue_payload",
+    "feed_payload",
     "fetch_feed",
     "ingest",
     "known_feed_name",

@@ -14,8 +14,9 @@ because this codebase has been bitten repeatedly by a background loop that
 turned out to be sitting in front of ``/v1/messages``:
 
 1. **Never overlap.** A tick that lands while a pass is running is skipped,
-   not queued. Seven feeds at a fifteen-second timeout is under two minutes in
-   the worst case, and a queued tick would make the next one worse.
+   not queued. A pass is serial at a fifteen-second timeout per feed, so its
+   worst case grows with however many lists the operator added, and a queued
+   tick would make the next one worse.
 2. **Never block the loop.** Every fetch is an ordinary ``await`` and ``ingest``
    yields between feeds.
 3. **Never touch the request path.** The pass writes the candidate list. It

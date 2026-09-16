@@ -8127,9 +8127,15 @@ details.turn-pane > summary:focus-visible {
    picker depending on whether an address was refused, so it is exactly
    the shape that was bitten. */
 
+/* One row per list from 7.18.0, not a wrap of chips: a row now carries a name,
+   the URL the operator typed, the format, and a Remove button, which is more
+   than fits on a chip. Column rather than grid for the same reason the note
+   above gives -- a row gains and loses children (a badge, a warning) depending
+   on what the feed is, and a grid child that vacates its column re-flows the
+   whole row. */
 .proxy-feed-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
@@ -8137,8 +8143,9 @@ details.turn-pane > summary:focus-visible {
 .proxy-feed {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: 4px 10px;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--panel);
@@ -8146,8 +8153,111 @@ details.turn-pane > summary:focus-visible {
   cursor: pointer;
 }
 
+/* Takes the slack so the Remove button stays at the end of the row, and
+   `min-width: 0` so a long URL wraps inside it rather than pushing the button
+   off a 420px screen. */
+.proxy-feed-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
 .proxy-feed-name {
   font-weight: 600;
+}
+
+/* Someone else's URL, shown in full and allowed to break anywhere: these
+   carry long query strings and a row must not scroll the page sideways. */
+.proxy-feed-url {
+  color: var(--muted, var(--text));
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.proxy-feed-parser {
+  color: var(--muted, var(--text));
+  font-size: 11px;
+}
+
+.proxy-feed-remove {
+  flex: 0 0 auto;
+}
+
+/* A list whose format MCC has no reader for. A statement of fact on the row
+   rather than a missing switch, so the operator can see why nothing arrives. */
+.proxy-feed-warning {
+  flex: 1 1 100%;
+  color: var(--warn, var(--accent));
+  font-size: 11px;
+}
+
+/* A fresh install's whole feed panel, and the point of the release: MCC ships
+   no lists, so this is what an operator sees before they add one. */
+.proxy-feed-empty {
+  margin-bottom: var(--space-3);
+}
+
+.proxy-feed-add {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.proxy-feed-add-title {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+}
+
+.proxy-feed-add-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.proxy-feed-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.proxy-feed-input,
+.proxy-feed-select {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg, var(--panel));
+  color: inherit;
+  font-size: 12px;
+}
+
+.proxy-feed-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.proxy-feed-detect,
+.proxy-feed-add-button {
+  white-space: nowrap;
+}
+
+/* What one press of Detect format found, or what the chosen format expects.
+   It sits under the picker because it describes the picker's value, and the
+   picker always wins: this sentence never changes what is stored. */
+.proxy-feed-detection {
+  margin: 0;
 }
 
 .proxy-feed-badge {

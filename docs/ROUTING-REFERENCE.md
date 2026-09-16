@@ -300,6 +300,14 @@ Both are live on the card: each entry says `healthy`, `failing`, `cooldown 4m`, 
 
 The same four names and the same meanings credential rotation uses: `single`, `round_robin`, `least_used`, `failover` (`on_error` is an accepted alias). `failover` is the default and the conservative one: it pins to the first healthy entry and changes nothing until something breaks. **`round_robin` is the one that multiplies a per-address allowance** — with four working addresses a per-IP limit applies four times over, from the first request rather than only after an error.
 
+#### Where the addresses come from: MCC ships no lists
+
+You can type an address into a chain yourself, or you can point MCC at a published proxy list and choose from what it offers. **MCC ships nobody's list.** It knows how to *read* seven formats — three flavours of JSON keyed by a wrapper object, three flavours of bare JSON array, and plain `ip:port` text — and which lists to read is entirely your choice. Earlier releases bundled seven concrete public feeds; that made every release depend on seven strangers' uptime and on their URLs not moving, and it meant shipping a judgement about whose endpoints you ought to be fetching. Reading a format is a fact about a file; shipping a catalogue is a recommendation, and this one was not ours to make.
+
+So the feed list on **Admin UI → Proxying** starts empty. Give a list a name and an `https` URL — plain `http` is refused, because a feed decides which addresses end up in front of your credentials and nobody on the path should get a vote — and press **Detect format**: MCC reads that URL **once** and proposes the format it recognises, saying what it found and how many addresses a trial read produced. The picker is always shown and always yours; the proposal just moves it, and whatever it says when you press **Add to list** is what gets stored. A list nothing recognises can still be added — something that 404s this afternoon may answer tomorrow. Nothing is fetched again until you switch the feed on and press **Fetch**, or turn on `PROXY_FEED_REFRESH_ENABLED`. Removing a list keeps the addresses it already offered: those are facts of their own, with their own test results, and often the reason you added it.
+
+If you are upgrading from 7.17.x, the feeds you had switched on are converted to entries of your own on first start — same URLs, same readers, still switched on — and are then ordinary rows you can rename, re-point or remove.
+
 #### Testing an address before you rely on it
 
 Every saved entry has a **Test** button, and each card has **Test all**. One press does three things, in order:

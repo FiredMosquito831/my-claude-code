@@ -17,7 +17,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from my_claude_code.application.proxy_check import ProxyCheckOutcome
-from my_claude_code.application.proxy_ingest import IngestRun, candidate_id
+from my_claude_code.application.proxy_ingest import (
+    FeedDetection,
+    IngestRun,
+    candidate_id,
+)
 from my_claude_code.config.proxy_chains import (
     TLS_INTERCEPTED,
     TLS_STRICT,
@@ -27,11 +31,32 @@ from my_claude_code.config.proxy_chains import (
     load_proxy_chains,
     save_proxy_chains,
 )
+from my_claude_code.config.proxy_feeds import PARSER_IDS, CustomFeed, ParserTrial
 from my_claude_code.config.settings import Settings
 from tests.api.support import create_test_app
 
 CANDIDATE_URL = "socks5h://203.0.113.7:1080"
 CANDIDATE_ID = candidate_id("203.0.113.7:1080")
+FEED_URL = "https://databay.example/list"
+
+
+def _feed_row(**rest: object) -> dict[str, object]:
+    """One feed as the page sends it: a name, a URL, a format and a switch.
+
+    There is no catalogue to name, so every one of these tests has to say what
+    the operator typed -- which is the change 7.18.0 is, expressed as a request
+    body.
+    """
+
+    row: dict[str, object] = {
+        "id": "",
+        "name": "Databay",
+        "url": FEED_URL,
+        "parser": "databay",
+        "enabled": True,
+    }
+    row.update(rest)
+    return row
 
 
 @pytest.fixture(autouse=True)
@@ -71,12 +96,22 @@ def _offer_one() -> None:
     )
 
 
-def test_a_fresh_install_has_no_feed_switched_on() -> None:
-    """The shipped answer, and the reason nothing is ever fetched by itself."""
+def test_a_fresh_install_ships_readers_and_no_sources() -> None:
+    """The shipped answer, and the reason nothing is ever fetched by itself.
+
+    There is no list to switch on because MCC ships nobody's endpoints: what it
+    ships is the seven readers, offered in the picker so an operator who types
+    a URL has something to read it with. "No outbound request the operator did
+    not choose" is then a property of the code rather than of a default.
+    """
 
     payload = _client().get("/admin/api/proxy-chains").json()
-    assert payload["feeds"], "the catalogue should still be offered"
-    assert not any(feed["enabled"] for feed in payload["feeds"])
+    assert payload["feeds"] == []
+    parsers = payload["vocabulary"]["parsers"]
+    assert len(parsers) == 7
+    assert all(
+        parser["id"] and parser["label"] and parser["shape"] for parser in parsers
+    )
     assert payload["candidates"] == []
     assert payload["vocabulary"]["refresh"]["enabled"] is False
 
@@ -88,29 +123,189 @@ def test_selecting_a_feed_records_consent_and_fetches_nothing(monkeypatch) -> No
     monkeypatch.setattr("my_claude_code.api.admin_proxy_routes.ingest", explode)
     payload = (
         _client()
-        .put("/admin/api/proxy-chains/feeds", json={"feeds": ["databay"]})
+        .put("/admin/api/proxy-chains/feeds", json={"feeds": [_feed_row()]})
         .json()
     )
-    enabled = [feed["id"] for feed in payload["feeds"] if feed["enabled"]]
-    assert enabled == ["databay"]
+    enabled = [feed["name"] for feed in payload["feeds"] if feed["enabled"]]
+    assert enabled == ["Databay"]
     assert payload["candidates"] == []
-    assert load_proxy_chains().feeds == ("databay",)
+    stored = load_proxy_chains().feeds
+    assert [feed.url for feed in stored] == [FEED_URL]
+    assert stored[0].parser == "databay"
+    # An id is minted on the way in, which is what makes add and edit one
+    # request: the page sends this row back with the id it was given.
+    assert stored[0].id
 
 
-def test_an_unknown_feed_name_is_refused_loudly() -> None:
-    """The store drops one silently; the API is a contract with the page."""
+def test_an_unknown_format_is_refused_loudly() -> None:
+    """The store keeps such a row blanked; the API is a contract with the page.
+
+    A stored feed whose reader this install no longer ships is a row asking for
+    a format. A *typed* format nobody ships is a mistake being made right now,
+    and the page gets told which word was wrong.
+    """
 
     response = _client().put(
-        "/admin/api/proxy-chains/feeds", json={"feeds": ["not-a-feed"]}
+        "/admin/api/proxy-chains/feeds",
+        json={"feeds": [_feed_row(parser="not-a-format")]},
     )
     assert response.status_code == 422
-    assert "not-a-feed" in response.json()["detail"]
+    assert "not-a-format" in response.json()["detail"]
+
+
+def test_a_feed_with_no_format_at_all_is_refused() -> None:
+    """A feed MCC cannot read is a fetch with nothing at the end of it."""
+
+    response = _client().put(
+        "/admin/api/proxy-chains/feeds", json={"feeds": [_feed_row(parser="")]}
+    )
+    assert response.status_code == 422
+    assert "needs a format" in response.json()["detail"]
+
+
+def test_a_feed_url_that_is_not_https_is_refused() -> None:
+    """The list decides which strangers end up in front of a credential.
+
+    Reading it over plain http would let anyone on the path choose that, so the
+    refusal is at the write rather than at the fetch.
+    """
+
+    response = _client().put(
+        "/admin/api/proxy-chains/feeds",
+        json={"feeds": [_feed_row(url="http://databay.example/list")]},
+    )
+    assert response.status_code == 422
+    assert "https" in response.json()["detail"]
+    assert load_proxy_chains().feeds == ()
+
+
+def test_the_same_url_listed_twice_is_refused() -> None:
+    """Two rows for one list would fetch it twice and count it twice.
+
+    ``source_count`` is the one quality signal that is evidence rather than a
+    claim copied off a publisher, and a duplicated feed would corroborate its
+    own rows.
+    """
+
+    response = _client().put(
+        "/admin/api/proxy-chains/feeds",
+        json={
+            "feeds": [
+                _feed_row(name="Databay"),
+                _feed_row(name="Databay again"),
+            ]
+        },
+    )
+    assert response.status_code == 422
+    assert "listed twice" in response.json()["detail"]
+
+
+def test_a_feed_name_long_enough_to_push_its_row_off_the_page_is_refused() -> None:
+    response = _client().put(
+        "/admin/api/proxy-chains/feeds", json={"feeds": [_feed_row(name="n" * 61)]}
+    )
+    assert response.status_code == 422
+    assert "at most 60 characters" in response.json()["detail"]
+
+
+def test_more_feeds_than_a_pass_can_read_is_refused() -> None:
+    """A pass is serial at fifteen seconds a feed, so the list is bounded."""
+
+    response = _client().put(
+        "/admin/api/proxy-chains/feeds",
+        json={
+            "feeds": [
+                _feed_row(name=f"List {n}", url=f"https://example.com/{n}.json")
+                for n in range(21)
+            ]
+        },
+    )
+    assert response.status_code == 422
+    assert "At most 20 feeds" in response.json()["detail"]
+    assert load_proxy_chains().feeds == ()
+
+
+def test_removing_a_feed_keeps_the_addresses_it_supplied() -> None:
+    """Deleting a list is not deleting what it already offered.
+
+    A candidate is an independent fact with its own ``source_count`` and its
+    own health record -- and often the whole reason the feed was added. An
+    operator halfway through choosing from a page of them must not lose the
+    page by tidying the list above it.
+    """
+
+    client = _client()
+    client.put("/admin/api/proxy-chains/feeds", json={"feeds": [_feed_row()]})
+    _offer_one()
+
+    payload = client.put("/admin/api/proxy-chains/feeds", json={"feeds": []}).json()
+
+    assert payload["feeds"] == []
+    assert [row["proxy"] for row in payload["candidates"]] == [CANDIDATE_ID]
+    assert load_proxy_chains().candidates == (CANDIDATE_ID,)
+
+
+def test_detecting_a_format_reports_the_proposal_and_every_reader(
+    monkeypatch,
+) -> None:
+    """The Detect button proposes; the picker still decides.
+
+    The route hands back the whole reader list beside the proposal precisely
+    because the proposal is not a decision: the page shows the picker either
+    way, pre-set to this, and stores whatever the operator left it on.
+    """
+
+    async def fake_detect(url, **kwargs):
+        assert url == FEED_URL
+        return FeedDetection(
+            ok=True,
+            detail="A trial read found 40 addresses.",
+            trials=(
+                ParserTrial(
+                    parser="databay",
+                    label='JSON: data[] with "iso" and "ssl"',
+                    shape="JSON under a data key.",
+                    count=40,
+                ),
+            ),
+            parser="databay",
+        )
+
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_proxy_routes.detect_feed", fake_detect
+    )
+    payload = (
+        _client()
+        .post("/admin/api/proxy-chains/feeds/detect", json={"url": FEED_URL})
+        .json()
+    )
+
+    assert payload["detection"]["parser"] == "databay"
+    assert payload["detection"]["count"] == 40
+    assert payload["detection"]["ok"] is True
+    assert [parser["id"] for parser in payload["parsers"]] == list(PARSER_IDS)
+
+
+def test_detecting_a_format_for_a_non_https_url_never_fetches_it(monkeypatch) -> None:
+    """The refusal is before the request, not after reading the answer."""
+
+    async def explode(*args, **kwargs):  # pragma: no cover - the assertion is that
+        raise AssertionError("a non-https feed URL must not be fetched")
+
+    monkeypatch.setattr("my_claude_code.api.admin_proxy_routes.detect_feed", explode)
+    response = _client().post(
+        "/admin/api/proxy-chains/feeds/detect",
+        json={"url": "http://databay.example/list"},
+    )
+
+    assert response.status_code == 422
+    assert "https" in response.json()["detail"]
 
 
 def test_fetching_with_no_feed_selected_is_refused_rather_than_silent() -> None:
     response = _client().post("/admin/api/proxy-chains/ingest")
     assert response.status_code == 422
-    assert "contacts none of them" in response.json()["detail"]
+    assert "MCC ships none of its own" in response.json()["detail"]
 
 
 def test_a_fetch_reports_which_feeds_answered(monkeypatch) -> None:
@@ -130,7 +325,19 @@ def test_a_fetch_reports_which_feeds_answered(monkeypatch) -> None:
 
     monkeypatch.setattr("my_claude_code.api.admin_proxy_routes.ingest", fake_ingest)
     client = _client()
-    client.put("/admin/api/proxy-chains/feeds", json={"feeds": ["databay", "geonode"]})
+    client.put(
+        "/admin/api/proxy-chains/feeds",
+        json={
+            "feeds": [
+                _feed_row(),
+                _feed_row(
+                    name="Geonode",
+                    url="https://geonode.example/list",
+                    parser="geonode",
+                ),
+            ]
+        },
+    )
     payload = client.post("/admin/api/proxy-chains/ingest").json()
 
     assert payload["ingest"]["corroborated"] == 1
@@ -142,17 +349,40 @@ def test_a_candidate_names_the_feeds_that_agreed_and_never_its_url() -> None:
     """``source_count`` is a score; the names are the answer.
 
     An operator deciding whether to put a stranger's machine in front of a
-    credential should be able to see which projects saw it, on the row.
+    credential should be able to see which lists saw it, on the row.
+
+    The third source here names a feed the store no longer holds, which is the
+    ordinary case rather than a corner one: removing a feed deliberately keeps
+    the addresses it supplied, so the row falls back to the id it was filed
+    under rather than showing an empty cell.
     """
 
     _offer_one()
+    save_proxy_chains(
+        load_proxy_chains().with_feeds(
+            [
+                CustomFeed(
+                    id="proxyscrape",
+                    name="ProxyScrape",
+                    url="https://proxyscrape.example/list",
+                    parser="proxyscrape",
+                ),
+                CustomFeed(
+                    id="hproxy",
+                    name="HProxy",
+                    url="https://hproxy.example/list",
+                    parser="hproxy",
+                ),
+            ]
+        )
+    )
     payload = _client().get("/admin/api/proxy-chains").json()
     row = payload["candidates"][0]
     assert row["source_count"] == 3
     assert [item["name"] for item in row["sources"]] == [
         "ProxyScrape",
         "HProxy",
-        "Databay (TLS-strict)",
+        "databay",
     ]
     assert row["label"] == "203.0.113.7:1080"
     assert "203.0.113.7:1080" not in str(row.get("url", ""))

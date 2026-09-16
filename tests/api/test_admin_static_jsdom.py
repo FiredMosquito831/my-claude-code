@@ -3618,18 +3618,167 @@ def test_jsdom_a_tick_alone_never_claims_the_server_knows_about_it(
     before = rendered["proxying"]["feeds"]
     after = rendered["proxying"]["feedsAfterTick"]
 
-    # Nothing is ticked on arrival, and the store agrees.
-    assert before["anyTicked"] is False
-    assert before["fetchDisabled"] is True
+    # The fixture arrives agreeing with its store, so nothing advertises a
+    # save. One readable feed is on, so Fetch is a plain read.
     assert before["saveDisabled"] is True
     assert before["unsaved"] == ""
+    assert before["fetchDisabled"] is False
 
-    # One tick: the press is now a save AND a read, and the label says so
-    # rather than implying the server already knows.
-    assert after["fetchLabel"] == "Save and fetch 1 feed"
+    # One tick of a feed that was off: the press is now a save AND a read, and
+    # the label says so rather than implying the server already knows.
+    assert after["fetchLabel"] == "Save and fetch 2 feeds"
     assert after["fetchDisabled"] is False
     assert after["saveDisabled"] is False
     assert "not saved yet" in after["unsaved"]
+
+
+def test_jsdom_a_feed_whose_format_mcc_cannot_read_is_never_counted(
+    rendered,
+) -> None:
+    """The 7.16.0 trap in its 7.18.0 shape.
+
+    A stored feed can name a reader this install does not ship -- a hand
+    edit, or a format retired in a later release. Its switch is dead and the
+    row says why, because the alternative is a feed that looks on, fetches
+    nothing, and gives the operator no way to find out which of those it is.
+    The Fetch button must not count it either: the server would not read it,
+    so counting it would be the same lie in a new place.
+    """
+
+    feeds = rendered["proxying"]["feeds"]
+
+    # The fixture's third row. Its box is the only disabled one.
+    assert feeds["unreadableDisabled"] == [2]
+    assert feeds["warnings"], "the unreadable row explained nothing"
+    assert "no reader for this list's format" in feeds["warnings"][0]
+
+    # Two feeds are switched on in the fixture, but only one is readable, and
+    # that is the number the button offers to fetch.
+    assert feeds["fetchLabel"] == "Fetch 1 feed now"
+
+
+def test_jsdom_a_feed_row_shows_the_url_the_operator_typed(rendered) -> None:
+    """Unlike a proxy URL, which is masked everywhere on this page.
+
+    A proxy URL can carry user:pass. A feed URL is a public list the operator
+    typed themselves, and hiding it would leave them unable to tell two lists
+    apart or see what they pointed MCC at.
+    """
+
+    urls = rendered["proxying"]["feeds"]["urls"]
+
+    assert urls == [
+        "https://lists.example.com/socks5.json",
+        "https://databay.com/api/v1/proxy-list?protocol=socks5&ssl=strict&limit=300",
+        "https://lists.example.com/mystery.txt",
+    ]
+
+
+def test_jsdom_the_format_picker_is_shown_before_anything_is_detected(
+    rendered,
+) -> None:
+    """The binding decision of this release, asserted at the DOM.
+
+    The user asked for the picker *and* auto-detection. Detection proposes;
+    it never decides silently. So the picker exists, offers every reader, and
+    is empty before any detection has run -- there is no path on which a
+    format is chosen without the operator seeing the control that chose it.
+    """
+
+    form = rendered["proxying"]["feedAddForm"]
+
+    assert form["hasName"] is True
+    assert form["hasUrl"] is True
+    # The blank prompt plus all seven readers.
+    assert form["pickerOptions"][0] == ""
+    assert len(form["pickerOptions"]) == 8
+    assert "lines" in form["pickerOptions"]
+    assert form["pickerValue"] == ""
+    # Nothing to read and nothing to add until a URL is typed.
+    assert form["detectDisabled"] is True
+    assert form["addDisabled"] is True
+    assert "press Detect format" in form["note"]
+
+
+def test_jsdom_detection_moves_the_picker_and_leaves_every_choice_open(
+    rendered,
+) -> None:
+    """One read of the URL, a proposal, and a picker that still offers all of
+    them.
+
+    A detection that "succeeded" must not collapse the choice: the operator
+    may know something about their own list that a trial parse does not.
+    """
+
+    detect = rendered["proxying"]["feedDetect"]
+
+    assert detect["request"] is not None, "Detect format read nothing"
+    assert detect["request"]["method"] == "POST"
+    assert detect["request"]["body"] == {"url": "https://lists.example.com/fresh.json"}
+    # The proposal moved the picker...
+    assert detect["pickerValue"] == "geonode"
+    assert "137 addresses" in detect["note"]
+    assert "change it if you know better" in detect["note"]
+    # ...and every reader is still on offer.
+    assert len(detect["pickerOptions"]) == 8
+
+
+def test_jsdom_the_operator_can_override_the_proposal_and_that_is_what_is_saved(
+    rendered,
+) -> None:
+    """Detection proposes, the operator decides, and the save carries the
+    operator's answer.
+
+    This is the one that would catch a page that quietly re-applied the
+    detected format on submit -- which would make the picker decoration.
+    """
+
+    override = rendered["proxying"]["feedOverride"]
+    added = rendered["proxying"]["feedAfterAdd"]
+    saved = rendered["proxying"]["feedSaveAfterAdd"]
+
+    assert override["pickerValue"] == "monosans"
+    # The note follows the picker rather than the proposal, so an override
+    # does not read as if it had not registered.
+    assert 'keyed by "host"' in override["note"]
+
+    assert "A list I found" in added["rows"]
+    # Added switched OFF: adding a list and reading it are separate acts.
+    assert added["ticked"][-1] is False
+    assert added["saveDisabled"] is False
+    # The form is cleared, so a second press cannot silently repeat the first.
+    assert added["urlValue"] == ""
+
+    assert saved is not None, "the row was never saved"
+    assert saved["method"] == "PUT"
+    row = [
+        feed
+        for feed in saved["body"]["feeds"]
+        if feed["url"] == "https://lists.example.com/fresh.json"
+    ]
+    assert row, "the saved list did not carry the new row"
+    assert row[0]["parser"] == "monosans", "the override was not what was saved"
+    assert row[0]["name"] == "A list I found"
+    assert row[0]["id"] == "", "a new row must travel without an id"
+    assert row[0]["enabled"] is False
+
+
+def test_jsdom_removing_a_feed_keeps_the_addresses_it_supplied(rendered) -> None:
+    """Removing a list is not discarding what it offered.
+
+    A candidate is an independent fact with its own source_count and its own
+    test result, and often the whole reason the list was added. Dropping the
+    rows an operator may be halfway through choosing from is not what "remove
+    this list" means.
+    """
+
+    removal = rendered["proxying"]["feedRemoval"]
+
+    assert len(removal["after"]) == len(removal["before"]) - 1
+    assert removal["before"][0] not in removal["after"]
+    assert removal["candidatesStillShown"] > 0
+    assert "stay on offer" in removal["announcement"]
+    assert "Save feed list" in removal["announcement"]
 
 
 def test_jsdom_pressing_fetch_saves_the_selection_before_it_reads_anything(
@@ -3659,7 +3808,9 @@ def test_jsdom_a_saved_selection_stops_advertising_a_save(rendered) -> None:
 
     after = rendered["proxying"]["feedsAfterFetch"]
 
-    assert after["fetchLabel"] == "Fetch 1 feed now"
+    # Two readable feeds are on now: the one the fixture ships switched on, and
+    # the one the tick above turned on and the press then saved.
+    assert after["fetchLabel"] == "Fetch 2 feeds now"
     assert after["unsaved"] == ""
     assert after["saveDisabled"] is True
 

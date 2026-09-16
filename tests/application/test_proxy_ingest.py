@@ -28,13 +28,32 @@ from my_claude_code.config.proxy_chains import (
     load_proxy_chains,
     save_proxy_chains,
 )
-from my_claude_code.config.proxy_feeds import FeedEndpoint
+from my_claude_code.config.proxy_feeds import CustomFeed, FeedEndpoint, ProxyFeed
 
 SHARED = "203.0.113.7"
+
+DATABAY_URL = "https://databay.example/list"
 
 
 def endpoint(ip: str = SHARED, port: int = 1080, **rest) -> FeedEndpoint:
     return FeedEndpoint(protocol="socks5", ip=ip, port=port, **rest)
+
+
+def a_feed() -> ProxyFeed:
+    """One feed an operator added, as ``fetch_feed`` is handed it.
+
+    MCC ships no catalogue to borrow an entry from, so a test that wants
+    something fetchable says so itself -- which is also exactly what
+    :meth:`CustomFeed.as_proxy_feed` hands the fetcher in production.
+    """
+
+    return ProxyFeed(
+        id="databay",
+        name="Databay",
+        url=DATABAY_URL,
+        parser="databay",
+        homepage="",
+    )
 
 
 @pytest.fixture
@@ -251,7 +270,7 @@ def _client(handler) -> httpx.AsyncClient:
 async def test_a_feed_that_errors_is_reported_not_raised():
     """One bad feed must not cost the pass the other six."""
 
-    feed = proxy_ingest.FEEDS_BY_ID["databay"]
+    feed = a_feed()
 
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("no route", request=request)
@@ -265,7 +284,7 @@ async def test_a_feed_that_errors_is_reported_not_raised():
 
 @pytest.mark.asyncio
 async def test_a_feed_that_answers_with_a_status_is_reported():
-    feed = proxy_ingest.FEEDS_BY_ID["databay"]
+    feed = a_feed()
 
     async with _client(lambda request: httpx.Response(404, text="nope")) as client:
         result, endpoints = await proxy_ingest.fetch_feed(feed, client=client)
@@ -278,10 +297,51 @@ async def test_a_feed_that_answers_with_a_status_is_reported():
 async def test_a_feed_that_changed_shape_says_so_rather_than_looking_healthy():
     """ "Answered, but nothing parsed" is a different problem from "down"."""
 
-    feed = proxy_ingest.FEEDS_BY_ID["databay"]
+    feed = a_feed()
     body = json.dumps({"rows": []})
 
     async with _client(lambda request: httpx.Response(200, text=body)) as client:
         result, _ = await proxy_ingest.fetch_feed(feed, client=client)
     assert result.ok is False
     assert "changed shape" in result.detail
+
+
+def _stored_feed(
+    *,
+    feed_id: str = "databay",
+    name: str = "Databay",
+    url: str = DATABAY_URL,
+    parser: str = "databay",
+    enabled: bool = True,
+) -> CustomFeed:
+    """One stored feed, in the shape the operator's own store holds it."""
+
+    return CustomFeed(id=feed_id, name=name, url=url, parser=parser, enabled=enabled)
+
+
+def test_a_feed_switched_off_is_not_read():
+    """The switch is the consent, and it is the only thing that grants it."""
+
+    store = ProxyChains(feeds=(_stored_feed(enabled=False),))
+    assert proxy_ingest.enabled_feeds(store) == ()
+
+
+def test_a_feed_this_install_has_no_reader_for_is_not_fetched():
+    """Switched on, but nothing here could do anything with the body.
+
+    A row whose parser is blank is one whose reader this install does not ship
+    -- a hand-edited file, or a reader retired in a later release. Fetching it
+    would be an outbound request that could not possibly produce an address.
+    """
+
+    store = ProxyChains(feeds=(_stored_feed(parser="", enabled=True),))
+    assert proxy_ingest.enabled_feeds(store) == ()
+
+
+def test_an_enabled_readable_feed_is_handed_over_as_something_fetchable():
+    """The one case that does reach the network, and what it is handed."""
+
+    store = ProxyChains(feeds=(_stored_feed(),))
+    feeds = proxy_ingest.enabled_feeds(store)
+    assert [feed.url for feed in feeds] == [DATABAY_URL]
+    assert feeds[0].parser == "databay"

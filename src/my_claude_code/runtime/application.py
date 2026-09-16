@@ -38,7 +38,10 @@ from my_claude_code.config.env_files import (
 from my_claude_code.config.model_refs import parse_provider_type
 from my_claude_code.config.paths import messaging_state_dir_path
 from my_claude_code.config.provider_registry import get_provider_registry
-from my_claude_code.config.proxy_chains import current_proxy_chains
+from my_claude_code.config.proxy_chains import (
+    current_proxy_chains,
+    migrate_proxy_feeds,
+)
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
@@ -304,6 +307,14 @@ class ApplicationRuntime:
             state.mark("proxy-refusals")
             await asyncio.to_thread(arm_refusals_from_store)
             self._proxy_check_timer.start()
+            # Before the feed timer reads the store, and before the Proxying
+            # page can be opened: an install upgrading from 7.17.1 still names
+            # its feeds by the ids of the seven this product used to ship, and
+            # this converts them to the custom entries that mean the same
+            # thing. One write, once -- a store already converted comes back
+            # with nothing to do. See ``config.proxy_feed_legacy``.
+            state.mark("proxy-feeds")
+            await asyncio.to_thread(migrate_proxy_feeds)
             self._proxy_feed_timer.start()
             state.mark("messaging")
             await self._start_messaging_if_configured()
