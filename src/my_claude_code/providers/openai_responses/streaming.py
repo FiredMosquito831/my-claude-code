@@ -12,6 +12,7 @@ import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
 
+from my_claude_code.core.anthropic.openai_tool_names import OpenAIToolNameCodec
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.wire_capture import ResponseShape
 
@@ -98,8 +99,13 @@ class ResponsesStreamConverter:
         *,
         log_raw_events: bool = False,
         output_reasoning: bool = True,
+        tool_names: OpenAIToolNameCodec | None = None,
     ) -> None:
         self._ledger = ledger
+        #: The codec the request body was built with, when its host declared a
+        #: tool-name limit. ``None`` passes every streamed name through as sent,
+        #: which is what a host that was never sent an alias needs.
+        self._tool_names = tool_names
         self._log_raw_events = log_raw_events
         #: Whether the client's reasoning policy allows the model's thinking to
         #: be shown. ``True`` by default because a converter handed no policy
@@ -174,6 +180,11 @@ class ResponsesStreamConverter:
             if item_type == "function_call":
                 tool_id = item.get("id") or f"call_{len(self._active_tool_calls)}"
                 name = item.get("name") or "unknown"
+                if self._tool_names is not None:
+                    # The only frame whose name reaches the client: the
+                    # tool_use block is opened here, and the argument and
+                    # ``.done`` frames are matched by item id, never by name.
+                    name = self._tool_names.decode(name)
                 self._active_tool_calls[tool_id] = {
                     "id": tool_id,
                     "name": name,

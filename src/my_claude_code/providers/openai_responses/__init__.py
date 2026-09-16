@@ -14,6 +14,7 @@ from .conversion import (
     RESPONSES_DEFAULT_REASONING_SUMMARY,
     build_responses_request_body,
     responses_tool_call_to_anthropic,
+    responses_tool_name_codec,
 )
 from .streaming import (
     ResponsesStreamConverter,
@@ -29,4 +30,5 @@ __all__ = [
     "iter_responses_sse_events",
     "note_responses_event_shape",
     "responses_tool_call_to_anthropic",
+    "responses_tool_name_codec",
 ]

@@ -321,6 +321,7 @@ class OpenAIChatProvider(BaseProvider):
                 api_key=self._api_key,
                 rate_limiter=self._rate_limiter,
                 api_key_provider=self._api_key_provider,
+                tool_name_max_length=self._profile.responses_tool_name_max_length,
             )
             self._responses_transport = transport
         return transport
