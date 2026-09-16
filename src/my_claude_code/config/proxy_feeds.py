@@ -1,66 +1,59 @@
-"""The named public proxy feeds this install knows how to read.
+"""The proxy-list *formats* this install knows how to read.
 
-Seven sources, each one **fetched once by hand before it was written down**, on
-2026-09-15, and built against what it actually returned rather than against
-what its documentation claims. Where a documented capability turned out not to
-exist it was dropped rather than coded around, and the note on each entry says
-what was seen. A bundled feed that 404s is worse than one that was never
-shipped.
+**MCC ships readers, not sources.** This module holds seven parsers -- code
+that knows how to read a shape -- and no list of anybody's endpoints. Which
+URLs to fetch is the operator's choice, stored in their own
+``~/.mcc/proxy_chains.json`` as named custom feeds, and a fresh install
+contacts nobody at all because it has been told about nobody at all.
 
-**Nothing here is fetched unless the operator asks.** No feed is enabled on a
-fresh install, the scheduled refresh is off, and an operator who never opens
-the Proxying page makes no outbound request they did not choose. Turning a feed
-on is a list of addresses arriving in a **candidate** list -- it is never a
-chain member, and it never carries a credential until the operator puts it in a
-chain and the checker has verified its tunnel.
+That is the distinction, and it is deliberate: a *parser* is a fact about a
+file format, where a *catalogue* is a claim that some third party's endpoint
+will be at some URL tomorrow. Earlier releases shipped seven concrete feeds and
+so made a release depend on seven strangers' uptime and on their URLs staying
+put. Removing the catalogue removes that dependency without removing any
+ability: every format those feeds published is still readable here, and an
+operator who wants one of them types its URL and picks -- or is offered -- the
+matching reader.
 
-**What was verified, per feed** (2026-09-15, plain ``curl``):
+**The seven shapes, and what each reader expects.** These were read off real
+responses on 2026-09-15 rather than off anybody's documentation, which is why
+they are described by structure rather than by publisher:
 
 ======================  =====================================================
-ProxyScrape             ``api.proxyscrape.com/v4`` answered 200 with
-                        ``{"proxies": [...]}``; each row carries ``ip``,
-                        ``port``, ``protocol``, ``anonymity``, ``ssl``,
-                        ``uptime``, ``timeout`` and an ``ip_data`` object with
-                        ``countryCode`` and ``as``. ``limit=`` and
-                        ``protocol=`` both narrow the result -- measured:
-                        2564 records unfiltered, 1569 for ``protocol=socks5``.
-HProxy                  The **GitHub repository** answered 200 for
-                        ``live.json``: an array of ``{proxy, ip, port,
-                        protocols[], anonymity, country, latency_ms,
-                        uptime_pct, alive}``. Its documented keyless API host
-                        ``api.hproxy.com`` **does not resolve** -- that claim
-                        is dropped, and this entry reads the repository only.
-Databay                 ``databay.com/api/v1/proxy-list`` answered 200 with
-                        ``{"data": [...]}`` and its ``ssl=strict`` filter is
-                        **real**: without it rows come back carrying
-                        ``"ssl": false``, with it every row is ``"ssl": true``.
-                        That is the one feed-side filter that selects for the
-                        property this product needs, so it is in the URL. The
-                        repository's documented ``https.txt`` is **not**
-                        there (404); ``http.txt``/``socks5.txt`` are.
-Proxifly                The jsDelivr mirror answered 200 with an array of
-                        ``{proxy, protocol, ip, port, https, anonymity,
-                        score, geolocation{country, city}}``.
-VPSLab                  Raw GitHub text, ``ip:port`` per line with a ``#``
-                        header naming the protocol, SSL and anonymity of the
-                        file. ``http_ssl_elite.txt`` is read because the file
-                        *is* the filter: its protocol is known from its name,
-                        which a bare ``ip:port`` list can never say.
-monosans                Raw GitHub ``proxies.json``: an array of
-                        ``{protocol, host, port, timeout, exit_ip,
-                        asn{...}, geolocation{country{names{en}}}}``.
-Geonode                 ``proxylist.geonode.com/api/proxy-list`` answered 200
-                        with ``{"data": [...]}``; rows carry ``protocols[]``,
+``proxyscrape``         ``{"proxies": [...]}``; rows carry ``ip``, ``port``,
+                        ``protocol``, ``anonymity``, ``ssl``, ``uptime``,
+                        ``timeout`` and an ``ip_data`` object with
+                        ``countryCode`` and ``as``.
+``hproxy``              A bare array of ``{proxy, ip, port, protocols[],
+                        anonymity, country, latency_ms, uptime_pct, alive}``.
+``databay``             ``{"data": [...]}`` with ``ip``, ``port``,
+                        ``protocol``, ``iso``, ``ssl``, ``latency``,
+                        ``uptime`` and ``lastChecked``.
+``proxifly``            A bare array of ``{proxy, protocol, ip, port, https,
+                        anonymity, score, geolocation{country, city}}``.
+``monosans``            A bare array of ``{protocol, host, port, timeout,
+                        exit_ip, asn{...}, geolocation{country{names{en}}}}``
+                        -- note ``host`` rather than ``ip``, and a timeout in
+                        **seconds**.
+``geonode``             ``{"data": [...]}`` with ``protocols[]``,
                         ``anonymityLevel``, ``country``, ``asn``, ``latency``,
-                        ``upTime`` and ``lastChecked``. ``limit`` and
-                        ``protocols`` narrow it.
+                        ``upTime`` and ``lastChecked``.
+``lines``               Plain text, one ``ip:port`` per line, ``#`` a comment.
+                        The body of such a file can never say which scheme
+                        dials it, so the feed carries that as
+                        :attr:`ProxyFeed.assume_protocol`; a line that brings
+                        its own ``scheme://`` is honoured over it.
 ======================  =====================================================
 
-**What is not claimed.** Nothing here has been checked for freshness beyond the
-one fetch, no refresh interval in anybody's README was measured, and no
-endpoint any of these feeds lists has been dialled by this module. The feeds
-say an address is alive; the checker in :mod:`~my_claude_code.application.
-proxy_check` is the only thing in this product that finds out.
+:func:`detect_parser` tries all seven against a body an operator has just
+pointed at and reports which of them yield plausible addresses. It **proposes**
+-- the page shows the picker either way, pre-set to the proposal, and the
+operator's choice is what is stored. A format nothing recognises is still
+addable: a URL that 404s today may answer tomorrow.
+
+**What is not claimed.** Nothing here measures anything. A feed says an address
+is alive; the checker in :mod:`~my_claude_code.application.proxy_check` is the
+only thing in this product that finds out.
 
 ``socks4`` rows are dropped on the way in. ``httpx[socks]`` dials ``http``,
 ``https``, ``socks5`` and ``socks5h`` and nothing else
@@ -69,17 +62,27 @@ address in the candidate list would be one that can never be added to a chain.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+import secrets
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
+from urllib.parse import urlsplit
 
-#: The day every URL below was fetched and every shape read off the answer.
+from loguru import logger
+
+#: The day the seven shapes above were read off real responses. Kept as
+#: provenance for the parsers, not as a claim about anybody's current URL.
 FEEDS_OBSERVED_ON = "2026-09-15"
+
+#: The longest display name a feed may carry. Long enough for a sentence's
+#: worth of "which list is this", short enough that one cannot be used to push
+#: the rest of a row off the page.
+FEED_NAME_MAX_LENGTH = 60
 
 #: The most bytes one feed may return. A response larger than this is truncated
 #: and what parsed out of the truncated text is kept, because a feed that grew
 #: a megabyte overnight is a feed to read less of, not one to stop reading. The
-#: largest of the seven measured 1.8 MB.
+#: largest list measured while these readers were written was 1.8 MB.
 FEED_MAX_BYTES = 6 * 1024 * 1024
 
 #: The most addresses taken from any one feed in one pass. A feed listing six
@@ -141,8 +144,9 @@ class ProxyFeed:
     parser: str
     homepage: str
     #: Whether this feed's own URL selects for a tunnel that leaves the
-    #: destination's certificate verifiable. Exactly one of the seven offers
-    #: that, and it is in that feed's URL rather than in a comment.
+    #: destination's certificate checkable -- some lists publish such a filter.
+    #: It lives in the feed's URL rather than in a comment, and it is a
+    #: preference rather than a verdict: only the checker finds out.
     tls_strict: bool = False
     #: For a feed whose rows are bare ``ip:port``: what its own filename says
     #: about them. A plain list can never carry a scheme, and guessing between
@@ -150,9 +154,9 @@ class ProxyFeed:
     assume_protocol: str = ""
     assume_https_ok: bool = False
     assume_anonymity: str = ""
-    #: What the fetch on :data:`FEEDS_OBSERVED_ON` returned, in one sentence,
-    #: rendered on the page beside the switch so the operator can see what they
-    #: are turning on without leaving it.
+    #: What a trial read of this URL found, in one sentence, rendered on the
+    #: page beside the switch so the operator can see what they pointed MCC at
+    #: without leaving it.
     observed: str = ""
 
     def parse(self, text: str) -> tuple[FeedEndpoint, ...]:
@@ -165,7 +169,7 @@ class ProxyFeed:
         """
 
         parser = _PARSERS.get(self.parser)
-        if parser is None:  # pragma: no cover - unreachable via CATALOGUE
+        if parser is None:
             return ()
         try:
             found = parser(text, self)
@@ -470,145 +474,362 @@ _PARSERS = {
 }
 
 
-# ---------------------------------------------------------------- catalogue
+def mint_feed_id(existing: Iterable[str]) -> str:
+    """Return a feed id no feed in this store already holds."""
 
-CATALOGUE: tuple[ProxyFeed, ...] = (
-    ProxyFeed(
-        id="proxyscrape",
-        name="ProxyScrape",
-        url=(
-            "https://api.proxyscrape.com/v4/free-proxy-list/get"
-            "?request=display_proxies&proxy_format=protocolipport"
-            "&format=json&limit=300&protocol=http,socks5"
-        ),
-        parser="proxyscrape",
-        homepage="https://github.com/ProxyScrape/free-proxy-list",
-        observed=(
-            "JSON with per-address metadata: protocol, anonymity, SSL "
-            "support, uptime, timeout, country and ASN. 2,564 records on the "
-            "day this was read, 1,857 of them in the two schemes this "
-            "product can dial -- which is what the protocol filter above "
-            "asks for, so the rest are never downloaded."
-        ),
+    taken = set(existing)
+    while True:
+        feed_id = f"fd_{secrets.token_hex(4)}"
+        if feed_id not in taken:
+            return feed_id
+
+
+@dataclass(frozen=True, slots=True)
+class CustomFeed:
+    """One proxy list the operator told this install about.
+
+    Name, URL and a reader: the three things MCC cannot work out on its own.
+    Detection *proposes* the reader by fetching the URL once and seeing which
+    of the seven yields addresses, but what is stored here is whatever the
+    operator left the picker on -- the proposal is never written behind their
+    back.
+
+    The three ``assume_*`` fields exist for the ``lines`` reader, whose file
+    cannot say which scheme dials it. They are not offered on the Add form;
+    they are set by detection and, for a feed converted from a pre-7.18.0
+    built-in, carried across from what that built-in declared, so a converted
+    plain-text feed parses exactly as many addresses after the migration as
+    before it.
+    """
+
+    id: str
+    name: str
+    url: str
+    parser: str
+    enabled: bool = False
+    added_at: str = ""
+    #: What the URL's own filter selects for, where the operator said so. Only
+    #: ever a preference -- the checker is the only thing that finds out.
+    tls_strict: bool = False
+    assume_protocol: str = ""
+    assume_https_ok: bool = False
+    assume_anonymity: str = ""
+    #: What a trial parse of this URL found, in one sentence, rendered on the
+    #: row so the operator can see what they pointed MCC at without leaving
+    #: the page.
+    observed: str = ""
+
+    @property
+    def readable(self) -> bool:
+        """Whether this install still ships a reader for this feed."""
+
+        return bool(self.parser)
+
+    def as_proxy_feed(self) -> ProxyFeed:
+        """This row as the thing :mod:`proxy_ingest` knows how to fetch."""
+
+        return ProxyFeed(
+            id=self.id,
+            name=self.name,
+            url=self.url,
+            parser=self.parser,
+            homepage="",
+            tls_strict=self.tls_strict,
+            assume_protocol=self.assume_protocol,
+            assume_https_ok=self.assume_https_ok,
+            assume_anonymity=self.assume_anonymity,
+            observed=self.observed,
+        )
+
+    def as_document(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "url": self.url,
+            "parser": self.parser,
+            "enabled": self.enabled,
+            "added_at": self.added_at,
+            "tls_strict": self.tls_strict,
+            "assume_protocol": self.assume_protocol,
+            "assume_https_ok": self.assume_https_ok,
+            "assume_anonymity": self.assume_anonymity,
+            "observed": self.observed,
+        }
+
+    @classmethod
+    def from_document(cls, raw: object, where: str) -> Self | None:
+        """Read one stored feed, or ``None`` for a row that cannot be one.
+
+        A row is dropped only when it has no usable URL, because a feed with
+        nowhere to fetch from is not a feed. An **unknown parser is kept**,
+        blanked: that is a feed whose reader this install no longer ships, and
+        the honest answer is a row on the page saying "pick a format" rather
+        than a switch that silently disappeared.
+        """
+
+        if not isinstance(raw, Mapping):
+            logger.warning("PROXY CHAINS: '{}' is not an object; ignoring it", where)
+            return None
+        url = str(raw.get("url") or "").strip()
+        if not is_valid_feed_url(url):
+            logger.warning(
+                "PROXY CHAINS: '{}' is not a usable https feed URL; ignoring it",
+                where,
+            )
+            return None
+        name = str(raw.get("name") or "").strip()[:FEED_NAME_MAX_LENGTH]
+        return cls(
+            id=str(raw.get("id") or "").strip(),
+            name=name or url,
+            url=url,
+            parser=normalise_parser(raw.get("parser")),
+            enabled=bool(raw.get("enabled")),
+            added_at=str(raw.get("added_at") or "").strip(),
+            tls_strict=bool(raw.get("tls_strict")),
+            assume_protocol=str(raw.get("assume_protocol") or "").strip(),
+            assume_https_ok=bool(raw.get("assume_https_ok")),
+            assume_anonymity=str(raw.get("assume_anonymity") or "").strip(),
+            observed=str(raw.get("observed") or "").strip(),
+        )
+
+
+def is_valid_feed_url(url: str) -> bool:
+    """Whether a string is a URL this product will fetch a proxy list from.
+
+    **https only.** A feed is a list of addresses that will end up in front of
+    a credential, fetched from a machine on the open internet; reading it over
+    plain http would let anyone on the path choose which proxies this install
+    considers, which is a downgrade with no case for it. The rest of this
+    module's schemes are about what MCC *dials through*, which is a different
+    question from what it *trusts a list from*.
+    """
+
+    candidate = url.strip()
+    if not candidate:
+        return False
+    parsed = urlsplit(candidate)
+    if parsed.scheme != "https":
+        return False
+    try:
+        host = parsed.hostname
+    except ValueError:
+        return False
+    return bool(host)
+
+
+# ------------------------------------------------------------------ pickers
+
+#: What a bare ``ip:port`` list is read as when nothing else says. ``http`` is
+#: the commonest such file by a wide margin and it is what the removed VPSLab
+#: entry assumed; it is a *stated* assumption rendered on the page beside the
+#: picker, never a silent one, and a line carrying its own ``scheme://``
+#: overrides it.
+LINES_DEFAULT_PROTOCOL = "http"
+
+
+@dataclass(frozen=True, slots=True)
+class FeedParser:
+    """One reader, named for the shape it reads rather than for a publisher.
+
+    ``shape`` is the sentence the Proxying page renders beside the picker, in
+    the same voice the feed rows have always used, so an operator choosing a
+    reader is choosing against a description of their own file rather than
+    against a bare identifier.
+    """
+
+    id: str
+    label: str
+    shape: str
+
+
+#: Every reader this install ships, in the order the picker offers them: the
+#: JSON shapes that carry per-address metadata first, the bare address list
+#: last, because it is the one that can say the least.
+PARSERS: tuple[FeedParser, ...] = (
+    FeedParser(
+        "proxyscrape",
+        "JSON: proxies[] with ip_data",
+        'JSON with per-address metadata under a "proxies" key: protocol, '
+        "anonymity, SSL support, uptime, timeout, country and ASN.",
     ),
-    ProxyFeed(
-        id="hproxy",
-        name="HProxy",
-        url="https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/live.json",
-        parser="hproxy",
-        homepage="https://github.com/hproxy-com/free-proxy-list",
-        observed=(
-            "JSON from the GitHub repository: protocol, anonymity, country, "
-            "latency and observed uptime per address. Its documented keyless "
-            "API host did not resolve, so only the repository is read."
-        ),
+    FeedParser(
+        "databay",
+        'JSON: data[] with "iso" and "ssl"',
+        'JSON with per-address metadata under a "data" key: protocol, country '
+        "as an ISO code, an SSL flag, latency, uptime and a last-checked time.",
     ),
-    ProxyFeed(
-        id="databay",
-        name="Databay (TLS-strict)",
-        url=(
-            "https://databay.com/api/v1/proxy-list?protocol=socks5&ssl=strict&limit=300"
-        ),
-        parser="databay",
-        homepage="https://github.com/databay-labs/free-proxy-list",
-        tls_strict=True,
-        observed=(
-            "JSON, and the only feed of the seven whose own filter selects "
-            "for a tunnel that leaves the destination's certificate "
-            "verifiable. Confirmed by fetching it both ways: without "
-            "ssl=strict the answer contains addresses marked ssl:false, with "
-            "it every address is ssl:true."
-        ),
+    FeedParser(
+        "geonode",
+        'JSON: data[] with "protocols" and "anonymityLevel"',
+        'JSON with per-address metadata under a "data" key: a list of '
+        "protocols, an anonymity level, country, ASN, latency and uptime.",
     ),
-    ProxyFeed(
-        id="proxifly",
-        name="Proxifly",
-        url=(
-            "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main"
-            "/proxies/protocols/socks5/data.json"
-        ),
-        parser="proxifly",
-        homepage="https://github.com/proxifly/free-proxy-list",
-        observed=(
-            "JSON from the project's CDN mirror: protocol, anonymity, an "
-            "https flag and a country per address. The SOCKS5 shard is read "
-            "rather than the combined list, which is twice the size."
-        ),
+    FeedParser(
+        "hproxy",
+        'JSON array with "protocols" and "alive"',
+        "A plain JSON array of addresses, each with a list of protocols, an "
+        "anonymity level, country, latency and observed uptime.",
     ),
-    ProxyFeed(
-        id="vpslab",
-        name="VPSLab (HTTP, SSL, elite)",
-        url=(
-            "https://raw.githubusercontent.com/VPSLabCloud/"
-            "VPSLab-Free-Proxy-List/main/http_ssl_elite.txt"
-        ),
-        parser="lines",
-        homepage="https://github.com/VPSLabCloud/VPSLab-Free-Proxy-List",
-        assume_protocol="http",
-        assume_https_ok=True,
-        assume_anonymity="elite",
-        observed=(
-            "Plain ip:port lines behind a comment header naming the file's "
-            "protocol, SSL and anonymity. This file is read rather than the "
-            "combined one because a bare address list cannot say which "
-            "scheme dials it, and this file's name can."
-        ),
+    FeedParser(
+        "proxifly",
+        'JSON array with "https" and "geolocation"',
+        "A plain JSON array of addresses, each with one protocol, an https "
+        "flag, an anonymity level and a country.",
     ),
-    ProxyFeed(
-        id="monosans",
-        name="monosans",
-        url="https://raw.githubusercontent.com/monosans/proxy-list/main/proxies.json",
-        parser="monosans",
-        homepage="https://github.com/monosans/proxy-list",
-        observed=(
-            "JSON from the GitHub repository: protocol, host, port, the "
-            "response time in seconds, the exit IP the project saw, and an "
-            "ASN and country per address."
-        ),
+    FeedParser(
+        "monosans",
+        'JSON array with "host" and seconds',
+        'A plain JSON array of addresses keyed by "host" rather than "ip", '
+        "with the response time in seconds and a nested ASN and country.",
     ),
-    ProxyFeed(
-        id="geonode",
-        name="Geonode",
-        url=(
-            "https://proxylist.geonode.com/api/proxy-list"
-            "?limit=300&page=1&sort_by=lastChecked&sort_type=desc"
-        ),
-        parser="geonode",
-        homepage="https://geonode.com/free-proxy-list",
-        observed=(
-            "JSON from the project's list API: protocols, anonymity level, "
-            "country, ASN, latency, uptime percentage and a last-checked "
-            "timestamp, newest first."
-        ),
+    FeedParser(
+        "lines",
+        "Plain text: one ip:port per line",
+        "Plain ip:port lines with # for a comment. The file cannot say which "
+        f"scheme dials it, so these are read as {LINES_DEFAULT_PROTOCOL}; a "
+        "line that carries its own scheme:// keeps it.",
     ),
 )
 
-FEEDS_BY_ID: dict[str, ProxyFeed] = {feed.id: feed for feed in CATALOGUE}
+PARSERS_BY_ID: dict[str, FeedParser] = {parser.id: parser for parser in PARSERS}
+
+#: The picker's ids, which are exactly :data:`_PARSERS`' keys. Pinned together
+#: in ``tests/config/test_proxy_feeds.py`` so a reader can never be added to
+#: one and forgotten in the other -- a parser missing from ``PARSERS`` would be
+#: unreachable from the page, and one missing from ``_PARSERS`` would be
+#: offered and then silently yield nothing.
+PARSER_IDS: tuple[str, ...] = tuple(parser.id for parser in PARSERS)
 
 
-def known_feed_ids(values: object) -> tuple[str, ...]:
-    """The feeds among ``values`` that this install ships, in catalogue order.
+def is_known_parser(parser_id: object) -> bool:
+    """Whether ``parser_id`` names a reader this install ships."""
 
-    Unknown names are dropped rather than raised on: this is reached by a
-    stored document that may predate a feed being removed, and a store that
-    refuses to load because one source retired is a worse outcome than a
-    switch quietly going away.
+    return str(parser_id or "").strip().lower() in PARSERS_BY_ID
+
+
+def normalise_parser(value: object) -> str:
+    """Return a reader id, or ``""`` for anything this install cannot read.
+
+    Empty rather than a default: guessing a reader for a stored feed would
+    make a feed that silently yields nothing look like a feed whose publisher
+    went quiet, and those want different answers from the operator.
     """
 
-    if isinstance(values, str) or not isinstance(values, Sequence):
-        return ()
-    wanted = {str(value).strip().lower() for value in values}
-    return tuple(feed.id for feed in CATALOGUE if feed.id in wanted)
+    parser_id = str(value or "").strip().lower()
+    return parser_id if parser_id in PARSERS_BY_ID else ""
+
+
+def parser_shape(parser_id: str) -> str:
+    """The one-sentence description of what a reader expects."""
+
+    parser = PARSERS_BY_ID.get(str(parser_id or "").strip().lower())
+    return parser.shape if parser is not None else ""
+
+
+def probe_feed(parser_id: str) -> ProxyFeed:
+    """A throwaway feed carrying just enough to run ``parser_id`` once.
+
+    Detection has no stored feed to parse against yet, and ``lines`` cannot
+    produce an address without being told a protocol, so the probe states the
+    same assumption the picker renders.
+    """
+
+    return ProxyFeed(
+        id="",
+        name="",
+        url="",
+        parser=str(parser_id or "").strip().lower(),
+        homepage="",
+        assume_protocol=LINES_DEFAULT_PROTOCOL,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ParserTrial:
+    """What one reader made of a body, in the words the page reports it with."""
+
+    parser: str
+    label: str
+    shape: str
+    count: int
+
+    @property
+    def plausible(self) -> bool:
+        return self.count > 0
+
+    def as_document(self) -> dict[str, Any]:
+        return {
+            "parser": self.parser,
+            "label": self.label,
+            "shape": self.shape,
+            "count": self.count,
+        }
+
+
+def detect_parser(text: str) -> tuple[ParserTrial, ...]:
+    """Try every reader against ``text``; best first, all of them reported.
+
+    **This proposes and never decides.** The caller shows the picker either
+    way, pre-set to the first trial that found anything, and stores whatever
+    the operator left it on. A body nothing reads comes back as seven trials of
+    zero -- which is an answer ("no reader here recognises this"), not a
+    failure, and the feed is still addable.
+
+    ``lines`` is tried last among equals on purpose: it accepts almost any text
+    containing ``host:port``, so on a JSON body it can score a spurious hit off
+    the punctuation. Ordering by count first and by :data:`PARSERS` order
+    second means a JSON reader that genuinely parsed the document outranks it.
+    """
+
+    trials: list[ParserTrial] = []
+    for parser in PARSERS:
+        try:
+            found = probe_feed(parser.id).parse(text)
+        except Exception:  # pragma: no cover - ``parse`` already swallows these
+            found = ()
+        trials.append(
+            ParserTrial(
+                parser=parser.id,
+                label=parser.label,
+                shape=parser.shape,
+                count=len(found),
+            )
+        )
+    # ``sorted`` is stable, so equal counts keep PARSERS order and ``lines``
+    # stays last among them.
+    return tuple(sorted(trials, key=lambda trial: -trial.count))
+
+
+def proposed_parser(trials: Sequence[ParserTrial]) -> str:
+    """The reader detection proposes, or ``""`` when nothing recognised it."""
+
+    for trial in trials:
+        if trial.plausible:
+            return trial.parser
+    return ""
 
 
 __all__ = [
-    "CATALOGUE",
-    "FEEDS_BY_ID",
     "FEEDS_OBSERVED_ON",
     "FEED_MAX_BYTES",
     "FEED_MAX_ENDPOINTS",
+    "FEED_NAME_MAX_LENGTH",
     "FEED_PROTOCOLS",
+    "LINES_DEFAULT_PROTOCOL",
+    "PARSERS",
+    "PARSERS_BY_ID",
+    "PARSER_IDS",
+    "CustomFeed",
     "FeedEndpoint",
+    "FeedParser",
+    "ParserTrial",
     "ProxyFeed",
-    "known_feed_ids",
+    "detect_parser",
+    "is_known_parser",
+    "is_valid_feed_url",
+    "mint_feed_id",
+    "normalise_parser",
+    "parser_shape",
+    "probe_feed",
+    "proposed_parser",
 ]

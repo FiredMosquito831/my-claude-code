@@ -539,8 +539,14 @@ const proxyState = {
   // provider's static <PROVIDER>_PROXY. Cleared on every reload so a saved
   // card cannot keep showing a draft the server rejected.
   drafts: new Map(),
-  // The feed ids the server last confirmed. See `rememberSavedFeeds`.
-  savedFeeds: new Set(),
+  // The feed list the server last confirmed, as a signature, and the page's
+  // own editable copy of it. See `rememberSavedFeeds`.
+  savedFeedSignature: "",
+  feeds: [],
+  // The Add form's half-finished row, and what one press of Detect format
+  // last said about its URL. Held in state so a re-render -- which this page
+  // performs after every change -- cannot wipe half-typed input.
+  feedDraft: { name: "", url: "", parser: "", detecting: false, detection: null },
   loading: false,
   /* ---------------------------------------------- the candidate selection
      Held in state rather than read back out of the DOM, so it survives every
@@ -612,35 +618,66 @@ async function loadProxying() {
   renderProxying();
 }
 
-/* The feed ids the SERVER last told us are switched on.
+/* What the SERVER last told us the feed list is, and the page's own copy of it.
 
-   Ticking a box mutates the feed object in `proxyState.data`, which is what
-   relabels the Fetch button -- but the store is only written by the save
-   route. Without a record of what was actually saved, the page counts ticks
-   and the server counts the store, and the two disagree the moment you tick
-   without saving: the button offers to fetch seven feeds and the server
-   answers "no feeds are switched on". That is what this set exists to
-   prevent. */
-function rememberSavedFeeds() {
-  proxyState.savedFeeds = new Set(
-    ((proxyState.data && proxyState.data.feeds) || [])
-      .filter((feed) => feed.enabled)
-      .map((feed) => feed.id),
+   Editing a row mutates `proxyState.feeds`, which is what relabels the Fetch
+   button -- but the store is only written by the save route. Without a record
+   of what was actually saved, the page counts rows and the server counts the
+   store, and the two disagree the moment you change one without saving: the
+   button offers to fetch feeds the server has never been told about, and the
+   server answers "no feeds are switched on". That is what this signature
+   exists to prevent.
+
+   A signature over the whole row rather than a set of ids, because from
+   7.18.0 a row can differ from the stored one by more than its switch: a
+   rename, a re-pointed URL, a different format, an addition and a removal are
+   all unsaved changes and all have to light the same button. */
+function proxyFeedSignature(feeds) {
+  return JSON.stringify(
+    (feeds || []).map((feed) => [
+      feed.id || "",
+      feed.name || "",
+      feed.url || "",
+      feed.parser || "",
+      Boolean(feed.enabled),
+    ]),
   );
 }
 
-function selectedFeedIds() {
-  return ((proxyState.data && proxyState.data.feeds) || [])
-    .filter((feed) => feed.enabled)
-    .map((feed) => feed.id);
+function rememberSavedFeeds() {
+  const served = (proxyState.data && proxyState.data.feeds) || [];
+  proxyState.savedFeedSignature = proxyFeedSignature(served);
+  // The page edits its own copy, so a draft removal cannot reach back into
+  // the payload the rest of the page renders from.
+  proxyState.feeds = served.map((feed) => ({ ...feed }));
+  proxyState.feedDraft = {
+    name: "",
+    url: "",
+    parser: "",
+    detecting: false,
+    detection: null,
+  };
 }
 
-/* Whether the ticks on screen differ from what the store holds. */
+/* The rows as the save route wants them: the four fields it accepts, plus the
+   id, which is empty for a row the operator just added and is what makes add
+   and edit the same request. */
+function proxyFeedsForSave() {
+  return (proxyState.feeds || []).map((feed) => ({
+    id: feed.id || "",
+    name: feed.name || "",
+    url: feed.url || "",
+    parser: feed.parser || "",
+    enabled: Boolean(feed.enabled),
+  }));
+}
+
+/* Whether the rows on screen differ from what the store holds. */
 function proxyFeedsAreDirty() {
-  const saved = proxyState.savedFeeds || new Set();
-  const selected = selectedFeedIds();
-  if (selected.length !== saved.size) return true;
-  return selected.some((id) => !saved.has(id));
+  return (
+    proxyFeedSignature(proxyState.feeds) !==
+    (proxyState.savedFeedSignature || proxyFeedSignature([]))
+  );
 }
 
 /* The page's one live region.
@@ -797,24 +834,37 @@ function renderProxyFeeds() {
   const panel = byId("proxyingFeeds");
   if (!panel) return;
   panel.textContent = "";
-  const feeds = (proxyState.data && proxyState.data.feeds) || [];
-  if (!feeds.length) return;
+  const feeds = proxyState.feeds || [];
 
-  const row = document.createElement("div");
-  row.className = "proxy-feed-row";
-  feeds.forEach((feed) => row.appendChild(proxyFeedSwitch(feed)));
-  panel.appendChild(row);
+  /* A fresh install lands here: MCC ships no lists, so there is nothing to
+     render but the form. This used to `return` on an empty array, which from
+     7.18.0 would have meant every fresh install seeing a blank panel and no
+     way to add anything -- the page's own version of shipping a Fetch button
+     with no feeds behind it. */
+  if (!feeds.length) {
+    const empty = document.createElement("p");
+    empty.className = "field-description proxy-feed-empty";
+    empty.textContent =
+      "No lists yet. MCC ships none of its own, so it has contacted nobody " +
+      "and will not until you add one below and switch it on.";
+    panel.appendChild(empty);
+  } else {
+    const row = document.createElement("div");
+    row.className = "proxy-feed-row";
+    feeds.forEach((feed) => row.appendChild(proxyFeedSwitch(feed)));
+    panel.appendChild(row);
+  }
 
   const actions = document.createElement("div");
   actions.className = "proxy-feed-actions";
-  const enabled = feeds.filter((feed) => feed.enabled);
+  const enabled = feeds.filter((feed) => feed.enabled && feed.readable);
 
   const dirty = proxyFeedsAreDirty();
 
   const save = document.createElement("button");
   save.type = "button";
   save.className = "secondary-button";
-  save.textContent = "Save feed selection";
+  save.textContent = "Save feed list";
   save.disabled = !dirty;
   save.addEventListener("click", () => saveProxyFeeds(save));
   actions.appendChild(save);
@@ -823,9 +873,11 @@ function renderProxyFeeds() {
   fetchNow.type = "button";
   fetchNow.className = "primary-button proxy-feed-fetch";
   /* The label says what the press will DO, including the save it now performs
-     when the ticks differ from the store. It used to count ticked boxes while
-     the route counted the store, so it could offer to fetch seven feeds from
-     a server that had been told about none. */
+     when the rows differ from the store. It used to count ticked boxes while
+     the route counted the store, so it could offer to fetch feeds from a
+     server that had been told about none. `enabled` also excludes a row whose
+     format MCC cannot read, for the same reason: the server would not read it
+     either, so counting it would be the same lie in a new place. */
   fetchNow.textContent = !enabled.length
     ? "Fetch now"
     : dirty
@@ -840,19 +892,21 @@ function renderProxyFeeds() {
     const unsaved = document.createElement("p");
     unsaved.className = "field-description proxy-feed-unsaved";
     unsaved.textContent = enabled.length
-      ? "This selection is not saved yet. Fetch saves it first; Save feed " +
-        "selection stores it without reading anything."
-      : "This selection is not saved yet. Saving it with nothing ticked " +
-        "switches every feed off.";
+      ? "This list is not saved yet. Fetch saves it first; Save feed list " +
+        "stores it without reading anything."
+      : "This list is not saved yet. Saving it with nothing switched on " +
+        "means MCC reads nothing.";
     panel.appendChild(unsaved);
   }
+
+  panel.appendChild(proxyFeedAddForm());
 
   const refresh = proxyVocabulary().refresh || {};
   const note = document.createElement("p");
   note.className = "field-description";
   note.textContent = refresh.enabled
-    ? `Scheduled refresh is on: the feeds you tick above are re-read about ` +
-      `every ${Math.max(
+    ? `Scheduled refresh is on: the feeds you switched on above are re-read ` +
+      `about every ${Math.max(
         Number(refresh.interval_minutes) || 0,
         Number(refresh.minimum_minutes) || 30,
       )} minutes. It writes this candidate list and nothing else.`
@@ -868,31 +922,315 @@ function proxyFeedSwitch(feed) {
   const box = document.createElement("input");
   box.type = "checkbox";
   box.checked = Boolean(feed.enabled);
+  // A feed MCC cannot read has nothing to switch on: the pass would skip it.
+  // Disabled rather than hidden, with the reason on the row.
+  box.disabled = !feed.readable;
   box.addEventListener("change", () => {
     feed.enabled = box.checked;
     renderProxying();
   });
+
+  const body = document.createElement("span");
+  body.className = "proxy-feed-body";
   const name = document.createElement("span");
   name.className = "proxy-feed-name";
   name.textContent = feed.name;
-  label.append(box, name);
+  body.appendChild(name);
+
+  const url = document.createElement("span");
+  url.className = "proxy-feed-url";
+  /* The URL is shown in full, unlike a proxy URL. A proxy URL can carry
+     user:pass and is masked everywhere on this page; a feed URL is a public
+     list the operator typed themselves, and hiding it would leave them unable
+     to tell two lists apart or see what they pointed MCC at. */
+  url.textContent = feed.url;
+  body.appendChild(url);
+
+  const parser = document.createElement("span");
+  parser.className = "proxy-feed-parser";
+  parser.textContent = feed.readable
+    ? proxyParserLabel(feed.parser)
+    : "Format not recognised";
+  if (feed.parser_shape) parser.title = feed.parser_shape;
+  body.appendChild(parser);
+  label.append(box, body);
+
   if (feed.tls_strict) {
     const badge = document.createElement("span");
     badge.className = "proxy-feed-badge";
     badge.textContent = "TLS-strict filter";
     badge.title =
       "This list's own filter selects for addresses that tunnel HTTPS " +
-      "without breaking the destination's certificate validation -- the one " +
+      "without breaking the destination's certificate checks -- the one " +
       "property MCC needs. It is a preference, not a verdict: only the Test " +
       "button finds out.";
     label.appendChild(badge);
   }
+
+  if (!feed.readable) {
+    const warning = document.createElement("span");
+    warning.className = "proxy-feed-warning";
+    warning.textContent =
+      "MCC has no reader for this list's format, so it is skipped. Remove it, " +
+      "or add it again and press Detect format.";
+    label.appendChild(warning);
+  }
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "secondary-button proxy-feed-remove";
+  remove.textContent = "Remove";
+  remove.title =
+    "Removes the list. The addresses it already offered stay on offer -- " +
+    "they are facts of their own, with their own test results.";
+  remove.addEventListener("click", () => {
+    proxyState.feeds = (proxyState.feeds || []).filter((item) => item !== feed);
+    renderProxying();
+    announceProxy(
+      `${feed.name} removed from the list. Press Save feed list to keep that. ` +
+        "Any addresses it offered stay on offer.",
+    );
+  });
+  label.appendChild(remove);
+
   if (feed.observed) label.title = feed.observed;
   return label;
 }
 
+/* The readers this install ships, for the picker. MCC ships no feed, so this
+   is the whole of what the page can offer: formats, never sources. */
+function proxyParsers() {
+  return proxyVocabulary().parsers || [];
+}
+
+function proxyParserLabel(parserId) {
+  const found = proxyParsers().find((parser) => parser.id === parserId);
+  return found ? found.label : parserId || "";
+}
+
+/** Name, URL, and a format the operator picks.
+ *
+ * Detection proposes and the operator decides, so the picker is ALWAYS
+ * rendered -- never hidden behind a successful detection, never pre-submitted
+ * on the page's behalf. Pressing Detect format reads the URL once and moves
+ * the picker to what it found; pressing nothing leaves the picker where the
+ * operator left it, and that is what gets saved.
+ */
+function proxyFeedAddForm() {
+  const draft = proxyState.feedDraft;
+  const form = document.createElement("div");
+  form.className = "proxy-feed-add";
+
+  /* Typing must reach the buttons WITHOUT a re-render.
+   *
+   * The first cut of this form computed `disabled` once, at render time, and
+   * left the input handlers to mutate the draft only -- so an operator typed a
+   * URL and watched Detect format stay greyed out until something unrelated
+   * redrew the panel. Re-rendering on every keystroke is not the fix either:
+   * it would tear out the very input being typed into and drop the caret. So
+   * the handlers call this, and it is assigned once the buttons exist. */
+  let syncAddForm = () => {};
+
+  const title = document.createElement("h4");
+  title.className = "proxy-feed-add-title";
+  title.textContent = "Add a list";
+  form.appendChild(title);
+
+  const fields = document.createElement("div");
+  fields.className = "proxy-feed-add-fields";
+
+  const nameField = document.createElement("label");
+  nameField.className = "proxy-feed-field";
+  const nameLabel = document.createElement("span");
+  nameLabel.textContent = "Name";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "proxy-feed-input";
+  nameInput.value = draft.name;
+  nameInput.placeholder = "What you will recognise it by";
+  nameInput.maxLength = Number(proxyVocabulary().feed_name_max_length) || 60;
+  nameInput.addEventListener("input", () => {
+    draft.name = nameInput.value;
+    syncAddForm();
+  });
+  nameField.append(nameLabel, nameInput);
+  fields.appendChild(nameField);
+
+  const urlField = document.createElement("label");
+  urlField.className = "proxy-feed-field";
+  const urlLabel = document.createElement("span");
+  urlLabel.textContent = "URL (https)";
+  const urlInput = document.createElement("input");
+  urlInput.type = "url";
+  urlInput.className = "proxy-feed-input";
+  urlInput.value = draft.url;
+  urlInput.placeholder = "https://example.com/proxies.json";
+  urlInput.addEventListener("input", () => {
+    draft.url = urlInput.value;
+    // A URL that changed invalidates what the last detection said about the
+    // old one. Clearing it is more honest than leaving a sentence about a
+    // different address sitting under the picker.
+    draft.detection = null;
+    syncAddForm();
+  });
+  urlField.append(urlLabel, urlInput);
+  fields.appendChild(urlField);
+
+  const parserField = document.createElement("label");
+  parserField.className = "proxy-feed-field";
+  const parserLabel = document.createElement("span");
+  parserLabel.textContent = "Format";
+  const select = document.createElement("select");
+  select.className = "proxy-feed-select";
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "Choose a format...";
+  select.appendChild(blank);
+  proxyParsers().forEach((parser) => {
+    const option = document.createElement("option");
+    option.value = parser.id;
+    option.textContent = parser.label;
+    option.title = parser.shape;
+    select.appendChild(option);
+  });
+  select.value = draft.parser;
+  select.addEventListener("change", () => {
+    draft.parser = select.value;
+    /* The operator has overridden the proposal, so the note under the picker
+       must stop describing what was detected and start describing what they
+       chose -- otherwise an override reads as if it had not registered. The
+       detection is forgotten at the same time, for the same reason: it is no
+       longer what this form is about to store. */
+    draft.detection = null;
+    syncAddForm();
+  });
+  parserField.append(parserLabel, select);
+  fields.appendChild(parserField);
+  form.appendChild(fields);
+
+  const buttons = document.createElement("div");
+  buttons.className = "proxy-feed-add-actions";
+
+  const detect = document.createElement("button");
+  detect.type = "button";
+  detect.className = "secondary-button proxy-feed-detect";
+  detect.title =
+    "Reads this URL once and proposes the format it recognises. It only " +
+    "proposes -- the picker stays yours.";
+  detect.addEventListener("click", () => detectProxyFeed(detect));
+  buttons.appendChild(detect);
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "secondary-button proxy-feed-add-button";
+  add.textContent = "Add to list";
+  add.addEventListener("click", () => addProxyFeed());
+  buttons.appendChild(add);
+  form.appendChild(buttons);
+
+  const note = document.createElement("p");
+  note.className = "field-description proxy-feed-detection";
+  form.appendChild(note);
+
+  /* The one place the form's derived state is computed, so the render path
+     and every keystroke agree about it by construction. */
+  syncAddForm = () => {
+    detect.textContent = draft.detecting ? "Reading..." : "Detect format";
+    detect.disabled = draft.detecting || !draft.url.trim();
+    add.disabled = !draft.url.trim() || !draft.parser;
+    const shape = draft.parser
+      ? (proxyParsers().find((parser) => parser.id === draft.parser) || {}).shape
+      : "";
+    if (draft.detection && draft.detection.detail) {
+      note.textContent = draft.detection.parser
+        ? `${draft.detection.detail} The picker has been set to that; change ` +
+          "it if you know better."
+        : draft.detection.detail;
+    } else if (shape) {
+      note.textContent = shape;
+    } else {
+      note.textContent =
+        "Pick the format yourself, or press Detect format to have MCC read " +
+        "the URL once and propose one. Nothing else is fetched until you " +
+        "switch the feed on.";
+    }
+  };
+  syncAddForm();
+  return form;
+}
+
+async function detectProxyFeed(button) {
+  const draft = proxyState.feedDraft;
+  const url = draft.url.trim();
+  if (!/^https:\/\//i.test(url)) {
+    announceProxy(
+      "A feed URL must start with https://. MCC reads a proxy list only over " +
+        "https: it is a list of addresses that will end up in front of a " +
+        "credential.",
+    );
+    return;
+  }
+  draft.detecting = true;
+  button.disabled = true;
+  renderProxying();
+  try {
+    const answer = await api("/admin/api/proxy-chains/feeds/detect", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    draft.detection = answer.detection || {};
+    /* The proposal moves the picker. It does NOT save, and it does not stop
+       the operator moving it back: detection proposes, the operator decides,
+       and the value in the picker when Add is pressed is what is stored. */
+    if (draft.detection.parser) draft.parser = draft.detection.parser;
+  } catch (error) {
+    draft.detection = { ok: false, parser: "", detail: error.message };
+    announceProxy(error.message);
+  } finally {
+    draft.detecting = false;
+    renderProxying();
+  }
+}
+
+function addProxyFeed() {
+  const draft = proxyState.feedDraft;
+  const url = draft.url.trim();
+  if (!/^https:\/\//i.test(url)) {
+    announceProxy("A feed URL must start with https://.");
+    return;
+  }
+  if ((proxyState.feeds || []).some((feed) => feed.url === url)) {
+    announceProxy("That URL is already in the list.");
+    return;
+  }
+  proxyState.feeds = (proxyState.feeds || []).concat([
+    {
+      id: "",
+      name: draft.name.trim() || url,
+      url,
+      parser: draft.parser,
+      parser_shape: (
+        proxyParsers().find((parser) => parser.id === draft.parser) || {}
+      ).shape || "",
+      readable: Boolean(draft.parser),
+      observed: (draft.detection && draft.detection.detail) || "",
+      tls_strict: false,
+      // Added switched OFF. Adding a list and reading it are separate
+      // decisions, and a list that started fetching because it was typed
+      // would be the surprise this whole page exists to avoid.
+      enabled: false,
+    },
+  ]);
+  proxyState.feedDraft = { name: "", url: "", parser: "", detecting: false, detection: null };
+  renderProxying();
+  announceProxy(
+    "Added to the list, switched off. Press Save feed list to keep it, then " +
+      "switch it on when you want MCC to read it.",
+  );
+}
+
 async function saveProxyFeeds(button) {
-  const feeds = selectedFeedIds();
+  const feeds = proxyFeedsForSave();
   button.disabled = true;
   try {
     proxyState.data = await api("/admin/api/proxy-chains/feeds", {
@@ -901,11 +1239,13 @@ async function saveProxyFeeds(button) {
     });
     rememberSavedFeeds();
     renderProxying();
+    const on = feeds.filter((feed) => feed.enabled).length;
     announceProxy(
-      feeds.length
-        ? `${feeds.length} feed(s) switched on. Nothing has been fetched yet ` +
-            "-- press Fetch, or turn on the scheduled refresh."
-        : "No feeds are switched on. MCC contacts none of them.",
+      on
+        ? `${feeds.length} list(s) saved, ${on} switched on. Nothing has been ` +
+            "fetched yet -- press Fetch, or turn on the scheduled refresh."
+        : `${feeds.length} list(s) saved, none switched on. MCC contacts none ` +
+            "of them.",
     );
   } catch (error) {
     button.disabled = false;
@@ -926,20 +1266,21 @@ async function ingestProxyFeeds(button) {
        Fetch is an unambiguous statement that the boxes on screen are the
        selection, so persist them rather than refuse, and say so. */
     if (proxyFeedsAreDirty()) {
-      button.textContent = "Saving selection...";
+      button.textContent = "Saving the list...";
       proxyState.data = await api("/admin/api/proxy-chains/feeds", {
         method: "PUT",
-        body: JSON.stringify({ feeds: selectedFeedIds() }),
+        body: JSON.stringify({ feeds: proxyFeedsForSave() }),
       });
       rememberSavedFeeds();
     }
-    if (!selectedFeedIds().length) {
+    if (!(proxyState.feeds || []).some((feed) => feed.enabled && feed.readable)) {
       // Nothing to read, and the server would say so. Answer here instead of
       // spending a request on a question this page can already answer.
       renderProxying();
       announceProxy(
-        "No feeds are switched on, so there is nothing to read. Tick one " +
-          "above first -- MCC contacts none of them until you do.",
+        "No feeds are switched on, so there is nothing to read. MCC ships " +
+          "none of its own -- add a list above and switch it on, and it " +
+          "contacts nobody until you do.",
       );
       return;
     }
@@ -1154,9 +1495,16 @@ function renderProxyCandidates() {
   if (!candidates.length) {
     const empty = document.createElement("p");
     empty.className = "field-description";
-    empty.textContent =
-      "No addresses are on offer. Tick a feed above and press Fetch; what " +
-      "comes back is a list of candidates you choose from, not a chain.";
+    /* Two different reasons for an empty list, and they need different
+       instructions. On a fresh install there is nothing to tick -- MCC ships
+       no lists -- so "tick a feed above" would point at a row that does not
+       exist and read as a page that failed to load. */
+    empty.textContent = (proxyState.feeds || []).length
+      ? "No addresses are on offer. Switch a list on above and press Fetch; " +
+        "what comes back is a list of candidates you choose from, not a chain."
+      : "No addresses are on offer, and no lists have been added yet. Add one " +
+        "above and switch it on; what comes back is a list of candidates you " +
+        "choose from, not a chain.";
     panel.appendChild(empty);
     return;
   }

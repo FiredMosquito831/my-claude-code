@@ -75,7 +75,8 @@ from my_claude_code.config.constants import (
     ROTATION_POLICY_ORDER,
 )
 from my_claude_code.config.paths import proxy_chains_path
-from my_claude_code.config.proxy_feeds import known_feed_ids
+from my_claude_code.config.proxy_feed_legacy import convert_legacy_feed_ids
+from my_claude_code.config.proxy_feeds import CustomFeed, mint_feed_id
 
 VERSION_KEY = "version"
 PROXIES_KEY = "proxies"
@@ -84,7 +85,14 @@ CHAINS_KEY = "chains"
 #: written before ingestion shipped, which reads back as "none on offer" and
 #: needs no migration.
 CANDIDATES_KEY = "candidates"
-#: The feeds this install has been told it may read. Absent means none.
+#: The feeds this install has been told it may read, as the operator described
+#: them. Absent means none, which is what a fresh install has: MCC ships no
+#: feed of its own, so every entry here is one somebody typed.
+#:
+#: Releases up to 7.17.1 wrote this key as a list of *built-in feed ids*
+#: (``["databay", "vpslab"]``). That shape is still read -- see
+#: :mod:`~my_claude_code.config.proxy_feed_legacy` -- and converted to the
+#: entries below, so an install that had feeds switched on keeps them.
 FEEDS_KEY = "feeds"
 DOCUMENT_VERSION = 1
 
@@ -165,9 +173,10 @@ SOURCE_MANUAL = "manual"
 #: into a chain, and it cannot carry a credential before then.
 SOURCE_FEED = "feed"
 
-#: The most addresses the candidate list holds. Ingestion merges seven feeds
-#: that between them publish tens of thousands of endpoints; what an operator
-#: can actually read and choose from is two screens of them, ranked.
+#: The most addresses the candidate list holds. A pass merges every feed the
+#: operator added, which between them can publish tens of thousands of
+#: endpoints; what an operator can actually read and choose from is two
+#: screens of them, ranked.
 MAX_CANDIDATES = 60
 
 #: What the checker learned about the destination's certificate through this
@@ -590,14 +599,32 @@ class ProxyChains:
     #: it goes through the same checker and the same ``TLS intercepted``
     #: refusal a typed address does.
     candidates: tuple[str, ...] = ()
-    #: Which named feeds this install has been told to read. Empty on a fresh
-    #: install and empty until an operator ticks one: it is the switch that
-    #: decides whether this product ever contacts a third party at all.
-    feeds: tuple[str, ...] = ()
+    #: The feeds this install has been told to read, in the order they were
+    #: added. Empty on a fresh install and empty until an operator adds one:
+    #: MCC ships none, so this list existing at all is a decision somebody
+    #: made, and it is what decides whether this product ever contacts a third
+    #: party.
+    feeds: tuple[CustomFeed, ...] = ()
+    #: Built-in feed ids that were converted into :attr:`feeds` while reading
+    #: this document. **Never persisted** -- it is how
+    #: :func:`~my_claude_code.config.proxy_feed_legacy.migrate_proxy_feeds`
+    #: knows there is a one-time write to do, and it is empty on every read of
+    #: a document that has already been through it. That emptiness is what
+    #: makes the migration idempotent.
+    migrated_feed_ids: tuple[str, ...] = ()
 
     @property
     def is_empty(self) -> bool:
         return not self.chains and not self.proxies and not self.feeds
+
+    @property
+    def enabled_feed_ids(self) -> tuple[str, ...]:
+        """The ids of the feeds a fetch would actually read."""
+
+        return tuple(feed.id for feed in self.feeds if feed.enabled and feed.readable)
+
+    def feed(self, feed_id: str) -> CustomFeed | None:
+        return next((feed for feed in self.feeds if feed.id == feed_id), None)
 
     def chain(self, provider_id: str | None) -> ProxyChain | None:
         """Return one provider's chain, or ``None`` for "behaves as today"."""
@@ -629,10 +656,30 @@ class ProxyChains:
         )
         return replace(self, proxies=proxies), proxy_id
 
-    def with_feeds(self, feed_ids: Iterable[str]) -> ProxyChains:
-        """Return a copy naming the feeds this install may read."""
+    def with_feeds(self, feeds: Iterable[CustomFeed]) -> ProxyChains:
+        """Return a copy whose feed list is exactly ``feeds``.
 
-        return replace(self, feeds=tuple(dict.fromkeys(feed_ids)))
+        The one write path for adding, editing, enabling and removing a feed:
+        the page sends the list it is showing and this replaces it, the way a
+        chain ``PUT`` replaces the chain. Removing a feed is leaving it out,
+        and it deliberately **does not touch the candidates** that feed
+        supplied -- an address on offer is an independent fact with its own
+        ``source_count`` and its own health record, and deleting the row that
+        named it would throw away work the operator may be halfway through.
+
+        Ids are minted here for entries that arrive without one, which is what
+        makes "add" and "edit" the same request.
+        """
+
+        kept: list[CustomFeed] = []
+        taken: set[str] = set()
+        for feed in feeds:
+            feed_id = feed.id.strip() or mint_feed_id(taken)
+            while feed_id in taken:
+                feed_id = mint_feed_id(taken)
+            taken.add(feed_id)
+            kept.append(replace(feed, id=feed_id))
+        return replace(self, feeds=tuple(kept))
 
     def with_candidates(
         self, offered: Sequence[tuple[str, ProxyEndpoint]]
@@ -759,7 +806,10 @@ class ProxyChains:
                 for provider_id, chain in self.chains.items()
             },
             CANDIDATES_KEY: list(self.candidates),
-            FEEDS_KEY: list(self.feeds),
+            # Always objects, never the pre-7.18.0 id strings. Writing this
+            # document is what completes the migration: the next read finds
+            # entries rather than ids and converts nothing.
+            FEEDS_KEY: [feed.as_document() for feed in self.feeds],
         }
 
     @classmethod
@@ -829,6 +879,7 @@ class ProxyChains:
         referenced.update(
             proxy_id for chain in chains.values() for proxy_id in chain.proxy_ids()
         )
+        feeds, migrated = _read_feeds(document.get(FEEDS_KEY))
         return cls(
             proxies={
                 proxy_id: endpoint
@@ -837,11 +888,56 @@ class ProxyChains:
             },
             chains=chains,
             candidates=candidates,
-            feeds=known_feed_ids(document.get(FEEDS_KEY)),
+            feeds=feeds,
+            migrated_feed_ids=migrated,
         )
 
 
 EMPTY_PROXY_CHAINS = ProxyChains()
+
+
+def _read_feeds(raw: object) -> tuple[tuple[CustomFeed, ...], tuple[str, ...]]:
+    """Read the ``feeds`` key in either shape, and say what was converted.
+
+    **Two shapes, one list.** 7.18.0 onwards writes objects. Up to 7.17.1 this
+    key was a list of built-in feed ids, and those strings are converted here
+    into the entries that mean the same thing, using the transitional table in
+    :mod:`~my_claude_code.config.proxy_feed_legacy`.
+
+    The conversion happens on **every** read of such a document, in memory, so
+    an install's feeds keep working from the moment it starts even if the
+    one-time rewrite has not run or could not run. The ids it converted are
+    reported back so that rewrite knows it has something to do -- and, once it
+    has run, this function sees objects, converts nothing, and reports nothing.
+
+    A mixed list is read as a mixture: entries and ids each go down their own
+    branch. That cannot arise from any release, but it is what a half-finished
+    hand edit looks like and there is no reason to lose either half of it.
+    """
+
+    if isinstance(raw, str) or not isinstance(raw, Sequence):
+        if raw is not None:
+            logger.warning("PROXY CHAINS: '{}' is not a list", FEEDS_KEY)
+        return (), ()
+
+    feeds: list[CustomFeed] = []
+    legacy: list[str] = []
+    taken: list[str] = []
+    for index, entry in enumerate(raw):
+        if isinstance(entry, str):
+            legacy.append(entry)
+            continue
+        feed = CustomFeed.from_document(entry, f"{FEEDS_KEY}[{index}]")
+        if feed is None:
+            continue
+        feed_id = feed.id or mint_feed_id(taken)
+        while feed_id in taken:
+            feed_id = mint_feed_id(taken)
+        taken.append(feed_id)
+        feeds.append(replace(feed, id=feed_id))
+
+    converted = convert_legacy_feed_ids(legacy, taken=taken)
+    return tuple(feeds) + converted, tuple(feed.id for feed in converted)
 
 
 def _mint_proxy_id(existing: Mapping[str, ProxyEndpoint]) -> str:
@@ -881,6 +977,43 @@ def load_proxy_chains(path: Path | None = None) -> ProxyChains:
         return EMPTY_PROXY_CHAINS
 
     return ProxyChains.from_document(document)
+
+
+def migrate_proxy_feeds(path: Path | None = None) -> tuple[str, ...]:
+    """Write a pre-7.18.0 feed list back in the new shape, once.
+
+    Called on server startup. The conversion itself happens on **every** read
+    (:func:`_read_feeds`), so an install's feeds keep working from the moment
+    it starts whether or not this ever runs; what this adds is making it
+    durable, which is also what makes it stop happening.
+
+    **Idempotent.** It writes only when the read actually converted something.
+    After the write the document holds feed objects rather than id strings, so
+    the next start converts nothing, reports nothing and writes nothing -- a
+    second start is a no-op, not a second set of entries.
+
+    Never raises. A migration that cannot write leaves an install whose feeds
+    still work and whose store is rewritten at the next start that can; that is
+    a far better outcome than a server refusing to boot over a read-only file.
+    """
+
+    try:
+        store = load_proxy_chains(path)
+        if not store.migrated_feed_ids:
+            return ()
+        save_proxy_chains(store, path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("PROXY FEEDS: could not rewrite the feed list: {}", exc)
+        return ()
+
+    logger.info(
+        "PROXY FEEDS: converted {} built-in feed(s) to custom entries, still "
+        "switched on: {}. MCC no longer ships any feed of its own; these are "
+        "now yours to edit or remove on the Proxying page.",
+        len(store.migrated_feed_ids),
+        ", ".join(store.migrated_feed_ids),
+    )
+    return store.migrated_feed_ids
 
 
 def save_proxy_chains(chains: ProxyChains, path: Path | None = None) -> None:
@@ -955,6 +1088,7 @@ __all__ = [
     "TLS_UNKNOWN",
     "TRIGGER_KIND_ORDER",
     "VERSION_KEY",
+    "CustomFeed",
     "ProxyChain",
     "ProxyChainEntry",
     "ProxyChains",
@@ -965,6 +1099,7 @@ __all__ = [
     "current_proxy_chains",
     "is_valid_proxy_url",
     "load_proxy_chains",
+    "migrate_proxy_feeds",
     "normalise_policy",
     "normalise_scope",
     "normalise_trigger_kinds",

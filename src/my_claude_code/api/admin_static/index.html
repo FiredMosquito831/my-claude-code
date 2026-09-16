@@ -336,13 +336,14 @@
                 <div>
                   <h3 id="proxyingFeedsTitle">Public proxy lists</h3>
                   <p>
-                    Seven named lists MCC knows how to read. <strong>None is
-                    switched on</strong> until you tick one here, and ticking
-                    one fetches nothing by itself &mdash; MCC contacts a list
-                    only when you press Fetch, or when you also turn on the
-                    scheduled refresh. Every URL below was fetched by hand and
-                    each parser was written against what it actually returned;
-                    hover a name to see what was seen.
+                    <strong>MCC ships no lists.</strong> It knows how to
+                    <em>read</em> seven formats; which lists to read is yours
+                    to choose, so this section is empty until you add one. Give
+                    it a name and an https URL and press <em>Detect format</em>
+                    &mdash; MCC reads the URL once and proposes the format it
+                    recognises, and you can override that proposal before
+                    saving. Nothing is fetched again until you switch the feed
+                    on and press Fetch, or turn on the scheduled refresh.
                   </p>
                 </div>
               </div>
@@ -362,11 +363,12 @@
                   benched because it did not answer, or refused.
                 </p>
                 <p>
-                  MCC does not vouch for any of these lists or the machines on
-                  them. <em>How many feeds agree</em> on an address is the one
-                  signal here that is evidence rather than a claim copied from
-                  one publisher, so it is shown on every row, with the names
-                  behind it.
+                  MCC does not vouch for any list you point it at, or for the
+                  machines on one. <em>How many feeds agree</em> on an address
+                  is the one signal here that is evidence rather than a claim
+                  copied from one publisher, so it is shown on every row, with
+                  the names behind it &mdash; which is worth having only once
+                  you have added more than one list.
                 </p>
               </div>
               <div id="proxyingFeeds"></div>

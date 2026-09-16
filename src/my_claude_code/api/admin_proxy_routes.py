@@ -37,6 +37,7 @@ import asyncio
 import threading
 import time
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -53,7 +54,8 @@ from my_claude_code.application.proxy_check import (
     destination_for_provider,
 )
 from my_claude_code.application.proxy_ingest import (
-    feed_catalogue_payload,
+    detect_feed,
+    feed_payload,
     ingest,
     known_feed_name,
 )
@@ -90,9 +92,13 @@ from my_claude_code.config.proxy_chains import (
     save_proxy_chains,
 )
 from my_claude_code.config.proxy_feeds import (
-    FEEDS_BY_ID,
-    FEEDS_OBSERVED_ON,
-    known_feed_ids,
+    FEED_NAME_MAX_LENGTH,
+    LINES_DEFAULT_PROTOCOL,
+    PARSER_IDS,
+    PARSERS,
+    CustomFeed,
+    is_valid_feed_url,
+    normalise_parser,
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
@@ -554,10 +560,31 @@ def _refuse_if_intercepted(store: ProxyChains, proxy_id: str, index: int) -> Non
 # ------------------------------------------------------------------ feeds
 
 
-class ProxyFeedsPayload(BaseModel):
-    """Which named feeds this install may read. A ``PUT`` replaces the set."""
+#: The most feeds one install may hold. A pass is serial at fifteen seconds a
+#: feed, so this is the bound that keeps the Fetch button from being unbounded
+#: in wall-clock; it is far above anything an operator would curate by hand.
+PROXY_FEED_MAX = 20
 
-    feeds: list[str] = Field(default_factory=list)
+
+class ProxyFeedPayload(BaseModel):
+    """One feed as the page holds it.
+
+    ``id`` empty means "new" -- which is what makes add and edit the same
+    request. A feed the operator did not touch travels back with the id it
+    already had, and keeps it.
+    """
+
+    id: str = ""
+    name: str = ""
+    url: str = ""
+    parser: str = ""
+    enabled: bool = False
+
+
+class ProxyFeedsPayload(BaseModel):
+    """The whole feed list. A ``PUT`` replaces it."""
+
+    feeds: list[ProxyFeedPayload] = Field(default_factory=list)
 
 
 @router.put("/admin/api/proxy-chains/feeds")
@@ -566,32 +593,170 @@ async def put_proxy_feeds(
     request: Request,
     services: ApiServices = Depends(get_services),
 ):
-    """Record which feeds may be read. Fetches nothing by itself.
+    """Write the feed list: add, edit, enable and remove, all one write.
 
-    Saving this makes no outbound request: it records consent. The reading
-    happens on the Fetch button below it, or on the timer if the operator also
-    turned that on -- two switches, because "may this install talk to public
-    proxy lists" and "may it do so unattended" are different questions.
+    **One write path**, the way the chain ``PUT`` is one write path, and for
+    the same reason: the list the operator is looking at *is* the setting, and
+    a partial write would need a vocabulary for "move this, rename that, drop
+    the other" that the list already says without one.
+
+    Saving makes no outbound request. It records what may be read; the reading
+    happens on the Fetch button, or on the timer if the operator also turned
+    that on -- two switches, because "may this install read this list" and "may
+    it do so unattended" are different questions.
+
+    Removing a feed **keeps the addresses it supplied.** A candidate is an
+    independent fact with its own ``source_count`` and its own health record,
+    and often the whole reason the feed was added; deleting rows the operator
+    may be halfway through choosing from is not what "remove this list" means.
     """
 
     require_loopback_admin(request)
-    unknown = sorted(
-        {
-            str(name).strip().lower()
-            for name in payload.feeds
-            if str(name).strip().lower() not in FEEDS_BY_ID
-        }
-    )
-    if unknown:
+    if len(payload.feeds) > PROXY_FEED_MAX:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Not a feed this install ships: {', '.join(unknown)}. "
-                f"Known feeds: {', '.join(FEEDS_BY_ID)}."
+                f"At most {PROXY_FEED_MAX} feeds; this list has "
+                f"{len(payload.feeds)}. Each one is a separate request on "
+                "every pass."
             ),
         )
-    await asyncio.to_thread(_commit_feeds, known_feed_ids(payload.feeds))
+    existing = {feed.id: feed for feed in current_proxy_chains().feeds}
+    feeds: list[CustomFeed] = []
+    seen_urls: set[str] = set()
+    for index, entry in enumerate(payload.feeds):
+        feeds.append(_feed_from_payload(entry, index, existing, seen_urls))
+    await asyncio.to_thread(_commit_feeds, tuple(feeds))
     return await asyncio.to_thread(_payload, services)
+
+
+def _feed_from_payload(
+    entry: ProxyFeedPayload,
+    index: int,
+    existing: dict[str, CustomFeed],
+    seen_urls: set[str],
+) -> CustomFeed:
+    """Validate one row, carrying across what the page was never told.
+
+    ``assume_protocol`` and the rest are not on the form. They belong to the
+    feed, so an edit that only renames a row must not silently strip them --
+    which would turn a working plain-text feed into one that fetches fine and
+    offers nothing.
+    """
+
+    url = entry.url.strip()
+    name = entry.name.strip()
+    where = name or url or f"feed {index + 1}"
+    if not is_valid_feed_url(url):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{where} needs an https URL. A feed is a list of addresses "
+                "that will end up in front of a credential, so MCC reads one "
+                "only over https -- give the full URL, for example "
+                "https://example.com/proxies.json."
+            ),
+        )
+    if url in seen_urls:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{where} is listed twice. One entry per URL.",
+        )
+    seen_urls.add(url)
+    if len(name) > FEED_NAME_MAX_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"A feed name may be at most {FEED_NAME_MAX_LENGTH} "
+                f"characters; {where}'s is {len(name)}."
+            ),
+        )
+    parser = normalise_parser(entry.parser)
+    if entry.parser.strip() and not parser:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Not a format this install reads: {entry.parser}. "
+                f"Choose one of: {', '.join(PARSER_IDS)}."
+            ),
+        )
+    if not parser:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{where} needs a format. Press Detect format to have MCC "
+                "read the URL once and propose one, or pick one yourself."
+            ),
+        )
+    previous = existing.get(entry.id.strip())
+    return CustomFeed(
+        id=entry.id.strip(),
+        name=name[:FEED_NAME_MAX_LENGTH] or url,
+        url=url,
+        parser=parser,
+        enabled=bool(entry.enabled),
+        added_at=(
+            previous.added_at
+            if previous is not None and previous.added_at
+            else datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        ),
+        tls_strict=previous.tls_strict if previous is not None else False,
+        assume_protocol=(
+            previous.assume_protocol
+            if previous is not None
+            else (LINES_DEFAULT_PROTOCOL if parser == "lines" else "")
+        ),
+        assume_https_ok=previous.assume_https_ok if previous is not None else False,
+        assume_anonymity=previous.assume_anonymity if previous is not None else "",
+        observed=previous.observed if previous is not None else "",
+    )
+
+
+class ProxyFeedDetectPayload(BaseModel):
+    """A URL the operator just typed, to be read once and described."""
+
+    url: str
+
+
+@router.post("/admin/api/proxy-chains/feeds/detect")
+async def detect_proxy_feed(
+    payload: ProxyFeedDetectPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Read a URL once and propose a format for it.
+
+    **It proposes; it never decides.** The page's picker is shown either way,
+    pre-set to whatever comes back, and the operator's choice is what the save
+    stores. A body no reader recognises comes back saying so, with the feed
+    still addable -- a list that 404s this afternoon may answer tomorrow, and a
+    form that refused to record it would be enforcing a guess about somebody
+    else's uptime.
+
+    One outbound request, to a URL the operator typed into a form and pressed a
+    button about, which is the same consent the Test button asks for. Nothing
+    else here fetches: the feed makes no further request until it is saved,
+    switched on, and fetched.
+    """
+
+    require_loopback_admin(request)
+    url = payload.url.strip()
+    if not is_valid_feed_url(url):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Give an https URL to read. MCC fetches a proxy list only "
+                "over https, for example https://example.com/proxies.json."
+            ),
+        )
+    detection = await detect_feed(url)
+    return {
+        "detection": detection.as_document(),
+        "parsers": [
+            {"id": parser.id, "label": parser.label, "shape": parser.shape}
+            for parser in PARSERS
+        ],
+    }
 
 
 @router.post("/admin/api/proxy-chains/ingest")
@@ -609,12 +774,13 @@ async def ingest_proxy_feeds(
 
     require_loopback_admin(request)
     store = current_proxy_chains()
-    if not store.feeds:
+    if not store.enabled_feed_ids:
         raise HTTPException(
             status_code=422,
             detail=(
-                "No feeds are switched on, so there is nothing to read. Tick "
-                "one above first -- MCC contacts none of them until you do."
+                "No feeds are switched on, so there is nothing to read. MCC "
+                "ships none of its own -- add a list above and switch it on, "
+                "and it contacts nobody until you do."
             ),
         )
     run = await ingest()
@@ -936,9 +1102,11 @@ async def _bulk_payload(
     return refreshed
 
 
-def _commit_feeds(feed_ids: tuple[str, ...]) -> None:
+def _commit_feeds(feeds: tuple[CustomFeed, ...]) -> None:
+    """Replace the feed list. Inside the writer lock, on a fresh read."""
+
     with _CHAIN_WRITE_LOCK:
-        save_proxy_chains(load_proxy_chains().with_feeds(feed_ids))
+        save_proxy_chains(load_proxy_chains().with_feeds(feeds))
 
 
 def _commit_promotions(provider_id: str, proxy_ids: list[str]) -> list[str]:
@@ -1097,9 +1265,17 @@ def _payload(services: ApiServices) -> dict[str, Any]:
                 "interval_minutes": int(settings.proxy_feed_refresh_minutes),
                 "minimum_minutes": PROXY_FEED_MINIMUM_MINUTES,
             },
-            "feeds_observed_on": FEEDS_OBSERVED_ON,
+            # The readers this install ships, for the Add form's picker. MCC
+            # ships no feed of its own, so this is the whole of what the page
+            # can offer: formats, never sources.
+            "parsers": [
+                {"id": parser.id, "label": parser.label, "shape": parser.shape}
+                for parser in PARSERS
+            ],
+            "feed_name_max_length": FEED_NAME_MAX_LENGTH,
+            "max_feeds": PROXY_FEED_MAX,
         },
-        "feeds": feed_catalogue_payload(store),
+        "feeds": feed_payload(store),
         "candidates": [
             _candidate_payload(proxy_id, store) for proxy_id in store.candidates
         ],
@@ -1132,7 +1308,7 @@ def _candidate_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
         "scheme": _scheme(endpoint.url),
         "source_count": endpoint.source_count,
         "sources": [
-            {"id": feed_id, "name": known_feed_name(feed_id)}
+            {"id": feed_id, "name": known_feed_name(store, feed_id)}
             for feed_id in endpoint.sources
         ],
         "country": facts.country if facts is not None else "",

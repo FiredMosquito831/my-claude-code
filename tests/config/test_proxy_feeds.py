@@ -1,21 +1,36 @@
-"""The bundled feed catalogue, and the parsers built against real answers.
+"""The readers, and the real bodies they were written against.
 
-Every fixture in this file is a trimmed copy of what that feed actually
-returned on 2026-09-15, field names and all. That is the point: a parser
-written against a README is a parser that finds out it was wrong in a bug
-report, and these seven were each fetched before a line of them was written.
+Every fixture in this file is a trimmed copy of what one real public proxy
+list actually returned on 2026-09-15, field names and all. That is the point:
+a parser written against a README is a parser that finds out it was wrong in a
+bug report, and each of these bodies was fetched before a line of the reader
+that reads it was written.
+
+MCC ships no list of anybody's endpoints -- the URLs those bodies came from are
+not in the product -- so what is pinned here is the *format* side: that every
+reader the picker offers exists, that each still reads the shape it was written
+for, and that a body of the wrong shape yields nothing rather than an
+exception.
 """
 
 import json
 
 import pytest
 
+from my_claude_code.config import proxy_feeds
 from my_claude_code.config.proxy_feeds import (
-    CATALOGUE,
+    FEED_NAME_MAX_LENGTH,
     FEED_PROTOCOLS,
-    FEEDS_BY_ID,
+    PARSER_IDS,
+    PARSERS,
+    CustomFeed,
     FeedEndpoint,
-    known_feed_ids,
+    ProxyFeed,
+    detect_parser,
+    is_valid_feed_url,
+    normalise_parser,
+    probe_feed,
+    proposed_parser,
 )
 
 PROXYSCRAPE = json.dumps(
@@ -155,40 +170,59 @@ VPSLAB = (
 )
 
 
-def parse(feed_id: str, body: str) -> tuple[FeedEndpoint, ...]:
-    return FEEDS_BY_ID[feed_id].parse(body)
+def feed_for(parser_id: str) -> ProxyFeed:
+    """A feed an operator could have added, pointed at ``parser_id``.
 
-
-def test_every_bundled_feed_has_an_https_url_and_a_working_parser():
-    """Nothing ships that was not fetched and read."""
-
-    assert len(CATALOGUE) == 7
-    assert len({feed.id for feed in CATALOGUE}) == 7
-    for feed in CATALOGUE:
-        assert feed.url.startswith("https://"), feed.id
-        assert feed.homepage.startswith("https://"), feed.id
-        assert feed.observed, f"{feed.id} must say what it actually returned"
-        # A parser that is not in the table would silently yield nothing,
-        # which reads on the page as "this feed is down" forever.
-        assert feed.parse("") == ()
-
-
-def test_exactly_one_feed_claims_a_tls_strict_filter():
-    """Databay, and only Databay -- verified by fetching it both ways.
-
-    The claim is load-bearing: it is the one feed-side filter that selects for
-    the property this product needs, and a second feed quietly acquiring the
-    badge without anybody checking would be a claim about somebody else's
-    server that nobody measured.
+    The catalogue is gone, so a test that wants to read a body has to say what
+    a stored custom feed would have said. The ``lines`` reader gets the three
+    assumptions the plain-text list it was written against carried in its own
+    filename -- ``http``, SSL yes, elite -- because a bare ``ip:port`` body can
+    never state them and without them that reader parses to nothing.
     """
 
-    strict = [feed.id for feed in CATALOGUE if feed.tls_strict]
-    assert strict == ["databay"]
-    assert "ssl=strict" in FEEDS_BY_ID["databay"].url
+    if parser_id == "lines":
+        return ProxyFeed(
+            id="fd_lines",
+            name="A plain-text list",
+            url="https://example.invalid/http.txt",
+            parser="lines",
+            homepage="",
+            assume_protocol="http",
+            assume_https_ok=True,
+            assume_anonymity="elite",
+        )
+    return ProxyFeed(
+        id=f"fd_{parser_id}",
+        name=f"A {parser_id} list",
+        url=f"https://example.invalid/{parser_id}.json",
+        parser=parser_id,
+        homepage="",
+    )
+
+
+def parse(parser_id: str, body: str) -> tuple[FeedEndpoint, ...]:
+    return feed_for(parser_id).parse(body)
+
+
+def test_every_reader_the_picker_offers_is_a_reader_that_exists():
+    """The both-ways pin: a reader cannot be in one table and not the other.
+
+    :data:`PARSERS` is what the page offers and ``_PARSERS`` is what actually
+    reads a body. A reader in the second and not the first is unreachable; one
+    in the first and not the second is offered and then silently yields
+    nothing, which reads on the page as "this feed is down" forever.
+    """
+
+    assert len(PARSER_IDS) == 7
+    assert len(set(PARSER_IDS)) == 7
+    for parser in PARSERS:
+        assert parser.label, parser.id
+        assert parser.shape, parser.id
+    assert set(PARSER_IDS) == set(proxy_feeds._PARSERS)
 
 
 @pytest.mark.parametrize(
-    ("feed_id", "body", "url", "country", "anonymity", "https_ok"),
+    ("parser_id", "body", "url", "country", "anonymity", "https_ok"),
     [
         (
             "proxyscrape",
@@ -210,14 +244,14 @@ def test_exactly_one_feed_claims_a_tls_strict_filter():
         ),
         ("monosans", MONOSANS, "http://5.129.254.51:8888", "Russia", "", False),
         ("geonode", GEONODE, "socks5h://112.5.173.148:63180", "CN", "elite", True),
-        ("vpslab", VPSLAB, "http://8.215.25.3:2080", "", "elite", True),
+        ("lines", VPSLAB, "http://8.215.25.3:2080", "", "elite", True),
     ],
 )
-def test_each_parser_reads_its_own_feeds_real_answer(
-    feed_id, body, url, country, anonymity, https_ok
+def test_each_reader_reads_the_real_body_it_was_written_against(
+    parser_id, body, url, country, anonymity, https_ok
 ):
-    found = parse(feed_id, body)
-    assert found, feed_id
+    found = parse(parser_id, body)
+    assert found, parser_id
     first = found[0]
     assert first.url == url
     assert first.country == country
@@ -240,7 +274,7 @@ def test_a_line_feed_takes_its_scheme_from_the_file_it_came_from():
     while every row on the page looks fine.
     """
 
-    found = parse("vpslab", VPSLAB)
+    found = parse("lines", VPSLAB)
     assert [endpoint.url for endpoint in found] == [
         "http://8.215.25.3:2080",
         "http://77.239.123.239:3128",
@@ -248,12 +282,19 @@ def test_a_line_feed_takes_its_scheme_from_the_file_it_came_from():
 
 
 def test_a_feed_that_changed_shape_yields_nothing_rather_than_raising():
-    """Six working feeds must not be lost to a seventh's bad morning."""
+    """One feed's bad morning must not cost the pass the other feeds.
 
-    for feed in CATALOGUE:
-        assert feed.parse("<html>502 Bad Gateway</html>") == ()
-        assert feed.parse('{"data": {"unexpected": true}}') == ()
-        assert feed.parse("null") == ()
+    Every reader, against the three bodies a URL that stopped being a proxy
+    list actually returns: an error page, a JSON document of the wrong shape,
+    and a bare ``null``.
+    """
+
+    assert PARSER_IDS
+    for parser_id in PARSER_IDS:
+        feed = probe_feed(parser_id)
+        assert feed.parse("<html>502 Bad Gateway</html>") == (), parser_id
+        assert feed.parse('{"data": {"unexpected": true}}') == (), parser_id
+        assert feed.parse("null") == (), parser_id
 
 
 def test_a_monosans_timeout_in_seconds_becomes_milliseconds():
@@ -262,11 +303,136 @@ def test_a_monosans_timeout_in_seconds_becomes_milliseconds():
     assert parse("monosans", MONOSANS)[0].latency_ms == 170
 
 
-def test_an_unknown_feed_name_is_dropped_not_raised():
-    """A store written by a later release must still load in an earlier one."""
+def test_a_format_this_install_cannot_read_normalises_to_nothing():
+    """A store written by a later release must still load in an earlier one.
 
-    assert known_feed_ids(["databay", "a-feed-that-retired"]) == ("databay",)
-    assert known_feed_ids("databay") == ()
-    assert known_feed_ids(None) == ()
-    # Catalogue order, not the caller's.
-    assert known_feed_ids(["geonode", "proxyscrape"]) == ("proxyscrape", "geonode")
+    Empty rather than a guessed default: a feed whose reader was retired shows
+    up on the page asking for a format, where a guess would make it look like a
+    feed whose publisher went quiet -- and those want different answers.
+    """
+
+    assert normalise_parser("databay") == "databay"
+    assert normalise_parser("  GEONODE  ") == "geonode"
+    assert normalise_parser("a-reader-that-retired") == ""
+    assert normalise_parser(None) == ""
+    assert normalise_parser("") == ""
+
+
+def test_a_feed_url_is_read_over_https_or_not_at_all():
+    """The list decides which strangers end up in front of a credential.
+
+    Reading it over plain http would let anyone on the path choose that, which
+    is a downgrade with no case for it.
+    """
+
+    assert is_valid_feed_url("https://example.com/proxies.json") is True
+    assert is_valid_feed_url("http://example.com/proxies.json") is False
+    assert is_valid_feed_url("ftp://example.com/proxies.json") is False
+    assert is_valid_feed_url("not a url") is False
+    assert is_valid_feed_url("") is False
+
+
+def test_detection_proposes_the_reader_that_made_most_of_the_body():
+    """The Detect button's whole job, against two real bodies."""
+
+    assert proposed_parser(detect_parser(GEONODE)) == "geonode"
+    assert proposed_parser(detect_parser(VPSLAB)) == "lines"
+
+
+def test_a_body_no_reader_recognises_proposes_nothing_and_still_reports():
+    """ "Nothing here reads this" is an answer, not a failure.
+
+    The feed is still addable -- a URL that answers with an error page today
+    may be a proxy list again tomorrow -- so the page needs every trial back,
+    with its zero, rather than an exception.
+    """
+
+    trials = detect_parser("<html>not json</html>")
+    assert proposed_parser(trials) == ""
+    assert len(trials) == len(PARSER_IDS)
+    assert {trial.parser for trial in trials} == set(PARSER_IDS)
+    assert all(trial.count == 0 for trial in trials)
+    assert not any(trial.plausible for trial in trials)
+
+
+def test_detection_always_reports_every_reader_it_tried():
+    """The picker is shown either way, so it needs the whole list either way."""
+
+    for body in (GEONODE, VPSLAB, "", "null"):
+        trials = detect_parser(body)
+        assert len(trials) == len(PARSER_IDS)
+        assert {trial.parser for trial in trials} == set(PARSER_IDS)
+
+
+def _stored(**rest) -> CustomFeed:
+    fields = {
+        "id": "fd_abcd1234",
+        "name": "My list",
+        "url": "https://example.com/proxies.json",
+        "parser": "databay",
+        "enabled": True,
+        "added_at": "2026-09-15T19:26:44Z",
+        "tls_strict": True,
+        "assume_protocol": "http",
+        "assume_https_ok": True,
+        "assume_anonymity": "elite",
+        "observed": "A trial read found 40 addresses.",
+    }
+    fields.update(rest)
+    return CustomFeed(**fields)
+
+
+def test_a_stored_feed_survives_a_round_trip_through_the_file_whole():
+    """Every field, not just the four on the form.
+
+    The ``assume_*`` three are set by detection and by the 7.18.0 migration and
+    never by the page, so a round trip that quietly dropped them would turn a
+    working plain-text feed into one that fetches fine and offers nothing.
+    """
+
+    feed = _stored()
+    again = CustomFeed.from_document(feed.as_document(), "feeds[0]")
+    assert again == feed
+
+
+def test_a_stored_feed_without_an_https_url_is_dropped_on_the_way_in():
+    """A feed with nowhere safe to fetch from is not a feed."""
+
+    raw = _stored().as_document()
+    raw["url"] = "http://example.com/proxies.json"
+    assert CustomFeed.from_document(raw, "feeds[0]") is None
+
+
+def test_a_stored_feed_with_a_retired_reader_is_kept_and_blanked():
+    """The row stays and asks for a format; it does not disappear.
+
+    A switch that silently vanished would be the product deciding an operator's
+    feed no longer exists, when what actually happened is that this install
+    stopped shipping the reader for it.
+    """
+
+    raw = _stored().as_document()
+    raw["parser"] = "a-reader-that-retired"
+    again = CustomFeed.from_document(raw, "feeds[0]")
+    assert again is not None
+    assert again.parser == ""
+    assert again.readable is False
+    assert again.url == "https://example.com/proxies.json"
+
+
+def test_a_stored_feed_name_cannot_push_the_rest_of_its_row_off_the_page():
+    raw = _stored().as_document()
+    raw["name"] = "n" * 200
+    again = CustomFeed.from_document(raw, "feeds[0]")
+    assert again is not None
+    assert again.name == "n" * FEED_NAME_MAX_LENGTH
+
+
+def test_a_stored_feed_with_no_name_is_called_by_its_url():
+    """Better a URL on the row than a blank cell nobody can identify."""
+
+    raw = _stored().as_document()
+    raw["name"] = ""
+    again = CustomFeed.from_document(raw, "feeds[0]")
+    assert again is not None
+    assert again.name == "https://example.com/proxies.json"

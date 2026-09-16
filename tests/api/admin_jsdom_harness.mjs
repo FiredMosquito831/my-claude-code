@@ -1397,27 +1397,71 @@ const ROUTES = {
       // The shipped answer: nothing is measuring these addresses until an
       // operator says so, and no exit-IP URL is named.
       checker: { enabled: false, interval_minutes: 30, exit_ip_configured: false },
+      /* The readers this install ships. MCC ships no feed, so this is the
+         whole of what the Add form can offer: formats, never sources. All
+         seven, because the picker offers all seven and a fixture with two
+         could not catch one being dropped from the list. */
+      parsers: [
+        { id: "proxyscrape", label: "JSON: proxies[] with ip_data", shape: "JSON with per-address metadata under a \"proxies\" key." },
+        { id: "databay", label: "JSON: data[] with \"iso\" and \"ssl\"", shape: "JSON with per-address metadata under a \"data\" key." },
+        { id: "geonode", label: "JSON: data[] with \"protocols\" and \"anonymityLevel\"", shape: "JSON with per-address metadata under a \"data\" key." },
+        { id: "hproxy", label: "JSON array with \"protocols\" and \"alive\"", shape: "A plain JSON array of addresses." },
+        { id: "proxifly", label: "JSON array with \"https\" and \"geolocation\"", shape: "A plain JSON array of addresses." },
+        { id: "monosans", label: "JSON array with \"host\" and seconds", shape: "A plain JSON array of addresses keyed by \"host\"." },
+        { id: "lines", label: "Plain text: one ip:port per line", shape: "Plain ip:port lines with # for a comment, read as http." },
+      ],
+      feed_name_max_length: 60,
+      max_feeds: 20,
     },
-    /* The shipped state: every feed known, none switched on. This array was
-       missing from the fixture entirely, which is why nothing caught the page
-       counting its own ticks -- the feed panel rendered empty in every test,
-       so no test could press Fetch. Two is enough to prove the pair. */
+    /* Feeds the OPERATOR added, because from 7.18.0 MCC ships none. This array
+       was once missing from the fixture entirely, which is why nothing caught
+       the page counting its own ticks -- the feed panel rendered empty in
+       every test, so no test could press Fetch. It now carries the three
+       states a row can be in, for the same reason: a form with no fixture rows
+       is untested by construction.
+
+       1. `fd_custom01` -- a feed somebody typed on this install, switched on.
+       2. `databay`     -- one converted from a pre-7.18.0 built-in. It keeps
+                           the id the old store used, which is what makes a
+                           migrated row recognisable in the file itself.
+       3. `fd_broken03` -- a feed whose parser this install does not ship
+                           (`readable: false`). A hand-edited store, or a
+                           reader retired in a later release. The row must ask
+                           for a format rather than silently offering nothing,
+                           and it must NOT be counted by the Fetch button. */
     feeds: [
       {
-        id: "proxyscrape",
-        name: "ProxyScrape",
-        homepage: "https://github.com/ProxyScrape/free-proxy-list",
-        observed: "JSON with per-address metadata.",
+        id: "fd_custom01",
+        name: "My mirror",
+        url: "https://lists.example.com/socks5.json",
+        parser: "proxifly",
+        parser_shape: "A plain JSON array of addresses, each with one protocol, an https flag, an anonymity level and a country.",
+        readable: true,
+        observed: "A trial read found 214 addresses.",
         tls_strict: false,
-        enabled: false,
+        enabled: true,
       },
       {
         id: "databay",
         name: "Databay (TLS-strict)",
-        homepage: "https://github.com/databay-labs/free-proxy-list",
-        observed: "JSON, and the only feed whose own filter selects for a verifiable tunnel.",
+        url: "https://databay.com/api/v1/proxy-list?protocol=socks5&ssl=strict&limit=300",
+        parser: "databay",
+        parser_shape: 'JSON with per-address metadata under a "data" key: protocol, country as an ISO code, an SSL flag, latency, uptime and a last-checked time.',
+        readable: true,
+        observed: "JSON whose own ssl=strict filter selects for a tunnel that leaves the destination's certificate checkable.",
         tls_strict: true,
         enabled: false,
+      },
+      {
+        id: "fd_broken03",
+        name: "A list in a format MCC stopped reading",
+        url: "https://lists.example.com/mystery.txt",
+        parser: "",
+        parser_shape: "",
+        readable: false,
+        observed: "",
+        tls_strict: false,
+        enabled: true,
       },
     ],
     /* Addresses on offer. This array was `[]`, which is the same shape of hole
@@ -2169,14 +2213,75 @@ window.fetch = async (url, options = {}) => {
      the store and the ingest REFUSES when nothing is enabled -- which is
      exactly what the real route does, and exactly what the page used to walk
      into by counting its own ticks. */
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/feeds/detect") {
+    /* Detection: one read of a URL the operator typed, proposing a format.
+       The stub answers the way the route does -- a proposal plus every trial,
+       and a plain refusal for a URL that is not https, so the page's own
+       validation and the server's cannot drift apart. */
+    const sent = JSON.parse(options.body);
+    const target = String((sent && sent.url) || "");
+    if (!/^https:\/\/.+/.test(target)) {
+      const error = new Error("Give an https URL to read.");
+      error.status = 422;
+      throw error;
+    }
+    const unreadable = target.includes("mystery");
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        detection: unreadable
+          ? {
+              ok: true,
+              parser: "",
+              count: 0,
+              detail:
+                "The URL answered, but none of the formats MCC reads " +
+                "recognised it. Pick one anyway if you know what this list is.",
+              trials: [],
+            }
+          : {
+              ok: true,
+              parser: "geonode",
+              count: 137,
+              detail:
+                'JSON with per-address metadata under a "data" key. A trial ' +
+                "read found 137 addresses.",
+              trials: [
+                { parser: "geonode", label: "JSON: data[] with \"protocols\" and \"anonymityLevel\"", shape: "", count: 137 },
+                { parser: "lines", label: "Plain text: one ip:port per line", shape: "", count: 2 },
+              ],
+            },
+      }),
+      text: async () => "",
+    };
+  }
   if (String(url).split("?")[0] === "/admin/api/proxy-chains/feeds") {
+    /* The feed list write: add, edit, enable and remove, all one PUT that
+       REPLACES the list. The stub mirrors that rather than merging, because
+       "remove" is expressed by a row being absent and a merging stub could
+       never fail a page that forgot to send one. Ids are minted for new rows,
+       exactly as the store does, so the page's next render addresses them. */
     const sent = JSON.parse(options.body);
     const state = ROUTES["/admin/api/proxy-chains"];
-    const wanted = new Set(sent.feeds || []);
-    state.feeds = (state.feeds || []).map((feed) => ({
-      ...feed,
-      enabled: wanted.has(feed.id),
-    }));
+    const previous = new Map((state.feeds || []).map((feed) => [feed.id, feed]));
+    let minted = 0;
+    state.feeds = (sent.feeds || []).map((row) => {
+      const before = previous.get(row.id) || {};
+      minted += row.id ? 0 : 1;
+      return {
+        ...before,
+        id: row.id || `fd_new${minted}`,
+        name: row.name,
+        url: row.url,
+        parser: row.parser,
+        parser_shape: before.parser_shape || "",
+        readable: Boolean(row.parser),
+        observed: before.observed || "",
+        tls_strict: Boolean(before.tls_strict),
+        enabled: Boolean(row.enabled),
+      };
+    });
     return {
       ok: true,
       status: 200,
@@ -2186,13 +2291,17 @@ window.fetch = async (url, options = {}) => {
   }
   if (String(url).split("?")[0] === "/admin/api/proxy-chains/ingest") {
     const state = ROUTES["/admin/api/proxy-chains"];
-    const on = (state.feeds || []).filter((feed) => feed.enabled);
+    // `readable` as well as `enabled`, exactly as `enabled_feed_ids` does: a
+    // feed whose reader this install does not ship has nothing to do with the
+    // body it would fetch, so it is not one of the feeds a pass reads.
+    const on = (state.feeds || []).filter((feed) => feed.enabled && feed.readable);
     if (!on.length) {
       // The real 422. A page that presses this with nothing saved deserves to
       // see the same refusal the server gives.
       const error = new Error(
-        "No feeds are switched on, so there is nothing to read. Tick one " +
-          "above first -- MCC contacts none of them until you do.",
+        "No feeds are switched on, so there is nothing to read. MCC ships " +
+          "none of its own -- add a list above and switch it on, and it " +
+          "contacts nobody until you do.",
       );
       error.status = 422;
       throw error;
@@ -2696,7 +2805,11 @@ if (withChain) {
     );
   const saveButton = () =>
     Array.from(feedPanel?.querySelectorAll("button") || []).find((node) =>
-      (node.textContent || "").includes("Save feed selection"),
+      (node.textContent || "").includes("Save feed list"),
+    );
+  const buttonNamed = (text) =>
+    Array.from(feedPanel?.querySelectorAll("button") || []).find(
+      (node) => (node.textContent || "").trim() === text,
     );
   const unsavedNote = () =>
     (feedPanel?.querySelector(".proxy-feed-unsaved")?.textContent || "")
@@ -2710,11 +2823,35 @@ if (withChain) {
     fetchDisabled: Boolean((fetchButton() || {}).disabled),
     saveDisabled: Boolean((saveButton() || {}).disabled),
     unsaved: unsavedNote(),
+    // A row whose format MCC has no reader for: its switch must be dead and
+    // the row must say why, rather than looking like a feed that works and
+    // offers nothing.
+    unreadableDisabled: feedBoxes
+      .map((box, index) => [index, box])
+      .filter(([, box]) => box.disabled)
+      .map(([index]) => index),
+    warnings: Array.from(
+      feedPanel?.querySelectorAll(".proxy-feed-warning") || [],
+    ).map((node) => node.textContent.trim()),
+    // The URLs are rendered in full. A feed URL is a public list the operator
+    // typed; unlike a proxy URL it carries no password and hiding it would
+    // leave them unable to tell two lists apart.
+    urls: Array.from(feedPanel?.querySelectorAll(".proxy-feed-url") || []).map(
+      (node) => node.textContent.trim(),
+    ),
   };
 
-  if (feedBoxes.length) {
-    feedBoxes[0].checked = true;
-    feedBoxes[0].dispatchEvent(new window.Event("change", { bubbles: true }));
+  const liveBoxes = () =>
+    Array.from(
+      doc.querySelectorAll("#proxyingFeeds .proxy-feed input[type=checkbox]"),
+    );
+  // Tick a row that is OFF and readable, so the change is a real change. The
+  // block used to tick index 0, which from 7.18.0 is already on -- a "tick"
+  // that changes nothing cannot catch a button counting the wrong thing.
+  const target = liveBoxes().find((box) => !box.checked && !box.disabled);
+  if (target) {
+    target.checked = true;
+    target.dispatchEvent(new window.Event("change", { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 60));
 
     proxying.feedsAfterTick = {
@@ -2750,6 +2887,127 @@ if (withChain) {
       saveDisabled: Boolean((saveButton() || {}).disabled),
     };
   }
+
+  /* The Add form, which is the whole of what a FRESH install sees: MCC ships
+     no lists, so without this block the release's main surface would be
+     untested by construction -- the same hole the missing `feeds` array was.
+     Detection proposes and the operator decides, so both halves are driven:
+     press Detect and read where the picker moved, then move it back. */
+  {
+    const nameInput = feedPanel?.querySelectorAll(".proxy-feed-input")[0];
+    const urlInput = feedPanel?.querySelectorAll(".proxy-feed-input")[1];
+    const picker = () => feedPanel?.querySelector(".proxy-feed-select");
+    const detectNote = () =>
+      (feedPanel?.querySelector(".proxy-feed-detection")?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    proxying.feedAddForm = {
+      hasName: Boolean(nameInput),
+      hasUrl: Boolean(urlInput),
+      // The picker is ALWAYS rendered, before any detection has run. That is
+      // the binding decision: detection never decides silently.
+      pickerOptions: Array.from(picker()?.options || []).map(
+        (option) => option.value,
+      ),
+      pickerValue: (picker() || {}).value || "",
+      detectDisabled: Boolean((buttonNamed("Detect format") || {}).disabled),
+      addDisabled: Boolean((buttonNamed("Add to list") || {}).disabled),
+      note: detectNote(),
+    };
+
+    if (nameInput && urlInput) {
+      nameInput.value = "A list I found";
+      nameInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+      urlInput.value = "https://lists.example.com/fresh.json";
+      urlInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      const detect = buttonNamed("Detect format");
+      if (detect) detect.click();
+      await new Promise((resolve) => setTimeout(resolve, 160));
+      proxying.feedDetect = {
+        request:
+          fetchBodies
+            .filter(
+              (entry) =>
+                entry.path === "/admin/api/proxy-chains/feeds/detect",
+            )
+            .pop() || null,
+        pickerValue: (picker() || {}).value || "",
+        note: detectNote(),
+        // Still exactly one picker, still offering every reader: a detection
+        // that "succeeded" must not collapse the choice.
+        pickerOptions: Array.from(picker()?.options || []).map(
+          (option) => option.value,
+        ),
+      };
+
+      // The override. The operator moves the picker off the proposal, and
+      // THAT is what must end up in the saved row.
+      const chooser = picker();
+      if (chooser) {
+        chooser.value = "monosans";
+        chooser.dispatchEvent(new window.Event("change", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      proxying.feedOverride = {
+        pickerValue: (picker() || {}).value || "",
+        note: detectNote(),
+      };
+
+      const add = buttonNamed("Add to list");
+      if (add) add.click();
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      proxying.feedAfterAdd = {
+        rows: Array.from(
+          feedPanel?.querySelectorAll(".proxy-feed-name") || [],
+        ).map((node) => node.textContent.trim()),
+        // Added switched OFF: adding a list and reading it are separate acts.
+        ticked: Array.from(
+          feedPanel?.querySelectorAll(".proxy-feed input[type=checkbox]") || [],
+        ).map((box) => box.checked),
+        saveDisabled: Boolean((saveButton() || {}).disabled),
+        // The form is cleared, so a second add cannot silently repeat the
+        // first.
+        urlValue:
+          (feedPanel?.querySelectorAll(".proxy-feed-input")[1] || {}).value || "",
+      };
+
+      const saveNow = saveButton();
+      if (saveNow) saveNow.click();
+      await new Promise((resolve) => setTimeout(resolve, 140));
+      proxying.feedSaveAfterAdd =
+        fetchBodies
+          .filter((entry) => entry.path === "/admin/api/proxy-chains/feeds")
+          .pop() || null;
+    }
+  }
+
+  /* Removing a row. The addresses that row already offered must survive it:
+     they are independent facts with their own test results, and often the
+     reason the list was added at all. */
+  {
+    const before = Array.from(
+      feedPanel?.querySelectorAll(".proxy-feed-name") || [],
+    ).map((node) => node.textContent.trim());
+    const remove = feedPanel?.querySelector(".proxy-feed-remove");
+    if (remove) remove.click();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    proxying.feedRemoval = {
+      before,
+      after: Array.from(
+        doc.querySelectorAll("#proxyingFeeds .proxy-feed-name"),
+      ).map((node) => node.textContent.trim()),
+      candidatesStillShown: doc.querySelectorAll(
+        "#proxyingCandidates .proxy-candidate",
+      ).length,
+      announcement: (doc.querySelector("#proxyingStatus")?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    };
+  }
+
 }
 
 /* The candidate list, driven the way an operator with 1,572 addresses drives
