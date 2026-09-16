@@ -10,6 +10,9 @@ from my_claude_code.application.model_metadata import ResponseSurface
 from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.openai_tool_names import (
+    OPENAI_TOOL_NAME_MAX_LENGTH,
+)
 from my_claude_code.core.reasoning import (
     ReasoningDialectOrigin,
     ReasoningEffort,
@@ -180,6 +183,14 @@ class OpenAIChatProfile:
     # which surface each model is on. Empty means "nothing published", and the
     # resolver falls through to the learned facts and then to the default.
     surface_registry_provider: str = ""
+    # The longest tool name this host's *Responses* endpoint accepts. ``None``
+    # -- every profile but the two OpenCode ones -- sends names as the client
+    # wrote them on that surface. OpenCode Zen refuses a name past 64
+    # characters there ("`name` must be at most 64 characters, got 68": 1,040
+    # failures on 2026-09-16), and Claude Code's MCP tool names run to 76.
+    # Chat Completions is not governed by this field: that funnel has always
+    # aliased through the same codec, so one tool has one alias on both doors.
+    responses_tool_name_max_length: int | None = None
 
     @property
     def provider_name(self) -> str:
@@ -345,6 +356,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             ResponseSurface.MESSAGES,
         ),
         surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
+        responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
     ),
     "opencode_go": OpenAIChatProfile(
         _policy(
@@ -368,6 +380,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             ResponseSurface.MESSAGES,
         ),
         surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
+        responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
     ),
     "vercel": OpenAIChatProfile(
         _policy(

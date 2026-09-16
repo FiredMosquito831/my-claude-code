@@ -19,6 +19,10 @@ from my_claude_code.core.anthropic.conversion import (
     ReasoningReplayMode,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.openai_tool_names import (
+    OPENAI_TOOL_NAME_MAX_LENGTH,
+    OpenAIToolNameCodec,
+)
 from my_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningPolicy,
@@ -26,6 +30,38 @@ from my_claude_code.core.reasoning import (
 
 RESPONSES_DEFAULT_REASONING_EFFORT = "medium"
 RESPONSES_DEFAULT_REASONING_SUMMARY = "auto"
+
+
+def responses_tool_name_codec(
+    request: MessagesRequest, tool_name_max_length: int | None
+) -> OpenAIToolNameCodec | None:
+    """Return the tool-name codec a host's declared limit calls for, or None.
+
+    ``None`` -- what ``chatgpt_oauth`` declares, by declaring nothing -- means
+    names leave exactly as the client wrote them, which is every byte this
+    module sent before 7.18.1. That backend accepts names past 64 characters
+    (300 of 300 measured, longest 76), so aliasing there would change a working
+    request for no reason and move its prompt-cache prefix.
+
+    A host that refuses long names declares its limit on the transport. OpenCode
+    Zen does: 1,040 requests to ``muse-spark-1.3/1.2-contributor-free`` failed
+    on 2026-09-16 with "``name`` must be at most 64 characters, got 68". The
+    codec is the one the Chat Completions funnel has always used, so a tool gets
+    the same alias on either surface, and the alias is a pure function of the
+    name -- stable across turns, tool order and tools added mid-session.
+
+    The codec implements one limit, so that is the only one a host may declare;
+    anything else is a programming error rather than something to approximate.
+    """
+    if tool_name_max_length is None:
+        return None
+    if tool_name_max_length != OPENAI_TOOL_NAME_MAX_LENGTH:
+        raise ValueError(
+            "Responses tool-name aliasing implements a limit of "
+            f"{OPENAI_TOOL_NAME_MAX_LENGTH}; got {tool_name_max_length}"
+        )
+    return OpenAIToolNameCodec.from_request(request)
+
 
 # There is deliberately no per-effort lookup table in this module. Between
 # 5.61.1 and 6.68.0 a ``_RESPONSES_EFFORTS`` dict here rewrote ``xhigh`` and
@@ -92,7 +128,10 @@ def _openai_content_to_responses_parts(
     return parts
 
 
-def _openai_message_to_responses_items(message: dict[str, Any]) -> list[dict[str, Any]]:
+def _openai_message_to_responses_items(
+    message: dict[str, Any],
+    tool_names: OpenAIToolNameCodec | None = None,
+) -> list[dict[str, Any]]:
     """Convert one OpenAI-chat message to Responses API input items.
 
     The Responses API has no ``tool_calls`` field on message items: assistant
@@ -140,11 +179,14 @@ def _openai_message_to_responses_items(message: dict[str, Any]) -> list[dict[str
                 continue
             function = tool_call.get("function") or {}
             arguments = function.get("arguments")
+            name = function.get("name") or "unknown"
+            if tool_names is not None:
+                name = tool_names.encode(name)
             items.append(
                 {
                     "type": "function_call",
                     "call_id": tool_call.get("id") or "",
-                    "name": function.get("name") or "unknown",
+                    "name": name,
                     "arguments": arguments
                     if isinstance(arguments, str)
                     else json.dumps(arguments or {}),
@@ -166,15 +208,19 @@ def _openai_message_to_responses_items(message: dict[str, Any]) -> list[dict[str
 
 def _openai_messages_to_responses_input(
     messages: list[dict[str, Any]],
+    tool_names: OpenAIToolNameCodec | None = None,
 ) -> list[dict[str, Any]]:
     """Convert OpenAI-chat message list to Responses API input list."""
     items: list[dict[str, Any]] = []
     for message in messages:
-        items.extend(_openai_message_to_responses_items(message))
+        items.extend(_openai_message_to_responses_items(message, tool_names))
     return items
 
 
-def _convert_tools(tools: list[Any] | None) -> list[dict[str, Any]] | None:
+def _convert_tools(
+    tools: list[Any] | None,
+    tool_names: OpenAIToolNameCodec | None = None,
+) -> list[dict[str, Any]] | None:
     """Convert Anthropic tools to ChatGPT Responses API tool definitions.
 
     The ChatGPT/Codex backend historically exposes only a small set of built-in
@@ -189,10 +235,13 @@ def _convert_tools(tools: list[Any] | None) -> list[dict[str, Any]] | None:
             "type": "object",
             "properties": {},
         }
+        name = getattr(tool, "name", "unknown")
+        if tool_names is not None:
+            name = tool_names.encode(name)
         result.append(
             {
                 "type": "function",
-                "name": getattr(tool, "name", "unknown"),
+                "name": name,
                 "description": getattr(tool, "description", None) or "",
                 "parameters": schema,
             }
@@ -200,14 +249,29 @@ def _convert_tools(tools: list[Any] | None) -> list[dict[str, Any]] | None:
     return result
 
 
-def _convert_tool_choice(tool_choice: Any) -> Any:
-    """Convert Anthropic tool_choice to ChatGPT Responses API tool_choice."""
+def _convert_tool_choice(
+    tool_choice: Any,
+    tool_names: OpenAIToolNameCodec | None = None,
+) -> Any:
+    """Convert Anthropic tool_choice to ChatGPT Responses API tool_choice.
+
+    A forced choice is spelled two ways. Without a codec it keeps the Chat
+    Completions nesting ``{"type": "function", "function": {"name": X}}`` that
+    ``chatgpt_oauth`` has always been sent -- left alone deliberately, because
+    that backend's bytes are not this fix's to change. With one (a host that
+    declared a tool-name limit) it uses the Responses API's own
+    ``ToolChoiceFunction`` shape, ``{"type": "function", "name": X}``, as
+    published in OpenAI's OpenAPI spec and the ``openai`` SDK's
+    ``types/responses/tool_choice_function.py``, carrying the wire alias.
+    """
     if not isinstance(tool_choice, dict):
         return tool_choice
     choice_type = tool_choice.get("type")
     if choice_type == "tool":
         name = tool_choice.get("name")
         if name:
+            if tool_names is not None:
+                return {"type": "function", "name": tool_names.encode(name)}
             return {"type": "function", "function": {"name": name}}
     if choice_type in {"auto", "none", "required"}:
         return choice_type
@@ -280,6 +344,7 @@ def build_responses_request_body(
     prompt_cache_key: str | None = None,
     include_encrypted_reasoning: bool = True,
     extra_body: Mapping[str, Any] | None = None,
+    tool_name_max_length: int | None = None,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -306,6 +371,13 @@ def build_responses_request_body(
     ``extra_body``
         merged last, after the caller's own validator has had it. Absent for
         every backend that forbids one.
+    ``tool_name_max_length``
+        the longest tool name this host accepts. ``None`` sends every name as
+        the client wrote it. A declared limit aliases the names that exceed it
+        (or are not ``[A-Za-z0-9_-]``) in ``tools``, a forced ``tool_choice``
+        and replayed ``function_call`` items; see
+        :func:`responses_tool_name_codec`. The stream converter must be handed
+        the same codec to decode the model's calls back.
 
     Key order is fixed and deliberate: the body is recorded verbatim in the
     request log and compared byte for byte against a captured reference, so
@@ -320,12 +392,13 @@ def build_responses_request_body(
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
 
+    tool_names = responses_tool_name_codec(request, tool_name_max_length)
     instructions = _extract_system_instructions(request)
     _, chat_messages = _strip_openai_system_message(openai_messages)
 
     body: dict[str, Any] = {
         "model": request.model,
-        "input": _openai_messages_to_responses_input(chat_messages),
+        "input": _openai_messages_to_responses_input(chat_messages, tool_names),
         "store": store,
         "stream": stream,
         "parallel_tool_calls": parallel_tool_calls,
@@ -338,10 +411,10 @@ def build_responses_request_body(
     if instructions:
         body["instructions"] = instructions
 
-    tools = _convert_tools(request.tools)
+    tools = _convert_tools(request.tools, tool_names)
     if tools:
         body["tools"] = tools
-        tool_choice = _convert_tool_choice(request.tool_choice)
+        tool_choice = _convert_tool_choice(request.tool_choice, tool_names)
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
 
@@ -364,9 +437,17 @@ def responses_tool_call_to_anthropic(
     item: dict[str, Any],
     *,
     tool_name_override: str | None = None,
+    tool_names: OpenAIToolNameCodec | None = None,
 ) -> dict[str, Any]:
-    """Convert one Responses function_call item to an Anthropic tool_use block."""
+    """Convert one Responses function_call item to an Anthropic tool_use block.
+
+    ``tool_names`` is the codec the request was built with, when its host
+    declared a tool-name limit; a wire alias is decoded back to the client's
+    original name. A name the codec did not generate passes through unchanged.
+    """
     name = item.get("name") or tool_name_override or "unknown"
+    if tool_names is not None:
+        name = tool_names.decode(name)
     arguments = item.get("arguments") or "{}"
     if not isinstance(arguments, str):
         arguments = json.dumps(arguments)

@@ -50,6 +50,7 @@ from my_claude_code.providers.openai_responses import (
     build_responses_request_body,
     iter_responses_sse_events,
     note_responses_event_shape,
+    responses_tool_name_codec,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
@@ -84,8 +85,10 @@ class ResponsesTransport:
         api_key: str | None,
         rate_limiter: ProviderRateLimiter,
         api_key_provider: Any | None = None,
+        tool_name_max_length: int | None = None,
     ) -> None:
         self._config = config
+        self._tool_name_max_length = tool_name_max_length
         self._rate_limiter = rate_limiter
         self._base_url = base_url.rstrip("/")
         self._provider_name = provider_name
@@ -101,6 +104,18 @@ class ResponsesTransport:
                 write=config.http_write_timeout,
             ),
         )
+
+    @property
+    def tool_name_max_length(self) -> int | None:
+        """The longest tool name this host accepts, or ``None`` for no limit.
+
+        Declared by the profile (``responses_tool_name_max_length``), never
+        inferred from a model or a provider name. It decides whether the body
+        carries aliases and, with the same value, whether the stream decodes
+        them -- the two must agree, which is why both read this one property.
+        """
+
+        return self._tool_name_max_length
 
     @property
     def url(self) -> str:
@@ -179,6 +194,7 @@ class ResponsesTransport:
             parallel_tool_calls=False,
             max_output_tokens=max_output_tokens,
             extra_body=extra_body,
+            tool_name_max_length=self._tool_name_max_length,
         )
         headers = self._headers(body)
         cache_key = self._prompt_cache_key(headers)
@@ -276,6 +292,9 @@ class ResponsesTransport:
                 ledger,
                 log_raw_events=self._config.log_raw_sse_events,
                 output_reasoning=reasoning.output_enabled,
+                tool_names=responses_tool_name_codec(
+                    request, self._tool_name_max_length
+                ),
             )
             identity = self.identity_headers(body)
             # The commit boundary, the same one the Chat Completions path has:
