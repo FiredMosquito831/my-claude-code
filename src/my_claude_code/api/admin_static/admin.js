@@ -593,10 +593,10 @@ const PROXY_CANDIDATE_KEY = "mcc.proxying.candidates.v1";
    and a page that cannot be stopped. */
 const PROXY_CANDIDATE_BATCH = 10;
 
-/* How many rows are drawn. A seven-feed fetch offers 1,572 addresses and a
-   list that long is neither readable nor cheap to paint; the filter is the way
-   through it, and Select all still means every address the filter matches, not
-   only the ones drawn. */
+/* How many rows are drawn. A pass over seven lists offered 1,572 addresses
+   when this cap was chosen, and a list that long is neither readable nor cheap
+   to paint; the filter is the way through it, and Select all still means every
+   address the filter matches, not only the ones drawn. */
 const PROXY_CANDIDATE_RENDER_CAP = 300;
 
 /* Above this, a bulk button asks for a second press. Not 200 like the Models
@@ -1318,10 +1318,11 @@ async function ingestProxyFeeds(button) {
 
 /* ------------------------------------------------------ the candidate list
 
-   Three facts shape everything below. A seven-feed fetch offers 1,572
-   addresses. One destination is chosen for the whole selection, not one per
-   row. And adding an address *tests* it against that provider's own host, so
-   adding twelve is twelve network calls with a ten-second ceiling each.
+   Three facts shape everything below. A pass over several lists offers
+   hundreds of addresses -- seven of them offered 1,572 when this was written.
+   One destination is chosen for the whole selection, not one per row. And
+   adding an address *tests* it against that provider's own host, so adding
+   twelve is twelve network calls with a ten-second ceiling each.
 
    The selection model is the Models page's, to the letter (6.7.0, and its
    one-write-path defect fixed in 6.24.0): a select column with Shift+click and
