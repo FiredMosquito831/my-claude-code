@@ -1379,15 +1379,32 @@ function proxyDestination() {
   );
 }
 
+/* The operator's own ceiling on chain length, or 0 for "there is none".
+ *
+ * 0 is what ships since 7.19.0, and reading it with `|| 12` -- which is what
+ * this page did while twelve was a hard cap -- turned the shipped default into
+ * the old limit and put "a chain holds at most 12 entries" back on a card with
+ * two hundred rows on it. `Number(...) || 12` cannot tell 0 from absent, so the
+ * cap is read once, here, and every caller asks this. */
+function proxyEntryCap() {
+  const raw = proxyVocabulary().max_entries;
+  const cap = Number(raw);
+  return Number.isFinite(cap) && cap > 0 ? cap : 0;
+}
+
 /* How much of that provider's chain is already spoken for. This is the fact
    that shapes a bulk add more than any other and the page used to leave it to
-   be discovered by a 422: a chain holds at most twelve entries, so "add fifty
-   selected" cannot mean what it says. */
+   be discovered by a 422. With no cap set there is always room, and "add fifty
+   selected" means fifty. */
 function proxyChainRoom(provider) {
-  const max = Number(proxyVocabulary().max_entries) || 12;
+  const max = proxyEntryCap();
   const chain = provider && provider.chain;
   const used = chain ? (chain.entries || []).length : 0;
-  return { used, max, room: Math.max(0, max - used) };
+  return {
+    used,
+    max,
+    room: max ? Math.max(0, max - used) : Number.MAX_SAFE_INTEGER,
+  };
 }
 
 function proxyCandidateSources(candidate) {
@@ -1792,14 +1809,20 @@ function paintProxyCandidateBar(bar, shown) {
 
   const capacity = document.createElement("p");
   capacity.className = "field-description proxy-candidate-capacity";
-  const over = selected.length - room.room;
-  capacity.textContent = destination
-    ? `${destination.display_name} has ${room.used} of ${room.max} entries, ` +
-      `so ${room.room} more will fit.` +
-      (over > 0
-        ? ` ${over} of the selected addresses will not be added this press.`
-        : "")
-    : "";
+  // With no cap set -- what ships -- there is no "of N" to report and no
+  // overflow to warn about, so the line says what it knows and stops. Printing
+  // Number.MAX_SAFE_INTEGER here would be worse than saying nothing.
+  const over = room.max ? selected.length - room.room : 0;
+  capacity.textContent = !destination
+    ? ""
+    : room.max
+      ? `${destination.display_name} has ${room.used} of ${room.max} entries, ` +
+        `so ${room.room} more will fit.` +
+        (over > 0
+          ? ` ${over} of the selected addresses will not be added this press.`
+          : "")
+      : `${destination.display_name} has ${room.used} entries, and you have ` +
+        "set no limit on how many it may hold.";
   bar.appendChild(capacity);
 
   if (running) {
@@ -2283,8 +2306,8 @@ function announceProxyBulk(action, providerId, token, stopped) {
     }
     if (counts.full) {
       lines.push(
-        `${counts.full} did not fit: a chain holds at most ` +
-          `${proxyVocabulary().max_entries || 12} entries.`,
+        `${counts.full} did not fit: you have set PROXY_CHAIN_MAX_ENTRIES to ` +
+          `${proxyEntryCap()}, so a chain holds at most that many entries.`,
       );
     }
     if (counts.gone) {
@@ -3072,7 +3095,8 @@ function proxyMoveEntry(provider, draft, from, to) {
 function proxyAddRow(provider, draft) {
   const row = document.createElement("div");
   row.className = "proxy-add";
-  const full = draft.entries.length >= (proxyVocabulary().max_entries || 12);
+  const cap = proxyEntryCap();
+  const full = Boolean(cap) && draft.entries.length >= cap;
 
   const input = document.createElement("input");
   input.type = "text";
@@ -3159,9 +3183,9 @@ function proxyAddRow(provider, draft) {
   if (full) {
     const note = document.createElement("p");
     note.className = "proxy-note";
-    note.textContent = `A chain holds at most ${
-      proxyVocabulary().max_entries || 12
-    } entries.`;
+    note.textContent =
+      `A chain holds at most ${cap} entries -- your own ` +
+      "PROXY_CHAIN_MAX_ENTRIES, on Limits & Resilience. 0 means no limit.";
     row.appendChild(note);
   }
   return row;
