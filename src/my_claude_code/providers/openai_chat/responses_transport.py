@@ -38,6 +38,7 @@ from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.client_fingerprint import current_fingerprint
 from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.core.wire_capture import (
     record_response_shape,
     record_wire_request,
@@ -45,6 +46,7 @@ from my_claude_code.core.wire_capture import (
 )
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
+from my_claude_code.providers.http import error_response_headers, read_error_body
 from my_claude_code.providers.openai_responses import (
     ResponsesStreamConverter,
     build_responses_request_body,
@@ -222,15 +224,21 @@ class ResponsesTransport:
         )
         response = await self._client.send(request, stream=streaming)
         if response.status_code >= 400:
-            error_body = await response.aread()
+            # Raw first, decoded second, and the status raised whatever the
+            # decode did. See ``providers/http.read_error_body``: an edge that
+            # labels a refusal ``gzip`` when it is not used to raise
+            # ``DecodingError`` here, one frame before the status existed, and
+            # 293 refusals by the host were filed as faults of the model.
+            error = await read_error_body(response)
             await response.aclose()
+            note_response_head(error.head)
             raise httpx.HTTPStatusError(
                 f"{self._provider_name} Responses API error {response.status_code}",
                 request=request,
                 response=httpx.Response(
                     response.status_code,
-                    headers=response.headers,
-                    content=error_body,
+                    headers=error_response_headers(response.headers),
+                    content=error.content,
                     request=request,
                 ),
             )

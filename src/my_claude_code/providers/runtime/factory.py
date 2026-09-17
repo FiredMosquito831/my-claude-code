@@ -7,6 +7,7 @@ from my_claude_code.application.errors import UnknownProviderError
 from my_claude_code.config.constants import (
     PROVIDER_RATE_LIMIT_DEFAULT,
     PROVIDER_RATE_WINDOW_DEFAULT,
+    PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
 )
 from my_claude_code.config.credentials import mask_key_label
 from my_claude_code.config.provider_catalog import (
@@ -27,6 +28,7 @@ from my_claude_code.providers.openai_chat import (
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .config import build_provider_config
+from .proxy_leg import ProxiedLegRateLimiter
 from .proxy_rotating import ProxyRotatingProvider, ProxyRotationState
 from .rotating import RotatingProvider
 
@@ -288,6 +290,10 @@ def _create_single_provider(
 
     legs = plan.legs
     labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
+    connect_timeout = float(
+        getattr(settings, "proxy_connect_timeout_seconds", None)
+        or PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT
+    )
 
     def build_leg(index: int) -> BaseProvider:
         """One leg's leaf provider, built the first time it is used.
@@ -301,10 +307,34 @@ def _create_single_provider(
         """
 
         url = legs[index].url if index < len(legs) else ""
+        if not url:
+            # The direct rung. Nothing about it is proxied, so it is built
+            # from exactly the line every release before 7.19 built it from.
+            return _create_leaf_provider(
+                descriptor,
+                dataclasses.replace(config, proxy=url, proxy_chain=None),
+                settings,
+            )
+        # Two things a proxied leg gets that nothing else does, both handed
+        # over as configuration at this one line rather than by editing what
+        # the leg is made of:
+        #
+        # * its own CONNECT timeout, because the provider's is sized for an
+        #   origin and a public chain's dead entries are what actually spend
+        #   a request's wall clock. Connect only -- read, write and pool are
+        #   the provider's, untouched, on every surface.
+        # * a limiter that will not dial the same dead address twice; see
+        #   ``proxy_leg.ProxiedLegRateLimiter``.
         return _create_leaf_provider(
             descriptor,
-            dataclasses.replace(config, proxy=url, proxy_chain=None),
+            dataclasses.replace(
+                config,
+                proxy=url,
+                proxy_chain=None,
+                http_connect_timeout=connect_timeout,
+            ),
             settings,
+            proxied_leg=True,
         )
 
     state = ProxyRotationState(
@@ -330,13 +360,23 @@ def _create_leaf_provider(
     descriptor: ProviderDescriptor,
     config: ProviderConfig,
     settings: Settings,
+    *,
+    proxied_leg: bool = False,
 ) -> BaseProvider:
-    """Create one provider instance bound to one credential and one address."""
+    """Create one provider instance bound to one credential and one address.
+
+    ``proxied_leg`` is set only by the chain fan-out above, and only for a rung
+    that has an address. It swaps in the limiter that surfaces a connect
+    failure to the proxy pool on the first dial instead of knocking twice on
+    an address that is not answering. Everything else about the leaf --
+    every window, every bound, every provider class -- is identical either way.
+    """
     # ``is None`` rather than ``or``: 0 is a meaningful value for the limit
     # -- it is the shipped default and it means "pace nothing" -- and ``or``
     # read it as unset and substituted 40, which is how the proactive window
     # stayed on for a release that had turned it off.
-    rate_limiter = ProviderRateLimiter(
+    limiter_class = ProxiedLegRateLimiter if proxied_leg else ProviderRateLimiter
+    rate_limiter = limiter_class(
         rate_limit=(
             PROVIDER_RATE_LIMIT_DEFAULT
             if config.rate_limit is None

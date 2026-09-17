@@ -80,6 +80,9 @@ from .constants import (
     PROXY_CHECK_INTERVAL_MINUTES_DEFAULT,
     PROXY_CHECK_INTERVAL_MINUTES_MAX,
     PROXY_CHECK_INTERVAL_MINUTES_MIN,
+    PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
+    PROXY_CONNECT_TIMEOUT_SECONDS_MAX,
+    PROXY_CONNECT_TIMEOUT_SECONDS_MIN,
     PROXY_FEED_REFRESH_ENABLED_DEFAULT,
     PROXY_FEED_REFRESH_MINUTES_DEFAULT,
     PROXY_FEED_REFRESH_MINUTES_MAX,
@@ -1011,6 +1014,14 @@ class Settings(BaseSettings):
         validation_alias="PROXY_MAX_LIVE_FAILURES",
         ge=PROXY_MAX_LIVE_FAILURES_MIN,
         le=PROXY_MAX_LIVE_FAILURES_MAX,
+    )
+    # The connect timeout of a proxied leg's HTTP client. Connect only, and
+    # proxied legs only: an unproxied client keeps HTTP_CONNECT_TIMEOUT.
+    proxy_connect_timeout_seconds: float = Field(
+        default=PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
+        validation_alias="PROXY_CONNECT_TIMEOUT_SECONDS",
+        ge=PROXY_CONNECT_TIMEOUT_SECONDS_MIN,
+        le=PROXY_CONNECT_TIMEOUT_SECONDS_MAX,
     )
     # Whether the health re-prober re-tests benched addresses so they can come
     # back. On: a bench expiring is "due for a re-check", never "usable again".

@@ -36,6 +36,7 @@ from my_claude_code.core.reasoning import (
 )
 from my_claude_code.core.request_log import observed_served_models
 from my_claude_code.core.trace import trace_event
+from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.core.version import package_version
 from my_claude_code.core.wire_capture import (
     record_reasoning_adaptation,
@@ -45,6 +46,7 @@ from my_claude_code.core.wire_capture import (
 )
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
+from my_claude_code.providers.http import error_response_headers, read_error_body
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     ReasoningStripRecovery,
@@ -563,14 +565,23 @@ class ChatGPTOAuthProvider(BaseProvider):
             response.headers, status_code=response.status_code
         )
         if response.status_code >= 400 and response.status_code != 401:
-            error_body = await response.aread()
+            # Read raw and decoded afterwards, so a body whose
+            # ``Content-Encoding`` lies cannot take the status with it. See
+            # ``providers/http.read_error_body``.
+            error = await read_error_body(response)
             await response.aclose()
-            error_text = error_body.decode("utf-8", errors="replace")
+            error_text = error.content.decode("utf-8", errors="replace")
+            note_response_head(error.head)
             self._remember_model_denial(body, response.status_code, error_text)
             raise httpx.HTTPStatusError(
                 f"ChatGPT OAuth API error {response.status_code}: {error_text[:1000]}",
                 request=request,
-                response=response,
+                response=httpx.Response(
+                    response.status_code,
+                    headers=error_response_headers(response.headers),
+                    content=error.content,
+                    request=request,
+                ),
             )
         return response
 

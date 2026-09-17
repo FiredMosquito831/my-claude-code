@@ -119,6 +119,29 @@ _REACHABILITY_TYPES: tuple[type[BaseException], ...] = (
     httpx.ConnectTimeout,
 )
 
+#: Transport failures that are the *proxy's* fault only when the attempt was
+#: proxied and nothing has been yielded yet.
+#:
+#: ``DecodingError`` is the body of a ``>=400`` reply whose ``Content-Encoding``
+#: did not describe it. Since 7.20.0 the transports read such a body raw and
+#: keep the status, so reaching here at all means the bytes on the wire were
+#: not what the head said they were -- and the log says that happened 293
+#: times, on one host, *never once unproxied*. It is measured evidence about
+#: the route, so the route is what moves.
+#:
+#: It is deliberately NOT in :data:`_REACHABILITY_TYPES`: those are connect-time
+#: and true whenever they happen, while this one is only true before the first
+#: chunk. After output has started a decode fault is the origin's, and this
+#: module may not move address then anyway.
+_PROXY_SHAPED_TYPES: tuple[type[BaseException], ...] = (httpx.DecodingError,)
+
+#: The module every failed SOCKS handshake comes from. ``socksio`` raises
+#: ``ProtocolError("Malformed reply")`` (``socksio/socks5.py:108``) when the
+#: address on the other end did not speak SOCKS5, and httpx/httpcore carry it
+#: on ``__cause__``. Matched by module rather than by import so an install
+#: without the ``socks`` extra still loads this file.
+_SOCKS_MODULE = "socksio"
+
 _CAUSE_DEPTH = 8
 
 
@@ -133,18 +156,36 @@ def _chain(error: BaseException) -> list[BaseException]:
     return seen
 
 
-def proxy_reachability_failure(error: BaseException, *, proxied: bool) -> str | None:
+def proxy_reachability_failure(
+    error: BaseException, *, proxied: bool, before_first_chunk: bool = True
+) -> str | None:
     """Name the way *the proxy* failed, or ``None`` if it did not.
 
     ``proxied`` is False for the Direct rung, where a refused connection is the
     provider's and benching "the address" would bench this machine.
+
+    ``before_first_chunk`` is False once the request has started yielding
+    output. The connect-time failures in :data:`_REACHABILITY_TYPES` cannot
+    happen then and are answered the same either way; the two classes in
+    :data:`_PROXY_SHAPED_TYPES` and :data:`_SOCKS_MODULE` can look like an
+    origin fault mid-stream, so they are only read as the address's before a
+    single byte has been yielded -- which is also the last moment this module
+    is allowed to move address at all.
     """
 
     if not proxied:
         return None
-    for link in _chain(error):
+    chain = _chain(error)
+    for link in chain:
         if isinstance(link, _REACHABILITY_TYPES):
             return type(link).__name__
+    if before_first_chunk:
+        for link in chain:
+            module = type(link).__module__ or ""
+            if module == _SOCKS_MODULE or module.startswith(f"{_SOCKS_MODULE}."):
+                return f"socks {type(link).__name__}"
+            if isinstance(link, _PROXY_SHAPED_TYPES):
+                return type(link).__name__
     failure = find_execution_failure(error)
     status = None if failure is None else failure.status_code
     if status in PROXY_STATUS_CODES:
@@ -299,6 +340,7 @@ class ProxyRotationState:
         *,
         scope_key: str,
         triggers: frozenset[str],
+        before_first_chunk: bool = True,
     ) -> str:
         """Record one failure against a rung; name what kind of failure it was.
 
@@ -317,7 +359,9 @@ class ProxyRotationState:
 
         label = self._label(index)
         reachability = proxy_reachability_failure(
-            error, proxied=label != DIRECT_PROXY_LABEL
+            error,
+            proxied=label != DIRECT_PROXY_LABEL,
+            before_first_chunk=before_first_chunk,
         )
         if reachability is not None:
             benched = PROXY_REACHABILITY.note_failure(label, reachability)
@@ -842,7 +886,9 @@ class ProxyRotatingProvider(BaseProvider):
         except Exception as error:
             self._pool.release(index)
             await maybe_await_aclose(iterator)
-            advance = await self._settle_failure(index, label, error, scope_key)
+            advance = await self._settle_failure(
+                index, label, error, scope_key, before_first_chunk=True
+            )
             return _LegAttempt(error=error, advance=advance)
 
         return _LegAttempt(
@@ -869,7 +915,9 @@ class ProxyRotatingProvider(BaseProvider):
             # dies mid-stream would never be benched.
             settled = True
             await maybe_await_aclose(iterator)
-            await self._settle_failure(index, label, error, scope_key)
+            await self._settle_failure(
+                index, label, error, scope_key, before_first_chunk=False
+            )
             raise
         finally:
             self._pool.release(index)
@@ -900,7 +948,13 @@ class ProxyRotatingProvider(BaseProvider):
         return self._pool.get(0).credential_label
 
     async def _settle_failure(
-        self, index: int, label: str, error: BaseException, scope_key: str
+        self,
+        index: int,
+        label: str,
+        error: BaseException,
+        scope_key: str,
+        *,
+        before_first_chunk: bool,
     ) -> str:
         if index >= len(self._labels):
             PROXY_HEALTH.note_failure(
@@ -912,4 +966,5 @@ class ProxyRotatingProvider(BaseProvider):
             error,
             scope_key=scope_key,
             triggers=self._triggers,
+            before_first_chunk=before_first_chunk,
         )

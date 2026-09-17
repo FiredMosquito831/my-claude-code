@@ -2832,7 +2832,10 @@ function proxyEntryRow(provider, draft, entry, index) {
   const health = proxyEntryHealth(entry);
   state.className = `proxy-entry-state proxy-entry-state-${health.state}`;
   state.textContent = entry.paused ? "paused" : health.text;
-  if (health.title) state.title = health.title;
+  // Always a title, not only when there is a longer explanation: the word is
+  // ellipsised when the row is tight, and a cut sentence the operator cannot
+  // read back is worse than no sentence.
+  state.title = health.title || state.textContent;
 
   const readout = proxyCheckReadout(entry);
   const check = document.createElement("span");
@@ -16203,6 +16206,45 @@ function ladderTryText(entry, position) {
   return parts.join(" · ");
 }
 
+/* The head fields, in the order an operator reads them: what answered, how it
+   said the body was encoded, who the edge was, and then the bytes themselves.
+   Only these keys are rendered, so a field added to the record later cannot
+   appear on the page without somebody deciding it should. */
+const LADDER_HEAD_FIELDS = [
+  ["status", "status"],
+  ["content_type", "content-type"],
+  ["content_encoding", "content-encoding"],
+  ["content_length", "content-length"],
+  ["transfer_encoding", "transfer-encoding"],
+  ["server", "server"],
+  ["cf_ray", "cf-ray"],
+  ["cf_placement", "cf-placement"],
+  ["retry_after", "retry-after"],
+  ["body_bytes", "body bytes"],
+  ["decode_error", "decode error"],
+];
+
+/**
+ * The response head recorded for one try, as text.
+ *
+ * Recorded only where the body could not be decoded -- the case where the
+ * status used to be lost entirely -- so a row from any earlier release has no
+ * head at all and renders exactly as it did. Returns "" when there is nothing
+ * to show, which is what keeps the block off every other row.
+ */
+function ladderHeadText(head) {
+  if (!head || typeof head !== "object") return "";
+  const lines = [];
+  LADDER_HEAD_FIELDS.forEach(([key, label]) => {
+    const value = head[key];
+    // `!= null` rather than a truthiness test: a content-length of 0 is a
+    // fact about the reply, and the one this record exists to show.
+    if (value != null && value !== "") lines.push(`${label}: ${value}`);
+  });
+  if (head.body_head_hex) lines.push(`first bytes: ${head.body_head_hex}`);
+  return lines.join("\n");
+}
+
 /** "key 0 ab...cd - benched 60s (rate_limit): 429 with no Retry-After". */
 function ladderDecisionText(decision) {
   const who =
@@ -16268,6 +16310,18 @@ function appendLadder(item, ladder) {
         pre.textContent = entry.body;
         bodyBox.appendChild(pre);
         row.appendChild(bodyBox);
+      }
+      const headText = ladderHeadText(entry.response_head);
+      if (headText) {
+        const headBox = document.createElement("details");
+        headBox.className = "req-chain-try-head";
+        const headLabel = document.createElement("summary");
+        headLabel.textContent = "Response head";
+        headBox.appendChild(headLabel);
+        const headPre = document.createElement("pre");
+        headPre.textContent = headText;
+        headBox.appendChild(headPre);
+        row.appendChild(headBox);
       }
       rows.appendChild(row);
     });
