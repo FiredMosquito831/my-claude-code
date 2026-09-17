@@ -86,9 +86,24 @@ def _legacy_store(tmp_path: Path, feeds: object = "unset") -> Path:
     return path
 
 
+#: Keys a later release added to a chain document with a default that means
+#: "what this store already did". A migration re-serialises every chain it
+#: reads, so these appear on the way out of a document written before they
+#: existed -- which is an added default, not the operator's work being spent,
+#: and is exactly what the round-trip assertion below has to be allowed to
+#: ignore. ``direct_fallback`` arrived in 7.19.0 and defaults to True.
+_DEFAULTED_CHAIN_KEYS = {"direct_fallback": True}
+
+
 def _everything_but_the_feeds(path: Path) -> dict[str, object]:
     document = json.loads(path.read_text(encoding="utf-8"))
     document.pop("feeds", None)
+    for chain in document.get("chains", {}).values():
+        if not isinstance(chain, dict):
+            continue
+        for key, default in _DEFAULTED_CHAIN_KEYS.items():
+            if chain.get(key) == default:
+                chain.pop(key, None)
     return document
 
 

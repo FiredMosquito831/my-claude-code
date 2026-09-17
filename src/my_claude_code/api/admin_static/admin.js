@@ -754,6 +754,9 @@ function proxyDraft(provider) {
         policy: chain.policy,
         scope: chain.scope,
         max_switches: chain.max_switches,
+        // Absent from a chain saved before 7.19.0, and absent means on: the
+        // server reads a missing key the same way, so the two cannot drift.
+        direct_fallback: chain.direct_fallback !== false,
         on: (chain.on || []).slice(),
         oauth_acknowledged: Boolean(chain.oauth_acknowledged),
         entries: (chain.entries || []).map((entry) => ({ ...entry })),
@@ -764,6 +767,7 @@ function proxyDraft(provider) {
         policy: vocabulary.default_policy || "failover",
         scope: "provider",
         max_switches: (vocabulary.switch_bound || {}).default || 2,
+        direct_fallback: true,
         on: (vocabulary.default_kinds || []).slice(),
         oauth_acknowledged: false,
         entries: [],
@@ -2546,6 +2550,35 @@ function proxyChip(kind, draft) {
   return chip;
 }
 
+/* How many rows of one chain are drawn before the operator asks for more.
+ *
+ * The chain cap went in 7.19.0, so a card can now hold three hundred entries
+ * and every row is a handful of elements with listeners on them. The Models
+ * page answered the same question the same way: draw a page, say how many are
+ * behind it, and let a press fill the next one. Fifty is what fits on a screen
+ * with room to scroll, and the whole list is still one press away. */
+const PROXY_ENTRY_PAGE_SIZE = 50;
+
+/* How many rows each card is currently showing, by provider id. Lives outside
+ * the draft on purpose: how much of a list you are looking at is not part of
+ * the chain you are editing, and it must not travel to the server or make the
+ * card dirty. */
+const proxyEntryShown = new Map();
+
+function proxyEntriesShown(providerId, total) {
+  const asked = Number(proxyEntryShown.get(providerId)) || PROXY_ENTRY_PAGE_SIZE;
+  return Math.min(Math.max(asked, PROXY_ENTRY_PAGE_SIZE), total);
+}
+
+function proxyShowMoreEntries(providerId, total, all) {
+  const shown = proxyEntriesShown(providerId, total);
+  proxyEntryShown.set(
+    providerId,
+    all ? total : Math.min(total, shown + PROXY_ENTRY_PAGE_SIZE),
+  );
+  renderProxying();
+}
+
 function proxyEntryList(provider, draft) {
   const list = document.createElement("ol");
   list.className = "proxy-entries";
@@ -2558,9 +2591,38 @@ function proxyEntryList(provider, draft) {
     list.appendChild(empty);
     return list;
   }
-  draft.entries.forEach((entry, index) => {
+  const total = draft.entries.length;
+  const shown = proxyEntriesShown(provider.provider_id, total);
+  draft.entries.slice(0, shown).forEach((entry, index) => {
     list.appendChild(proxyEntryRow(provider, draft, entry, index));
   });
+  if (shown < total) {
+    // The reorder buttons and the drag both address the draft array by index,
+    // and the rows behind this line are in that array whether they are drawn
+    // or not, so nothing an operator does to a drawn row depends on the rows
+    // that are not.
+    const more = document.createElement("li");
+    more.className = "proxy-entries-more";
+    const note = document.createElement("span");
+    note.className = "proxy-entries-more-note";
+    note.textContent = `Showing ${shown} of ${total} entries.`;
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "secondary-button proxy-entries-more-next";
+    next.textContent = `Show ${Math.min(PROXY_ENTRY_PAGE_SIZE, total - shown)} more`;
+    next.addEventListener("click", () =>
+      proxyShowMoreEntries(provider.provider_id, total, false),
+    );
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = "ghost-button proxy-entries-more-all";
+    all.textContent = `Show all ${total}`;
+    all.addEventListener("click", () =>
+      proxyShowMoreEntries(provider.provider_id, total, true),
+    );
+    more.append(note, next, all);
+    list.appendChild(more);
+  }
   return list;
 }
 
@@ -2577,17 +2639,28 @@ function proxyEntryHealth(entry) {
   if (entry.refused || health.state === "intercepted") {
     return {
       state: "intercepted",
-      text: "TLS intercepted",
+      text: "refused -- TLS intercepted",
       title:
         health.reason ||
         "This proxy breaks certificate validation -- MCC will not route through it.",
     };
   }
   if (health.state === "unreachable") {
+    // Since 7.19.0 a bench running out does not put an address back: it makes
+    // it due for a re-check, and only a check that PASSES returns it to the
+    // rotation. The row has to say which of the two it is looking at, or an
+    // operator watching a countdown reach zero would expect traffic to start
+    // flowing through it again.
+    const detail = health.reason ? ` (${health.reason})` : "";
     return {
       state: "unreachable",
-      text: `unreachable ${wait}`,
-      title: health.reason || "This address would not carry a request.",
+      text: health.due_for_recheck
+        ? `unhealthy -- due for a re-check${detail}`
+        : `unhealthy -- next check in ${wait}${detail}`,
+      title:
+        (health.reason || "This address would not carry a request.") +
+        " It stays out of the rotation until a check passes. Press Check now " +
+        "to run one.",
     };
   }
   if (health.state === "cooldown") {
@@ -2749,8 +2822,14 @@ function proxyEntryRow(provider, draft, entry, index) {
   // before there is anything to measure, and the button says so by not being
   // there rather than by failing when pressed.
   if (!entry.direct && entry.proxy) {
+    // "Check now", not "Test". Since 7.19.0 this button is not a diagnostic
+    // an operator might reasonably skip: an address that failed is held out of
+    // the rotation until a check PASSES, and this is how a person asks for
+    // that check without waiting for the re-prober's next pass. One word for
+    // one action, on every row, so the healthy row and the benched one do not
+    // look like two different controls.
     actions.appendChild(
-      proxyEntryButton("Test", true, (button) =>
+      proxyEntryButton("Check now", true, (button) =>
         testProxyEntry(provider, entry, button),
       ),
     );
@@ -3126,6 +3205,34 @@ function proxyCardFoot(provider, draft) {
   });
   scopeLabel.append(scopeText, scope);
 
+  // What happens when this chain has nothing healthy left. ON for every chain
+  // including a subscription-login one, because the alternative is a provider
+  // that stops answering the moment its free proxies die -- and an operator
+  // who added proxies to REACH a provider did not ask for that. Off is
+  // available and means it: a chain with this off never sends a request from
+  // this machine's own address.
+  const directLabel = document.createElement("label");
+  directLabel.className = "proxy-control proxy-direct-fallback";
+  const directInput = document.createElement("input");
+  directInput.type = "checkbox";
+  directInput.className = "proxy-direct-fallback-input";
+  directInput.checked = draft.direct_fallback !== false;
+  directInput.addEventListener("change", () => {
+    draft.direct_fallback = directInput.checked;
+    renderProxying();
+  });
+  const directText = document.createElement("span");
+  directText.textContent = "Fall back to this machine's own address";
+  directLabel.title =
+    directInput.checked
+      ? "When no healthy proxy is left, the request goes out with no proxy " +
+        "at all rather than failing. It is tried once, and the request log " +
+        "says Direct on that try."
+      : "This chain never uses this machine's own address. When every proxy " +
+        "in it is unhealthy, requests fail through to the model fallback " +
+        "chain as they did before 7.19.0.";
+  directLabel.append(directInput, directText);
+
   const actions = document.createElement("div");
   actions.className = "proxy-card-actions";
 
@@ -3176,7 +3283,7 @@ function proxyCardFoot(provider, draft) {
     actions.appendChild(remove);
   }
 
-  foot.append(boundLabel, scopeLabel, actions);
+  foot.append(boundLabel, scopeLabel, directLabel, actions);
   return foot;
 }
 
@@ -3216,6 +3323,7 @@ async function saveProxyChain(provider, draft, button, remove = false) {
         policy: draft.policy,
         scope: draft.scope,
         max_switches: draft.max_switches,
+        direct_fallback: draft.direct_fallback !== false,
         on: draft.on,
         oauth_acknowledged: draft.oauth_acknowledged,
         entries: draft.entries.map((entry) => ({

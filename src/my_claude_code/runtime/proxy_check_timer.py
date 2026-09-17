@@ -33,7 +33,15 @@ from collections.abc import Callable
 
 from loguru import logger
 
-from my_claude_code.application.proxy_check import check_endpoints
+from my_claude_code.application.proxy_check import (
+    PROXY_CHECK_MAX_CONCURRENCY,
+    check_endpoints,
+    check_targets,
+)
+from my_claude_code.application.proxy_health_store import flush_health
+from my_claude_code.config.credentials import mask_proxy_label
+from my_claude_code.config.proxy_chains import load_proxy_chains
+from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY
 
 #: Floor under the configured interval. One sweep is one HEAD request per
 #: address to a provider's own host; a mistyped ``1`` against a twelve-entry
@@ -179,8 +187,156 @@ class ProxyCheckTimer:
             await outcome
 
 
+#: Seconds between passes of the health re-prober. Fixed rather than a setting:
+#: the cadence an address is actually re-tested on is its own reachability tier
+#: (60s, 5m, 1h), and this is only how often the loop looks for one whose tier
+#: has run out. Thirty seconds makes the 60-second tier honest without being a
+#: second number anybody has to reason about.
+PROXY_REPROBE_TICK_SECONDS = 30.0
+
+
+class ProxyHealthTimer:
+    """Re-test the addresses that failed, and write what is known to the store.
+
+    Two jobs, one loop, and they are in one loop because they are two halves of
+    the same sentence: since 7.19.0 an address that failed stays out of the
+    rotation until a check **passes**, so something has to run that check and
+    something has to remember the answer across a restart.
+
+    * **Flush.** Every tick, whatever else happens, the reachability bench is
+      written into the proxy store. Free when nothing changed, and it is the
+      only reason the request path never touches the file.
+    * **Re-probe.** When ``PROXY_HEALTH_REPROBE_ENABLED`` is on -- which it is
+      by default -- every address in an **enabled** chain whose tier has run
+      out is re-checked through
+      :func:`~my_claude_code.application.proxy_check.check_endpoints`, against
+      that provider's own host. A pass puts it back in rotation; a failure
+      moves it one tier down the ladder.
+
+    The consent story is the one the checker above states, one step narrower:
+    this loop contacts only hosts the operator already routes to, only about
+    addresses that have already failed on the operator's own traffic, and never
+    about a chain that is switched off. An install with no chain, or with every
+    chain off, makes no request from here at all -- and the flush half still
+    runs, because writing a file is not traffic.
+
+    The same four guards as ``ProxyCheckTimer``: never overlap, never block the
+    loop, never touch the request path, cancellable.
+    """
+
+    def __init__(
+        self,
+        settings: Callable[[], object],
+        enabled: Callable[[], bool],
+        *,
+        sleep: Callable[[float], object] | None = None,
+        tick_seconds: float = PROXY_REPROBE_TICK_SECONDS,
+    ) -> None:
+        self._settings = settings
+        self._enabled = enabled
+        self._sleep = sleep
+        self._tick_seconds = max(1.0, float(tick_seconds))
+        self._task: asyncio.Task[None] | None = None
+        self._sweeping = False
+
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def start(self) -> bool:
+        """Start the loop. Idempotent, and it starts even when probing is off.
+
+        The flush half has to run either way: an operator who turned the
+        re-prober off still wants a restart to remember which addresses are
+        dead, or turning it off would silently turn persistence off too.
+        """
+
+        if self.running:
+            return True
+        self._task = asyncio.create_task(self.run())
+        return True
+
+    async def close(self) -> None:
+        task = self._task
+        self._task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        # One last write on the way out, so a clean shutdown does not lose the
+        # benches the final requests earned.
+        await asyncio.to_thread(flush_health)
+
+    async def run(self) -> None:
+        while True:
+            await self._wait(self._tick_seconds)
+            await self.tick()
+
+    async def tick(self) -> int:
+        """One pass. Returns how many addresses were re-probed."""
+
+        await asyncio.to_thread(flush_health)
+        if self._sweeping or not self._enabled():
+            return 0
+        settings = self._settings()
+        try:
+            store = await asyncio.to_thread(load_proxy_chains)
+        except Exception as exc:  # pragma: no cover - a read failure is logged
+            logger.debug(
+                "Proxy health re-probe could not read the store: exc_type={}",
+                type(exc).__name__,
+            )
+            return 0
+        targets = check_targets(settings, store, enabled_only=True)
+        due: list[str] = []
+        for proxy_id in targets:
+            endpoint = store.proxies.get(proxy_id)
+            if endpoint is None:  # pragma: no cover - targets come from the store
+                continue
+            label = endpoint.label or mask_proxy_label(endpoint.url)
+            if PROXY_REACHABILITY.due_for_reprobe(label):
+                due.append(proxy_id)
+        if not due:
+            return 0
+        self._sweeping = True
+        try:
+            outcomes = await check_endpoints(
+                due,
+                targets,
+                exit_ip_url="",
+                concurrency=PROXY_CHECK_MAX_CONCURRENCY,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Proxy health re-probe failed: exc_type={}", type(exc).__name__
+            )
+            return 0
+        finally:
+            self._sweeping = False
+        back = [outcome.label for outcome in outcomes.values() if outcome.record.ok]
+        if back:
+            logger.info(
+                "Proxy health: {} passed a re-check and are back in rotation",
+                ", ".join(sorted(back)),
+            )
+        await asyncio.to_thread(flush_health)
+        return len(outcomes)
+
+    async def _wait(self, seconds: float) -> None:
+        if self._sleep is None:
+            await asyncio.sleep(seconds)
+            return
+        outcome = self._sleep(seconds)
+        if asyncio.iscoroutine(outcome):
+            await outcome
+
+
 __all__ = [
     "PROXY_CHECK_MINIMUM_MINUTES",
+    "PROXY_REPROBE_TICK_SECONDS",
     "ProxyCheckTimer",
+    "ProxyHealthTimer",
     "resolve_check_interval",
 ]

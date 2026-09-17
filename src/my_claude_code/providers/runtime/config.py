@@ -87,6 +87,7 @@ def resolve_proxy_chain(
         max_switches=min(
             chain.max_switches, int(settings.proxy_max_switches_per_request)
         ),
+        direct_fallback=chain.direct_fallback,
     )
 
 

@@ -75,8 +75,13 @@ class ProxyChainPlan:
     on: frozenset[str] = frozenset()
     #: ``provider`` or ``credential`` -- how wide a triggering bench reaches.
     scope: str = "provider"
-    #: How many times one request may move to the next rung.
+    #: How many times one request may move to the next rung *because the
+    #: operator armed a trigger chip*. Unchanged in meaning and in range.
     max_switches: int = 2
+    #: Whether a request with no healthy rung left goes out on this machine's
+    #: own address rather than failing. True for every chain that has not said
+    #: otherwise, including every chain stored before the field existed.
+    direct_fallback: bool = True
 
 
 @dataclass(frozen=True, slots=True)

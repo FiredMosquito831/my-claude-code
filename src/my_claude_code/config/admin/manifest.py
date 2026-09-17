@@ -1855,6 +1855,86 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_CHAIN_MAX_ENTRIES",
+        "Most entries in one proxy chain",
+        "credential_health",
+        "number",
+        settings_attr="proxy_chain_max_entries",
+        default="0",
+        restart_required=True,
+        advanced=True,
+        minimum=0,
+        description=(
+            "How many addresses one provider's chain may hold. 0 -- what "
+            "ships -- means no limit: paste as many as you like. Set a number "
+            "if you want MCC to refuse a longer chain, and it refuses it with "
+            "a message rather than silently dropping the extra entries. "
+            "Length costs memory for the list, not connections: a chain's "
+            "legs are built on first use and closed again when idle."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_MAX_OPEN_LEGS",
+        "Open connections per proxy chain",
+        "credential_health",
+        "number",
+        settings_attr="proxy_max_open_legs",
+        default="32",
+        restart_required=True,
+        advanced=True,
+        minimum=0,
+        maximum=4096,
+        description=(
+            "How many addresses in one chain may hold an open HTTP client at "
+            "the same time. A leg is built the first time a request goes out "
+            "through it and closed again when it has been idle longest, so a "
+            "three-hundred-entry chain does not mean three hundred connection "
+            "pools. 0 keeps every leg that was ever used open."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_MAX_LIVE_FAILURES",
+        "Live proxy failures before going direct",
+        "credential_health",
+        "number",
+        settings_attr="proxy_max_live_failures",
+        default="5",
+        restart_required=True,
+        advanced=True,
+        minimum=0,
+        maximum=1000,
+        description=(
+            "How many addresses may fail while actually carrying one request "
+            "before MCC stops walking the chain and sends that request out on "
+            "this machine's own address instead. Addresses already known to "
+            "be unhealthy are skipped for free and do not count here. 0 "
+            "removes the bound, which on a long chain of dead addresses is "
+            "one connect timeout each inside a single attempt. Whether the "
+            "direct fallback happens at all is a per-chain switch on the "
+            "Proxying page."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_HEALTH_REPROBE_ENABLED",
+        "Re-test unhealthy proxies so they can come back",
+        "credential_health",
+        "boolean",
+        settings_attr="proxy_health_reprobe_enabled",
+        default="true",
+        restart_required=True,
+        advanced=True,
+        description=(
+            "An address that failed is held out of the rotation until a check "
+            "passes -- a bench running out means 'due for a re-check', never "
+            "'healthy again'. This loop is what runs that re-check, on the "
+            "same 1 minute / 5 minute / 1 hour ladder the bench uses. It "
+            "contacts only the provider hosts you already route to, only for "
+            "addresses in an ENABLED chain, and only ones that have already "
+            "failed on your own traffic. Turn it off and an address that "
+            "fails stays out until you press Check now."
+        ),
+    ),
+    ConfigFieldSpec(
         "PROXY_CHECK_ENABLED",
         "Check proxies in the background",
         "credential_health",

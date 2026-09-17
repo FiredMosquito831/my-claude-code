@@ -46,6 +46,7 @@ means an admin request never has to find a pool and a pool never has to be
 findable.
 """
 
+import contextlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -127,6 +128,18 @@ class ReachabilityLedger:
     scoped per provider: an address that refuses a CONNECT refuses it for every
     provider that would have used it, and discovering that once per provider is
     three connect timeouts instead of one.
+
+    **What a tier expiring means changed in 7.19.0.** It used to mean the
+    address was selectable again, so a dead free proxy was re-tried on a live
+    request every minute for as long as it stayed in the chain, and every one
+    of those re-tries cost the operator a connect timeout inside a real
+    request. It now means the address is *due for a re-probe*: a failed address
+    is unhealthy until a check **passes**, and the only things that clear it
+    are :meth:`note_success` -- which the checker calls on a pass and the
+    request path calls when an address really did carry a request -- and
+    :meth:`clear`. :meth:`remaining` still answers "how long until the next
+    re-check", which is what the page shows and what the re-prober schedules
+    on; :meth:`is_unhealthy` is the question selection asks.
     """
 
     def __init__(
@@ -137,6 +150,87 @@ class ReachabilityLedger:
         self._tiers = tiers or PROXY_REACHABILITY_TIERS
         self._clock = clock
         self._records: dict[str, ReachabilityRecord] = {}
+        self._listener: Callable[[str], None] | None = None
+
+    def set_listener(self, listener: Callable[[str], None] | None) -> None:
+        """Register one callback told which address's record just moved.
+
+        The ledger lives in ``core`` and durability lives above it, so the
+        ledger does not know what a store is: it names the address that
+        changed and the layer that owns the file decides what to do about it.
+        Exactly one listener, replaced rather than appended, so a test that
+        installs one cannot leave a second behind.
+        """
+
+        self._listener = listener
+
+    def _announce(self, endpoint: str) -> None:
+        listener = self._listener
+        if listener is None:
+            return
+        # A durability writer must never be able to fail a request. The ledger
+        # is the request path's; the file is somebody else's problem.
+        with contextlib.suppress(Exception):
+            listener(endpoint)
+
+    def is_unhealthy(self, endpoint: str) -> bool:
+        """Whether this address may not be selected for a live request.
+
+        True from the first failure until something *passes*. The deadline is
+        not part of this answer, which is the whole of the 7.19.0 change.
+        """
+
+        record = self._records.get(endpoint)
+        return record is not None and record.failures > 0
+
+    def due_for_reprobe(self, endpoint: str) -> bool:
+        """Whether this address has failed and its re-check window has passed."""
+
+        record = self._records.get(endpoint)
+        return (
+            record is not None and record.failures > 0 and record.until <= self._clock()
+        )
+
+    def due_endpoints(self) -> tuple[str, ...]:
+        """Every address a re-probe is owed, oldest deadline first."""
+
+        now = self._clock()
+        due = [
+            (record.until, endpoint)
+            for endpoint, record in self._records.items()
+            if record.failures > 0 and record.until <= now
+        ]
+        return tuple(endpoint for _, endpoint in sorted(due))
+
+    def failures(self, endpoint: str) -> int:
+        record = self._records.get(endpoint)
+        return 0 if record is None else record.failures
+
+    def restore(
+        self, endpoint: str, failures: int, remaining: float, reason: str = ""
+    ) -> None:
+        """Re-arm one address's bench from a durable record.
+
+        Used once at startup. ``remaining`` is seconds still to wait, already
+        worked out against wall-clock time by the caller that read the file,
+        because this ledger's own clock is monotonic and means nothing across a
+        restart. A non-positive ``remaining`` re-arms the address as unhealthy
+        and immediately due, which is the honest reading of a bench that
+        expired while the process was down: it has not passed a check.
+        """
+
+        if not endpoint or failures <= 0:
+            return
+        now = self._clock()
+        record = self._records.get(endpoint)
+        if record is None:
+            record = ReachabilityRecord()
+            self._records[endpoint] = record
+            self._prune(now)
+        record.failures = failures
+        record.reason = reason
+        record.last_seen_at = now
+        record.until = now + max(0.0, remaining)
 
     def note_failure(self, endpoint: str, reason: str = "") -> float:
         """Bench ``endpoint`` one tier deeper; return the seconds it now waits."""
@@ -154,18 +248,26 @@ class ReachabilityLedger:
         record.last_seen_at = now
         window = self._tiers[min(record.failures, len(self._tiers)) - 1]
         record.until = now + window
+        self._announce(endpoint)
         return window
 
     def note_success(self, endpoint: str) -> None:
-        """Forget an address's bench: it just carried a request."""
+        """Forget an address's bench: something about it just passed.
+
+        The **only** way back into rotation. Called by the checker on a pass
+        and by the request path when an address really carried a request.
+        """
 
         record = self._records.get(endpoint)
         if record is None:
             return
+        changed = record.failures > 0
         record.failures = 0
         record.until = 0.0
         record.reason = ""
         record.last_seen_at = self._clock()
+        if changed:
+            self._announce(endpoint)
 
     def remaining(self, endpoint: str) -> float:
         """Seconds before ``endpoint`` may be tried again; 0 while it may."""
@@ -176,11 +278,32 @@ class ReachabilityLedger:
         return max(0.0, record.until - self._clock())
 
     def reason(self, endpoint: str) -> str:
+        """Why this address is out, for as long as it is out.
+
+        Tied to ``failures`` rather than to the deadline since 7.19.0: an
+        address whose window has expired is still out, and a row that stopped
+        saying why the moment the countdown hit zero was the most confusing
+        part of the old reading.
+        """
+
         record = self._records.get(endpoint)
-        return "" if record is None or self.remaining(endpoint) <= 0 else record.reason
+        return "" if record is None or record.failures <= 0 else record.reason
+
+    def state(self, endpoint: str) -> tuple[int, float, str]:
+        """``(failures, seconds still to wait, reason)`` for the writer."""
+
+        record = self._records.get(endpoint)
+        if record is None or record.failures <= 0:
+            return (0, 0.0, "")
+        return (record.failures, self.remaining(endpoint), record.reason)
 
     def clear(self) -> None:
-        """Forget everything. Tests, and the admin reset."""
+        """Forget everything. Tests, and the admin reset.
+
+        The listener is deliberately kept: it belongs to whoever wired the
+        process up, and a test that resets the measurements is not asking for
+        durability to be unwired.
+        """
 
         self._records.clear()
 
@@ -318,7 +441,13 @@ class ProxyHealthLedger:
         """
 
         record = self._records.get((provider_id, endpoint))
+        # Two different numbers now. ``unhealthy`` is whether the address may be
+        # selected at all -- true from the first failure until a check passes --
+        # and ``unreachable`` is only how long until the next re-probe is owed,
+        # which is what the row counts down.
+        unhealthy = bool(endpoint) and PROXY_REACHABILITY.is_unhealthy(endpoint)
         unreachable = PROXY_REACHABILITY.remaining(endpoint) if endpoint else 0.0
+        due = bool(endpoint) and PROXY_REACHABILITY.due_for_reprobe(endpoint)
         benched = (
             0.0 if record is None else max(0.0, record.benched_until - self._clock())
         )
@@ -327,7 +456,7 @@ class ProxyHealthLedger:
             # also be benched, unchecked or perfectly fast, and none of that is
             # the thing the operator needs to read on its row.
             state = "intercepted"
-        elif unreachable > 0:
+        elif unhealthy:
             state = "unreachable"
         elif benched > 0:
             state = "cooldown"
@@ -344,13 +473,18 @@ class ProxyHealthLedger:
             "successes": 0 if record is None else record.successes,
             "failures": 0 if record is None else record.failures,
             "cooldown_remaining": round(max(unreachable, benched), 1),
+            # True when the address has failed and its window has run out: it
+            # is waiting on a check, not on a clock. The row says so rather
+            # than showing "0s" and implying it is about to come back by
+            # itself.
+            "due_for_recheck": due,
             "refused": PROXY_INTERCEPTION.is_refused(endpoint),
             "reason": (
                 PROXY_INTERCEPTION.detail(endpoint)
                 or "This address breaks certificate validation."
                 if PROXY_INTERCEPTION.is_refused(endpoint)
                 else PROXY_REACHABILITY.reason(endpoint)
-                if unreachable > 0
+                if unhealthy
                 else (None if record is None else record.last_error)
             ),
         }

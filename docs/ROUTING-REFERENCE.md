@@ -290,11 +290,35 @@ Two separate rules.
 | **Reachability** | the address would not carry the request at all | escalating `60s → 5m → 1h`, clamped at the last | the **address**, across every provider on this install — a dead proxy is dead for everybody, and discovering that once per provider is three connect timeouts instead of one |
 | **Trigger** | the provider answered with a failure you selected | the provider's own published `Retry-After` if it sent one, else `300s` | the **address and the provider**, across all its keys, because the allowance is metered by address. Switch *Quota is metered per* to **address and key** on a provider that meters per (address, account) |
 
-Both are live on the card: each entry says `healthy`, `failing`, `cooldown 4m`, `unreachable 5m`, or **not checked yet** — which means exactly that, an address no request has gone through, not a bad measurement. A third state, **TLS intercepted**, is not a bench at all: see *Testing an address* below.
+Both are live on the card: each entry says `healthy`, `failing`, `cooldown 4m`, `unhealthy — next check in 5m (reason)`, or **not checked yet** — which means exactly that, an address no request has gone through, not a bad measurement. A fourth state, **refused — TLS intercepted**, is not a bench at all: see *Testing an address* below.
 
-#### The bound, and why it is real
+#### A bench running out is not a way back (7.19.0)
 
-`PROXY_MAX_SWITCHES_PER_REQUEST` on **Limits & Resilience** (default `2`, range `1`–`5`) is the most any chain on this install may move inside one request; each card carries its own number, and the smaller of the two applies. `2` means at most three addresses are tried. Every switch spends wall-clock inside a single attempt and **the deadlines above it do not move to make room** — three dead addresses is three connect timeouts — which is what the reachability bench and this bound exist to contain together.
+Up to 7.18 a reachability tier expiring made an address selectable again, with nothing having measured it. On a list of free proxies that meant a dead address was re-tried on a live request every minute, forever, at the cost of a connect timeout each time.
+
+Since **7.19.0** the tier expiring means the address is **due for a re-check**, and the only thing that puts it back in the rotation is a check that **passes** — the same check the **Check now** button on its row runs, against that provider's own host. `PROXY_HEALTH_REPROBE_ENABLED` on **Limits & Resilience** (default **on**) is the loop that runs those checks for you, on the same `60s → 5m → 1h` cadence. It contacts only provider hosts you already route to, only for addresses that have already failed on your own traffic, and only inside chains you have switched **on** — a chain that is off is never probed. Turn it off and an address that fails stays out until you press **Check now**.
+
+An address already known to be unhealthy is **skipped for free**: it spends no switch, no live-failure budget and no connect timeout. That is what makes a three-hundred-entry chain of mostly-dead free proxies usable.
+
+The bench is also **written down** now, in `~/.mcc/proxy_chains.json` beside the address it describes, and re-armed at startup. A restart used to make every dead proxy look healthy again; a bench that expired while MCC was not running comes back as *unhealthy and due*, never as healthy, because nothing checked it.
+
+#### How long a chain may be
+
+There is **no limit** on a fresh install. 7.13 capped a chain at twelve entries because each one was a client, a rate limiter and a recovery ladder built for every credential at startup; 7.19.0 builds a rung's leaf the first time a request goes out through it and closes it again when it has been idle longest, so a three-hundred-entry chain is three hundred strings and at most `PROXY_MAX_OPEN_LEGS` (default `32`) open clients. Set `PROXY_CHAIN_MAX_ENTRIES` on **Limits & Resilience** if you want a ceiling of your own; a longer chain is then refused with a message rather than silently truncated. A card longer than fifty rows draws fifty and offers **Show 50 more** / **Show all**.
+
+#### The bounds, and why they are real
+
+`PROXY_MAX_SWITCHES_PER_REQUEST` on **Limits & Resilience** (default `2`, range `1`–`5`) is the most any chain on this install may move inside one request **because a trigger you armed fired**; each card carries its own number, and the smaller of the two applies. Every switch spends wall-clock inside a single attempt and **the deadlines above it do not move to make room**.
+
+`PROXY_MAX_LIVE_FAILURES` (default `5`, `0` = no bound) is the companion bound on the other kind of move: how many addresses may fail while actually carrying the request — a refused CONNECT, a connect timeout, a `407` — before MCC stops walking the chain. Addresses already known unhealthy are skipped for free and do not count against it.
+
+#### Direct is the last rung (7.19.0)
+
+When a chain has no healthy address left, or has spent `PROXY_MAX_LIVE_FAILURES`, the request goes out **with no proxy at all** — on this machine's own address — **once**, and the request log's per-try `proxy` label says `Direct` on that try.
+
+This is a per-chain switch, **Fall back to this machine's own address**, on the card beside the switch bound. It is **on** for every chain including one stored before 7.19.0 and including a subscription-login provider, because the alternative is a provider that stops answering the moment its free proxies die, and an operator who added proxies to *reach* a provider did not ask for that. **Turn it off** on a provider that must never see this machine's address: with it off, a chain whose addresses are all benched behaves exactly as it did before 7.19.0 — it dispatches into a bench rather than answer nothing, and the failure reaches the model fallback chain as it always did.
+
+An address the checker found terminating TLS is **never** used, in any of these branches, including the direct one: a bench is a preference and an interception is a prohibition. If the chain already contains an explicit **Direct (no proxy)** entry, that rung is an ordinary rung and no second direct try is added.
 
 #### Rotation policies
 

@@ -75,7 +75,6 @@ from my_claude_code.config.proxy_chains import (
     MAX_SWITCHES_MAX,
     MAX_SWITCHES_MIN,
     OAUTH_PROVIDER_IDS,
-    PROXY_CHAIN_MAX_ENTRIES,
     PROXY_URL_SCHEMES,
     REFUSED_TRIGGER_KINDS,
     SCOPES,
@@ -197,6 +196,11 @@ class ProxyChainPayload(BaseModel):
     policy: str = "failover"
     scope: str = "provider"
     max_switches: int = 2
+    #: Whether a request with no healthy address left goes out on this
+    #: machine's own address. Defaults to True here as it does in the store, so
+    #: an older client that does not send the field cannot turn it off by
+    #: omission.
+    direct_fallback: bool = True
     on: list[str] = Field(default_factory=lambda: list(DEFAULT_TRIGGER_KINDS))
     oauth_acknowledged: bool = False
     entries: list[ProxyEntryPayload] = Field(default_factory=list)
@@ -242,13 +246,15 @@ async def put_proxy_chain(
 
     _reject_bad_policy(payload)
     _reject_bad_triggers(payload.on)
-    if len(payload.entries) > PROXY_CHAIN_MAX_ENTRIES:
+    cap = _entry_cap(settings)
+    if cap and len(payload.entries) > cap:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"A chain may hold at most {PROXY_CHAIN_MAX_ENTRIES} entries; "
-                f"this one has {len(payload.entries)}. Each entry is a separate "
-                "client, rate limiter and recovery ladder per credential."
+                f"A chain may hold at most {cap} entries; this one has "
+                f"{len(payload.entries)}. That ceiling is yours, not MCC's: "
+                "PROXY_CHAIN_MAX_ENTRIES on Limits & Resilience, and 0 -- what "
+                "ships -- means no limit at all."
             ),
         )
     if (
@@ -452,6 +458,19 @@ def _commit(provider_id: str, chain: ProxyChain | None) -> None:
         save_proxy_chains(load_proxy_chains().with_chain(provider_id, chain))
 
 
+def _entry_cap(settings: Any) -> int:
+    """The operator's own ceiling on chain length; ``0`` means there is none.
+
+    7.13 shipped a hard 12 in ``config/proxy_chains.py``, justified by the cost
+    of a leaf provider per entry per credential. 7.19.0 builds those leaves
+    lazily, so the cost is gone and the ceiling with it -- what is left is a
+    number an operator may want, read from their own settings and enforced with
+    a message rather than by truncation.
+    """
+
+    return max(0, int(getattr(settings, "proxy_chain_max_entries", 0) or 0))
+
+
 def _commit_chain(provider_id: str, payload: ProxyChainPayload, inherited: str) -> None:
     with _CHAIN_WRITE_LOCK:
         store = load_proxy_chains()
@@ -467,6 +486,7 @@ def _commit_chain(provider_id: str, payload: ProxyChainPayload, inherited: str) 
             ),
             scope=payload.scope.strip().lower(),
             max_switches=clamp_max_switches(payload.max_switches),
+            direct_fallback=payload.direct_fallback,
             oauth_acknowledged=payload.oauth_acknowledged,
         )
         # An address the operator typed may be one a feed had already offered:
@@ -822,7 +842,8 @@ class ProxyUndoPayload(BaseModel):
 #: The most addresses one request may carry. The page sends a long selection in
 #: batches of ten so it can show progress and stay usable, so this is a bound
 #: on a misbehaving caller rather than on an operator: nothing the page does
-#: comes close to it, and a chain caps at twelve entries anyway.
+#: comes close to it, and a chain is not capped at all unless the operator
+#: capped it.
 PROXY_CANDIDATE_BULK_MAX = 100
 
 #: Outcomes one address can have, in the words the page reports them with. This
@@ -943,7 +964,8 @@ async def bulk_proxy_candidates(
                 "its chain."
             ),
         )
-    free = max(0, PROXY_CHAIN_MAX_ENTRIES - len(chain.entries))
+    cap = _entry_cap(settings)
+    free = len(proxies) if not cap else max(0, cap - len(chain.entries))
     in_chain = {entry.proxy for entry in chain.entries if entry.proxy}
 
     results: dict[str, dict[str, Any]] = {}
@@ -1012,7 +1034,9 @@ async def bulk_proxy_candidates(
 
     before = await asyncio.to_thread(_snapshot)
     if keep:
-        missed = await asyncio.to_thread(_commit_promotions, provider_id, keep)
+        missed = await asyncio.to_thread(
+            _commit_promotions, provider_id, keep, _entry_cap(settings)
+        )
         for proxy_id in missed:
             # The store moved under the write -- another tab, or a hand edit.
             # Say so rather than reporting an add that did not happen.
@@ -1109,7 +1133,9 @@ def _commit_feeds(feeds: tuple[CustomFeed, ...]) -> None:
         save_proxy_chains(load_proxy_chains().with_feeds(feeds))
 
 
-def _commit_promotions(provider_id: str, proxy_ids: list[str]) -> list[str]:
+def _commit_promotions(
+    provider_id: str, proxy_ids: list[str], cap: int = 0
+) -> list[str]:
     """Append several candidates to one chain, in **one** write.
 
     Inside the writer lock and on a store re-read from disk, so a batch that
@@ -1139,7 +1165,7 @@ def _commit_promotions(provider_id: str, proxy_ids: list[str]) -> list[str]:
             if proxy_id not in store.candidates:
                 missed.append(proxy_id)
                 continue
-            if len(entries) >= PROXY_CHAIN_MAX_ENTRIES:
+            if cap and len(entries) >= cap:
                 missed.append(proxy_id)
                 continue
             entries.append(ProxyChainEntry(proxy=proxy_id, paused=False))
@@ -1240,7 +1266,7 @@ def _payload(services: ApiServices) -> dict[str, Any]:
             "kinds": [_kind_payload(kind) for kind in TRIGGER_KIND_ORDER],
             "default_kinds": list(DEFAULT_TRIGGER_KINDS),
             "scopes": list(SCOPES),
-            "max_entries": PROXY_CHAIN_MAX_ENTRIES,
+            "max_entries": _entry_cap(settings),
             "switch_bound": {
                 "min": MAX_SWITCHES_MIN,
                 "max": MAX_SWITCHES_MAX,
@@ -1427,6 +1453,7 @@ def _chain_payload(
         "policy": chain.policy,
         "scope": chain.scope,
         "max_switches": chain.max_switches,
+        "direct_fallback": chain.direct_fallback,
         "on": list(chain.on),
         "oauth_acknowledged": chain.oauth_acknowledged,
         "entries": [_entry_payload(item, store, provider_id) for item in chain.entries],

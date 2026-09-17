@@ -218,10 +218,46 @@ def test_inheriting_a_proxy_a_provider_does_not_have_is_refused() -> None:
     assert "has none" in response.json()["detail"]
 
 
-def test_a_chain_longer_than_the_cap_is_refused() -> None:
-    """Each entry is a separate client, rate limiter and recovery ladder."""
+def test_a_chain_is_not_capped_unless_the_operator_capped_it() -> None:
+    """Thirteen entries are accepted on a shipped install, and three hundred.
+
+    Replaces ``test_a_chain_longer_than_the_cap_is_refused``, which asserted
+    that a fourteenth entry was refused with "at most 12". That ceiling was
+    about construction cost -- a client, a rate limiter and a recovery ladder
+    per rung per credential, all built eagerly -- and 7.19.0 builds a rung's
+    leaf on its first use. What is left is ``PROXY_CHAIN_MAX_ENTRIES``, which
+    ships as 0 (no limit) and is the operator's to set.
+    """
 
     response = _client().put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "entries": [{"url": f"http://198.51.100.9:{9000 + i}"} for i in range(300)],
+        },
+    )
+
+    assert response.status_code == 200
+    chain = _provider(response.json(), "nvidia_nim")["chain"]
+    assert len(chain["entries"]) == 300
+
+
+def test_a_chain_longer_than_the_operators_own_cap_is_refused() -> None:
+    """A ceiling the operator set is enforced with a message, not a truncation.
+
+    The number in the message is theirs, and the message says where it came
+    from -- an operator who finds a chain refused has to be able to find the
+    setting that refused it.
+    """
+
+    settings = Settings.model_validate(
+        {
+            "model": "nvidia_nim/primary",
+            "nvidia_nim_api_key": "nim-key",
+            "PROXY_CHAIN_MAX_ENTRIES": 12,
+        }
+    )
+    response = _client(settings).put(
         "/admin/api/proxy-chains",
         json={
             "provider": "nvidia_nim",
@@ -230,7 +266,9 @@ def test_a_chain_longer_than_the_cap_is_refused() -> None:
     )
 
     assert response.status_code == 422
-    assert "at most 12" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "at most 12" in detail
+    assert "PROXY_CHAIN_MAX_ENTRIES" in detail
 
 
 def test_a_destructive_trigger_is_refused_with_its_reason() -> None:
