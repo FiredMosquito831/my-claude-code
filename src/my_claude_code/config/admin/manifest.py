@@ -1893,6 +1893,28 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_CONNECT_TIMEOUT_SECONDS",
+        "Proxy connect timeout (seconds)",
+        "credential_health",
+        "number",
+        settings_attr="proxy_connect_timeout_seconds",
+        default="10",
+        restart_required=True,
+        advanced=True,
+        minimum=1,
+        maximum=120,
+        description=(
+            "How long a request waits for the handshake with a proxy address "
+            "before giving up on it and trying the next one. Only the connect "
+            "step, and only when the request is going out through a proxy: "
+            "the read and write timeouts are the provider's own, and a "
+            "provider with no chain is not affected at all. A dead address "
+            "costs this many seconds, once -- MCC no longer dials the same "
+            "address a second time after a connect failure, because another "
+            "address is what fixes one."
+        ),
+    ),
+    ConfigFieldSpec(
         "PROXY_MAX_LIVE_FAILURES",
         "Live proxy failures before going direct",
         "credential_health",

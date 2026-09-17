@@ -1343,6 +1343,36 @@ def test_a_truncated_tool_call_says_it_could_not_be_completed(rendered) -> None:
     assert detail["truncations"] == ["stalled inside a tool call — cannot be completed"]
 
 
+def test_the_response_head_renders_on_the_try_that_had_one(rendered) -> None:
+    """The measured bug's evidence, on the row it belongs to.
+
+    Recorded only where the body could not be decoded, so exactly one of this
+    ladder's three rows carries one and the other two render as they did
+    before 7.20.0 -- which is what makes an old stored ladder safe.
+    """
+
+    detail = rendered["requestDetail"]["ladder"]
+    assert detail["ladderHeadLabels"] == ["Response head"]
+    head = detail["ladderHeads"][0]
+    assert "status: 502" in head
+    assert "content-encoding: gzip" in head
+    assert "cf-ray: a3c9a1dc-ORD" in head
+    assert "retry-after: 25517" in head
+    assert "decode error: Error -3 while decompressing data" in head
+    # Hex, not text: a head is read to decide what KIND of thing answered.
+    assert "first bytes: 3c68746d6c3e" in head
+    # ``0`` is a fact about the reply, not a missing term.
+    assert "content-length: 0" in head
+
+
+def test_a_try_with_no_recorded_head_renders_exactly_as_before(rendered) -> None:
+    """Every row a release before 7.20.0 wrote has no head at all."""
+
+    detail = rendered["requestDetail"]["ladder"]
+    assert len(detail["ladderTries"]) == 3
+    assert len(detail["ladderHeads"]) == 1
+
+
 def test_a_single_try_attempt_renders_no_ladder(rendered) -> None:
     """Nothing was hidden, so the panel adds nothing -- and stays hidden."""
     detail = rendered["requestDetail"]["singleTry"]

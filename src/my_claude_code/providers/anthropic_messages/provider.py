@@ -18,6 +18,7 @@ from my_claude_code.core.reasoning import (
     narrow_dialect_by_rejections,
 )
 from my_claude_code.core.trace import trace_event
+from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.core.wire_capture import (
     record_reasoning_adaptation,
     record_response_shape,
@@ -29,7 +30,12 @@ from my_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
     classify_provider_failure,
 )
-from my_claude_code.providers.http import close_provider_stream
+from my_claude_code.providers.http import (
+    ErrorBody,
+    close_provider_stream,
+    error_response_headers,
+    read_error_body,
+)
 from my_claude_code.providers.model_listing import model_infos_from_ids
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
@@ -247,20 +253,46 @@ class AnthropicMessagesProvider(BaseProvider):
 
     async def _send_stream_request(self, body: dict[str, Any]) -> httpx.Response:
         response, request = await self._open_stream(body)
+        # The body of a refusal is read RAW and decoded afterwards, so an edge
+        # that labels it ``gzip`` when it is not cannot raise before the status
+        # exists. See ``providers/http.read_error_body``. It is carried across
+        # the auth retry the way the response object used to carry it: the
+        # first branch reads it, and the second raises with it.
+        error: ErrorBody | None = None
         if response.status_code >= 400 and self._auth_retry is not None:
             status = response.status_code
-            await response.aread()
+            error = await read_error_body(response)
             await response.aclose()
             if await self._auth_retry(status):
                 response, request = await self._open_stream(body)
+                error = None
         if response.status_code >= 400:
-            if not response.is_closed:
-                await response.aread()
+            if error is None and not response.is_closed:
+                error = await read_error_body(response)
                 await response.aclose()
+            if error is None:
+                # Already closed and never read by this frame: the pre-7.20
+                # path, raised with the response object itself exactly as it
+                # always was.
+                raise httpx.HTTPStatusError(
+                    f"{self._provider_name} Messages API error {response.status_code}",
+                    request=request,
+                    response=response,
+                )
+            note_response_head(error.head)
+            # Re-wrapped rather than re-raised as itself: the body was taken
+            # off the wire raw, so the decoded bytes have to be carried on a
+            # response that says what they are, and the two headers that
+            # described the *encoded* bytes are dropped with them.
             raise httpx.HTTPStatusError(
                 f"{self._provider_name} Messages API error {response.status_code}",
                 request=request,
-                response=response,
+                response=httpx.Response(
+                    response.status_code,
+                    headers=error_response_headers(response.headers),
+                    content=error.content,
+                    request=request,
+                ),
             )
         return response
 

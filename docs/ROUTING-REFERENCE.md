@@ -310,7 +310,20 @@ There is **no limit** on a fresh install. 7.13 capped a chain at twelve entries 
 
 `PROXY_MAX_SWITCHES_PER_REQUEST` on **Limits & Resilience** (default `2`, range `1`–`5`) is the most any chain on this install may move inside one request **because a trigger you armed fired**; each card carries its own number, and the smaller of the two applies. Every switch spends wall-clock inside a single attempt and **the deadlines above it do not move to make room**.
 
-`PROXY_MAX_LIVE_FAILURES` (default `5`, `0` = no bound) is the companion bound on the other kind of move: how many addresses may fail while actually carrying the request — a refused CONNECT, a connect timeout, a `407` — before MCC stops walking the chain. Addresses already known unhealthy are skipped for free and do not count against it.
+`PROXY_MAX_LIVE_FAILURES` (default `5`, `0` = no bound) is the companion bound on the other kind of move: how many addresses may fail while actually carrying the request — a refused CONNECT, a connect timeout, a `407`, a failed SOCKS handshake, or a reply MCC could not decode before the first byte of output — before MCC stops walking the chain. Addresses already known unhealthy are skipped for free and do not count against it.
+
+`PROXY_CONNECT_TIMEOUT_SECONDS` (default `10`, range `1`–`120`) is what one dead address actually costs. It is the **connect** timeout of a proxied leg's HTTP client and nothing else: read, write and pool timeouts stay on the provider's own settings, and a provider with no chain is not affected. Since 7.20.0 a proxied connect failure is also surfaced to the chain on the **first** dial — `PROVIDER_RETRY_ATTEMPTS` used to run its ladder *inside* the leg, so every dead address was dialled twice before the chain was told. Status retries (`429`, `5xx`) inside a leg are unchanged: the address answered, so a second knock can still help.
+
+#### What counts as the address's fault (7.20.0)
+
+Two failure shapes were previously filed against the **model**. Both are now read as the address's, and both only when the request was actually going out through a proxy and nothing had been yielded yet:
+
+- a failed SOCKS handshake (`socksio` — “Malformed reply”), which can only happen to a proxied connection by construction; and
+- a reply MCC could not decode, which in one measured day happened 293 times, on one host, and never once unproxied.
+
+Both switch to the next address and bench the one that failed on the reachability ladder, and both count against `PROXY_MAX_LIVE_FAILURES` — so a chain of such addresses still ends at Direct. After the first chunk of output neither is read that way: the request cannot move address then, and a decode fault there is the origin's.
+
+Separately, an error reply whose `Content-Encoding` does not describe its bytes no longer loses its status. MCC reads a `>=400` body raw and decodes it afterwards, so a `403` or a `429` is classified as a `403` or a `429` whatever the body turned out to be — and the response head (status, content-type, content-encoding, length, `server`, `cf-ray`, `retry-after`, and the first 128 bytes as hex) is recorded on that try in the request-detail modal.
 
 #### Direct is the last rung (7.19.0)
 

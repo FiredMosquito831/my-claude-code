@@ -119,6 +119,12 @@ class LadderTry:
     #: change. It costs no migration at all: the ladder is stored inside the
     #: attempt's existing ``params.ladder`` JSON.
     proxy: str | None = None
+    #: The bounded, allow-listed head of the response behind this try --
+    #: status, the transport headers, and the first bytes as hex -- recorded
+    #: only where the body could not be decoded and the status would otherwise
+    #: have been lost. ``None`` everywhere else, so every row a release before
+    #: 7.20 wrote renders exactly as it did.
+    response_head: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +257,36 @@ def current_ladder() -> LadderTrace | None:
     return _LADDER.get()
 
 
+#: The head of the response the *next* recorded try describes.
+#:
+#: The frame that reads a refusal body and the frame that records the try are
+#: not the same frame -- the transport reads it, and the retry ladder in
+#: ``providers/rate_limit.py`` records the row one ``except`` later. Rather
+#: than widen a signature that every provider shares, the head is left in the
+#: same kind of per-request slot the proxy label already uses
+#: (``core/proxy_attribution.current_proxy``) and taken by the first try
+#: recorded after it. It is *popped*, never merely read, so it can attach to
+#: one row and only one.
+_PENDING_HEAD: ContextVar[Mapping[str, Any] | None] = ContextVar(
+    "fcc_response_head", default=None
+)
+
+
+def note_response_head(head: Mapping[str, Any] | None) -> None:
+    """Leave the head of one response for the try about to be recorded."""
+
+    _PENDING_HEAD.set(head)
+
+
+def take_response_head() -> Mapping[str, Any] | None:
+    """Take the pending head, clearing it."""
+
+    head = _PENDING_HEAD.get()
+    if head is not None:
+        _PENDING_HEAD.set(None)
+    return head
+
+
 def redact_try_body(body: Any, limit: int) -> tuple[str | None, bool]:
     """Redact and cap one raw upstream body.
 
@@ -306,12 +342,14 @@ def record_upstream_try(
     signature to tell it would be a much larger change than the one the feature
     needs.
     """
+    head = take_response_head()
     slot = _LADDER.get()
     if slot is None:
         return
     text, truncated = redact_try_body(body, slot.body_limit)
     slot.record_try(
         LadderTry(
+            response_head=head,
             proxy=proxy if proxy is not None else current_proxy(),
             key_index=key_index,
             key_label=key_label,
@@ -432,6 +470,7 @@ def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
                 ("upstream_ms", _rounded(entry.upstream_ms)),
                 ("proxy", entry.proxy),
                 ("body", entry.body),
+                ("response_head", entry.response_head),
             )
             if value is not None
         }

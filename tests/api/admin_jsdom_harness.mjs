@@ -3734,6 +3734,12 @@ function driveDetail(row) {
     ladderBodies: Array.from(chain.querySelectorAll(".req-chain-try-body pre")).map(
       (el) => el.textContent,
     ),
+    ladderHeads: Array.from(chain.querySelectorAll(".req-chain-try-head pre")).map(
+      (el) => el.textContent,
+    ),
+    ladderHeadLabels: Array.from(
+      chain.querySelectorAll(".req-chain-try-head summary"),
+    ).map((el) => el.textContent),
   };
 }
 
@@ -3947,6 +3953,20 @@ const requestDetail = {
                 status: 502,
                 upstream_ms: 830,
                 retry_after: 12,
+                /* 7.20.0: the head of a reply whose Content-Encoding did not
+                   describe its bytes. Recorded only on that row, so every
+                   other try here renders exactly as it did before. */
+                response_head: {
+                  status: 502,
+                  content_type: "text/html",
+                  content_encoding: "gzip",
+                  content_length: 0,
+                  server: "cloudflare",
+                  cf_ray: "a3c9a1dc-ORD",
+                  retry_after: "25517",
+                  body_head_hex: "3c68746d6c3e",
+                  decode_error: "Error -3 while decompressing data",
+                },
               },
               { source: "limiter_wait", waited_ms: 51900 },
             ],

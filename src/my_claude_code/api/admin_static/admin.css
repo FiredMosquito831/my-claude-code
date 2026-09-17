@@ -6969,6 +6969,21 @@ details.turn-pane > summary:focus-visible {
   opacity: 0.75;
 }
 
+/* The head of a reply MCC could not decode: status, the transport headers and
+   the first bytes as hex. Drawn like the body box beside it, because it is the
+   same kind of evidence about the same try -- and folded away, because it is
+   only there on the rare row that needed it. */
+.req-chain-try-head > pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--input);
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
 .req-chain-try-body > pre {
   margin: 4px 0 0;
   padding: 6px 8px;
@@ -7994,6 +8009,27 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+/* The live-health word, bounded.
+   "unhealthy -- due for a re-check (ConnectError)" is forty-five characters,
+   and with the row a wrapping flex container it pushed the action group onto a
+   second line -- so a card of mixed health drew rows of two different heights
+   with their buttons in two different places. The status is the one term here
+   that has no bound on its length, so it is the one that is cut: it shrinks,
+   ellipsises, and carries the whole sentence in its title. */
+.proxy-entry-state {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 28ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The badge form is short by construction and must not be clipped to nothing. */
+.proxy-entry-state-intercepted {
+  max-width: none;
+}
+
 /* The checker's own line: latency, what the tunnel did to certificate
    validation, and when that was measured. Allowed to wrap onto its own line on
    a narrow card rather than squeezing the label, which is the identity of the
@@ -8048,9 +8084,14 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+/* The action column is reserved, not negotiated: it keeps its own width and
+   never wraps, so every row's buttons line up whatever its status says. The
+   label, the check readout and the status all shrink instead -- they each
+   carry ``min-width: 0`` and either wrap their text or ellipsise it. */
 .proxy-entry-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: var(--space-1);
   margin-left: auto;
 }

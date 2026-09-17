@@ -391,6 +391,17 @@ PROXY_MAX_OPEN_LEGS_MAX = 4096
 PROXY_MAX_LIVE_FAILURES_DEFAULT = 5
 PROXY_MAX_LIVE_FAILURES_MIN = 0
 PROXY_MAX_LIVE_FAILURES_MAX = 1000
+# How long a *proxied* leg waits for the TCP/SOCKS handshake with its address
+# before giving up on it. Only the connect step: the read, write and pool
+# timeouts stay on the provider's own settings, and an unproxied client is not
+# touched at all. A dead address is the common case on a public chain and the
+# provider-wide connect timeout is sized for an origin, not for a stranger --
+# one measured dead entry cost 21 s, and with no bound on how many a chain may
+# hold that is the number that decides how long a request spends finding a live
+# one.
+PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT = 10.0
+PROXY_CONNECT_TIMEOUT_SECONDS_MIN = 1.0
+PROXY_CONNECT_TIMEOUT_SECONDS_MAX = 120.0
 # Whether the health re-prober runs. TRUE, and unlike the background *checker*
 # above this is on by default because it is not a new outbound conversation:
 # it re-tests only the addresses that have ALREADY failed while carrying this
