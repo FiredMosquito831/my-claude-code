@@ -600,9 +600,11 @@ const PROXY_CANDIDATE_BATCH = 10;
 const PROXY_CANDIDATE_RENDER_CAP = 300;
 
 /* Above this, a bulk button asks for a second press. Not 200 like the Models
-   page: a chain holds at most twelve entries, so twenty-five is already a
-   gesture that cannot mean what it says, and a discard of two hundred offers
-   is a bigger loss than hiding two hundred models ever was. */
+   page: the number was chosen while a chain held at most twelve entries, and
+   7.19.0 removed that cap -- but the reason to confirm did not go with it. A
+   discard of two hundred offers is still a bigger loss than hiding two hundred
+   models ever was, and adding two hundred addresses in front of a credential
+   is still worth one deliberate second press. */
 const PROXY_CANDIDATE_CONFIRM_AT = 25;
 
 async function loadProxying() {
