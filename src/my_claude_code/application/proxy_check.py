@@ -120,17 +120,28 @@ def destination_for_provider(provider_id: str, settings: Any) -> str:
     return ""
 
 
-def check_targets(settings: Any, store: ProxyChains) -> dict[str, str]:
+def check_targets(
+    settings: Any, store: ProxyChains, *, enabled_only: bool = False
+) -> dict[str, str]:
     """Map every address in a chain to the host a check should aim at.
 
     An address shared between two providers is checked against the first
     provider that names it, in store order. One check is enough: the question
     is whether this tunnel keeps *any* certificate honest, and a machine that
     terminates one terminates them all.
+
+    ``enabled_only`` narrows it to chains the operator actually armed, which is
+    what the health re-prober asks for: a chain that is switched off routes no
+    traffic, so re-testing its addresses would be an outbound request nobody
+    asked for. A *paused* entry inside an enabled chain is still included --
+    it is held out of selection, not out of the catalogue, and an operator who
+    un-pauses it wants a current answer rather than a stale one.
     """
 
     targets: dict[str, str] = {}
     for provider_id, chain in store.chains.items():
+        if enabled_only and not chain.enabled:
+            continue
         destination = destination_for_provider(provider_id, settings)
         if not destination.lower().startswith("https://"):
             continue

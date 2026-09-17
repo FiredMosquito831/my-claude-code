@@ -15,7 +15,6 @@ from my_claude_code.config.proxy_chains import (
     DEFAULT_TRIGGER_KINDS,
     DIRECT,
     MAX_SWITCHES_DEFAULT,
-    PROXY_CHAIN_MAX_ENTRIES,
     REFUSED_TRIGGER_KINDS,
     TLS_INTERCEPTED,
     TLS_STRICT,
@@ -242,8 +241,20 @@ def test_an_endpoint_no_chain_names_is_pruned() -> None:
     assert emptied.proxies == {}
 
 
-def test_a_chain_is_capped_at_the_documented_entry_limit(tmp_path: Path) -> None:
-    """Twelve is a cap on clients, rate limiters and recovery ladders."""
+def test_reading_a_chain_never_truncates_what_the_operator_saved(
+    tmp_path: Path,
+) -> None:
+    """Every entry in the document comes back, however many there are.
+
+    Replaces ``test_a_chain_is_capped_at_the_documented_entry_limit``, which
+    asserted the opposite: up to 7.18 this reader silently dropped everything
+    past the twelfth entry. That cap existed because a leg cost a client, a
+    rate limiter and a recovery ladder at construction time -- 7.19.0 builds
+    legs on first use, so it does not, and a ceiling is now the operator's own
+    ``PROXY_CHAIN_MAX_ENTRIES`` enforced at the API with a message. A store
+    this install already wrote is data, and silently losing part of it on read
+    was never the right answer to a bound on a request.
+    """
 
     path = tmp_path / "proxy_chains.json"
     path.write_text(
@@ -261,7 +272,7 @@ def test_a_chain_is_capped_at_the_documented_entry_limit(tmp_path: Path) -> None
 
     chain = load_proxy_chains(path).chain("opencode")
     assert chain is not None
-    assert len(chain.entries) == PROXY_CHAIN_MAX_ENTRIES
+    assert len(chain.entries) == 40
 
 
 def test_a_proxy_url_needs_a_scheme_this_product_can_dial() -> None:

@@ -8060,6 +8060,43 @@ details.turn-pane > summary:focus-visible {
   font-size: 11px;
 }
 
+/* The footer of a chain longer than one page. Paging arrived with the entry
+   cap leaving in 7.19.0: a card can hold three hundred rows now, and every row
+   is a handful of elements with listeners on them. Laid out as one line so the
+   count and the two ways to see more read together. */
+.proxy-entries-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  list-style: none;
+}
+
+.proxy-entries-more-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.proxy-entries-more-next,
+.proxy-entries-more-all {
+  white-space: nowrap;
+}
+
+/* The per-chain switch for the last rung of all: this machine's own address.
+   On the foot beside the switch bound and the scope, because all three answer
+   "what does this chain do when something goes wrong" rather than "which
+   addresses are in it". */
+.proxy-direct-fallback {
+  gap: var(--space-2);
+}
+
+.proxy-direct-fallback-input {
+  margin: 0;
+}
+
 .proxy-empty {
   padding: var(--space-3);
   border: 1px dashed var(--line-strong);

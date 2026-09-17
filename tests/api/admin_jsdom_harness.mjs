@@ -2695,7 +2695,7 @@ if (withChain) {
   ).map((node) => node.textContent.trim());
   // Only a saved address can be tested, so the Direct rung has no button.
   proxying.testButtons = Array.from(withChain.querySelectorAll(".proxy-entry")).map(
-    (row) => Boolean(proxyButton(row, "Test")),
+    (row) => Boolean(proxyButton(row, "Check now")),
   );
   proxying.testAll = (proxyButton(withChain, "Test all (3)") || {}).textContent || "";
 
@@ -2748,9 +2748,9 @@ if (withChain) {
   // the announcement has to say what a refusal means rather than reporting a
   // failed request.
   const rows = Array.from(proxyCardFor("nvidia_nim").querySelectorAll(".proxy-entry"));
-  const testable = rows.find((row) => proxyButton(row, "Test"));
+  const testable = rows.find((row) => proxyButton(row, "Check now"));
   if (testable) {
-    proxyButton(testable, "Test").click();
+    proxyButton(testable, "Check now").click();
     await new Promise((resolve) => setTimeout(resolve, 150));
     proxying.checkPost =
       fetchBodies
@@ -2769,8 +2769,8 @@ if (withChain) {
   const refusedRow = Array.from(
     proxyCardFor("nvidia_nim").querySelectorAll(".proxy-entry"),
   ).find((row) => (row.textContent || "").includes("192.0.2.44:3128"));
-  if (refusedRow && proxyButton(refusedRow, "Test")) {
-    proxyButton(refusedRow, "Test").click();
+  if (refusedRow && proxyButton(refusedRow, "Check now")) {
+    proxyButton(refusedRow, "Check now").click();
     await new Promise((resolve) => setTimeout(resolve, 150));
     proxying.announcementAfterRefusedTest = (
       doc.querySelector("#proxyingStatus")?.textContent || ""

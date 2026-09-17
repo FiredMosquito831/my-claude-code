@@ -317,6 +317,13 @@ def test_the_factory_builds_one_leaf_per_rung_below_the_credential_pool(
     Two credentials and three rungs is one ``RotatingProvider`` over two
     ``ProxyRotatingProvider``s over six leaves, each leaf differing from its
     sibling in exactly one field.
+
+    Since 7.19.0 those six leaves are built on **first use** rather than at
+    construction, so this walks them by asking the pool for each rung rather
+    than by reading a list that no longer exists. The shape it asserts is
+    unchanged; what changed is when the clients appear, which
+    ``test_a_long_chain_builds_no_client_until_a_request_goes_out`` below is
+    the assertion for.
     """
 
     from my_claude_code.providers.runtime.rotating import RotatingProvider
@@ -339,17 +346,109 @@ def test_the_factory_builds_one_leaf_per_rung_below_the_credential_pool(
     assert len(pools) == 2
     for pool in pools:
         assert isinstance(pool, ProxyRotatingProvider)
-        assert [leaf._config.proxy for leaf in pool._providers] == [
+        leaves = [pool._pool.get(index) for index in range(3)]
+        assert [leaf._config.proxy for leaf in leaves] == [
             "socks5h://u:p@203.0.113.7:1080",
             "http://198.51.100.9:8080",
             "",
         ]
         # Every leaf carries one credential and one address, and no leaf
         # carries a plan -- the recursion stops at the rung.
-        assert {leaf._config.api_key for leaf in pool._providers} == {
-            pool._providers[0]._config.api_key
-        }
-        assert all(leaf._config.proxy_chain is None for leaf in pool._providers)
+        assert {leaf._config.api_key for leaf in leaves} == {leaves[0]._config.api_key}
+        assert all(leaf._config.proxy_chain is None for leaf in leaves)
     assert (
-        pools[0]._providers[0]._config.api_key != pools[1]._providers[0]._config.api_key
+        pools[0]._pool.get(0)._config.api_key != pools[1]._pool.get(0)._config.api_key
     )
+
+
+def test_with_no_chain_provider_construction_is_what_it_always_was(store) -> None:
+    """The safety boundary of 7.19.0, asserted rather than asserted about.
+
+    Everything this release adds -- lazy legs, a live-failure bound, a direct
+    fallback, a health re-prober -- is reachable only through a configured
+    chain. An install that has never opened the Proxying page must get back the
+    object it got from 7.18, built from the same config, and that means not
+    even a ``ProxyRotatingProvider`` in the tree.
+    """
+
+    store(ProxyChains())
+    settings = Settings.model_validate({"nvidia_nim_api_key": "k1"})
+
+    provider = create_provider("nvidia_nim", settings)
+
+    assert not isinstance(provider, ProxyRotatingProvider)
+    assert provider._config.proxy == ""
+    assert provider._config.proxy_chain is None
+    # The four fields a chain would have changed are untouched, so the bytes
+    # this provider puts on the wire cannot differ from the release before.
+    assert (
+        provider._config.base_url
+        == create_provider("nvidia_nim", settings)._config.base_url
+    )
+
+
+def test_a_three_hundred_entry_chain_round_trips_through_the_store(store) -> None:
+    """The cap is gone from the reader, the writer and the runtime alike.
+
+    Three hundred addresses in, three hundred out, three hundred legs in the
+    plan -- and, because a leg is built on first use, no client for any of them
+    until a request picks one.
+    """
+
+    proxies = {
+        f"px_{index:03d}": ProxyEndpoint(url=f"http://198.51.100.9:{9000 + index}")
+        for index in range(300)
+    }
+    chains = ProxyChains(
+        proxies=proxies,
+        chains={
+            "nvidia_nim": ProxyChain(
+                enabled=True,
+                entries=tuple(ProxyChainEntry(proxy=proxy_id) for proxy_id in proxies),
+            )
+        },
+    )
+    store(chains)
+    settings = Settings.model_validate({"nvidia_nim_api_key": "k1"})
+
+    proxy, plan = resolve_proxy_chain("nvidia_nim", "", settings)
+
+    assert proxy == ""
+    assert plan is not None
+    assert len(plan.legs) == 300
+    assert plan.direct_fallback is True
+
+    provider = create_provider("nvidia_nim", settings)
+    assert isinstance(provider, ProxyRotatingProvider)
+    assert provider.open_leg_count() == 0
+
+
+def test_pruning_keeps_every_endpoint_a_long_chain_references(store) -> None:
+    """``with_chain`` drops endpoints nothing references, and 300 are referenced."""
+
+    proxies = {
+        f"px_{index:03d}": ProxyEndpoint(url=f"http://198.51.100.9:{9000 + index}")
+        for index in range(300)
+    }
+    chains = ProxyChains(proxies=proxies, chains={})
+    kept = chains.with_chain(
+        "nvidia_nim",
+        ProxyChain(
+            enabled=True,
+            entries=tuple(ProxyChainEntry(proxy=proxy_id) for proxy_id in proxies),
+        ),
+    )
+
+    assert len(kept.proxies) == 300
+
+    # And one entry removed prunes exactly one endpoint, not the other 299.
+    trimmed = kept.with_chain(
+        "nvidia_nim",
+        ProxyChain(
+            enabled=True,
+            entries=tuple(
+                ProxyChainEntry(proxy=proxy_id) for proxy_id in list(proxies)[:299]
+            ),
+        ),
+    )
+    assert len(trimmed.proxies) == 299

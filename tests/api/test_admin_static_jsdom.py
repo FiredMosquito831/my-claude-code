@@ -3569,10 +3569,16 @@ def test_jsdom_each_entry_shows_the_health_the_pools_measured(rendered) -> None:
 
     states = rendered["proxying"]["entryStates"]
 
+    # "unreachable 5m" up to 7.18, which read as a countdown to being usable
+    # again. It was not one even then, and since 7.19.0 it is emphatically not:
+    # the window running out makes an address due for a re-CHECK, and only a
+    # check that passes puts it back. The row now says which of the two states
+    # it is in and why, and "refused" leads the intercepted row because a
+    # refusal is a prohibition rather than a measurement.
     assert [state["text"] for state in states] == [
         "healthy",
-        "unreachable 5m",
-        "TLS intercepted",
+        "unhealthy -- next check in 5m (ConnectTimeout -- benched 300s)",
+        "refused -- TLS intercepted",
         "not checked yet",
     ]
     assert "proxy-entry-state-healthy" in states[0]["className"]
@@ -3883,11 +3889,14 @@ def test_jsdom_an_intercepting_address_is_struck_through_and_kept_on_the_card(
     assert proxying["refusedRowsAfterTest"] == ["192.0.2.44:3128"]
 
 
-def test_jsdom_only_a_saved_address_offers_a_test_button(rendered) -> None:
+def test_jsdom_only_a_saved_address_offers_a_check_now_button(rendered) -> None:
     """The check dials the stored URL, which the page has never been told.
 
-    So the three saved addresses can be tested and the Direct rung cannot, and
+    So the three saved addresses can be checked and the Direct rung cannot, and
     the button says so by not being there rather than by failing when pressed.
+    The word is "Check now" since 7.19.0: an address that failed comes back
+    only when a check passes, so this is how an operator asks for that rather
+    than a diagnostic they might reasonably skip.
     """
 
     assert rendered["proxying"]["testButtons"] == [True, True, True, False]

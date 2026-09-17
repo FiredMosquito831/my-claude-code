@@ -74,6 +74,7 @@ from .constants import (
     PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+    PROXY_CHAIN_MAX_ENTRIES_DEFAULT,
     PROXY_CHECK_ENABLED_DEFAULT,
     PROXY_CHECK_EXIT_IP_URL_DEFAULT,
     PROXY_CHECK_INTERVAL_MINUTES_DEFAULT,
@@ -83,6 +84,13 @@ from .constants import (
     PROXY_FEED_REFRESH_MINUTES_DEFAULT,
     PROXY_FEED_REFRESH_MINUTES_MAX,
     PROXY_FEED_REFRESH_MINUTES_MIN,
+    PROXY_HEALTH_REPROBE_ENABLED_DEFAULT,
+    PROXY_MAX_LIVE_FAILURES_DEFAULT,
+    PROXY_MAX_LIVE_FAILURES_MAX,
+    PROXY_MAX_LIVE_FAILURES_MIN,
+    PROXY_MAX_OPEN_LEGS_DEFAULT,
+    PROXY_MAX_OPEN_LEGS_MAX,
+    PROXY_MAX_OPEN_LEGS_MIN,
     PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
     PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
     PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
@@ -980,6 +988,35 @@ class Settings(BaseSettings):
     proxy_check_enabled: bool = Field(
         default=PROXY_CHECK_ENABLED_DEFAULT,
         validation_alias="PROXY_CHECK_ENABLED",
+    )
+    # The operator's own ceiling on chain length. 0 is unlimited and is what
+    # ships; a longer chain is refused at the API with a message rather than
+    # quietly truncated.
+    proxy_chain_max_entries: int = Field(
+        default=PROXY_CHAIN_MAX_ENTRIES_DEFAULT,
+        validation_alias="PROXY_CHAIN_MAX_ENTRIES",
+        ge=0,
+    )
+    # How many of a chain's legs may hold an open HTTP client at once.
+    proxy_max_open_legs: int = Field(
+        default=PROXY_MAX_OPEN_LEGS_DEFAULT,
+        validation_alias="PROXY_MAX_OPEN_LEGS",
+        ge=PROXY_MAX_OPEN_LEGS_MIN,
+        le=PROXY_MAX_OPEN_LEGS_MAX,
+    )
+    # How many addresses may fail live inside one request before it goes
+    # Direct. 0 removes the bound.
+    proxy_max_live_failures: int = Field(
+        default=PROXY_MAX_LIVE_FAILURES_DEFAULT,
+        validation_alias="PROXY_MAX_LIVE_FAILURES",
+        ge=PROXY_MAX_LIVE_FAILURES_MIN,
+        le=PROXY_MAX_LIVE_FAILURES_MAX,
+    )
+    # Whether the health re-prober re-tests benched addresses so they can come
+    # back. On: a bench expiring is "due for a re-check", never "usable again".
+    proxy_health_reprobe_enabled: bool = Field(
+        default=PROXY_HEALTH_REPROBE_ENABLED_DEFAULT,
+        validation_alias="PROXY_HEALTH_REPROBE_ENABLED",
     )
     proxy_check_interval_minutes: int = Field(
         default=PROXY_CHECK_INTERVAL_MINUTES_DEFAULT,

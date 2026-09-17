@@ -23,6 +23,11 @@ from my_claude_code.application.proxy_check import (
     arm_refusals_from_store,
     check_targets,
 )
+from my_claude_code.application.proxy_health_store import (
+    arm_health_from_store,
+    install_listener,
+    remove_listener,
+)
 from my_claude_code.config.admin.manifest import update_affects_providers
 from my_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
@@ -86,7 +91,7 @@ from my_claude_code.providers.runtime.reasoning_probe import (
 
 from .discovery_timer import ProviderDiscoveryTimer, resolve_refresh_interval
 from .provider_manager import ProviderRuntimeManager
-from .proxy_check_timer import ProxyCheckTimer
+from .proxy_check_timer import ProxyCheckTimer, ProxyHealthTimer
 from .proxy_feed_timer import ProxyFeedTimer
 
 RestartCallback = Callable[[], Awaitable[None] | None]
@@ -253,6 +258,17 @@ class ApplicationRuntime:
             lambda: self.settings.proxy_feed_refresh_minutes,
             lambda: self.settings.proxy_feed_refresh_enabled,
         )
+        # The health re-prober, and the writer that makes a bench survive a
+        # restart. On by default, unlike the two above, because it is not a new
+        # conversation: it re-tests only addresses that have already failed on
+        # this operator's own traffic, only in chains they switched on, and
+        # only against provider hosts they already route to. Its other half --
+        # writing the bench into the store -- runs whether probing is on or
+        # off, because a file write is not an outbound request.
+        self._proxy_health_timer = ProxyHealthTimer(
+            lambda: self.settings,
+            lambda: self.settings.proxy_health_reprobe_enabled,
+        )
 
     @property
     def settings(self) -> Settings:
@@ -306,7 +322,16 @@ class ApplicationRuntime:
             # terminating TLS.
             state.mark("proxy-refusals")
             await asyncio.to_thread(arm_refusals_from_store)
+            # And the other half of the same argument. A reachability bench is
+            # process-lifetime state too, and since 7.19.0 an address that
+            # failed comes back only after a check that PASSES -- so a restart
+            # that forgot the benches would put every dead proxy back into
+            # rotation and charge the operator a connect timeout each to
+            # rediscover them.
+            await asyncio.to_thread(arm_health_from_store)
+            install_listener()
             self._proxy_check_timer.start()
+            self._proxy_health_timer.start()
             # Before the feed timer reads the store, and before the Proxying
             # page can be opened: an install upgrading from 7.17.1 still names
             # its feeds by the ids of the seven this product used to ship, and
@@ -1016,6 +1041,8 @@ class ApplicationRuntime:
         await self._discovery_timer.close()
         await self._proxy_check_timer.close()
         await self._proxy_feed_timer.close()
+        await self._proxy_health_timer.close()
+        remove_listener()
         await best_effort(
             "learned_facts.flush",
             self._learned_facts.close(),

@@ -288,16 +288,27 @@ def _create_single_provider(
 
     legs = plan.legs
     labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
-    providers = [
-        _create_leaf_provider(
+
+    def build_leg(index: int) -> BaseProvider:
+        """One leg's leaf provider, built the first time it is used.
+
+        Index ``len(legs)`` is the direct fallback: the same leaf with no proxy
+        at all, which is what a chain with nothing healthy left falls back to.
+        Building these lazily is what lets a chain be as long as the operator
+        wants -- the eager version of this line was the reason for the old
+        twelve-entry cap, since five keys times twelve addresses was sixty
+        connection pools built before the first request.
+        """
+
+        url = legs[index].url if index < len(legs) else ""
+        return _create_leaf_provider(
             descriptor,
-            dataclasses.replace(config, proxy=leg.url, proxy_chain=None),
+            dataclasses.replace(config, proxy=url, proxy_chain=None),
             settings,
         )
-        for leg in legs
-    ]
+
     state = ProxyRotationState(
-        len(providers),
+        len(legs),
         plan.policy,
         labels=labels,
         provider_id=descriptor.provider_id,
@@ -305,11 +316,13 @@ def _create_single_provider(
     )
     return ProxyRotatingProvider(
         config,
-        providers,
+        build_leg,
         state,
         labels=labels,
         plan=plan,
         provider_id=descriptor.provider_id,
+        max_open_legs=int(getattr(settings, "proxy_max_open_legs", 0) or 0),
+        max_live_failures=int(getattr(settings, "proxy_max_live_failures", 0) or 0),
     )
 
 

@@ -367,6 +367,38 @@ CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT = 2
 PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT = 2
 PROXY_MAX_SWITCHES_PER_REQUEST_MIN = 1
 PROXY_MAX_SWITCHES_PER_REQUEST_MAX = 5
+# How many entries one provider's chain may hold. 0 is UNLIMITED and is the
+# shipped default: 7.19.0 removed the hard 12 that 7.13 shipped, because the
+# operators who use this feature paste lists of hundreds of free addresses and
+# a tool-invented ceiling was the wrong place to bound them. A ceiling an
+# operator sets for themselves is still honoured -- the API refuses a longer
+# chain with a message rather than silently truncating it.
+PROXY_CHAIN_MAX_ENTRIES_DEFAULT = 0
+# How many of a chain's legs may hold an open HTTP client at once. A leg is
+# built on its first use and closed again when it has been idle longest, so a
+# three-hundred-entry chain costs three hundred entries of memory rather than
+# three hundred connection pools. 0 removes the bound and keeps every leg that
+# was ever used open, which is what 7.13-7.18 effectively did.
+PROXY_MAX_OPEN_LEGS_DEFAULT = 32
+PROXY_MAX_OPEN_LEGS_MIN = 0
+PROXY_MAX_OPEN_LEGS_MAX = 4096
+# How many addresses may fail LIVE -- inside one request, carrying real
+# traffic -- before the request stops walking the chain and goes out Direct.
+# Distinct from the switch bound above, which counts only the switches an
+# operator armed with a trigger chip. 0 removes the bound, and on a chain of
+# three hundred dead addresses that is three hundred connect timeouts in one
+# attempt, which is why it is not the default.
+PROXY_MAX_LIVE_FAILURES_DEFAULT = 5
+PROXY_MAX_LIVE_FAILURES_MIN = 0
+PROXY_MAX_LIVE_FAILURES_MAX = 1000
+# Whether the health re-prober runs. TRUE, and unlike the background *checker*
+# above this is on by default because it is not a new outbound conversation:
+# it re-tests only the addresses that have ALREADY failed while carrying this
+# operator's traffic, against the provider host that operator already routes
+# to, and it is the only way back into rotation now that a bench expiring no
+# longer re-admits an address by itself. A disabled chain is never probed, so
+# an install whose chains are all off makes no request from this loop at all.
+PROXY_HEALTH_REPROBE_ENABLED_DEFAULT = True
 # Whether the background proxy checker runs. OFF, and it stays off until an
 # operator turns it on: a user who never opens the Proxying page must make no
 # outbound request they did not ask for. The Test button on that page is always

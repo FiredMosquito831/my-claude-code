@@ -109,10 +109,20 @@ PROXY_URL_SCHEMES: frozenset[str] = frozenset({"http", "https", "socks5", "socks
 DIRECT = ""
 DIRECT_LABEL = "Direct (no proxy)"
 
-#: 5 keys x 4 proxies is already 20 leaf providers for one entry in the
-#: catalogue, each with its own client, recovery ladder and rate limiter. The
-#: cap is refused at the API with a message rather than silently truncated.
-PROXY_CHAIN_MAX_ENTRIES = 12
+#: The operator's own ceiling on chain length, and ``0`` -- the shipped
+#: default -- means there is none.
+#:
+#: 7.13 shipped a hard 12 here, reasoning that 5 keys x 4 proxies is already 20
+#: leaf providers each with its own client. That reasoning was about
+#: *connections*, and connections are no longer what a chain entry costs: since
+#: 7.19.0 a leg is built on its first use and closed again when it has been
+#: idle longest (``PROXY_MAX_OPEN_LEGS``), so a three-hundred-entry chain is
+#: three hundred strings and at most thirty-two clients. What is left is a
+#: bound an operator may want for themselves, so it is a setting they set --
+#: read from ``Settings.proxy_chain_max_entries`` at the API, refused with a
+#: message, never silently truncated, and never applied when reading the store,
+#: because a store this install already wrote is data rather than a request.
+PROXY_CHAIN_MAX_ENTRIES_UNLIMITED = 0
 
 #: How many times one request may move to the next entry. The user's own range.
 #: Every switch spends wall-clock inside a single attempt and the executor's
@@ -401,6 +411,64 @@ def _optional_float(value: object) -> float | None:
 
 
 @dataclass(frozen=True, slots=True)
+class ProxyHealthState:
+    """One address's reachability bench, made durable.
+
+    The ledger in ``core/proxy_rotation.py`` is process-lifetime state on a
+    *monotonic* clock, and before 7.19.0 a restart therefore made every dead
+    address in every chain look healthy again -- which mattered little while a
+    bench expiring re-admitted an address anyway, and matters a great deal now
+    that only a passing check does. This is that ledger's record written down.
+
+    ``until`` is a **wall-clock** epoch second rather than the ledger's
+    monotonic deadline, because a monotonic number means nothing to the process
+    that reads it back. ``failures`` is the index into the ladder and is the
+    load-bearing half: it is what makes a proxy that has failed three times
+    come back on the hour tier rather than the minute one.
+    """
+
+    failures: int = 0
+    #: Epoch seconds, from :func:`time.time`. ``0.0`` means "no deadline"; an
+    #: address with ``failures > 0`` and an elapsed deadline is *due for a
+    #: re-probe*, which is emphatically not the same as usable.
+    until: float = 0.0
+    reason: str = ""
+    #: When this was written, ISO-8601 Z, for the page.
+    at: str = ""
+
+    def as_document(self) -> dict[str, Any]:
+        return {
+            "failures": self.failures,
+            "until": self.until,
+            "reason": self.reason,
+            "at": self.at,
+        }
+
+    @classmethod
+    def from_document(cls, raw: object) -> ProxyHealthState | None:
+        if not isinstance(raw, Mapping):
+            return None
+        raw_failures = raw.get("failures")
+        try:
+            failures = (
+                max(0, int(raw_failures)) if isinstance(raw_failures, int | str) else 0
+            )
+        except ValueError:
+            failures = 0
+        if failures <= 0:
+            # A healthy address is the absence of a record, not a record saying
+            # zero. Reading one back as ``None`` keeps the two spellings from
+            # meaning different things anywhere downstream.
+            return None
+        return cls(
+            failures=failures,
+            until=_optional_float(raw.get("until")) or 0.0,
+            reason=str(raw.get("reason") or "").strip(),
+            at=str(raw.get("at") or "").strip(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProxyEndpoint:
     """One address in the catalogue.
 
@@ -425,6 +493,9 @@ class ProxyEndpoint:
     #: checked. ``None`` and "checked and failed" are different states and the
     #: page says which it is looking at.
     last_check: ProxyCheckRecord | None = None
+    #: The reachability bench this address was carrying when it was last
+    #: written. ``None`` for an address that has never failed.
+    health: ProxyHealthState | None = None
 
     @property
     def refused(self) -> bool:
@@ -446,6 +517,8 @@ class ProxyEndpoint:
             document["feed"] = self.feed.as_document()
         if self.last_check is not None:
             document["last_check"] = self.last_check.as_document()
+        if self.health is not None:
+            document["health"] = self.health.as_document()
         return document
 
     @classmethod
@@ -481,6 +554,7 @@ class ProxyEndpoint:
             sources=sources,
             feed=ProxyFeedFacts.from_document(raw.get("feed")),
             last_check=ProxyCheckRecord.from_document(raw.get("last_check")),
+            health=ProxyHealthState.from_document(raw.get("health")),
         )
 
 
@@ -515,6 +589,14 @@ class ProxyChain:
     on: tuple[str, ...] = DEFAULT_TRIGGER_KINDS
     scope: str = DEFAULT_SCOPE
     max_switches: int = MAX_SWITCHES_DEFAULT
+    #: Whether a request that has run out of healthy addresses goes out on this
+    #: machine's own address instead of failing. TRUE, including for a chain
+    #: written before this key existed: a document without it reads back as
+    #: ``True``, because the alternative -- a provider that stops answering the
+    #: moment its free proxies die -- is not what an operator who added proxies
+    #: to *reach* a provider asked for. Turn it off on a provider that must
+    #: never see this machine's address.
+    direct_fallback: bool = True
     #: Set by the operator on a subscription-login provider. The rail is
     #: inert until it is, because changing source address between requests on
     #: a personal subscription is the operator's risk to take knowingly.
@@ -537,6 +619,7 @@ class ProxyChain:
             "on": list(self.on),
             "scope": self.scope,
             "max_switches": self.max_switches,
+            "direct_fallback": self.direct_fallback,
             "oauth_acknowledged": self.oauth_acknowledged,
         }
 
@@ -573,10 +656,18 @@ class ProxyChain:
         return cls(
             enabled=bool(raw.get("enabled")),
             policy=normalise_policy(raw.get("policy")),
-            entries=tuple(entries[:PROXY_CHAIN_MAX_ENTRIES]),
+            entries=tuple(entries),
             on=on,
             scope=normalise_scope(raw.get("scope")),
             max_switches=clamp_max_switches(raw.get("max_switches")),
+            # ``"direct_fallback" not in raw`` rather than ``raw.get(..., True)``
+            # alone, so that an explicit ``false`` an operator saved is honoured
+            # and a document written before 7.19.0 reads back as on.
+            direct_fallback=(
+                True
+                if raw.get("direct_fallback") is None
+                else bool(raw.get("direct_fallback"))
+            ),
             oauth_acknowledged=bool(raw.get("oauth_acknowledged")),
         )
 
@@ -748,6 +839,25 @@ class ProxyChains:
             return self
         proxies = dict(self.proxies)
         proxies[proxy_id] = replace(endpoint, last_check=record)
+        return replace(self, proxies=proxies)
+
+    def with_health(
+        self, proxy_id: str, health: ProxyHealthState | None
+    ) -> ProxyChains:
+        """Return a copy carrying one address's reachability bench.
+
+        A no-op for an id the catalogue no longer holds, for the reason
+        :meth:`with_check` gives: the writer runs out of band and must not put
+        back a row the operator just removed.
+        """
+
+        endpoint = self.proxies.get(proxy_id)
+        if endpoint is None:
+            return self
+        if endpoint.health == health:
+            return self
+        proxies = dict(self.proxies)
+        proxies[proxy_id] = replace(endpoint, health=health)
         return replace(self, proxies=proxies)
 
     def refused_ids(self) -> tuple[str, ...]:
@@ -1076,7 +1186,7 @@ __all__ = [
     "MAX_SWITCHES_MIN",
     "OAUTH_PROVIDER_IDS",
     "PROXIES_KEY",
-    "PROXY_CHAIN_MAX_ENTRIES",
+    "PROXY_CHAIN_MAX_ENTRIES_UNLIMITED",
     "PROXY_URL_SCHEMES",
     "REFUSED_TRIGGER_KINDS",
     "SCOPES",
@@ -1095,6 +1205,7 @@ __all__ = [
     "ProxyCheckRecord",
     "ProxyEndpoint",
     "ProxyFeedFacts",
+    "ProxyHealthState",
     "clamp_max_switches",
     "current_proxy_chains",
     "is_valid_proxy_url",
