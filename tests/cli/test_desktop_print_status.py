@@ -821,7 +821,9 @@ def test_a_genuine_stranger_on_the_port_is_still_foreign(
 # --- 7.26.0: a busy server is not an absent one ---------------------------
 
 
-def test_the_escalating_probe_ladder_ships_five_ten_fifteen(config_dir) -> None:
+def test_the_escalating_probe_ladder_ships_five_ten_fifteen(
+    config_dir, monkeypatch
+) -> None:
     """The user's design, on the document the desktop window reads.
 
     Three consecutive failed probes with 5, 10 and 15 second timeouts is about
@@ -829,6 +831,8 @@ def test_the_escalating_probe_ladder_ships_five_ten_fifteen(config_dir) -> None:
     called gone -- the 2026-09-18 report is six restarts of a server that was
     merely busy, every one of them decided on a single 1.5 second sample.
     """
+
+    _presence(monkeypatch, "healthy")
 
     payload = desktop_status()
 
