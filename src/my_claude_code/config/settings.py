@@ -90,6 +90,10 @@ from .constants import (
     PROXY_FEED_REFRESH_MINUTES_DEFAULT,
     PROXY_FEED_REFRESH_MINUTES_MAX,
     PROXY_FEED_REFRESH_MINUTES_MIN,
+    PROXY_FETCH_CHECK_DEPTH_DEFAULT,
+    PROXY_FETCH_CHECK_DEPTH_NAMES,
+    PROXY_FETCH_CONCURRENCY_MODE_DEFAULT,
+    PROXY_FETCH_CONCURRENCY_MODE_NAMES,
     PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_DEFAULT,
     PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MAX,
     PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MIN,
@@ -1097,6 +1101,19 @@ class Settings(BaseSettings):
         ge=PROXY_FETCH_TEST_CONCURRENCY_MIN,
         le=PROXY_FETCH_TEST_CONCURRENCY_MAX,
     )
+    # Whether the number above is a count of addresses or a percentage of
+    # however many the feeds offered. ``fixed`` is 7.21.0 behaviour exactly.
+    proxy_fetch_concurrency_mode: str = Field(
+        default=PROXY_FETCH_CONCURRENCY_MODE_DEFAULT,
+        validation_alias="PROXY_FETCH_CONCURRENCY_MODE",
+    )
+    # How far a fetch sweep's test of one address goes. ``tls`` finishes the
+    # handshake through the tunnel and sends no request; ``request`` is the
+    # 7.22.1 check. Add, Test and "Add all working" always use ``request``.
+    proxy_fetch_check_depth: str = Field(
+        default=PROXY_FETCH_CHECK_DEPTH_DEFAULT,
+        validation_alias="PROXY_FETCH_CHECK_DEPTH",
+    )
     # The TCP step's own ceiling during a fetch sweep. The HTTPS leg that
     # follows keeps PROXY_CHECK_TIMEOUT_SECONDS.
     proxy_fetch_connect_timeout_seconds: float = Field(
@@ -1964,6 +1981,44 @@ class Settings(BaseSettings):
                 f"{', '.join(RATE_LIMIT_COOLDOWN_MODE_NAMES)}"
             )
         return mode
+
+    @field_validator("proxy_fetch_concurrency_mode")
+    @classmethod
+    def validate_proxy_fetch_concurrency_mode(cls, v: str) -> str:
+        """Reject an unknown concurrency mode rather than guess at it.
+
+        A blank value is the admin UI clearing the field, not a typo, so it
+        falls back to the default the same way every other select does.
+        """
+        mode = str(v).strip().lower()
+        if not mode:
+            return PROXY_FETCH_CONCURRENCY_MODE_DEFAULT
+        if mode not in PROXY_FETCH_CONCURRENCY_MODE_NAMES:
+            raise ValueError(
+                f"Unknown proxy fetch concurrency mode: {v!r}. Known modes: "
+                f"{', '.join(PROXY_FETCH_CONCURRENCY_MODE_NAMES)}"
+            )
+        return mode
+
+    @field_validator("proxy_fetch_check_depth")
+    @classmethod
+    def validate_proxy_fetch_check_depth(cls, v: str) -> str:
+        """Reject an unknown check depth rather than guess at it.
+
+        Guessing here would be the one kind of guess this setting must not
+        make: a typo silently resolving to ``request`` would send a thousand
+        requests to a provider from a thousand addresses, which is exactly what
+        the default exists to stop.
+        """
+        depth = str(v).strip().lower()
+        if not depth:
+            return PROXY_FETCH_CHECK_DEPTH_DEFAULT
+        if depth not in PROXY_FETCH_CHECK_DEPTH_NAMES:
+            raise ValueError(
+                f"Unknown proxy fetch check depth: {v!r}. Known depths: "
+                f"{', '.join(PROXY_FETCH_CHECK_DEPTH_NAMES)}"
+            )
+        return depth
 
     @field_validator("vision_adapter_mode")
     @classmethod

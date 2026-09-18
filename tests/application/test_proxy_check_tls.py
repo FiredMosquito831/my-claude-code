@@ -39,6 +39,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+from my_claude_code.application import proxy_check
 from my_claude_code.application.proxy_check import (
     apply_outcome,
     check_proxy,
@@ -191,6 +192,12 @@ def pki(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     # nothing. It replaces the trust root; it does not relax verification.
     monkeypatch.setenv("SSL_CERT_FILE", str(ca_pem))
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    # The ``tls`` depth builds its context once and keeps it, which is right in
+    # a process whose trust store does not move and wrong in a test file that
+    # mints a new CA per test. Cleared on the way in and on the way out, so
+    # each test verifies against its own roots and nothing leaks into the rest
+    # of the suite.
+    monkeypatch.setattr(proxy_check, "_DEFAULT_SSL_CONTEXT", None, raising=False)
     return {
         "ca": ca_pem,
         "honest": _write(tmp_path / "honest.pem", honest_cert, honest_key),
@@ -247,12 +254,20 @@ class _Origin(_Server):
     def __init__(self, certificate: Path) -> None:
         self._context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self._context.load_cert_chain(certificate)
+        #: Every request byte this origin was actually sent, which since 7.22.2
+        #: is a thing worth asserting about: the ``tls`` depth's whole claim is
+        #: that a sweep of a thousand addresses does not arrive here as a
+        #: thousand requests, and the only honest way to test that is to ask
+        #: the destination whether it heard anything.
+        self.requests: list[bytes] = []
         super().__init__()
 
     def _serve(self, conn: socket.socket) -> None:
         try:
             with self._context.wrap_socket(conn, server_side=True) as tls:
-                tls.recv(4096)
+                received = tls.recv(4096)
+                if received:
+                    self.requests.append(received)
                 tls.sendall(_HTTP_OK)
         except OSError:
             pass
@@ -509,3 +524,152 @@ async def test_a_refusal_survives_the_proxy_simply_going_offline(
     # And it is benched as unreachable as well, which is the other half: the
     # two ledgers answer different questions and both still apply.
     assert PROXY_REACHABILITY.remaining(label) > 0
+
+
+# ------------------------------------------------------ 7.22.2: the two depths
+
+
+async def test_the_tls_depth_passes_an_honest_proxy_and_sends_the_origin_nothing(
+    origin: _Origin, clean_proxy: _ConnectProxy
+) -> None:
+    """The default sweep check, against the real shape of it.
+
+    Two assertions and they are the whole feature. The tunnel opened and the
+    destination's certificate verified through it -- so the verdict is the same
+    verdict the request depth reaches -- and the origin, asked directly, heard
+    no request at all. The second one is not inferable from the code: it is the
+    provider's side of a thousand-address sweep, measured.
+    """
+
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=10.0,
+        depth="tls",
+    )
+
+    assert record.ok is True, record.detail
+    assert record.tls == TLS_STRICT
+    assert record.intercepted is False
+    assert record.latency_ms is not None and record.latency_ms >= 0
+    assert record.depth == "tls"
+    # The origin completed a handshake and was then hung up on. Nothing was
+    # sent through the tunnel after it.
+    assert origin.requests == [], origin.requests
+
+
+async def test_the_request_depth_still_sends_exactly_one_request(
+    origin: _Origin, clean_proxy: _ConnectProxy
+) -> None:
+    """The golden: 7.22.1's check, byte for byte, still available and still the
+    thing Add does.
+
+    Same verdict, same record, and one ``HEAD`` arriving at the origin -- which
+    is the difference the depth setting names, stated as a number rather than
+    as prose.
+    """
+
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=10.0,
+        depth="request",
+    )
+
+    assert record.ok is True, record.detail
+    assert record.tls == TLS_STRICT
+    assert record.depth == "request"
+    assert len(origin.requests) == 1, origin.requests
+    assert origin.requests[0].startswith(b"HEAD ")
+
+
+async def test_the_default_depth_of_the_checker_itself_is_the_request(
+    origin: _Origin, clean_proxy: _ConnectProxy
+) -> None:
+    """Nobody who does not ask gets the new behaviour.
+
+    The setting's default is ``tls`` and the *sweep* reads it. Every other
+    caller -- Test, Add, "Add all working", the background re-prober -- calls
+    ``check_proxy`` without a depth, and this pins that those callers are
+    unchanged without having to enumerate them.
+    """
+
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=10.0,
+    )
+
+    assert record.depth == "request"
+    assert len(origin.requests) == 1, origin.requests
+
+
+async def test_the_tls_depth_refuses_an_intercepting_proxy(
+    origin: _Origin, mitm_proxy: _ConnectProxy
+) -> None:
+    """The security control is not what was traded away.
+
+    The interception verdict arrives during the handshake, so stopping at the
+    handshake cannot miss it. Same verdict, same durable refusal, and the
+    intercepting machine never got a request out of MCC either.
+    """
+
+    url = f"http://127.0.0.1:{mitm_proxy.port}"
+    record = await check_proxy(
+        url, f"https://{HOSTNAME}:{origin.port}/", timeout=10.0, depth="tls"
+    )
+
+    assert record.tls == TLS_INTERCEPTED, record.detail
+    assert record.ok is False
+    assert record.intercepted is True
+    assert "certificate validation" in record.detail
+    assert record.depth == "tls"
+
+    apply_outcome(mask_proxy_label(url), record)
+    assert PROXY_INTERCEPTION.is_refused(mask_proxy_label(url)) is True
+
+
+async def test_the_tls_depth_calls_a_dead_address_dead(
+    origin: _Origin, clean_proxy: _ConnectProxy
+) -> None:
+    """A closed port is dead at either depth, and is never an interception."""
+
+    clean_proxy.close()
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=2.0,
+        depth="tls",
+    )
+
+    assert record.ok is False
+    assert record.tls == TLS_UNKNOWN
+    assert record.intercepted is False
+    assert record.depth == "tls"
+
+
+async def test_the_tls_depth_verifies_with_the_library_s_own_default_context(
+    pki: dict[str, Path],
+) -> None:
+    """Where the trust comes from, asserted rather than described.
+
+    The context is whatever ``httpx`` builds for a client that says nothing --
+    the same object, not an equivalent one -- which is why the ``tls`` depth
+    cannot be more permissive than a request through the same proxy. Two
+    properties are checked because they are the two a hand-rolled context gets
+    wrong: hostnames are matched, and certificates are required.
+    """
+
+    import httpx
+
+    context = proxy_check.default_ssl_context()
+
+    assert context.verify_mode is ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    # And it is the same trust store the request path would use: the fixture
+    # pointed SSL_CERT_FILE at its own CA, and httpx's own builder honours it,
+    # so the two contexts agree on which roots exist.
+    theirs = httpx.create_ssl_context()
+    assert sorted(cert["serialNumber"] for cert in context.get_ca_certs()) == sorted(
+        cert["serialNumber"] for cert in theirs.get_ca_certs()
+    )

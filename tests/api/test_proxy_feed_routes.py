@@ -595,6 +595,51 @@ def test_adding_a_candidate_checks_it_first(monkeypatch) -> None:
     assert payload["bulk"]["results"][0]["outcome"] == "added"
 
 
+def test_a_bulk_add_re_tests_at_the_operators_own_concurrency(monkeypatch) -> None:
+    """Not four. Four was a number for a person ticking a dozen rows.
+
+    "Add all working" on the list a fetch just produced is the same gesture as
+    the fetch, so it runs at the same number -- resolved the same way, against
+    how many addresses this press is about. What it does *not* change is the
+    check: the full ``request`` depth, and a per-address budget around it, so
+    an address entering a chain is still proven end to end.
+    """
+
+    seen: list[dict] = []
+
+    async def fake_check(ids, destinations, **kwargs):
+        seen.append(dict(kwargs))
+        return {
+            CANDIDATE_ID: ProxyCheckOutcome(
+                label="203.0.113.7:1080",
+                record=ProxyCheckRecord(
+                    at="now", ok=True, latency_ms=120, tls=TLS_STRICT
+                ),
+            )
+        }
+
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_proxy_routes.check_endpoints", fake_check
+    )
+    _offer_one()
+    _client().post(
+        "/admin/api/proxy-chains/candidates/bulk",
+        json={"action": "add", "provider": "nvidia_nim", "proxies": [CANDIDATE_ID]},
+    )
+
+    assert seen, "the bulk add did not measure anything"
+    # The shipped setting is 100, and one address to test resolves to one
+    # worker's worth of work -- but the ceiling handed to the checker is the
+    # setting's own maximum rather than the old hard-coded four, which is the
+    # bound that used to make this slow.
+    assert seen[0]["concurrency"] == 100
+    assert seen[0]["max_concurrency"] == 500
+    assert seen[0]["budget"] and seen[0]["budget"] > 0
+    # And no depth is passed, so the checker's own default -- the full request
+    # -- is what runs. This route never abbreviates.
+    assert "depth" not in seen[0]
+
+
 def test_an_intercepting_candidate_is_refused_and_stays_a_candidate(
     monkeypatch,
 ) -> None:

@@ -964,6 +964,62 @@ def test_config_mirrors_the_cooldown_modes_it_cannot_import():
     assert RATE_LIMIT_COOLDOWN_MODE_DEFAULT in RATE_LIMIT_COOLDOWN_MODES
 
 
+def test_config_mirrors_the_fetch_concurrency_modes_it_cannot_import():
+    """``PROXY_FETCH_CONCURRENCY_MODE`` is validated in ``config`` and applied
+    in ``application``, and ``config`` may not import ``application``.
+
+    Same leaf-package rule, same both-directions pin, same asymmetry: a mode
+    added to the sweep but missing here would be rejected by settings
+    validation as unknown -- loud -- while a mode removed from the sweep but
+    left here would be quietly accepted and then mean nothing at all.
+    """
+    from my_claude_code.application.proxy_fetch import (
+        DEFAULT_FETCH_CONCURRENCY_MODE,
+        FETCH_CONCURRENCY_MODES,
+    )
+    from my_claude_code.config.constants import (
+        PROXY_FETCH_CONCURRENCY_MODE_DEFAULT,
+        PROXY_FETCH_CONCURRENCY_MODE_NAMES,
+    )
+
+    assert PROXY_FETCH_CONCURRENCY_MODE_NAMES == FETCH_CONCURRENCY_MODES
+    assert PROXY_FETCH_CONCURRENCY_MODE_DEFAULT == DEFAULT_FETCH_CONCURRENCY_MODE
+    assert PROXY_FETCH_CONCURRENCY_MODE_DEFAULT in FETCH_CONCURRENCY_MODES
+
+
+def test_config_mirrors_the_check_depths_it_cannot_import():
+    """``PROXY_FETCH_CHECK_DEPTH`` is validated in ``config`` and applied in
+    ``application.proxy_check``.
+
+    Both directions, and one extra assertion that is the whole safety argument
+    of the setting: the *sweep's* default is ``tls``, while ``check_proxy``'s
+    own parameter default stays ``request`` -- so every caller that does not
+    ask (Test, Add, "Add all working", the background re-prober) is byte for
+    byte what it was. A change that made those two the same value would silence
+    the sweep's request or send a thousand of them, depending which way it went.
+    """
+    import inspect
+
+    from my_claude_code.application.proxy_check import (
+        CHECK_DEPTH_REQUEST,
+        CHECK_DEPTHS,
+        DEFAULT_FETCH_CHECK_DEPTH,
+        check_proxy,
+    )
+    from my_claude_code.config.constants import (
+        PROXY_FETCH_CHECK_DEPTH_DEFAULT,
+        PROXY_FETCH_CHECK_DEPTH_NAMES,
+    )
+
+    assert PROXY_FETCH_CHECK_DEPTH_NAMES == CHECK_DEPTHS
+    assert PROXY_FETCH_CHECK_DEPTH_DEFAULT == DEFAULT_FETCH_CHECK_DEPTH
+    assert PROXY_FETCH_CHECK_DEPTH_DEFAULT in CHECK_DEPTHS
+
+    default = inspect.signature(check_proxy).parameters["depth"].default
+    assert default == CHECK_DEPTH_REQUEST
+    assert default != DEFAULT_FETCH_CHECK_DEPTH
+
+
 def test_config_mirrors_the_tier_vocabulary_it_cannot_import():
     """Same leaf-package rule, same both-directions pin.
 

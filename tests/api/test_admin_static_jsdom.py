@@ -3900,7 +3900,10 @@ def test_jsdom_pressing_fetch_starts_a_job_and_shows_what_it_is_doing(
     # addresses those lists offered -- against which provider's own host, and
     # that only the ones that verify it are kept.
     assert "NVIDIA NIM's own host" in started["line"]
-    assert "certificate intact are kept" in started["line"]
+    # Since 7.22.2 what is about to happen is a tunnel and a verified
+    # certificate rather than a request, and the line says which.
+    assert "the certificate is verified through it" in started["line"]
+    assert "no request is sent to NVIDIA NIM" in started["line"]
 
 
 def test_jsdom_a_second_fetch_while_one_runs_is_refused_by_the_server(
@@ -3968,6 +3971,53 @@ def test_jsdom_a_finished_fetch_says_what_it_found(rendered) -> None:
     assert finished["state"] == "done"
     assert "Tested 834 of 834" in finished["line"]
     assert "none is in a chain" in finished["line"]
+
+
+def test_jsdom_the_page_says_the_pace_it_resolved_and_that_nothing_was_sent(
+    rendered,
+) -> None:
+    """Two sentences a person can act on, in the server's own numbers.
+
+    A percentage is a number the operator did not type, so the page says what
+    it worked out to; and the default depth changes what the provider sees, so
+    the page says that too rather than leaving it to the release notes. The
+    stale-number check is the other half: the page must not still be saying 32.
+    """
+
+    line = rendered["proxying"]["fetchFinished"]["line"]
+    running = rendered["proxying"]["fetchProgress"]["afterTwoPolls"]
+
+    assert "Testing 96 at a time (6% of 1,592)." in line, line
+    assert "without a request being sent to NVIDIA NIM" in line, line
+    assert "Testing 96 at a time (6% of 1,592)." in running, running
+    assert "no request is sent to NVIDIA NIM" in running, running
+    for stale in ("32 at a time", "testing 32", "4 at a time"):
+        assert stale not in line and stale not in running
+
+
+def test_jsdom_a_candidate_row_says_how_it_was_proven(rendered) -> None:
+    """A verified handshake and an answered request are both passes.
+
+    They are not the same evidence, though, and a row that said only "working"
+    would leave the operator to guess which one this was -- which matters
+    exactly when they are deciding whether to put a stranger's machine in front
+    of a credential.
+    """
+
+    texts = [row["text"] for row in rendered["proxying"]["candidateMeasured"]]
+
+    assert any("tunnel + certificate verified" in text for text in texts), texts
+    assert any("HTTPS request answered" in text for text in texts), texts
+
+
+def test_jsdom_the_two_fetch_selects_are_on_limits_and_resilience(rendered) -> None:
+    """Every tunable is reachable from the dashboard, on the page it belongs to."""
+
+    limits = rendered["limits"]
+
+    assert limits["fetchConcurrencyModeOptions"] == ["", "fixed", "percent"]
+    assert limits["fetchCheckDepthOptions"] == ["", "tls", "request"]
+    assert "4 to 500" in limits["fetchConcurrencyRange"]
 
 
 def test_jsdom_one_press_adds_every_working_address_to_the_chosen_provider(

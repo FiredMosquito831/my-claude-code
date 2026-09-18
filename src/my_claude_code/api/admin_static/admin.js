@@ -932,10 +932,15 @@ function renderProxyFeeds() {
   fetchNow.disabled = !enabled.length || Boolean(running);
   fetchNow.title =
     "Reads the lists you switched on, then tests every address they offered " +
-    "against the provider chosen below -- and keeps only the ones that " +
-    "answered with that provider's own certificate intact. Hundreds of " +
-    `addresses take minutes; ${concurrency} are tested at once and you can ` +
-    "stop it at any point without losing what has already passed.";
+    "against the provider chosen below -- and keeps only the ones whose " +
+    "tunnel left that provider's own certificate verifying. " +
+    proxyFetchDepthSentence("that provider") +
+    " Hundreds of addresses take minutes; " +
+    (proxyFetchConcurrencyMode() === "percent"
+      ? `${Number((proxyVocabulary().fetch || {}).concurrency) || 0}% of what ` +
+        "the lists offer are tested at once"
+      : `${concurrency} are tested at once`) +
+    " and you can stop it at any point without losing what has already passed.";
   fetchNow.addEventListener("click", () => ingestProxyFeeds(fetchNow));
   actions.appendChild(fetchNow);
   panel.appendChild(actions);
@@ -1457,11 +1462,13 @@ function proxyFetchSentence() {
       );
     }
     const saved = `${fetch.persisted || 0} already saved`;
+    const pace = proxyFetchPaceSentence();
     return (
-      `${measured} · ${saved}. Each one opens an HTTPS request through that ` +
-      `machine to ${where}'s own host; only the ones that answer with that ` +
-      "host's certificate intact are kept, and they are written as they are " +
-      "found -- stopping, or a restart, keeps them."
+      `${measured} · ${saved}. ` +
+      (pace ? `${pace} ` : "") +
+      proxyFetchDepthSentence(where) +
+      " Passing addresses are written as they are found -- stopping, or a " +
+      "restart, keeps them."
     );
   }
   if (fetch.state === "interrupted") {
@@ -1484,11 +1491,17 @@ function proxyFetchSentence() {
     const extra = failed.length
       ? ` No usable answer from ${failed.map((item) => item.name).join(", ")}.`
       : "";
+    const pace = proxyFetchPaceSentence();
     return (
-      `${measured}. Every address on offer below answered and verified ` +
-      `${where}'s certificate through its tunnel a moment ago. They are ` +
-      "still candidates: none is in a chain, and none carries a credential " +
-      `until you add it to one.${extra}`
+      `${measured}. ` +
+      (pace ? `${pace} ` : "") +
+      `Every address on offer below verified ${where}'s certificate through ` +
+      "its own tunnel a moment ago" +
+      (proxyFetchCheckDepth() === "tls"
+        ? `, without a request being sent to ${where}`
+        : "") +
+      ". They are still candidates: none is in a chain, and none carries a " +
+      `credential until you add it to one.${extra}`
     );
   }
   return "No fetch has run yet.";
@@ -1579,9 +1592,63 @@ function proxyCandidateCap() {
   return Number.isFinite(cap) && cap > 0 ? cap : 0;
 }
 
+/* The number the operator set, read the way they set it to be read. In percent
+   mode the setting is a percentage of a list nobody has fetched yet, so there
+   is no honest count to print before a pass has run -- the live one from the
+   job is used the moment there is one, and until then the page says what it
+   knows rather than inventing a count. The fallback is the shipped default and
+   has to be kept equal to PROXY_FETCH_TEST_CONCURRENCY_DEFAULT: `Number(x) ||
+   32` is how a browser copy of a server number goes stale. */
 function proxyFetchConcurrency() {
+  const live = Number((proxyState.fetch || {}).concurrency);
+  if (Number.isFinite(live) && live > 0) return live;
   const value = Number((proxyVocabulary().fetch || {}).concurrency);
-  return Number.isFinite(value) && value > 0 ? value : 32;
+  return Number.isFinite(value) && value > 0 ? value : 100;
+}
+
+function proxyFetchConcurrencyMode() {
+  return String((proxyVocabulary().fetch || {}).concurrency_mode || "fixed");
+}
+
+/* How far a fetch tests each address. "tls" is the shipped answer and is the
+   one that changes what the provider sees, so the page says it out loud. */
+function proxyFetchCheckDepth() {
+  const live = String((proxyState.fetch || {}).check_depth || "");
+  if (live) return live;
+  return String((proxyVocabulary().fetch || {}).check_depth || "tls");
+}
+
+/* The one sentence that says what a press of Fetch will do to the provider.
+   It is the honest half of the default: a handshake proves the tunnel and the
+   certificate, and it proves nothing about whether that provider would have
+   answered a request -- which is why Add tests again, all the way. */
+function proxyFetchDepthSentence(where) {
+  const who = where || "the chosen provider";
+  return proxyFetchCheckDepth() === "tls"
+    ? `Each address is tunnelled to ${who}'s own host and the certificate is ` +
+        `verified through it -- no request is sent to ${who}. Adding one to a ` +
+        "chain tests it again with a real HTTPS request."
+    : `Each address opens a real HTTPS request through that machine to ${who}` +
+        "'s own host, and only the ones that answer with that host's " +
+        "certificate intact are kept.";
+}
+
+/* What the concurrency worked out to, said only when it is not simply the
+   number in the settings: a resolved percentage, or a value MCC had to
+   reinterpret. Never a silence -- a percentage of 200 is a typo and the
+   operator finds out here. */
+function proxyFetchPaceSentence() {
+  const fetch = proxyState.fetch || {};
+  const parts = [];
+  if (fetch.concurrency_summary && fetch.concurrency_mode === "percent") {
+    parts.push(
+      String(fetch.concurrency_summary)
+        .replace(/^testing /, "Testing ")
+        .concat("."),
+    );
+  }
+  if (fetch.concurrency_note) parts.push(String(fetch.concurrency_note));
+  return parts.join(" ");
 }
 
 /* How much of that provider's chain is already spoken for. This is the fact
@@ -1935,9 +2002,10 @@ function paintProxyCandidateList() {
     why.textContent =
       `${ineligible.map((provider) => provider.display_name).join(", ")} ` +
       `${ineligible.length === 1 ? "is" : "are"} not offered as a ` +
-      "destination: an address is verified by opening an HTTPS request " +
-      "through it to the provider's own host, and this one has no https base " +
-      "URL to verify against. Set its base URL on the Providers page.";
+      "destination: an address is verified by tunnelling through it to the " +
+      "provider's own host and checking that host's certificate, and this one " +
+      "has no https base URL to verify against. Set its base URL on the " +
+      "Providers page.";
     notes.appendChild(why);
   }
   paintProxyCandidateBar(bar, shown);
@@ -2394,15 +2462,32 @@ function proxyCandidateRow(candidate) {
       check && check.latency_ms !== null && check.latency_ms !== undefined
         ? ` · ${check.latency_ms} ms`
         : "";
+    /* How it was proven, not only that it was. A verified handshake and an
+       answered request are both passes and both catch an intercepting proxy,
+       but they are not the same evidence, and a row that said only "working"
+       would leave the operator to guess which one this was. A record written
+       before 7.22.2 carries no depth and was always the request. */
+    const provenBy =
+      check && check.depth === "tls"
+        ? "tunnel + certificate verified"
+        : "HTTPS request answered";
     measured.textContent = candidate.checked_for_name
-      ? `working for ${candidate.checked_for_name}${latency}`
-      : `working${latency}`;
+      ? `working for ${candidate.checked_for_name}${latency} · ${provenBy}`
+      : `working${latency} · ${provenBy}`;
     measured.title =
-      "MCC opened a tunnel through this address and an HTTPS request to " +
-      (candidate.checked_for_name || "that provider") +
-      "'s own host came back with that host's certificate verifying. " +
+      (check && check.depth === "tls"
+        ? "MCC opened a tunnel through this address and completed a full TLS " +
+          "handshake to " +
+          (candidate.checked_for_name || "that provider") +
+          "'s own host through it: the certificate verified against this " +
+          "machine's own trust store and the hostname matched. No request was " +
+          "sent. "
+        : "MCC opened a tunnel through this address and an HTTPS request to " +
+          (candidate.checked_for_name || "that provider") +
+          "'s own host came back with that host's certificate verifying. ") +
       (check && check.exit_ip ? `It answered from ${check.exit_ip}. ` : "") +
-      "Adding it to a different provider tests it again against that one.";
+      "Adding it to a chain tests it again with a real request, and adding it " +
+      "to a different provider tests it against that one.";
   } else {
     measured.className = "proxy-candidate-measured proxy-candidate-untested";
     measured.textContent = "tested, did not pass";

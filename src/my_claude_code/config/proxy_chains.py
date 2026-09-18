@@ -311,6 +311,13 @@ class ProxyCheckRecord:
     #: fetched by default and never from a URL MCC chose: it is an outbound
     #: request to a stranger, so it is the operator's call.
     exit_ip: str = ""
+    #: How far the check that produced this record went -- ``"request"`` for
+    #: the tunnel plus an HTTPS request, ``"tls"`` for the tunnel plus a
+    #: verified handshake and nothing sent. Empty for a record written before
+    #: 7.22.2, which the page reads as ``"request"`` because that is the only
+    #: check those releases had. It says how an address was proven; it is not a
+    #: second security verdict -- ``tls`` above is that, in both depths.
+    depth: str = ""
 
     @property
     def intercepted(self) -> bool:
@@ -324,6 +331,7 @@ class ProxyCheckRecord:
             "tls": self.tls,
             "detail": self.detail,
             "exit_ip": self.exit_ip,
+            "depth": self.depth,
         }
 
     @classmethod
@@ -347,6 +355,7 @@ class ProxyCheckRecord:
             else TLS_UNKNOWN,
             detail=str(raw.get("detail") or "").strip(),
             exit_ip=str(raw.get("exit_ip") or "").strip(),
+            depth=str(raw.get("depth") or "").strip().lower(),
         )
 
 

@@ -2133,21 +2133,77 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "credential_health",
         "number",
         settings_attr="proxy_fetch_test_concurrency",
-        default="32",
+        default="100",
         restart_required=False,
         advanced=True,
         affects_providers=False,
         minimum=4,
-        maximum=128,
+        maximum=500,
         description=(
             "A fetch tests every address it found before offering it, and a "
             "public list holds hundreds. Each test waits on somebody else's "
-            "network rather than on this machine, so they overlap: 32 at once "
-            "turns a list of eight hundred from hours into minutes. The Test "
-            "and Add buttons are unaffected and keep their own smaller bound "
-            "-- those are a handful of addresses with you watching. Raising "
-            "this opens more sockets at once; the number here is exactly how "
-            "many."
+            "network rather than on this machine, so they overlap. Measured: "
+            "seven lists offered 1,592 addresses and 32 at a time had tested "
+            "848 of them after three minutes, because a dead address costs the "
+            "whole connect timeout. A hundred is the default and 500 the "
+            "ceiling. Raising this opens more sockets at once; the number here "
+            "is exactly how many. The single Test and Add buttons are "
+            "unaffected -- those are one address with you watching."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_FETCH_CONCURRENCY_MODE",
+        "How that number is read",
+        "credential_health",
+        "select",
+        settings_attr="proxy_fetch_concurrency_mode",
+        default="fixed",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        options=(
+            ConfigOptionSpec("fixed", "A count of addresses"),
+            ConfigOptionSpec("percent", "A percentage of what the feeds offered"),
+        ),
+        description=(
+            "A count of addresses is what MCC has always meant by the setting "
+            "above. A percentage reads the same number against however many "
+            "addresses your feeds actually offered this pass -- so 6 with "
+            "1,592 on offer tests 96 at a time, and the same setting paces a "
+            "list of two hundred and a list of five thousand. It is resolved "
+            "after the lists are read, never below 4 and never above 500, and "
+            "the Proxying page says what it worked out to. In percent mode a "
+            "number outside 1-100 is a typo: it is reported on the page and "
+            "read as a fixed count for that pass rather than refusing to run."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_FETCH_CHECK_DEPTH",
+        "How far a fetch tests each address",
+        "credential_health",
+        "select",
+        settings_attr="proxy_fetch_check_depth",
+        default="tls",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        options=(
+            ConfigOptionSpec("tls", "Tunnel and verify the certificate"),
+            ConfigOptionSpec("request", "Tunnel and send an HTTPS request"),
+        ),
+        description=(
+            "Tunnel and verify opens the tunnel, completes a full TLS "
+            "handshake to the provider's own host through it with ordinary "
+            "strict trust, and closes -- no HTTP request is sent. It catches "
+            "an intercepting proxy exactly as the other one does, because that "
+            "verdict arrives during the handshake. It ships as the default "
+            "because a sweep of 1,592 addresses otherwise arrives at your "
+            "provider as about a thousand requests from a thousand different "
+            "source addresses, which is a lot to ask of somebody else's "
+            "service for an answer the handshake already gave. Tunnel and send "
+            'a request is what 7.22.1 did. Either way, Test, Add and "Add all '
+            'working" always send the request: an address entering a chain is '
+            "proven end to end."
         ),
     ),
     ConfigFieldSpec(
