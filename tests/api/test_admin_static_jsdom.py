@@ -4385,3 +4385,147 @@ def test_jsdom_chain_entries_are_removed_in_bulk_from_the_card(rendered) -> None
     assert "Removed 2 entries from NVIDIA NIM" in said
     # A draft change, not a write: the chain on disk is untouched until Save.
     assert "nothing has changed on disk yet" in said
+
+
+# --------------------------------------------------------------------------- #
+# Per-model reasoning and output preferences (7.25.0)
+#
+# The whole point of the control is that it offers what THIS model reports and
+# says why it withholds the rest, so these assert the drawing rule against the
+# five capability shapes the catalogue actually contains.
+# --------------------------------------------------------------------------- #
+
+
+def test_jsdom_the_preference_controls_are_drawn_above_the_parameter_grid(
+    rendered,
+) -> None:
+    """Two headed sections, preferences first: they are statements about a
+    decision, and the nine below them are fields of a request body."""
+
+    editor = rendered["models"]["preferences"]["0"]
+
+    assert editor["heads"][0] == "PreferenceWhat to decideValue"
+    assert editor["heads"][1] == "ParameterWhat to sendValue"
+    # Three-state, the same idiom as every other row on the form.
+    assert editor["modes"] == ["inherit", "inherit"]
+
+
+def test_jsdom_the_reasoning_select_offers_exactly_what_the_row_published(
+    rendered,
+) -> None:
+    editor = rendered["models"]["preferences"]["0"]
+
+    assert [option[0] for option in editor["options"]] == [
+        "client",
+        "off",
+        "adaptive",
+        "low",
+        "high",
+    ]
+
+
+def test_jsdom_off_is_disabled_on_a_mandatory_model_and_says_why(rendered) -> None:
+    options = {
+        option[0]: option
+        for option in rendered["models"]["preferences"]["1"]["options"]
+    }
+
+    assert options["off"][1] is True
+    assert "cannot run with thinking disabled" in options["off"][2]
+
+
+def test_jsdom_a_model_that_does_not_reason_has_the_control_disabled(
+    rendered,
+) -> None:
+    editor = rendered["models"]["preferences"]["2"]
+
+    assert editor["selectDisabled"] is True
+    assert editor["options"][0][1] is True
+
+
+def test_jsdom_an_unknown_vocabulary_offers_every_rung_marked_unverified(
+    rendered,
+) -> None:
+    editor = rendered["models"]["preferences"]["3"]
+
+    assert [option[0] for option in editor["options"]][3:] == [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert all("unverified" in option[2] for option in editor["options"])
+    assert "clamped to what it accepts" in editor["notes"][0]
+
+
+def test_jsdom_a_host_with_no_effort_field_says_a_level_sends_nothing(
+    rendered,
+) -> None:
+    options = {
+        option[0]: option
+        for option in rendered["models"]["preferences"]["4"]["options"]
+    }
+
+    assert "nothing is sent" in options["high"][2]
+
+
+def test_jsdom_the_output_control_is_bounded_by_the_published_limit(
+    rendered,
+) -> None:
+    editor = rendered["models"]["preferences"]["0"]
+
+    assert editor["numberType"] == "number"
+    assert editor["numberMax"] == "40960"
+    assert "40,960" in editor["notes"][1]
+    assert "models.dev bucket, exact id" in editor["notes"][1]
+
+
+def test_jsdom_a_model_with_no_published_limit_still_offers_the_control(
+    rendered,
+) -> None:
+    editor = rendered["models"]["preferences"]["5"]
+
+    assert editor["numberMax"] is None
+    assert "becomes the limit" in editor["notes"][1]
+
+
+def test_jsdom_a_stored_value_the_catalogue_dropped_is_kept_and_badged(
+    rendered,
+) -> None:
+    """Never rewritten on disk: the catalogue may move back."""
+
+    editor = rendered["models"]["preferences"]["6"]
+
+    assert editor["selectValue"] == "xhigh"
+    assert "no longer offered" in [option[0] for option in editor["options"]] or any(
+        option[0] == "xhigh" for option in editor["options"]
+    )
+    assert "no longer in this model's vocabulary" in editor["notes"][0]
+
+
+def test_jsdom_the_provider_card_offers_the_whole_vocabulary(rendered) -> None:
+    editor = rendered["models"]["providerPreferences"]
+
+    assert [option[0] for option in editor["options"]] == [
+        "off",
+        "client",
+        "adaptive",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert "each model clamps this" in editor["notes"][0]
+
+
+def test_jsdom_the_value_control_is_disabled_until_force_value_is_chosen(
+    rendered,
+) -> None:
+    """The three states stay distinguishable: a box you can type in while the
+    mode says Inherit would make "inherit" and "force" look the same."""
+
+    assert rendered["models"]["preferences"]["0"]["valueDisabledWhileInherit"] is True

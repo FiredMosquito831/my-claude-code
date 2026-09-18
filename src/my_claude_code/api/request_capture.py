@@ -178,6 +178,12 @@ class RequestCapture:
         # fact, and a fallback on a smaller model may not have been widened at
         # all. Absent means "the client's ask is what left", the common case.
         self._output_widened_from: dict[int, int] = {}
+        # Which level of the override file decided a per-model preference for
+        # each attempt, keyed by attempt index, empty for the overwhelming
+        # majority of requests. Kept beside the attempts for the same reason
+        # the widening is: a fallback rung may carry a different preference
+        # from the one above it, or none at all.
+        self._preference_sources: dict[int, dict[str, str]] = {}
         self._start = time.perf_counter()
         self._ttft_ms: float | None = None
         self._output_parts: list[str] = []
@@ -444,6 +450,14 @@ class RequestCapture:
         widened = self._output_widened_from.get(attempt_index)
         if widened is not None:
             params["output_widened_from"] = widened
+        # Where a number the operator will not recognise came from. Written
+        # only when a preference actually decided something, so absence keeps
+        # meaning "nobody on the Models page had an opinion about this model"
+        # -- and every row written before this release, having no key at all,
+        # renders exactly as it did.
+        preferences = self._preference_sources.get(attempt_index)
+        if preferences:
+            params["preferences"] = dict(preferences)
         # Nested beside ``wire`` for the same reason: it is a list of facts of
         # variable shape about one attempt, and the flat counters above must
         # keep theirs.
@@ -565,6 +579,9 @@ class RequestCapture:
         # is the finding, exactly as it is for every other wire knob.
         if routed.output_widened_from is not None:
             self._output_widened_from[attempt] = routed.output_widened_from
+        # Same rule, same reason: nothing is stored when nothing was set.
+        if routed.preference_sources:
+            self._preference_sources[attempt] = dict(routed.preference_sources)
         # ``reasoning`` is the applied policy (post per-model gating);
         # ``requested_reasoning`` is what was asked for before it. They are
         # equal on an ungated request and differ exactly when the model's

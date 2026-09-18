@@ -34,6 +34,7 @@ def _reasoning_options(
         ReasoningPreference.OFF: "Off",
         ReasoningPreference.CLIENT: "From client",
         ReasoningPreference.ADAPTIVE: "Adaptive",
+        ReasoningPreference.MINIMAL: "Minimal",
         ReasoningPreference.LOW: "Low",
         ReasoningPreference.MEDIUM: "Medium",
         ReasoningPreference.HIGH: "High",

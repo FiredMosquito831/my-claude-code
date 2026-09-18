@@ -448,7 +448,56 @@ const modelsFor = (providerId, hiddenTail) =>
       index === 2 ? { attempts: 12, requested: 12, returned: 12 } : null,
     reasoning_dialect:
       index === 3 ? { known: true, style: "effort", origin: "stated" } : null,
+    /* The five shapes the preference control has to draw, one per row:
+       ordinary, mandatory (Off withdrawn), cannot reason (control off),
+       unknown vocabulary (every rung, unverified), and a host that parses no
+       effort field. Row 6 also carries a stored value the catalogue no longer
+       offers, which must be kept and badged rather than rewritten. */
+    preferences: PREFERENCES_FOR(index),
   }));
+
+const PREFERENCE_SHAPES = {
+  0: { options: [
+        { value: "client", label: "From client", available: true, reason: null },
+        { value: "off", label: "Off", available: true, reason: null },
+        { value: "adaptive", label: "Adaptive", available: false, reason: "no adaptive channel" },
+        { value: "low", label: "Low", available: true, reason: null },
+        { value: "high", label: "High", available: true, reason: null },
+      ], capability_known: true, can_reason: true },
+  1: { options: [
+        { value: "client", label: "From client", available: true, reason: null },
+        { value: "off", label: "Off", available: false, reason: "this model cannot run with thinking disabled" },
+        { value: "high", label: "High", available: true, reason: null },
+      ], capability_known: true, can_reason: true },
+  2: { options: [
+        { value: "client", label: "From client", available: false, reason: "this model does not reason" },
+      ], capability_known: false, can_reason: false },
+  3: { options: ["client", "off", "adaptive", "minimal", "low", "medium", "high", "xhigh", "max"].map(
+        (value) => ({ value, label: value, available: true, reason: "unverified -- will be clamped" }),
+      ), capability_known: false, can_reason: true },
+  4: { options: [
+        { value: "client", label: "From client", available: true, reason: null },
+        { value: "high", label: "High", available: true, reason: "a level has no effect on this host -- nothing is sent" },
+      ], capability_known: true, can_reason: true },
+};
+
+const PREFERENCES_FOR = (index) => ({
+  reasoning_preference: {
+    ...(PREFERENCE_SHAPES[index] || PREFERENCE_SHAPES[0]),
+    state: index === 6 ? "value" : "inherit",
+    value: index === 6 ? "xhigh" : null,
+  },
+  max_output_tokens: {
+    state: "inherit",
+    value: null,
+    limit: index === 5 ? null : 40960,
+    limit_source_label: "models.dev",
+    limit_tier_label: "models.dev bucket, exact id",
+    note: index === 5
+      ? "Nothing publishes an output limit for this model, so your number becomes the limit."
+      : "A cap, not a request: a client asking for fewer tokens still gets fewer.",
+  },
+});
 
 const MODEL_ADMIN_PAGE = {
   measured_days: 7,
@@ -468,10 +517,30 @@ const MODEL_ADMIN_PAGE = {
     model_count: 45,
     hidden_count: providerId === "beta" ? 9 : 0,
     override: {},
+    preferences: {
+      reasoning_preference: {
+        state: "inherit",
+        value: null,
+        options: ["off", "client", "adaptive", "minimal", "low", "medium", "high", "xhigh", "max"].map(
+          (value) => ({ value, label: value, available: true, reason: null }),
+        ),
+        capability_known: false,
+        note: "each model clamps this to what it accepts",
+      },
+      max_output_tokens: {
+        state: "inherit",
+        value: null,
+        limit: null,
+        limit_source_label: null,
+        limit_tier_label: null,
+        note: "A cap for every model under this provider.",
+      },
+    },
     models: modelsFor(providerId, providerId === "beta"),
   })),
   overrides: {
     editable_parameters: ["temperature"],
+    preference_parameters: { reasoning_preference: "enum", max_output_tokens: "integer" },
     owned_elsewhere: {},
   },
   visibility: {
@@ -5081,6 +5150,62 @@ if (modelsLink) {
   await settle();
   models.openBodies = tree.querySelectorAll(".models-readouts").length;
   models.viewNodesOneProviderOpen = view.querySelectorAll("*").length;
+
+  /* --- the two preference controls, drawn per capability shape.
+     Built directly rather than by opening six rows: the editor is a pure
+     function of (scope, key, row, editable, preferences), and what is under
+     test is the drawing rule, not the disclosure. */
+  const describeEditor = (scope, key, row, preferences) => {
+    const form = window.eval("buildOverrideEditor")(
+      scope,
+      key,
+      row,
+      [],
+      preferences,
+    );
+    const wraps = Array.from(form.querySelectorAll(".models-preference-value"));
+    const select = wraps.length ? wraps[0].querySelector("select") : null;
+    const number = wraps.length > 1 ? wraps[1].querySelector("input") : null;
+    return {
+      heads: Array.from(form.querySelectorAll(".models-override-head")).map(flat),
+      options: select
+        ? Array.from(select.options).map((option) => [
+            option.value,
+            option.disabled,
+            option.title || "",
+          ])
+        : [],
+      selectValue: select ? select.value : "",
+      selectDisabled: select ? select.disabled : null,
+      notes: wraps.map((wrap) => {
+        const note = wrap.querySelector(".models-preference-note");
+        return note ? flat(note) : "";
+      }),
+      numberMax: number ? number.getAttribute("max") : null,
+      numberType: number ? number.type : "",
+      modes: Array.from(form.querySelectorAll("select.models-override-mode")).map(
+        (mode) => mode.value,
+      ),
+      valueDisabledWhileInherit: select ? select.disabled : null,
+    };
+  };
+  const alpha = MODEL_ADMIN_PAGE.providers[0];
+  models.preferences = {};
+  [0, 1, 2, 3, 4, 5, 6].forEach((index) => {
+    const model = alpha.models[index];
+    models.preferences[index] = describeEditor(
+      "model",
+      model.model_ref,
+      model.override,
+      model.preferences,
+    );
+  });
+  models.providerPreferences = describeEditor(
+    "provider",
+    alpha.provider_id,
+    alpha.override,
+    alpha.preferences,
+  );
 }
 
 // ----------------------------------------------------- analytics filters

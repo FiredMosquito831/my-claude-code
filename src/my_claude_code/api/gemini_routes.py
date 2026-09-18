@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 from my_claude_code.application.errors import ApplicationError
 from my_claude_code.application.ports import ProviderResolver, RequestRuntimeLease
 from my_claude_code.application.routing import ModelRouter
+from my_claude_code.config.model_overrides import current_model_overrides
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import MessagesRequest, get_token_count
 from my_claude_code.core.gemini_api import (
@@ -73,6 +74,12 @@ def _model_router(services: ApiServices, lease: RequestRuntimeLease) -> ModelRou
         reasoning_dialect_lookup=services.requests.model_reasoning_dialect,
         output_limit_lookup=services.requests.model_output_limit,
         context_length_lookup=services.requests.model_context_length,
+        # A callable, never a table: the Models page rewrites
+        # ``~/.mcc/model_overrides.json`` between any two requests and
+        # ``current_model_overrides`` re-reads only when its mtime changed, so
+        # a saved preference lands on the next request with no provider
+        # rebuild and no restart.
+        model_preferences=current_model_overrides,
     )
 
 

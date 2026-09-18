@@ -2640,7 +2640,8 @@ To pin an endpoint yourself, in `model_overrides.json`:
 Values are `chat_completions`, `responses`, `messages` and `unservable`. This
 key is deliberately **not** a request parameter — it is never written into a
 request body — and an unrecognised value is ignored with a log line rather
-than obeyed.
+than obeyed. `reasoning_preference` and `max_output_tokens` are the other two
+keys of that kind; see **Per-model reasoning and output preferences** below.
 
 ### Local providers
 
@@ -3292,6 +3293,72 @@ The Models page shows the two side by side: what the model can do, with the reso
 </div>
 
 Since 6.35.0 the tier is shown for **every** resolved field, not only the output ceiling: the context window, vision support, tool support and all four price rates each walk the same ten rungs and each name the one that answered. Where the routed deployment's own `/models` payload supplied the value the badge reads *provider /models or models.dev* with no tier, because the enrichment step that merged them keeps no record of which won; where the ladder supplied it, the rung is exact — down to *cross-provider, bare model*, which is a vote across strangers who merely share a name and is badged **approximate** accordingly. The Models page and every generated agent catalogue read that from the same resolver, so they cannot disagree about a number or about where it came from.
+
+### Per-model reasoning and output preferences
+
+**New in 7.25.0.** The same `model_overrides.json` row carries two keys that
+are **not** request parameters -- they are statements about a decision MCC
+makes before any request body exists, and they are never written into one:
+
+```json
+{
+  "providers": {"open_router": {"reasoning_preference": "medium"}},
+  "models": {
+    "open_router/z-ai/glm-5": {"reasoning_preference": "max", "max_output_tokens": 32768}
+  }
+}
+```
+
+Both are editable on the **Models** page, on each model row and on the
+provider card, with the same three states as the nine sampling parameters:
+*Inherit* (the key is absent), *Force unset* (`null` -- you have stopped
+stating an opinion at this level), and *Force value*.
+
+`reasoning_preference` takes the configuration vocabulary --
+`off`, `client`, `adaptive`, `minimal`, `low`, `medium`, `high`, `xhigh`,
+`max` -- and the control offers only the rungs **this model actually reports**,
+resolved through the same ladder the rest of its row came from. A mandatory
+model cannot be set to `off` and says so; a model that does not reason has the
+control disabled; a host that parses no effort field says that a level there
+sends nothing; and where nothing published a vocabulary every rung is offered,
+marked *unverified*, because unknown never adds a restriction. `max` is stored
+as `max` and keeps translating to the host's own top rung -- `ultra`, then
+`persistent` -- exactly as it has since 7.11.0; `ultra` is a wire word, never a
+stored value.
+
+**Precedence, highest first:** the model row, the provider row, the route's
+own tier setting (`REASONING_FABLE`/`OPUS`/`SONNET`/`HAIKU`/`MYTHOS`), the
+per-harness tier override, `REASONING_POLICY`, and last the client's own
+`thinking` or `effort` ask. A per-model preference therefore **outranks
+`REASONING_*` for that model**, which is the point of it; set
+`"reasoning_preference": "client"` on a row to hand that one model's decision
+back to the client.
+
+A stored value the catalogue no longer offers is **never a 400**: it is clamped
+by the same gating a client's own ask goes through, an adaptation is recorded,
+and the row is badged. Nothing is rewritten on disk -- the catalogue may move
+back, and silently editing your file is worse than telling you.
+
+`max_output_tokens` is a **cap, not a request**. It lowers the model's
+effective limit to `min(published limit, your number)`, so it can never exceed
+what the model reported; a client asking for fewer tokens still gets fewer;
+and the reasoning-room widening widens to *your* number rather than past it.
+Where nothing publishes a limit, your number becomes the limit. The operator
+ceiling (`MAX_OUTPUT_TOKENS_CEILING`) and the context headroom still have the
+last word, as they always did.
+
+Both reach **every** provider family -- Anthropic, Anthropic OAuth, ChatGPT
+OAuth, Vertex, Gemini and every OpenAI-compatible host -- because they enter
+the pipeline in the application layer, where the client's own values enter it,
+rather than as body edits. With no preference set, every request body is byte
+for byte what 7.24.0 sent.
+
+> **Downgrading.** An MCC below 7.25.0 does not know these two keys: it reads
+> the file, logs that they are not known request parameters, and ignores them,
+> so the preference simply stops applying. But if you then **edit any override
+> row from the old build's Models page**, it writes back only what it parsed
+> and your per-model preferences are erased from disk. Downgrade and read:
+> fine. Downgrade and save: keep a copy of `model_overrides.json` first.
 
 #### What "learned from the host's own rejection" means
 

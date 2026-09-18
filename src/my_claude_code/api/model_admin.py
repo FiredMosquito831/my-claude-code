@@ -35,7 +35,10 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.config.model_overrides import (
     ALLOWED_OVERRIDE_PARAMETERS,
+    MAX_OUTPUT_TOKENS_OVERRIDE,
     OWNED_ELSEWHERE_PARAMETERS,
+    PREFERENCE_OVERRIDE_PARAMETERS,
+    REASONING_PREFERENCE_OVERRIDE,
     ModelParameterOverrides,
     normalize_override_key,
 )
@@ -45,6 +48,7 @@ from my_claude_code.config.model_refs import (
     parse_provider_type,
 )
 from my_claude_code.config.provider_registry import get_provider_registry
+from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.model_visibility import (
     MODEL_PATTERN_SEPARATOR,
@@ -54,8 +58,12 @@ from my_claude_code.core.model_visibility import (
 from my_claude_code.core.reasoning import (
     ReasoningDialect,
     ReasoningDialectOrigin,
+    ReasoningEffort,
 )
-from my_claude_code.providers.openai_chat import catalogue_surface
+from my_claude_code.providers.openai_chat import (
+    catalogue_surface,
+    learned_effort_values,
+)
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
     model_context_length_tiered,
@@ -215,6 +223,80 @@ INHERIT_SENTINEL = "inherit"
 
 PROVIDER_SCOPE = "provider"
 MODEL_SCOPE = "model"
+
+# The two non-body preferences the editor may write, and the shape of each,
+# so the page does not hardcode either name. ``enum`` is checked against the
+# option list the row itself publishes; ``integer`` is bounded by the row's
+# own resolved output limit.
+PREFERENCE_PARAMETER_KINDS: dict[str, str] = {
+    REASONING_PREFERENCE_OVERRIDE: "enum",
+    MAX_OUTPUT_TOKENS_OVERRIDE: "integer",
+}
+
+# The controls, which are not efforts: they say *how* to decide rather than
+# how hard to think, and every row offers all three regardless of capability
+# -- with ``off`` withdrawn on a model that cannot run without thinking.
+REASONING_CONTROL_LABELS: dict[str, str] = {
+    ReasoningPreference.CLIENT.value: "From client",
+    ReasoningPreference.OFF.value: "Off",
+    ReasoningPreference.ADAPTIVE.value: "Adaptive",
+}
+
+REASONING_RUNG_LABELS: dict[str, str] = {
+    ReasoningEffort.MINIMAL.value: "Minimal",
+    ReasoningEffort.LOW.value: "Low",
+    ReasoningEffort.MEDIUM.value: "Medium",
+    ReasoningEffort.HIGH.value: "High",
+    ReasoningEffort.XHIGH.value: "X-High",
+    ReasoningEffort.MAX.value: "Max",
+}
+
+# What each withdrawn or qualified option has to say for itself. Written once
+# here rather than in the page, because the reason is a statement about the
+# pipeline and the page is not where the pipeline is described.
+UNVERIFIED_RUNG_NOTE = (
+    "unverified -- nothing published this model's effort vocabulary, so this "
+    "will be clamped to whatever it accepts and the request log will say what "
+    "was sent"
+)
+NO_EFFORT_FIELD_NOTE = (
+    "a level has no effect on this host -- it parses no effort field, so "
+    "nothing is sent for it"
+)
+TOGGLE_ONLY_NOTE = (
+    "this model only switches thinking on or off; a level here turns thinking "
+    "on and is clamped to what the host spells"
+)
+MANDATORY_OFF_NOTE = (
+    "this model cannot run with thinking disabled; an Off here would be "
+    "rewritten to its lowest rung"
+)
+NO_ADAPTIVE_NOTE = (
+    "this host has no adaptive channel; nothing would be sent and the model's "
+    "own default would apply"
+)
+NO_REASONING_NOTE = "this model does not reason; a preference here would be suppressed"
+MAX_WIRE_NOTE = (
+    'max means "the most this model will do"; on a host that spells a '
+    "higher rung MCC sends that word and the request log records it"
+)
+OUTPUT_CAP_NOTE = (
+    "A cap, not a request: a client asking for fewer tokens still gets fewer, "
+    "and reasoning room is widened to your number rather than past it."
+)
+OUTPUT_NO_LIMIT_NOTE = (
+    "Nothing publishes an output limit for this model, so your number becomes "
+    "the limit."
+)
+PROVIDER_PREFERENCE_NOTE = (
+    "A default for every model under this provider. Each model's own row wins "
+    "where it states one, and each model clamps this to what it actually "
+    "accepts."
+)
+PROVIDER_OUTPUT_NOTE = (
+    "A cap for every model under this provider. Each model's own published "
+    "limit still wins where it is lower."
+)
 
 # What the page must say out loud, because both are surprising.
 HIDE_ONLY_NOTICE = (
@@ -1130,6 +1212,220 @@ def listing_payload(evidence: ModelListingEvidence | None) -> dict[str, Any] | N
     }
 
 
+def _option(
+    value: str, label: str, *, available: bool = True, reason: str | None = None
+) -> dict[str, Any]:
+    return {"value": value, "label": label, "available": available, "reason": reason}
+
+
+def max_wire_word(provider_id: str) -> str | None:
+    """The word this host spells for ``max``, when it spells a different one.
+
+    2026-09-13 Q7 stands: ``max`` is the stored value and ``ultra`` is a wire
+    word a dialect produces from it, never a choice an operator makes. This
+    is the read-only half of that -- the page may *say* which word will leave,
+    and says nothing at all where it cannot know.
+
+    Only a custom provider records its probed vocabulary, so this answers for
+    those and returns ``None`` everywhere else; the generic
+    :data:`MAX_WIRE_NOTE` still tells the operator that a top rung may be
+    translated.
+    """
+
+    entry = get_provider_registry().get(provider_id)
+    words = None if entry is None else entry.reasoning_effort_enum
+    if not words:
+        return None
+    for rung, word in learned_effort_values(tuple(words)):
+        if rung is ReasoningEffort.MAX:
+            return word if word != ReasoningEffort.MAX.value else None
+    return None
+
+
+def reasoning_preference_options(
+    reasoning: Mapping[str, Any],
+    dialect: Mapping[str, Any],
+    *,
+    wire_word_for_max: str | None = None,
+) -> list[dict[str, Any]]:
+    """The rungs and controls this model may be given, and why not otherwise.
+
+    Derived from the row's own resolved capability and the host's dialect --
+    the same two objects gating intersects -- and never from a fixed list: the
+    catalogue publishes genuinely heterogeneous vocabularies, and a six-option
+    select would be wrong on most rows.
+
+    The pipeline's own rule that **unknown never adds a restriction** is
+    honoured rather than inverted: where nothing published a vocabulary every
+    rung is offered and marked unverified, because hiding a usable setting
+    behind a metadata gap is the worse of the two errors. Whatever is chosen
+    is clamped by ``adapt_reasoning_policy`` exactly as a client's own ask is,
+    and never rejected.
+    """
+
+    can_reason = reasoning.get("can_reason", {}).get("value")
+    mandatory = reasoning.get("mandatory", {}).get("value")
+    supported = reasoning.get("supported_efforts", {}).get("value")
+    effort_control = reasoning.get("supports_effort_control", {}).get("value")
+    toggle_control = reasoning.get("supports_toggle_control", {}).get("value")
+    dialect_known = bool(dialect.get("known"))
+    effort_values = dialect.get("effort_values") if dialect_known else None
+    host_has_effort_field = not dialect_known or effort_values is not None
+
+    if can_reason is False:
+        return [
+            _option(
+                ReasoningPreference.CLIENT.value,
+                REASONING_CONTROL_LABELS[ReasoningPreference.CLIENT.value],
+                available=False,
+                reason=NO_REASONING_NOTE,
+            )
+        ]
+
+    options = [
+        _option(
+            ReasoningPreference.CLIENT.value,
+            REASONING_CONTROL_LABELS[ReasoningPreference.CLIENT.value],
+            reason="hand the client's own ask through on this model",
+        ),
+        _option(
+            ReasoningPreference.OFF.value,
+            REASONING_CONTROL_LABELS[ReasoningPreference.OFF.value],
+            available=mandatory is not True,
+            reason=MANDATORY_OFF_NOTE if mandatory is True else None,
+        ),
+        _option(
+            ReasoningPreference.ADAPTIVE.value,
+            REASONING_CONTROL_LABELS[ReasoningPreference.ADAPTIVE.value],
+            available=not dialect_known or bool(dialect.get("adaptive")),
+            reason=(
+                None
+                if not dialect_known or dialect.get("adaptive")
+                else NO_ADAPTIVE_NOTE
+            ),
+        ),
+    ]
+
+    # The same intersection ``_channels`` computes, in ladder order rather
+    # than alphabetical: a select whose rungs are not ordered low to high is
+    # a different control from the one the settings page already has.
+    for rung in ReasoningEffort:
+        word = rung.value
+        reasons: list[str] = []
+        if supported is None:
+            reasons.append(UNVERIFIED_RUNG_NOTE)
+        elif word not in supported:
+            # A rung this model does not spell is not offered at all: offering
+            # it would invite ``nearest_effort`` to clamp UP, which surprises
+            # everyone who tries it once.
+            continue
+        if not host_has_effort_field:
+            reasons.append(NO_EFFORT_FIELD_NOTE)
+        elif effort_values is not None and word not in effort_values:
+            reasons.append(
+                f"this host does not spell {word}; the nearest rung it does "
+                "spell is sent instead"
+            )
+        if effort_control is False and toggle_control is True:
+            reasons.append(TOGGLE_ONLY_NOTE)
+        if rung is ReasoningEffort.MAX:
+            reasons.append(
+                f'max is sent as "{wire_word_for_max}" on this host'
+                if wire_word_for_max
+                else MAX_WIRE_NOTE
+            )
+        options.append(
+            _option(
+                word,
+                REASONING_RUNG_LABELS[word],
+                reason="; ".join(reasons) or None,
+            )
+        )
+    return options
+
+
+def _preference_state(row: Mapping[str, Any], name: str) -> dict[str, Any]:
+    """The three states, for one preference key, in the editor's own words."""
+
+    if name not in row:
+        return {"state": "inherit", "value": None}
+    value = row[name]
+    return {"state": "unset" if value is None else "value", "value": value}
+
+
+def model_preferences_payload(
+    provider_id: str, capabilities: Mapping[str, Any], row: Mapping[str, Any]
+) -> dict[str, Any]:
+    """What this model row may be told to prefer, and what it is told now.
+
+    Sits beside ``override`` and ``effective`` rather than inside them: the
+    nine sampling parameters are fields of a request body and these two are
+    statements about a decision, and the page draws them as two sections for
+    that reason.
+    """
+
+    output = capabilities.get("max_output_tokens", {})
+    limit = output.get("value")
+    return {
+        REASONING_PREFERENCE_OVERRIDE: {
+            **_preference_state(row, REASONING_PREFERENCE_OVERRIDE),
+            "options": reasoning_preference_options(
+                capabilities.get("reasoning", {}),
+                capabilities.get("reasoning_dialect", {}),
+                wire_word_for_max=max_wire_word(provider_id),
+            ),
+            "capability_known": capabilities.get("reasoning", {})
+            .get("supported_efforts", {})
+            .get("value")
+            is not None,
+            "can_reason": capabilities.get("reasoning", {})
+            .get("can_reason", {})
+            .get("value"),
+        },
+        MAX_OUTPUT_TOKENS_OVERRIDE: {
+            **_preference_state(row, MAX_OUTPUT_TOKENS_OVERRIDE),
+            "limit": limit,
+            "limit_source_label": output.get("source_label"),
+            "limit_tier_label": output.get("tier_label"),
+            "note": OUTPUT_CAP_NOTE if limit is not None else OUTPUT_NO_LIMIT_NOTE,
+        },
+    }
+
+
+def provider_preferences_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    """The same two controls, one level down the merge.
+
+    The options cannot be capability-derived here, because a provider has many
+    models with many vocabularies, so the whole configuration vocabulary is
+    offered and each model clamps it -- which is what the pipeline does with
+    the tier settings today.
+    """
+
+    return {
+        REASONING_PREFERENCE_OVERRIDE: {
+            **_preference_state(row, REASONING_PREFERENCE_OVERRIDE),
+            "options": [
+                _option(
+                    preference.value,
+                    REASONING_CONTROL_LABELS.get(preference.value)
+                    or REASONING_RUNG_LABELS[preference.value],
+                )
+                for preference in ReasoningPreference
+                if preference is not ReasoningPreference.INHERIT
+            ],
+            "capability_known": False,
+            "note": PROVIDER_PREFERENCE_NOTE,
+        },
+        MAX_OUTPUT_TOKENS_OVERRIDE: {
+            **_preference_state(row, MAX_OUTPUT_TOKENS_OVERRIDE),
+            "limit": None,
+            "limit_source_label": None,
+            "limit_tier_label": None,
+            "note": PROVIDER_OUTPUT_NOTE,
+        },
+    }
+
+
 def _row_state(row: Mapping[str, Any]) -> dict[str, Any]:
     """Render one override row so absent, null and value stay distinguishable.
 
@@ -1151,6 +1447,10 @@ def overrides_payload(overrides: ModelParameterOverrides) -> dict[str, Any]:
         "providers": {key: _row_state(row) for key, row in overrides.providers.items()},
         "models": {key: _row_state(row) for key, row in overrides.models.items()},
         "editable_parameters": sorted(ALLOWED_OVERRIDE_PARAMETERS),
+        # Named rather than hardcoded in the page, for the same reason
+        # ``editable_parameters`` is: adding a preference must be one change
+        # here, not two.
+        "preference_parameters": dict(sorted(PREFERENCE_PARAMETER_KINDS.items())),
         "owned_elsewhere": dict(sorted(OWNED_ELSEWHERE_PARAMETERS.items())),
         "inherit_sentinel": INHERIT_SENTINEL,
     }
@@ -1197,6 +1497,11 @@ def _model_entry(
         "listing": listing_payload(None if info is None else info.listing),
         "override": _row_state(model_row),
         "effective": effective_parameters(overrides, provider_id, model_ref),
+        # What MCC may be told to DECIDE for this model, beside what it may be
+        # told to SEND. Built from the capability record already computed
+        # above, so every option on offer came off the same ladder the rest of
+        # the row did and none of it is a hand-written table.
+        "preferences": model_preferences_payload(provider_id, capabilities, model_row),
         # What the log measured for this model over the window, or None
         # when it served no succeeded attempt in it. None rather than a
         # zeroed row: never measured is not the same fact as measured
@@ -1296,6 +1601,9 @@ def build_models_page_payload(
             "override": _row_state(
                 overrides.providers.get(normalize_override_key(provider_id), {})
             ),
+            "preferences": provider_preferences_payload(
+                overrides.providers.get(normalize_override_key(provider_id), {})
+            ),
             "model_count": len(models),
             "hidden_count": sum(1 for model in models if not model["visible"]),
             "models": models,
@@ -1367,11 +1675,18 @@ def merged_override_row(
     Anything outside :data:`ALLOWED_OVERRIDE_PARAMETERS` is dropped here as
     well as in the store: the allow-list is a security boundary and a value
     that reaches an upstream body must have passed it more than once.
+
+    :data:`PREFERENCE_OVERRIDE_PARAMETERS` is admitted beside it and is NOT a
+    widening of that boundary: those two keys are non-body operator statements
+    that ``apply_model_parameter_overrides`` refuses to write into a body at
+    all. The whole non-body set is deliberately not admitted --
+    ``response_surface`` is written by the surface machinery and has no cell
+    in this grid, so accepting it here would newly expose it.
     """
 
     row = dict(existing)
     for name, value in updates.items():
-        if name not in ALLOWED_OVERRIDE_PARAMETERS:
+        if name not in ALLOWED_OVERRIDE_PARAMETERS | PREFERENCE_OVERRIDE_PARAMETERS:
             continue
         if value == INHERIT_SENTINEL:
             row.pop(name, None)
