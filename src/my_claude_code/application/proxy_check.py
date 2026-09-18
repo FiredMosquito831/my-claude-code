@@ -224,6 +224,7 @@ async def check_proxy(
     *,
     timeout: float = PROXY_CHECK_TIMEOUT_SECONDS,
     exit_ip_url: str = "",
+    connect_timeout: float | None = None,
 ) -> ProxyCheckRecord:
     """Run the three-step check against one address and return its verdict.
 
@@ -231,6 +232,16 @@ async def check_proxy(
     address serves. ``exit_ip_url`` is fetched only when the operator supplied
     one, and a failure there never changes the verdict: it is extra evidence,
     not a gate.
+
+    ``connect_timeout`` bounds **step 1 only** -- the plain TCP connection to
+    the proxy's own port. ``None`` means "the same as ``timeout``", which is
+    what every caller did before the fetch sweep existed and is therefore what
+    the Test and Add buttons still get, byte for byte. The sweep passes a
+    shorter one because the commonest thing in a public list is an address that
+    has stopped listening, and the difference between five seconds and ten,
+    multiplied by six hundred dead addresses, is the difference between a fetch
+    an operator waits for and one they abandon. It never shortens the HTTPS leg
+    that follows: an address that answered has earned the full handshake.
     """
 
     label = mask_proxy_label(url)
@@ -240,7 +251,8 @@ async def check_proxy(
             at=_now(), ok=False, tls=TLS_UNKNOWN, detail="not a usable proxy address"
         )
 
-    reason = await _tcp_connect(endpoint[0], endpoint[1], timeout)
+    dial = timeout if connect_timeout is None else max(0.1, float(connect_timeout))
+    reason = await _tcp_connect(endpoint[0], endpoint[1], dial)
     if reason:
         return ProxyCheckRecord(at=_now(), ok=False, tls=TLS_UNKNOWN, detail=reason)
 
@@ -370,6 +382,50 @@ def apply_outcome(label: str, record: ProxyCheckRecord) -> None:
         PROXY_REACHABILITY.note_failure(label, record.detail or "check failed")
 
 
+def apply_fetch_outcome(label: str, record: ProxyCheckRecord, *, in_use: bool) -> None:
+    """:func:`apply_outcome`, for an address that may belong to nobody yet.
+
+    A fetch tests every address a public list offered -- hundreds of them, and
+    most of those are strangers this install has never routed a byte through.
+    Two of the three ledgers must therefore be written differently here, and
+    the difference is not a nicety:
+
+    * **Interception is written exactly as always.** It is the security
+      control, it is rare, and an address caught terminating TLS must be
+      refused whether or not anybody is using it. ``in_use`` does not enter
+      into it.
+    * **The reachability ladder is only charged for an address that is
+      actually in a chain.** That ladder holds
+      :data:`~my_claude_code.core.proxy_rotation.MAX_TRACKED_ENDPOINTS` rows
+      and it exists to tell the request path which of *this install's own*
+      addresses are worth dialling. A sweep of eight hundred candidates would
+      evict every one of those rows to record benches for addresses no chain
+      references -- so the sweep would break the thing it was meant to
+      inform. An address nobody uses needs no ladder row.
+    * **An address that IS in a chain is charged normally.** A fetch-test is
+      the same three questions the Test button asks, against the same
+      destination, so its answer about an address the operator is routing
+      through is ordinary evidence and is recorded as such. Deciding otherwise
+      would mean throwing away a measurement because of where it came from.
+    """
+
+    if not label:
+        return
+    if record.intercepted:
+        PROXY_INTERCEPTION.mark(label, record.detail)
+        return
+    if record.ok:
+        # Success retires a refusal wherever it is measured: the tunnel was
+        # opened and the destination's certificate verified through it. That is
+        # the 7.17.1 rule and it is the same rule here.
+        PROXY_INTERCEPTION.clear_endpoint(label)
+        if in_use:
+            PROXY_REACHABILITY.note_success(label)
+        return
+    if in_use:
+        PROXY_REACHABILITY.note_failure(label, record.detail or "check failed")
+
+
 def arm_refusals_from_store(store: ProxyChains | None = None) -> int:
     """Re-arm the interception ledger from what the checker already found.
 
@@ -467,6 +523,7 @@ __all__ = [
     "PROXY_CHECK_MAX_CONCURRENCY",
     "PROXY_CHECK_TIMEOUT_SECONDS",
     "ProxyCheckOutcome",
+    "apply_fetch_outcome",
     "apply_outcome",
     "arm_refusals_from_store",
     "check_endpoints",

@@ -247,11 +247,15 @@ def test_a_refused_candidate_stays_refused_across_a_refresh(store_path):
     assert marked is not None
     assert marked.refused is True
 
-    # Same address, offered again by a later pass.
+    # Same address, offered again by a later pass. Since 7.21.0 it is not
+    # re-offered at all -- a fetch keeps only addresses that passed its own
+    # test -- but the verdict is what stops it being offered, so the verdict
+    # has to survive the pass AND the round trip through the file.
     save_proxy_chains(load_proxy_chains().with_candidates([(proxy_id, fresh)]))
     again = load_proxy_chains().endpoint(proxy_id)
     assert again is not None
     assert again.refused is True
+    assert proxy_id not in load_proxy_chains().candidates
 
 
 def _client(handler) -> httpx.AsyncClient:

@@ -8545,6 +8545,70 @@ details.turn-pane > summary:focus-visible {
   margin: 0 0 var(--space-1);
 }
 
+/* Paging through a list of addresses that all work, rather than a filter box
+   standing between the operator and the rest of them. */
+.proxy-candidate-more-button {
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------- what a fetch measured
+   The one field on a candidate row that MCC measured itself. Everything else
+   on the row is a claim some list published, so this gets the emphasis. */
+.proxy-candidate-measured {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--input);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.proxy-candidate-working {
+  color: var(--success, var(--accent));
+  font-weight: 600;
+}
+
+/* A row from a release that offered addresses without testing them, or one
+   whose last check did not pass. Muted rather than red: it is not a fault,
+   it is an absence of evidence, and the next fetch clears it. */
+.proxy-candidate-untested {
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------ the fetch progress
+   Rendered whether or not anything is on offer yet: the commonest moment to
+   look at this panel is while the sweep is still running. */
+.proxy-fetch-progress {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.proxy-fetch-line {
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.proxy-fetch-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.proxy-fetch-stop {
+  white-space: nowrap;
+}
+
+.proxy-feed-bound {
+  margin: var(--space-1) 0 0;
+}
+
+.proxy-candidate-all {
+  white-space: nowrap;
+}
+
 /* What the last bulk action did to this row. The colours say only three
    things -- it landed, it did not, or it was refused -- because a partial
    result with six shades is a legend nobody reads. */

@@ -74,6 +74,9 @@ from .constants import (
     PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+    PROXY_CANDIDATES_MAX_DEFAULT,
+    PROXY_CANDIDATES_MAX_MAX,
+    PROXY_CANDIDATES_MAX_MIN,
     PROXY_CHAIN_MAX_ENTRIES_DEFAULT,
     PROXY_CHECK_ENABLED_DEFAULT,
     PROXY_CHECK_EXIT_IP_URL_DEFAULT,
@@ -87,6 +90,12 @@ from .constants import (
     PROXY_FEED_REFRESH_MINUTES_DEFAULT,
     PROXY_FEED_REFRESH_MINUTES_MAX,
     PROXY_FEED_REFRESH_MINUTES_MIN,
+    PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_DEFAULT,
+    PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MAX,
+    PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MIN,
+    PROXY_FETCH_TEST_CONCURRENCY_DEFAULT,
+    PROXY_FETCH_TEST_CONCURRENCY_MAX,
+    PROXY_FETCH_TEST_CONCURRENCY_MIN,
     PROXY_HEALTH_REPROBE_ENABLED_DEFAULT,
     PROXY_MAX_LIVE_FAILURES_DEFAULT,
     PROXY_MAX_LIVE_FAILURES_MAX,
@@ -1054,6 +1063,32 @@ class Settings(BaseSettings):
         validation_alias="PROXY_FEED_REFRESH_MINUTES",
         ge=PROXY_FEED_REFRESH_MINUTES_MIN,
         le=PROXY_FEED_REFRESH_MINUTES_MAX,
+    )
+    # How many of the addresses a fetch offers are tested and kept. 0 is
+    # unlimited and is what ships: chains have been unlimited since 7.19.0, so
+    # a ceiling on the offer would be the tool inventing one.
+    proxy_candidates_max: int = Field(
+        default=PROXY_CANDIDATES_MAX_DEFAULT,
+        validation_alias="PROXY_CANDIDATES_MAX",
+        ge=PROXY_CANDIDATES_MAX_MIN,
+        le=PROXY_CANDIDATES_MAX_MAX,
+    )
+    # How many addresses one fetch tests at once. The Test and Add buttons keep
+    # their own, much smaller, bound: this sweep is hundreds of addresses with
+    # nobody watching a single row.
+    proxy_fetch_test_concurrency: int = Field(
+        default=PROXY_FETCH_TEST_CONCURRENCY_DEFAULT,
+        validation_alias="PROXY_FETCH_TEST_CONCURRENCY",
+        ge=PROXY_FETCH_TEST_CONCURRENCY_MIN,
+        le=PROXY_FETCH_TEST_CONCURRENCY_MAX,
+    )
+    # The TCP step's own ceiling during a fetch sweep. The HTTPS leg that
+    # follows keeps PROXY_CHECK_TIMEOUT_SECONDS.
+    proxy_fetch_connect_timeout_seconds: float = Field(
+        default=PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_DEFAULT,
+        validation_alias="PROXY_FETCH_CONNECT_TIMEOUT_SECONDS",
+        ge=PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MIN,
+        le=PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MAX,
     )
     # Backoff between a provider's own retries of a 429 or 5xx.
     provider_retry_backoff_base_seconds: float = Field(

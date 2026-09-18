@@ -11,6 +11,9 @@ stranger's address gets near a credential:
   gets, reached by a different door.
 """
 
+import asyncio
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -19,7 +22,6 @@ from fastapi.testclient import TestClient
 from my_claude_code.application.proxy_check import ProxyCheckOutcome
 from my_claude_code.application.proxy_ingest import (
     FeedDetection,
-    IngestRun,
     candidate_id,
 )
 from my_claude_code.config.proxy_chains import (
@@ -120,7 +122,7 @@ def test_selecting_a_feed_records_consent_and_fetches_nothing(monkeypatch) -> No
     def explode(*args, **kwargs):  # pragma: no cover - the assertion is that
         raise AssertionError("selecting a feed must not contact it")
 
-    monkeypatch.setattr("my_claude_code.api.admin_proxy_routes.ingest", explode)
+    monkeypatch.setattr("my_claude_code.api.admin_proxy_routes.start_fetch", explode)
     payload = (
         _client()
         .put("/admin/api/proxy-chains/feeds", json={"feeds": [_feed_row()]})
@@ -308,23 +310,7 @@ def test_fetching_with_no_feed_selected_is_refused_rather_than_silent() -> None:
     assert "MCC ships none of its own" in response.json()["detail"]
 
 
-def test_a_fetch_reports_which_feeds_answered(monkeypatch) -> None:
-    from my_claude_code.application.proxy_ingest import FeedResult
-
-    async def fake_ingest(**kwargs):
-        _offer_one()
-        return IngestRun(
-            at="2026-09-15T00:00:00Z",
-            results=(
-                FeedResult("databay", "Databay (TLS-strict)", ok=True, count=40),
-                FeedResult("geonode", "Geonode", ok=False, detail="answered 503"),
-            ),
-            offered=1,
-            corroborated=1,
-        )
-
-    monkeypatch.setattr("my_claude_code.api.admin_proxy_routes.ingest", fake_ingest)
-    client = _client()
+def _two_feeds(client: TestClient) -> None:
     client.put(
         "/admin/api/proxy-chains/feeds",
         json={
@@ -338,11 +324,174 @@ def test_a_fetch_reports_which_feeds_answered(monkeypatch) -> None:
             ]
         },
     )
-    payload = client.post("/admin/api/proxy-chains/ingest").json()
 
-    assert payload["ingest"]["corroborated"] == 1
-    names = {entry["id"]: entry["ok"] for entry in payload["ingest"]["feeds"]}
+
+def _await_fetch(client: TestClient) -> dict:
+    """Poll the status route until the job is no longer running."""
+
+    for _ in range(400):
+        payload = client.get("/admin/api/proxy-chains/ingest/status").json()
+        if payload["fetch"]["state"] != "running":
+            return payload
+        time.sleep(0.02)
+    raise AssertionError("the fetch never finished")
+
+
+def test_a_fetch_reports_which_feeds_answered_and_what_it_measured(
+    monkeypatch,
+) -> None:
+    """The headline of 7.21.0: a fetch says what it TESTED, not what it read.
+
+    The old answer was "1,572 addresses on offer", every one of them a claim
+    somebody else published. The new one is "834 tested, 41 working" -- and the
+    41 are the only ones stored.
+    """
+
+    from my_claude_code.application.proxy_fetch import FetchRun
+    from my_claude_code.application.proxy_ingest import FeedResult
+
+    async def fake_pass(**kwargs):
+        _offer_one()
+        return FetchRun(
+            at="2026-09-15T00:00:00Z",
+            provider_id=kwargs["provider_id"],
+            destination=kwargs["destination"],
+            results=(
+                FeedResult("databay", "Databay (TLS-strict)", ok=True, count=40),
+                FeedResult("geonode", "Geonode", ok=False, detail="answered 503"),
+            ),
+            offered=12,
+            corroborated=1,
+            tested=12,
+            working=1,
+            dead=10,
+            refused=1,
+        )
+
+    monkeypatch.setattr(
+        "my_claude_code.application.proxy_fetch.run_fetch_pass", fake_pass
+    )
+    with _client() as client:
+        _two_feeds(client)
+        started = client.post("/admin/api/proxy-chains/ingest")
+        assert started.status_code == 200
+        # It returns AT ONCE, with a job id to ask after -- a sweep of
+        # hundreds of strangers' machines takes minutes and cannot be an open
+        # HTTP request.
+        assert started.json()["fetch"]["job"]
+        payload = _await_fetch(client)
+
+    fetch = payload["fetch"]
+    assert fetch["state"] == "done"
+    assert (fetch["tested"], fetch["working"], fetch["dead"], fetch["refused"]) == (
+        12,
+        1,
+        10,
+        1,
+    )
+    names = {entry["id"]: entry["ok"] for entry in fetch["feeds"]}
     assert names == {"databay": True, "geonode": False}
+
+
+def test_the_status_payload_answers_the_same_keys_before_anything_has_run() -> None:
+    """One shape for the page to read, idle or not.
+
+    A browser that has to tell "no job has ever run" from "the server did not
+    answer that key" will get it wrong once and render a blank progress line
+    forever.
+    """
+
+    from my_claude_code.application.proxy_fetch import reset_fetch_job
+
+    reset_fetch_job()
+    payload = _client().get("/admin/api/proxy-chains/ingest/status").json()
+    fetch = payload["fetch"]
+    assert fetch["state"] == "idle"
+    for key in (
+        "job",
+        "provider",
+        "detail",
+        "at",
+        "elapsed_seconds",
+        "stopping",
+        "feeds_total",
+        "feeds_read",
+        "total",
+        "tested",
+        "working",
+        "dead",
+        "refused",
+        "offered",
+        "corroborated",
+        "feeds",
+    ):
+        assert key in fetch, key
+    assert (fetch["tested"], fetch["working"], fetch["dead"], fetch["refused"]) == (
+        0,
+        0,
+        0,
+        0,
+    )
+
+
+def test_a_second_fetch_while_one_runs_is_a_409_naming_the_first(monkeypatch) -> None:
+    """One sweep at a time. Two would double the outbound load for nothing."""
+
+    from my_claude_code.application.proxy_fetch import FetchRun, reset_fetch_job
+
+    release = threading.Event()
+
+    async def slow_pass(**kwargs):
+        await asyncio.get_running_loop().run_in_executor(None, release.wait)
+        return FetchRun(at="now")
+
+    monkeypatch.setattr(
+        "my_claude_code.application.proxy_fetch.run_fetch_pass", slow_pass
+    )
+    reset_fetch_job()
+    with _client() as client:
+        _two_feeds(client)
+        first = client.post("/admin/api/proxy-chains/ingest").json()
+        running = first["fetch"]["job"]
+        assert running
+        second = client.post("/admin/api/proxy-chains/ingest")
+        assert second.status_code == 409
+        assert running in second.json()["detail"]
+        release.set()
+        _await_fetch(client)
+
+
+def test_a_fetch_with_no_https_destination_is_refused_with_the_reason(
+    monkeypatch,
+) -> None:
+    """Never silently skip the testing, and never store an untested address."""
+
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_proxy_routes._configured_providers",
+        lambda settings: [
+            {
+                "provider_id": "nvidia_nim",
+                "display_name": "NVIDIA NIM",
+                "group": "",
+                "custom": False,
+                "oauth": False,
+                "key_count": 1,
+                "env_var": "NVIDIA_NIM_PROXY",
+                "inherited_proxy": "",
+                # Plain http: there is no certificate to verify through a
+                # tunnel to it, so there is nothing a check could find out.
+                "base_url": "http://nim.example/v1",
+            }
+        ],
+    )
+    client = _client()
+    _two_feeds(client)
+    response = client.post("/admin/api/proxy-chains/ingest")
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "https base URL" in detail
+    assert "has not tested" in detail
+    assert load_proxy_chains().candidates == ()
 
 
 def test_a_candidate_names_the_feeds_that_agreed_and_never_its_url() -> None:

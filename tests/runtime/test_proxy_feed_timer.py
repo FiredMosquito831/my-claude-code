@@ -9,7 +9,9 @@ import asyncio
 
 import pytest
 
+from my_claude_code.application.proxy_fetch import FetchRun, reset_fetch_job
 from my_claude_code.config.constants import PROXY_FEED_MINIMUM_MINUTES
+from my_claude_code.config.settings import Settings
 from my_claude_code.runtime.proxy_feed_timer import (
     ProxyFeedTimer,
     resolve_feed_interval,
@@ -48,16 +50,14 @@ async def test_a_tick_that_lands_mid_pass_is_skipped_not_queued(monkeypatch):
     release = asyncio.Event()
     calls = 0
 
-    async def slow_ingest(**kwargs):
+    async def slow_pass(self):
         nonlocal calls
         calls += 1
         started.set()
         await release.wait()
-        from my_claude_code.application.proxy_ingest import IngestRun
+        return FetchRun(at="now")
 
-        return IngestRun(at="now")
-
-    monkeypatch.setattr("my_claude_code.runtime.proxy_feed_timer.ingest", slow_ingest)
+    monkeypatch.setattr(ProxyFeedTimer, "_fetch", slow_pass)
     timer = ProxyFeedTimer(lambda: 60.0, lambda: True)
     first = asyncio.create_task(timer.tick())
     await started.wait()
@@ -69,10 +69,10 @@ async def test_a_tick_that_lands_mid_pass_is_skipped_not_queued(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_failing_pass_is_logged_and_the_loop_survives(monkeypatch):
-    async def boom(**kwargs):
+    async def boom(self):
         raise RuntimeError("the feeds are having a day")
 
-    monkeypatch.setattr("my_claude_code.runtime.proxy_feed_timer.ingest", boom)
+    monkeypatch.setattr(ProxyFeedTimer, "_fetch", boom)
     timer = ProxyFeedTimer(lambda: 60.0, lambda: True)
     assert await timer.tick() == 0
 
@@ -81,13 +81,129 @@ async def test_a_failing_pass_is_logged_and_the_loop_survives(monkeypatch):
 async def test_cancellation_propagates_rather_than_being_swallowed(monkeypatch):
     """``ApplicationRuntime.close()`` has to be able to end this."""
 
-    async def cancelled(**kwargs):
+    async def cancelled(self):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("my_claude_code.runtime.proxy_feed_timer.ingest", cancelled)
+    monkeypatch.setattr(ProxyFeedTimer, "_fetch", cancelled)
     timer = ProxyFeedTimer(lambda: 60.0, lambda: True)
     with pytest.raises(asyncio.CancelledError):
         await timer.tick()
+
+
+@pytest.mark.asyncio
+async def test_the_scheduled_refresh_goes_through_the_same_tested_path(
+    monkeypatch, tmp_path
+):
+    """7: the timer must not be a second, untested, way to write candidates.
+
+    A loop that stored whatever the lists published while the button stored
+    only what it had measured would make the candidate list mean two different
+    things depending on which of them wrote it last -- and the one that ran
+    unattended would be the one storing the unmeasured rows.
+    """
+
+    from my_claude_code.config import proxy_chains as chains_config
+    from my_claude_code.config.proxy_chains import ProxyChains, save_proxy_chains
+    from my_claude_code.config.proxy_feeds import CustomFeed
+
+    store_path = tmp_path / "proxy_chains.json"
+    monkeypatch.setattr(chains_config, "proxy_chains_path", lambda: store_path)
+    chains_config.reset_proxy_chains_cache()
+    save_proxy_chains(
+        ProxyChains().with_feeds(
+            [
+                CustomFeed(
+                    id="f1",
+                    name="A list",
+                    url="https://example.invalid/list.txt",
+                    parser="lines",
+                    enabled=True,
+                )
+            ]
+        )
+    )
+    reset_fetch_job()
+
+    seen: dict[str, object] = {}
+
+    async def record(**kwargs):
+        seen.update(kwargs)
+        return FetchRun(at="now", working=3)
+
+    monkeypatch.setattr("my_claude_code.application.proxy_fetch.run_fetch_pass", record)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_proxy_routes.pick_fetch_destination",
+        lambda settings, store, requested="": {
+            "provider_id": "anthropic",
+            "display_name": "Anthropic",
+            "base_url": "https://api.anthropic.com",
+        },
+    )
+
+    # By env alias: the fields carry a ``validation_alias``, so that is the
+    # name an operator sets and the name that populates one here.
+    settings = Settings.model_validate(
+        {
+            "PROXY_FETCH_TEST_CONCURRENCY": 48,
+            "PROXY_FETCH_CONNECT_TIMEOUT_SECONDS": 3,
+            "PROXY_CANDIDATES_MAX": 17,
+        }
+    )
+    timer = ProxyFeedTimer(lambda: 60.0, lambda: True, settings=lambda: settings)
+    assert await timer.tick() == 3
+    # The tested path, with the operator's own numbers -- not a second pass
+    # with defaults of its own.
+    assert seen["provider_id"] == "anthropic"
+    assert seen["destination"] == "https://api.anthropic.com"
+    assert seen["concurrency"] == 48
+    assert seen["connect_timeout"] == 3.0
+    assert seen["limit"] == 17
+    reset_fetch_job()
+    chains_config.reset_proxy_chains_cache()
+
+
+@pytest.mark.asyncio
+async def test_a_pass_with_no_https_destination_reads_nothing(monkeypatch, tmp_path):
+    """Never store what could not be measured -- not even unattended."""
+
+    from my_claude_code.config import proxy_chains as chains_config
+    from my_claude_code.config.proxy_chains import ProxyChains, save_proxy_chains
+    from my_claude_code.config.proxy_feeds import CustomFeed
+
+    store_path = tmp_path / "proxy_chains.json"
+    monkeypatch.setattr(chains_config, "proxy_chains_path", lambda: store_path)
+    chains_config.reset_proxy_chains_cache()
+    save_proxy_chains(
+        ProxyChains().with_feeds(
+            [
+                CustomFeed(
+                    id="f1",
+                    name="A list",
+                    url="https://example.invalid/list.txt",
+                    parser="lines",
+                    enabled=True,
+                )
+            ]
+        )
+    )
+    reset_fetch_job()
+    called = False
+
+    async def never(**kwargs):
+        nonlocal called
+        called = True
+        return FetchRun(at="now")
+
+    monkeypatch.setattr("my_claude_code.application.proxy_fetch.run_fetch_pass", never)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_proxy_routes.pick_fetch_destination",
+        lambda settings, store, requested="": None,
+    )
+    timer = ProxyFeedTimer(lambda: 60.0, lambda: True, settings=Settings)
+    assert await timer.tick() == 0
+    assert called is False
+    reset_fetch_job()
+    chains_config.reset_proxy_chains_cache()
 
 
 @pytest.mark.asyncio

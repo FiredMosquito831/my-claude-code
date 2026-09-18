@@ -53,10 +53,15 @@ from my_claude_code.application.proxy_check import (
     check_endpoints,
     destination_for_provider,
 )
+from my_claude_code.application.proxy_fetch import (
+    FetchAlreadyRunning,
+    fetch_status,
+    start_fetch,
+    stop_fetch,
+)
 from my_claude_code.application.proxy_ingest import (
     detect_feed,
     feed_payload,
-    ingest,
     known_feed_name,
 )
 from my_claude_code.config.admin.manifest import FIELDS
@@ -779,17 +784,106 @@ async def detect_proxy_feed(
     }
 
 
+class ProxyIngestPayload(BaseModel):
+    """Which provider's host this fetch should test the addresses against.
+
+    Empty means "choose for me", and the choice is
+    :func:`fetch_destination`'s: the first provider that has a chain, else the
+    first configured provider with an https base URL. A check is a question
+    about one destination, so a fetch has to have one before it starts.
+    """
+
+    provider: str = ""
+
+
+def pick_fetch_destination(
+    settings: Settings, store: ProxyChains, requested: str = ""
+) -> dict[str, Any] | None:
+    """The provider a fetch tests against, and its https base URL. Or ``None``.
+
+    The operator's choice when they made one. Otherwise **the first provider
+    that has a chain** -- an install with a chain has already said which
+    provider it wants proxied, and testing against that one is the answer that
+    needs no explaining -- and failing that the first configured provider whose
+    base URL is https.
+
+    ``None`` means there is nothing to test against. The route turns that into
+    a 422 with the reason on it and the scheduled refresh turns it into a log
+    line and no outbound request; neither of them fetches anyway. Storing a
+    list of addresses nothing has measured under a heading that says they work
+    is the one defect this release exists to remove, and "there was no
+    destination" is not a licence to put it back quietly.
+    """
+
+    eligible = [
+        entry
+        for entry in _configured_providers(settings)
+        if str(entry.get("base_url") or "").lower().startswith("https://")
+    ]
+    if requested:
+        return next(
+            (entry for entry in eligible if entry["provider_id"] == requested), None
+        )
+    with_chain = next(
+        (entry for entry in eligible if store.chain(entry["provider_id"]) is not None),
+        None,
+    )
+    return with_chain or (eligible[0] if eligible else None)
+
+
+def fetch_destination(
+    settings: Settings, store: ProxyChains, requested: str
+) -> dict[str, Any]:
+    """:func:`pick_fetch_destination`, refusing with the reason instead of ``None``."""
+
+    chosen = pick_fetch_destination(settings, store, requested)
+    if chosen is not None:
+        return chosen
+    if requested:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{requested} is not a configured provider with an https base "
+                "URL, so there is no certificate to verify through a tunnel to "
+                "it. Pick another destination for this fetch."
+            ),
+        )
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "No provider on this install has an https base URL, so a fetch "
+            "has nothing to test these addresses against -- and an address "
+            "MCC has not tested is not one it will offer you. Set a "
+            "provider's base URL on the Providers page, then fetch."
+        ),
+    )
+
+
 @router.post("/admin/api/proxy-chains/ingest")
 async def ingest_proxy_feeds(
-    request: Request, services: ApiServices = Depends(get_services)
+    request: Request,
+    payload: ProxyIngestPayload | None = None,
+    services: ApiServices = Depends(get_services),
 ):
-    """Read every enabled feed once, and return what they offered.
+    """Start a fetch and return at once, with the job id to ask after.
 
     The one outbound call this feature makes on an install where the scheduled
-    refresh is off, and only for the feeds the operator ticked. The result is a
-    **candidate list**: addresses that have been merged, counted and ranked,
-    and that no provider's chain references. Nothing routes through one until
-    the operator moves it, and moving it tests it first.
+    refresh is off, and only for the feeds the operator ticked.
+
+    **A fetch now tests what it found.** Every address the enabled lists
+    offered is measured against the chosen provider's own host -- does it
+    answer, does its tunnel leave that host's certificate verifiable -- and
+    only the ones that passed are kept and offered. An address that did not
+    answer is not stored; one that broke certificate validation is recorded
+    refused so no later fetch offers it again. What the operator ends up
+    looking at is a list of addresses that were working a moment ago, not a
+    list of claims somebody else published.
+
+    That takes minutes for a list of several hundred, so this route does not
+    wait for it: it starts a background job and answers with the id.
+    ``GET .../ingest/status`` reports progress, ``POST .../ingest/stop`` ends
+    it while keeping everything that has already passed, and a second start
+    while one is running is a 409 naming the one that is.
     """
 
     require_loopback_admin(request)
@@ -803,9 +897,104 @@ async def ingest_proxy_feeds(
                 "and it contacts nobody until you do."
             ),
         )
-    run = await ingest()
+    settings = services.requests.current_settings()
+    chosen = fetch_destination(
+        settings, store, (payload.provider if payload else "").strip().lower()
+    )
+    try:
+        job = await start_fetch(
+            provider_id=str(chosen["provider_id"]),
+            destination=str(chosen["base_url"]).strip(),
+            concurrency=int(settings.proxy_fetch_test_concurrency),
+            connect_timeout=float(settings.proxy_fetch_connect_timeout_seconds),
+            timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+            limit=int(settings.proxy_candidates_max),
+            exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+        )
+    except FetchAlreadyRunning as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A fetch is already running ({exc.job_id}). One at a time: "
+                "these are hundreds of outbound connections to strangers' "
+                "machines, and two sweeps at once would double that without "
+                "finding anything new. Watch it, or stop it, and start again."
+            ),
+        ) from exc
     refreshed = await asyncio.to_thread(_payload, services)
-    refreshed["ingest"] = run.as_document()
+    refreshed["fetch"] = job.as_document() | {
+        "provider_name": str(chosen["display_name"])
+    }
+    return refreshed
+
+
+@router.get("/admin/api/proxy-chains/ingest/status")
+async def proxy_ingest_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    """What the running -- or last -- fetch is doing, and the page beneath it.
+
+    Answers the same keys whether or not anything has ever run, so the page
+    has one shape to read: a fresh process reports ``state: "idle"`` with every
+    counter at zero rather than an absence the browser has to guess about.
+
+    The whole payload rides along, which is what lets a reload re-attach: the
+    page asks this once on load, finds a job in flight, and picks up the
+    progress it left -- and finds the finished candidate list in the same
+    answer when the job ended while the tab was closed.
+    """
+
+    require_loopback_admin(request)
+    refreshed = await asyncio.to_thread(_payload, services)
+    status = fetch_status()
+    provider_id = str(status.get("provider") or "")
+    if provider_id:
+        settings = services.requests.current_settings()
+        named = next(
+            (
+                entry
+                for entry in _configured_providers(settings)
+                if entry["provider_id"] == provider_id
+            ),
+            None,
+        )
+        status["provider_name"] = (
+            str(named["display_name"]) if named is not None else provider_id
+        )
+    refreshed["fetch"] = status
+    return refreshed
+
+
+class ProxyIngestStopPayload(BaseModel):
+    """Which fetch to stop. Empty means "whichever one is running".
+
+    Naming it is how a page that has been open a while avoids stopping a sweep
+    somebody else started after the one it was watching finished.
+    """
+
+    job: str = ""
+
+
+@router.post("/admin/api/proxy-chains/ingest/stop")
+async def stop_proxy_ingest(
+    request: Request,
+    payload: ProxyIngestStopPayload | None = None,
+    services: ApiServices = Depends(get_services),
+):
+    """Stop the running fetch at the next address. What passed is kept.
+
+    Not a cancellation: a check already in flight finishes and its verdict
+    counts, and every address that passed before the press is written to the
+    store. "Stop" means "that is enough addresses", never "throw the work
+    away" -- an operator who has watched forty working addresses arrive out of
+    eight hundred should be able to take those forty and get on with it.
+    """
+
+    require_loopback_admin(request)
+    stopped = stop_fetch((payload.job if payload else "").strip())
+    refreshed = await asyncio.to_thread(_payload, services)
+    refreshed["fetch"] = fetch_status()
+    refreshed["stopped"] = stopped
     return refreshed
 
 
@@ -1291,6 +1480,23 @@ def _payload(services: ApiServices) -> dict[str, Any]:
                 "interval_minutes": int(settings.proxy_feed_refresh_minutes),
                 "minimum_minutes": PROXY_FEED_MINIMUM_MINUTES,
             },
+            # What a press of Fetch is about to do, in the operator's own
+            # numbers. The page prints these rather than a constant of its own:
+            # 7.19.0 shipped "a chain holds at most 12" on a card with two
+            # hundred rows because the browser kept its own copy of a limit the
+            # server had stopped applying.
+            "fetch": {
+                "concurrency": int(settings.proxy_fetch_test_concurrency),
+                "connect_timeout_seconds": float(
+                    settings.proxy_fetch_connect_timeout_seconds
+                ),
+                "check_timeout_seconds": PROXY_CHECK_TIMEOUT_SECONDS,
+                # 0 is UNLIMITED and is what ships. It travels as 0, and the
+                # page must read it with a test for "is it a positive number",
+                # never with `Number(x) || <something>` -- which cannot tell 0
+                # from absent and is exactly how 7.19.0 put the old cap back.
+                "candidates_max": int(settings.proxy_candidates_max),
+            },
             # The readers this install ships, for the Add form's picker. MCC
             # ships no feed of its own, so this is the whole of what the page
             # can offer: formats, never sources.
@@ -1344,7 +1550,47 @@ def _candidate_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
         "uptime_pct": facts.uptime_pct if facts is not None else None,
         "last_check": None if last_check is None else last_check.as_document(),
         "refused": bool(endpoint.refused),
+        # Since 7.21.0 a fetch tests everything it offers and keeps only the
+        # addresses that passed, so on a freshly fetched list this is true of
+        # every row -- and the three fields below are what let the page say so
+        # honestly rather than by assumption.
+        #
+        # ``working`` is the measurement: this address answered and the
+        # destination's certificate verified through its tunnel.
+        "working": bool(last_check is not None and last_check.ok),
+        # Which provider's host that was measured against. A check answers one
+        # question about one destination, so "working" without this would be a
+        # claim about hosts nobody asked about. Empty for a candidate stored by
+        # 7.18-7.20, which did not record it.
+        "checked_for": endpoint.checked_for,
+        "checked_for_name": (
+            _display_name(endpoint.checked_for) if endpoint.checked_for else ""
+        ),
+        # A candidate from 7.18-7.20: offered, never measured. It is shown --
+        # dropping somebody's stored list on an upgrade would be a destructive
+        # migration nobody asked for -- but it is never counted as working, and
+        # the next fetch replaces the offer list wholesale, so it clears itself
+        # the first time the operator presses the button.
+        "untested": bool(last_check is None),
     }
+
+
+def _display_name(provider_id: str) -> str:
+    """A provider's display name, falling back to its id.
+
+    Read from the catalogue and the custom registry rather than from
+    ``_configured_providers``: a candidate may have been tested against a
+    provider whose key has since been removed, and "working for opencode" is a
+    better answer than an empty cell.
+    """
+
+    descriptor = PROVIDER_CATALOG.get(provider_id)
+    if descriptor is not None:
+        return descriptor.display_name
+    for entry in get_provider_registry().list_custom():
+        if entry.provider_id == provider_id:
+            return entry.display_name
+    return provider_id
 
 
 def _kind_payload(kind: str) -> dict[str, Any]:
