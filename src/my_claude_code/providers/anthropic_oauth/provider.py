@@ -246,14 +246,18 @@ class AnthropicOAuthProvider(AnthropicProvider):
                 # published Retry-After is honoured here the same way it is for
                 # every other provider. ``None`` when the endpoint published
                 # none, which the ladder treats as "use the default backoff".
-                retry_after_seconds=retry_after_from_error(error),
+                retry_after_seconds=retry_after_from_error(
+                    error, cooldown=self.rate_limit_cooldown()
+                ),
             )
         return ExecutionFailure(
             kind=FailureKind.OVERLOADED,
             status_code=529 if status >= 500 else 503,
             message=str(error),
             retryable=True,
-            retry_after_seconds=retry_after_from_error(error),
+            retry_after_seconds=retry_after_from_error(
+                error, cooldown=self.rate_limit_cooldown()
+            ),
         )
 
     # -- 401 -> refresh once, retry once ------------------------------------

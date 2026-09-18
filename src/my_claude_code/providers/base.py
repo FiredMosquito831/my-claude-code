@@ -16,6 +16,8 @@ from my_claude_code.config.constants import (
     PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+    RATE_LIMIT_COOLDOWN_MAX_SECONDS_DEFAULT,
+    RATE_LIMIT_COOLDOWN_MODE_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
     STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
@@ -28,6 +30,10 @@ from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.diagnostics import (
     exception_cause_types,
     redacted_exception_traceback,
+)
+from my_claude_code.core.rate_limit import (
+    DEFAULT_RATE_LIMIT_COOLDOWN,
+    RateLimitCooldown,
 )
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
@@ -134,6 +140,11 @@ class ProviderConfig:
     # Whether a 429 is answered by routing to another model instead of by
     # retrying this one and then spending the rest of the key pool on it.
     routes_around_model: bool = RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT
+    # What a 429 costs at all: honour the host's own wait (7.21.0 and every
+    # release before it), always use the operator's number, or nothing.
+    rate_limit_cooldown_mode: str = RATE_LIMIT_COOLDOWN_MODE_DEFAULT
+    # The ceiling on a wait a host published in a header. 0 removes it.
+    rate_limit_cooldown_max_seconds: float = RATE_LIMIT_COOLDOWN_MAX_SECONDS_DEFAULT
     # This provider's egress chain, already resolved: ids looked up, paused
     # rungs dropped, passwords masked into labels. ``None`` -- the default and
     # by far the common case -- means "no chain": ``proxy`` above is the single
@@ -142,12 +153,39 @@ class ProviderConfig:
     # ``proxy``, and zero is no chain at all.
     proxy_chain: ProxyChainPlan | None = None
 
+    def rate_limit_cooldown(self) -> RateLimitCooldown:
+        """The operator's whole 429 policy, as one value to hand around.
+
+        The three settings only mean anything together, and every bench, every
+        (key, model) bench and every reactive block resolves through the one
+        object this builds -- there is no second reading of the rule anywhere.
+        """
+        return RateLimitCooldown(
+            mode=self.rate_limit_cooldown_mode,
+            fallback_seconds=self.rate_limit_cooldown_seconds,
+            max_seconds=self.rate_limit_cooldown_max_seconds,
+        )
+
 
 class BaseProvider(ABC):
     """Base class for all providers. Extend this to add your own."""
 
     def __init__(self, config: ProviderConfig):
         self._config = config
+
+    def rate_limit_cooldown(self) -> RateLimitCooldown:
+        """This provider's 429 policy: mode, fallback and ceiling, together.
+
+        Read through ``getattr`` rather than ``self._config`` directly because
+        a provider's failure classifier is sometimes bound to a bare instance
+        (``object.__new__``) to exercise classification without building a
+        live provider. A policy is never what such a caller is asking about,
+        so it gets the shipped one.
+        """
+        config = getattr(self, "_config", None)
+        if config is None:
+            return DEFAULT_RATE_LIMIT_COOLDOWN
+        return config.rate_limit_cooldown()
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:
         """Which reasoning fields this host parses for ``model_id``.

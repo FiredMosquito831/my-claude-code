@@ -6156,27 +6156,47 @@ function renderCredentialHealth(fields) {
     const escalation = state.fields.has("CREDENTIAL_MODEL_BENCH_ESCALATION")
       ? calcNumber("CREDENTIAL_MODEL_BENCH_ESCALATION")
       : 2;
+    // The mode decides whether any of the sentence below is true at all, so
+    // it is read first. An untouched select still renders its current option,
+    // so liveValue is right here; the fallback is the shipped default and not
+    // an empty string, because "" is not one of the three answers.
+    const mode = state.fields.has("RATE_LIMIT_COOLDOWN_MODE")
+      ? liveValue("RATE_LIMIT_COOLDOWN_MODE").trim() || "provider"
+      : "provider";
     let scope;
+    if (mode === "off") {
+      rule.textContent =
+        "A 401/403 walks the lockout ladder; a 429 benches nothing at all — " +
+        "MCC still rotates to the next key and still moves down the fallback " +
+        "chain, so the provider goes on answering 429 and MCC goes on " +
+        "spending attempts on it; a timeout or 5xx costs a key nothing.";
+      return;
+    }
+    const benchWindow =
+      mode === "fixed"
+        ? "the cooldown above, whatever the provider published"
+        : "the provider's Retry-After or the cooldown above when it sends none";
     if (escalation === 1) {
-      scope =
-        "a 429 benches the whole key for the provider's Retry-After, or the " +
-        "cooldown above when it sends none";
+      scope = `a 429 benches the whole key for ${benchWindow}`;
     } else if (escalation <= 0) {
       scope =
         "a 429 benches only the model it happened on, on that key, and never " +
         "the whole key";
     } else {
       scope =
-        "a 429 benches only the model it happened on, on that key, for the " +
-        "provider's Retry-After or the cooldown above when it sends none — " +
-        `the key itself is benched once ${escalation} different models are ` +
-        "rate-limited on it at the same time";
+        "a 429 benches only the model it happened on, on that key, for " +
+        `${benchWindow} — the key itself is benched once ${escalation} different ` +
+        "models are rate-limited on it at the same time";
     }
     rule.textContent = `A 401/403 walks the lockout ladder; ${scope}; a timeout or 5xx costs a key nothing.`;
   };
-  const escalationField = wrappers.get("CREDENTIAL_MODEL_BENCH_ESCALATION");
-  if (escalationField) {
-    const input = escalationField.querySelector("input, select, textarea");
+  for (const key of [
+    "CREDENTIAL_MODEL_BENCH_ESCALATION",
+    "RATE_LIMIT_COOLDOWN_MODE",
+  ]) {
+    const field = wrappers.get(key);
+    if (!field) continue;
+    const input = field.querySelector("input, select, textarea");
     if (input) {
       input.addEventListener("input", paintRule);
       input.addEventListener("change", paintRule);

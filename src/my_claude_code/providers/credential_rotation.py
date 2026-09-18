@@ -15,7 +15,11 @@ One rule, two questions
 - ``429`` -- the credential is throttled. It is benched for exactly the window
   the provider published in its own ``Retry-After`` / ``x-ratelimit-reset-*``
   header, or for ``RATE_LIMIT_COOLDOWN_SECONDS`` when it published none, capped
-  at one hour. No ladder, no tier escalation, no circuit breaker.
+  at ``RATE_LIMIT_COOLDOWN_MAX_SECONDS`` (an hour by default, which is what was
+  hard-coded before 7.22.0). No ladder, no tier escalation, no circuit breaker.
+  ``RATE_LIMIT_COOLDOWN_MODE`` decides whether any of that happens: ``fixed``
+  uses the operator's number rather than the published one, and ``off``
+  benches nothing at all while leaving rotation exactly as it is.
 - a ``QUOTA`` failure whose body named an explicit billing phrase -- the
   account behind the credential is out of credits, which is a fact about the
   key and about nothing else. Benched for ``RATE_LIMIT_COOLDOWN_SECONDS``
@@ -71,6 +75,10 @@ from my_claude_code.core.credential_rotation import (
     RotationEngine,
 )
 from my_claude_code.core.failures import FailureKind, find_execution_failure
+from my_claude_code.core.rate_limit import (
+    DEFAULT_RATE_LIMIT_COOLDOWN,
+    RateLimitCooldown,
+)
 from my_claude_code.core.upstream_ladder import record_credential_decision
 from my_claude_code.providers.failure_policy import (
     retryable_upstream_transport_error,
@@ -144,6 +152,22 @@ def _uncharged_reason(status: int | None, failure: BaseException | None) -> str:
     if kind is not None:
         return f"{kind} is not credential-shaped"
     return "the failure is not credential-shaped"
+
+
+def _cooldown_off_reason(failure_class: str, status: int | None) -> str:
+    """Why a 429 or an empty balance left this credential's health untouched.
+
+    The sentence has to say the operator asked for this, or the next reader
+    goes looking for the bug that stopped the pool benching a throttled key.
+    """
+    named = str(status) if status is not None else failure_class
+    what = (
+        "credits exhausted" if failure_class == QUOTA_FAILURE_CLASS else "rate limited"
+    )
+    return (
+        f"{named} {what} -- RATE_LIMIT_COOLDOWN_MODE=off, nothing benched; "
+        "rotated to the next key"
+    )
 
 
 def _charged_reason(
@@ -274,6 +298,7 @@ class CredentialRotationState:
         rate_limit_seconds: float,
         lockout_tiers: Sequence[float],
         model_bench_escalation: int = 1,
+        cooldown: RateLimitCooldown | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if policy == "on_error":
@@ -287,6 +312,17 @@ class CredentialRotationState:
         )
         self._engine = RotationEngine(
             key_count, policy=canonical, tuning=tuning, clock=clock
+        )
+        # The operator's 429 policy, read at exactly two decisions below:
+        # whether a 429 or an exhausted balance benches anything at all, and
+        # whether the wait the host published is the one that goes into the
+        # bench. The *shape* of the window -- fixed rather than the generic
+        # ladder, and the (key, model) scoping -- is the engine's
+        # ``PROVIDER_TUNING`` and is not touched by any of the three modes: a
+        # global ``fixed`` picks which number fills the pool's flat window, it
+        # does not turn a ladder-mode pool into a fixed-mode one.
+        self._cooldown = (
+            cooldown if cooldown is not None else DEFAULT_RATE_LIMIT_COOLDOWN
         )
         # Kept so a bench the engine just installed can be read back as a
         # duration for the request log, on the engine's own clock.
@@ -372,6 +408,32 @@ class CredentialRotationState:
         # never with a number invented here.
         carried = failure.retry_after_seconds if failure is not None else None
         retry_after = carried if failure_class == "rate_limit" else None
+        if not self._cooldown.benches and failure_class in (
+            "rate_limit",
+            QUOTA_FAILURE_CLASS,
+        ):
+            # ``off``: a 429 (and, by the same rule, an exhausted balance)
+            # costs the credential nothing. Rotation is a separate question
+            # and is answered above, so the next key is still tried; the pool
+            # simply keeps offering keys the provider is refusing. Recorded
+            # with a null class, which is how the ladder already says "the
+            # pool deliberately left this key alone" -- the root-cause
+            # sentence then names no bench, because none happened.
+            record_credential_decision(
+                key_index=index,
+                cls=None,
+                status=status,
+                retry_after=retry_after,
+                reason=_cooldown_off_reason(failure_class, status),
+            )
+            return rotate
+        if failure_class == "rate_limit" and not self._cooldown.honours_provider:
+            # ``fixed``: the operator has said their own number wins, so the
+            # engine is handed no published wait and falls back to the
+            # ``RATE_LIMIT_COOLDOWN_SECONDS`` it was built with. The published
+            # value is still on the failure and still reaches the request log
+            # -- what the host said is a fact; what MCC waits is a policy.
+            retry_after = None
         async with self._lock:
             if failure_class == QUOTA_FAILURE_CLASS:
                 # The 429 mechanism, deliberately unscoped: an empty balance
@@ -441,6 +503,24 @@ class CredentialRotationState:
         Returns the seconds the credential is now benched for, read back out
         of the engine that decided it.
         """
+        if not self._cooldown.benches:
+            # ``off``: the same rule as the ordinary 429 path. The probe still
+            # told the executor what it needed to know; nothing is benched.
+            record_credential_decision(
+                key_index=index,
+                key_label=key_label,
+                cls=None,
+                status=429,
+                retry_after=retry_after,
+                reason=(
+                    f"probe on {model} also 429 -- "
+                    "RATE_LIMIT_COOLDOWN_MODE=off, nothing benched"
+                ),
+            )
+            return 0.0
+        if not self._cooldown.honours_provider:
+            # ``fixed``: the engine's own window, not the host's number.
+            retry_after = None
         async with self._lock:
             self._engine.note_rate_limit(index, retry_after=retry_after)
             slot = self._engine.slot(index)

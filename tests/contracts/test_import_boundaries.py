@@ -940,6 +940,30 @@ def test_config_mirrors_the_rotation_policies_it_cannot_import():
     assert tuple(kind.value for kind in FailureKind) == TRIGGER_KIND_ORDER
 
 
+def test_config_mirrors_the_cooldown_modes_it_cannot_import():
+    """``RATE_LIMIT_COOLDOWN_MODE`` is validated in ``config`` and applied in
+    ``core``, and ``config`` may not import ``core``.
+
+    Same leaf-package rule, same both-directions pin, and the same asymmetry:
+    a mode added to the policy but missing here would be rejected by settings
+    validation as unknown -- loud -- while a mode removed from the policy but
+    left here would be quietly accepted and then mean nothing at all. The
+    default has to be one of them, in both files.
+    """
+    from my_claude_code.config.constants import (
+        RATE_LIMIT_COOLDOWN_MODE_DEFAULT,
+        RATE_LIMIT_COOLDOWN_MODE_NAMES,
+    )
+    from my_claude_code.core.rate_limit import (
+        DEFAULT_RATE_LIMIT_COOLDOWN_MODE,
+        RATE_LIMIT_COOLDOWN_MODES,
+    )
+
+    assert RATE_LIMIT_COOLDOWN_MODE_NAMES == RATE_LIMIT_COOLDOWN_MODES
+    assert RATE_LIMIT_COOLDOWN_MODE_DEFAULT == DEFAULT_RATE_LIMIT_COOLDOWN_MODE
+    assert RATE_LIMIT_COOLDOWN_MODE_DEFAULT in RATE_LIMIT_COOLDOWN_MODES
+
+
 def test_config_mirrors_the_tier_vocabulary_it_cannot_import():
     """Same leaf-package rule, same both-directions pin.
 

@@ -21,6 +21,7 @@ from my_claude_code.config.provider_catalog import (
     VERCEL_AI_GATEWAY_DEFAULT_BASE,
     ZAI_DEFAULT_BASE,
 )
+from my_claude_code.core.rate_limit import RateLimitCooldown
 from my_claude_code.providers.anthropic import AnthropicProvider
 from my_claude_code.providers.anthropic_oauth import AnthropicOAuthProvider
 from my_claude_code.providers.chatgpt_oauth import ChatGPTOAuthProvider
@@ -592,6 +593,13 @@ def test_create_provider_instantiates_each_builtin():
                 backoff_jitter_seconds=1.0,
                 # A 429 is answered by routing, not by this limiter's ladder.
                 routes_around_model=True,
+                # And the operator's 429 policy, which the limiter reads for
+                # one question only: whether a 429 costs a reactive block.
+                cooldown=RateLimitCooldown(
+                    mode=settings.rate_limit_cooldown_mode,
+                    fallback_seconds=settings.rate_limit_cooldown_seconds,
+                    max_seconds=settings.rate_limit_cooldown_max_seconds,
+                ),
             )
             limiter_factory.reset_mock()
 

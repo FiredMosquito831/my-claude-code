@@ -393,6 +393,7 @@ def _create_leaf_provider(
         backoff_max_seconds=config.retry_backoff_max_seconds,
         backoff_jitter_seconds=config.retry_backoff_jitter_seconds,
         routes_around_model=config.routes_around_model,
+        cooldown=config.rate_limit_cooldown(),
     )
     factory = _SPECIAL_PROVIDER_FACTORIES.get(descriptor.provider_id)
     if factory is not None:
@@ -451,6 +452,7 @@ def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
         rate_limit_seconds=config.rate_limit_cooldown_seconds,
         lockout_tiers=config.lockout_tiers,
         model_bench_escalation=config.credential_model_bench_escalation,
+        cooldown=config.rate_limit_cooldown(),
     )
     labels = tuple(mask_key_label(key) for key in keys)
     return RotatingProvider(

@@ -1798,7 +1798,62 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         advanced=True,
         description=(
             "How long a rate-limited provider is paused when it sends no "
-            "Retry-After header of its own to obey."
+            "Retry-After header of its own to obey. 0 does not pause at all -- "
+            "the key is offered again immediately, and the provider goes on "
+            "answering 429 until it stops."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RATE_LIMIT_COOLDOWN_MAX_SECONDS",
+        "Longest cooldown a provider may ask for",
+        "credential_health",
+        "number",
+        settings_attr="rate_limit_cooldown_max_seconds",
+        default="3600",
+        restart_required=True,
+        advanced=True,
+        minimum=0,
+        description=(
+            "The ceiling on a wait a provider asks for in a Retry-After or "
+            "x-ratelimit-reset header. An hour was hard-coded until 7.22.0 and "
+            "is still the default, so leaving this alone changes nothing. "
+            "Lower it to stop one buggy or hostile header taking a key out of "
+            "the pool for an hour; 0 removes the ceiling and obeys whatever "
+            "the provider asked for. It does not apply to a wait a provider "
+            "published in the body of its answer -- that is a statement about "
+            "the account's allowance for the day, is bounded at one day, and "
+            "is ignored only by the cooldown mode below."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RATE_LIMIT_COOLDOWN_MODE",
+        "What a 429 costs the key",
+        "credential_health",
+        "select",
+        settings_attr="rate_limit_cooldown_mode",
+        default="provider",
+        restart_required=True,
+        advanced=True,
+        options=(
+            ConfigOptionSpec("provider", "Wait as long as the provider asked"),
+            ConfigOptionSpec("fixed", "Always the cooldown above"),
+            ConfigOptionSpec("off", "Never pause -- keep trying"),
+        ),
+        description=(
+            "Three settings, one question: what a 429 costs the key that met "
+            "it. Wait as long as the provider asked is what every release "
+            "before 7.22.0 did -- obey the Retry-After under the ceiling "
+            "above, and use the cooldown above when the provider sent none. "
+            "Always the cooldown above ignores what the provider published and "
+            "uses your number, for a host whose headers you do not trust. "
+            "Never pause benches nothing at all: no key bench, no (key, model) "
+            "bench, no provider-wide pause. MCC still rotates to the next key "
+            "and still moves down the fallback chain -- rotating and benching "
+            "are separate questions -- so the consequence is the plain one: "
+            "the provider goes on answering 429 and MCC goes on spending "
+            "attempts on it. Setting the cooldown above to 0 is the milder "
+            "version: nothing is benched when the provider sent no header, but "
+            "a wait it did publish is still honoured."
         ),
     ),
     ConfigFieldSpec(

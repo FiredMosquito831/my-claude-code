@@ -1,0 +1,74 @@
+{
+  "body-0": {
+    "cooldown_0s": 0.0,
+    "cooldown_7s": 0.0,
+    "cooldown_default": 0.0,
+    "published": 0.0
+  },
+  "body-68400": {
+    "cooldown_0s": 68400.0,
+    "cooldown_7s": 68400.0,
+    "cooldown_default": 68400.0,
+    "published": 68400.0
+  },
+  "body-garbage": {
+    "cooldown_0s": 0.0,
+    "cooldown_7s": 7.0,
+    "cooldown_default": 60.0,
+    "published": null
+  },
+  "body-negative": {
+    "cooldown_0s": 0.0,
+    "cooldown_7s": 7.0,
+    "cooldown_default": 60.0,
+    "published": null
+  },
+  "header-0": {
+    "cooldown_0s": 0.0,
+    "cooldown_7s": 0.0,
+    "cooldown_default": 0.0,
+    "published": 0.0
+  },
+  "header-15": {
+    "cooldown_0s": 15.0,
+    "cooldown_7s": 15.0,
+    "cooldown_default": 15.0,
+    "published": 15.0
+  },
+  "header-5000": {
+    "cooldown_0s": 3600.0,
+    "cooldown_7s": 3600.0,
+    "cooldown_default": 3600.0,
+    "published": 3600.0
+  },
+  "header-60": {
+    "cooldown_0s": 60.0,
+    "cooldown_7s": 60.0,
+    "cooldown_default": 60.0,
+    "published": 60.0
+  },
+  "header-empty": {
+    "cooldown_0s": 0.0,
+    "cooldown_7s": 7.0,
+    "cooldown_default": 60.0,
+    "published": null
+  },
+  "header-garbage": {
+    "cooldown_0s": 0.0,
+    "cooldown_7s": 7.0,
+    "cooldown_default": 60.0,
+    "published": null
+  },
+  "header-negative": {
+    "cooldown_0s": 0.0,
+    "cooldown_7s": 7.0,
+    "cooldown_default": 60.0,
+    "published": null
+  },
+  "none": {
+    "cooldown_0s": 0.0,
+    "cooldown_7s": 7.0,
+    "cooldown_default": 60.0,
+    "published": null
+  }
+}
