@@ -32,7 +32,10 @@ import httpx
 import pytest
 
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.anthropic.openai_tool_names import OpenAIToolNameCodec
+from my_claude_code.core.anthropic.openai_tool_names import (
+    MIN_TOOL_NAME_MAX_LENGTH,
+    OpenAIToolNameCodec,
+)
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.base import ProviderConfig
@@ -124,10 +127,22 @@ def test_the_opencode_responses_transport_carries_the_declared_limit(name) -> No
 
 
 def test_a_limit_the_codec_does_not_implement_is_refused() -> None:
+    """A ceiling too small to build an alias under is refused, not approximated.
+
+    Until 7.23.0 this read ``responses_tool_name_codec(request, 128)`` raises,
+    because the codec implemented exactly one limit. It implements any limit
+    from :data:`MIN_TOOL_NAME_MAX_LENGTH` upward now -- a host may *state* one
+    in a rejection rather than a profile declaring it -- so the assertion that
+    still holds is the one at the bottom of the range: below the floor an
+    alias stops naming the tool, and inventing one would trade a visible
+    failure for a call the model cannot make.
+    """
+
     request = MessagesRequest.model_validate(_fixture())
     assert responses_tool_name_codec(request, None) is None
-    with pytest.raises(ValueError, match="64"):
-        responses_tool_name_codec(request, 128)
+    assert responses_tool_name_codec(request, 128) is not None
+    with pytest.raises(ValueError, match=str(MIN_TOOL_NAME_MAX_LENGTH)):
+        responses_tool_name_codec(request, MIN_TOOL_NAME_MAX_LENGTH - 1)
 
 
 # -- (a) prompt cache ---------------------------------------------------------

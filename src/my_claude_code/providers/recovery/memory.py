@@ -23,7 +23,10 @@ from .facts import (
     FACT_EFFORT_VALUE_REJECTED,
     FACT_OUTPUT_CAP,
     FACT_REASONING_FIELD_REJECTED,
+    FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
+    FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
     FACT_STREAM_USAGE_UNSUPPORTED,
+    PROVIDER_WIDE_MODEL_ID,
     FactSink,
 )
 
@@ -54,6 +57,17 @@ class RecoveryMemory:
     #: request to such a host paid a failed try and a retry -- not once per
     #: process, once per request.
     stream_usage_unsupported: set[str] = field(default_factory=set)
+
+    #: The longest tool name this host's Responses surface accepts, or
+    #: ``None`` when it has never said. Host-wide rather than per model: the
+    #: request validator that states it sits in front of the deployment.
+    responses_tool_name_max_length: int | None = None
+
+    #: Bare model id -> the ISO date its Responses surface was proven to
+    #: refuse every ``tool_choice`` but ``auto``. Per model, because that is
+    #: the scope the refusal was measured at; the date is what the request
+    #: log's marker and the Models page both show.
+    responses_tool_choice_auto_only: dict[str, str] = field(default_factory=dict)
 
     #: Where a newly learned fact is written through to, or ``None`` for a
     #: memory that persists nothing.
@@ -142,6 +156,58 @@ class RecoveryMemory:
                     evidence,
                 )
         return bool(learned)
+
+    def learn_responses_tool_name_limit(self, limit: int, *, evidence: str = "") -> int:
+        """Record a stated tool-name ceiling, keeping the smallest, and return it.
+
+        Monotonically narrowing for the same reason
+        :meth:`learn_cap` is: a host that later states a lower ceiling has
+        revised its own answer downward, and a higher one does not contradict
+        the length already proven to be accepted.
+
+        Written through even when the number did not move, so a re-statement
+        counts as the host confirming it today and the row stays fresh.
+        """
+
+        previous = self.responses_tool_name_max_length
+        limit = limit if previous is None else min(previous, limit)
+        self.responses_tool_name_max_length = limit
+        if self.sink is not None:
+            self.sink(
+                FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
+                PROVIDER_WIDE_MODEL_ID,
+                limit,
+                "",
+                evidence,
+            )
+        return limit
+
+    def responses_tool_choice_refused(self, model: str) -> bool:
+        """Whether this model has been proven to take only ``auto``."""
+
+        return model in self.responses_tool_choice_auto_only
+
+    def responses_tool_choice_learned_on(self, model: str) -> str:
+        """The ISO date that refusal was proven, or ``""`` if it never was."""
+
+        return self.responses_tool_choice_auto_only.get(model, "")
+
+    def remember_responses_tool_choice_refusal(
+        self, model: str, *, evidence: str = ""
+    ) -> bool:
+        """Record a proven ``tool_choice`` refusal; ``False`` when already known.
+
+        Reached only once the request without ``tool_choice`` was actually
+        accepted, exactly like :meth:`remember_stream_usage_refusal`: a 400
+        that merely mentioned the field is not proof that dropping it is what
+        fixed the request.
+        """
+
+        already_known = model in self.responses_tool_choice_auto_only
+        self.responses_tool_choice_auto_only[model] = date.today().isoformat()
+        if self.sink is not None:
+            self.sink(FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY, model, True, "", evidence)
+        return not already_known
 
     def stream_usage_refused(self, model: str) -> bool:
         """Whether this host has been proven to reject streamed usage here."""

@@ -29,6 +29,7 @@ of the real ``opencode-ai@1.18.30`` CLI taken on 2026-09-11
 
 import uuid
 from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -38,7 +39,7 @@ from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.client_fingerprint import current_fingerprint
 from my_claude_code.core.reasoning import ReasoningPolicy
-from my_claude_code.core.upstream_ladder import note_response_head
+from my_claude_code.core.upstream_ladder import note_recovery_rung, note_response_head
 from my_claude_code.core.wire_capture import (
     record_response_shape,
     record_wire_request,
@@ -49,12 +50,21 @@ from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
 from my_claude_code.providers.openai_responses import (
     ResponsesStreamConverter,
+    alias_responses_body_tool_names,
     build_responses_request_body,
     iter_responses_sse_events,
     note_responses_event_shape,
     responses_tool_name_codec,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.recovery import (
+    RecoveryMemory,
+    clone_body_without_tool_choice,
+    complaint_evidence_snippet,
+    is_tool_choice_auto_only,
+    rejected_tool_name_max_length,
+    upstream_complaint,
+)
 
 from .client_identity import ClientIdentity, identity_headers_for_body
 from .opencode_identity import identity_wire_record
@@ -68,6 +78,85 @@ PROBE_MAX_OUTPUT_TOKENS = 16
 #: "does this endpoint serve this model at all", and anything more would be
 #: asking a second question at the same time.
 PROBE_PROMPT = "hi"
+
+#: The two rungs this surface adds, named once so the ladder row, the log line
+#: and the learning all agree on the word the operator reads.
+_RUNG_TOOL_NAME_LENGTH = "responses_tool_name_length"
+_RUNG_TOOL_CHOICE = "responses_tool_choice"
+
+
+@dataclass(frozen=True, slots=True)
+class _ResponsesLearning:
+    """One fired rung: what to send now, and what to remember if it works."""
+
+    kind: str
+    body: dict[str, Any]
+    value: Any
+    evidence: str
+    log_line: str
+
+
+def _forces_a_tool(tool_choice: Any) -> bool:
+    """Whether a client's ``tool_choice`` asks for anything but ``auto``.
+
+    Read off the *Anthropic* request rather than the built body, because that
+    is what decides whether a body is built with the field at all. ``None`` and
+    an explicit ``auto`` are the same instruction as omission.
+    """
+
+    if tool_choice is None:
+        return False
+    if isinstance(tool_choice, dict):
+        return tool_choice.get("type") not in {None, "auto"}
+    return tool_choice != "auto"
+
+
+def _next_responses_recovery(
+    request: MessagesRequest,
+    error: Exception,
+    body: Mapping[str, Any],
+    used: set[str],
+) -> _ResponsesLearning | None:
+    """The next rewrite this refusal calls for, or ``None`` to raise it.
+
+    A free function because it holds no state: the rungs read the host's own
+    words and the body in hand, and ``used`` -- owned by the caller, one set
+    per request -- is what makes each rung fire at most once. Concurrent
+    requests through one transport therefore never share a rung budget.
+    """
+
+    if _RUNG_TOOL_NAME_LENGTH not in used:
+        stated = rejected_tool_name_max_length(error)
+        if stated is not None:
+            codec = responses_tool_name_codec(request, stated)
+            retry = (
+                alias_responses_body_tool_names(dict(body), codec)
+                if codec is not None
+                else None
+            )
+            if retry is not None:
+                used.add(_RUNG_TOOL_NAME_LENGTH)
+                return _ResponsesLearning(
+                    kind=_RUNG_TOOL_NAME_LENGTH,
+                    body=retry,
+                    value=stated,
+                    evidence=complaint_evidence_snippet(upstream_complaint(error)),
+                    log_line=(
+                        f"host states tool names must be at most {stated} characters"
+                    ),
+                )
+    if _RUNG_TOOL_CHOICE not in used and is_tool_choice_auto_only(error):
+        retry = clone_body_without_tool_choice(dict(body))
+        if retry is not None:
+            used.add(_RUNG_TOOL_CHOICE)
+            return _ResponsesLearning(
+                kind=_RUNG_TOOL_CHOICE,
+                body=retry,
+                value=True,
+                evidence=complaint_evidence_snippet(upstream_complaint(error)),
+                log_line="host states only tool_choice=auto is supported",
+            )
+    return None
 
 
 class ResponsesTransport:
@@ -88,9 +177,15 @@ class ResponsesTransport:
         rate_limiter: ProviderRateLimiter,
         api_key_provider: Any | None = None,
         tool_name_max_length: int | None = None,
+        memory: RecoveryMemory | None = None,
     ) -> None:
         self._config = config
-        self._tool_name_max_length = tool_name_max_length
+        self._declared_tool_name_max_length = tool_name_max_length
+        # What this host has taught MCC about its own Responses validator.
+        # A bare transport (a unit test, an embedded use) gets an unpersisted
+        # memory and behaves exactly as one built before 7.23.0 did: nothing
+        # has been learned, so nothing is applied.
+        self._memory = memory if memory is not None else RecoveryMemory()
         self._rate_limiter = rate_limiter
         self._base_url = base_url.rstrip("/")
         self._provider_name = provider_name
@@ -111,13 +206,22 @@ class ResponsesTransport:
     def tool_name_max_length(self) -> int | None:
         """The longest tool name this host accepts, or ``None`` for no limit.
 
-        Declared by the profile (``responses_tool_name_max_length``), never
-        inferred from a model or a provider name. It decides whether the body
-        carries aliases and, with the same value, whether the stream decodes
-        them -- the two must agree, which is why both read this one property.
+        **The one resolver.** Declared first -- the profile's
+        ``responses_tool_name_max_length``, which ``opencode`` and
+        ``opencode_go`` set to 64 -- and otherwise whatever this host *stated*
+        in a rejection and MCC wrote down. Never inferred from a model id or a
+        provider name.
+
+        It decides whether the body carries aliases and, with the same value,
+        whether the stream decodes them. The two must agree or the model's
+        call comes back under a name the client never sent, which is why both
+        read this one property and why a learned limit is indistinguishable
+        from a declared one everywhere below it.
         """
 
-        return self._tool_name_max_length
+        if self._declared_tool_name_max_length is not None:
+            return self._declared_tool_name_max_length
+        return self._memory.responses_tool_name_max_length
 
     @property
     def url(self) -> str:
@@ -186,6 +290,12 @@ class ResponsesTransport:
         Returned together because they are not independent: the cache key in
         the body is the session id in the headers, and computing them apart is
         how they would drift.
+
+        Both learned refusals are applied here rather than paid for again: a
+        stated tool-name ceiling aliases from the first try, and a model proven
+        to take only ``auto`` never has a forced ``tool_choice`` built into its
+        body at all. A host that has refused nothing gets the body it has
+        always got.
         """
 
         body = build_responses_request_body(
@@ -196,13 +306,46 @@ class ResponsesTransport:
             parallel_tool_calls=False,
             max_output_tokens=max_output_tokens,
             extra_body=extra_body,
-            tool_name_max_length=self._tool_name_max_length,
+            tool_name_max_length=self.tool_name_max_length,
+            include_tool_choice=not self._tool_choice_refused(request),
         )
         headers = self._headers(body)
         cache_key = self._prompt_cache_key(headers)
         if cache_key:
             body["prompt_cache_key"] = cache_key
         return body, headers
+
+    def _tool_choice_refused(self, request: MessagesRequest) -> bool:
+        """Whether this model has been proven to accept only ``auto``.
+
+        A client that forced a tool still gets a correct answer: the Responses
+        default *is* ``auto``, so the model is free to call the tool and
+        normally does. If it calls a different one or none at all, that is the
+        model's behaviour rather than MCC's -- and the marker
+        :meth:`_note_dropped_tool_choice` writes is what makes the difference
+        visible in the request log instead of mysterious.
+        """
+
+        if not self._memory.responses_tool_choice_refused(request.model):
+            return False
+        return _forces_a_tool(request.tool_choice)
+
+    def _note_dropped_tool_choice(self, model: str) -> dict[str, str]:
+        """The wire marker for a ``tool_choice`` this host would have refused.
+
+        Returned as a mapping to merge into ``record_wire_request`` rather
+        than written here, so it lands in the same ``params.wire`` record as
+        the body it describes and can never be recorded for a request that was
+        not actually sent.
+        """
+
+        learned = self._memory.responses_tool_choice_learned_on(model)
+        return {
+            "tool_choice_dropped": (
+                "this model accepts only auto"
+                + (f" (learned {learned})" if learned else "")
+            )
+        }
 
     async def send(
         self, body: Mapping[str, Any], headers: Mapping[str, str]
@@ -270,6 +413,132 @@ class ResponsesTransport:
         response = await self.send(body, self._headers(body))
         await response.aclose()
 
+    async def _send_with_recovery(
+        self,
+        request: MessagesRequest,
+        *,
+        body: Mapping[str, Any],
+        headers: Mapping[str, str],
+        surface_label: str,
+        request_id: str | None,
+    ) -> httpx.Response:
+        """Send one body, answering the two refusals this surface can recover.
+
+        The same contract every rung in ``providers/recovery/ladder.py`` has:
+        one rewrite per rung per request, the host's own words as the only
+        trigger, and a rejection nothing recognises raised exactly as it was.
+        A host that keeps refusing after its own stated fix fails visibly on
+        the second try -- ``used`` is never cleared, so there is no loop.
+
+        Placement inside the transport rather than beside the Chat
+        Completions ladder is not a second ladder: both rungs are statements
+        about a *Responses body* -- a ``tools`` catalogue and a
+        ``tool_choice`` in the Responses spelling -- and neither can be
+        applied to a Chat Completions body at all. The refusal has also never
+        been demonstrated on Chat Completions (the 1,040 logged 400s and the
+        2026-09-17 probe are all ``/zen/v1/responses``), and the scope rule
+        for this project is to fix the path where it is broken.
+
+        Ordering, and why the two rungs are in this order: tool-name length is
+        a number the host *stated*, exactly the evidence class the output-cap
+        rung sits first for, while ``tool_choice`` is the more destructive
+        rewrite -- it removes an instruction the client gave. Narrowest and
+        most certain first is the ladder's own rule, and a 400 that names
+        ``tool_choice`` can never be read as a name-length complaint anyway
+        (:func:`rejected_tool_name_max_length` refuses it outright), so the
+        order is total rather than merely conventional.
+        """
+
+        used: set[str] = set()
+        # What the rungs that have fired will teach the memory, written only
+        # once a send has actually been accepted. The rule the reasoning strip
+        # states and this one keeps: a rewrite that did not fix anything is not
+        # evidence about the host.
+        pending: list[_ResponsesLearning] = []
+        current = dict(body)
+        while True:
+            identity = self.identity_headers(current)
+            marker = (
+                self._note_dropped_tool_choice(request.model)
+                if self._tool_choice_refused(request)
+                else {}
+            )
+            # The commit boundary, the same one the Chat Completions path has:
+            # the body is final once it is handed to the sender, and the
+            # surface it was sent on is recorded beside it.
+            record_wire_request(
+                current,
+                surface=surface_label,
+                **(
+                    {"client_identity": identity_wire_record(identity)}
+                    if identity
+                    else {}
+                ),
+                **marker,
+            )
+            try:
+                response = await self._rate_limiter.execute_with_retry(
+                    self.send, body=current, headers=headers
+                )
+            except Exception as error:
+                learning = _next_responses_recovery(request, error, current, used)
+                if learning is None:
+                    # Classified here rather than left raw so a Responses
+                    # refusal reaches routing as the same ``ExecutionFailure``
+                    # a Chat Completions refusal does -- the fallback chain,
+                    # the bench and the request log all read that one type.
+                    raise classify_provider_failure(
+                        error,
+                        provider_name=self._provider_name,
+                        request_id=request_id,
+                        read_timeout_s=self._config.http_read_timeout,
+                        mark_rate_limited=self._rate_limiter.extend_reactive_block,
+                        cooldown=self._config.rate_limit_cooldown(),
+                        mark_rate_limited_enabled=(
+                            not self._config.routes_around_model
+                        ),
+                    ) from error
+                logger.warning(
+                    "{}_RESPONSES: {} -- retrying once ({})",
+                    self._provider_name,
+                    learning.log_line,
+                    learning.evidence,
+                )
+                current = learning.body
+                pending.append(learning)
+                # Carried on the *retry* row, so the ladder in the modal reads
+                # "400 ... / 200 (responses_tool_choice)" and the operator can
+                # see which rewrite the second body is.
+                note_recovery_rung(learning.kind)
+                continue
+            for learned in pending:
+                self._remember(request, learned)
+            return response
+
+    def _remember(self, request: MessagesRequest, learning: _ResponsesLearning) -> None:
+        """Write one rung's learning down, now that a send has proven it."""
+
+        if learning.kind == _RUNG_TOOL_NAME_LENGTH:
+            self._memory.learn_responses_tool_name_limit(
+                int(learning.value), evidence=learning.evidence
+            )
+            logger.warning(
+                "{}_RESPONSES: this host caps tool names at {} -- later "
+                "requests alias from the first try",
+                self._provider_name,
+                learning.value,
+            )
+            return
+        if self._memory.remember_responses_tool_choice_refusal(
+            request.model, evidence=learning.evidence
+        ):
+            logger.warning(
+                "{}_RESPONSES: {} accepts only tool_choice=auto -- later "
+                "requests omit the field without paying the rejection",
+                self._provider_name,
+                request.model,
+            )
+
     def stream(
         self,
         request: MessagesRequest,
@@ -296,48 +565,26 @@ class ResponsesTransport:
                 input_tokens,
                 log_raw_events=self._config.log_raw_sse_events,
             )
-            converter = ResponsesStreamConverter(
-                ledger,
-                log_raw_events=self._config.log_raw_sse_events,
-                output_reasoning=reasoning.output_enabled,
-                tool_names=responses_tool_name_codec(
-                    request, self._tool_name_max_length
-                ),
-            )
-            identity = self.identity_headers(body)
-            # The commit boundary, the same one the Chat Completions path has:
-            # the body is final once it is handed to the sender, and the
-            # surface it was sent on is recorded beside it.
-            record_wire_request(
-                body,
-                surface=surface_label,
-                **(
-                    {"client_identity": identity_wire_record(identity)}
-                    if identity
-                    else {}
-                ),
-            )
             async with self._rate_limiter.concurrency_slot():
-                try:
-                    response = await self._rate_limiter.execute_with_retry(
-                        self.send, body=body, headers=headers
-                    )
-                except Exception as error:
-                    # Classified here rather than left raw so a Responses
-                    # refusal reaches routing as the same ``ExecutionFailure``
-                    # a Chat Completions refusal does -- the fallback chain,
-                    # the bench and the request log all read that one type.
-                    raise classify_provider_failure(
-                        error,
-                        provider_name=self._provider_name,
-                        request_id=request_id,
-                        read_timeout_s=self._config.http_read_timeout,
-                        mark_rate_limited=self._rate_limiter.extend_reactive_block,
-                        cooldown=self._config.rate_limit_cooldown(),
-                        mark_rate_limited_enabled=(
-                            not self._config.routes_around_model
-                        ),
-                    ) from error
+                response = await self._send_with_recovery(
+                    request,
+                    body=body,
+                    headers=headers,
+                    surface_label=surface_label,
+                    request_id=request_id,
+                )
+                # Built from the ceiling the accepted body was aliased under,
+                # not from the one the first try used: decoding has to undo
+                # exactly the encoding that went out, and a learned limit is
+                # resolved between those two moments.
+                converter = ResponsesStreamConverter(
+                    ledger,
+                    log_raw_events=self._config.log_raw_sse_events,
+                    output_reasoning=reasoning.output_enabled,
+                    tool_names=responses_tool_name_codec(
+                        request, self.tool_name_max_length
+                    ),
+                )
                 try:
                     yield ledger.message_start()
                     shape = start_response_shape()

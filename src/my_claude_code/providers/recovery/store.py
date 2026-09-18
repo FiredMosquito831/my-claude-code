@@ -46,6 +46,8 @@ from .facts import (
     FACT_MODELS_ETAG,
     FACT_OUTPUT_CAP,
     FACT_REASONING_FIELD_REJECTED,
+    FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
+    FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
     FACT_STREAM_USAGE_UNSUPPORTED,
     FACTS_KEY,
     MAX_FACT_ROWS,
@@ -496,6 +498,20 @@ class LearnedFactStore:
                     ).setdefault(field_name, set()).add(value)
             elif fact.fact_kind == FACT_STREAM_USAGE_UNSUPPORTED:
                 memory.stream_usage_unsupported.add(fact.model_id)
+            elif fact.fact_kind == FACT_RESPONSES_TOOL_NAME_MAX_LENGTH and isinstance(
+                fact.value, int
+            ):
+                # Narrowest wins, the same rule the memory itself applies when
+                # it learns one: two rows can only differ because the host
+                # revised its own answer downward.
+                known = memory.responses_tool_name_max_length
+                memory.responses_tool_name_max_length = (
+                    fact.value if known is None else min(known, fact.value)
+                )
+            elif fact.fact_kind == FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY:
+                memory.responses_tool_choice_auto_only[fact.model_id] = (
+                    fact.last_confirmed_at[:10]
+                )
 
     def _resync_memories(self) -> None:
         """Rebuild the handed-out memories after a forget.
@@ -510,6 +526,8 @@ class LearnedFactStore:
             memory.rejected_reasoning_fields.clear()
             memory.rejected_effort_values.clear()
             memory.stream_usage_unsupported.clear()
+            memory.responses_tool_name_max_length = None
+            memory.responses_tool_choice_auto_only.clear()
             self._populate_memory(provider_id, memory)
 
 

@@ -68,6 +68,16 @@ from my_claude_code.providers.runtime.models_dev import (
     models_dev_describes_provider,
 )
 
+#: The ``model_id`` a fact about the whole provider is stored under.
+#:
+#: Mirrored rather than imported: ``api`` may not depend on ``providers``
+#: (``tests/contracts/test_import_boundaries.py``), and one character is not
+#: worth widening that boundary for. Pinned against
+#: :data:`my_claude_code.providers.recovery.facts.PROVIDER_WIDE_MODEL_ID` in
+#: ``tests/providers/test_responses_learned_refusals.py``, the way the config
+#: package already mirrors an enum it may not import and pins the copy.
+PROVIDER_WIDE_MODEL_ID = "*"
+
 # Where one capability field came from, most authoritative first. The strings
 # are part of the admin API: the page renders a badge per field from them.
 SOURCE_PROVIDER = "provider"
@@ -101,11 +111,17 @@ FACT_KIND_LABELS: dict[str, str] = {
     "model_withheld": "withheld from listings",
     "stream_usage_unsupported": "no streamed usage",
     "effort_enum": "effort words",
+    # Added in 7.23.0 with the two Responses kinds below it: 7.12.0 introduced
+    # this kind without a label, so every value-level reasoning refusal has
+    # been drawing its own identifier in the Learned column ever since.
+    "effort_value_rejected": "effort value refused",
     "vision_unsupported": "no vision",
     "tool_calls_unsupported": "no tool calls",
     "models_etag": "catalogue validator",
     "client_identity_required": "client identity checked",
     "response_surface": "wire surface",
+    "responses_tool_name_max_length": "tool-name limit",
+    "responses_tool_choice_auto_only": "tool_choice auto only",
 }
 
 # Where a resolved wire surface came from, in the operator's words. A separate
@@ -381,6 +397,37 @@ def models_dev_cache_mark() -> str:
     return f"{stat.st_mtime_ns}:{stat.st_size}"
 
 
+#: Host-wide fact kinds that shape an outbound request and therefore belong on
+#: every model row of that provider.
+#:
+#: Deliberately an allow-list rather than "every provider-wide fact": a
+#: conditional-GET validator (``models_etag``) is plumbing for the catalogue
+#: sweep and would add a row to every model on the page that tells the
+#: operator nothing about their request. A tool-name ceiling is the opposite
+#: -- it decides what the next body carries for this model -- and before
+#: 7.23.0 a fact stored under :data:`PROVIDER_WIDE_MODEL_ID` had no row
+#: anywhere at all.
+ROW_WIDE_FACT_KINDS: frozenset[str] = frozenset({"responses_tool_name_max_length"})
+
+
+def facts_for_row(
+    learned: Mapping[str, Sequence[Mapping[str, Any]]],
+    provider_id: str,
+    model_id: str,
+) -> list[Mapping[str, Any]]:
+    """This model's own facts, plus the host-wide ones that shape its body."""
+
+    rows = list(learned.get(learned_key(provider_id, model_id), ()))
+    if model_id == PROVIDER_WIDE_MODEL_ID:
+        return rows
+    rows.extend(
+        fact
+        for fact in learned.get(learned_key(provider_id, PROVIDER_WIDE_MODEL_ID), ())
+        if str(fact.get("fact_kind") or "") in ROW_WIDE_FACT_KINDS
+    )
+    return rows
+
+
 def learned_key(provider_id: str, model_id: str) -> str:
     """The key a learned-fact lookup is addressed by, for one model."""
 
@@ -414,6 +461,12 @@ def learned_payload(fact: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "fact_kind": kind,
         "fact_label": FACT_KIND_LABELS.get(kind, kind),
+        # Carried so *Forget* on this row names the row's own subject rather
+        # than the model whose row it is drawn on. They are the same string
+        # for every per-model fact; a host-wide one
+        # (:data:`PROVIDER_WIDE_MODEL_ID`) is drawn on each affected model and
+        # would otherwise be un-forgettable from the page that shows it.
+        "model_id": str(fact.get("model_id") or ""),
         "value": fact.get("value"),
         "detail": fact.get("detail") or "",
         "source": source,
@@ -1127,7 +1180,7 @@ def _model_entry(
     )
     learned_facts = attach_learned_facts(
         capabilities,
-        () if learned is None else learned.get(learned_key(provider_id, model_id), ()),
+        () if learned is None else facts_for_row(learned, provider_id, model_id),
     )
     return {
         "model_ref": model_ref,

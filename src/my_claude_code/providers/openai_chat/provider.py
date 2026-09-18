@@ -322,6 +322,10 @@ class OpenAIChatProvider(BaseProvider):
                 rate_limiter=self._rate_limiter,
                 api_key_provider=self._api_key_provider,
                 tool_name_max_length=self._profile.responses_tool_name_max_length,
+                # The same memory the Chat Completions ladder writes to, so a
+                # Responses refusal survives a config apply exactly as an
+                # output cap does and shows up on the same Models page row.
+                memory=self._recovery_memory,
             )
             self._responses_transport = transport
         return transport
