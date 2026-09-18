@@ -101,6 +101,23 @@ pub struct Status {
     /// so a 6.61.0 window under a 6.60.2 wheel behaves exactly as it did.
     #[serde(default)]
     pub health_probe_timeout_seconds: Option<f64>,
+    /// The escalating probe timeouts, in seconds, one per consecutive failed
+    /// probe of a live holder of ours. `DESKTOP_HEALTH_PROBE_TIMEOUTS`,
+    /// shipped as `5, 10, 15`; the last entry repeats if the failures outrun
+    /// the ladder.
+    ///
+    /// It does NOT replace `health_probe_timeout_seconds`, which still times
+    /// every probe taken before this window has ever seen the server answer --
+    /// a cold start must not be slowed down to protect a server that is not
+    /// there yet. Optional this release, per the two-release rule: 7.26.0
+    /// emits it, this build tolerates it, and the pin moves in 7.26.1.
+    #[serde(default)]
+    pub health_probe_timeouts: Option<Vec<f64>>,
+    /// How long a holder of ours that is alive and answered recently is left
+    /// alone, whatever the probe said. `DESKTOP_BUSY_GRACE_SECONDS`, 15 s.
+    /// Optional this release, per the same rule.
+    #[serde(default)]
+    pub busy_grace_seconds: Option<f64>,
     /// The lifecycle tick: how often the controller probes and, when the
     /// server is dead, starts one. Decision Q4 fixed it at ten seconds,
     /// forever, with no attempt cap.
@@ -225,7 +242,7 @@ pub fn parse_status(raw: &str) -> Result<Status, StatusError> {
 
 #[cfg(test)]
 pub(crate) fn sample_json() -> serde_json::Value {
-    serde_json::json!({
+    let mut document = serde_json::json!({
         "schema": 1,
         "version": "6.43.0",
         "config_dir": "/home/example/config",
@@ -258,13 +275,24 @@ pub(crate) fn sample_json() -> serde_json::Value {
         "reconnect_timeout_seconds": 1320.0,
         "reconnect_restatus_seconds": 30.0,
         "health_probe_timeout_seconds": 1.5,
+
         "tick_seconds": 10.0,
         "start_backoff_seconds": 10.0,
         "foreign_grace_seconds": 45.0,
         "status_wall_seconds": 15.0,
         "server_pid": serde_json::Value::Null,
         "holder": {"kind": "ours_healthy", "pid": 4242, "image": "python.exe"}
-    })
+    });
+    // 7.26.0's two, set after the literal rather than inside it: the
+    // `json!` macro recurses once per key and the document had already
+    // reached the default limit.
+    let object = document.as_object_mut().expect("an object");
+    object.insert(
+        "health_probe_timeouts".to_owned(),
+        serde_json::json!([5.0, 10.0, 15.0]),
+    );
+    object.insert("busy_grace_seconds".to_owned(), serde_json::json!(15.0));
+    document
 }
 
 #[cfg(test)]
@@ -502,6 +530,13 @@ mod tests {
         let status = parse_status(&sample_json().to_string()).expect("sample parses");
         assert_eq!(status.tick_seconds, Some(10.0));
         assert_eq!(status.health_probe_timeout_seconds, Some(1.5));
+        assert_eq!(
+            status.health_probe_timeouts,
+            Some(vec![5.0, 10.0, 15.0]),
+            "the escalating ladder is read when the wheel sends one"
+        );
+        assert_eq!(status.busy_grace_seconds, Some(15.0));
+
         assert_eq!(status.start_backoff_seconds, Some(10.0));
         assert_eq!(status.foreign_grace_seconds, Some(45.0));
         assert_eq!(status.status_wall_seconds, Some(15.0));
@@ -520,6 +555,8 @@ mod tests {
         let object = document.as_object_mut().expect("an object");
         for key in [
             "health_probe_timeout_seconds",
+            "health_probe_timeouts",
+            "busy_grace_seconds",
             "tick_seconds",
             "start_backoff_seconds",
             "foreign_grace_seconds",
@@ -532,6 +569,11 @@ mod tests {
         let status = parse_status(&document.to_string()).expect("an older wheel is fine");
         assert_eq!(status.tick_seconds, None);
         assert!(status.holder.is_none());
+        // 7.26.0's two, from the same side: a window with the busy grace in
+        // it must keep working under a 7.25.0 wheel that has never heard of
+        // it, and `None` means "use what this release shipped with".
+        assert_eq!(status.health_probe_timeouts, None);
+        assert_eq!(status.busy_grace_seconds, None);
     }
 
     #[test]

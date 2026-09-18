@@ -364,6 +364,17 @@ impl ActiveHelper {
     }
 }
 
+/// Whether `pid` names a live process, for callers outside this module.
+///
+/// Public since 7.26.0: the lifecycle controller asks the same question about
+/// the port holder before it decides the server is gone, and two
+/// implementations of "is that process alive" is how two answers to it start
+/// disagreeing. A thin wrapper rather than a rename, so every existing caller
+/// and test here reads exactly as it did.
+pub fn pid_is_alive(pid: i64) -> Option<bool> {
+    pid_is_running(pid)
+}
+
 /// Whether `pid` names a live process. `None` when it cannot be told.
 ///
 /// `None` is a real answer rather than a failure, and every caller has to treat

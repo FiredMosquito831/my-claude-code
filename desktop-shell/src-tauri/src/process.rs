@@ -594,7 +594,8 @@ pub const LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
 /// transcript that silently loses its beginning is worse than one that says so.
 pub const LOG_KEEP_BYTES: u64 = 256 * 1024;
 
-/// Start this launch's transcript: truncate whatever the last launch left.
+/// Start this launch's transcript: keep the last launch's aside, then
+/// truncate.
 ///
 /// The file holds *this launch's* transcript. That is what the comment at its
 /// only call site has always said it was ("every line a server child printed"
@@ -619,6 +620,7 @@ pub fn begin_log(path: &Path) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    rotate_aside(path);
     // `create(true).truncate(true)` rather than a remove: the file may be open
     // in somebody's tail, and emptying it in place is what that reader expects.
     let _ = std::fs::OpenOptions::new()
@@ -626,6 +628,35 @@ pub fn begin_log(path: &Path) {
         .write(true)
         .truncate(true)
         .open(path);
+}
+
+/// Keep the last launch's transcript beside the new one, as `<name>.1`.
+///
+/// The 2026-09-18 report has six restarts in it and the shell's own reasoning
+/// for five of them could not be recovered, because `begin_log` emptied
+/// `desktop-server-start.log` at the start of every launch and the only copy
+/// of the evidence was the one it had just deleted.
+///
+/// This does not change what [`begin_log`] leaves at `path` -- the file is
+/// still this launch's transcript and still starts empty, which is what a
+/// reader opening it expects and what the tests below pin. It simply stops
+/// the previous one being the only casualty of looking at the current one.
+/// Exactly one generation is kept, and [`LOG_MAX_BYTES`] still bounds each of
+/// them, so the 7.10.1 cap is untouched and the worst case is twice it.
+///
+/// A copy rather than a rename, for the same reason the truncate is in place:
+/// the file may be open in somebody's tail, and a rename out from under a
+/// reader is how a tail silently stops following anything.
+fn rotate_aside(path: &Path) {
+    let Ok(contents) = std::fs::read(path) else {
+        return;
+    };
+    if contents.is_empty() {
+        return;
+    }
+    let mut previous = path.as_os_str().to_os_string();
+    previous.push(".1");
+    let _ = std::fs::write(PathBuf::from(previous), contents);
 }
 
 /// Append one line to a log, creating the directory. Never fails a caller:
@@ -887,6 +918,35 @@ mod tests {
 
         assert_eq!(text, "first\nsecond\n");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn beginning_a_launch_keeps_the_last_one_beside_it() {
+        // The 2026-09-18 report has six restarts in it, and the shell's own
+        // reasoning for five of them could not be recovered: the only copy of
+        // the evidence was the file `begin_log` had just emptied. What `path`
+        // itself holds is unchanged -- the test below still pins it -- and
+        // the previous launch now survives as `<name>.1`.
+        let path = scratch_log("rotate");
+        std::fs::write(&path, "a previous launch\n").expect("seed");
+
+        begin_log(&path);
+        append_line(&path, "this launch");
+
+        let mut previous = path.as_os_str().to_os_string();
+        previous.push(".1");
+        let previous = PathBuf::from(previous);
+        assert_eq!(
+            std::fs::read_to_string(&previous).expect("the last launch is kept"),
+            "a previous launch\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "this launch\n",
+            "and this launch's own transcript still starts empty"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&previous);
     }
 
     #[test]

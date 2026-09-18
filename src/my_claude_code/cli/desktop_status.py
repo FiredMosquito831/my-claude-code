@@ -152,6 +152,8 @@ STATUS_KEYS: tuple[str, ...] = (
     "reconnect_timeout_seconds",
     "reconnect_restatus_seconds",
     "health_probe_timeout_seconds",
+    "health_probe_timeouts",
+    "busy_grace_seconds",
     "tick_seconds",
     "start_backoff_seconds",
     "foreign_grace_seconds",
@@ -166,6 +168,34 @@ STATUS_KEYS: tuple[str, ...] = (
     "update",
     "other_servers",
 )
+
+
+def health_probe_timeouts(settings: Any) -> list[float]:
+    """Return the escalating /health timeouts, in seconds, for the shell.
+
+    ``DESKTOP_HEALTH_PROBE_TIMEOUTS`` is a comma-separated list because it is
+    a setting on a page with a text box on it, and one string is a great deal
+    easier to explain than three numbered fields. Anything unparseable, and
+    anything that is not a positive number, is dropped rather than raised:
+    this document is what the desktop window reads to decide whether to start
+    a server, and a typo in a tunable must never be the reason a window cannot
+    be painted. An empty result means "no ladder", and the shell keeps its
+    single ``health_probe_timeout_seconds`` for every probe.
+    """
+
+    raw = str(getattr(settings, "desktop_health_probe_timeouts", "") or "")
+    timeouts: list[float] = []
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            value = float(piece)
+        except ValueError:
+            continue
+        if value > 0.0:
+            timeouts.append(value)
+    return timeouts
 
 
 def shell_tray_enabled(state: Any) -> bool:
@@ -283,6 +313,8 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
         # two constants that were meant to be the same number and were not
         # (``launchers/common.py`` and the shell's ``health.rs``). Audit C9.
         "health_probe_timeout_seconds": float(settings.desktop_health_probe_timeout),
+        "health_probe_timeouts": health_probe_timeouts(settings),
+        "busy_grace_seconds": float(settings.desktop_busy_grace_seconds),
         # The lifecycle tick: how often the desktop app probes, and how often it
         # starts a server that is not there. Decision Q4 (2026-09-08) fixed it
         # at ten seconds, forever, with no attempt cap and no page that parks.

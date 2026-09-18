@@ -774,6 +774,29 @@ DESKTOP_HEALTH_PROBE_TIMEOUT_DEFAULT = 1.5
 # is overwhelmingly us -- which is the mistake this window used to make, on
 # this user's machine, about this user's own python.exe.
 DESKTOP_FOREIGN_GRACE_SECONDS_DEFAULT = 45.0
+# How long the desktop app leaves a server of its own alone after it last
+# answered, whatever a later probe says. The 2026-09-18 report is this number:
+# a 300-address bulk add held the server's event loop for longer than one
+# 1.5 s /health probe, the window read a single late answer as "the server is
+# gone", started a second one, and the second took the port from the first by
+# pid. Six times between 09-16 and 09-18, with no crash anywhere in the logs.
+# A server that answered a moment ago is busy, and busy is not a reason to
+# replace anything. Fifteen seconds is the floor; the escalating ladder below
+# is where the rest of the tolerance comes from. Zero restores the old
+# behaviour exactly.
+DESKTOP_BUSY_GRACE_SECONDS_DEFAULT = 15.0
+# The escalating /health timeouts the desktop app uses once it has seen a
+# server answer: one per consecutive failed probe, the last repeating for
+# ever after. 5 + 10 + 15 is about thirty seconds of patience before a server
+# whose process is alive is called gone -- roughly twice the longest
+# event-loop hold measured on the reporting machine (1.6-9.7 s per sweep).
+#
+# It does not replace DESKTOP_HEALTH_PROBE_TIMEOUT. That one still times every
+# probe taken before the window has ever seen this server answer, so a cold
+# start, a refused connection and a genuinely dead server all cost exactly
+# what they cost today.
+DESKTOP_HEALTH_PROBE_TIMEOUTS_DEFAULT = "5,10,15"
+
 # How long the desktop app may wait for one `mcc-desktop --print-status` before
 # it gives up on that read and paints something. Out of the shell's binary in
 # 6.61.0 (audit S5.4): it decides whether a slow machine gets a window at all,

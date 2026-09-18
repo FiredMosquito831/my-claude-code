@@ -1003,6 +1003,19 @@ struct Lifecycle {
     health: controller::Health,
     holder: controller::Holder,
     holder_since: Instant,
+    /// Whether the holder's process was alive at the last probe that did not
+    /// answer. Re-checked only on a fresh tick, and only when the server did
+    /// not answer -- an attached window still pays for one `/health` and
+    /// nothing else (BUG-4).
+    holder_alive: bool,
+    /// When this window last saw the server answer anything at all. The clock
+    /// the busy grace is measured on; `None` until the first answer, which is
+    /// what keeps a cold start timed exactly as it is today.
+    last_healthy: Option<Instant>,
+    /// Consecutive probes that came back absent. Reset by any answer, and by
+    /// a spawn.
+    consecutive_absent: u32,
+
     helper: controller::Helper,
     /// What the update in flight is saying about itself, refreshed on every
     /// tick beside `helper` and from the same file.
@@ -1030,6 +1043,10 @@ impl Lifecycle {
             health: controller::Health::Absent,
             holder: controller::Holder::Unknown,
             holder_since: Instant::now(),
+            holder_alive: false,
+            last_healthy: None,
+            consecutive_absent: 0,
+
             helper: controller::Helper::None,
             update: controller::UpdateNarration::default(),
             status_health: controller::StatusHealth::Ok,
@@ -1087,6 +1104,67 @@ impl Lifecycle {
             .map_or(health::DEFAULT_PROBE_TIMEOUT, Duration::from_secs_f64)
     }
 
+    /// The escalating ladder, from the document (C9) or this build's default
+    /// while the key is still only tolerated.
+    fn probe_timeouts(&self) -> Vec<f64> {
+        self.status
+            .as_ref()
+            .and_then(|status| status.health_probe_timeouts.clone())
+            .filter(|ladder| ladder.iter().any(|value| *value > 0.0))
+            .unwrap_or_else(controller::default_probe_timeouts)
+    }
+
+    /// How long a live holder of ours that answered recently is left alone.
+    fn busy_grace(&self) -> f64 {
+        self.status
+            .as_ref()
+            .and_then(|status| status.busy_grace_seconds)
+            .filter(|value| *value >= 0.0)
+            .unwrap_or(controller::DEFAULT_BUSY_GRACE_SECONDS)
+    }
+
+    /// The timeout for the probe this tick is about to take.
+    ///
+    /// The ladder applies only once this window has seen THIS server answer.
+    /// Before that there is nothing alive to be patient with, and a cold
+    /// start, a refused connection and a genuinely dead server must all cost
+    /// exactly what they cost today -- so the first probe of a launch is the
+    /// document's `health_probe_timeout_seconds` (1.5 s), unchanged.
+    ///
+    /// Note that a longer timeout costs nothing on a port that is *free*: a
+    /// refused connection is refused immediately. The ladder is only ever
+    /// paid by a port that is held and silent, which is the case it exists
+    /// for.
+    fn next_probe_timeout(&self) -> Duration {
+        if self.last_healthy.is_none() || !self.holder.is_ours() {
+            return self.probe_timeout();
+        }
+        match controller::probe_timeout_for(self.consecutive_absent, &self.probe_timeouts()) {
+            Some(seconds) => Duration::from_secs_f64(seconds),
+            None => self.probe_timeout(),
+        }
+    }
+
+    /// Whether the holder's process is alive right now.
+    ///
+    /// `false` when there is no pid to ask about or the question cannot be
+    /// answered: an unknown pid buys no patience, which is what keeps a dead
+    /// server's restart timed exactly as it is today.
+    fn holder_is_alive(&self) -> bool {
+        if !self.holder.is_ours() {
+            return false;
+        }
+        let Some(status) = self.status.as_ref() else {
+            return false;
+        };
+        let pid = status
+            .holder
+            .as_ref()
+            .and_then(|holder| holder.pid)
+            .or(status.server_pid);
+        pid.is_some_and(|pid| update_progress::pid_is_alive(pid) == Some(true))
+    }
+
     /// How long `mcc-desktop --print-status` may take. Out of the binary since
     /// 6.61.0 (audit §5.4): it decides whether a slow machine gets a window.
     fn status_wall(&self) -> Duration {
@@ -1134,7 +1212,17 @@ impl Lifecycle {
                 controller::DEFAULT_START_TIMEOUT_SECONDS
             },
             server_start_retries: status.server_start_retries,
+            // On the document since 6.61.0, promised by the shell's README
+            // since then, and read here for the first time in 7.26.0.
+            health_failure_threshold: if status.health_failure_threshold > 0 {
+                status.health_failure_threshold
+            } else {
+                controller::DEFAULT_HEALTH_FAILURE_THRESHOLD
+            },
+            probe_timeouts: self.probe_timeouts(),
+            busy_grace_seconds: self.busy_grace(),
             holder_image: holder.and_then(|holder| holder.image.clone()),
+
             holder_pid: holder.and_then(|holder| holder.pid),
         }
     }
@@ -1151,7 +1239,7 @@ impl Lifecycle {
             self.health = controller::Health::Absent;
             return;
         };
-        self.health = match health::probe_outcome_within(&url, self.probe_timeout()) {
+        self.health = match health::probe_outcome_within(&url, self.next_probe_timeout()) {
             health::ProbeOutcome::Healthy => controller::Health::Healthy,
             health::ProbeOutcome::StartingUp => controller::Health::Starting,
             health::ProbeOutcome::ShuttingDown => controller::Health::Draining,
@@ -1163,6 +1251,61 @@ impl Lifecycle {
         if self.health == controller::Health::Healthy {
             self.remember_holder(controller::Holder::OursHealthy);
         }
+        if self.health == controller::Health::Absent {
+            self.consecutive_absent = self.consecutive_absent.saturating_add(1);
+            // The one process lookup this release adds, and it is on the
+            // path where something is already wrong: never on the healthy
+            // tick, which is the cost rule BUG-4 set.
+            self.holder_alive = self.holder_is_alive();
+            self.note_absent_probe();
+        } else {
+            // Healthy, starting or draining: the server answered, so it is
+            // alive and the count starts again.
+            self.consecutive_absent = 0;
+            self.holder_alive = true;
+            self.last_healthy = Some(Instant::now());
+        }
+    }
+
+    /// Write one line about a probe that did not answer, so the reasoning
+    /// behind a restart survives the restart.
+    ///
+    /// Until 7.26.0 `desktop-server-start.log` held the spawn marker and
+    /// nothing about why the window had decided to spawn, and the previous
+    /// launch's copy of it had already been emptied -- which is why the
+    /// evidence for five of the six restarts in the 2026-09-18 report could
+    /// not be recovered.
+    fn note_absent_probe(&mut self) {
+        if self.last_healthy.is_none() {
+            // Nothing has ever answered: this is an ordinary cold start and
+            // the transcript already says what it is doing.
+            return;
+        }
+        let Some(log) = self
+            .status
+            .as_ref()
+            .and_then(|status| shell_log_path(&status.config_dir))
+        else {
+            return;
+        };
+        let threshold = self.facts().health_failure_threshold.max(1);
+        let waited = self
+            .last_healthy
+            .map(|at| at.elapsed().as_secs_f64())
+            .unwrap_or_default();
+        process::append_line(
+            &log,
+            &format!(
+                "-- absent probe {}/{} (holder={:?} alive={}, last answered {:.0} s ago, \
+                 busy grace {:.0} s) --",
+                self.consecutive_absent,
+                threshold,
+                self.holder,
+                self.holder_alive,
+                waited,
+                self.busy_grace(),
+            ),
+        );
     }
 
     /// Re-read what the update helper is doing. Cheap, and on every tick.
@@ -1301,6 +1444,10 @@ impl Lifecycle {
             health: self.health,
             holder: self.holder,
             holder_age: self.holder_since.elapsed().as_secs_f64(),
+            holder_alive: self.holder_alive,
+            seconds_since_healthy: self.last_healthy.map(|at| at.elapsed().as_secs_f64()),
+            consecutive_absent: self.consecutive_absent,
+
             helper: self.helper.clone(),
             update: self.update.clone(),
             status: self.status_health.clone(),
@@ -1428,6 +1575,13 @@ fn apply(
             }
             Effect::Spawn => {
                 life.last_spawn = Some(Instant::now());
+                // A new server is a new episode: the ladder and the grace
+                // start from nothing, so the start it is about to make is
+                // timed exactly as it is today.
+                life.consecutive_absent = 0;
+                life.last_healthy = None;
+                life.holder_alive = false;
+
                 if life.first_spawn.is_none() {
                     life.first_spawn = life.last_spawn;
                 }
