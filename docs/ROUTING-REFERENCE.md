@@ -345,6 +345,30 @@ So the feed list on **Admin UI → Proxying** starts empty. Give a list a name a
 
 If you are upgrading from 7.17.x, the feeds you had switched on are converted to entries of your own on first start — same URLs, same readers, still switched on — and are then ordinary rows you can rename, re-point or remove.
 
+#### Fetch tests what it found, and only offers addresses that work
+
+Up to 7.20.0, pressing **Fetch** downloaded the lists, merged them, ranked them and offered the result. Every row was a claim somebody else had published, none of it had been measured, and you found out which addresses were real one **Add** at a time — a ten-second check each, mostly spent discovering that a free proxy had stopped listening months ago. Seven lists offered 1,572 addresses once; a handful of them worked.
+
+Since 7.21.0 a fetch finishes the job. It reads the lists, merges and ranks them exactly as before, and then **tests every address it found** with the same check the Add button runs — a TCP connect, a `CONNECT` tunnel, and a strict-TLS request to the chosen provider's own host. Only the addresses that passed are stored and offered. An address that did not answer is not kept. An address whose tunnel broke certificate validation is recorded **refused**, durably, so no later fetch offers it again — and, as always, that verdict is lifted only by a later test that *succeeds*.
+
+**Which provider it tests against** is the one picked in **Add to** beneath the list, and each row says so: *working for NVIDIA NIM · 190 ms*. A check answers one question about one host, so a verdict without a destination would be a claim about providers nobody measured. The default is the first provider that already has a chain, otherwise the first configured provider with an `https` base URL. If no provider has one, the fetch is **refused with the reason** rather than falling back to storing addresses it could not test.
+
+**It runs in the background and you can watch it.** A list of several hundred addresses takes minutes, so the press starts a job and returns; the page shows `Tested 212 of 834 · 41 working · 163 dead · 2 refused`, with a **Stop**. Stopping keeps everything that has already passed — it means "that is enough addresses", not "throw the work away". Reloading the page re-attaches to a sweep that is still running rather than losing it, and only one fetch runs at a time: a second press while one is going is refused, naming the one that is.
+
+**Three settings, all on Limits & Resilience:**
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `PROXY_FETCH_TEST_CONCURRENCY` | `32` | How many addresses are tested at once. The work is waiting on other people's networks, so it overlaps; this is also exactly how many sockets are open to strangers at one moment. Range 4–128. The **Test** and **Add** buttons are unaffected and keep their own, much smaller, bound — those are a handful of addresses with you watching a row. |
+| `PROXY_FETCH_CONNECT_TIMEOUT_SECONDS` | `5` | How long the TCP step waits before calling an address dead. Short on purpose: most of what a public list publishes has stopped listening. An address that *does* answer gets the checker's full ten seconds for the HTTPS handshake that follows — this shortens the first step only. |
+| `PROXY_CANDIDATES_MAX` | `0` | How many of the ranked addresses are tested and offered. **0 is unlimited and is what ships** — chains have held any number of entries since 7.19.0, so a ceiling on the offer would be one MCC invented. A number you set is applied in rank order, so a bounded fetch tests the best of what was found. |
+
+**Then one press to use them.** **Add all N working to `<provider>`** takes the whole offer into that chain. It re-tests every address on the way in, exactly as a hand-picked add does — the verdict you are looking at is about one destination, this button may be pointing at another, and the interception check is the one thing standing between a stranger's machine and your credentials. A few seconds is not worth skipping it for.
+
+**A fetch does not disturb the request path.** The reachability ladder that tells the runtime which addresses are worth dialling holds a bounded number of rows and is about *your* addresses. A sweep of eight hundred strangers is not charged to it: an address no chain references gets no row at all. An address that **is** in one of your chains is charged normally — a fetch-test is the same three questions the Test button asks, so its answer about an address you route through is ordinary evidence.
+
+**Candidates stored by 7.18–7.20** were offered without being tested. They are not deleted on upgrade, and they are never shown as working: each is marked *not tested — fetch again*. The next fetch replaces the offer list, so they clear themselves the first time you press the button.
+
 #### Testing an address before you rely on it
 
 Every saved entry has a **Test** button, and each card has **Test all**. One press does three things, in order:
@@ -355,7 +379,7 @@ Every saved entry has a **Test** button, and each card has **Test all**. One pre
 
 **Step 2 is a security control.** If the certificate that comes back does not verify, the tunnel is not being relayed, it is being *read*: something between you and the provider terminated the TLS and is looking at the plaintext. That address is marked **TLS intercepted** and **refused** — it cannot be saved into a chain, and one already in a chain is held out of selection immediately rather than waiting for you to edit anything. There is no override; the way out is a later Test that passes, which is a measurement rather than a confirmation dialog. In one published study of 640,000 open proxies, 16,923 of them were manipulating traffic, and this is the one check that tells them apart from the honest ones — up to the handshake they are indistinguishable, so a TCP check alone would call them healthy.
 
-**Nothing is measured until you ask.** Set **Check proxies in the background** on **Limits & Resilience** to have MCC re-measure every address in a chain on a timer (**Minutes between proxy checks**, default `30`, floor `5`, `0` for off). It ships off: an install that never opens this page makes no outbound request it was not asked to. An address the checker finds dead walks the reachability ladder above with no action from you, so the chain routes around it.
+**Nothing is measured until you ask.** Pressing **Fetch** is asking — that is what starts the sweep described above — and so is this button. Set **Check proxies in the background** on **Limits & Resilience** to have MCC re-measure every address in a chain on a timer (**Minutes between proxy checks**, default `30`, floor `5`, `0` for off). It ships off: an install that never opens this page makes no outbound request it was not asked to. An address the checker finds dead walks the reachability ladder above with no action from you, so the chain routes around it.
 
 **The exit-IP check is yours to enable.** **Exit-IP check URL** is empty by default and MCC names no default host for it. Set a URL that answers with the address it saw and the checker fetches it through each proxy, so the row can show the address the far end reported — proof that the source address really changed. It is the one leg of the check that contacts somebody you did not already choose to talk to, which is why it happens only if you name them, and it never decides whether an address passes.
 

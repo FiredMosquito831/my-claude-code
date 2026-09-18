@@ -34,7 +34,7 @@ only the checker actually finds out.
 
 import asyncio
 import hashlib
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
@@ -43,7 +43,6 @@ from loguru import logger
 
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import (
-    MAX_CANDIDATES,
     SOURCE_FEED,
     ProxyChains,
     ProxyEndpoint,
@@ -374,6 +373,68 @@ def merge(
     return list(table.values())
 
 
+def rank_merged(
+    harvest: Sequence[tuple[str, tuple[FeedEndpoint, ...]]],
+) -> list[_Merged]:
+    """Merge every feed's answer and put the best first. One line, one place.
+
+    Exists so that the pass that only reads and the pass that reads and tests
+    cannot disagree about what "best first" means: there is one merge and one
+    ranking, and both callers ask this for them.
+    """
+
+    return rank(merge(harvest))
+
+
+async def harvest_feeds(
+    *,
+    timeout: float = FEED_TIMEOUT_SECONDS,
+    store: ProxyChains | None = None,
+    on_feed: Callable[[], None] | None = None,
+) -> tuple[list[FeedResult], list[tuple[str, tuple[FeedEndpoint, ...]]], int]:
+    """Read every enabled feed once. Results, harvest, and how many were read.
+
+    One client for the whole pass and one yield per feed, so a pass over a
+    dozen slow lists cannot sit in front of a request. ``on_feed`` is called
+    after each one, which is how a fetch shows "3 of 7 lists read" while it is
+    still reading them.
+
+    An install with no enabled feeds returns ``([], [], 0)`` and makes no
+    outbound request at all -- which is every fresh install, because MCC ships
+    no feeds of its own.
+    """
+
+    table = load_proxy_chains() if store is None else store
+    feeds = enabled_feeds(table)
+    if not feeds:
+        return [], [], 0
+
+    harvest: list[tuple[str, tuple[FeedEndpoint, ...]]] = []
+    results: list[FeedResult] = []
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers={"user-agent": FEED_USER_AGENT},
+    ) as client:
+        for feed in feeds:
+            result, endpoints = await fetch_feed(feed, timeout=timeout, client=client)
+            results.append(result)
+            if endpoints:
+                harvest.append((feed.id, endpoints))
+            if on_feed is not None:
+                on_feed()
+            # One yield per feed, so a pass cannot sit in front of a request
+            # even when every feed the operator added is slow.
+            await asyncio.sleep(0)
+    return results, harvest, len(feeds)
+
+
+def as_candidate_endpoint(item: _Merged, at: str) -> ProxyEndpoint:
+    """One merged address as the catalogue row a candidate is stored as."""
+
+    return _as_endpoint(item, at)
+
+
 def _as_endpoint(item: _Merged, at: str) -> ProxyEndpoint:
     endpoint = item.endpoint
     return ProxyEndpoint(
@@ -430,8 +491,22 @@ async def ingest(
     timeout: float = FEED_TIMEOUT_SECONDS,
     persist: bool = True,
     store: ProxyChains | None = None,
+    limit: int = 0,
 ) -> IngestRun:
     """One pass: read every enabled feed, merge, rank, store the candidates.
+
+    **This pass stores addresses nothing has tested**, which is why nothing in
+    the product calls it any more:
+    :func:`~my_claude_code.application.proxy_fetch.run_fetch_pass` is what the
+    Fetch button and the scheduled refresh go through, and it keeps only
+    addresses that passed the checker. This one survives for callers that want
+    the reading half on its own -- and for the tests that pin what the reading
+    half does -- and it is not reachable from the page.
+
+    ``limit`` is a ceiling on how many of the ranked addresses are stored, in
+    rank order. ``0``, the default, is no ceiling: chains have been unlimited
+    since 7.19.0 and the sixty this used to impose was a number the tool chose
+    rather than one the operator did.
 
     The store is re-read before the write rather than held across the fetches,
     the way ``check_endpoints`` does it and for the same reason: a pass takes
@@ -439,29 +514,12 @@ async def ingest(
     edit to a result about a different table.
     """
 
-    table = load_proxy_chains() if store is None else store
-    feeds = enabled_feeds(table)
     at = _now()
-    if not feeds:
+    results, harvest, feed_count = await harvest_feeds(timeout=timeout, store=store)
+    if not feed_count:
         return IngestRun(at=at)
 
-    harvest: list[tuple[str, tuple[FeedEndpoint, ...]]] = []
-    results: list[FeedResult] = []
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        follow_redirects=True,
-        headers={"user-agent": FEED_USER_AGENT},
-    ) as client:
-        for feed in feeds:
-            result, endpoints = await fetch_feed(feed, timeout=timeout, client=client)
-            results.append(result)
-            if endpoints:
-                harvest.append((feed.id, endpoints))
-            # One yield per feed, so a pass cannot sit in front of a request
-            # even when every feed the operator added is slow.
-            await asyncio.sleep(0)
-
-    merged = rank(merge(harvest))
+    merged = rank_merged(harvest)
     corroborated = sum(1 for item in merged if len(item.sources) > 1)
     run = IngestRun(
         at=at,
@@ -472,9 +530,10 @@ async def ingest(
 
     if persist:
         fresh = load_proxy_chains()
+        kept = merged[:limit] if limit > 0 else merged
         offered = [
             (candidate_id(item.endpoint.address), _as_endpoint(item, at))
-            for item in merged[:MAX_CANDIDATES]
+            for item in kept
         ]
         save_proxy_chains(fresh.with_candidates(offered))
 
@@ -482,7 +541,7 @@ async def ingest(
         "PROXY FEEDS: {} of {} feed(s) answered; {} address(es) on offer, {} "
         "listed by more than one",
         run.reached,
-        len(feeds),
+        feed_count,
         run.offered,
         run.corroborated,
     )
@@ -538,13 +597,16 @@ __all__ = [
     "FeedDetection",
     "FeedResult",
     "IngestRun",
+    "as_candidate_endpoint",
     "candidate_id",
     "detect_feed",
     "enabled_feeds",
     "feed_payload",
     "fetch_feed",
+    "harvest_feeds",
     "ingest",
     "known_feed_name",
     "merge",
     "rank",
+    "rank_merged",
 ]

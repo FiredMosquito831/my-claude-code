@@ -432,9 +432,17 @@ def test_a_refetch_keeps_what_was_added_and_what_was_refused() -> None:
 
     An operator who fetches the feeds again must not lose the work of the last
     pass: an address they added is in a chain and must not come back as
-    something nobody has chosen, and an address the checker refused must come
-    back refused rather than as a fresh unknown row -- that verdict is the one
-    piece of state on this page that is a security control.
+    something nobody has chosen, and an address the checker refused must not
+    come back at all.
+
+    7.21.0 changed the second half. A refused address used to stay **on offer**
+    with a badge on it, because until then a fetch stored whatever the lists
+    published and the page's job was to warn about it. Now a fetch tests
+    everything it found and offers only what passed, so an address whose tunnel
+    was caught terminating TLS is not something to warn about on a list of
+    working addresses -- it is something that must not be on that list. It
+    stays in the catalogue, refused, which is what stops the next pass offering
+    the same machine as a fresh unknown; the fetch reports how many it refused.
     """
 
     from my_claude_code.config.proxy_chains import ProxyEndpoint
@@ -462,7 +470,10 @@ def test_a_refetch_keeps_what_was_added_and_what_was_refused() -> None:
     assert "px_chosen01" not in refetched.candidates
     chain = refetched.chain("nvidia_nim")
     assert chain is not None and chain.proxy_ids() == ("px_chosen01",)
-    # And the refusal survives the pass.
+    # And the refusal survives the pass -- in the catalogue, not on the offer.
     refused = refetched.endpoint("px_bad00002")
     assert refused is not None and refused.refused is True
-    assert "px_bad00002" in refetched.candidates
+    assert "px_bad00002" not in refetched.candidates
+    # The address nothing objected to is still offered, so the assertion above
+    # is about the refusal rather than about the pass having dropped the lot.
+    assert "px_plain003" in refetched.candidates

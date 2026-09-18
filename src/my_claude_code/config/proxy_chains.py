@@ -60,6 +60,7 @@ import secrets
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from itertools import islice
 from pathlib import Path
 from typing import Any, Self
 from urllib.parse import urlsplit
@@ -183,11 +184,18 @@ SOURCE_MANUAL = "manual"
 #: into a chain, and it cannot carry a credential before then.
 SOURCE_FEED = "feed"
 
-#: The most addresses the candidate list holds. A pass merges every feed the
-#: operator added, which between them can publish tens of thousands of
-#: endpoints; what an operator can actually read and choose from is two
-#: screens of them, ranked.
-MAX_CANDIDATES = 60
+#: The most refused addresses the store keeps beyond the candidate list.
+#:
+#: A refusal is durable on purpose -- an address caught terminating TLS must
+#: not come back as a fresh unknown row on the next fetch -- but a refused
+#: address is not on offer either, so nothing else in the document references
+#: it and :meth:`ProxyChains.pruned` would drop it. It is kept by name here
+#: instead, newest first, with a ceiling so that a store cannot grow without
+#: bound on a machine whose network is intercepting everything it dials. The
+#: ceiling matches the reachability ladder's
+#: ``MAX_TRACKED_ENDPOINTS`` for the same reason: five hundred is far more
+#: than any real install refuses, and a document is not a log.
+MAX_REFUSED_ENDPOINTS = 512
 
 #: What the checker learned about the destination's certificate through this
 #: address's tunnel. ``strict`` is an ordinary verified handshake. ``unknown``
@@ -493,6 +501,13 @@ class ProxyEndpoint:
     #: checked. ``None`` and "checked and failed" are different states and the
     #: page says which it is looking at.
     last_check: ProxyCheckRecord | None = None
+    #: The provider id :attr:`last_check` was measured against, or ``""`` for a
+    #: record from a release that did not say. A check is a question about one
+    #: destination -- "does this tunnel reach *that* host with its certificate
+    #: intact" -- so a verdict is only honest about the provider it was asked
+    #: for. The page prints it ("working for Anthropic") rather than letting a
+    #: pass against one host read as a pass against all of them.
+    checked_for: str = ""
     #: The reachability bench this address was carrying when it was last
     #: written. ``None`` for an address that has never failed.
     health: ProxyHealthState | None = None
@@ -517,6 +532,8 @@ class ProxyEndpoint:
             document["feed"] = self.feed.as_document()
         if self.last_check is not None:
             document["last_check"] = self.last_check.as_document()
+        if self.checked_for:
+            document["checked_for"] = self.checked_for
         if self.health is not None:
             document["health"] = self.health.as_document()
         return document
@@ -554,6 +571,7 @@ class ProxyEndpoint:
             sources=sources,
             feed=ProxyFeedFacts.from_document(raw.get("feed")),
             last_check=ProxyCheckRecord.from_document(raw.get("last_check")),
+            checked_for=str(raw.get("checked_for") or "").strip().lower(),
             health=ProxyHealthState.from_document(raw.get("health")),
         )
 
@@ -783,6 +801,15 @@ class ProxyChains:
         linger as a row nobody can account for. An address already in a chain
         is untouched by this -- chains and candidates are different tables and
         a promoted address has stopped being on offer.
+
+        **A refused address is kept whether or not it is still offered.** It is
+        the one row here that is a security control rather than a convenience:
+        dropping it would mean the next fetch offering the same machine as a
+        fresh unknown, testing it again, and -- on the pass where it happened
+        not to intercept -- putting it in front of a credential. The caller
+        decides how many addresses are offered;
+        :data:`MAX_REFUSED_ENDPOINTS` is the only ceiling this method imposes,
+        and it is on the refusals rather than on the offer.
         """
 
         chained = {
@@ -793,11 +820,15 @@ class ProxyChains:
             for proxy_id, endpoint in self.proxies.items()
             if proxy_id in chained
         }
+        for proxy_id in self.refused_ids()[:MAX_REFUSED_ENDPOINTS]:
+            if proxy_id not in proxies:
+                proxies[proxy_id] = self.proxies[proxy_id]
         candidates: list[str] = []
-        for proxy_id, endpoint in offered[:MAX_CANDIDATES]:
+        for proxy_id, endpoint in offered:
             if proxy_id in proxies:
-                # Already in a chain. It is no longer on offer, and the copy
-                # the operator chose keeps its own label and health.
+                # Already in a chain, or standing refused. Either way it is not
+                # on offer: the copy the operator chose keeps its own label and
+                # health, and a refused one keeps the verdict that refused it.
                 continue
             previous = self.proxies.get(proxy_id)
             if previous is not None and previous.last_check is not None:
@@ -825,20 +856,30 @@ class ProxyChains:
             candidates=tuple(item for item in self.candidates if item != proxy_id),
         )
 
-    def with_check(self, proxy_id: str, record: ProxyCheckRecord) -> ProxyChains:
+    def with_check(
+        self, proxy_id: str, record: ProxyCheckRecord, *, checked_for: str = ""
+    ) -> ProxyChains:
         """Return a copy carrying one address's latest check.
 
         A no-op for an id the catalogue no longer holds: the checker runs out
         of band and may finish after the operator removed the address it was
         measuring, and inventing an endpoint from a stale result would put a
         row back on a page somebody just cleared.
+
+        ``checked_for`` records which provider's host the verdict is about.
+        Empty leaves whatever was there, so a caller that does not know cannot
+        erase what an earlier one did.
         """
 
         endpoint = self.proxies.get(proxy_id)
         if endpoint is None:
             return self
         proxies = dict(self.proxies)
-        proxies[proxy_id] = replace(endpoint, last_check=record)
+        proxies[proxy_id] = replace(
+            endpoint,
+            last_check=record,
+            checked_for=checked_for.strip().lower() or endpoint.checked_for,
+        )
         return replace(self, proxies=proxies)
 
     def with_health(
@@ -888,9 +929,17 @@ class ProxyChains:
         The catalogue exists to be shared between chains, not to accumulate:
         an address removed from the last chain that named it has no health
         record worth keeping and no way back onto the page.
+
+        **A refusal is not a health record and is not dropped with one.** An
+        address the checker caught terminating TLS is kept, up to
+        :data:`MAX_REFUSED_ENDPOINTS` of them, even when no chain and no offer
+        names it: forgetting it is what lets the next fetch offer the same
+        machine as an unknown, and the one control between a credential and a
+        hostile proxy must not be cleared by a tidy-up.
         """
 
         referenced: set[str] = set(self.candidates)
+        referenced.update(self.refused_ids()[:MAX_REFUSED_ENDPOINTS])
         for chain in self.chains.values():
             referenced.update(chain.proxy_ids())
         if referenced == set(self.proxies):
@@ -984,8 +1033,22 @@ class ProxyChains:
 
         # Prune here rather than through ``pruned()``: the classmethod has to
         # return ``Self``, and a copy made by ``dataclasses.replace`` is only
-        # ever the base class.
+        # ever the base class. The rule is the same one ``pruned()`` applies,
+        # including its exception: a refused address is kept even when nothing
+        # else in the document names it, because forgetting the verdict on a
+        # tunnel caught reading the traffic is the one loss here that is a
+        # security regression rather than a tidy-up.
         referenced = set(candidates)
+        referenced.update(
+            islice(
+                (
+                    proxy_id
+                    for proxy_id, endpoint in proxies.items()
+                    if endpoint.refused
+                ),
+                MAX_REFUSED_ENDPOINTS,
+            )
+        )
         referenced.update(
             proxy_id for chain in chains.values() for proxy_id in chain.proxy_ids()
         )
@@ -1180,7 +1243,7 @@ __all__ = [
     "EMPTY_CHAIN",
     "EMPTY_PROXY_CHAINS",
     "FEEDS_KEY",
-    "MAX_CANDIDATES",
+    "MAX_REFUSED_ENDPOINTS",
     "MAX_SWITCHES_DEFAULT",
     "MAX_SWITCHES_MAX",
     "MAX_SWITCHES_MIN",

@@ -447,6 +447,34 @@ PROXY_FEED_REFRESH_MINUTES_MAX = 10080
 # than this, so a shorter interval buys no new addresses and only sends more
 # requests to strangers.
 PROXY_FEED_MINIMUM_MINUTES = 30
+# How many addresses one fetch may test and keep on offer. 0 is UNLIMITED and
+# is the shipped default: a chain has held any number of entries since 7.19.0,
+# so an offer artificially trimmed to sixty was the tool inventing a ceiling
+# the operator never asked for. A number an operator sets for themselves is
+# honoured, and it is applied in rank order -- the best N are tested, not an
+# arbitrary N.
+PROXY_CANDIDATES_MAX_DEFAULT = 0
+PROXY_CANDIDATES_MAX_MIN = 0
+PROXY_CANDIDATES_MAX_MAX = 100000
+# How many addresses a fetch tests at once. This sweep is not the Test button:
+# it is hundreds of strangers' machines, most of which are no longer listening,
+# and the slow half of each check is a TLS handshake that spends its time
+# waiting on somebody else's network rather than on this CPU. Thirty-two
+# overlapping handshakes finish a list of eight hundred in minutes instead of
+# hours, and the semaphore that enforces it is also what bounds how many
+# sockets are open at once.
+PROXY_FETCH_TEST_CONCURRENCY_DEFAULT = 32
+PROXY_FETCH_TEST_CONCURRENCY_MIN = 4
+PROXY_FETCH_TEST_CONCURRENCY_MAX = 128
+# How long the TCP step of a fetch-test waits. Short on purpose and only for
+# this sweep: the commonest thing in a public list is an address that has
+# stopped listening, and five seconds is the difference between a dead address
+# costing five seconds and costing the full check timeout. The HTTPS leg that
+# follows keeps PROXY_CHECK_TIMEOUT_SECONDS -- a tunnel that answered deserves
+# the time to finish its handshake.
+PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_DEFAULT = 5.0
+PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MIN = 1.0
+PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MAX = 60.0
 # What a 429 on a pooled credential means. True: it benches the (key, model)
 # pair and the executor moves to another model on the SAME provider first,
 # because a gateway that limits one model usually still answers another on the

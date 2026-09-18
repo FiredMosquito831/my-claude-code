@@ -1412,6 +1412,17 @@ const ROUTES = {
       ],
       feed_name_max_length: 60,
       max_feeds: 20,
+      /* What a press of Fetch is about to do, in the operator's own numbers.
+         `candidates_max: 0` is the shipped default and means UNLIMITED -- it
+         is here as 0 on purpose, because `Number(x) || 60` cannot tell 0 from
+         absent and that exact mistake put a retired cap back on this page four
+         times in 7.19.0. */
+      fetch: {
+        concurrency: 32,
+        connect_timeout_seconds: 5.0,
+        check_timeout_seconds: 10.0,
+        candidates_max: 0,
+      },
     },
     /* Feeds the OPERATOR added, because from 7.18.0 MCC ships none. This array
        was once missing from the fixture entirely, which is why nothing caught
@@ -1481,7 +1492,7 @@ const ROUTES = {
           { id: "geonode", name: "Geonode" },
         ],
         country: "DE", anonymity: "elite", https_ok: true,
-        latency_ms: 210, uptime_pct: 96, last_check: null, refused: false,
+        latency_ms: 210, uptime_pct: 96, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 190, tls: "strict", detail: "", exit_ip: "" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
       },
       {
         proxy: "px_cand0002", label: "203.0.113.22:1080", scheme: "socks5h",
@@ -1491,7 +1502,7 @@ const ROUTES = {
           { id: "geonode", name: "Geonode" },
         ],
         country: "NL", anonymity: "anonymous", https_ok: true,
-        latency_ms: 480, uptime_pct: 81, last_check: null, refused: false,
+        latency_ms: 480, uptime_pct: 81, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 420, tls: "strict", detail: "", exit_ip: "" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
       },
       {
         // The one the checker will catch terminating TLS when it is added.
@@ -1499,7 +1510,7 @@ const ROUTES = {
         source_count: 1,
         sources: [{ id: "proxyscrape", name: "ProxyScrape" }],
         country: "US", anonymity: "transparent", https_ok: false,
-        latency_ms: 1200, uptime_pct: 40, last_check: null, refused: false,
+        latency_ms: 1200, uptime_pct: 40, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 980, tls: "strict", detail: "", exit_ip: "" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
       },
       {
         // The one that simply will not answer: added, benched, routed around.
@@ -1507,7 +1518,7 @@ const ROUTES = {
         source_count: 1,
         sources: [{ id: "hproxy", name: "HProxy" }],
         country: "", anonymity: "", https_ok: false,
-        latency_ms: null, uptime_pct: null, last_check: null, refused: false,
+        latency_ms: null, uptime_pct: null, last_check: null, refused: false, working: false, checked_for: "", checked_for_name: "", untested: true,
       },
       {
         proxy: "px_cand0005", label: "203.0.113.25:8080", scheme: "http",
@@ -1518,7 +1529,7 @@ const ROUTES = {
           { id: "geonode", name: "Geonode" },
         ],
         country: "FR", anonymity: "elite", https_ok: true,
-        latency_ms: 95, uptime_pct: 99, last_check: null, refused: false,
+        latency_ms: 95, uptime_pct: 99, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 88, tls: "strict", detail: "", exit_ip: "" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
       },
       {
         // Already refused by an earlier check, and still listed: an operator
@@ -1538,6 +1549,13 @@ const ROUTES = {
           exit_ip: "",
         },
         refused: true,
+        // Refused, and therefore NOT on the offer any more since 7.21.0. It is
+        // in the fixture because a store that already held one has to render
+        // without the page assuming every row is working.
+        working: false,
+        checked_for: "nvidia_nim",
+        checked_for_name: "NVIDIA NIM",
+        untested: false,
       },
     ],
     providers: [
@@ -2153,6 +2171,54 @@ const fetchBodies = [];
    as one gesture: the first batch mints the token and keeps the document as it
    was, and every batch carrying that token back extends the same point. */
 const PROXY_UNDO = { token: "", before: null, after: null };
+
+/* The fetch job, as the server would hold it. Idle until something presses
+   Fetch, which is what a fresh server process reports and what the page has to
+   render as "no fetch has run" rather than as "0 of 0". */
+const PROXY_FETCH = {
+  job: "",
+  state: "idle",
+  provider: "",
+  detail: "",
+  at: "2026-09-17T12:00:00Z",
+  elapsed_seconds: 0,
+  stopping: false,
+  feeds_total: 0,
+  feeds_read: 0,
+  total: 0,
+  tested: 0,
+  working: 0,
+  dead: 0,
+  refused: 0,
+  offered: 0,
+  corroborated: 0,
+  feeds: [],
+};
+
+/* One step of the sweep per status poll, so the progress line the page prints
+   is driven by numbers that actually move. Two hundred addresses a step, and
+   the one that finishes the run puts the tested-and-working addresses on the
+   offer list -- which is the whole change: an address is offered because it
+   passed, not because a list published it. */
+function proxyFetchStatePayload(advance) {
+  const state = ROUTES["/admin/api/proxy-chains"];
+  if (advance && PROXY_FETCH.state === "running") {
+    PROXY_FETCH.tested = Math.min(PROXY_FETCH.total, PROXY_FETCH.tested + 200);
+    PROXY_FETCH.working = Math.round(PROXY_FETCH.tested * 0.05);
+    PROXY_FETCH.refused = PROXY_FETCH.tested >= 200 ? 2 : 0;
+    PROXY_FETCH.dead =
+      PROXY_FETCH.tested - PROXY_FETCH.working - PROXY_FETCH.refused;
+    PROXY_FETCH.elapsed_seconds += 1.5;
+    if (PROXY_FETCH.tested >= PROXY_FETCH.total) PROXY_FETCH.state = "done";
+  }
+  return JSON.parse(
+    JSON.stringify({
+      ...state,
+      fetch: { ...PROXY_FETCH, provider_name: "NVIDIA NIM" },
+    }),
+  );
+}
+
 // Pause-route fault injection. Null means the route behaves normally.
 let pauseRefusal = null;
 let pauseHttpFailure = null;
@@ -2289,6 +2355,34 @@ window.fetch = async (url, options = {}) => {
       text: async () => "",
     };
   }
+  /* The fetch JOB. Since 7.21.0 a fetch reads the lists and then TESTS every
+     address they offered, which for hundreds of addresses is minutes -- so the
+     press starts a job and the page asks after it. The stub below walks a job
+     through the states a real one does, one step per status poll, so the page's
+     progress line, its Stop, and its re-attach after a reload are all driven by
+     something that actually changes rather than by a fixed payload. */
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/ingest/status") {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => proxyFetchStatePayload(true),
+      text: async () => "",
+    };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/ingest/stop") {
+    if (PROXY_FETCH.state === "running") {
+      PROXY_FETCH.state = "stopped";
+      PROXY_FETCH.stopping = false;
+      // Stopping KEEPS what already passed. The offer list is not cleared.
+      PROXY_FETCH.total = PROXY_FETCH.tested;
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => proxyFetchStatePayload(false),
+      text: async () => "",
+    };
+  }
   if (String(url).split("?")[0] === "/admin/api/proxy-chains/ingest") {
     const state = ROUTES["/admin/api/proxy-chains"];
     // `readable` as well as `enabled`, exactly as `enabled_feed_ids` does: a
@@ -2306,20 +2400,40 @@ window.fetch = async (url, options = {}) => {
       error.status = 422;
       throw error;
     }
+    if (PROXY_FETCH.state === "running") {
+      // One sweep at a time. The real route answers 409 naming the one that is
+      // already going, and a page that quietly started a second would double
+      // the outbound load on strangers' machines for nothing.
+      const error = new Error(
+        `A fetch is already running (${PROXY_FETCH.job}). One at a time.`,
+      );
+      error.status = 409;
+      throw error;
+    }
+    PROXY_FETCH.job = `fetch_${Date.now().toString(16)}`;
+    PROXY_FETCH.state = "running";
+    PROXY_FETCH.stopping = false;
+    PROXY_FETCH.feeds_total = on.length;
+    PROXY_FETCH.feeds_read = on.length;
+    PROXY_FETCH.feeds = on.map((feed) => ({
+      id: feed.id,
+      name: feed.name,
+      ok: true,
+      count: 40,
+      detail: "",
+    }));
+    PROXY_FETCH.total = 834;
+    PROXY_FETCH.tested = 0;
+    PROXY_FETCH.working = 0;
+    PROXY_FETCH.dead = 0;
+    PROXY_FETCH.refused = 0;
+    PROXY_FETCH.offered = 834;
+    PROXY_FETCH.corroborated = 3;
+    PROXY_FETCH.provider = JSON.parse(options.body || "{}").provider || "";
     return {
       ok: true,
       status: 200,
-      json: async () =>
-        JSON.parse(
-          JSON.stringify({
-            ...state,
-            ingest: {
-              feeds: on.map((feed) => ({ id: feed.id, name: feed.name, ok: true })),
-              offered: 12,
-              corroborated: 3,
-            },
-          }),
-        ),
+      json: async () => proxyFetchStatePayload(false),
       text: async () => "",
     };
   }
@@ -2886,6 +3000,154 @@ if (withChain) {
       unsaved: unsavedNote(),
       saveDisabled: Boolean((saveButton() || {}).disabled),
     };
+  }
+
+  /* ------------------------------------------- the fetch job: 7.21.0
+     A fetch now tests every address the lists offered and keeps only what
+     passed, which for hundreds of addresses is minutes of work. So the press
+     starts a job, the page shows what it is doing, and it can be stopped.
+     Everything below is read off what is RENDERED, and visibility is asserted
+     rather than presence: a progress line in a hidden panel is not a progress
+     line. */
+  {
+    const candidatePanel = () => doc.querySelector("#proxyingCandidates");
+    const progressBox = () => candidatePanel()?.querySelector(".proxy-fetch-progress");
+    const progressLine = () =>
+      (progressBox()?.querySelector(".proxy-fetch-line")?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    const stopButton = () => progressBox()?.querySelector(".proxy-fetch-stop");
+    /* Visible WITHIN its view, which is the question worth asking here: the
+       harness drives every view of a single-page dashboard, so all but one are
+       `hidden` at any moment and "is the proxying view on screen" is not what
+       this is about. Everything between the node and the view has to be
+       showing -- a progress line inside a collapsed panel is not a progress
+       line, and that is the failure this would otherwise miss. */
+    const visible = (node) => {
+      let cursor = node;
+      while (cursor && !(cursor.classList || { contains: () => false }).contains("admin-view")) {
+        if (cursor.hidden) return false;
+        cursor = cursor.parentElement;
+      }
+      return Boolean(node);
+    };
+
+    // The press above started the job. Its first render is before any status
+    // poll, so this is what the operator sees the instant they press.
+    proxying.fetchStarted = {
+      visible: visible(progressBox()),
+      line: progressLine(),
+      stopVisible: visible(stopButton()),
+      refetchDisabled: Boolean((fetchButton() || {}).disabled),
+      job: PROXY_FETCH.job,
+    };
+
+    // A second press while one is running must be refused by the SERVER, not
+    // merely hidden by a disabled button. Called directly, past the button.
+    let secondStatus = 0;
+    try {
+      await window.fetch("/admin/api/proxy-chains/ingest", {
+        method: "POST",
+        body: JSON.stringify({ provider: "nvidia_nim" }),
+      });
+    } catch (error) {
+      secondStatus = error.status || 0;
+    }
+    proxying.fetchSecondPress = secondStatus;
+
+    // Two polls of the status route: the numbers have to MOVE.
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    const after_one = progressLine();
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    proxying.fetchProgress = {
+      afterOnePoll: after_one,
+      afterTwoPolls: progressLine(),
+      moved: after_one !== progressLine(),
+    };
+
+    // Stop, mid-run. What has already passed has to survive it.
+    const testedBeforeStop = PROXY_FETCH.tested;
+    const workingBeforeStop = PROXY_FETCH.working;
+    const stop = stopButton();
+    if (stop) {
+      stop.click();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    proxying.fetchStopped = {
+      state: PROXY_FETCH.state,
+      line: progressLine(),
+      stopVisible: visible(stopButton()),
+      testedKept: PROXY_FETCH.tested === testedBeforeStop,
+      workingKept: PROXY_FETCH.working === workingBeforeStop,
+      // The offer list is untouched by stopping: the addresses that passed are
+      // still there to be used.
+      offered: candidatePanel()?.querySelectorAll(".proxy-candidate[data-proxy]")
+        .length,
+    };
+
+    /* Re-attach. Leaving the view and coming back runs `loadProxying()` again
+       -- byte for byte the path a browser reload takes -- so a sweep that is
+       still going has to be picked up from the server rather than forgotten.
+       The job is put back into `running` first, because that is the state a
+       reload mid-sweep actually finds. */
+    PROXY_FETCH.state = "running";
+    PROXY_FETCH.stopping = false;
+    PROXY_FETCH.total = 834;
+    const navTo = (id) => {
+      const link = doc.querySelector(`.nav-link[data-view="${id}"]`);
+      if (link) link.click();
+    };
+    // Put the view back afterwards: every block after this one reads a page
+    // that was left where it found it.
+    const wasActive =
+      doc.querySelector(".admin-view.active")?.dataset.view || "get_started";
+    navTo("models");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    navTo("proxying");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const reattachedLine = progressLine();
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    proxying.fetchReattached = {
+      visible: visible(progressBox()),
+      line: reattachedLine,
+      stopVisible: visible(stopButton()),
+      // And the timer came back with it: the line moves again without another
+      // press.
+      stillPolling: progressLine() !== reattachedLine,
+    };
+
+    // Let it finish so the rest of the harness is not racing a poll.
+    PROXY_FETCH.state = "done";
+    PROXY_FETCH.tested = PROXY_FETCH.total;
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    proxying.fetchFinished = { line: progressLine(), state: PROXY_FETCH.state };
+    navTo(wasActive);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+
+  /* "Add all working": one press to use what the fetch found. It is the bulk
+     add with the working addresses in it -- the same route, the same repaint,
+     the same undo -- which is what 6.24.0 is about. */
+  {
+    const bar = () => doc.querySelector("#proxyingCandidates .proxy-candidate-bar");
+    const allButton = () => bar()?.querySelector(".proxy-candidate-all");
+    proxying.addAllWorking = {
+      visible: Boolean(allButton()) && !allButton().hidden,
+      label: (allButton()?.textContent || "").replace(/\s+/g, " ").trim(),
+      disabled: Boolean((allButton() || {}).disabled),
+    };
+  }
+
+  /* What MCC itself measured, on the row. Every other field on a candidate is
+     a claim some list published; this one is the reason the row is there. */
+  {
+    const measured = Array.from(
+      doc.querySelectorAll("#proxyingCandidates .proxy-candidate-measured"),
+    ).map((node) => ({
+      text: (node.textContent || "").trim(),
+      className: node.className,
+    }));
+    proxying.candidateMeasured = measured;
   }
 
   /* The Add form, which is the whole of what a FRESH install sees: MCC ships

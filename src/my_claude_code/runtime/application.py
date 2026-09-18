@@ -257,6 +257,12 @@ class ApplicationRuntime:
         self._proxy_feed_timer = ProxyFeedTimer(
             lambda: self.settings.proxy_feed_refresh_minutes,
             lambda: self.settings.proxy_feed_refresh_enabled,
+            # The live Settings, because a pass has to pick a destination to
+            # test against and that depends on which providers are configured
+            # right now. A pass with nowhere to test does nothing at all --
+            # storing addresses it could not measure is exactly what 7.21.0
+            # removed from the button, and a timer is the last place to keep it.
+            settings=lambda: self.settings,
         )
         # The health re-prober, and the writer that makes a bench survive a
         # restart. On by default, unlike the two above, because it is not a new

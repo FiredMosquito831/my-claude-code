@@ -569,6 +569,19 @@ const proxyState = {
   },
   // The one-level undo point the server minted for the last bulk write.
   undo: null,
+  /* ------------------------------------------------------- the fetch job
+     A fetch reads the lists and then TESTS every address they offered, which
+     for eight hundred addresses is minutes of work. So the press starts a job
+     on the server and this page asks after it: `fetch` is the last status it
+     was handed, `fetchPoll` is the interval asking for the next one.
+     Both are rebuilt from the server on load, which is what lets a reload
+     re-attach to a sweep that is still running instead of losing it. */
+  fetch: null,
+  fetchPoll: 0,
+  // How many candidate rows are drawn. Paged rather than capped: hundreds of
+  // tested, working addresses is the ordinary result now, and "narrow the
+  // filter" is not an answer when every one of them is usable.
+  drawn: 0,
   // The bulk run in flight: { total, done, stop, action }. A run is batched so
   // the page can show progress and stay usable, and so a long selection is not
   // one request that either all works or all does not.
@@ -593,11 +606,23 @@ const PROXY_CANDIDATE_KEY = "mcc.proxying.candidates.v1";
    and a page that cannot be stopped. */
 const PROXY_CANDIDATE_BATCH = 10;
 
-/* How many rows are drawn. A pass over seven lists offered 1,572 addresses
-   when this cap was chosen, and a list that long is neither readable nor cheap
-   to paint; the filter is the way through it, and Select all still means every
-   address the filter matches, not only the ones drawn. */
+/* How many rows are drawn at a time. A pass over seven lists offered 1,572
+   addresses when this number was chosen, and a list that long is neither
+   readable nor cheap to paint.
+
+   It is a PAGE rather than a cap since 7.21.0. It used to be the end of the
+   list -- "narrow the filter to see the rest" -- which was a fair answer while
+   every row was an untested claim and most of them were dead. Now a fetch
+   tests everything it found and keeps only what worked, so three hundred rows
+   are three hundred addresses that were all working a minute ago and "the rest
+   are not shown" is hiding usable work. Select all still means every address
+   the filter matches, drawn or not. */
 const PROXY_CANDIDATE_RENDER_CAP = 300;
+
+/* How often the page asks how the fetch is getting on. Slow enough that a
+   sweep of eight hundred addresses is not also a thousand requests to this
+   process, fast enough that the counter visibly moves. */
+const PROXY_FETCH_POLL_MS = 1500;
 
 /* Above this, a bulk button asks for a second press. Not 200 like the Models
    page: the number was chosen while a chain held at most twelve entries, and
@@ -607,17 +632,30 @@ const PROXY_CANDIDATE_RENDER_CAP = 300;
    is still worth one deliberate second press. */
 const PROXY_CANDIDATE_CONFIRM_AT = 25;
 
+/* The whole page in one request, including what a fetch started before this
+   tab existed is doing.
+
+   The status route answers the ordinary payload plus a `fetch` block, so
+   asking it instead of `/admin/api/proxy-chains` is how a reload re-attaches:
+   an operator who pressed Fetch on eight hundred addresses and then hit F5
+   comes back to the progress line rather than to a page that has forgotten the
+   sweep is running. It is a superset, so nothing else on the page can tell. */
 async function loadProxying() {
   if (proxyState.loading) return;
   proxyState.loading = true;
   try {
-    proxyState.data = await api("/admin/api/proxy-chains");
+    const payload = await api("/admin/api/proxy-chains/ingest/status");
+    proxyState.data = payload;
+    proxyState.fetch = payload.fetch || null;
     proxyState.drafts.clear();
     rememberSavedFeeds();
   } finally {
     proxyState.loading = false;
   }
   renderProxying();
+  // Re-attach to a sweep that is still going. `watchProxyFetch` is idempotent,
+  // so a second load while one is being watched does not start a second timer.
+  if (proxyState.fetch && proxyState.fetch.state === "running") watchProxyFetch();
 }
 
 /* What the SERVER last told us the feed list is, and the page's own copy of it.
@@ -866,6 +904,8 @@ function renderProxyFeeds() {
   const enabled = feeds.filter((feed) => feed.enabled && feed.readable);
 
   const dirty = proxyFeedsAreDirty();
+  const running = proxyState.fetch && proxyState.fetch.state === "running";
+  const concurrency = proxyFetchConcurrency();
 
   const save = document.createElement("button");
   save.type = "button";
@@ -889,7 +929,13 @@ function renderProxyFeeds() {
     : dirty
       ? `Save and fetch ${enabled.length} feed${enabled.length === 1 ? "" : "s"}`
       : `Fetch ${enabled.length} feed${enabled.length === 1 ? "" : "s"} now`;
-  fetchNow.disabled = !enabled.length;
+  fetchNow.disabled = !enabled.length || Boolean(running);
+  fetchNow.title =
+    "Reads the lists you switched on, then tests every address they offered " +
+    "against the provider chosen below -- and keeps only the ones that " +
+    "answered with that provider's own certificate intact. Hundreds of " +
+    `addresses take minutes; ${concurrency} are tested at once and you can ` +
+    "stop it at any point without losing what has already passed.";
   fetchNow.addEventListener("click", () => ingestProxyFeeds(fetchNow));
   actions.appendChild(fetchNow);
   panel.appendChild(actions);
@@ -915,11 +961,27 @@ function renderProxyFeeds() {
       `about every ${Math.max(
         Number(refresh.interval_minutes) || 0,
         Number(refresh.minimum_minutes) || 30,
-      )} minutes. It writes this candidate list and nothing else.`
+      )} minutes, tested the same way, and only what passes is kept. It ` +
+      "writes this candidate list and nothing else."
     : "Scheduled refresh is off, so these lists are read only when you press " +
       "Fetch. Turn on PROXY_FEED_REFRESH_ENABLED on Limits & Resilience to " +
-      "have them re-read on a timer.";
+      "have them re-read -- and re-tested -- on a timer.";
   panel.appendChild(note);
+
+  /* The bound, said out loud, in the operator's own number. 0 ships and means
+     there is none, so the line says that rather than printing a 0 or, worse,
+     a number this page invented. */
+  const cap = proxyCandidateCap();
+  const bound = document.createElement("p");
+  bound.className = "field-description proxy-feed-bound";
+  bound.textContent = cap
+    ? `A fetch tests at most ${cap} address(es), best-ranked first -- you set ` +
+      `PROXY_CANDIDATES_MAX to ${cap} on Limits & Resilience. Set it to 0 to ` +
+      "test everything the lists offer."
+    : "A fetch tests every address the lists offer, however many that is, and " +
+      "keeps the ones that work. Set PROXY_CANDIDATES_MAX on Limits & " +
+      "Resilience if you would rather it stopped at a number.";
+  panel.appendChild(bound);
 }
 
 function proxyFeedSwitch(feed) {
@@ -1290,36 +1352,138 @@ async function ingestProxyFeeds(button) {
       );
       return;
     }
-    button.textContent = "Fetching...";
+    button.textContent = "Starting...";
+    /* The press starts a JOB and comes straight back. A fetch now tests every
+       address the lists offered -- a TCP connect, a tunnel, and a strict-TLS
+       request to the chosen provider's own host, each -- and for a list of
+       eight hundred that is minutes. Held open as one request it would time
+       out in the browser, die on a reload, and leave nothing to press Stop on.
+       The destination travels with it: a check is a question about one host,
+       so the page says which. */
+    const destination = proxyDestination();
     proxyState.data = await api("/admin/api/proxy-chains/ingest", {
       method: "POST",
+      body: JSON.stringify({
+        provider: destination ? destination.provider_id : "",
+      }),
     });
+    proxyState.fetch = proxyState.data.fetch || null;
+    proxyState.outcomes = new Map();
     rememberSavedFeeds();
     renderProxying();
-    const run = proxyState.data.ingest || {};
-    const results = run.feeds || [];
-    const reached = results.filter((item) => item.ok);
-    const failed = results.filter((item) => !item.ok);
-    const parts = [
-      `${reached.length} of ${results.length} feed(s) answered`,
-      `${run.offered || 0} address(es) on offer`,
-      `${run.corroborated || 0} listed by more than one feed`,
-    ];
-    if (failed.length) {
-      parts.push(
-        `no usable answer from ${failed.map((item) => item.name).join(", ")}`,
-      );
-    }
-    announceProxy(
-      `${parts.join(", ")}. These are candidates: none of them is in a chain, ` +
-        "and none carries a credential until you add it to one.",
-    );
+    announceProxy(proxyFetchSentence());
+    watchProxyFetch();
   } catch (error) {
     button.disabled = false;
     button.textContent = original;
     announceProxy(error.message);
     showMessage(error.message, "error");
   }
+}
+
+/* ------------------------------------------------------------ the fetch job
+
+   One timer, asking the server how the sweep is getting on. It is started by a
+   press and by a page load that finds one already running, and it is stopped
+   by the job ending -- never by navigating away from the page, because the job
+   lives on the server and coming back has to find it. */
+function watchProxyFetch() {
+  if (proxyState.fetchPoll) return;
+  proxyState.fetchPoll = window.setInterval(readProxyFetchStatus, PROXY_FETCH_POLL_MS);
+}
+
+function unwatchProxyFetch() {
+  if (!proxyState.fetchPoll) return;
+  window.clearInterval(proxyState.fetchPoll);
+  proxyState.fetchPoll = 0;
+}
+
+async function readProxyFetchStatus() {
+  let payload;
+  try {
+    payload = await api("/admin/api/proxy-chains/ingest/status");
+  } catch (_) {
+    // A poll that could not be answered is not a failed fetch. The sweep is on
+    // the server and the next poll will find it; saying so would be inventing
+    // an outcome the server never reported.
+    return;
+  }
+  const previous = proxyState.fetch ? proxyState.fetch.state : "";
+  proxyState.data = payload;
+  proxyState.fetch = payload.fetch || null;
+  rememberSavedFeeds();
+  renderProxying();
+  const state = proxyState.fetch ? proxyState.fetch.state : "idle";
+  if (state === "running") return;
+  unwatchProxyFetch();
+  // Announce the end once, not on every poll after it.
+  if (previous === "running") announceProxy(proxyFetchSentence());
+}
+
+async function stopProxyFetch() {
+  const job = proxyState.fetch ? proxyState.fetch.job : "";
+  try {
+    const payload = await api("/admin/api/proxy-chains/ingest/stop", {
+      method: "POST",
+      body: JSON.stringify({ job }),
+    });
+    proxyState.data = payload;
+    proxyState.fetch = payload.fetch || null;
+    rememberSavedFeeds();
+    renderProxying();
+  } catch (error) {
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+/* What the fetch is doing, or what it did, in one sentence a person can act
+   on. The numbers are the server's own: the page keeps no count of its own,
+   which is how "Tested 212 of 834" cannot drift from what was actually
+   measured. */
+function proxyFetchSentence() {
+  const fetch = proxyState.fetch || {};
+  const where = fetch.provider_name || fetch.provider || "the chosen provider";
+  const measured =
+    `Tested ${fetch.tested || 0} of ${fetch.total || 0} · ` +
+    `${fetch.working || 0} working · ${fetch.dead || 0} dead · ` +
+    `${fetch.refused || 0} refused`;
+  if (fetch.state === "running") {
+    const read = `${fetch.feeds_read || 0} of ${fetch.feeds_total || 0} list(s) read`;
+    if (!fetch.total) {
+      return (
+        `Reading the lists: ${read}. Nothing is tested until they have all ` +
+        "answered, and only addresses that pass are kept."
+      );
+    }
+    return (
+      `${measured}. Each one opens an HTTPS request through that machine to ` +
+      `${where}'s own host; only the ones that answer with that host's ` +
+      "certificate intact are kept."
+    );
+  }
+  if (fetch.state === "failed") {
+    return `The fetch did not finish: ${fetch.detail || "no reason was given"}.`;
+  }
+  if (fetch.state === "stopped") {
+    return (
+      `Stopped. ${measured}. The ${fetch.working || 0} that passed are on ` +
+      "offer and on disk -- stopping kept them; the rest were not tested."
+    );
+  }
+  if (fetch.state === "done") {
+    const failed = (fetch.feeds || []).filter((item) => !item.ok);
+    const extra = failed.length
+      ? ` No usable answer from ${failed.map((item) => item.name).join(", ")}.`
+      : "";
+    return (
+      `${measured}. Every address on offer below answered and verified ` +
+      `${where}'s certificate through its tunnel a moment ago. They are ` +
+      "still candidates: none is in a chain, and none carries a credential " +
+      `until you add it to one.${extra}`
+    );
+  }
+  return "No fetch has run yet.";
 }
 
 /* ------------------------------------------------------ the candidate list
@@ -1392,6 +1556,24 @@ function proxyEntryCap() {
   const raw = proxyVocabulary().max_entries;
   const cap = Number(raw);
   return Number.isFinite(cap) && cap > 0 ? cap : 0;
+}
+
+/* The fetch settings, read from the server's own answer rather than kept as
+   constants here.
+ *
+ * `PROXY_CANDIDATES_MAX` ships as 0 meaning UNLIMITED, which is the same trap
+ * `proxyEntryCap` exists for: `Number(x) || 60` cannot tell 0 from absent, and
+ * 7.19.0 shipped the old chain limit back onto the page four times over
+ * exactly that. So it is read once, here, with a test for "is it a positive
+ * number", and every caller asks this. */
+function proxyCandidateCap() {
+  const cap = Number((proxyVocabulary().fetch || {}).candidates_max);
+  return Number.isFinite(cap) && cap > 0 ? cap : 0;
+}
+
+function proxyFetchConcurrency() {
+  const value = Number((proxyVocabulary().fetch || {}).concurrency);
+  return Number.isFinite(value) && value > 0 ? value : 32;
 }
 
 /* How much of that provider's chain is already spoken for. This is the fact
@@ -1514,6 +1696,12 @@ function renderProxyCandidates() {
   if (!panel) return;
   restoreProxyCandidateView();
   panel.textContent = "";
+  // The progress line comes first and is rendered whether or not anything is
+  // on offer: the commonest moment to look at this panel is while a fetch is
+  // running and the offer list is still empty, and an empty panel then reads
+  // as a page that did nothing.
+  const progress = proxyFetchPanel();
+  if (progress) panel.appendChild(progress);
   const candidates = proxyCandidates();
   pruneProxyCandidateSelection(candidates);
   if (!candidates.length) {
@@ -1523,12 +1711,24 @@ function renderProxyCandidates() {
        instructions. On a fresh install there is nothing to tick -- MCC ships
        no lists -- so "tick a feed above" would point at a row that does not
        exist and read as a page that failed to load. */
-    empty.textContent = (proxyState.feeds || []).length
-      ? "No addresses are on offer. Switch a list on above and press Fetch; " +
-        "what comes back is a list of candidates you choose from, not a chain."
-      : "No addresses are on offer, and no lists have been added yet. Add one " +
-        "above and switch it on; what comes back is a list of candidates you " +
-        "choose from, not a chain.";
+    const running = proxyState.fetch && proxyState.fetch.state === "running";
+    const ran = proxyState.fetch && proxyState.fetch.state !== "idle";
+    empty.textContent = running
+      ? "Nothing has passed yet. Addresses appear here as they are tested, " +
+        "and only the ones that answered with the provider's own certificate " +
+        "intact are kept."
+      : ran
+        ? "None of the addresses those lists offered passed the test, so " +
+          "none is on offer. That is an ordinary result for public lists: " +
+          "most of what they publish has stopped listening. Try another list."
+        : (proxyState.feeds || []).length
+          ? "No addresses are on offer. Switch a list on above and press " +
+            "Fetch; every address the lists offer is tested and only the ones " +
+            "that work come back -- as candidates you choose from, not a chain."
+          : "No addresses are on offer, and no lists have been added yet. Add " +
+            "one above and switch it on; every address it offers is tested " +
+            "and only the ones that work come back -- as candidates you " +
+            "choose from, not a chain.";
     panel.appendChild(empty);
     return;
   }
@@ -1546,6 +1746,41 @@ function renderProxyCandidates() {
   notes.className = "proxy-candidate-notes";
   panel.appendChild(notes);
   paintProxyCandidateList();
+}
+
+/* The live progress of a fetch, and the Stop that ends it.
+
+   `null` when nothing has run in this server process, which is every fresh
+   start: a progress line reading "0 of 0" for a sweep nobody asked for is
+   worse than no line. */
+function proxyFetchPanel() {
+  const fetch = proxyState.fetch;
+  if (!fetch || fetch.state === "idle") return null;
+  const box = document.createElement("div");
+  box.className = "proxy-fetch-progress";
+  box.setAttribute("role", "status");
+
+  const line = document.createElement("p");
+  line.className = "proxy-fetch-line";
+  line.textContent = proxyFetchSentence();
+  box.appendChild(line);
+
+  if (fetch.state !== "running") return box;
+
+  const actions = document.createElement("div");
+  actions.className = "proxy-fetch-actions";
+  const stop = document.createElement("button");
+  stop.type = "button";
+  stop.className = "secondary-button proxy-fetch-stop";
+  stop.textContent = fetch.stopping ? "Stopping..." : "Stop";
+  stop.disabled = Boolean(fetch.stopping);
+  stop.title =
+    "Stops testing the rest. Everything that has already passed stays on " +
+    "offer -- stopping keeps the work, it does not throw it away.";
+  stop.addEventListener("click", () => stopProxyFetch());
+  actions.appendChild(stop);
+  box.appendChild(actions);
+  return box;
 }
 
 function proxyCandidateControls() {
@@ -1651,7 +1886,8 @@ function paintProxyCandidateList() {
   const notes = panel.querySelector(".proxy-candidate-notes");
   if (!bar || !list || !notes) return;
   const shown = proxyFilteredCandidates();
-  const drawn = shown.slice(0, PROXY_CANDIDATE_RENDER_CAP);
+  const page = Math.max(PROXY_CANDIDATE_RENDER_CAP, proxyState.drawn || 0);
+  const drawn = shown.slice(0, page);
 
   list.textContent = "";
   list.appendChild(proxyCandidateHead(shown, drawn));
@@ -1659,13 +1895,30 @@ function paintProxyCandidateList() {
 
   notes.textContent = "";
   if (shown.length > drawn.length) {
+    /* Paged, not truncated. Every row here is an address that was working when
+       it was tested, so "narrow the filter to see the rest" would be hiding
+       usable work behind a search box. The button is the way through the list;
+       the filter is still there for finding one address in it. */
     const more = document.createElement("p");
     more.className = "field-description proxy-candidate-more";
     more.textContent =
-      `Showing the first ${drawn.length} of ${shown.length} matching ` +
-      "addresses. Narrow the filter to see the rest -- Select all still means " +
-      "every address the filter matches, not only the ones drawn.";
+      `Showing ${drawn.length} of ${shown.length} matching addresses. ` +
+      "Select all still means every address the filter matches, not only the " +
+      "ones drawn.";
     notes.appendChild(more);
+    const showMore = document.createElement("button");
+    showMore.type = "button";
+    showMore.className = "ghost-button proxy-candidate-more-button";
+    const next = Math.min(
+      PROXY_CANDIDATE_RENDER_CAP,
+      shown.length - drawn.length,
+    );
+    showMore.textContent = `Show ${next} more`;
+    showMore.addEventListener("click", () => {
+      proxyState.drawn = drawn.length + PROXY_CANDIDATE_RENDER_CAP;
+      paintProxyCandidateList();
+    });
+    notes.appendChild(showMore);
   }
   const ineligible = proxyIneligibleProviders();
   if (ineligible.length) {
@@ -1800,6 +2053,53 @@ function paintProxyCandidateBar(bar, shown) {
     runProxyCandidateBulk({ action: "discard", proxies: selected }),
   );
   bar.appendChild(discard);
+
+  /* One press to use what the fetch found.
+
+     Selecting four hundred rows to add four hundred addresses that a fetch has
+     just proved all work is a gesture with no decision in it, so the page
+     offers to make it. It is the SAME write path -- `runProxyCandidateBulk`
+     with the working addresses in it -- because a second one is how 6.24.0
+     happened, and it re-tests every address exactly as a hand-picked add does:
+     the check is against one provider's host, this button may be pointing at a
+     different provider, and skipping the one gate standing between a stranger's
+     machine and a credential to save a few seconds is not a trade worth
+     making. */
+  const working = shown.filter((candidate) => candidate.working);
+  if (working.length) {
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = "primary-button proxy-candidate-bulk-button proxy-candidate-all";
+    const fitAll = Math.min(working.length, room.room);
+    all.textContent =
+      proxyState.confirming === "all"
+        ? `Add all ${fitAll} working -- press again to confirm`
+        : `Add all ${working.length} working to ${
+            destination ? destination.display_name : "this provider"
+          }`;
+    all.disabled = running || !destination || room.room === 0;
+    all.title =
+      "Every address below passed its test a moment ago. Adding them tests " +
+      "each one again against this provider's own host -- a verdict is about " +
+      "one destination, and this may not be the one they were tested for.";
+    all.addEventListener("click", () => {
+      // Selecting them first is what makes the progress, the per-row outcomes
+      // and the Undo read exactly as they do for a hand-made selection.
+      setProxyCandidateSelection(
+        working.map((candidate) => candidate.proxy),
+        true,
+      );
+      runProxyCandidateBulk({
+        action: "add",
+        // Its own confirm key, so the inline confirm on this button cannot be
+        // satisfied by a second press of the one beside it.
+        confirmAs: "all",
+        providerId: destination ? destination.provider_id : "",
+        proxies: working.map((candidate) => candidate.proxy).slice(0, room.room),
+      });
+    });
+    bar.appendChild(all);
+  }
 
   const clear = document.createElement("button");
   clear.type = "button";
@@ -2059,7 +2359,49 @@ function proxyCandidateRow(candidate) {
   facts.textContent = bits.join(" · ");
   facts.title =
     "What the feeds published about this address. None of it was measured " +
-    "by MCC -- the Test that runs when you add it is.";
+    "by MCC -- the check beside it is.";
+
+  /* What MCC itself found, which since 7.21.0 is the reason this row is here
+     at all: a fetch tests every address the lists offered and keeps only the
+     ones that passed. The destination is named because a verdict is about one
+     host -- "working" with no "for whom" would be a claim about providers
+     nobody measured. */
+  const measured = document.createElement("span");
+  const check = candidate.last_check || null;
+  if (candidate.untested) {
+    /* A candidate stored by 7.18-7.20, which offered addresses without testing
+       them. It is shown rather than deleted -- throwing away somebody's stored
+       list on an upgrade is not a migration anyone asked for -- and it is
+       never counted as working. The next fetch replaces the offer list, so it
+       clears itself the first time the button is pressed. */
+    measured.className = "proxy-candidate-measured proxy-candidate-untested";
+    measured.textContent = "not tested -- fetch again";
+    measured.title =
+      "This address was offered by a release that did not test what it " +
+      "found. Press Fetch to replace this list with addresses that have " +
+      "been measured, or add it and it will be tested then.";
+  } else if (candidate.working) {
+    measured.className = "proxy-candidate-measured proxy-candidate-working";
+    const latency =
+      check && check.latency_ms !== null && check.latency_ms !== undefined
+        ? ` · ${check.latency_ms} ms`
+        : "";
+    measured.textContent = candidate.checked_for_name
+      ? `working for ${candidate.checked_for_name}${latency}`
+      : `working${latency}`;
+    measured.title =
+      "MCC opened a tunnel through this address and an HTTPS request to " +
+      (candidate.checked_for_name || "that provider") +
+      "'s own host came back with that host's certificate verifying. " +
+      (check && check.exit_ip ? `It answered from ${check.exit_ip}. ` : "") +
+      "Adding it to a different provider tests it again against that one.";
+  } else {
+    measured.className = "proxy-candidate-measured proxy-candidate-untested";
+    measured.textContent = "tested, did not pass";
+    measured.title =
+      (check && check.detail) ||
+      "The last check of this address did not succeed.";
+  }
 
   // The one signal that is evidence rather than a copied claim, and it names
   // the feeds rather than only counting them.
@@ -2145,7 +2487,7 @@ function proxyCandidateRow(candidate) {
   );
   actions.appendChild(discard);
 
-  row.append(label, scheme, facts, sources, actions);
+  row.append(label, scheme, measured, facts, sources, actions);
   return row;
 }
 
@@ -2164,6 +2506,10 @@ function proxyCandidateRow(candidate) {
    means "before I pressed Add", not "before the last ten of them". */
 async function runProxyCandidateBulk(request) {
   const action = request.action;
+  // Which button is asking, for the inline confirm only. The route sees
+  // `action` and nothing else: "Add all working" is the add path with a longer
+  // list, not a third thing the server has to know about.
+  const asking = request.confirmAs || action;
   const proxies = request.proxies || [];
   if (proxyState.run) return;
   if (!proxies.length) {
@@ -2186,12 +2532,12 @@ async function runProxyCandidateBulk(request) {
   // gesture large enough to be a slip.
   if (
     proxies.length >= PROXY_CANDIDATE_CONFIRM_AT &&
-    proxyState.confirming !== action
+    proxyState.confirming !== asking
   ) {
-    proxyState.confirming = action;
+    proxyState.confirming = asking;
     paintProxyCandidateList();
     window.setTimeout(() => {
-      if (proxyState.confirming !== action) return;
+      if (proxyState.confirming !== asking) return;
       proxyState.confirming = "";
       paintProxyCandidateList();
     }, 5000);

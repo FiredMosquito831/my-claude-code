@@ -11,6 +11,7 @@ size. Those remain unverified by any automated check in this repo.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -3849,6 +3850,137 @@ def test_jsdom_a_saved_selection_stops_advertising_a_save(rendered) -> None:
     assert after["fetchLabel"] == "Fetch 2 feeds now"
     assert after["unsaved"] == ""
     assert after["saveDisabled"] is True
+
+
+# ------------------------------------------------- the fetch job (7.21.0)
+
+
+def test_jsdom_pressing_fetch_starts_a_job_and_shows_what_it_is_doing(
+    rendered,
+) -> None:
+    """A fetch that tests hundreds of addresses cannot be one open request.
+
+    The press starts a job on the server and comes straight back; the page
+    shows the progress and a Stop. A spinner with no numbers and no way out
+    would be the whole of what an operator saw for several minutes.
+    """
+
+    started = rendered["proxying"]["fetchStarted"]
+
+    assert started["job"], "the press did not start a job"
+    assert started["visible"] is True, "the progress panel is not visible"
+    assert started["stopVisible"] is True, "there is no way to stop it"
+    # And the button that starts it is out of action while one runs.
+    assert started["refetchDisabled"] is True
+    # And it says, from the first frame, what is about to happen to the
+    # addresses those lists offered -- against which provider's own host, and
+    # that only the ones that verify it are kept.
+    assert "NVIDIA NIM's own host" in started["line"]
+    assert "certificate intact are kept" in started["line"]
+
+
+def test_jsdom_a_second_fetch_while_one_runs_is_refused_by_the_server(
+    rendered,
+) -> None:
+    """Not merely a disabled button: the route answers 409."""
+
+    assert rendered["proxying"]["fetchSecondPress"] == 409
+
+
+def test_jsdom_the_progress_line_counts_what_was_tested_and_what_worked(
+    rendered,
+) -> None:
+    """The sentence the user asked for, in the server's own numbers.
+
+    "Tested 212 of 834 - 41 working - 163 dead - 2 refused". The page keeps no
+    count of its own, which is how the line cannot drift from what was
+    measured.
+    """
+
+    progress = rendered["proxying"]["fetchProgress"]
+    line = progress["afterTwoPolls"]
+
+    assert progress["moved"] is True, f"the counter never moved: {line}"
+    assert re.search(r"Tested \d+ of 834", line), line
+    assert re.search(r"\d+ working", line), line
+    assert re.search(r"\d+ dead", line), line
+    assert re.search(r"\d+ refused", line), line
+    # The destination is named: a verdict is about one host.
+    assert "NVIDIA NIM's own host" in line
+
+
+def test_jsdom_stopping_keeps_what_had_already_passed(rendered) -> None:
+    """Stop means "that is enough addresses", never "throw the work away"."""
+
+    stopped = rendered["proxying"]["fetchStopped"]
+
+    assert stopped["state"] == "stopped"
+    assert stopped["testedKept"] is True
+    assert stopped["workingKept"] is True
+    assert stopped["stopVisible"] is False, "Stop is still offered after stopping"
+    assert "stopping kept them" in stopped["line"]
+    # The addresses that passed are still on the page to be used.
+    assert stopped["offered"] > 0
+
+
+def test_jsdom_arriving_at_the_page_re_attaches_to_a_running_fetch(rendered) -> None:
+    """A reload must not lose a sweep that is minutes into its work.
+
+    Leaving the view and coming back runs the same load path a browser reload
+    does: it asks the server what is running and picks it up, timer and all.
+    """
+
+    again = rendered["proxying"]["fetchReattached"]
+
+    assert again["visible"] is True, "the progress panel did not come back"
+    assert again["stopVisible"] is True, "the re-attached run cannot be stopped"
+    assert "Tested" in again["line"]
+    assert again["stillPolling"] is True, "it re-rendered once and then went quiet"
+
+
+def test_jsdom_a_finished_fetch_says_what_it_found(rendered) -> None:
+    finished = rendered["proxying"]["fetchFinished"]
+
+    assert finished["state"] == "done"
+    assert "Tested 834 of 834" in finished["line"]
+    assert "none is in a chain" in finished["line"]
+
+
+def test_jsdom_one_press_adds_every_working_address_to_the_chosen_provider(
+    rendered,
+) -> None:
+    """The point of testing them up front: using them is one gesture.
+
+    Five of the fixture's six candidates are working; the sixth is refused and
+    is not one of them.
+    """
+
+    button = rendered["proxying"]["addAllWorking"]
+
+    assert button["visible"] is True
+    assert button["disabled"] is False
+    # Four, not five: the bulk-add block earlier in the harness already moved
+    # one of the working addresses into a chain, so it is no longer on offer.
+    assert button["label"] == "Add all 4 working to NVIDIA NIM"
+
+
+def test_jsdom_a_candidate_row_says_what_mcc_measured_and_for_whom(rendered) -> None:
+    """ "Working" with no "for whom" would be a claim about hosts nobody tested.
+
+    And a row stored by 7.18-7.20, which offered addresses without testing
+    them, must never read as working: it says so instead, and the next fetch
+    replaces it.
+    """
+
+    rows = rendered["proxying"]["candidateMeasured"]
+    texts = [row["text"] for row in rows]
+
+    assert any(text.startswith("working for NVIDIA NIM") for text in texts), texts
+    assert "not tested -- fetch again" in texts, texts
+    working = [row for row in rows if row["text"].startswith("working for")]
+    assert all("proxy-candidate-working" in row["className"] for row in working)
+    untested = [row for row in rows if row["text"] == "not tested -- fetch again"]
+    assert all("proxy-candidate-untested" in row["className"] for row in untested)
 
 
 def test_jsdom_the_subscription_card_says_what_it_risks_and_starts_unticked(

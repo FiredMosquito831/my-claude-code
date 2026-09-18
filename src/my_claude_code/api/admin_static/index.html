@@ -350,25 +350,37 @@
               <div class="callout" id="proxyingCandidateMeaning">
                 <p>
                   <strong>What an address from a list is, and is not.</strong>
-                  It is a <em>candidate</em>: an address somebody else
-                  published, shown here so you can compare and choose. It is in
-                  no chain, nothing routes through it, and no key or token has
-                  gone near it. It becomes part of a chain only when you tick
-                  it, choose one provider, and press <em>Test and add</em>
-                  &mdash; which measures every address you ticked against that
-                  provider&rsquo;s own host first, and refuses any whose tunnel
-                  breaks certificate validation, exactly as for an address you
-                  typed yourself. That is a network call per address, so a
-                  press of it reports each one separately: added, added but
-                  benched because it did not answer, or refused.
+                  It is a <em>candidate</em>: an address MCC found on a list you
+                  chose, <strong>tested</strong>, and found working. It is in no
+                  chain, nothing routes through it, and no key or token has gone
+                  near it. It becomes part of a chain only when you choose one
+                  provider and press <em>Add</em> &mdash; which measures it
+                  against that provider&rsquo;s own host again, and refuses any
+                  whose tunnel breaks certificate validation, exactly as for an
+                  address you typed yourself. That is a network call per
+                  address, so a press of it reports each one separately: added,
+                  added but benched because it did not answer, or refused.
                 </p>
                 <p>
-                  MCC does not vouch for any list you point it at, or for the
-                  machines on one. <em>How many feeds agree</em> on an address
-                  is the one signal here that is evidence rather than a claim
-                  copied from one publisher, so it is shown on every row, with
-                  the names behind it &mdash; which is worth having only once
-                  you have added more than one list.
+                  <strong>Fetch tests what it finds.</strong> Every address the
+                  lists offer is checked before it is shown &mdash; a
+                  connection, a tunnel, and an HTTPS request to the provider
+                  named below with ordinary strict certificate verification
+                  &mdash; and only the ones that passed are kept. An address
+                  that did not answer is not stored; one whose tunnel was
+                  reading the traffic is recorded refused and is not offered
+                  again. Hundreds of addresses take minutes, so the sweep runs
+                  in the background, says what it has found so far, and can be
+                  stopped without losing what has already passed.
+                </p>
+                <p>
+                  MCC does not vouch for any list you point it at, and a test
+                  says what an address was doing a minute ago rather than what
+                  it will do. <em>How many feeds agree</em> on an address is the
+                  other signal here that is evidence rather than a claim copied
+                  from one publisher, so it is shown on every row, with the
+                  names behind it &mdash; which is worth having only once you
+                  have added more than one list.
                 </p>
               </div>
               <div id="proxyingFeeds"></div>

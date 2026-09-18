@@ -2052,6 +2052,71 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_CANDIDATES_MAX",
+        "Most addresses one fetch may offer",
+        "credential_health",
+        "number",
+        settings_attr="proxy_candidates_max",
+        default="0",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=0,
+        maximum=100000,
+        description=(
+            "How many of the addresses a fetch found it tests and keeps on "
+            "offer, best-ranked first. 0 is no limit and is what ships: a "
+            "chain has held any number of entries since 7.19.0, so trimming "
+            "the offer to a round number would be MCC inventing a ceiling you "
+            "did not ask for. Set one if you would rather a fetch finished "
+            "sooner -- the addresses more feeds agree on are tested first."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_FETCH_TEST_CONCURRENCY",
+        "Addresses tested at once by a fetch",
+        "credential_health",
+        "number",
+        settings_attr="proxy_fetch_test_concurrency",
+        default="32",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=4,
+        maximum=128,
+        description=(
+            "A fetch tests every address it found before offering it, and a "
+            "public list holds hundreds. Each test waits on somebody else's "
+            "network rather than on this machine, so they overlap: 32 at once "
+            "turns a list of eight hundred from hours into minutes. The Test "
+            "and Add buttons are unaffected and keep their own smaller bound "
+            "-- those are a handful of addresses with you watching. Raising "
+            "this opens more sockets at once; the number here is exactly how "
+            "many."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_FETCH_CONNECT_TIMEOUT_SECONDS",
+        "Seconds a fetch waits for an address to answer",
+        "credential_health",
+        "number",
+        settings_attr="proxy_fetch_connect_timeout_seconds",
+        default="5",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=60,
+        description=(
+            "The first step of a fetch's test is a plain TCP connection, and "
+            "the commonest thing in a public list is an address that has "
+            "stopped listening. This is how long that step waits before "
+            "calling it dead. It applies only to the fetch sweep: an address "
+            "that does answer gets the full check timeout for the HTTPS "
+            "handshake that follows, and the Test button is unaffected."
+        ),
+    ),
+    ConfigFieldSpec(
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
         "Route around a rate-limited model",
         "credential_health",
