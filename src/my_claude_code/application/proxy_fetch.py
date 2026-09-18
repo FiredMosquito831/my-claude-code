@@ -96,6 +96,7 @@ from my_claude_code.application.proxy_ingest import (
 )
 from my_claude_code.config.atomic_json import write_json_document_atomically
 from my_claude_code.config.constants import (
+    PROXY_FETCH_PERSIST_INTERVAL_SECONDS_DEFAULT,
     PROXY_FETCH_TEST_CONCURRENCY_MAX,
     PROXY_FETCH_TEST_CONCURRENCY_MIN,
 )
@@ -158,8 +159,12 @@ DEFAULT_FETCH_CONCURRENCY_MODE = FETCH_CONCURRENCY_MODE_FIXED
 #: batch small enough that almost nothing is ever at risk and large enough that
 #: a sweep is not a write per address; five seconds is what makes a slow trickle
 #: durable too.
+#:
+#: Since 7.24.0 the five seconds is the operator's, settable as
+#: ``PROXY_FETCH_PERSIST_INTERVAL_SECONDS`` on Limits & Resilience. This name
+#: is the shipped default and what a caller that is handed nothing still uses.
 FETCH_PERSIST_BATCH = 25
-FETCH_PERSIST_INTERVAL_SECONDS = 5.0
+FETCH_PERSIST_INTERVAL_SECONDS = PROXY_FETCH_PERSIST_INTERVAL_SECONDS_DEFAULT
 
 # How hard the *last* write of a pass tries. Writing the store is an atomic
 # rename, and on Windows a rename over a file another handle has open fails
@@ -445,6 +450,7 @@ async def run_fetch_pass(
     check_depth: str = DEFAULT_FETCH_CHECK_DEPTH,
     timeout: float = PROXY_CHECK_TIMEOUT_SECONDS,
     feed_timeout: float = FEED_TIMEOUT_SECONDS,
+    persist_interval: float = FETCH_PERSIST_INTERVAL_SECONDS,
     limit: int = 0,
     exit_ip_url: str = "",
     progress: FetchProgress | None = None,
@@ -558,7 +564,7 @@ async def run_fetch_pass(
         async with write_lock:
             waited = time.monotonic() - last_write
             enough = unwritten >= FETCH_PERSIST_BATCH
-            overdue = unwritten > 0 and waited >= FETCH_PERSIST_INTERVAL_SECONDS
+            overdue = unwritten > 0 and waited >= persist_interval
             if not force and not enough and not overdue:
                 return
             snapshot = sorted(passing, key=lambda pair: order.get(pair[0], len(order)))
@@ -1023,6 +1029,8 @@ async def start_fetch(
     concurrency_mode: str = DEFAULT_FETCH_CONCURRENCY_MODE,
     check_depth: str = DEFAULT_FETCH_CHECK_DEPTH,
     timeout: float = PROXY_CHECK_TIMEOUT_SECONDS,
+    feed_timeout: float = FEED_TIMEOUT_SECONDS,
+    persist_interval: float = FETCH_PERSIST_INTERVAL_SECONDS,
     limit: int = 0,
     exit_ip_url: str = "",
 ) -> FetchJob:
@@ -1057,6 +1065,8 @@ async def start_fetch(
                 concurrency_mode=concurrency_mode,
                 check_depth=check_depth,
                 timeout=timeout,
+                feed_timeout=feed_timeout,
+                persist_interval=persist_interval,
                 limit=limit,
                 exit_ip_url=exit_ip_url,
                 progress=job.progress,

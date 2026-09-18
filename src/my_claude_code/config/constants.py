@@ -526,6 +526,69 @@ PROXY_FETCH_CHECK_DEPTH_NAMES: tuple[str, ...] = ("tls", "request")
 PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_DEFAULT = 5.0
 PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MIN = 1.0
 PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MAX = 60.0
+# How long any single leg of an address check may take -- the HTTPS handshake
+# through the tunnel, and the optional HEAD that follows it. Ten seconds is
+# what every release up to 7.23.0 used and is therefore the default here: this
+# setting exposes the number, it does not change it. Deliberately shorter than
+# the request path's own connect timeout, because a checker that waits sixty
+# seconds on a dead address turns a sweep of twelve into four minutes of
+# nothing. Raise it for a chain that has to reach the other side of the world;
+# lower it to write off a slow address sooner.
+#
+# Mirrored by ``application.proxy_check.PROXY_CHECK_TIMEOUT_SECONDS``, which is
+# where the check reads it -- ``config`` is a leaf package and may not import
+# ``application``, so the literal lives here and that module aliases it.
+PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT = 10.0
+PROXY_CHECK_TIMEOUT_SECONDS_MIN = 1.0
+PROXY_CHECK_TIMEOUT_SECONDS_MAX = 120.0
+# How many addresses the background health re-prober has in flight. This is NOT
+# the fetch sweep, and not the operator's Add either -- both of those are paced
+# by PROXY_FETCH_TEST_CONCURRENCY. This one number belongs to the loop that
+# re-tests benched addresses until they pass, which is its only consumer
+# (``runtime.proxy_check_timer``).
+#
+# Four is what 7.19.0 through 7.23.0 used and is the default for that reason.
+# The ceiling is 128 rather than the fetch sweep's 500 because these checks
+# always send the full end-to-end request to a provider's own host, and a
+# hundred of those at once from one machine is already a lot to ask of it.
+PROXY_CHECK_MAX_CONCURRENCY_DEFAULT = 4
+PROXY_CHECK_MAX_CONCURRENCY_MIN = 1
+PROXY_CHECK_MAX_CONCURRENCY_MAX = 128
+# How long one proxy feed has to answer before it is written off for that pass.
+# Fifteen seconds is 7.20.0's number and the shipped default. Feeds are read
+# one after another, so this bounds the Fetch button by the number of feeds
+# rather than by the patience of the slowest list. Raise it for a big list on
+# a slow mirror; a public list that cannot answer at all is not the one to
+# build a chain on.
+PROXY_FEED_TIMEOUT_SECONDS_DEFAULT = 15.0
+PROXY_FEED_TIMEOUT_SECONDS_MIN = 1.0
+PROXY_FEED_TIMEOUT_SECONDS_MAX = 300.0
+# How many feed URLs the store will hold. Twenty is what the Proxying page has
+# enforced since 7.20.0 and is the default. It is a bound on a list a person
+# types, not on anything the network does: each feed is one request per refresh
+# pass, so a hundred feeds is a hundred requests to strangers every time the
+# loop runs. Raise it if you have the lists; the ceiling of 1000 is a sanity
+# bound on a pasted document, not an opinion.
+PROXY_FEED_MAX_DEFAULT = 20
+PROXY_FEED_MAX_MIN = 1
+PROXY_FEED_MAX_MAX = 1000
+# How many addresses one bulk Add or Discard may carry. A hundred is 7.21.0's
+# number and the default. It bounds a single HTTP request's body and the sweep
+# it starts, not the number of addresses a chain may hold -- that has been
+# unlimited since 7.19.0, and "Add all working" on a big fetch is exactly the
+# press this ceiling used to refuse. Raise it to add a whole sweep at once.
+PROXY_CANDIDATE_BULK_MAX_DEFAULT = 100
+PROXY_CANDIDATE_BULK_MAX_MIN = 1
+PROXY_CANDIDATE_BULK_MAX_MAX = 100000
+# How often a running fetch writes what has passed so far. Five seconds is
+# 7.22.0's number and the default. Since 7.22.0 a sweep persists in batches
+# while it runs rather than only at the end, so a server killed mid-sweep
+# keeps the addresses it had already proven; this is the longest a proven
+# address may sit unwritten. Lower it to lose less to a crash, raise it to
+# write the store less often while a long sweep runs.
+PROXY_FETCH_PERSIST_INTERVAL_SECONDS_DEFAULT = 5.0
+PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MIN = 0.5
+PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MAX = 300.0
 # What a 429 on a pooled credential means. True: it benches the (key, model)
 # pair and the executor moves to another model on the SAME provider first,
 # because a gateway that limits one model usually still answers another on the

@@ -2228,6 +2228,143 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_CHECK_TIMEOUT_SECONDS",
+        "Seconds one leg of an address check may take",
+        "credential_health",
+        "number",
+        settings_attr="proxy_check_timeout_seconds",
+        default="10",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=120,
+        description=(
+            "Every check of an address opens a tunnel and completes a TLS "
+            "handshake to your provider's own host through it; this is how "
+            "long any one of those steps may take before the address is "
+            "called dead. Ten seconds is what MCC has always used and nothing "
+            "changes unless you change it. Raise it for a chain that has to "
+            "reach the other side of the world -- a working but distant "
+            "address can otherwise be written off. Lower it and a sweep "
+            "finishes sooner, at the cost of failing addresses that were only "
+            "slow. This is the check, not the request path: a real request "
+            'through a proxy uses "Seconds to open a proxied connection".'
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_CHECK_MAX_CONCURRENCY",
+        "Addresses checked at once outside a fetch",
+        "credential_health",
+        "number",
+        settings_attr="proxy_check_max_concurrency",
+        default="4",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=128,
+        description=(
+            "How many addresses the background health re-prober tests at the "
+            "same time. That loop is the only thing this paces: since 7.19.0 "
+            "an address that failed stays out of the rotation until a check "
+            "passes, and this is how many of those catch-up checks overlap. "
+            "Four is what MCC has always used. Each one sends the full "
+            "end-to-end request to your provider, so raising this sends that "
+            "many at once from this machine -- which is why the ceiling is "
+            "128 and not the 500 the fetch sweep allows. Raise it if a chain "
+            "of many benched addresses takes too long to come back. The "
+            'fetch sweep and "Add all working" are paced by "Addresses '
+            'tested at once by a fetch" instead.'
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_FEED_TIMEOUT_SECONDS",
+        "Seconds one feed has to answer",
+        "credential_health",
+        "number",
+        settings_attr="proxy_feed_timeout_seconds",
+        default="15",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=300,
+        description=(
+            "Feeds are read one after another, so this is what bounds the "
+            "Fetch button: a feed that has not answered in this long is "
+            "skipped for that pass and the next one is read. Fifteen seconds "
+            "is what MCC has always used. Raise it if you have a large list "
+            "on a slow mirror and the Proxying page keeps reporting it as "
+            "unreachable; a list that cannot answer at all is not one to "
+            "build a chain on."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_FEED_MAX",
+        "Most feed URLs the store will hold",
+        "credential_health",
+        "number",
+        settings_attr="proxy_feed_max",
+        default="20",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=1000,
+        description=(
+            "Saving the feed list on the Proxying page refuses more than this "
+            "many URLs. Twenty is what MCC has always allowed. It bounds a "
+            "list you type, not anything a chain may hold: every feed is one "
+            "request to somebody else's server on every refresh pass, so a "
+            "hundred feeds is a hundred requests each time the loop runs. "
+            "Raise it if you have the lists."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_CANDIDATE_BULK_MAX",
+        "Most addresses one bulk Add may carry",
+        "credential_health",
+        "number",
+        settings_attr="proxy_candidate_bulk_max",
+        default="100",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=100000,
+        description=(
+            "How many addresses one press of Add all working, or of a bulk "
+            "Discard, may send. A hundred is what MCC has always allowed. It "
+            "bounds one request and the sweep it starts, not how many entries "
+            "a chain may hold -- that has had no limit since 7.19.0. Raise it "
+            "to hand a whole fetch to a provider in one press; every address "
+            "is still proven end to end before it enters a chain."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_FETCH_PERSIST_INTERVAL_SECONDS",
+        "Seconds between a running fetch's saves",
+        "credential_health",
+        "number",
+        settings_attr="proxy_fetch_persist_interval_seconds",
+        default="5",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=0.5,
+        maximum=300,
+        description=(
+            "A fetch writes what has passed so far while it is still running, "
+            "so a server that stops mid-sweep keeps the addresses it had "
+            "already proven. This is the longest a proven address may sit "
+            "unwritten. Five seconds is what MCC has always used. Lower it to "
+            "lose less to a crash; raise it to touch the store less often "
+            "during a long sweep. Addresses are also written whenever enough "
+            "of them have accumulated, and always once at the end."
+        ),
+    ),
+    ConfigFieldSpec(
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
         "Route around a rate-limited model",
         "credential_health",

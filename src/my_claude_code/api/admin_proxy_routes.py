@@ -48,7 +48,6 @@ from my_claude_code.api.admin_routes import require_loopback_admin
 from my_claude_code.api.dependencies import get_services
 from my_claude_code.api.ports import ApiServices
 from my_claude_code.application.proxy_check import (
-    PROXY_CHECK_TIMEOUT_SECONDS,
     check_budget,
     check_endpoints,
     destination_for_provider,
@@ -68,6 +67,8 @@ from my_claude_code.application.proxy_ingest import (
 from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.admin.status import provider_config_status
 from my_claude_code.config.constants import (
+    PROXY_CANDIDATE_BULK_MAX_DEFAULT,
+    PROXY_FEED_MAX_DEFAULT,
     PROXY_FEED_MINIMUM_MINUTES,
     PROXY_FETCH_TEST_CONCURRENCY_MAX,
     ROTATION_POLICY_ORDER,
@@ -354,7 +355,7 @@ async def check_proxy_chain(
     outcomes = await check_endpoints(
         wanted,
         dict.fromkeys(wanted, destination),
-        timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+        timeout=float(settings.proxy_check_timeout_seconds),
         exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
     )
     refreshed = await asyncio.to_thread(_payload, services)
@@ -590,7 +591,7 @@ def _refuse_if_intercepted(store: ProxyChains, proxy_id: str, index: int) -> Non
 #: The most feeds one install may hold. A pass is serial at fifteen seconds a
 #: feed, so this is the bound that keeps the Fetch button from being unbounded
 #: in wall-clock; it is far above anything an operator would curate by hand.
-PROXY_FEED_MAX = 20
+PROXY_FEED_MAX = PROXY_FEED_MAX_DEFAULT
 
 
 class ProxyFeedPayload(BaseModel):
@@ -639,11 +640,12 @@ async def put_proxy_feeds(
     """
 
     require_loopback_admin(request)
-    if len(payload.feeds) > PROXY_FEED_MAX:
+    feed_max = int(services.requests.current_settings().proxy_feed_max)
+    if len(payload.feeds) > feed_max:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"At most {PROXY_FEED_MAX} feeds; this list has "
+                f"At most {feed_max} feeds; this list has "
                 f"{len(payload.feeds)}. Each one is a separate request on "
                 "every pass."
             ),
@@ -911,7 +913,9 @@ async def ingest_proxy_feeds(
             connect_timeout=float(settings.proxy_fetch_connect_timeout_seconds),
             concurrency_mode=str(settings.proxy_fetch_concurrency_mode),
             check_depth=str(settings.proxy_fetch_check_depth),
-            timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+            timeout=float(settings.proxy_check_timeout_seconds),
+            feed_timeout=float(settings.proxy_feed_timeout_seconds),
+            persist_interval=float(settings.proxy_fetch_persist_interval_seconds),
             limit=int(settings.proxy_candidates_max),
             exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
         )
@@ -1046,7 +1050,7 @@ class ProxyUndoPayload(BaseModel):
 #: on a misbehaving caller rather than on an operator: nothing the page does
 #: comes close to it, and a chain is not capped at all unless the operator
 #: capped it.
-PROXY_CANDIDATE_BULK_MAX = 100
+PROXY_CANDIDATE_BULK_MAX = PROXY_CANDIDATE_BULK_MAX_DEFAULT
 
 #: Outcomes one address can have, in the words the page reports them with. This
 #: is the vocabulary the summary and the per-row state both read from, so a
@@ -1112,11 +1116,12 @@ async def bulk_proxy_candidates(
             status_code=422,
             detail="Select at least one address first.",
         )
-    if len(proxies) > PROXY_CANDIDATE_BULK_MAX:
+    bulk_max = int(services.requests.current_settings().proxy_candidate_bulk_max)
+    if len(proxies) > bulk_max:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"At most {PROXY_CANDIDATE_BULK_MAX} addresses in one request; "
+                f"At most {bulk_max} addresses in one request; "
                 f"this one carries {len(proxies)}."
             ),
         )
@@ -1205,13 +1210,13 @@ async def bulk_proxy_candidates(
         await check_endpoints(
             tuple(testable),
             dict.fromkeys(testable, destination),
-            timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+            timeout=float(settings.proxy_check_timeout_seconds),
             exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
             concurrency=pace.value,
             max_concurrency=PROXY_FETCH_TEST_CONCURRENCY_MAX,
             budget=check_budget(
-                connect_timeout=PROXY_CHECK_TIMEOUT_SECONDS,
-                timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+                connect_timeout=float(settings.proxy_check_timeout_seconds),
+                timeout=float(settings.proxy_check_timeout_seconds),
                 exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
             ),
         )
@@ -1528,7 +1533,7 @@ def _payload(services: ApiServices) -> dict[str, Any]:
                 "connect_timeout_seconds": float(
                     settings.proxy_fetch_connect_timeout_seconds
                 ),
-                "check_timeout_seconds": PROXY_CHECK_TIMEOUT_SECONDS,
+                "check_timeout_seconds": float(settings.proxy_check_timeout_seconds),
                 # 0 is UNLIMITED and is what ships. It travels as 0, and the
                 # page must read it with a test for "is it a positive number",
                 # never with `Number(x) || <something>` -- which cannot tell 0
@@ -1543,7 +1548,7 @@ def _payload(services: ApiServices) -> dict[str, Any]:
                 for parser in PARSERS
             ],
             "feed_name_max_length": FEED_NAME_MAX_LENGTH,
-            "max_feeds": PROXY_FEED_MAX,
+            "max_feeds": int(settings.proxy_feed_max),
         },
         "feeds": feed_payload(store),
         "candidates": [

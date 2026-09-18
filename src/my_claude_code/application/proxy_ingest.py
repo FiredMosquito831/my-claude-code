@@ -41,6 +41,7 @@ from datetime import UTC, datetime
 import httpx
 from loguru import logger
 
+from my_claude_code.config.constants import PROXY_FEED_TIMEOUT_SECONDS_DEFAULT
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import (
     SOURCE_FEED,
@@ -64,7 +65,11 @@ from my_claude_code.config.proxy_feeds import (
 #: minute per feed would make the Fetch button unbounded in the number of feeds
 #: the operator added -- and a public list that cannot answer in fifteen
 #: seconds is not the one to build a chain on.
-FEED_TIMEOUT_SECONDS = 15.0
+#:
+#: Since 7.24.0 this is the shipped default of the
+#: ``PROXY_FEED_TIMEOUT_SECONDS`` setting on Limits & Resilience, and the
+#: value every caller that is handed nothing still uses.
+FEED_TIMEOUT_SECONDS = PROXY_FEED_TIMEOUT_SECONDS_DEFAULT
 
 #: What MCC calls itself when it asks. These are other people's servers and an
 #: unattributed scraper is the thing every one of their READMEs complains

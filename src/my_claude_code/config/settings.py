@@ -74,6 +74,9 @@ from .constants import (
     PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+    PROXY_CANDIDATE_BULK_MAX_DEFAULT,
+    PROXY_CANDIDATE_BULK_MAX_MAX,
+    PROXY_CANDIDATE_BULK_MAX_MIN,
     PROXY_CANDIDATES_MAX_DEFAULT,
     PROXY_CANDIDATES_MAX_MAX,
     PROXY_CANDIDATES_MAX_MIN,
@@ -83,13 +86,25 @@ from .constants import (
     PROXY_CHECK_INTERVAL_MINUTES_DEFAULT,
     PROXY_CHECK_INTERVAL_MINUTES_MAX,
     PROXY_CHECK_INTERVAL_MINUTES_MIN,
+    PROXY_CHECK_MAX_CONCURRENCY_DEFAULT,
+    PROXY_CHECK_MAX_CONCURRENCY_MAX,
+    PROXY_CHECK_MAX_CONCURRENCY_MIN,
+    PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT,
+    PROXY_CHECK_TIMEOUT_SECONDS_MAX,
+    PROXY_CHECK_TIMEOUT_SECONDS_MIN,
     PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
     PROXY_CONNECT_TIMEOUT_SECONDS_MAX,
     PROXY_CONNECT_TIMEOUT_SECONDS_MIN,
+    PROXY_FEED_MAX_DEFAULT,
+    PROXY_FEED_MAX_MAX,
+    PROXY_FEED_MAX_MIN,
     PROXY_FEED_REFRESH_ENABLED_DEFAULT,
     PROXY_FEED_REFRESH_MINUTES_DEFAULT,
     PROXY_FEED_REFRESH_MINUTES_MAX,
     PROXY_FEED_REFRESH_MINUTES_MIN,
+    PROXY_FEED_TIMEOUT_SECONDS_DEFAULT,
+    PROXY_FEED_TIMEOUT_SECONDS_MAX,
+    PROXY_FEED_TIMEOUT_SECONDS_MIN,
     PROXY_FETCH_CHECK_DEPTH_DEFAULT,
     PROXY_FETCH_CHECK_DEPTH_NAMES,
     PROXY_FETCH_CONCURRENCY_MODE_DEFAULT,
@@ -97,6 +112,9 @@ from .constants import (
     PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_DEFAULT,
     PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MAX,
     PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MIN,
+    PROXY_FETCH_PERSIST_INTERVAL_SECONDS_DEFAULT,
+    PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MAX,
+    PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MIN,
     PROXY_FETCH_TEST_CONCURRENCY_DEFAULT,
     PROXY_FETCH_TEST_CONCURRENCY_MAX,
     PROXY_FETCH_TEST_CONCURRENCY_MIN,
@@ -1121,6 +1139,51 @@ class Settings(BaseSettings):
         validation_alias="PROXY_FETCH_CONNECT_TIMEOUT_SECONDS",
         ge=PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MIN,
         le=PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MAX,
+    )
+    # How long any single leg of an address check may take. Ten seconds is what
+    # every release up to 7.23.0 used; the setting exposes that number, it does
+    # not change it.
+    proxy_check_timeout_seconds: float = Field(
+        default=PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT,
+        validation_alias="PROXY_CHECK_TIMEOUT_SECONDS",
+        ge=PROXY_CHECK_TIMEOUT_SECONDS_MIN,
+        le=PROXY_CHECK_TIMEOUT_SECONDS_MAX,
+    )
+    # How many addresses a check sweep has in flight. Not the fetch sweep --
+    # this paces the background health re-probe and the operator's own Add.
+    proxy_check_max_concurrency: int = Field(
+        default=PROXY_CHECK_MAX_CONCURRENCY_DEFAULT,
+        validation_alias="PROXY_CHECK_MAX_CONCURRENCY",
+        ge=PROXY_CHECK_MAX_CONCURRENCY_MIN,
+        le=PROXY_CHECK_MAX_CONCURRENCY_MAX,
+    )
+    # How long one feed has to answer before it is written off for that pass.
+    proxy_feed_timeout_seconds: float = Field(
+        default=PROXY_FEED_TIMEOUT_SECONDS_DEFAULT,
+        validation_alias="PROXY_FEED_TIMEOUT_SECONDS",
+        ge=PROXY_FEED_TIMEOUT_SECONDS_MIN,
+        le=PROXY_FEED_TIMEOUT_SECONDS_MAX,
+    )
+    # How many feed URLs the store will hold.
+    proxy_feed_max: int = Field(
+        default=PROXY_FEED_MAX_DEFAULT,
+        validation_alias="PROXY_FEED_MAX",
+        ge=PROXY_FEED_MAX_MIN,
+        le=PROXY_FEED_MAX_MAX,
+    )
+    # How many addresses one bulk Add or Discard may carry.
+    proxy_candidate_bulk_max: int = Field(
+        default=PROXY_CANDIDATE_BULK_MAX_DEFAULT,
+        validation_alias="PROXY_CANDIDATE_BULK_MAX",
+        ge=PROXY_CANDIDATE_BULK_MAX_MIN,
+        le=PROXY_CANDIDATE_BULK_MAX_MAX,
+    )
+    # The longest a proven address may sit unwritten while a fetch runs.
+    proxy_fetch_persist_interval_seconds: float = Field(
+        default=PROXY_FETCH_PERSIST_INTERVAL_SECONDS_DEFAULT,
+        validation_alias="PROXY_FETCH_PERSIST_INTERVAL_SECONDS",
+        ge=PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MIN,
+        le=PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MAX,
     )
     # Backoff between a provider's own retries of a 429 or 5xx.
     provider_retry_backoff_base_seconds: float = Field(

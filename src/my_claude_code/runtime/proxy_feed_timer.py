@@ -41,7 +41,6 @@ from collections.abc import Callable
 
 from loguru import logger
 
-from my_claude_code.application.proxy_check import PROXY_CHECK_TIMEOUT_SECONDS
 from my_claude_code.application.proxy_fetch import (
     FetchAlreadyRunning,
     FetchRun,
@@ -222,7 +221,9 @@ class ProxyFeedTimer:
                 # one happened to run last.
                 concurrency_mode=str(settings.proxy_fetch_concurrency_mode),
                 check_depth=str(settings.proxy_fetch_check_depth),
-                timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+                timeout=float(settings.proxy_check_timeout_seconds),
+                feed_timeout=float(settings.proxy_feed_timeout_seconds),
+                persist_interval=float(settings.proxy_fetch_persist_interval_seconds),
                 limit=int(settings.proxy_candidates_max),
                 exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
             )

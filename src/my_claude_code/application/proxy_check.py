@@ -51,6 +51,10 @@ import httpx
 import socksio.socks5
 from loguru import logger
 
+from my_claude_code.config.constants import (
+    PROXY_CHECK_MAX_CONCURRENCY_DEFAULT,
+    PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT,
+)
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -68,7 +72,14 @@ from my_claude_code.core.proxy_rotation import PROXY_INTERCEPTION, PROXY_REACHAB
 #: How long any single leg of the check may take. Deliberately shorter than the
 #: request path's own connect timeout: a checker that waits sixty seconds on a
 #: dead address turns a sweep of twelve into four minutes of nothing.
-PROXY_CHECK_TIMEOUT_SECONDS = 10.0
+#:
+#: Since 7.24.0 the number is the operator's, settable as
+#: ``PROXY_CHECK_TIMEOUT_SECONDS`` on Limits & Resilience. This name is the
+#: shipped default and the fallback every caller that is handed nothing still
+#: uses, so a call site that has no Settings in reach behaves exactly as it
+#: did. ``config`` is a leaf package that may not import ``application``, so
+#: the literal lives in ``config.constants`` and this aliases it.
+PROXY_CHECK_TIMEOUT_SECONDS = PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT
 
 #: The most bytes of an exit-IP answer that are kept. The operator's URL is
 #: their own choice and may return anything at all; the store holds a short
@@ -83,7 +94,11 @@ EXIT_IP_MAX_CHARS = 64
 #: because the slow half of a check is a TLS handshake through a stranger's
 #: machine: four of those overlap comfortably and forty would be a small
 #: outbound flood from an admin page.
-PROXY_CHECK_MAX_CONCURRENCY = 4
+#:
+#: Since 7.24.0 this is the shipped default of the
+#: ``PROXY_CHECK_MAX_CONCURRENCY`` setting on Limits & Resilience, and the
+#: value every caller that is handed nothing still uses.
+PROXY_CHECK_MAX_CONCURRENCY = PROXY_CHECK_MAX_CONCURRENCY_DEFAULT
 
 #: How long the *tidying up* after a check may take. Closing a socket is not
 #: part of the measurement and nothing about the verdict depends on it
