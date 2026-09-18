@@ -16,6 +16,8 @@ does not own a second copy of it.
 """
 
 import asyncio
+import json
+import time
 
 import pytest
 
@@ -360,7 +362,19 @@ async def test_a_bounded_fetch_tests_the_best_ranked_addresses(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_stopping_keeps_everything_that_had_already_passed(monkeypatch):
-    """Stop means "that is enough addresses", never "throw the work away"."""
+    """Stop means "that is enough addresses", never "throw the work away".
+
+    **Reversed in 7.22.1, deliberately.** This used to assert that the check
+    which asked for the stop still counted -- that Stop took effect only at the
+    *next* address. That is exactly what made Stop unbounded: with the workers
+    mid-handshake against strangers' machines, "the next address" is as far
+    away as the slowest of them cares to make it, and on one operator's install
+    it never arrived at all. Stop now cancels what is in flight, so the address
+    whose check was cancelled has no verdict and is not counted -- which is
+    what Stop was asking for. What the promise was always about is unchanged
+    and is what is asserted here: every verdict that *had* been reached is
+    counted and is on disk.
+    """
 
     _offer(monkeypatch, [f"10.0.0.{n}:8080" for n in range(1, 21)])
     halt = asyncio.Event()
@@ -379,10 +393,176 @@ async def test_stopping_keeps_everything_that_had_already_passed(monkeypatch):
     run = await _run(concurrency=1, stop=halt)
 
     assert run.stopped is True
-    assert run.tested == 5
-    assert run.working == 5
+    # Some of the twenty, not all of them, and not none of them.
+    assert 0 < run.tested < 20
+    assert run.working == run.tested
     # On disk, not merely in the reply.
+    assert len(load_proxy_chains().candidates) == run.working
+
+
+@pytest.mark.asyncio
+async def test_stop_settles_in_seconds_with_fifty_checks_mid_handshake(monkeypatch):
+    """Fifty addresses hanging for ever, and Stop still settles at once.
+
+    The live defect, in miniature: the sweep is in flight against addresses
+    that will never answer, and the operator presses Stop. Before 7.22.1 the
+    press set a flag the workers read *between* addresses, so a worker stuck
+    inside a check never read it and the job never settled -- the page said
+    "Stopping..." for seventeen minutes and then for ever.
+    """
+
+    _offer(monkeypatch, [f"10.0.0.{n}:8080" for n in range(1, 61)])
+    halt = asyncio.Event()
+    started = asyncio.Event()
+    passed = 0
+    forever = asyncio.Event()
+
+    async def check(url, destination, **kwargs):
+        nonlocal passed
+        if passed < 5:
+            passed += 1
+            return _ok()
+        started.set()
+        # Never resolves. Only cancellation gets out of here.
+        await forever.wait()
+        raise AssertionError("a hanging check must never return a verdict")
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+
+    async def press() -> None:
+        await started.wait()
+        halt.set()
+
+    presser = asyncio.create_task(press())
+    began = time.monotonic()
+    run = await asyncio.wait_for(_run(concurrency=50, stop=halt), 10.0)
+    elapsed = time.monotonic() - began
+    await presser
+
+    assert run.stopped is True
+    assert elapsed < 2.0, f"stopping took {elapsed:.2f}s"
+    # The five that passed before the hang are counted and on disk.
+    assert run.working == 5
     assert len(load_proxy_chains().candidates) == 5
+
+
+@pytest.mark.asyncio
+async def test_one_hanging_address_cannot_hold_the_whole_sweep(monkeypatch):
+    """The sweep finishes, every address is accounted for, the hang is dead.
+
+    This is the shape of what happened at 1,591 of 1,592: one address that
+    never returns. The outer per-address budget is the backstop underneath
+    every leg's own timeout -- wherever a future leaks, the job still ends.
+    """
+
+    _offer(monkeypatch, [f"10.0.0.{n}:8080" for n in range(1, 9)])
+    forever = asyncio.Event()
+
+    async def check(url, destination, **kwargs):
+        if url.endswith("10.0.0.4:8080"):
+            await forever.wait()
+            raise AssertionError("unreachable")
+        return _ok()
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+    # A budget small enough to be a test rather than a nap.
+    monkeypatch.setattr(proxy_fetch, "check_budget", lambda **kwargs: 0.5)
+
+    run = await asyncio.wait_for(_run(concurrency=4), 10.0)
+
+    assert run.tested == 8, "every address must be accounted for"
+    assert run.working == 7
+    assert run.dead == 1
+    assert run.stopped is False
+    store = load_proxy_chains()
+    assert len(store.candidates) == 7
+    assert "10.0.0.4:8080" not in _labels(store)
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_address_is_dead_and_says_how_long_it_was_given(
+    monkeypatch,
+):
+    """Never a pass. Nothing measured that tunnel, so nothing may claim it did."""
+
+    _offer(monkeypatch, ["10.0.0.1:8080"])
+    forever = asyncio.Event()
+
+    async def check(url, destination, **kwargs):
+        await forever.wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+    monkeypatch.setattr(proxy_fetch, "check_budget", lambda **kwargs: 0.3)
+
+    run = await asyncio.wait_for(_run(concurrency=1), 10.0)
+
+    assert (run.tested, run.working, run.dead) == (1, 0, 1)
+    assert load_proxy_chains().candidates == ()
+
+
+@pytest.mark.asyncio
+async def test_passing_addresses_are_on_disk_while_the_sweep_is_still_running(
+    monkeypatch,
+):
+    """Incremental persistence: the offer grows during the run, not after it.
+
+    The 7.21.0 sweep wrote once, at the end, so a job that never reached the
+    end lost all 355 addresses it had found. Here the last address hangs until
+    the test has confirmed the earlier ones are already on disk.
+    """
+
+    _offer(monkeypatch, [f"10.0.0.{n}:8080" for n in range(1, 41)])
+    monkeypatch.setattr(proxy_fetch, "FETCH_PERSIST_BATCH", 5)
+    held = asyncio.Event()
+    seen = 0
+
+    async def check(url, destination, **kwargs):
+        nonlocal seen
+        seen += 1
+        if seen > 30:
+            await held.wait()
+        await asyncio.sleep(0)
+        return _ok()
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+
+    sweep = asyncio.create_task(_run(concurrency=1))
+    for _ in range(500):
+        await asyncio.sleep(0.01)
+        chains_config.reset_proxy_chains_cache()
+        if len(load_proxy_chains().candidates) >= 25:
+            break
+    mid_run = len(load_proxy_chains().candidates)
+    held.set()
+    run = await asyncio.wait_for(sweep, 10.0)
+
+    assert mid_run >= 25, f"only {mid_run} address(es) were on disk mid-run"
+    assert mid_run < 40, "that is the whole sweep, not a mid-run snapshot"
+    assert run.working == 40
+    assert len(load_proxy_chains().candidates) == 40
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_does_not_write_the_store_once_per_address(monkeypatch):
+    """In batches. A write per address would be forty writes for forty rows."""
+
+    _offer(monkeypatch, [f"10.0.0.{n}:8080" for n in range(1, 41)])
+    _checker(monkeypatch, lambda url: _ok())
+    writes = 0
+    real = proxy_fetch._commit_fetch
+
+    def counted(passing, refused):
+        nonlocal writes
+        writes += 1
+        real(passing, refused)
+
+    monkeypatch.setattr(proxy_fetch, "_commit_fetch", counted)
+
+    run = await _run(concurrency=8)
+
+    assert run.working == 40
+    assert writes <= 5, f"{writes} writes for 40 addresses is a write per address"
 
 
 @pytest.mark.asyncio
@@ -445,6 +625,166 @@ async def test_stop_ends_the_running_job_and_reports_it_stopped(monkeypatch):
     working = status["working"]
     assert isinstance(working, int) and working >= 1
     assert len(load_proxy_chains().candidates) == working
+
+
+@pytest.mark.asyncio
+async def test_pressing_stop_twice_is_the_same_as_pressing_it_once(monkeypatch):
+    """An operator watching "Stopping..." will press it again. Nothing breaks."""
+
+    _offer(monkeypatch, [f"10.0.0.{n}:8080" for n in range(1, 31)])
+    started = asyncio.Event()
+    forever = asyncio.Event()
+
+    async def check(url, destination, **kwargs):
+        started.set()
+        await forever.wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+
+    job = await start_fetch(
+        provider_id="anthropic",
+        destination=DESTINATION,
+        concurrency=4,
+        connect_timeout=5.0,
+    )
+    await started.wait()
+    assert stop_fetch() == job.job_id
+    assert stop_fetch() == job.job_id
+    await asyncio.wait_for(_finish(job), 5.0)
+    assert fetch_status()["state"] == "stopped"
+    # And a third press, after it has settled, is not an error either.
+    assert stop_fetch() == ""
+
+
+@pytest.mark.asyncio
+async def test_a_job_the_server_restarted_under_comes_back_interrupted(monkeypatch):
+    """A job lives in memory. Its record does not.
+
+    Before 7.22.1 there was no record: a server restarted mid-sweep reported
+    ``idle`` about a job whose results had never been written, and the page
+    that had been watching a ``running`` job found nothing at all. Now the
+    sweep persists as it goes, the job's own state is persisted with it, and
+    the next start reads that record and says what it is: interrupted.
+    """
+
+    _offer(monkeypatch, [f"10.0.0.{n}:8080" for n in range(1, 31)])
+    started = asyncio.Event()
+    forever = asyncio.Event()
+    passed = 0
+
+    async def check(url, destination, **kwargs):
+        nonlocal passed
+        if passed < 3:
+            passed += 1
+            return _ok()
+        started.set()
+        await forever.wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+    monkeypatch.setattr(proxy_fetch, "FETCH_PERSIST_BATCH", 1)
+
+    job = await start_fetch(
+        provider_id="anthropic",
+        destination=DESTINATION,
+        concurrency=1,
+        connect_timeout=5.0,
+    )
+    await started.wait()
+    assert fetch_status()["state"] == "running"
+
+    # Durable while it runs, which is the whole mechanism: the record on disk
+    # says a job is running and how far it had got.
+    mid_run = json.loads(
+        proxy_fetch.proxy_fetch_status_path().read_text(encoding="utf-8")
+    )
+    assert mid_run["state"] == "running"
+    assert mid_run["persisted"] == 3
+
+    # The server is killed outright: nothing gets to run a ``finally``, so the
+    # record stays exactly as the sweep last wrote it, and the process's memory
+    # of the job goes with the process.
+    assert job.task is not None
+    job.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await job.task
+    proxy_fetch.proxy_fetch_status_path().write_text(
+        json.dumps(mid_run), encoding="utf-8"
+    )
+    proxy_fetch.reset_fetch_job()
+    assert fetch_status()["state"] == "idle"
+
+    # The next process starts and reads what was left behind.
+    assert proxy_fetch.recover_fetch_job() == "interrupted"
+    status = fetch_status()
+    assert status["state"] == "interrupted"
+    assert status["stopping"] is False
+    assert "restarted" in str(status["detail"])
+    # With its results, which were written while it ran.
+    assert status["persisted"] == 3
+    assert len(load_proxy_chains().candidates) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_job_cancelled_by_a_shutdown_reads_interrupted_too(monkeypatch):
+    """The server going away under a fetch is not the operator stopping it."""
+
+    _offer(monkeypatch, [f"10.0.0.{n}:8080" for n in range(1, 31)])
+    started = asyncio.Event()
+    forever = asyncio.Event()
+
+    async def check(url, destination, **kwargs):
+        started.set()
+        await forever.wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+
+    job = await start_fetch(
+        provider_id="anthropic",
+        destination=DESTINATION,
+        concurrency=2,
+        connect_timeout=5.0,
+    )
+    await started.wait()
+    assert job.task is not None
+    job.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await job.task
+
+    status = fetch_status()
+    assert status["state"] == "interrupted"
+    assert "server stopped" in str(status["detail"])
+
+
+@pytest.mark.asyncio
+async def test_a_finished_job_never_comes_back_as_interrupted(monkeypatch):
+    """``interrupted`` is about a job that was cut off, not one that ended."""
+
+    _offer(monkeypatch, ["10.0.0.1:8080"])
+    _checker(monkeypatch, lambda url: _ok())
+
+    job = await start_fetch(
+        provider_id="anthropic",
+        destination=DESTINATION,
+        concurrency=1,
+        connect_timeout=5.0,
+    )
+    await _finish(job)
+    assert fetch_status()["state"] == "done"
+
+    proxy_fetch.reset_fetch_job()
+    assert proxy_fetch.recover_fetch_job() == "done"
+    assert fetch_status()["state"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_install_recovers_nothing_and_reads_idle():
+    """No record, no job, nothing to report. Every first start."""
+
+    assert proxy_fetch.recover_fetch_job() == ""
+    assert fetch_status()["state"] == "idle"
 
 
 @pytest.mark.asyncio

@@ -37,8 +37,27 @@ so rather than store a list nothing has tested.
 outbound work in the product: hundreds of addresses, each one a handshake with
 a stranger. The bounds are a fixed pool of workers rather than a task per
 address, a yield after every result, no blocking call anywhere on the loop, and
-one ``httpx`` client per check closed by its own ``async with`` -- so the
-number of sockets open at once is the worker count and nothing else.
+one ``httpx`` client per check whose close is bounded -- so the number of
+sockets open at once is the worker count and nothing else.
+
+**And it must always end.** 7.22.1 is that sentence being made true. A fetch of
+1,592 addresses on an operator's install reached 1,591 and stopped there: one
+address's socket close never completed on the Windows proactor loop, the worker
+holding it never returned, the job never settled, Stop said "Stopping..." for
+seventeen minutes, and the 355 addresses that had already passed were lost
+because the store was only written when the pass finished. Three things follow
+from that, and they are the whole of this module's contract now:
+
+* **Every step of a check is bounded** -- see
+  :func:`~my_claude_code.application.proxy_check.check_budget` -- and one bound
+  sits around the whole of each ``check_proxy`` call underneath all of them. An
+  address that outlasts it is recorded dead, never a pass, and the sweep moves
+  on.
+* **Stop cancels.** The checks in flight are cancellation-safe, so the job
+  settles in the time it takes the loop to unwind them rather than in the time
+  the slowest stranger takes to answer.
+* **What passed is written as it is found**, in batches, so stopping, crashing
+  or restarting keeps it.
 
 **Nothing here runs unless somebody asked.** The operator presses Fetch, or
 turns the scheduled refresh on. A fresh install has no feeds, so a pass over
@@ -47,9 +66,11 @@ turns the scheduled refresh on. A fresh install has no feeds, so a pass over
 
 import asyncio
 import contextlib
+import json
 import threading
 import time
 import uuid
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
@@ -58,6 +79,7 @@ from loguru import logger
 from my_claude_code.application.proxy_check import (
     PROXY_CHECK_TIMEOUT_SECONDS,
     apply_fetch_outcome,
+    check_budget,
     check_proxy,
 )
 from my_claude_code.application.proxy_ingest import (
@@ -69,19 +91,58 @@ from my_claude_code.application.proxy_ingest import (
     harvest_feeds,
     rank_merged,
 )
+from my_claude_code.config.atomic_json import write_json_document_atomically
 from my_claude_code.config.credentials import mask_proxy_label
+from my_claude_code.config.paths import proxy_fetch_status_path
 from my_claude_code.config.proxy_chains import (
+    TLS_UNKNOWN,
     ProxyChains,
+    ProxyCheckRecord,
     ProxyEndpoint,
     load_proxy_chains,
     save_proxy_chains,
 )
 
 #: The states a fetch job is reported in. ``idle`` is "no job has run in this
-#: process"; the other four are a job that started. They are the page's
-#: vocabulary as well as this module's, so a run cannot be described one way by
-#: the server and another by the browser.
-FETCH_STATES: tuple[str, ...] = ("idle", "running", "done", "stopped", "failed")
+#: process"; the rest are a job that started. They are the page's vocabulary as
+#: well as this module's, so a run cannot be described one way by the server
+#: and another by the browser.
+#:
+#: ``interrupted`` is the one that is not about this process at all: a job
+#: lives in memory and dies with the server, so a restart mid-sweep used to
+#: leave the page reading ``running`` for ever about something nothing was
+#: doing. A sweep persists what it has found as it finds it, and the next start
+#: reports the job it inherited as interrupted -- with its results, which are
+#: on disk.
+FETCH_STATES: tuple[str, ...] = (
+    "idle",
+    "running",
+    "done",
+    "stopped",
+    "failed",
+    "interrupted",
+)
+
+#: How many passing addresses accumulate before the store is written, and how
+#: long a smaller batch may wait. Whichever comes first.
+#:
+#: The pre-7.22.1 sweep wrote once, at the end. A fetch of 1,592 addresses that
+#: never reached the end -- because one of them held a socket open for ever --
+#: therefore lost all 355 that had passed: the operator watched the counter
+#: climb for twenty minutes, pressed Stop, and got nothing. Twenty-five is a
+#: batch small enough that almost nothing is ever at risk and large enough that
+#: a sweep is not a write per address; five seconds is what makes a slow trickle
+#: durable too.
+FETCH_PERSIST_BATCH = 25
+FETCH_PERSIST_INTERVAL_SECONDS = 5.0
+
+# How hard the *last* write of a pass tries. Writing the store is an atomic
+# rename, and on Windows a rename over a file another handle has open fails
+# outright -- which the page polling this store several times a second makes a
+# real possibility rather than a theoretical one. An ordinary batch that loses
+# the race is simply written by the next one; the final batch has no next one.
+_PERSIST_ATTEMPTS = 5
+_PERSIST_RETRY_SECONDS = 0.2
 
 
 def _now() -> str:
@@ -108,6 +169,11 @@ class FetchProgress:
     refused: int = 0
     offered: int = 0
     corroborated: int = 0
+    #: How many passing addresses are already on disk. The difference between
+    #: "355 working" and "355 working, and they are still there if this stops"
+    #: -- and the only counter here a person reading the page can act on while
+    #: the sweep is still going.
+    persisted: int = 0
     results: tuple[FeedResult, ...] = ()
 
     def as_document(self) -> dict[str, object]:
@@ -121,6 +187,7 @@ class FetchProgress:
             "refused": self.refused,
             "offered": self.offered,
             "corroborated": self.corroborated,
+            "persisted": self.persisted,
             "feeds": [
                 {
                     "id": result.feed_id,
@@ -211,6 +278,7 @@ async def run_fetch_pass(
     progress: FetchProgress | None = None,
     stop: asyncio.Event | None = None,
     persist: bool = True,
+    on_persist: Callable[[], None] | None = None,
 ) -> FetchRun:
     """Read every enabled feed, test everything they offered, keep the passes.
 
@@ -219,10 +287,20 @@ async def run_fetch_pass(
     what was found rather than an arbitrary slice. ``0`` is no ceiling and is
     what ships.
 
-    ``stop`` ends the sweep at the next address. It is not a cancellation: a
-    check already in flight is allowed to finish and its verdict is kept, and
-    everything that passed before the press is written to the store. Stopping a
-    fetch means "that is enough addresses", not "throw away the work".
+    ``stop`` ends the sweep. Since 7.22.1 it **does** cancel the checks in
+    flight, and that is the fix rather than a change of mind: a check is
+    cancellation-safe end to end -- every ``finally`` that awaits anything is
+    bounded -- so cancelling one costs a verdict about one address and returns
+    the loop in milliseconds, where waiting for it costs an operator a Stop
+    button that says "Stopping..." for as long as the slowest stranger on the
+    list feels like holding a socket. Everything that passed is kept: it was
+    already being written while the sweep ran, and the remainder is written
+    here. Stopping a fetch still means "that is enough addresses", never "throw
+    away the work".
+
+    ``on_persist`` is called after every write of the store, on the loop, so a
+    caller that keeps a durable record of the job can keep it current without
+    this function knowing what that record is.
     """
 
     counters = progress if progress is not None else FetchProgress()
@@ -251,8 +329,102 @@ async def run_fetch_pass(
     cursor = 0
     cursor_lock = asyncio.Lock()
 
+    # Rank order, computed once: the workers finish in whatever order the
+    # network allows, the page reads the list top to bottom, and now every
+    # incremental write has to produce that same order too.
+    order = {
+        candidate_id(item.endpoint.address): index for index, item in enumerate(ranked)
+    }
+    write_lock = asyncio.Lock()
+    unwritten = 0
+    last_write = time.monotonic()
+
+    async def flush(*, force: bool = False) -> None:
+        """Write what has passed so far. In batches, never per address.
+
+        A write that cannot land is never a reason to lose a worker or a
+        verdict. On Windows the store's atomic rename fails outright while
+        another handle has the file open -- and the page polling this store
+        several times a second is exactly such a handle -- so the batch is put
+        back and the next flush, or the forced one at the end, writes it again.
+        """
+
+        nonlocal unwritten, last_write
+        if not persist:
+            return
+        async with write_lock:
+            waited = time.monotonic() - last_write
+            enough = unwritten >= FETCH_PERSIST_BATCH
+            overdue = unwritten > 0 and waited >= FETCH_PERSIST_INTERVAL_SECONDS
+            if not force and not enough and not overdue:
+                return
+            snapshot = sorted(passing, key=lambda pair: order.get(pair[0], len(order)))
+            refusals = list(refused)
+            pending = unwritten
+            unwritten = 0
+            last_write = time.monotonic()
+            written = False
+            failure: OSError | None = None
+            # The last write of a pass is the one that must not be skipped, so
+            # it is the one that gets to try again.
+            for attempt in range(_PERSIST_ATTEMPTS if force else 1):
+                try:
+                    await asyncio.to_thread(_commit_fetch, snapshot, refusals)
+                except OSError as exc:
+                    failure = exc
+                    await asyncio.sleep(_PERSIST_RETRY_SECONDS * (attempt + 1))
+                    continue
+                written = True
+                break
+            if not written:
+                unwritten = pending
+                logger.warning(
+                    "PROXY FEEDS: could not write the offer yet ({}); keeping "
+                    "the batch and trying again",
+                    failure,
+                )
+                return
+            counters.persisted = len(snapshot)
+        if on_persist is not None:
+            await asyncio.to_thread(on_persist)
+
+    # One bound around the whole check, underneath every leg's own. If it ever
+    # fires, something inside leaked a future -- which is precisely what the
+    # unbounded ``wait_closed`` used to do on the Windows proactor loop -- and
+    # the honest answer is that this address did not finish, not that the job
+    # is stuck on it. A timed-out address is dead. It is never a pass: nothing
+    # measured its tunnel.
+    budget = check_budget(
+        connect_timeout=connect_timeout, timeout=timeout, exit_ip_url=exit_ip_url
+    )
+
+    async def measure(url: str) -> ProxyCheckRecord:
+        try:
+            return await asyncio.wait_for(
+                check_proxy(
+                    url,
+                    destination,
+                    timeout=timeout,
+                    exit_ip_url=exit_ip_url,
+                    connect_timeout=connect_timeout,
+                ),
+                budget,
+            )
+        except TimeoutError:
+            logger.warning(
+                "PROXY CHECK: {} did not finish within {:.0f}s -- abandoning it",
+                mask_proxy_label(url),
+                budget,
+            )
+            return ProxyCheckRecord(
+                at=_now(),
+                ok=False,
+                tls=TLS_UNKNOWN,
+                detail=f"did not finish within {budget:.0f}s",
+            )
+
     async def worker() -> None:
-        nonlocal cursor
+        nonlocal cursor, unwritten
         while True:
             if halt.is_set():
                 return
@@ -264,13 +436,7 @@ async def run_fetch_pass(
             item = ranked[index]
             url = item.endpoint.url
             label = mask_proxy_label(url)
-            record = await check_proxy(
-                url,
-                destination,
-                timeout=timeout,
-                exit_ip_url=exit_ip_url,
-                connect_timeout=connect_timeout,
-            )
+            record = await measure(url)
             apply_fetch_outcome(label, record, in_use=label in used)
             endpoint = replace(
                 as_candidate_endpoint(item, at),
@@ -281,11 +447,17 @@ async def run_fetch_pass(
             if record.intercepted:
                 counters.refused += 1
                 refused.append((candidate_id(item.endpoint.address), endpoint))
+                unwritten += 1
             elif record.ok:
                 counters.working += 1
                 passing.append((candidate_id(item.endpoint.address), endpoint))
+                unwritten += 1
             else:
                 counters.dead += 1
+            # Durable as it goes. A verdict worth keeping is on disk within a
+            # batch or five seconds of being measured, so a stop, a crash or a
+            # restart keeps it.
+            await flush()
             # One yield per address, every address. This is the whole of "a
             # sweep of eight hundred strangers cannot sit in front of
             # /v1/messages": the workers hand the loop back between checks.
@@ -293,17 +465,13 @@ async def run_fetch_pass(
 
     workers = max(1, min(int(concurrency), len(ranked))) if ranked else 0
     if workers:
-        await asyncio.gather(*(worker() for _ in range(workers)))
+        await _sweep(worker, workers, halt)
 
-    # Back into rank order. The workers finish in whatever order the network
-    # allows, and the page reads this list top to bottom.
-    order = {
-        candidate_id(item.endpoint.address): index for index, item in enumerate(ranked)
-    }
+    # Back into rank order, and the last of it onto disk. The workers finish in
+    # whatever order the network allows, and the page reads this list top to
+    # bottom.
     passing.sort(key=lambda pair: order.get(pair[0], len(order)))
-
-    if persist:
-        await asyncio.to_thread(_commit_fetch, passing, refused)
+    await flush(force=True)
 
     run = FetchRun(
         at=at,
@@ -331,6 +499,57 @@ async def run_fetch_pass(
         " (stopped early)" if run.stopped else "",
     )
     return run
+
+
+async def _sweep(
+    worker: Callable[[], Coroutine[object, object, None]],
+    workers: int,
+    halt: asyncio.Event,
+) -> None:
+    """Run the pool, and cancel it the moment somebody presses Stop.
+
+    The pre-7.22.1 sweep gathered the workers and let ``halt`` be read at the
+    top of each worker's loop, which meant Stop took effect *after* the check
+    in flight returned. With 32 workers mid-handshake against strangers'
+    machines that is thirty-two ten-second waits in the best case -- and in the
+    case that actually happened on an operator's install, one of those checks
+    never returned at all and Stop never took effect. So Stop cancels.
+
+    Cancelling is safe here because the checker was made safe first: every
+    ``await`` inside a check is bounded and every ``finally`` that touches the
+    network aborts rather than waits, so a cancelled check unwinds immediately
+    and leaves no socket in anybody's hands. What it costs is a verdict about
+    each address that was mid-flight, which is exactly what Stop is asking for.
+
+    Exceptions are collected rather than raised: one worker failing must not
+    lose the sweep's results, and the sweep's caller writes the store
+    afterwards either way. A cancellation of the *sweep itself* -- the server
+    shutting down -- still propagates.
+    """
+
+    tasks = [asyncio.create_task(worker()) for _ in range(workers)]
+
+    async def supervise() -> None:
+        await halt.wait()
+        for task in tasks:
+            task.cancel()
+
+    guard = asyncio.create_task(supervise())
+    try:
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        guard.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await guard
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException) and not isinstance(
+            outcome, asyncio.CancelledError
+        ):
+            logger.warning(
+                "PROXY FEEDS: a sweep worker stopped early: {}: {}",
+                type(outcome).__name__,
+                outcome,
+            )
 
 
 def _bump_feeds(counters: FetchProgress) -> None:
@@ -451,6 +670,87 @@ def _settle(counters: FetchProgress, run: FetchRun) -> None:
 _JOB_LOCK = threading.Lock()
 _JOB: FetchJob | None = None
 
+#: The job this process inherited from the one before it, if any. Read once, at
+#: startup, by :func:`recover_fetch_job`, and reported whenever no job is
+#: running in *this* process -- which is how a server restarted mid-sweep
+#: answers ``interrupted`` with real numbers instead of ``running`` for ever or
+#: ``idle`` about work that is sitting on disk.
+_RECOVERED: dict[str, object] | None = None
+
+
+def _write_job_status(document: dict[str, object]) -> None:
+    """Record what the job is doing, durably. Never raises.
+
+    A status file that cannot be written costs the next start its ability to
+    say ``interrupted``; a status file that raised would cost this start its
+    fetch. The first is much the smaller loss.
+    """
+
+    with contextlib.suppress(Exception):
+        write_json_document_atomically(proxy_fetch_status_path(), document)
+
+
+def _read_job_status() -> dict[str, object] | None:
+    """The last durable job record, or ``None``. Never raises."""
+
+    try:
+        raw = proxy_fetch_status_path().read_text(encoding="utf-8")
+    except OSError, ValueError:
+        return None
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def recover_fetch_job() -> str:
+    """Read the job the previous process left behind. Called once, at startup.
+
+    A fetch is memory: the job object, its counters, its stop event and its
+    task all die with the server. What survives is the store the sweep wrote as
+    it went, and this record of what was doing the writing.
+
+    So a job left ``running`` by a process that is no longer here is reported
+    ``interrupted``: nothing is testing anything, the counters say how far it
+    got, and the addresses that passed are on offer because they were persisted
+    while it ran. A job that had already finished is reported as it finished --
+    a restart is not a reason to forget that a fetch found 355 working
+    addresses ten minutes ago.
+
+    Returns the state it recovered, or ``""`` when there was nothing to
+    recover.
+    """
+
+    global _RECOVERED
+    document = _read_job_status()
+    if document is None:
+        _RECOVERED = None
+        return ""
+    recovered = dict(IDLE_STATUS) | document
+    state = str(recovered.get("state") or "")
+    if state == "running":
+        recovered["state"] = "interrupted"
+        recovered["stopping"] = False
+        recovered["detail"] = (
+            "The server restarted while this fetch was running, so it stopped "
+            "where it was. Everything that had already passed was written as "
+            "it was found and is still on offer below."
+        )
+        logger.info(
+            "PROXY FEEDS: a fetch was interrupted by a restart at {} of {} "
+            "tested; {} working address(es) were already saved",
+            recovered.get("tested"),
+            recovered.get("total"),
+            recovered.get("persisted"),
+        )
+    elif state in ("", "idle"):
+        _RECOVERED = None
+        return ""
+    _RECOVERED = recovered
+    return str(recovered["state"])
+
+
 #: What an "idle" status looks like: a fetch has never run in this process. The
 #: same keys as a real one, so the page has one shape to read rather than two.
 IDLE_STATUS: dict[str, object] = {
@@ -469,7 +769,10 @@ def fetch_status() -> dict[str, object]:
 
     with _JOB_LOCK:
         job = _JOB
-    return dict(IDLE_STATUS) if job is None else job.as_document()
+        inherited = _RECOVERED
+    if job is not None:
+        return job.as_document()
+    return dict(IDLE_STATUS) if inherited is None else dict(inherited)
 
 
 def running_fetch_id() -> str:
@@ -481,11 +784,17 @@ def running_fetch_id() -> str:
 
 
 def stop_fetch(job_id: str = "") -> str:
-    """Ask the running fetch to stop at the next address.
+    """Ask the running fetch to stop, and cancel what it has in flight.
 
     Returns the id it asked to stop, or ``""`` when nothing was running or the
-    id named a different job. What has already passed is kept: the sweep writes
-    its store after the stop, not instead of it.
+    id named a different job. Idempotent: pressing Stop twice sets an event
+    that is already set and returns the same id, because an operator watching a
+    button that still says "Stopping..." will press it again and must not be
+    punished for it.
+
+    What has already passed is kept. It was written while the sweep ran, and
+    the remainder is written as the sweep settles -- after the stop, never
+    instead of it.
     """
 
     with _JOB_LOCK:
@@ -511,7 +820,7 @@ async def start_fetch(
     """Start a fetch and return at once. One at a time, process-wide."""
 
     with _JOB_LOCK:
-        global _JOB
+        global _JOB, _RECOVERED
         if _JOB is not None and _JOB.state == "running":
             raise FetchAlreadyRunning(_JOB.job_id)
         job = FetchJob(
@@ -522,6 +831,12 @@ async def start_fetch(
             started_iso=_now(),
         )
         _JOB = job
+        # A new job supersedes whatever the last process left behind.
+        _RECOVERED = None
+
+    # Durable from the first moment, so a server killed one second into a sweep
+    # still reports an interrupted job rather than an idle one.
+    await asyncio.to_thread(_write_job_status, job.as_document())
 
     async def body() -> None:
         try:
@@ -535,6 +850,7 @@ async def start_fetch(
                 exit_ip_url=exit_ip_url,
                 progress=job.progress,
                 stop=job.stop,
+                on_persist=lambda: _write_job_status(job.as_document()),
             )
             job.state = "stopped" if job.run.stopped else "done"
             # The finished run is the authoritative answer; the live counters
@@ -543,8 +859,16 @@ async def start_fetch(
             # numbers as one that watched the whole thing.
             _settle(job.progress, job.run)
         except asyncio.CancelledError:
-            job.state = "stopped"
-            job.detail = "The fetch was cancelled because the server is shutting down."
+            # Not ``stopped``: nobody pressed Stop. The server went away under
+            # it, which is the same thing that happens to a job when the
+            # process is killed outright -- and it must read the same way, so
+            # that "interrupted" means one thing on the page rather than two.
+            job.state = "interrupted"
+            job.detail = (
+                "The server stopped while this fetch was running, so the fetch "
+                "stopped with it. Everything that had already passed was "
+                "written as it was found and is still on offer below."
+            )
             raise
         except Exception as exc:  # pragma: no cover - defensive
             job.state = "failed"
@@ -552,6 +876,13 @@ async def start_fetch(
             logger.warning("PROXY FEEDS: the fetch failed: {}", job.detail)
         finally:
             job.finished_at = time.monotonic()
+            # The last word, and the one a restart would read: a job that
+            # reached here is finished, whatever it finished as, and must never
+            # come back as ``interrupted``. Written on the loop rather than in
+            # a thread precisely because this runs in a ``finally``: a job
+            # being cancelled has no time left to hand to an executor, and one
+            # small atomic write once per job is not what makes a loop late.
+            _write_job_status(job.as_document())
 
     job.task = asyncio.create_task(body())
     return job
@@ -575,14 +906,21 @@ async def wait_for_fetch() -> FetchRun | None:
 
 
 def reset_fetch_job() -> None:
-    """Forget the job slot. For tests, and for a runtime that is shutting down."""
+    """Forget the job slot. For tests, and for a runtime that is shutting down.
+
+    The recovered record goes with it: "no job" has to mean the same thing
+    whether this process never ran one or was told to forget the one it did.
+    """
 
     with _JOB_LOCK:
-        global _JOB
+        global _JOB, _RECOVERED
         _JOB = None
+        _RECOVERED = None
 
 
 __all__ = [
+    "FETCH_PERSIST_BATCH",
+    "FETCH_PERSIST_INTERVAL_SECONDS",
     "FETCH_STATES",
     "IDLE_STATUS",
     "FetchAlreadyRunning",
@@ -591,6 +929,7 @@ __all__ = [
     "FetchRun",
     "fetch_status",
     "in_use_labels",
+    "recover_fetch_job",
     "reset_fetch_job",
     "run_fetch_pass",
     "running_fetch_id",

@@ -23,6 +23,7 @@ from my_claude_code.application.proxy_check import (
     arm_refusals_from_store,
     check_targets,
 )
+from my_claude_code.application.proxy_fetch import recover_fetch_job
 from my_claude_code.application.proxy_health_store import (
     arm_health_from_store,
     install_listener,
@@ -335,6 +336,13 @@ class ApplicationRuntime:
             # rotation and charge the operator a connect timeout each to
             # rediscover them.
             await asyncio.to_thread(arm_health_from_store)
+            # And the third: a feed fetch is memory, so one that was running
+            # when this process's predecessor stopped would otherwise be
+            # reported as still running for ever. This reads the record it left
+            # and reports it as interrupted -- with its counters, and with the
+            # addresses it had already found, which the sweep writes as it goes
+            # rather than only at the end.
+            await asyncio.to_thread(recover_fetch_job)
             install_listener()
             self._proxy_check_timer.start()
             self._proxy_health_timer.start()
