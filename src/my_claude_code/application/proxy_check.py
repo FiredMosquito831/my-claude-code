@@ -83,6 +83,23 @@ EXIT_IP_MAX_CHARS = 64
 #: outbound flood from an admin page.
 PROXY_CHECK_MAX_CONCURRENCY = 4
 
+#: How long the *tidying up* after a check may take. Closing a socket is not
+#: part of the measurement and nothing about the verdict depends on it
+#: finishing, but on Windows it is where a sweep dies: the proactor loop can
+#: raise inside ``_call_connection_lost``, the transport's closed future is
+#: then never resolved, and ``StreamWriter.wait_closed()`` waits for it for
+#: ever. A fetch of 1,592 addresses on a 7.21.0 install stopped at 1,591 that
+#: way and never settled. One second is generous for a close that is going to
+#: happen at all; past it the transport is aborted and the socket is the
+#: operating system's problem, not this job's.
+PROXY_CLOSE_TIMEOUT_SECONDS = 1.0
+
+#: Slack on top of every leg's own ceiling before an address is declared to
+#: have leaked a future. Wide enough that a slow-but-working address is never
+#: cut short by it -- the legs already have their own timeouts and this is the
+#: backstop underneath them, not a second policy.
+CHECK_BUDGET_MARGIN_SECONDS = 5.0
+
 
 @dataclass(frozen=True, slots=True)
 class ProxyCheckOutcome:
@@ -195,6 +212,89 @@ def _host_and_port(url: str) -> tuple[str, int] | None:
     return host, 443 if parsed.scheme == "https" else 80
 
 
+def _abort_writer(writer: asyncio.StreamWriter) -> None:
+    """Throw the socket away without waiting for anybody to agree.
+
+    ``transport.abort()`` is synchronous and cannot block: it drops the
+    connection and schedules the callbacks. It is what is left when a polite
+    close has already been given its second and has not come back.
+    """
+
+    with contextlib.suppress(Exception):
+        writer.transport.abort()
+
+
+async def _release_writer(writer: asyncio.StreamWriter) -> None:
+    """Give up a socket in bounded time, whatever the transport does.
+
+    Three ways out and every one of them ends:
+
+    * the close completes, which is the ordinary case;
+    * it does not complete within :data:`PROXY_CLOSE_TIMEOUT_SECONDS`, or it
+      raises because the peer had already dropped the connection -- the
+      transport is aborted and the check carries on with its verdict;
+    * the surrounding task is being cancelled, in which case there is nothing
+      left to wait for at all: abort, and let the cancellation through.
+
+    The last two are the point. ``wait_closed()`` resolves a future the
+    transport is supposed to complete, and a transport whose
+    ``_call_connection_lost`` raised never completes it -- so the unbounded
+    await that used to be here could hold one address, and with it the whole
+    sweep, for ever.
+    """
+
+    with contextlib.suppress(Exception):
+        writer.close()
+    try:
+        await asyncio.wait_for(writer.wait_closed(), PROXY_CLOSE_TIMEOUT_SECONDS)
+    except TimeoutError, OSError:
+        _abort_writer(writer)
+    except asyncio.CancelledError:
+        _abort_writer(writer)
+        raise
+
+
+async def _release_client(client: httpx.AsyncClient) -> None:
+    """Close an ``httpx`` client in bounded time, whatever its pool is doing.
+
+    The same argument as :func:`_release_writer`, one layer up. A client whose
+    connection to a stranger's proxy is mid-handshake can take an unbounded
+    time to shut its pool down, and the measurement is already over by the time
+    this runs: a close that has not happened in a second is abandoned, and the
+    sockets are collected with the client.
+    """
+
+    try:
+        await asyncio.wait_for(client.aclose(), PROXY_CLOSE_TIMEOUT_SECONDS)
+    except TimeoutError, OSError, RuntimeError:
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # pragma: no cover - transport-specific
+        logger.debug("PROXY CHECK: a client did not close cleanly: {}", exc)
+
+
+def check_budget(
+    *,
+    connect_timeout: float,
+    timeout: float = PROXY_CHECK_TIMEOUT_SECONDS,
+    exit_ip_url: str = "",
+) -> float:
+    """The longest one call to :func:`check_proxy` may honestly take.
+
+    Every leg's own ceiling, plus the closes, plus a margin -- so a caller can
+    put one bound around the whole call and know it is not cutting short a
+    check that was still working. It is a backstop, not a policy: if it ever
+    fires, a future leaked somewhere inside and the address is recorded dead
+    rather than allowed to hold the job.
+    """
+
+    legs = max(0.1, float(connect_timeout)) + max(0.1, float(timeout))
+    if exit_ip_url:
+        legs += max(0.1, float(timeout))
+    return legs + 3.0 * PROXY_CLOSE_TIMEOUT_SECONDS + CHECK_BUDGET_MARGIN_SECONDS
+
+
 async def _tcp_connect(host: str, port: int, timeout: float) -> str:
     """Empty string when the address answered; a reason when it did not."""
 
@@ -211,11 +311,10 @@ async def _tcp_connect(host: str, port: int, timeout: float) -> str:
         return f"{host}:{port} refused the connection: {exc.strerror or exc}"
     finally:
         if writer is not None:
-            writer.close()
-            # Closing a socket the peer already dropped raises, and nothing
-            # about this check depends on the close succeeding.
-            with contextlib.suppress(OSError):
-                await writer.wait_closed()
+            # Closing a socket the peer already dropped raises, and a socket
+            # whose transport has stopped answering never closes at all.
+            # Nothing about this check depends on either, so both are bounded.
+            await _release_writer(writer)
 
 
 async def check_proxy(
@@ -263,11 +362,18 @@ async def check_proxy(
         # hostnames matched, certificates required -- which is byte for byte
         # the client the request path builds for this same proxy. A check made
         # with anything more permissive would measure nothing at all.
-        async with httpx.AsyncClient(
-            proxy=url, timeout=timeout, follow_redirects=False
-        ) as client:
+        client = httpx.AsyncClient(proxy=url, timeout=timeout, follow_redirects=False)
+        try:
             response = await client.head(destination)
             del response
+        finally:
+            # A bounded ``async with``. Shutting the pool down waits on each
+            # connection the transport still holds, and a connection through a
+            # proxy that has stopped answering is exactly the one that does not
+            # come back -- the same shape of stall as ``wait_closed``. The
+            # client is built with nothing said about trust either way; only
+            # the giving-up is bounded.
+            await _release_client(client)
     except Exception as exc:
         elapsed = int((time.monotonic() - started) * 1000)
         if _is_certificate_failure(exc):
@@ -332,12 +438,15 @@ async def _exit_ip(proxy_url: str, exit_ip_url: str, timeout: float) -> str:
     """
 
     try:
-        async with httpx.AsyncClient(
+        client = httpx.AsyncClient(
             proxy=proxy_url, timeout=timeout, follow_redirects=True
-        ) as client:
+        )
+        try:
             response = await client.get(exit_ip_url)
             response.raise_for_status()
             return response.text.strip()[:EXIT_IP_MAX_CHARS]
+        finally:
+            await _release_client(client)
     except Exception as exc:
         logger.debug("PROXY CHECK: exit-IP URL did not answer: {}", exc)
         return ""
@@ -519,13 +628,16 @@ async def check_endpoints(
 
 
 __all__ = [
+    "CHECK_BUDGET_MARGIN_SECONDS",
     "EXIT_IP_MAX_CHARS",
     "PROXY_CHECK_MAX_CONCURRENCY",
     "PROXY_CHECK_TIMEOUT_SECONDS",
+    "PROXY_CLOSE_TIMEOUT_SECONDS",
     "ProxyCheckOutcome",
     "apply_fetch_outcome",
     "apply_outcome",
     "arm_refusals_from_store",
+    "check_budget",
     "check_endpoints",
     "check_proxy",
     "check_targets",

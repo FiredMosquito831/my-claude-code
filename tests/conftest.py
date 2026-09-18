@@ -410,6 +410,25 @@ def _reset_credential_digests():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_proxy_fetch_status(monkeypatch, tmp_path):
+    """No test may write the real config directory's fetch-status file.
+
+    A fetch job became durable in 7.22.1 -- it has to be, or a server restarted
+    mid-sweep reports ``running`` for ever about a job nothing is doing -- and
+    that means ``start_fetch`` writes a document beside the operator's own
+    stores. Every test that starts one would otherwise write the developer's,
+    and inherit whatever the last one left.
+    """
+    from my_claude_code.application import proxy_fetch
+
+    path = tmp_path / "fcc-config" / "proxy_fetch_status.json"
+    monkeypatch.setattr(proxy_fetch, "proxy_fetch_status_path", lambda: path)
+    proxy_fetch.reset_fetch_job()
+    yield path
+    proxy_fetch.reset_fetch_job()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_provider_registry(monkeypatch, tmp_path):
     """Keep custom provider registry state out of the real ~/.fcc directory."""
     from my_claude_code.config import provider_registry

@@ -1456,10 +1456,18 @@ function proxyFetchSentence() {
         "answered, and only addresses that pass are kept."
       );
     }
+    const saved = `${fetch.persisted || 0} already saved`;
     return (
-      `${measured}. Each one opens an HTTPS request through that machine to ` +
-      `${where}'s own host; only the ones that answer with that host's ` +
-      "certificate intact are kept."
+      `${measured} · ${saved}. Each one opens an HTTPS request through that ` +
+      `machine to ${where}'s own host; only the ones that answer with that ` +
+      "host's certificate intact are kept, and they are written as they are " +
+      "found -- stopping, or a restart, keeps them."
+    );
+  }
+  if (fetch.state === "interrupted") {
+    return (
+      `${measured}. ${fetch.detail || "The fetch did not finish."} ` +
+      `The ${fetch.persisted || 0} that passed are on offer below.`
     );
   }
   if (fetch.state === "failed") {

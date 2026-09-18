@@ -981,13 +981,22 @@ async def stop_proxy_ingest(
     payload: ProxyIngestStopPayload | None = None,
     services: ApiServices = Depends(get_services),
 ):
-    """Stop the running fetch at the next address. What passed is kept.
+    """Stop the running fetch. Settles in seconds. What passed is kept.
 
-    Not a cancellation: a check already in flight finishes and its verdict
-    counts, and every address that passed before the press is written to the
-    store. "Stop" means "that is enough addresses", never "throw the work
-    away" -- an operator who has watched forty working addresses arrive out of
-    eight hundred should be able to take those forty and get on with it.
+    The checks in flight are cancelled, which is what makes "in seconds" true:
+    thirty-two addresses mid-handshake with strangers' machines would otherwise
+    hold the button at "Stopping..." for as long as the slowest of them cared
+    to take -- and, before 7.22.1, for ever if one of them never returned at
+    all. A cancelled check costs one verdict about one address, which is what
+    Stop is asking for.
+
+    Every address that passed is kept: the sweep writes them to the store in
+    batches as it finds them, and the remainder goes in as it settles. "Stop"
+    means "that is enough addresses", never "throw the work away" -- an
+    operator who has watched forty working addresses arrive out of eight
+    hundred should be able to take those forty and get on with it.
+
+    Pressing it twice is the same as pressing it once.
     """
 
     require_loopback_admin(request)

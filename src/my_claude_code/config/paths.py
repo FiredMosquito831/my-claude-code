@@ -58,6 +58,7 @@ OTHER_SERVERS_FILENAME = "other-servers.json"
 LEARNED_FACTS_FILENAME = "learned_facts.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
 PROXY_CHAINS_FILENAME = "proxy_chains.json"
+PROXY_FETCH_STATUS_FILENAME = "proxy_fetch_status.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
 MACOS_MANAGED_SETTINGS_PATH = (
@@ -566,6 +567,23 @@ def proxy_chains_path() -> Path:
     """
 
     return config_dir_path() / PROXY_CHAINS_FILENAME
+
+
+def proxy_fetch_status_path() -> Path:
+    """Return the last known state of the feed-fetch job.
+
+    A separate small document rather than a field in the chain store: a fetch
+    writes it several times a minute while it runs, and the chain store is the
+    operator's own configuration. Keeping them apart means a status write can
+    never be the thing that loses a chain.
+
+    It exists so that a job does not vanish with the process that ran it. A
+    fetch lives in memory; a server that is restarted mid-sweep would otherwise
+    leave the page reading "running" for a job nothing is doing. This file is
+    how the next start can say ``interrupted`` and mean it.
+    """
+
+    return config_dir_path() / PROXY_FETCH_STATUS_FILENAME
 
 
 def legacy_env_paths() -> tuple[Path, ...]:
