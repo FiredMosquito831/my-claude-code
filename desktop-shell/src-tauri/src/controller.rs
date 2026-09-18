@@ -1027,7 +1027,11 @@ fn step_absent(
     // pushed is deliberately KEPT here -- a spawning tick drops it, and this
     // tick does not spawn, so the next tick decides on a fresh process-based
     // classification instead of a cached `OursHealthy`.
-    if busy_holder(observation) {
+    // ...and the same page while a live holder of ours is still inside the
+    // failure threshold. Nothing is being started in that window either, and
+    // "Reconnecting..." over a server whose process is alive and which
+    // answered a few seconds ago is the window saying something untrue.
+    if live_holder(observation) && (busy_holder(observation) || !absent_confirmed(observation)) {
         effects.push(Effect::Show(busy_page(observation)));
         return (
             State::Reconnecting {
@@ -1444,8 +1448,8 @@ fn busy_page(observation: &Observation) -> Page {
         message: format!(
             "The server is busy ({waited:.0} s since it last answered). It is alive and \
              working -- a long operation is holding it up. Nothing is being restarted; \
-             this window keeps checking ({}).",
-            cadence_tail(observation)
+             this window keeps checking (last checked {} ago).",
+            seconds(observation.since_probe)
         ),
     }
 }
@@ -1799,6 +1803,24 @@ mod tests {
             message.contains("busy (7 s since it last answered)"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_live_holder_under_the_threshold_also_says_it_is_busy() {
+        // Past the grace but under the threshold, nothing is started either,
+        // so the page must not say "Reconnecting..." over a server whose
+        // process is alive and which answered half a minute ago.
+        let observation = busy(1, 31.0);
+        assert!(!busy_holder(&observation));
+        assert!(!absent_confirmed(&observation));
+        let (_, effects) = step(&State::Attached, &observation, 100.0);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Show(Page::Busy { .. }))),
+            "{effects:?}"
+        );
+        assert!(!effects.contains(&Effect::Spawn), "{effects:?}");
     }
 
     #[test]
