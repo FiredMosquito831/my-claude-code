@@ -2742,6 +2742,44 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "DESKTOP_HEALTH_PROBE_TIMEOUTS",
+        "Health probe timeouts, escalating",
+        "desktop",
+        "text",
+        settings_attr="desktop_health_probe_timeouts",
+        default="5,10,15",
+        advanced=True,
+        description=(
+            "Once the desktop app has seen this server answer, how long each "
+            "further check may take, in seconds, one per consecutive failure "
+            "- the last number repeats. The default 5, 10, 15 gives a server "
+            "that is merely busy about thirty seconds to finish what it is "
+            "doing before the app decides it is gone. A server the app has "
+            "never seen answer, and a port nothing is listening on, are still "
+            'checked with the single "Health probe timeout" above, so '
+            "starting a server that is not running is exactly as fast as it "
+            "was. Leave empty to use that one number for every check."
+        ),
+    ),
+    ConfigFieldSpec(
+        "DESKTOP_BUSY_GRACE_SECONDS",
+        "Busy server grace",
+        "desktop",
+        "number",
+        settings_attr="desktop_busy_grace_seconds",
+        default="15",
+        description=(
+            "How long the desktop app leaves your server alone after it last "
+            "answered, even if a later check times out. A long operation - a "
+            "bulk proxy add, a big provider refresh - can hold the server up "
+            "for several seconds at a time, and a server that answered a "
+            "moment ago is busy, not gone. Nothing is restarted during this "
+            "window; the app says the server is busy instead. A server whose "
+            "process has actually exited is still restarted immediately. Set "
+            "0 to restart on the first missed check, as before 7.26.0."
+        ),
+    ),
+    ConfigFieldSpec(
         "DESKTOP_FOREIGN_GRACE_SECONDS",
         "Port conflict grace",
         "desktop",

@@ -90,6 +90,15 @@ pub enum Page {
     PortConflict { message: String, take_port: bool },
     /// The server was healthy and stopped answering; still inside the budget.
     Reconnecting { message: String },
+    /// The server is alive and working, and a long operation is holding up
+    /// its answer to `/health`.
+    ///
+    /// Deliberately not `Reconnecting`: nothing has gone away and nothing is
+    /// being restarted. Saying "Reconnecting..." over a server that is in the
+    /// middle of the user's own three-hundred-address bulk add is the window
+    /// telling them something untrue about their own machine.
+    Busy { message: String },
+
     /// The end of the line. `server_log` is shown when there is one to name.
     ///
     /// `shell_log` is this window's own transcript -- the installer's two
@@ -273,6 +282,9 @@ mod tests {
             Page::Reconnecting {
                 message: String::new(),
             },
+            Page::Busy {
+                message: String::new(),
+            },
             Page::Error {
                 message: String::new(),
                 server_log: None,
@@ -317,6 +329,9 @@ mod tests {
                 take_port: false,
             },
             Page::Reconnecting {
+                message: String::new(),
+            },
+            Page::Busy {
                 message: String::new(),
             },
             Page::Error {

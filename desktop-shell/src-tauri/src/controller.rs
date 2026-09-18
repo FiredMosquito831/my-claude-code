@@ -58,6 +58,49 @@ pub const DEFAULT_START_BACKOFF_SECONDS: f64 = 10.0;
 /// A holder nobody can name during our own startup is overwhelmingly us.
 pub const DEFAULT_FOREIGN_GRACE_SECONDS: f64 = 45.0;
 
+/// How long a holder of OURS that is alive and answered recently is left
+/// alone, whatever this tick's probe said. `DESKTOP_BUSY_GRACE_SECONDS`.
+///
+/// This is the number the 2026-09-18 report is about. Six times between
+/// 09-16 and 09-18 a `/health` answer that arrived late -- because the
+/// server's event loop was busy with a three-hundred-address bulk add, not
+/// because anything had died -- was read as "absent" on a single sample, and
+/// the second server this window then started took the port from the first
+/// one by pid. A server that answered a moment ago is *busy*, and busy is not
+/// a reason to replace anything.
+///
+/// Fifteen seconds is the user's answer (decision I, 2026-09-18 21:25). It is
+/// deliberately short: the escalating ladder below is where the ~30 s of real
+/// tolerance comes from, and the grace is the floor under it.
+pub const DEFAULT_BUSY_GRACE_SECONDS: f64 = 15.0;
+
+/// How many consecutive failed probes of a LIVE holder of ours it takes
+/// before the window is allowed to call the server absent.
+///
+/// `DESKTOP_HEALTH_FAILURE_THRESHOLD` has existed, been on the dashboard and
+/// been shipped on the status document since 6.61.0, and until now the Rust
+/// controller never read it -- while `desktop-shell/README.md` promised
+/// *"Was healthy, now failing, under `health_failure_threshold` -> Nothing at
+/// all"*. This is that row, finally implemented. The document's value is used
+/// whenever there is one; this is only the floor under a document that says 0.
+pub const DEFAULT_HEALTH_FAILURE_THRESHOLD: u32 = 3;
+
+/// The escalating probe timeouts, in seconds: one per consecutive failed
+/// probe of a live holder of ours, the last entry repeating for ever after.
+///
+/// `DESKTOP_HEALTH_PROBE_TIMEOUTS`. 5 + 10 + 15 is about thirty seconds of
+/// patience before the window concludes that a server it can see, whose pid
+/// is alive, is not coming back -- which is the user's design, and roughly
+/// twice the longest loop hold measured on the reporting machine.
+///
+/// It does NOT replace `health_probe_timeout_seconds` (1.5 s). That one still
+/// times every probe taken before this window has ever seen this server
+/// answer, so a cold start, a genuinely dead server and a refused connection
+/// all cost exactly what they cost today. See `Facts::probe_timeouts`.
+pub fn default_probe_timeouts() -> Vec<f64> {
+    vec![5.0, 10.0, 15.0]
+}
+
 /// How long after an update helper stops the environment is still treated as
 /// mid-replacement (decision Q3 of 2026-09-10: "yes, and 30 s").
 ///
@@ -156,6 +199,18 @@ impl Holder {
     /// stops that guess ever becoming a permanent one.
     pub fn allows_start(self) -> bool {
         !matches!(self, Self::Foreign)
+    }
+
+    /// Whether this holder is one of MCC's own servers.
+    ///
+    /// `Unknown` is deliberately not ours: an unknown holder is a reason to
+    /// look again, and the busy grace must never be granted to a process
+    /// nobody has identified.
+    pub fn is_ours(self) -> bool {
+        matches!(
+            self,
+            Self::OursHealthy | Self::OursStarting | Self::OursDraining | Self::OursStale
+        )
     }
 
     /// Whether the "Take port" button may be offered (decision Q1: only for a
@@ -373,6 +428,16 @@ pub struct Facts {
     /// One plus this is the user's "three attempts", and it comes from the
     /// document rather than from a new setting nobody asked for (C9).
     pub server_start_retries: u32,
+    /// How many consecutive failed probes of a live holder of ours are needed
+    /// before it is called absent. `DESKTOP_HEALTH_FAILURE_THRESHOLD`, on the
+    /// status document since 6.61.0 and read by nothing here until 7.26.0.
+    pub health_failure_threshold: u32,
+    /// The escalating probe timeouts, in seconds, one per consecutive failure;
+    /// the last repeats. Empty means "this document does not carry the key",
+    /// and the ladder falls back to [`default_probe_timeouts`].
+    pub probe_timeouts: Vec<f64>,
+    /// How long a live holder of ours that answered recently is left alone.
+    pub busy_grace_seconds: f64,
     /// The holder's image name and pid, for the port-conflict page. Python's
     /// words, not a guess assembled here.
     pub holder_image: Option<String>,
@@ -393,7 +458,11 @@ impl Default for Facts {
             foreign_grace_seconds: DEFAULT_FOREIGN_GRACE_SECONDS,
             start_timeout_seconds: DEFAULT_START_TIMEOUT_SECONDS,
             server_start_retries: DEFAULT_SERVER_START_RETRIES,
+            health_failure_threshold: DEFAULT_HEALTH_FAILURE_THRESHOLD,
+            probe_timeouts: default_probe_timeouts(),
+            busy_grace_seconds: DEFAULT_BUSY_GRACE_SECONDS,
             holder_image: None,
+
             holder_pid: None,
         }
     }
@@ -410,6 +479,22 @@ pub struct Observation {
     /// How long the current holder classification has been unbroken. A
     /// `Foreign` holder becomes a reason to stop only past the grace window.
     pub holder_age: f64,
+    /// Whether the holder's pid is a live process right now.
+    ///
+    /// Checked by the caller, and only on a tick where the server did not
+    /// answer -- an attached window still pays for one `/health` probe and
+    /// nothing else (BUG-4). `false` when the pid cannot be told, which is
+    /// what keeps a dead server's restart timed exactly as it is today: an
+    /// unknown pid buys no patience at all.
+    pub holder_alive: bool,
+    /// Seconds since the last probe that this window saw answered, or `None`
+    /// if it has never seen one answer in this session. The clock the busy
+    /// grace is measured on.
+    pub seconds_since_healthy: Option<f64>,
+    /// How many consecutive probes have come back absent. Reset by any answer
+    /// at all -- healthy, starting or draining -- and by a spawn.
+    pub consecutive_absent: u32,
+
     pub helper: Helper,
     /// What the update in flight is saying about itself. Empty when there is
     /// no receipt, which is every ordinary tick.
@@ -497,6 +582,61 @@ impl Effect {
     }
 }
 
+/// Whether the port is held by one of our servers whose process is alive.
+///
+/// Both halves matter and neither is enough. The classification alone is a
+/// cached answer from the last `--print-status` (or from the last healthy
+/// probe, via `remember_holder`), and a cached `OursHealthy` outlived the
+/// process it described on every one of the six restarts in the report. The
+/// pid alone cannot say whether the process is ours.
+pub fn live_holder(observation: &Observation) -> bool {
+    observation.holder.is_ours() && observation.holder_alive
+}
+
+/// Whether the server is *busy* rather than absent: ours, alive, and it
+/// answered inside [`Facts::busy_grace_seconds`].
+///
+/// Nothing is started or restarted while this is true, whatever the probe
+/// said. This is item (b) of decision I.
+pub fn busy_holder(observation: &Observation) -> bool {
+    live_holder(observation)
+        && observation
+            .seconds_since_healthy
+            .is_some_and(|seconds| seconds < observation.facts.busy_grace_seconds.max(0.0))
+}
+
+/// Whether "absent" has been established rather than merely sampled.
+///
+/// A live holder of ours must fail [`Facts::health_failure_threshold`]
+/// consecutive probes -- the README's row, finally implemented. Anything else
+/// (no holder, a foreign one, a holder whose pid is gone, a holder that
+/// cannot be identified) is confirmed on the first sample, exactly as today:
+/// a dead server is restarted on the same tick it always was.
+pub fn absent_confirmed(observation: &Observation) -> bool {
+    if !live_holder(observation) {
+        return true;
+    }
+    observation.consecutive_absent >= observation.facts.health_failure_threshold.max(1)
+}
+
+/// The timeout for the next probe, given how many have failed in a row.
+///
+/// The ladder is indexed by the failure count and saturates on its last
+/// entry, so 5, 10, 15, 15, 15... An empty ladder means the document did not
+/// carry one and the caller keeps its own single timeout.
+pub fn probe_timeout_for(consecutive_absent: u32, ladder: &[f64]) -> Option<f64> {
+    let usable: Vec<f64> = ladder
+        .iter()
+        .copied()
+        .filter(|value| *value > 0.0)
+        .collect();
+    if usable.is_empty() {
+        return None;
+    }
+    let index = (consecutive_absent as usize).min(usable.len() - 1);
+    Some(usable[index])
+}
+
 /// Whether a start may be made right now. The governor from §5.1, with Q4's
 /// amendment: no attempt cap, and the backoff is the tick.
 pub fn may_start(observation: &Observation) -> bool {
@@ -504,6 +644,15 @@ pub fn may_start(observation: &Observation) -> bool {
         return false;
     }
     if observation.health != Health::Absent {
+        return false;
+    }
+    // The server answered a moment ago and its process is alive: it is busy,
+    // not gone. Nothing is started over it. (Decision I, 2026-09-18 21:25.)
+    if busy_holder(observation) {
+        return false;
+    }
+    // ...and even past the grace, one late answer is a sample, not a verdict.
+    if !absent_confirmed(observation) {
         return false;
     }
     if observation.child_alive {
@@ -873,7 +1022,27 @@ fn step_absent(
         );
     }
 
+    // Ours, alive, and it answered inside the grace. The server is working,
+    // not missing: say so and touch nothing. The `Restatus` `step` already
+    // pushed is deliberately KEPT here -- a spawning tick drops it, and this
+    // tick does not spawn, so the next tick decides on a fresh process-based
+    // classification instead of a cached `OursHealthy`.
+    // ...and the same page while a live holder of ours is still inside the
+    // failure threshold. Nothing is being started in that window either, and
+    // "Reconnecting..." over a server whose process is alive and which
+    // answered a few seconds ago is the window saying something untrue.
+    if live_holder(observation) && (busy_holder(observation) || !absent_confirmed(observation)) {
+        effects.push(Effect::Show(busy_page(observation)));
+        return (
+            State::Reconnecting {
+                since: since(state, now),
+            },
+            effects,
+        );
+    }
+
     // The post-update path, named. The helper is gone, it wrote its terminal
+
     // stage, and nothing is answering -- so this tick spawns. No reload, no
     // button, no other path involved.
     let post_update = matches!(state, State::Updating { .. } | State::RestartPending { .. })
@@ -1272,6 +1441,19 @@ fn starting_page(observation: &Observation, lead: &str) -> Page {
     }
 }
 
+/// What the window says while the server is busy rather than gone.
+fn busy_page(observation: &Observation) -> Page {
+    let waited = observation.seconds_since_healthy.unwrap_or(0.0).max(0.0);
+    Page::Busy {
+        message: format!(
+            "The server is busy ({waited:.0} s since it last answered). It is alive and \
+             working -- a long operation is holding it up. Nothing is being restarted; \
+             this window keeps checking (last checked {} ago).",
+            seconds(observation.since_probe)
+        ),
+    }
+}
+
 fn reconnecting_page(observation: &Observation) -> Page {
     Page::Reconnecting {
         message: format!(
@@ -1360,6 +1542,10 @@ mod tests {
             health,
             holder: Holder::Absent,
             holder_age: 0.0,
+            holder_alive: false,
+            seconds_since_healthy: None,
+            consecutive_absent: 1,
+
             helper: Helper::None,
             update: UpdateNarration::default(),
             status: StatusHealth::Ok,
@@ -1516,6 +1702,293 @@ mod tests {
         cases.push(("helper-finished-long-ago", stale_receipt));
 
         cases
+    }
+
+    // -- I-1: a busy server is not an absent one (2026-09-18) --------------
+
+    /// The world at the moment of the reported bug: our own server, pid
+    /// alive, answering four milliseconds ago until this probe.
+    fn busy(consecutive_absent: u32, since_healthy: f64) -> Observation {
+        let mut observation = observation(Health::Absent);
+        observation.holder = Holder::OursHealthy;
+        observation.holder_alive = true;
+        observation.seconds_since_healthy = Some(since_healthy);
+        observation.consecutive_absent = consecutive_absent;
+        observation
+    }
+
+    #[test]
+    fn a_live_holder_of_ours_is_absent_only_after_three_failed_probes() {
+        // The README has promised this row since 6.61.0 and the Rust
+        // controller never implemented it: "Was healthy, now failing, under
+        // health_failure_threshold -> Nothing at all."
+        for failures in 1..=2 {
+            let observation = busy(failures, 600.0);
+            assert!(
+                !absent_confirmed(&observation),
+                "{failures} failed probe(s) must not be enough to call a live \
+                 server absent"
+            );
+            assert!(!may_start(&observation), "{failures}");
+        }
+        let confirmed = busy(3, 600.0);
+        assert!(absent_confirmed(&confirmed));
+        assert!(
+            may_start(&confirmed),
+            "three failed probes past the grace is the whole tolerance; the \
+             server must still be started after it"
+        );
+    }
+
+    #[test]
+    fn the_probe_timeouts_escalate_five_ten_fifteen_and_then_stay_at_fifteen() {
+        let ladder = default_probe_timeouts();
+        assert_eq!(probe_timeout_for(0, &ladder), Some(5.0));
+        assert_eq!(probe_timeout_for(1, &ladder), Some(10.0));
+        assert_eq!(probe_timeout_for(2, &ladder), Some(15.0));
+        assert_eq!(probe_timeout_for(3, &ladder), Some(15.0));
+        assert_eq!(probe_timeout_for(99, &ladder), Some(15.0));
+        // A document that carries no ladder leaves the caller's own timeout
+        // alone rather than inventing one (C9).
+        assert_eq!(probe_timeout_for(0, &[]), None);
+        assert_eq!(probe_timeout_for(0, &[0.0, -1.0]), None);
+    }
+
+    #[test]
+    fn one_answer_resets_the_failure_count() {
+        // Not a controller assertion but the shape the caller must keep: the
+        // count is what `absent_confirmed` reads, and a server that answered
+        // between two timeouts has not failed twice in a row.
+        let mut observation = busy(2, 600.0);
+        assert!(!absent_confirmed(&observation));
+        observation.consecutive_absent = 0;
+        assert!(!absent_confirmed(&observation));
+        observation.consecutive_absent = 3;
+        assert!(absent_confirmed(&observation));
+    }
+
+    #[test]
+    fn a_busy_holder_inside_the_grace_window_is_not_spawned_over() {
+        // The user's report, exactly: a 300-address bulk add held the event
+        // loop, one /health probe took longer than its timeout, and the
+        // window started a second server that killed the first by pid.
+        let observation = busy(9, 4.0);
+        assert!(busy_holder(&observation));
+        assert!(
+            !may_start(&observation),
+            "a server that answered 4 s ago is busy, not gone"
+        );
+        let (state, effects) = step(&State::Attached, &observation, 100.0);
+        assert!(
+            !effects.contains(&Effect::Spawn),
+            "nothing may be started over a live, recently-answering server: \
+             {effects:?}"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Show(Page::Busy { .. }))),
+            "the window must say the server is busy: {effects:?}"
+        );
+        assert!(matches!(state, State::Reconnecting { .. }));
+    }
+
+    #[test]
+    fn the_busy_page_says_how_long_it_has_been() {
+        let observation = busy(2, 7.4);
+        let Page::Busy { message } = busy_page(&observation) else {
+            panic!("a busy page");
+        };
+        assert!(
+            message.contains("busy (7 s since it last answered)"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_live_holder_under_the_threshold_also_says_it_is_busy() {
+        // Past the grace but under the threshold, nothing is started either,
+        // so the page must not say "Reconnecting..." over a server whose
+        // process is alive and which answered half a minute ago.
+        let observation = busy(1, 31.0);
+        assert!(!busy_holder(&observation));
+        assert!(!absent_confirmed(&observation));
+        let (_, effects) = step(&State::Attached, &observation, 100.0);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Show(Page::Busy { .. }))),
+            "{effects:?}"
+        );
+        assert!(!effects.contains(&Effect::Spawn), "{effects:?}");
+    }
+
+    #[test]
+    fn a_busy_tick_keeps_its_restatus() {
+        // controller.rs:880's `effects.retain(|effect| !effect.acts())` drops
+        // the Restatus on a tick that spawns, which is why the deciding tick
+        // read a cached `OursHealthy`. A busy tick does not spawn, so the
+        // Restatus survives and the NEXT tick decides on a fresh
+        // process-based classification.
+        let observation = busy(1, 2.0);
+        let (_, effects) = step(&State::Attached, &observation, 100.0);
+        assert!(
+            effects.contains(&Effect::Restatus),
+            "the busy tick must still ask who holds the port: {effects:?}"
+        );
+        assert_eq!(
+            effects.iter().filter(|effect| effect.acts()).count(),
+            1,
+            "and still only one side effect: {effects:?}"
+        );
+    }
+
+    #[test]
+    fn grace_expiry_and_the_threshold_together_reach_todays_spawn() {
+        // The tolerance is finite. Past the grace AND past the threshold, the
+        // window starts a server exactly as it does today.
+        let past_grace_under_threshold = busy(1, 60.0);
+        assert!(!busy_holder(&past_grace_under_threshold));
+        assert!(!may_start(&past_grace_under_threshold));
+
+        let past_both = busy(3, 60.0);
+        assert!(!busy_holder(&past_both));
+        assert!(may_start(&past_both));
+        let (_, effects) = step(&State::Attached, &past_both, 100.0);
+        assert!(effects.contains(&Effect::Spawn), "{effects:?}");
+    }
+
+    #[test]
+    fn a_dead_holder_is_started_over_on_the_same_tick_as_before() {
+        // Item 3 of the decision: "a DEAD server (PID gone, or port free) is
+        // restarted exactly as today". The tick count is the proof -- one
+        // absent probe, one tick, one spawn -- and it is asserted for every
+        // way a holder can be dead.
+        let mut gone = busy(1, 0.5);
+        gone.holder_alive = false; // the pid is gone
+        let mut free = observation(Health::Absent);
+        free.holder = Holder::Absent; // the port is free
+        free.consecutive_absent = 1;
+        free.seconds_since_healthy = Some(0.5);
+        let mut stale = busy(1, 0.5);
+        stale.holder = Holder::OursStale;
+        stale.holder_alive = false;
+
+        for (name, observation) in [
+            ("pid gone", gone),
+            ("port free", free),
+            ("stale holder", stale),
+        ] {
+            assert!(
+                absent_confirmed(&observation),
+                "{name}: a dead server is absent on the first probe"
+            );
+            assert!(!busy_holder(&observation), "{name}");
+            assert!(may_start(&observation), "{name}");
+            let (_, effects) = step(&State::Attached, &observation, 100.0);
+            assert!(
+                effects.contains(&Effect::Spawn),
+                "{name}: the first absent tick must still spawn: {effects:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_but_a_live_holder_of_ours_buys_any_patience() {
+        // The debounce must never become a reason not to start a server that
+        // nobody is running. Every holder that is not identified as ours is
+        // confirmed absent on its first failed probe, whatever the count.
+        for holder in [Holder::Absent, Holder::Foreign, Holder::Unknown] {
+            let mut observation = busy(0, 0.0);
+            observation.holder = holder;
+            assert!(
+                absent_confirmed(&observation),
+                "{holder:?} must not be given the live-holder debounce"
+            );
+        }
+    }
+
+    #[test]
+    fn no_spawn_while_the_holder_is_ours_alive_and_answered_within_the_grace() {
+        // The property, over every state and every plausible number: there is
+        // no (state, grace, count) at which a live, recently-answering server
+        // of ours is started over.
+        for state in all_states() {
+            for count in [0_u32, 1, 3, 7, 400] {
+                for since_healthy in [0.0_f64, 0.1, 5.0, 14.9] {
+                    let observation = busy(count, since_healthy);
+                    assert!(
+                        !may_start(&observation),
+                        "{} + {count} failures + {since_healthy}s would spawn \
+                         over a busy server",
+                        state.name()
+                    );
+                    let (_, effects) = step(&state, &observation, 100.0);
+                    assert!(
+                        !effects.contains(&Effect::Spawn),
+                        "{} + {count} + {since_healthy}s spawned: {effects:?}",
+                        state.name()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_server_this_window_has_never_seen_answer_gets_no_grace() {
+        // A cold start: nothing has ever answered, so there is nothing to be
+        // patient with and the window starts a server on the first tick,
+        // exactly as it does today.
+        let mut cold = observation(Health::Absent);
+        cold.holder = Holder::Unknown;
+        cold.holder_alive = false;
+        cold.seconds_since_healthy = None;
+        cold.consecutive_absent = 1;
+        assert!(!busy_holder(&cold));
+        assert!(absent_confirmed(&cold));
+        let (_, effects) = step(&State::Booting, &cold, 0.0);
+        assert!(effects.contains(&Effect::Spawn), "{effects:?}");
+    }
+
+    #[test]
+    fn a_dead_server_costs_the_same_tick_count_as_7_25_0() {
+        // Measured on 7.25.0 (fork/main 6017bc57) in a detached worktree with
+        // this exact loop, and recorded here so the number cannot drift:
+        //
+        //     BASE pid gone / cached ours: first spawn on tick Some(1)
+        //     BASE port free:              first spawn on tick Some(1)
+        //     BASE stale holder:           first spawn on tick Some(1)
+        //
+        // The busy grace and the failure threshold are only ever granted to a
+        // holder that is ours AND whose pid is alive, so none of these three
+        // touches them and every one of them still spawns on the first tick.
+        const BASE_TICKS_TO_SPAWN: u32 = 1;
+        for (name, holder, alive) in [
+            ("pid gone / cached ours", Holder::OursHealthy, false),
+            ("port free", Holder::Absent, false),
+            ("stale holder", Holder::OursStale, false),
+        ] {
+            let mut observation = observation(Health::Absent);
+            observation.holder = holder;
+            observation.holder_alive = alive;
+            let mut state = State::Attached;
+            let mut ticks = 0_u32;
+            let mut spawned_on = None;
+            for round in 1..=5 {
+                let (next, effects) = step(&state, &observation, 100.0 + f64::from(round));
+                ticks += 1;
+                if effects.contains(&Effect::Spawn) && spawned_on.is_none() {
+                    spawned_on = Some(ticks);
+                }
+                state = next;
+            }
+            assert_eq!(
+                spawned_on,
+                Some(BASE_TICKS_TO_SPAWN),
+                "{name}: a dead server must still be started on the same tick \
+                 7.25.0 started it on"
+            );
+        }
     }
 
     // -- the property the whole redesign exists for -----------------------

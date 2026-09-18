@@ -19,11 +19,13 @@ from .constants import (
     CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
     DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT,
     DESKTOP_ADMIN_REQUEST_TIMEOUT_DEFAULT,
+    DESKTOP_BUSY_GRACE_SECONDS_DEFAULT,
     DESKTOP_FOREIGN_GRACE_SECONDS_DEFAULT,
     DESKTOP_HEALTH_CHECK_INTERVAL_DEFAULT,
     DESKTOP_HEALTH_FAILURE_THRESHOLD_DEFAULT,
     DESKTOP_HEALTH_POLL_SECONDS_DEFAULT,
     DESKTOP_HEALTH_PROBE_TIMEOUT_DEFAULT,
+    DESKTOP_HEALTH_PROBE_TIMEOUTS_DEFAULT,
     DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT,
     DESKTOP_SERVER_START_RETRIES_DEFAULT,
     DESKTOP_SERVER_START_TIMEOUT_DEFAULT,
@@ -1815,6 +1817,21 @@ class Settings(BaseSettings):
     desktop_health_probe_timeout: float = Field(
         default=DESKTOP_HEALTH_PROBE_TIMEOUT_DEFAULT,
         validation_alias="DESKTOP_HEALTH_PROBE_TIMEOUT",
+    )
+    # The escalating /health timeouts the desktop app uses once it has seen
+    # the server answer: one per consecutive failed probe, the last repeating.
+    # Seconds, comma-separated. Empty restores the single
+    # DESKTOP_HEALTH_PROBE_TIMEOUT for every probe.
+    desktop_health_probe_timeouts: str = Field(
+        default=DESKTOP_HEALTH_PROBE_TIMEOUTS_DEFAULT,
+        validation_alias="DESKTOP_HEALTH_PROBE_TIMEOUTS",
+    )
+    # How long the desktop app leaves a server of its own alone after it last
+    # answered, whatever a later probe says. A busy server is not an absent
+    # one; 0 restores the pre-7.26.0 behaviour exactly.
+    desktop_busy_grace_seconds: float = Field(
+        default=DESKTOP_BUSY_GRACE_SECONDS_DEFAULT,
+        validation_alias="DESKTOP_BUSY_GRACE_SECONDS",
     )
     # How long an unidentifiable port holder is given before it is treated as
     # a genuine conflict rather than as our own server starting.

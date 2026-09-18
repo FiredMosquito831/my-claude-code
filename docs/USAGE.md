@@ -1160,7 +1160,7 @@ refusal and the window reads it as "shutting down", waits, and reconnects.
 
 > **These settings apply on the next `mcc-desktop` launch, not to a tray already running.** `mcc-desktop` is a separate process from `mcc-server` and reads them once at start — changing one in the dashboard or in `~/.mcc/.env` does nothing to a tray you already have open. Quit and relaunch `mcc-desktop` to pick it up.
 
-Seventeen settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
+Nineteen settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
 
 | Setting | Default | Range |
 | --- | --- | --- |
@@ -1178,6 +1178,8 @@ Seventeen settings live under **Admin → Providers → Desktop**, beside the li
 | `DESKTOP_TICK_SECONDS` | 10 | 1–3600 |
 | `DESKTOP_START_BACKOFF_SECONDS` | 10 | 1–3600 |
 | `DESKTOP_HEALTH_PROBE_TIMEOUT` | 1.5 | 0.1–60 |
+| `DESKTOP_HEALTH_PROBE_TIMEOUTS` | 5,10,15 | seconds, comma-separated |
+| `DESKTOP_BUSY_GRACE_SECONDS` | 15 | 0–3600 |
 | `DESKTOP_FOREIGN_GRACE_SECONDS` | 45 | 0–3600 |
 | `DESKTOP_STATUS_WALL_SECONDS` | 15 | 1–600 |
 | `DESKTOP_SHELL_AUTO_UPDATE` | true | true / false |
@@ -1196,6 +1198,44 @@ long the app waits for one status read before painting something anyway — rais
 on a machine where antivirus scanning makes a cold start take longer than that.
 `DESKTOP_SHELL_AUTO_UPDATE` is the server's one-shot desktop-app update described
 above.
+
+<a id="a-busy-server-is-not-an-absent-one"></a>
+
+#### A busy server is not an absent one (7.26.0)
+
+**The two new in 7.26.0 exist because the desktop app used to restart a server
+that was working.** One `/health` answer that arrived later than 1.5 seconds was
+enough: the window read a single late sample as *the server is gone*, started a
+second `mcc-server`, and that second server took the port from the first one by
+process id. On the machine this was found on it happened six times between
+2026-09-16 and 2026-09-18, always in the middle of a long operation — a
+three-hundred-address proxy add, a big provider refresh — and there was not one
+crash in the logs. The server was never dying. It was busy.
+
+`DESKTOP_HEALTH_PROBE_TIMEOUTS` is how long each further check may take **once
+the app has seen this server answer**: one number per consecutive failure, in
+seconds, the last one repeating. The default `5,10,15` gives a server that is
+merely busy about thirty seconds to finish what it is doing. Leave it empty to
+use the single `DESKTOP_HEALTH_PROBE_TIMEOUT` for every check, which is what
+7.25.0 did.
+
+`DESKTOP_BUSY_GRACE_SECONDS` is how long the app leaves a server of its own
+alone after it last answered, whatever a later check says. Inside that window
+the app shows *The server is busy (N s since it last answered)* and starts
+nothing. Set it to `0` to restart on the first missed check, as before 7.26.0.
+
+`DESKTOP_HEALTH_FAILURE_THRESHOLD` — which has been a setting since 6.61.0 and
+which the desktop window's own controller had never read — now does what this
+page and the app's README have always said it does: a server the app can see,
+whose process is alive, must miss that many checks in a row before the app calls
+it gone.
+
+**What does not change.** A server whose process has actually exited, or a port
+nothing is listening on, is started again immediately, on exactly the same check
+it always was — none of the three settings above applies to a server the app has
+never seen answer. `SERVER_PORT_TAKEOVER=always` still means what it has always
+meant for a server you start yourself from a terminal: it takes the port. And
+nothing about updating or installing changes.
 
 `DESKTOP_BROWSER_PATH` points at a browser binary in a nonstandard location; if the path no longer exists, `mcc-desktop` warns and falls back to the built-in search instead of failing to start. `DESKTOP_WINDOW_WIDTH`/`HEIGHT` are only the window's *initial* size — once it has opened, its size and position are remembered across launches, so changing these later applies on first run or when you actually change the setting, not every launch.
 

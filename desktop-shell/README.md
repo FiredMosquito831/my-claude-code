@@ -65,6 +65,7 @@ pure function (`src/ladder.rs::decide`), so every row below is a unit test.
 | `foreign` | Nothing is started | The `port_conflict` sentence Python wrote, verbatim — it names the holding process — + Retry |
 | `draining` | Nothing is started, nothing is killed | "The server is shutting down…" and a wait, bounded by `reconnect_timeout_seconds`, then the ladder runs again |
 | Was healthy, now failing, under `health_failure_threshold` | Nothing at all | The dashboard, untouched |
+| Was healthy, now failing, holder is ours + its pid is alive + it answered inside `busy_grace_seconds` | Nothing at all — and the `Restatus` is **kept**, so the next tick decides on a fresh process-based classification rather than a cached `OursHealthy` | "The server is busy (N s since it last answered)" |
 | …over the threshold, inside `reconnect_timeout_seconds` | Reconnect banner, **repainted on every poll**; every `reconnect_restatus_seconds` the status document is re-read, and if it says `free` + `spawn` a server is started **once** per episode | "Still trying: 3 m 20 s elapsed of 22 m, 18 m 40 s left. Last checked 2 s ago (connection refused). Update: Installing the new version." |
 | …past the budget, or a start that timed out | The end of the line | An error page naming `server_log` and what the last check said, + Retry |
 | `schema` is not 1, or `server_presence` is a word this build does not know | Refuses | "Update the desktop window" — never a guess |
@@ -72,6 +73,44 @@ pure function (`src/ladder.rs::decide`), so every row below is a unit test.
 Every number in that table is read from the status document. None of them is
 compiled into this binary (contract C9), which is what stops a routine server
 update being painted over with an error page.
+
+### The `health_failure_threshold` row, and why it took until 7.26.0
+
+That row was written when this README was, and the shipped Rust controller did
+not implement it: `lib.rs::probe` assigned one probe's outcome straight to
+`self.health` with no counter anywhere, and `controller.rs::may_start` had
+nothing in it that could count. One late `/health` answer was a verdict.
+
+7.26.0 implements it, with two numbers beside it:
+
+* **`health_probe_timeouts`** (`DESKTOP_HEALTH_PROBE_TIMEOUTS`, `5,10,15`) —
+  the timeout for each consecutive failed probe, the last entry repeating. It
+  applies **only once this window has seen this server answer**. Before that,
+  and for a holder that is not ours, every probe still uses the single
+  `health_probe_timeout_seconds` (1.5 s), so a cold start and a dead server are
+  timed exactly as they were in 7.25.0. A longer timeout costs nothing against
+  a port that is free: a refused connection is refused immediately.
+* **`busy_grace_seconds`** (`DESKTOP_BUSY_GRACE_SECONDS`, 15) — how long a
+  holder that is ours, whose pid is alive, and which answered inside the window
+  is left alone whatever the probe said.
+
+Both halves of "ours and alive" are required, and `false` is the answer whenever
+the holder's pid cannot be told. That is deliberate: an unknown pid buys no
+patience, so a server that has genuinely exited is restarted on the same tick it
+always was.
+
+### The transcript is rotated, not only truncated
+
+`process::begin_log` still empties `desktop-server-start.log` at the start of a
+launch — that file is *this* launch's transcript and a reader opening it expects
+nothing else — but it now copies what the last launch left to
+`desktop-server-start.log.1` first. The 2026-09-18 report has six restarts in it
+and the shell's own reasoning for five of them could not be recovered, because
+the only copy of the evidence was the file that had just been emptied. Each
+generation is still bounded by `LOG_MAX_BYTES` (2 MB, 7.10.1), so the worst case
+is twice that. Every failed probe past the first answer also writes one line:
+
+    -- absent probe 1/3 (holder=OursHealthy alive=true, last answered 6 s ago, busy grace 15 s) --
 
 ### `draining`, and why it is opt-in
 

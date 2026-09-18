@@ -295,6 +295,14 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "desktop_foreign_grace_seconds": LimitRange(
         0.0, HOUR, "0 reports a conflict on the first unidentified holder"
     ),
+    # How long the desktop app leaves a server of its own alone after it last
+    # answered, whatever a later health check says. 0 restores the pre-7.26.0
+    # behaviour: one missed check is enough to start a replacement. The upper
+    # bound is an hour because the trade is the operator's -- a longer grace
+    # is a server that genuinely wedges being restarted later.
+    "desktop_busy_grace_seconds": LimitRange(
+        0.0, HOUR, "0 restarts on the first missed check, as before 7.26.0"
+    ),
     # How long the desktop app waits for one --print-status before painting
     # something anyway. Out of the shell's binary in 6.61.0: it decides whether
     # a slow machine gets a window at all.

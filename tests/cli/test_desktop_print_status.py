@@ -22,6 +22,7 @@ from my_claude_code.cli.desktop_status import (
     STATUS_KEYS,
     STATUS_SCHEMA,
     desktop_status,
+    health_probe_timeouts,
     reconnect_timeout_seconds,
 )
 from my_claude_code.cli.launchers.common import PreflightResult
@@ -81,6 +82,11 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     # controller. Adding a key does not bump ``schema`` (C3); the shell
     # tolerates all of them in 6.61.0 and its pin moves in 6.61.1.
     "health_probe_timeout_seconds": float,
+    # 7.26.0's two. The escalating ladder and the busy grace: the shell
+    # tolerates both in 7.26.0 and its pin moves in 7.26.1, exactly as the
+    # lifecycle keys above did.
+    "health_probe_timeouts": list,
+    "busy_grace_seconds": float,
     "tick_seconds": float,
     "start_backoff_seconds": float,
     "foreign_grace_seconds": float,
@@ -810,3 +816,55 @@ def test_a_genuine_stranger_on_the_port_is_still_foreign(
 
     assert payload["server_presence"] == "foreign"
     assert payload["port_conflict"]
+
+
+# --- 7.26.0: a busy server is not an absent one ---------------------------
+
+
+def test_the_escalating_probe_ladder_ships_five_ten_fifteen(
+    config_dir, monkeypatch
+) -> None:
+    """The user's design, on the document the desktop window reads.
+
+    Three consecutive failed probes with 5, 10 and 15 second timeouts is about
+    thirty seconds of tolerance before a server whose process is alive is
+    called gone -- the 2026-09-18 report is six restarts of a server that was
+    merely busy, every one of them decided on a single 1.5 second sample.
+    """
+
+    _presence(monkeypatch, "healthy")
+
+    payload = desktop_status()
+
+    assert payload["health_probe_timeouts"] == [5.0, 10.0, 15.0]
+    assert payload["busy_grace_seconds"] == 15.0
+    # And the single timeout is untouched: it still times every probe taken
+    # before the window has seen this server answer, so a cold start and a
+    # dead server cost exactly what they cost today.
+    assert payload["health_probe_timeout_seconds"] == 1.5
+
+
+def test_the_ladder_is_read_from_the_setting_and_bad_pieces_are_dropped() -> None:
+    """A typo in a tunable must never be why a window cannot be painted."""
+
+    def ladder(value: str) -> list[float]:
+        return health_probe_timeouts(
+            Settings.model_validate({"DESKTOP_HEALTH_PROBE_TIMEOUTS": value})
+        )
+
+    assert ladder("5,10,15") == [5.0, 10.0, 15.0]
+    assert ladder(" 2 , 4 ") == [2.0, 4.0]
+    assert ladder("1,oops,3") == [1.0, 3.0]
+    assert ladder("0,-4,7") == [7.0]
+    # Empty means "no ladder", and the shell keeps its single timeout for
+    # every probe -- which is 7.25.0's behaviour exactly.
+    assert ladder("") == []
+    assert ladder("nonsense") == []
+
+
+def test_the_busy_grace_can_be_turned_off_to_restore_the_old_behaviour() -> None:
+    """0 is the pre-7.26.0 shell: one missed check starts a replacement."""
+
+    settings = Settings.model_validate({"DESKTOP_BUSY_GRACE_SECONDS": "0"})
+
+    assert settings.desktop_busy_grace_seconds == 0.0
