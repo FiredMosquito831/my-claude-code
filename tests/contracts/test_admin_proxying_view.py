@@ -156,16 +156,23 @@ def test_the_bulk_route_appears_on_both_sides_of_the_wire() -> None:
 def test_the_checks_of_a_bulk_add_are_bounded_rather_than_serial_or_unbounded() -> None:
     """Twelve ten-second timeouts in a row is two minutes of a spinner.
 
-    Forty at once would be a small outbound flood from an admin page. The
-    background checker keeps its serial default either way.
+    Unbounded would be an outbound flood from an admin page. Since 7.22.2 the
+    bound is the operator's own fetch number rather than the four this route
+    used to hard-code -- "Add all working" on three hundred addresses is the
+    same gesture as the sweep that found them -- and it is still a bound: the
+    ceiling is the setting's own maximum and every check carries the per-address
+    budget. The background checker keeps its serial default either way.
     """
 
-    assert "concurrency=PROXY_CHECK_MAX_CONCURRENCY" in ROUTES_PY
+    assert "concurrency=pace.value" in ROUTES_PY
+    assert "max_concurrency=PROXY_FETCH_TEST_CONCURRENCY_MAX" in ROUTES_PY
+    assert "budget=check_budget(" in ROUTES_PY
     checker = (
         ROOT / "src" / "my_claude_code" / "application" / "proxy_check.py"
     ).read_text(encoding="utf-8")
     assert "PROXY_CHECK_MAX_CONCURRENCY = " in checker
     assert "concurrency: int = 1" in checker
+    assert "max_concurrency: int = PROXY_CHECK_MAX_CONCURRENCY" in checker
     assert "asyncio.Semaphore(" in checker
 
 

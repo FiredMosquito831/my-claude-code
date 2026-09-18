@@ -48,14 +48,15 @@ from my_claude_code.api.admin_routes import require_loopback_admin
 from my_claude_code.api.dependencies import get_services
 from my_claude_code.api.ports import ApiServices
 from my_claude_code.application.proxy_check import (
-    PROXY_CHECK_MAX_CONCURRENCY,
     PROXY_CHECK_TIMEOUT_SECONDS,
+    check_budget,
     check_endpoints,
     destination_for_provider,
 )
 from my_claude_code.application.proxy_fetch import (
     FetchAlreadyRunning,
     fetch_status,
+    resolve_fetch_concurrency,
     start_fetch,
     stop_fetch,
 )
@@ -68,6 +69,7 @@ from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.admin.status import provider_config_status
 from my_claude_code.config.constants import (
     PROXY_FEED_MINIMUM_MINUTES,
+    PROXY_FETCH_TEST_CONCURRENCY_MAX,
     ROTATION_POLICY_ORDER,
 )
 from my_claude_code.config.credentials import mask_proxy_label
@@ -907,6 +909,8 @@ async def ingest_proxy_feeds(
             destination=str(chosen["base_url"]).strip(),
             concurrency=int(settings.proxy_fetch_test_concurrency),
             connect_timeout=float(settings.proxy_fetch_connect_timeout_seconds),
+            concurrency_mode=str(settings.proxy_fetch_concurrency_mode),
+            check_depth=str(settings.proxy_fetch_check_depth),
             timeout=PROXY_CHECK_TIMEOUT_SECONDS,
             limit=int(settings.proxy_candidates_max),
             exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
@@ -1184,13 +1188,32 @@ async def bulk_proxy_candidates(
         else:
             testable.append(proxy_id)
 
+    # The operator's own fetch number, resolved against how many addresses this
+    # gesture is actually about. "Add all working" on a list of three hundred
+    # used to re-test them four at a time -- a number chosen for a person
+    # ticking a dozen rows -- which turned one press into a quarter of an hour
+    # of re-doing a test the fetch had just done. The checks themselves are
+    # unchanged: every address here is proven end to end with the full
+    # ``request`` depth before it can enter a chain, whatever the sweep was set
+    # to, because this is the door a credential goes through.
+    pace = resolve_fetch_concurrency(
+        requested=int(settings.proxy_fetch_test_concurrency),
+        mode=str(settings.proxy_fetch_concurrency_mode),
+        offered=len(testable),
+    )
     outcomes = (
         await check_endpoints(
             tuple(testable),
             dict.fromkeys(testable, destination),
             timeout=PROXY_CHECK_TIMEOUT_SECONDS,
             exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
-            concurrency=PROXY_CHECK_MAX_CONCURRENCY,
+            concurrency=pace.value,
+            max_concurrency=PROXY_FETCH_TEST_CONCURRENCY_MAX,
+            budget=check_budget(
+                connect_timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+                timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+                exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+            ),
         )
         if testable
         else {}
@@ -1496,6 +1519,12 @@ def _payload(services: ApiServices) -> dict[str, Any]:
             # server had stopped applying.
             "fetch": {
                 "concurrency": int(settings.proxy_fetch_test_concurrency),
+                # How that number is read, and how far each test goes. Both
+                # travel because both change what a press of Fetch does to
+                # somebody else's machines, and the page must not keep its own
+                # opinion about either.
+                "concurrency_mode": str(settings.proxy_fetch_concurrency_mode),
+                "check_depth": str(settings.proxy_fetch_check_depth),
                 "connect_timeout_seconds": float(
                     settings.proxy_fetch_connect_timeout_seconds
                 ),

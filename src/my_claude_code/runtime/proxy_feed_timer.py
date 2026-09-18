@@ -216,6 +216,12 @@ class ProxyFeedTimer:
                 destination=str(chosen["base_url"]).strip(),
                 concurrency=int(settings.proxy_fetch_test_concurrency),
                 connect_timeout=float(settings.proxy_fetch_connect_timeout_seconds),
+                # The scheduled pass is the same sweep the button starts, so it
+                # follows the same two settings. A timer that tested differently
+                # from the button would make the candidate list depend on which
+                # one happened to run last.
+                concurrency_mode=str(settings.proxy_fetch_concurrency_mode),
+                check_depth=str(settings.proxy_fetch_check_depth),
                 timeout=PROXY_CHECK_TIMEOUT_SECONDS,
                 limit=int(settings.proxy_candidates_max),
                 exit_ip_url=settings.proxy_check_exit_ip_url.strip(),

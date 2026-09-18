@@ -77,6 +77,9 @@ from datetime import UTC, datetime
 from loguru import logger
 
 from my_claude_code.application.proxy_check import (
+    CHECK_DEPTH_REQUEST,
+    CHECK_DEPTH_TLS,
+    DEFAULT_FETCH_CHECK_DEPTH,
     PROXY_CHECK_TIMEOUT_SECONDS,
     apply_fetch_outcome,
     check_budget,
@@ -92,6 +95,10 @@ from my_claude_code.application.proxy_ingest import (
     rank_merged,
 )
 from my_claude_code.config.atomic_json import write_json_document_atomically
+from my_claude_code.config.constants import (
+    PROXY_FETCH_TEST_CONCURRENCY_MAX,
+    PROXY_FETCH_TEST_CONCURRENCY_MIN,
+)
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.paths import proxy_fetch_status_path
 from my_claude_code.config.proxy_chains import (
@@ -123,6 +130,24 @@ FETCH_STATES: tuple[str, ...] = (
     "interrupted",
 )
 
+#: How the operator's concurrency number is read.
+#:
+#: ``fixed`` is a count of addresses and is what shipped. ``percent`` reads the
+#: same number as a percentage of however many addresses the feeds actually
+#: offered, resolved once the merge is done, so one setting paces a list of two
+#: hundred and a list of five thousand alike.
+#:
+#: Mirrored by ``config.constants.PROXY_FETCH_CONCURRENCY_MODE_NAMES``, because
+#: ``config`` is a leaf package that may not import this one. Pinned in both
+#: directions by ``tests/contracts/test_import_boundaries.py``.
+FETCH_CONCURRENCY_MODE_FIXED = "fixed"
+FETCH_CONCURRENCY_MODE_PERCENT = "percent"
+FETCH_CONCURRENCY_MODES: tuple[str, ...] = (
+    FETCH_CONCURRENCY_MODE_FIXED,
+    FETCH_CONCURRENCY_MODE_PERCENT,
+)
+DEFAULT_FETCH_CONCURRENCY_MODE = FETCH_CONCURRENCY_MODE_FIXED
+
 #: How many passing addresses accumulate before the store is written, and how
 #: long a smaller batch may wait. Whichever comes first.
 #:
@@ -147,6 +172,125 @@ _PERSIST_RETRY_SECONDS = 0.2
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _clamp_concurrency(value: int, *, floor: int = 1) -> int:
+    """The number, inside the range the sweep can actually honour.
+
+    The ceiling is the setting's own maximum and is never exceeded: it is
+    exactly how many sockets are open to strangers at one moment.
+
+    The floor is ``1`` by default and deliberately not the setting's minimum of
+    four. Settings validation already refuses a configured value below four;
+    this function is also called by tests and by a caller that has worked out a
+    number for itself, and rounding *up* a caller who asked for one would be
+    this code overruling an explicit instruction. A percentage is the exception
+    and passes the setting's floor: four is what keeps a small list overlapping
+    at all.
+    """
+
+    return max(max(1, floor), min(int(value), PROXY_FETCH_TEST_CONCURRENCY_MAX))
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedConcurrency:
+    """How many addresses this pass will test at once, and why that number.
+
+    The *why* is half of it. A percentage resolved against a list nobody has
+    seen yet is a number the operator did not type, so it is carried to the
+    status payload and said on the page -- "testing 96 at a time (6% of 1,592)"
+    -- rather than left to be inferred from how fast the counter moves.
+    """
+
+    value: int
+    mode: str
+    requested: int
+    offered: int
+    #: Empty when the setting was honoured as written. Otherwise the plain
+    #: sentence explaining what was wrong with it and what was done instead.
+    #: Never a crash and never a silence: a percentage of 200 is a typo, and
+    #: the operator finds out from the page rather than from the clock.
+    note: str = ""
+
+    @property
+    def summary(self) -> str:
+        if self.mode == FETCH_CONCURRENCY_MODE_PERCENT:
+            return (
+                f"testing {self.value} at a time "
+                f"({self.requested}% of {self.offered:,})"
+            )
+        return f"testing {self.value} at a time"
+
+    def as_document(self) -> dict[str, object]:
+        return {
+            "concurrency": self.value,
+            "concurrency_mode": self.mode,
+            "concurrency_requested": self.requested,
+            "concurrency_summary": self.summary,
+            "concurrency_note": self.note,
+        }
+
+
+def resolve_fetch_concurrency(
+    *, requested: int, mode: str, offered: int
+) -> ResolvedConcurrency:
+    """Turn the setting and the size of the offer into one number.
+
+    ``fixed`` is the number, clamped to the range the setting allows.
+    ``percent`` is that percentage of ``offered``, to the nearest address, with
+    the same floor and ceiling -- so a small list still gets at least four in
+    flight and a huge one still stops at five hundred.
+
+    A ``percent`` value outside 1-100 is a typo rather than an instruction.
+    It is **reported** and the number is used as a fixed count, which is the
+    only reading of it that could have been meant. Nothing raises: a fetch that
+    refused to start over a badly typed percentage would cost the operator the
+    whole pass to fix a number they can see.
+    """
+
+    wanted = int(requested)
+    chosen = str(mode or "").strip().lower() or DEFAULT_FETCH_CONCURRENCY_MODE
+    if chosen not in FETCH_CONCURRENCY_MODES:
+        return ResolvedConcurrency(
+            value=_clamp_concurrency(wanted),
+            mode=FETCH_CONCURRENCY_MODE_FIXED,
+            requested=wanted,
+            offered=offered,
+            note=(
+                f"PROXY_FETCH_CONCURRENCY_MODE is set to {mode!r}, which is "
+                f"not one of {', '.join(FETCH_CONCURRENCY_MODES)}. The number "
+                "was read as a fixed count of addresses."
+            ),
+        )
+    if chosen == FETCH_CONCURRENCY_MODE_FIXED:
+        return ResolvedConcurrency(
+            value=_clamp_concurrency(wanted),
+            mode=chosen,
+            requested=wanted,
+            offered=offered,
+        )
+    if not 1 <= wanted <= 100:
+        return ResolvedConcurrency(
+            value=_clamp_concurrency(wanted),
+            mode=FETCH_CONCURRENCY_MODE_FIXED,
+            requested=wanted,
+            offered=offered,
+            note=(
+                f"PROXY_FETCH_TEST_CONCURRENCY is {wanted}, and in percent "
+                "mode it has to be between 1 and 100. It was read as a fixed "
+                f"count of addresses for this pass: {_clamp_concurrency(wanted)} "
+                "at a time."
+            ),
+        )
+    return ResolvedConcurrency(
+        value=_clamp_concurrency(
+            int(max(0, offered) * wanted / 100 + 0.5),
+            floor=PROXY_FETCH_TEST_CONCURRENCY_MIN,
+        ),
+        mode=chosen,
+        requested=wanted,
+        offered=offered,
+    )
 
 
 @dataclass
@@ -174,7 +318,27 @@ class FetchProgress:
     #: -- and the only counter here a person reading the page can act on while
     #: the sweep is still going.
     persisted: int = 0
+    #: How many addresses are in flight at once, once the setting has been
+    #: read against the size of the offer, and the sentence that says why.
+    #: Zero and empty until the feeds have answered, because a percentage has
+    #: nothing to be a percentage of before then.
+    concurrency: int = 0
+    concurrency_mode: str = ""
+    concurrency_requested: int = 0
+    concurrency_summary: str = ""
+    concurrency_note: str = ""
+    #: How far each address's test goes in this pass. The page says it, because
+    #: it is the difference between a sweep that talks to the provider and one
+    #: that does not.
+    check_depth: str = ""
     results: tuple[FeedResult, ...] = ()
+
+    def note_concurrency(self, resolved: ResolvedConcurrency) -> None:
+        self.concurrency = resolved.value
+        self.concurrency_mode = resolved.mode
+        self.concurrency_requested = resolved.requested
+        self.concurrency_summary = resolved.summary
+        self.concurrency_note = resolved.note
 
     def as_document(self) -> dict[str, object]:
         return {
@@ -188,6 +352,12 @@ class FetchProgress:
             "offered": self.offered,
             "corroborated": self.corroborated,
             "persisted": self.persisted,
+            "concurrency": self.concurrency,
+            "concurrency_mode": self.concurrency_mode,
+            "concurrency_requested": self.concurrency_requested,
+            "concurrency_summary": self.concurrency_summary,
+            "concurrency_note": self.concurrency_note,
+            "check_depth": self.check_depth,
             "feeds": [
                 {
                     "id": result.feed_id,
@@ -271,6 +441,8 @@ async def run_fetch_pass(
     destination: str,
     concurrency: int,
     connect_timeout: float,
+    concurrency_mode: str = DEFAULT_FETCH_CONCURRENCY_MODE,
+    check_depth: str = DEFAULT_FETCH_CHECK_DEPTH,
     timeout: float = PROXY_CHECK_TIMEOUT_SECONDS,
     feed_timeout: float = FEED_TIMEOUT_SECONDS,
     limit: int = 0,
@@ -301,11 +473,32 @@ async def run_fetch_pass(
     ``on_persist`` is called after every write of the store, on the loop, so a
     caller that keeps a durable record of the job can keep it current without
     this function knowing what that record is.
+
+    ``concurrency_mode`` decides how ``concurrency`` is read, and the reading
+    happens **here**, after the feeds have answered and been merged, because a
+    percentage has nothing to be a percentage of until then. The resolved
+    number, and the sentence that explains it, go onto the counters so the page
+    reports what is happening rather than what was configured.
+
+    ``check_depth`` is how far each address's test goes, and its default --
+    :data:`~my_claude_code.application.proxy_check.DEFAULT_FETCH_CHECK_DEPTH`
+    -- is the one deliberate behaviour change in 7.22.2: a sweep opens the
+    tunnel, finishes a verified TLS handshake to the provider's own host
+    through it, and sends nothing. The interception control is identical --
+    that verdict is reached during the handshake either way -- and the
+    provider's server no longer receives a request per address from an address
+    it has never seen. ``request`` restores 7.22.1 exactly.
     """
 
     counters = progress if progress is not None else FetchProgress()
     halt = stop if stop is not None else asyncio.Event()
     at = _now()
+    depth = (
+        CHECK_DEPTH_TLS
+        if str(check_depth).strip().lower() == CHECK_DEPTH_TLS
+        else CHECK_DEPTH_REQUEST
+    )
+    counters.check_depth = depth
 
     results, harvest, feed_count = await harvest_feeds(
         timeout=feed_timeout, on_feed=lambda: _bump_feeds(counters)
@@ -320,6 +513,16 @@ async def run_fetch_pass(
     counters.corroborated = sum(1 for item in merged if len(item.sources) > 1)
     ranked = merged[:limit] if limit > 0 else merged
     counters.total = len(ranked)
+
+    # The offer is known, so the setting can finally be read against it.
+    resolved = resolve_fetch_concurrency(
+        requested=int(concurrency),
+        mode=concurrency_mode,
+        offered=len(ranked),
+    )
+    counters.note_concurrency(resolved)
+    if resolved.note:
+        logger.warning("PROXY FEEDS: {}", resolved.note)
 
     store = load_proxy_chains()
     used = in_use_labels(store)
@@ -407,6 +610,7 @@ async def run_fetch_pass(
                     timeout=timeout,
                     exit_ip_url=exit_ip_url,
                     connect_timeout=connect_timeout,
+                    depth=depth,
                 ),
                 budget,
             )
@@ -421,6 +625,7 @@ async def run_fetch_pass(
                 ok=False,
                 tls=TLS_UNKNOWN,
                 detail=f"did not finish within {budget:.0f}s",
+                depth=depth,
             )
 
     async def worker() -> None:
@@ -463,7 +668,7 @@ async def run_fetch_pass(
             # /v1/messages": the workers hand the loop back between checks.
             await asyncio.sleep(0)
 
-    workers = max(1, min(int(concurrency), len(ranked))) if ranked else 0
+    workers = max(1, min(resolved.value, len(ranked))) if ranked else 0
     if workers:
         await _sweep(worker, workers, halt)
 
@@ -488,11 +693,13 @@ async def run_fetch_pass(
     )
     logger.info(
         "PROXY FEEDS: {} of {} feed(s) answered; {} address(es) offered, {} "
-        "tested, {} working, {} dead, {} refused{}",
+        "tested at {} depth, {} at a time; {} working, {} dead, {} refused{}",
         run.reached,
         feed_count,
         run.offered,
         run.tested,
+        depth,
+        resolved.value,
         run.working,
         run.dead,
         run.refused,
@@ -813,6 +1020,8 @@ async def start_fetch(
     destination: str,
     concurrency: int,
     connect_timeout: float,
+    concurrency_mode: str = DEFAULT_FETCH_CONCURRENCY_MODE,
+    check_depth: str = DEFAULT_FETCH_CHECK_DEPTH,
     timeout: float = PROXY_CHECK_TIMEOUT_SECONDS,
     limit: int = 0,
     exit_ip_url: str = "",
@@ -845,6 +1054,8 @@ async def start_fetch(
                 destination=destination,
                 concurrency=concurrency,
                 connect_timeout=connect_timeout,
+                concurrency_mode=concurrency_mode,
+                check_depth=check_depth,
                 timeout=timeout,
                 limit=limit,
                 exit_ip_url=exit_ip_url,
@@ -919,6 +1130,10 @@ def reset_fetch_job() -> None:
 
 
 __all__ = [
+    "DEFAULT_FETCH_CONCURRENCY_MODE",
+    "FETCH_CONCURRENCY_MODES",
+    "FETCH_CONCURRENCY_MODE_FIXED",
+    "FETCH_CONCURRENCY_MODE_PERCENT",
     "FETCH_PERSIST_BATCH",
     "FETCH_PERSIST_INTERVAL_SECONDS",
     "FETCH_STATES",
@@ -927,10 +1142,12 @@ __all__ = [
     "FetchJob",
     "FetchProgress",
     "FetchRun",
+    "ResolvedConcurrency",
     "fetch_status",
     "in_use_labels",
     "recover_fetch_job",
     "reset_fetch_job",
+    "resolve_fetch_concurrency",
     "run_fetch_pass",
     "running_fetch_id",
     "start_fetch",

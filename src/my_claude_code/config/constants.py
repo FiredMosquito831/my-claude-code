@@ -472,13 +472,51 @@ PROXY_CANDIDATES_MAX_MAX = 100000
 # How many addresses a fetch tests at once. This sweep is not the Test button:
 # it is hundreds of strangers' machines, most of which are no longer listening,
 # and the slow half of each check is a TLS handshake that spends its time
-# waiting on somebody else's network rather than on this CPU. Thirty-two
-# overlapping handshakes finish a list of eight hundred in minutes instead of
-# hours, and the semaphore that enforces it is also what bounds how many
-# sockets are open at once.
-PROXY_FETCH_TEST_CONCURRENCY_DEFAULT = 32
+# waiting on somebody else's network rather than on this CPU. The number here
+# is also exactly how many sockets are open at one moment, because the
+# semaphore that paces the sweep is what bounds them.
+#
+# A hundred, not the thirty-two that shipped in 7.21.0. That number was chosen
+# before anybody had run this against a real catalogue: seven feeds offered
+# 1,592 addresses, a dead one costs the whole connect timeout, and at 32 the
+# sweep had tested 848 of them after 186 seconds. The work is waiting, not
+# computing, so the ceiling is raised to 500 for an operator who wants a list
+# of several thousand finished while they watch it.
+PROXY_FETCH_TEST_CONCURRENCY_DEFAULT = 100
 PROXY_FETCH_TEST_CONCURRENCY_MIN = 4
-PROXY_FETCH_TEST_CONCURRENCY_MAX = 128
+PROXY_FETCH_TEST_CONCURRENCY_MAX = 500
+# How the number above is read. ``fixed`` is 7.21.0 exactly: it is a count of
+# addresses. ``percent`` reads it as a percentage of however many addresses the
+# feeds actually offered in this pass, resolved after they are merged, with the
+# same floor and ceiling as the fixed number -- so one setting paces a list of
+# two hundred and a list of five thousand alike.
+#
+# Mirrors ``application.proxy_fetch.FETCH_CONCURRENCY_MODES``, which ``config``
+# -- a leaf package that imports nothing first-party -- may not import. Pinned
+# in both directions by ``tests/contracts/test_import_boundaries.py``.
+PROXY_FETCH_CONCURRENCY_MODE_DEFAULT = "fixed"
+PROXY_FETCH_CONCURRENCY_MODE_NAMES: tuple[str, ...] = ("fixed", "percent")
+# How far a fetch sweep's test of one address goes.
+#
+# ``tls`` stops at the thing the check is actually for: open the tunnel, finish
+# a full TLS handshake to the provider's own host through it with ordinary
+# strict trust, and close. A certificate that does not verify is an
+# intercepting proxy and is refused exactly as before -- that control is
+# unchanged -- but no HTTP request is ever sent. It is the default because a
+# sweep of 1,592 addresses used to send about a thousand HEAD requests to the
+# provider from a thousand different source addresses, which is a thing to do
+# to somebody else's service only when it buys something, and the handshake
+# already proves the tunnel.
+#
+# ``request`` is 7.22.1's check byte for byte: the same tunnel, then a HEAD to
+# the destination. The Test and Add buttons -- and "Add all working" -- always
+# use it whatever this says, because an address entering a chain is proven end
+# to end rather than up to the handshake.
+#
+# Mirrors ``application.proxy_check.CHECK_DEPTHS``; same leaf-package rule,
+# same both-directions pin.
+PROXY_FETCH_CHECK_DEPTH_DEFAULT = "tls"
+PROXY_FETCH_CHECK_DEPTH_NAMES: tuple[str, ...] = ("tls", "request")
 # How long the TCP step of a fetch-test waits. Short on purpose and only for
 # this sweep: the commonest thing in a public list is an address that has
 # stopped listening, and five seconds is the difference between a dead address

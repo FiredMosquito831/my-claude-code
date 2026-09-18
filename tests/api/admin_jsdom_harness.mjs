@@ -312,6 +312,42 @@ const FIELDS = [
     ],
     description: "What a 429 costs the key that met it.",
   },
+  {
+    key: "PROXY_FETCH_TEST_CONCURRENCY",
+    label: "Addresses tested at once by a fetch",
+    section: "credential_health",
+    type: "number",
+    value: "100",
+    default: "100",
+    range_hint: "4 to 500",
+    description: "How many addresses a fetch tests at once.",
+  },
+  {
+    key: "PROXY_FETCH_CONCURRENCY_MODE",
+    label: "How that number is read",
+    section: "credential_health",
+    type: "select",
+    value: "fixed",
+    default: "fixed",
+    options: [
+      { value: "fixed", label: "A count of addresses" },
+      { value: "percent", label: "A percentage of what the feeds offered" },
+    ],
+    description: "Whether the number above is a count or a percentage.",
+  },
+  {
+    key: "PROXY_FETCH_CHECK_DEPTH",
+    label: "How far a fetch tests each address",
+    section: "credential_health",
+    type: "select",
+    value: "tls",
+    default: "tls",
+    options: [
+      { value: "tls", label: "Tunnel and verify the certificate" },
+      { value: "request", label: "Tunnel and send an HTTPS request" },
+    ],
+    description: "How far a fetch sweep's test of one address goes.",
+  },
 ];
 
 const SECTIONS = [
@@ -1442,7 +1478,9 @@ const ROUTES = {
          absent and that exact mistake put a retired cap back on this page four
          times in 7.19.0. */
       fetch: {
-        concurrency: 32,
+        concurrency: 100,
+        concurrency_mode: "fixed",
+        check_depth: "tls",
         connect_timeout_seconds: 5.0,
         check_timeout_seconds: 10.0,
         candidates_max: 0,
@@ -1516,7 +1554,7 @@ const ROUTES = {
           { id: "geonode", name: "Geonode" },
         ],
         country: "DE", anonymity: "elite", https_ok: true,
-        latency_ms: 210, uptime_pct: 96, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 190, tls: "strict", detail: "", exit_ip: "" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
+        latency_ms: 210, uptime_pct: 96, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 190, tls: "strict", detail: "", exit_ip: "", depth: "tls" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
       },
       {
         proxy: "px_cand0002", label: "203.0.113.22:1080", scheme: "socks5h",
@@ -1526,7 +1564,7 @@ const ROUTES = {
           { id: "geonode", name: "Geonode" },
         ],
         country: "NL", anonymity: "anonymous", https_ok: true,
-        latency_ms: 480, uptime_pct: 81, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 420, tls: "strict", detail: "", exit_ip: "" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
+        latency_ms: 480, uptime_pct: 81, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 420, tls: "strict", detail: "", exit_ip: "", depth: "tls" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
       },
       {
         // The one the checker will catch terminating TLS when it is added.
@@ -1534,7 +1572,7 @@ const ROUTES = {
         source_count: 1,
         sources: [{ id: "proxyscrape", name: "ProxyScrape" }],
         country: "US", anonymity: "transparent", https_ok: false,
-        latency_ms: 1200, uptime_pct: 40, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 980, tls: "strict", detail: "", exit_ip: "" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
+        latency_ms: 1200, uptime_pct: 40, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 980, tls: "strict", detail: "", exit_ip: "", depth: "tls" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
       },
       {
         // The one that simply will not answer: added, benched, routed around.
@@ -1553,7 +1591,7 @@ const ROUTES = {
           { id: "geonode", name: "Geonode" },
         ],
         country: "FR", anonymity: "elite", https_ok: true,
-        latency_ms: 95, uptime_pct: 99, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 88, tls: "strict", detail: "", exit_ip: "" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
+        latency_ms: 95, uptime_pct: 99, last_check: { at: "2026-09-17T12:00:00Z", ok: true, latency_ms: 88, tls: "strict", detail: "", exit_ip: "", depth: "request" }, refused: false, working: true, checked_for: "nvidia_nim", checked_for_name: "NVIDIA NIM", untested: false,
       },
       {
         // Already refused by an earlier check, and still listed: an operator
@@ -2216,6 +2254,13 @@ const PROXY_FETCH = {
   refused: 0,
   offered: 0,
   corroborated: 0,
+  persisted: 0,
+  concurrency: 0,
+  concurrency_mode: "",
+  concurrency_requested: 0,
+  concurrency_summary: "",
+  concurrency_note: "",
+  check_depth: "",
   feeds: [],
 };
 
@@ -2233,6 +2278,13 @@ function proxyFetchStatePayload(advance) {
     PROXY_FETCH.dead =
       PROXY_FETCH.tested - PROXY_FETCH.working - PROXY_FETCH.refused;
     PROXY_FETCH.elapsed_seconds += 1.5;
+    /* The server resolves the pace once the lists are in and reports it every
+       poll, so the page prints what is happening rather than what is set. */
+    PROXY_FETCH.concurrency = 96;
+    PROXY_FETCH.concurrency_mode = "percent";
+    PROXY_FETCH.concurrency_requested = 6;
+    PROXY_FETCH.concurrency_summary = "testing 96 at a time (6% of 1,592)";
+    PROXY_FETCH.check_depth = "tls";
     if (PROXY_FETCH.tested >= PROXY_FETCH.total) PROXY_FETCH.state = "done";
   }
   return JSON.parse(
@@ -3767,6 +3819,19 @@ const limits = {
     (controlIn("RATE_LIMIT_COOLDOWN_MODE") || { options: [] }).options,
   ).map((option) => option.value),
   cooldownMaxRange: textOf(rowIn("RATE_LIMIT_COOLDOWN_MAX_SECONDS"), ".field-range"),
+  /* 7.22.2's two fetch selects, on the page they belong to. Every env var is
+     configurable on the dashboard, and a select that never rendered would be a
+     setting only a .env file can reach. */
+  fetchConcurrencyModeOptions: Array.from(
+    (controlIn("PROXY_FETCH_CONCURRENCY_MODE") || { options: [] }).options,
+  ).map((option) => option.value),
+  fetchCheckDepthOptions: Array.from(
+    (controlIn("PROXY_FETCH_CHECK_DEPTH") || { options: [] }).options,
+  ).map((option) => option.value),
+  fetchConcurrencyRange: textOf(
+    rowIn("PROXY_FETCH_TEST_CONCURRENCY"),
+    ".field-range",
+  ),
   ranges: {
     count: limitsView ? limitsView.querySelectorAll(".field-range").length : 0,
     FALLBACK_FIRST_TOKEN_TIMEOUT: textOf(

@@ -147,6 +147,8 @@ async def test_the_scheduled_refresh_goes_through_the_same_tested_path(
             "PROXY_FETCH_TEST_CONCURRENCY": 48,
             "PROXY_FETCH_CONNECT_TIMEOUT_SECONDS": 3,
             "PROXY_CANDIDATES_MAX": 17,
+            "PROXY_FETCH_CONCURRENCY_MODE": "percent",
+            "PROXY_FETCH_CHECK_DEPTH": "request",
         }
     )
     timer = ProxyFeedTimer(lambda: 60.0, lambda: True, settings=lambda: settings)
@@ -158,6 +160,11 @@ async def test_the_scheduled_refresh_goes_through_the_same_tested_path(
     assert seen["concurrency"] == 48
     assert seen["connect_timeout"] == 3.0
     assert seen["limit"] == 17
+    # The timer is the same sweep the button starts, so it follows the same two
+    # 7.22.2 settings rather than a default of its own -- otherwise the offer
+    # would depend on which of the two happened to run last.
+    assert seen["concurrency_mode"] == "percent"
+    assert seen["check_depth"] == "request"
     reset_fetch_job()
     chains_config.reset_proxy_chains_cache()
 

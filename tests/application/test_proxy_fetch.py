@@ -856,3 +856,188 @@ async def test_a_pass_over_no_feeds_makes_no_request_and_writes_nothing(monkeypa
     assert (run.tested, run.working) == (0, 0)
     # And it did not clear a list it had no answer for.
     assert load_proxy_chains().candidates == ("px_kept00001",)
+
+
+# ----------------------------------------------- 7.22.2: the pace of a sweep
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_of_five_hundred_keeps_five_hundred_in_flight_and_no_more(
+    monkeypatch,
+):
+    """The new ceiling, counted rather than asserted from the setting.
+
+    Five hundred is a number somebody typed into a box, and the only thing that
+    makes it safe is that the semaphore is also exactly how many sockets are
+    open at one moment. So the fake counts what is actually concurrent, and the
+    test fails both ways: a bound that leaked would show a peak above 500, and
+    a bound that quietly stayed at 32 would show a peak far below it.
+    """
+
+    _offer(monkeypatch, [f"10.{n // 250}.{n % 250}.1:8080" for n in range(600)])
+    inflight = 0
+    peak = 0
+
+    async def check(url, destination, **kwargs):
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        inflight -= 1
+        return _dead()
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+
+    run = await _run(concurrency=500)
+
+    assert run.tested == 600
+    assert peak <= 500
+    assert peak > 100
+
+
+@pytest.mark.asyncio
+async def test_percent_mode_resolves_against_what_the_feeds_offered(monkeypatch):
+    """Six per cent of 1,592 is 96, and the page is told so in those words."""
+
+    resolved = proxy_fetch.resolve_fetch_concurrency(
+        requested=6, mode="percent", offered=1592
+    )
+
+    assert resolved.value == 96
+    assert resolved.mode == "percent"
+    assert resolved.note == ""
+    assert resolved.summary == "testing 96 at a time (6% of 1,592)"
+
+    # And the sweep really runs at what it resolved, rather than at the raw 6.
+    _offer(monkeypatch, [f"10.0.{n // 250}.{n % 250}:8080" for n in range(400)])
+    inflight = 0
+    peak = 0
+
+    async def check(url, destination, **kwargs):
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        inflight -= 1
+        return _dead()
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+    counters = FetchProgress()
+    await _run(concurrency=25, concurrency_mode="percent", progress=counters)
+
+    # 25% of 400 is 100, and nothing else in the code could have produced it.
+    assert counters.concurrency == 100
+    assert counters.concurrency_mode == "percent"
+    assert counters.concurrency_summary == "testing 100 at a time (25% of 400)"
+    assert peak <= 100
+    assert counters.as_document()["concurrency_summary"] == (
+        "testing 100 at a time (25% of 400)"
+    )
+
+
+def test_percent_mode_has_a_floor_of_four_and_a_ceiling_of_five_hundred():
+    """A tiny list still overlaps, and a huge one still stops where the setting does."""
+
+    assert (
+        proxy_fetch.resolve_fetch_concurrency(
+            requested=1, mode="percent", offered=10
+        ).value
+        == 4
+    )
+    assert (
+        proxy_fetch.resolve_fetch_concurrency(
+            requested=1, mode="percent", offered=0
+        ).value
+        == 4
+    )
+    assert (
+        proxy_fetch.resolve_fetch_concurrency(
+            requested=100, mode="percent", offered=50_000
+        ).value
+        == 500
+    )
+
+
+def test_a_percentage_outside_one_to_a_hundred_is_reported_not_obeyed_and_not_fatal():
+    """Never a crash, never a silence, and never 200% of the catalogue."""
+
+    resolved = proxy_fetch.resolve_fetch_concurrency(
+        requested=200, mode="percent", offered=1592
+    )
+
+    assert resolved.mode == "fixed"
+    assert resolved.value == 200
+    assert "between 1 and 100" in resolved.note
+    assert "200" in resolved.note
+
+    # Zero is the other end of the same typo.
+    zero = proxy_fetch.resolve_fetch_concurrency(
+        requested=0, mode="percent", offered=1592
+    )
+    assert zero.mode == "fixed"
+    assert zero.value == 1
+    assert zero.note
+
+
+def test_fixed_mode_is_the_number_and_says_nothing_extra():
+    """The shipped default, unchanged: the setting is a count of addresses."""
+
+    resolved = proxy_fetch.resolve_fetch_concurrency(
+        requested=100, mode="fixed", offered=1592
+    )
+
+    assert (resolved.value, resolved.mode, resolved.note) == (100, "fixed", "")
+    assert resolved.summary == "testing 100 at a time"
+    assert proxy_fetch.DEFAULT_FETCH_CONCURRENCY_MODE == "fixed"
+
+
+def test_an_unknown_mode_is_reported_and_read_as_a_count():
+    """Settings validation rejects one, so this is the belt to that braces."""
+
+    resolved = proxy_fetch.resolve_fetch_concurrency(
+        requested=64, mode="proportional", offered=900
+    )
+
+    assert (resolved.value, resolved.mode) == (64, "fixed")
+    assert "proportional" in resolved.note
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_asks_for_the_tls_depth_by_default_and_says_so(monkeypatch):
+    """The one deliberate behaviour change, pinned at the call it is made in."""
+
+    _offer(monkeypatch, ["10.0.0.1:8080"])
+    seen: list[str] = []
+
+    async def check(url, destination, **kwargs):
+        seen.append(kwargs.get("depth", ""))
+        return _ok()
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+    counters = FetchProgress()
+    await _run(progress=counters)
+
+    assert seen == ["tls"]
+    assert counters.check_depth == "tls"
+    assert counters.as_document()["check_depth"] == "tls"
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_told_request_sends_the_request_and_says_so(monkeypatch):
+    """7.22.1's sweep, available by setting one word."""
+
+    _offer(monkeypatch, ["10.0.0.1:8080"])
+    seen: list[str] = []
+
+    async def check(url, destination, **kwargs):
+        seen.append(kwargs.get("depth", ""))
+        return _ok()
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+    counters = FetchProgress()
+    await _run(check_depth="request", progress=counters)
+
+    assert seen == ["request"]
+    assert counters.check_depth == "request"
