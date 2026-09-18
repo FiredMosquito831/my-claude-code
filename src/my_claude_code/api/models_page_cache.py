@@ -31,7 +31,7 @@ from my_claude_code.api.model_admin import (
     _image_estimate_row,
     attach_learned_facts,
     build_models_page_payload,
-    learned_key,
+    facts_for_row,
     models_dev_cache_mark,
 )
 from my_claude_code.application.model_metadata import (
@@ -160,7 +160,7 @@ def merge_moving_parts(
                 facts = (
                     ()
                     if learned is None
-                    else learned.get(learned_key(provider_key, model_id), ())
+                    else facts_for_row(learned, provider_key, model_id)
                 )
                 model["learned"] = attach_learned_facts(capabilities, facts)
     return payload

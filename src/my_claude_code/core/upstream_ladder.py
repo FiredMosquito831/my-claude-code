@@ -125,6 +125,16 @@ class LadderTry:
     #: have been lost. ``None`` everywhere else, so every row a release before
     #: 7.20 wrote renders exactly as it did.
     response_head: Mapping[str, Any] | None = None
+    #: The recovery rung that produced *this* try, when it is a retry a
+    #: ``providers/recovery`` ladder rewrote the body for -- the rung's own
+    #: ``kind`` (``responses_tool_name_length``, ``responses_tool_choice``).
+    #:
+    #: On the retry rather than on the try that failed, because the rung is
+    #: chosen after that row is already written and because the operator's
+    #: question is "why does this body differ from the one above it". ``None``
+    #: on every ordinary try, so nothing any release before 7.23 wrote renders
+    #: differently.
+    recovery: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +288,34 @@ def note_response_head(head: Mapping[str, Any] | None) -> None:
     _PENDING_HEAD.set(head)
 
 
+#: The recovery rung the *next* recorded try is a retry for.
+#:
+#: The same slot-and-pop shape :data:`_PENDING_HEAD` uses, for the same reason:
+#: the frame that chooses a rung (a provider's recovery loop) and the frame
+#: that records the try (the retry ladder in ``providers/rate_limit.py``) are
+#: not the same frame, and widening a signature every provider shares to carry
+#: a value two rungs can produce would be a much larger change than the
+#: feature needs.
+_PENDING_RECOVERY: ContextVar[str | None] = ContextVar(
+    "fcc_recovery_rung", default=None
+)
+
+
+def note_recovery_rung(kind: str | None) -> None:
+    """Name the rung whose rewrite the next recorded try is carrying."""
+
+    _PENDING_RECOVERY.set(kind or None)
+
+
+def take_recovery_rung() -> str | None:
+    """Take the pending rung name, clearing it."""
+
+    kind = _PENDING_RECOVERY.get()
+    if kind is not None:
+        _PENDING_RECOVERY.set(None)
+    return kind
+
+
 def take_response_head() -> Mapping[str, Any] | None:
     """Take the pending head, clearing it."""
 
@@ -343,6 +381,7 @@ def record_upstream_try(
     needs.
     """
     head = take_response_head()
+    rung = take_recovery_rung()
     slot = _LADDER.get()
     if slot is None:
         return
@@ -350,6 +389,7 @@ def record_upstream_try(
     slot.record_try(
         LadderTry(
             response_head=head,
+            recovery=rung,
             proxy=proxy if proxy is not None else current_proxy(),
             key_index=key_index,
             key_label=key_label,
@@ -471,6 +511,7 @@ def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
                 ("proxy", entry.proxy),
                 ("body", entry.body),
                 ("response_head", entry.response_head),
+                ("recovery", entry.recovery),
             )
             if value is not None
         }

@@ -12,6 +12,7 @@ provider.
 from .conversion import (
     RESPONSES_DEFAULT_REASONING_EFFORT,
     RESPONSES_DEFAULT_REASONING_SUMMARY,
+    alias_responses_body_tool_names,
     build_responses_request_body,
     responses_tool_call_to_anthropic,
     responses_tool_name_codec,
@@ -26,6 +27,7 @@ __all__ = [
     "RESPONSES_DEFAULT_REASONING_EFFORT",
     "RESPONSES_DEFAULT_REASONING_SUMMARY",
     "ResponsesStreamConverter",
+    "alias_responses_body_tool_names",
     "build_responses_request_body",
     "iter_responses_sse_events",
     "note_responses_event_shape",

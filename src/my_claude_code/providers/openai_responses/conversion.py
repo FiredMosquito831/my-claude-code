@@ -20,7 +20,7 @@ from my_claude_code.core.anthropic.conversion import (
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
-    OPENAI_TOOL_NAME_MAX_LENGTH,
+    MIN_TOOL_NAME_MAX_LENGTH,
     OpenAIToolNameCodec,
 )
 from my_claude_code.core.reasoning import (
@@ -50,17 +50,107 @@ def responses_tool_name_codec(
     the same alias on either surface, and the alias is a pure function of the
     name -- stable across turns, tool order and tools added mid-session.
 
-    The codec implements one limit, so that is the only one a host may declare;
-    anything else is a programming error rather than something to approximate.
+    Since 7.23.0 the limit may also be one a host *stated* in a rejection
+    rather than one a profile declared -- the two are the same number to
+    everything downstream, which is the point of resolving them in one place.
+    The codec builds aliases under whatever ceiling it is given; below
+    :data:`MIN_TOOL_NAME_MAX_LENGTH` it raises, because an alias that short
+    stops naming the tool and inventing one would trade a visible failure for
+    a call the model cannot make.
     """
     if tool_name_max_length is None:
         return None
-    if tool_name_max_length != OPENAI_TOOL_NAME_MAX_LENGTH:
+    if tool_name_max_length < MIN_TOOL_NAME_MAX_LENGTH:
         raise ValueError(
-            "Responses tool-name aliasing implements a limit of "
-            f"{OPENAI_TOOL_NAME_MAX_LENGTH}; got {tool_name_max_length}"
+            "Responses tool-name aliasing needs a ceiling of at least "
+            f"{MIN_TOOL_NAME_MAX_LENGTH}; got {tool_name_max_length}"
         )
-    return OpenAIToolNameCodec.from_request(request)
+    return OpenAIToolNameCodec.from_request(request, max_length=tool_name_max_length)
+
+
+def alias_responses_body_tool_names(
+    body: dict[str, Any], tool_names: OpenAIToolNameCodec
+) -> dict[str, Any] | None:
+    """Re-encode one already-built body's tool names, or ``None`` if unchanged.
+
+    The tool-name rung's rewrite. It exists because the body handed to the
+    sender is the unit a retry can rebuild faithfully: reconstructing it from
+    the original request would have to re-derive ``max_output_tokens``, the
+    cache key and the caller's ``extra_body``, and any of those drifting would
+    make the retry a different request rather than the same one spelled
+    legally.
+
+    Three sites, the same three :func:`build_responses_request_body` encodes:
+    the ``tools`` catalogue, a forced ``tool_choice``, and every replayed
+    ``function_call`` in ``input``. ``encode`` is the identity for a name the
+    codec left alone, so a body with nothing to alias comes back ``None`` and
+    is never retried.
+    """
+
+    if not tool_names.has_aliases:
+        return None
+    changed = False
+    cloned = dict(body)
+
+    tools = cloned.get("tools")
+    if isinstance(tools, list):
+        rebuilt_tools: list[Any] = []
+        for tool in tools:
+            name = tool.get("name") if isinstance(tool, dict) else None
+            alias = tool_names.encode(name) if isinstance(name, str) else None
+            if alias is not None and alias != name:
+                rebuilt_tools.append({**tool, "name": alias})
+                changed = True
+            else:
+                rebuilt_tools.append(tool)
+        cloned["tools"] = rebuilt_tools
+
+    choice = cloned.get("tool_choice")
+    if isinstance(choice, dict):
+        rebuilt_choice = _alias_tool_choice(choice, tool_names)
+        if rebuilt_choice is not None:
+            cloned["tool_choice"] = rebuilt_choice
+            changed = True
+
+    items = cloned.get("input")
+    if isinstance(items, list):
+        rebuilt_items: list[Any] = []
+        for item in items:
+            name = item.get("name") if isinstance(item, dict) else None
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "function_call"
+                and isinstance(name, str)
+            ):
+                alias = tool_names.encode(name)
+                if alias != name:
+                    rebuilt_items.append({**item, "name": alias})
+                    changed = True
+                    continue
+            rebuilt_items.append(item)
+        cloned["input"] = rebuilt_items
+
+    return cloned if changed else None
+
+
+def _alias_tool_choice(
+    choice: dict[str, Any], tool_names: OpenAIToolNameCodec
+) -> dict[str, Any] | None:
+    """Re-encode a forced choice in either spelling, or ``None`` if unchanged."""
+
+    name = choice.get("name")
+    if isinstance(name, str):
+        alias = tool_names.encode(name)
+        return {"type": "function", "name": alias} if alias != name else None
+    nested = choice.get("function")
+    if isinstance(nested, dict) and isinstance(nested.get("name"), str):
+        alias = tool_names.encode(nested["name"])
+        # Promoted to the Responses spelling on the way, exactly as
+        # ``_convert_tool_choice`` does the moment a codec exists: a host
+        # strict enough to state a name ceiling is the kind that also reads
+        # the published shape.
+        return {"type": "function", "name": alias} if alias != nested["name"] else None
+    return None
 
 
 # There is deliberately no per-effort lookup table in this module. Between
@@ -345,6 +435,7 @@ def build_responses_request_body(
     include_encrypted_reasoning: bool = True,
     extra_body: Mapping[str, Any] | None = None,
     tool_name_max_length: int | None = None,
+    include_tool_choice: bool = True,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -378,6 +469,12 @@ def build_responses_request_body(
         and replayed ``function_call`` items; see
         :func:`responses_tool_name_codec`. The stream converter must be handed
         the same codec to decode the model's calls back.
+    ``include_tool_choice``
+        ``False`` omits the field entirely, for a host proven to accept no
+        value but ``auto`` -- which is the Responses default, so omitting it
+        sends the same instruction rather than a different one. ``True``, the
+        default, is what every host that has never refused one gets, and it
+        leaves their body byte-identical.
 
     Key order is fixed and deliberate: the body is recorded verbatim in the
     request log and compared byte for byte against a captured reference, so
@@ -414,9 +511,10 @@ def build_responses_request_body(
     tools = _convert_tools(request.tools, tool_names)
     if tools:
         body["tools"] = tools
-        tool_choice = _convert_tool_choice(request.tool_choice, tool_names)
-        if tool_choice is not None:
-            body["tool_choice"] = tool_choice
+        if include_tool_choice:
+            tool_choice = _convert_tool_choice(request.tool_choice, tool_names)
+            if tool_choice is not None:
+                body["tool_choice"] = tool_choice
 
     reasoning_block = _reasoning_block(reasoning)
     if reasoning_block is not None:

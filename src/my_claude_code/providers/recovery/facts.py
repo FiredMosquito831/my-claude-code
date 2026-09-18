@@ -86,6 +86,23 @@ FACT_CLIENT_IDENTITY_REQUIRED = "client_identity_required"
 #: *listing* statement, never a hiding one: the model keeps its row, with the
 #: reason on it.
 FACT_RESPONSE_SURFACE = "response_surface"
+#: The longest tool name this host's Responses surface accepts, stated by the
+#: host in a 400 that named the ``name`` parameter. Provider-wide, because a
+#: request validator sits in front of the whole deployment rather than behind
+#: one model: OpenCode Zen answers the same sentence for muse-spark-1.2 and
+#: 1.3, and a per-model fact would re-pay the 400 once for every model in the
+#: catalogue. Value: ``int``.
+FACT_RESPONSES_TOOL_NAME_MAX_LENGTH = "responses_tool_name_max_length"
+#: This model's Responses surface takes no ``tool_choice`` but ``auto``,
+#: proven by a retry that succeeded once the field was gone. Value: ``True``.
+#:
+#: Per ``(provider, model)`` on purpose and on evidence: the 2026-09-17 probe
+#: measured the refusal on ``muse-spark-1.3-contributor-free`` only, and a
+#: gateway reselling twenty models does not owe them all the same validator.
+#: If a host is later shown to refuse it deployment-wide, this fact widens to
+#: :data:`PROVIDER_WIDE_MODEL_ID` with no change to anything that reads it --
+#: the reader already asks for the model and falls back to the provider row.
+FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY = "responses_tool_choice_auto_only"
 
 #: The allow-list. Whatever lands in this document is read back into live
 #: request-shaping state, so an unknown kind is dropped with one log line
@@ -104,6 +121,8 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_MODELS_ETAG,
         FACT_CLIENT_IDENTITY_REQUIRED,
         FACT_RESPONSE_SURFACE,
+        FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
+        FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
     }
 )
 
@@ -137,6 +156,14 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     FACT_OUTPUT_CAP: STATED_FACT_TTL_SECONDS,
     FACT_EFFORT_ENUM: STATED_FACT_TTL_SECONDS,
     FACT_MODELS_ETAG: STATED_FACT_TTL_SECONDS,
+    # A number the host named in its own sentence -- the same evidence class
+    # as an output cap, and a request validator's ceiling changes about as
+    # often.
+    FACT_RESPONSES_TOOL_NAME_MAX_LENGTH: STATED_FACT_TTL_SECONDS,
+    # Stated in words but *proven* by the retry, which is the weaker of the
+    # two and decides the clock: the host said "only auto", and what MCC
+    # wrote down is "the request worked once the field was gone".
+    FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY: INFERRED_FACT_TTL_SECONDS,
     # A published property of the deployment, not an inference: the host
     # either did the thing or a probe watched it not do the thing, and
     # both answers are worth a month before they are asked again.

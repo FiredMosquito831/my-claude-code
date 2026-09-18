@@ -16662,6 +16662,10 @@ function ladderTryText(entry, position) {
   // not-measured convention, and a zero wait is a claim we cannot make.
   if (entry.waited_ms != null) parts.push(`waited ${Math.round(entry.waited_ms)}ms`);
   if (entry.retry_after != null) parts.push(`retry-after ${entry.retry_after}s`);
+  /* Why this body differs from the one above it. Present only on a try a
+     recovery rung rewrote, so every row written before 7.23.0 -- and
+     every ordinary try since -- reads exactly as it did. */
+  if (entry.recovery) parts.push(`retry: ${entry.recovery}`);
   return parts.join(" · ");
 }
 
@@ -20569,7 +20573,11 @@ function learnedChipText(fact) {
   const value =
     typeof fact.value === "number" ? ` ${fact.value.toLocaleString()}` : "";
   const detail = fact.detail ? ` ${fact.detail}` : "";
-  return `${label}${value}${detail} · ${learnedAgeText(fact.age_seconds)}`;
+  /* A host-wide fact is drawn on every model row of its provider, so it
+     has to say whose property it is -- otherwise "tool-name limit 64"
+     reads as a statement about this one model. */
+  const scope = fact.model_id === "*" ? " (host-wide)" : "";
+  return `${label}${value}${detail}${scope} · ${learnedAgeText(fact.age_seconds)}`;
 }
 
 function appendLearnedChips(row, facts) {
@@ -20689,7 +20697,10 @@ function buildLearnedPanel(model) {
       forgetLearnedFacts(
         {
           providerId: providerIdOf(model.model_ref),
-          modelId: modelIdOf(model.model_ref),
+          /* The fact's own subject, not the row it is drawn on: a
+             host-wide fact appears on every model of the provider
+             and must be forgotten once. */
+          modelId: fact.model_id || modelIdOf(model.model_ref),
           factKind: fact.fact_kind,
         },
         forget,
