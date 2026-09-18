@@ -91,9 +91,33 @@ ALLOWED_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
 #: here, because this module is a leaf and importing the enum would make it
 #: one no longer. An unrecognised value is logged and ignored there, so the
 #: resolved surface falls back to the next source rather than to nothing.
-NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset({"response_surface"})
+#:
+#: ``reasoning_preference`` and ``max_output_tokens`` are the operator's own
+#: per-model answers to two questions the request pipeline already asks: how
+#: hard this model should think, and how many tokens it may emit. They are
+#: spelled differently from the body fields of the same subject --
+#: ``reasoning``/``reasoning_effort`` and ``max_tokens``, all of which stay in
+#: :data:`OWNED_ELSEWHERE_PARAMETERS` -- precisely so that a user who types a
+#: body field is still told which layer owns it instead of having a body edit
+#: silently reinterpreted as a policy. The value vocabularies are checked in
+#: ``application`` for the same reason ``response_surface`` is checked in the
+#: provider layer: this module is a leaf and importing the enums would make it
+#: one no longer.
+NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
+    {"response_surface", "reasoning_preference", "max_output_tokens"}
+)
 
 RESPONSE_SURFACE_OVERRIDE = "response_surface"
+REASONING_PREFERENCE_OVERRIDE = "reasoning_preference"
+MAX_OUTPUT_TOKENS_OVERRIDE = "max_output_tokens"
+
+#: The two non-body keys the Models page editor may write. A strict subset of
+#: :data:`NON_BODY_OVERRIDE_PARAMETERS`: ``response_surface`` is written by the
+#: surface machinery and its editor is not part of the parameter grid, so
+#: widening the grid to the whole non-body set would newly expose it.
+PREFERENCE_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
+    {REASONING_PREFERENCE_OVERRIDE, MAX_OUTPUT_TOKENS_OVERRIDE}
+)
 
 # Named rather than merely absent, so a user who sets one is told why it did
 # nothing instead of watching it be ignored alongside their typos.
@@ -198,6 +222,61 @@ class ModelParameterOverrides:
         if not isinstance(value, str) or not value.strip():
             return None
         return value.strip()
+
+    def reasoning_preference(self, provider_id: str, model_ref: str) -> str | None:
+        """Return the operator's per-model reasoning word, or ``None``.
+
+        Same per-parameter merge as :meth:`resolve`, so a model row beats the
+        provider row for this key alone. ``None`` is returned for all three
+        ways of saying "nothing here": the key is absent, the key is ``null``
+        (the operator stopped stating an opinion at this level), or the word
+        is ``inherit``, which is the same statement spelled out. The caller
+        then falls back to the route's own answer, which is what "inherit"
+        has always meant.
+
+        The word itself is NOT parsed here: ``ReasoningPreference`` lives in
+        ``config.reasoning`` and this module deliberately imports nothing that
+        could make it more than a leaf. An unknown word is rejected where it
+        is turned into a policy, exactly as ``response_surface`` is.
+        """
+
+        value = self.resolve(provider_id, model_ref).get(REASONING_PREFERENCE_OVERRIDE)
+        if not isinstance(value, str):
+            return None
+        word = value.strip().casefold()
+        if not word or word == "inherit":
+            return None
+        return word
+
+    def max_output_tokens(self, provider_id: str, model_ref: str) -> int | None:
+        """Return the operator's per-model output cap, or ``None``.
+
+        A cap, never a request: the caller lowers the model's published limit
+        with it. ``bool`` is rejected explicitly because it is an ``int`` in
+        Python and ``True`` would otherwise become a one-token allowance.
+        Anything else unusable is logged once and ignored, which leaves the
+        published limit in charge rather than inventing a number.
+        """
+
+        value = self.resolve(provider_id, model_ref).get(MAX_OUTPUT_TOKENS_OVERRIDE)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            logger.warning(
+                "MODEL OVERRIDES: '{}' for {} is not a whole number of tokens; "
+                "ignoring it",
+                MAX_OUTPUT_TOKENS_OVERRIDE,
+                model_ref,
+            )
+            return None
+        if value <= 0:
+            logger.warning(
+                "MODEL OVERRIDES: '{}' for {} must be greater than zero; ignoring it",
+                MAX_OUTPUT_TOKENS_OVERRIDE,
+                model_ref,
+            )
+            return None
+        return value
 
     def as_document(self) -> dict[str, dict[str, dict[str, Any]]]:
         """Render back to the on-disk shape."""

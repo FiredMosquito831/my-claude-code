@@ -17282,6 +17282,24 @@ const WIRE_SAMPLING_FIELDS = [
   "n",
 ];
 
+/* "effort high" is a fact about the request; "set for this model on the
+   Models page" is the answer to the question it provokes. The request log is
+   the only place that answer can be given, because by the time a body is
+   built the preference is indistinguishable from a client's own ask. */
+function preferenceSourceText(attempt) {
+  const preferences = attempt.params && attempt.params.preferences;
+  if (!preferences) return "";
+  const parts = Object.keys(preferences)
+    .sort()
+    .map((name) => {
+      const what = name === "reasoning_preference" ? "effort" : "max_tokens";
+      const where =
+        preferences[name] === "model" ? "for this model" : "for this provider";
+      return `${what} set ${where} on the Models page`;
+    });
+  return parts.join(", ");
+}
+
 /** One line of the numbers people open this panel to check. */
 function formatWireFacts(attempt) {
   const wire = (attempt.params && attempt.params.wire) || {};
@@ -17297,6 +17315,12 @@ function formatWireFacts(attempt) {
      actually raised because the attempt was going to think, so the line reads
      as an explanation of a number that would otherwise look invented. */
   if (widened != null) parts.push(`raised from ${Number(widened).toLocaleString()} for reasoning`);
+  /* Where a number above came from, when it was not the client's idea. Only
+     present when a per-model or per-provider preference actually decided
+     something, so every row written before this release -- having no key at
+     all -- renders exactly as it always did. */
+  const preferenceNote = preferenceSourceText(attempt);
+  if (preferenceNote) parts.push(preferenceNote);
   if (wire.tools != null) parts.push(wire.tools === 1 ? "1 tool" : `${wire.tools} tools`);
   if (wire.temperature != null) parts.push(`temp ${wire.temperature}`);
   const reasoning = wire.reasoning || null;
@@ -17344,6 +17368,17 @@ function buildWireKnobs(attempt) {
   });
   const widened = attempt.params && attempt.params.output_widened_from;
   if (widened != null) rows.push(["output_widened_from", wireValueText(widened)]);
+  const preferences = (attempt.params && attempt.params.preferences) || null;
+  if (preferences) {
+    Object.keys(preferences)
+      .sort()
+      .forEach((name) => {
+        rows.push([
+          `${name} set on`,
+          `${preferences[name]} row, on the Models page`,
+        ]);
+      });
+  }
   const reasoning = wire.reasoning || {};
   Object.keys(reasoning).forEach((name) => {
     rows.push([name, wireValueText(reasoning[name])]);
@@ -19677,6 +19712,12 @@ function modelsMatchesFacet(model) {
   if (facet === "hidden") return !model.visible;
   if (facet === "configured") return Boolean(model.configured);
   if (facet === "overridden") {
+    /* "Not stock" is the question this facet asks, and a row carrying only a
+       preference is not stock. It counts one without a predicate change
+       because a preference is stored in the same row as the nine sampling
+       parameters and `override` renders every key of that row -- which is
+       exactly why the preferences went into the existing row rather than into
+       a second store beside it. */
     return Object.keys(model.override || {}).length > 0;
   }
   if (facet === "learned") {
@@ -20199,6 +20240,7 @@ function fillModelsProviderBody(body, provider, models) {
         provider.provider_id,
         provider.override,
         editable,
+        provider.preferences,
       ),
     );
   };
@@ -20606,7 +20648,13 @@ function appendLearnedChips(row, facts) {
 function fillModelBody(body, model, editable) {
   body.textContent = "";
   body.appendChild(
-    buildOverrideEditor("model", model.model_ref, model.override, editable),
+    buildOverrideEditor(
+      "model",
+      model.model_ref,
+      model.override,
+      editable,
+      model.preferences,
+    ),
   );
   const readouts = document.createElement("div");
   readouts.className = "models-readouts";
@@ -20896,10 +20944,189 @@ function buildModelsChip(kind, text) {
 
    The grid carries column headers, because "temperature | Inherit | [ ]" with
    nothing above it does not say which of the two controls is the answer. */
-function buildOverrideEditor(scope, key, row, editable) {
+/* The two preference controls, drawn above the nine sampling rows and under
+   their own heading.
+
+   They are three-state like everything else in this editor -- Inherit /
+   Force unset / Force value -- because the file's three states are the whole
+   point of it and a second idiom on the same form would be a second thing to
+   learn. What differs is only the third mode's argument: a select whose
+   options the ROW published (derived from this model's own resolved
+   capability and its host's dialect, never a fixed list), and a number input
+   bounded by the limit the same ladder resolved.
+
+   An option the model cannot take is rendered disabled with the reason as its
+   text, rather than omitted: "Off is not available here, and here is why" is
+   a different message from "Off does not exist", and the second one reads as
+   a defect. A stored value that is no longer on offer is kept, marked, and
+   never silently rewritten -- the catalogue may move back, and editing a
+   user's file behind their back is worse than telling them. */
+function buildPreferenceRows(form, scope, key, preferences, inputs) {
+  if (!preferences) return;
+  const names =
+    (modelsState.data &&
+      modelsState.data.overrides &&
+      modelsState.data.overrides.preference_parameters) ||
+    {};
+  const ordered = Object.keys(names).filter((name) => preferences[name]);
+  if (!ordered.length) return;
+
+  const head = document.createElement("div");
+  head.className = "models-override-row models-override-head";
+  ["Preference", "What to decide", "Value"].forEach((text) => {
+    const cell = document.createElement("span");
+    cell.textContent = text;
+    head.appendChild(cell);
+  });
+  form.appendChild(head);
+
+  ordered.forEach((name) => {
+    const spec = preferences[name];
+    const field = document.createElement("div");
+    field.className = "models-override-row";
+    const boxId = `pref-${scope}-${key}-${name}`.replace(/[^A-Za-z0-9_-]/g, "-");
+
+    const label = document.createElement("label");
+    label.className = "models-override-name";
+    label.textContent = name === "reasoning_preference" ? "reasoning" : name;
+    label.htmlFor = `${boxId}-mode`;
+    field.appendChild(label);
+
+    const mode = document.createElement("select");
+    mode.className = "models-override-mode";
+    mode.id = `${boxId}-mode`;
+    [
+      ["inherit", "Inherit"],
+      ["unset", "Force unset"],
+      ["value", "Force value"],
+    ].forEach(([value, text]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      mode.appendChild(option);
+    });
+    mode.value = spec.state === "value" || spec.state === "unset" ? spec.state : "inherit";
+    field.appendChild(mode);
+
+    const control =
+      names[name] === "integer"
+        ? buildOutputPreferenceInput(boxId, spec)
+        : buildReasoningPreferenceSelect(boxId, spec);
+    control.box.disabled = mode.value !== "value";
+    mode.addEventListener("change", () => {
+      control.box.disabled = mode.value !== "value";
+      if (!control.box.disabled) control.box.focus();
+    });
+    field.appendChild(control.wrap);
+    inputs.set(name, { mode: mode, box: control.box, max: control.max });
+    form.appendChild(field);
+  });
+}
+
+function buildReasoningPreferenceSelect(boxId, spec) {
+  const wrap = document.createElement("div");
+  wrap.className = "models-preference-value";
+  const box = document.createElement("select");
+  box.className = "models-override-value";
+  box.id = `${boxId}-value`;
+  box.setAttribute("aria-label", "reasoning preference");
+  const options = Array.isArray(spec.options) ? spec.options : [];
+  const stored = spec.state === "value" ? String(spec.value) : "";
+  let storedIsOffered = false;
+  options.forEach((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.value;
+    option.textContent = entry.label;
+    if (entry.available === false) {
+      option.disabled = true;
+      option.textContent = `${entry.label} -- unavailable`;
+    }
+    if (entry.reason) option.title = entry.reason;
+    if (entry.value === stored) storedIsOffered = true;
+    box.appendChild(option);
+  });
+  /* A value the catalogue no longer offers is kept on the list so the select
+     can still show what is stored; the note below says it is being clamped. */
+  if (stored && !storedIsOffered) {
+    const option = document.createElement("option");
+    option.value = stored;
+    option.textContent = `${stored} -- no longer offered`;
+    box.appendChild(option);
+  }
+  if (stored) box.value = stored;
+  wrap.appendChild(box);
+
+  const note = document.createElement("p");
+  note.className = "models-preference-note";
+  const parts = [];
+  if (spec.note) parts.push(spec.note);
+  if (spec.can_reason === false) {
+    box.disabled = true;
+  }
+  if (spec.capability_known === false && spec.can_reason !== false) {
+    parts.push(
+      "Nothing published this model's effort vocabulary, so every rung is " +
+        "offered and whatever you pick is clamped to what it accepts.",
+    );
+  }
+  if (stored && !storedIsOffered) {
+    parts.push(
+      `Your setting "${stored}" is no longer in this model's vocabulary; ` +
+        "the nearest rung it does spell is being sent. Nothing was rewritten " +
+        "on disk.",
+    );
+  }
+  const chosen = options.find((entry) => entry.value === stored);
+  if (chosen && chosen.reason) parts.push(chosen.reason);
+  note.textContent = parts.join(" ");
+  if (note.textContent) wrap.appendChild(note);
+  return { wrap: wrap, box: box, max: null };
+}
+
+function buildOutputPreferenceInput(boxId, spec) {
+  const wrap = document.createElement("div");
+  wrap.className = "models-preference-value";
+  const box = document.createElement("input");
+  box.type = "number";
+  box.min = "1";
+  box.step = "1";
+  box.className = "models-override-value";
+  box.id = `${boxId}-value`;
+  box.setAttribute("aria-label", "max output tokens");
+  const limit = typeof spec.limit === "number" ? spec.limit : null;
+  if (limit != null) box.max = String(limit);
+  box.value = spec.state === "value" && spec.value != null ? String(spec.value) : "";
+  wrap.appendChild(box);
+
+  const note = document.createElement("p");
+  note.className = "models-preference-note";
+  const parts = [];
+  if (limit != null) {
+    const where = [spec.limit_source_label, spec.limit_tier_label]
+      .filter(Boolean)
+      .join(", ");
+    parts.push(
+      `This model reports ${limit.toLocaleString()}` +
+        (where ? ` (${where})` : "") +
+        ".",
+    );
+  }
+  if (spec.note) parts.push(spec.note);
+  note.textContent = parts.join(" ");
+  if (note.textContent) wrap.appendChild(note);
+  return { wrap: wrap, box: box, max: limit };
+}
+
+function buildOverrideEditor(scope, key, row, editable, preferences) {
   const form = document.createElement("div");
   form.className = "models-override-editor";
   const inputs = new Map();
+
+  /* Preferences first, and under their own heading: the nine rows below
+     are fields of a request BODY, and these two are statements about a
+     DECISION MCC makes before any body exists. Drawing them in one
+     undifferentiated grid would say they are the same kind of thing. */
+  buildPreferenceRows(form, scope, key, preferences, inputs);
 
   const header = document.createElement("div");
   header.className = "models-override-row models-override-head";
@@ -20970,6 +21197,7 @@ function buildOverrideEditor(scope, key, row, editable) {
     // "Force value" with an empty box used to save the empty string, which is
     // then forced onto the upstream body as `temperature: ""`. Refuse it.
     const blank = [];
+    const overCap = [];
     inputs.forEach((control, name) => {
       if (control.mode.value === "inherit") {
         updates[name] =
@@ -20982,9 +21210,27 @@ function buildOverrideEditor(scope, key, row, editable) {
       } else if (!control.box.value.trim()) {
         blank.push(name);
       } else {
-        updates[name] = parseOverrideValue(name, control.box.value);
+        const parsed = parseOverrideValue(name, control.box.value);
+        /* The published limit is a bound the server applies anyway --
+           min(published, yours) -- so a number above it is not an error the
+           request would fail on. It is still refused here, because saving a
+           number that silently means a different number is the surprise this
+           control exists to remove. */
+        if (control.max != null && Number(parsed) > control.max) {
+          overCap.push(`${name} (limit ${control.max.toLocaleString()})`);
+        } else {
+          updates[name] = parsed;
+        }
       }
     });
+    if (overCap.length) {
+      const message =
+        `This model reports a lower limit than that: ${overCap.join(", ")}.`;
+      status.textContent = message;
+      status.className = "models-status error";
+      showMessage(message, "error");
+      return;
+    }
     if (blank.length) {
       const many = blank.length > 1;
       const message = `Give ${blank.join(", ")} a value, or set ${many ? "them" : "it"} back to Inherit or Force unset.`;

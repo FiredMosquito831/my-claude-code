@@ -633,6 +633,11 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
         {"value": "off", "label": "Off"},
         {"value": "client", "label": "From client"},
         {"value": "adaptive", "label": "Adaptive"},
+        # 7.25.0: the mirror of ``ReasoningEffort.MINIMAL``, which 74
+        # catalogued models publish and every effort encoder already
+        # spells. Adding it to the CONFIGURATION vocabulary also makes
+        # it selectable here, which is the bug-fix half of that change.
+        {"value": "minimal", "label": "Minimal"},
         {"value": "low", "label": "Low"},
         {"value": "medium", "label": "Medium"},
         {"value": "high", "label": "High"},

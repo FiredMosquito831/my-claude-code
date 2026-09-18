@@ -1,0 +1,1222 @@
+{
+  "anthropic_messages/bare/client_default": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true
+  },
+  "anthropic_messages/bare/off": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true
+  },
+  "anthropic_messages/bare/on_high": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true,
+    "thinking": {
+      "budget_tokens": 2048,
+      "type": "enabled"
+    }
+  },
+  "anthropic_messages/client_effort_high/client_default": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "output_config": {
+      "effort": "high"
+    },
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "anthropic_messages/client_effort_high/off": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "output_config": {
+      "effort": "high"
+    },
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "anthropic_messages/client_effort_high/on_high": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "output_config": {
+      "effort": "high"
+    },
+    "stream": true,
+    "thinking": {
+      "budget_tokens": 2048,
+      "type": "enabled"
+    },
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "anthropic_messages/client_thinking_ask/client_default": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true,
+    "thinking": {
+      "budget_tokens": 8192,
+      "enabled": true,
+      "type": "enabled"
+    },
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "anthropic_messages/client_thinking_ask/off": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "anthropic_messages/client_thinking_ask/on_high": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true,
+    "thinking": {
+      "budget_tokens": 2048,
+      "type": "enabled"
+    },
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "anthropic_messages/with_tools/client_default": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true,
+    "tool_choice": {
+      "type": "auto"
+    },
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "anthropic_messages/with_tools/off": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true,
+    "tool_choice": {
+      "type": "auto"
+    },
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "anthropic_messages/with_tools/on_high": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "stream": true,
+    "thinking": {
+      "budget_tokens": 2048,
+      "type": "enabled"
+    },
+    "tool_choice": {
+      "type": "auto"
+    },
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "input_schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "read_file"
+      }
+    ]
+  },
+  "google/bare/client_default": {
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/bare/off": {
+    "extra_body": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "include_thoughts": false,
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/bare/on_high": {
+    "extra_body": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "include_thoughts": true,
+            "thinking_budget": 2048
+          }
+        }
+      }
+    },
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/client_effort_high/client_default": {
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/client_effort_high/off": {
+    "extra_body": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "include_thoughts": false,
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/client_effort_high/on_high": {
+    "extra_body": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "include_thoughts": true,
+            "thinking_budget": 2048
+          }
+        }
+      }
+    },
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/client_thinking_ask/client_default": {
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/client_thinking_ask/off": {
+    "extra_body": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "include_thoughts": false,
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/client_thinking_ask/on_high": {
+    "extra_body": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "include_thoughts": true,
+            "thinking_budget": 2048
+          }
+        }
+      }
+    },
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/with_tools/client_default": {
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/with_tools/off": {
+    "extra_body": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "include_thoughts": false,
+            "thinking_budget": 0
+          }
+        }
+      }
+    },
+    "messages": [],
+    "model": "a-model"
+  },
+  "google/with_tools/on_high": {
+    "extra_body": {
+      "extra_body": {
+        "google": {
+          "thinking_config": {
+            "include_thoughts": true,
+            "thinking_budget": 2048
+          }
+        }
+      }
+    },
+    "messages": [],
+    "model": "a-model"
+  },
+  "openai_chat/bare/client_default": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model"
+  },
+  "openai_chat/bare/off": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model"
+  },
+  "openai_chat/bare/on_high": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model"
+  },
+  "openai_chat/client_effort_high/client_default": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_chat/client_effort_high/off": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_chat/client_effort_high/on_high": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_chat/client_thinking_ask/client_default": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_chat/client_thinking_ask/off": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_chat/client_thinking_ask/on_high": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_chat/with_tools/client_default": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_chat/with_tools/off": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_chat/with_tools/on_high": {
+    "max_completion_tokens": 4096,
+    "messages": [
+      {
+        "content": "hello",
+        "role": "user"
+      }
+    ],
+    "model": "provider/a-model",
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file from disk.",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/bare/client_default": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "reasoning": {
+      "effort": "medium",
+      "summary": "auto"
+    },
+    "store": false,
+    "stream": true
+  },
+  "openai_responses/bare/off": {
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "store": false,
+    "stream": true
+  },
+  "openai_responses/bare/on_high": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    },
+    "store": false,
+    "stream": true
+  },
+  "openai_responses/client_effort_high/client_default": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "reasoning": {
+      "effort": "medium",
+      "summary": "auto"
+    },
+    "store": false,
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/client_effort_high/off": {
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "store": false,
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/client_effort_high/on_high": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    },
+    "store": false,
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/client_thinking_ask/client_default": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "reasoning": {
+      "effort": "medium",
+      "summary": "auto"
+    },
+    "store": false,
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/client_thinking_ask/off": {
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "store": false,
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/client_thinking_ask/on_high": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    },
+    "store": false,
+    "stream": true,
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/with_tools/client_default": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "reasoning": {
+      "effort": "medium",
+      "summary": "auto"
+    },
+    "store": false,
+    "stream": true,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/with_tools/off": {
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "store": false,
+    "stream": true,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "openai_responses/with_tools/on_high": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "model": "provider/a-model",
+    "parallel_tool_calls": false,
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    },
+    "store": false,
+    "stream": true,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "description": "Read a file from disk.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "router/bare": {
+    "max_tokens": 8192,
+    "output_limit": 200000,
+    "output_widened_from": 4096,
+    "reasoning": "ReasoningPolicy(control=<ReasoningControl.DEFAULT: 'default'>, effort=None, budget_tokens=None, effort_budget_tokens=None)",
+    "requested_reasoning": "ReasoningPolicy(control=<ReasoningControl.DEFAULT: 'default'>, effort=None, budget_tokens=None, effort_budget_tokens=None)"
+  },
+  "router/client_effort_high": {
+    "max_tokens": 131072,
+    "output_limit": 200000,
+    "output_widened_from": 4096,
+    "reasoning": "ReasoningPolicy(control=<ReasoningControl.DEFAULT: 'default'>, effort=<ReasoningEffort.HIGH: 'high'>, budget_tokens=None, effort_budget_tokens=None)",
+    "requested_reasoning": "ReasoningPolicy(control=<ReasoningControl.DEFAULT: 'default'>, effort=<ReasoningEffort.HIGH: 'high'>, budget_tokens=None, effort_budget_tokens=None)"
+  },
+  "router/client_thinking_ask": {
+    "max_tokens": 131072,
+    "output_limit": 200000,
+    "output_widened_from": 4096,
+    "reasoning": "ReasoningPolicy(control=<ReasoningControl.ON: 'on'>, effort=None, budget_tokens=8192, effort_budget_tokens=None)",
+    "requested_reasoning": "ReasoningPolicy(control=<ReasoningControl.ON: 'on'>, effort=None, budget_tokens=8192, effort_budget_tokens=None)"
+  },
+  "router/with_tools": {
+    "max_tokens": 8192,
+    "output_limit": 200000,
+    "output_widened_from": 4096,
+    "reasoning": "ReasoningPolicy(control=<ReasoningControl.DEFAULT: 'default'>, effort=None, budget_tokens=None, effort_budget_tokens=None)",
+    "requested_reasoning": "ReasoningPolicy(control=<ReasoningControl.DEFAULT: 'default'>, effort=None, budget_tokens=None, effort_budget_tokens=None)"
+  }
+}

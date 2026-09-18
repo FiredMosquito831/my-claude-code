@@ -6658,6 +6658,28 @@ details.turn-pane > summary:focus-visible {
   opacity: 0.4;
 }
 
+/* A preference's third column is a control plus the sentence that makes it
+   usable -- which rungs this model actually spells, what its limit is and
+   where that number came from. The grid's row alignment is kept by putting
+   the note INSIDE the third cell rather than on a row of its own. */
+.models-preference-value {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.models-preference-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.models-preference-value .models-override-value {
+  width: 100%;
+}
+
 .models-table {
   width: 100%;
   border-collapse: collapse;

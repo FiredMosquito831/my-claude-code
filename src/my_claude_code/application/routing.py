@@ -9,6 +9,13 @@ from loguru import logger
 
 from my_claude_code.application.errors import UnknownProviderError
 from my_claude_code.config.harness_tiers import HarnessTiers, current_harness_tiers
+from my_claude_code.config.model_overrides import (
+    MAX_OUTPUT_TOKENS_OVERRIDE,
+    REASONING_PREFERENCE_OVERRIDE,
+    ModelParameterOverrides,
+    model_ref_for,
+    normalize_override_key,
+)
 from my_claude_code.config.model_refs import (
     parse_model_name,
     parse_model_ref_list,
@@ -86,6 +93,12 @@ _PAUSE_SETTINGS: dict[str, tuple[str, str]] = {
 _DEFAULT_PAUSE_SETTING = ("model_paused", "MODEL_PAUSED")
 _VISION_PAUSE_SETTING = ("model_vision_paused", "MODEL_VISION_PAUSED")
 
+# Which level of ``~/.mcc/model_overrides.json`` stated a preference, in the
+# words the Models page already uses for its two editor scopes. Recorded on
+# the routed request for the request log alone; no encoder reads either one.
+MODEL_PREFERENCE_SCOPE = "model"
+PROVIDER_PREFERENCE_SCOPE = "provider"
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedModel:
@@ -129,6 +142,16 @@ class RoutedMessagesRequest:
     ``None`` means "the client's ask is the wire value's origin", which is the
     common case and needs no row in the request log.
 
+    ``preference_sources`` names which level of the override file decided a
+    per-model preference for this attempt -- pairs such as
+    ``("reasoning_preference", "model")``. It exists for the request log and
+    for nothing else: no encoder reads it, and empty is the normal state,
+    because an operator who set no preference decided nothing. Recorded for
+    the same stated reason ``output_widened_from`` is: it is a fact about the
+    decision rather than about the body that left, and without it a wire value
+    that came from the Models page is indistinguishable from one the client
+    asked for.
+
     ``image_token_family`` is how the destination host bills a picture, read
     from its provider descriptor. It is carried rather than re-derived for the
     same reason ``reasoning_dialect`` is: two later consumers need it -- the
@@ -154,6 +177,7 @@ class RoutedMessagesRequest:
     output_limits: OutputTokenLimits = UNKNOWN_OUTPUT_TOKEN_LIMITS
     reasoning_dialect: ReasoningDialect | None = None
     output_widened_from: int | None = None
+    preference_sources: tuple[tuple[str, str], ...] = ()
     image_delivery: MediaDelivery = MediaDelivery.NONE
     image_token_family: str = ImageTokenFamily.UNKNOWN.value
     image_resizes: tuple[ImageResize, ...] = ()
@@ -350,6 +374,13 @@ def apply_output_token_budget(
     answer are spent from this one number (WORKING-NOTES 54). The clamps are
     unchanged and still run in the same order afterwards, so the ceiling and
     the context headroom have the last word either way.
+
+    ``limits.limit`` may be the operator's own per-model cap rather than the
+    model's published limit (see ``ModelRouter._effective_output_limit``).
+    That is deliberate and is the whole reason the cap is entered as a limit
+    instead of as a requested value: the widening above raises the ask *to*
+    ``limits.limit``, so a cap entered here bounds the widening by arithmetic
+    rather than by a second rule that could be forgotten.
     """
 
     requested = routed.request.max_tokens
@@ -452,6 +483,7 @@ class ModelRouter:
         output_limit_lookup: OutputLimitLookup | None = None,
         context_length_lookup: ContextLengthLookup | None = None,
         harness_tiers: Callable[[], HarnessTiers] | None = None,
+        model_preferences: Callable[[], ModelParameterOverrides] | None = None,
     ):
         self._settings = settings
         # A callable, not a table: the router is built once per settings
@@ -461,6 +493,19 @@ class ModelRouter:
         # file's own mtime changed, so this costs a stat per tier request and a
         # dashboard edit lands without a restart.
         self._harness_tiers = harness_tiers or current_harness_tiers
+        # A callable for exactly the reason above, and left ``None`` by
+        # default for a second one: a bare ``ModelRouter(settings)`` -- what
+        # every test and every non-HTTP caller builds -- must keep deciding
+        # precisely what it decided before this feature existed. ``None``
+        # means "no preferences", which is the same "an absent lookup adds no
+        # restriction" rule the vision, reasoning and output lookups already
+        # follow. The HTTP handlers pass ``current_model_overrides``, which
+        # re-reads only when the file's own mtime changed, so a save on the
+        # Models page lands on the next request with no provider rebuild.
+        self._model_preferences = model_preferences
+        # Words the operator wrote that are not in the vocabulary. Remembered
+        # so a typo is reported once rather than on every request it touches.
+        self._reported_bad_preferences: set[str] = set()
         self._vision_lookup = vision_lookup
         self._reasoning_capability_lookup = reasoning_capability_lookup
         self._reasoning_dialect_lookup = reasoning_dialect_lookup
@@ -1168,7 +1213,17 @@ class ModelRouter:
         image_resizes = self._downscale_images(
             routed, image_token_family, image_delivery
         )
-        policy = resolve_reasoning_policy(routed, resolved.reasoning_preference)
+        # The operator's own per-model answer enters exactly where the
+        # client's does, and nowhere else: what leaves this line is a
+        # ``ReasoningPreference`` produced the way one has always been
+        # produced, so gating, the clamp, the adaptation record, the budget
+        # and every wire encoder below run unmodified. It is resolved HERE
+        # rather than on the ``ResolvedModel`` because this is the only
+        # function that knows which rung of a fallback chain is being built:
+        # ``LazyRouteChain`` calls it once per rung, so a chain whose rungs
+        # carry different preferences gets each rung's own.
+        preference, reasoning_source = self._model_reasoning_preference(resolved)
+        policy = resolve_reasoning_policy(routed, preference)
         # Looked up once and handed to both consumers: gating decides what may
         # be sent with it, and the routed request carries it onward so the
         # execution layer can answer "is this really a thinking attempt" for
@@ -1185,6 +1240,7 @@ class ModelRouter:
             reasoning_adaptation=reasoning_adaptation,
             output_limits=self._output_limits(resolved),
             reasoning_dialect=dialect,
+            preference_sources=self._preference_sources(resolved, reasoning_source),
             image_delivery=image_delivery,
             image_token_family=image_token_family,
             image_resizes=image_resizes,
@@ -1199,7 +1255,7 @@ class ModelRouter:
         """
 
         return OutputTokenLimits(
-            limit=self._model_output_limit(resolved),
+            limit=self._effective_output_limit(resolved),
             context_length=self._model_context_length(resolved),
             unknown_default=self._settings.max_output_tokens_unknown_default,
             floor=self._settings.max_output_tokens_floor,
@@ -1227,6 +1283,137 @@ class ModelRouter:
         if self._output_limit_lookup is None:
             return None
         return self._output_limit_lookup(resolved.provider_id, resolved.provider_model)
+
+    def _effective_output_limit(self, resolved: ResolvedModel) -> int | None:
+        """How many tokens this model may emit, after the operator's own cap.
+
+        The cap is a CAP, entered as a lowered *limit* rather than as a
+        requested value. Entering it as the request would be defeated by the
+        first step of :func:`resolve_max_output_tokens`, which raises a
+        thinking attempt's ask back to ``limits.limit`` and would therefore
+        blow straight past the operator's number; it would also make
+        ``output_widened_from`` start naming the cap instead of the client's
+        own ``max_tokens``. As a limit it is arithmetic: the widening widens
+        to the cap, the model-limit clamp lowers a greedy client to the cap,
+        the floor cannot raise past it, and the operator ceiling and the
+        context headroom still have the last word -- which is correct, because
+        a bound that cannot be lowered is not a bound.
+
+        ``min`` of the two, never the operator's number alone, because the
+        stated requirement is that the value can never exceed what the model
+        reported. Where nothing published a limit, the operator's number is
+        the only statement anybody made, and becomes the limit.
+        """
+
+        published = self._model_output_limit(resolved)
+        chosen = self._model_output_preference(resolved)
+        if chosen is None:
+            return published
+        if published is None:
+            return chosen
+        return min(published, chosen)
+
+    def _model_output_preference(self, resolved: ResolvedModel) -> int | None:
+        overrides = self._preferences()
+        if overrides is None:
+            return None
+        return overrides.max_output_tokens(
+            resolved.provider_id,
+            model_ref_for(resolved.provider_id, resolved.provider_model),
+        )
+
+    def _model_reasoning_preference(
+        self, resolved: ResolvedModel
+    ) -> tuple[ReasoningPreference, str | None]:
+        """The operator's own per-model choice, or the route's.
+
+        Returns the preference and, when the operator's file decided it, the
+        level that did -- the second half being for the request log alone.
+        An unparsable word leaves the route's answer in charge: a typo must
+        not be able to change what is sent, and it is reported once rather
+        than on every request it touches.
+        """
+
+        overrides = self._preferences()
+        if overrides is None:
+            return resolved.reasoning_preference, None
+        word = overrides.reasoning_preference(
+            resolved.provider_id,
+            model_ref_for(resolved.provider_id, resolved.provider_model),
+        )
+        if word is None:
+            return resolved.reasoning_preference, None
+        try:
+            preference = ReasoningPreference(word)
+        except ValueError:
+            if word not in self._reported_bad_preferences:
+                self._reported_bad_preferences.add(word)
+                logger.warning(
+                    "MODEL PREFERENCES: '{}' is not a reasoning preference; "
+                    "ignoring it for {}",
+                    word,
+                    resolved.provider_model_ref,
+                )
+            return resolved.reasoning_preference, None
+        if preference is ReasoningPreference.INHERIT:
+            return resolved.reasoning_preference, None
+        return preference, self._preference_scope(
+            overrides, resolved, REASONING_PREFERENCE_OVERRIDE
+        )
+
+    def _preferences(self) -> ModelParameterOverrides | None:
+        if self._model_preferences is None:
+            return None
+        return self._model_preferences()
+
+    def _preference_scope(
+        self, overrides: ModelParameterOverrides, resolved: ResolvedModel, name: str
+    ) -> str | None:
+        """Which level of the override file stated ``name`` for this model.
+
+        Mirrors ``resolve``'s own per-parameter merge exactly -- the model row
+        shadows the provider row by *presence*, so a ``null`` on the model row
+        silences the provider row rather than deferring to it.
+        """
+
+        model_row = overrides.models.get(
+            normalize_override_key(
+                model_ref_for(resolved.provider_id, resolved.provider_model)
+            ),
+            {},
+        )
+        if name in model_row:
+            return MODEL_PREFERENCE_SCOPE if model_row[name] is not None else None
+        provider_row = overrides.providers.get(
+            normalize_override_key(resolved.provider_id), {}
+        )
+        if name in provider_row:
+            return PROVIDER_PREFERENCE_SCOPE if provider_row[name] is not None else None
+        return None
+
+    def _preference_sources(
+        self, resolved: ResolvedModel, reasoning_source: str | None
+    ) -> tuple[tuple[str, str], ...]:
+        """Which levels decided something, for the request log and nothing else.
+
+        Empty whenever the operator set nothing, which is the normal state and
+        the reason the request log writes no key at all for it.
+        """
+
+        sources: list[tuple[str, str]] = []
+        if reasoning_source is not None:
+            sources.append((REASONING_PREFERENCE_OVERRIDE, reasoning_source))
+        overrides = self._preferences()
+        if (
+            overrides is not None
+            and self._model_output_preference(resolved) is not None
+        ):
+            scope = self._preference_scope(
+                overrides, resolved, MAX_OUTPUT_TOKENS_OVERRIDE
+            )
+            if scope is not None:
+                sources.append((MAX_OUTPUT_TOKENS_OVERRIDE, scope))
+        return tuple(sources)
 
     def _model_context_length(self, resolved: ResolvedModel) -> int | None:
         if self._context_length_lookup is None:
@@ -1260,7 +1447,12 @@ class ModelRouter:
             if self._reasoning_capability_lookup is not None
             else None
         )
-        output_limit = self._model_output_limit(resolved)
+        # The SAME number ``_output_limits`` hands the budget, cap included.
+        # Gating prices the thinking allowance against it, so the two reading
+        # different limits would be a silent disagreement no wire byte would
+        # reveal -- gating budgeting for the published limit while the body
+        # carries the operator's own cap.
+        output_limit = self._effective_output_limit(resolved)
         return adapt_reasoning_policy(
             policy,
             capability,

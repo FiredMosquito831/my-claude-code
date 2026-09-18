@@ -10,6 +10,13 @@ class ReasoningPreference(StrEnum):
     OFF = "off"
     CLIENT = "client"
     ADAPTIVE = "adaptive"
+    # The rungs, lowest first. ``minimal`` is the mirror of
+    # ``core.reasoning.ReasoningEffort.MINIMAL``, which 74 catalogued models
+    # publish and every effort encoder already spells; without it the
+    # configuration vocabulary could not name a rung the wire has always
+    # been able to carry. ``ultra`` is deliberately NOT here: it is a wire
+    # word a host dialect produces from ``max``, never a stored choice.
+    MINIMAL = "minimal"
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
