@@ -106,6 +106,9 @@ from .constants import (
     PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
     PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
     PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
+    RATE_LIMIT_COOLDOWN_MAX_SECONDS_DEFAULT,
+    RATE_LIMIT_COOLDOWN_MODE_DEFAULT,
+    RATE_LIMIT_COOLDOWN_MODE_NAMES,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
     REASONING_ANSWER_FLOOR_MAX,
@@ -961,6 +964,18 @@ class Settings(BaseSettings):
     rate_limit_cooldown_seconds: float = Field(
         default=RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
         validation_alias="RATE_LIMIT_COOLDOWN_SECONDS",
+    )
+    # The ceiling on a wait a provider published in a header. Hard-coded at
+    # 3600 until 7.22.0; the default keeps that number, 0 removes the ceiling.
+    rate_limit_cooldown_max_seconds: float = Field(
+        default=RATE_LIMIT_COOLDOWN_MAX_SECONDS_DEFAULT,
+        validation_alias="RATE_LIMIT_COOLDOWN_MAX_SECONDS",
+    )
+    # Whether a 429 is answered by the host's own wait, by the operator's
+    # number, or by nothing at all. ``provider`` is 7.21.0 behaviour exactly.
+    rate_limit_cooldown_mode: str = Field(
+        default=RATE_LIMIT_COOLDOWN_MODE_DEFAULT,
+        validation_alias="RATE_LIMIT_COOLDOWN_MODE",
     )
     # The escalating bench for a key the provider keeps rejecting with
     # 401/403. Comma-separated seconds, walked by consecutive auth failures
@@ -1931,6 +1946,24 @@ class Settings(BaseSettings):
         except ValueError as exc:
             raise ValueError(f"CREDENTIAL_LOCKOUT_TIERS: {exc}") from exc
         return v
+
+    @field_validator("rate_limit_cooldown_mode")
+    @classmethod
+    def validate_rate_limit_cooldown_mode(cls, v: str) -> str:
+        """Reject an unknown cooldown mode rather than guess at it.
+
+        A blank value is the admin UI clearing the field, not a typo, so it
+        falls back to the default the same way every other select does.
+        """
+        mode = str(v).strip().lower()
+        if not mode:
+            return RATE_LIMIT_COOLDOWN_MODE_DEFAULT
+        if mode not in RATE_LIMIT_COOLDOWN_MODE_NAMES:
+            raise ValueError(
+                f"Unknown rate-limit cooldown mode: {v!r}. Known modes: "
+                f"{', '.join(RATE_LIMIT_COOLDOWN_MODE_NAMES)}"
+            )
+        return mode
 
     @field_validator("vision_adapter_mode")
     @classmethod

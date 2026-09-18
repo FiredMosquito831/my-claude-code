@@ -100,6 +100,8 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
     ),
     "credential_health": (
         "RATE_LIMIT_COOLDOWN_SECONDS",
+        "RATE_LIMIT_COOLDOWN_MAX_SECONDS",
+        "RATE_LIMIT_COOLDOWN_MODE",
         "CREDENTIAL_LOCKOUT_TIERS",
         "CREDENTIAL_MODEL_BENCH_ESCALATION",
         "PROXY_MAX_SWITCHES_PER_REQUEST",

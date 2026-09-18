@@ -4579,6 +4579,30 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   when a 429 arrives with no header to obey; the policy itself is
                   the rotation select on each provider's own card.
                 </p>
+                <p class="guide-note">
+                  <strong>The 429 cooldown is yours to set, all the way down to
+                  nothing.</strong> Three settings on that same card, and they
+                  only mean anything together.
+                  <code>RATE_LIMIT_COOLDOWN_SECONDS</code> is the bench used when
+                  the provider published no wait.
+                  <code>RATE_LIMIT_COOLDOWN_MAX_SECONDS</code> is the longest
+                  wait a provider may ask for in a header and have MCC obey; an
+                  hour was hard-coded until 7.22.0 and is still the default, and
+                  <code>0</code> removes the ceiling.
+                  <code>RATE_LIMIT_COOLDOWN_MODE</code> decides what a 429 costs
+                  the key at all: <em>provider</em> obeys the header under that
+                  ceiling and is exactly what every earlier release did,
+                  <em>fixed</em> ignores the header and always uses your number,
+                  and <em>off</em> benches nothing &mdash; no key bench, no
+                  (key, model) bench, no provider-wide pause. Off still rotates
+                  to the next key and still moves down the fallback chain,
+                  because rotating and benching are separate questions, so the
+                  consequence is the plain one: the provider goes on answering
+                  429 and MCC goes on spending attempts on it. There was never a
+                  15 &rarr; 60 &rarr; 3600 ladder in the code: 15&nbsp;s is a
+                  wait a provider asked for, 60&nbsp;s is this cooldown, and
+                  3600&nbsp;s was that hard-coded ceiling.
+                </p>
                 <img class="guide-shot" src="/admin/img/admin-credential-health.png"
                      alt="Credential health card: lockout ladder and rate-limit cooldown"
                      loading="lazy">

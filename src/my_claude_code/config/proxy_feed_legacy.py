@@ -20,9 +20,10 @@ picker. A fresh install passes through this module without it producing
 anything, because a fresh install has no built-in ids to convert.
 
 **When this can be deleted.** After two or three releases, once no store in
-circulation can still hold a built-in id -- **7.22.0** is the earliest sensible
-point. It used to say 7.21.0; that release went to the fetch pass instead, and
-deleting this in the same change would have bundled an unrelated removal onto
+circulation can still hold a built-in id -- **7.23.0** is the earliest sensible
+point. It used to say 7.21.0, then 7.22.0; both of those releases went to
+something else (the proxy fetch pass, then the 429 cooldown controls), and
+deleting this in either change would have bundled an unrelated removal onto
 it. One concern per release, so the note moves rather than the deletion
 happening quietly beside something else. Deleting it is: remove this module,
 remove the ``str`` branch in

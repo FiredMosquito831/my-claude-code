@@ -750,6 +750,30 @@ def test_the_lockout_ladder_is_spelled_out_in_words(rendered) -> None:
         assert part in hint
 
 
+def test_the_cooldown_mode_offers_exactly_three_answers(rendered) -> None:
+    """Both new fields render on Credential health, and the select is the
+    three modes and nothing else."""
+    limits = rendered["limits"]
+    # The leading blank is the page's "leave it unset" option, which every
+    # select renders; the three answers follow it in manifest order.
+    assert limits["cooldownModeOptions"] == ["", "provider", "fixed", "off"]
+    assert limits["cooldownMaxRange"] == "Accepts 0 to 86400"
+
+
+def test_the_credential_health_rule_follows_the_cooldown_mode(rendered) -> None:
+    """The card's one sentence has to say what this install actually does."""
+    limits = rendered["limits"]
+    assert "the provider's Retry-After or the cooldown above" in limits["cooldownRule"]
+    assert (
+        "the cooldown above, whatever the provider published"
+        in (limits["afterCooldownFixed"]["cooldownRule"])
+    )
+    off = limits["afterCooldownOff"]["cooldownRule"]
+    assert "a 429 benches nothing at all" in off
+    assert "still rotates to the next key" in off
+    assert "Retry-After" not in off
+
+
 def test_the_in_page_rail_links_to_a_section_that_exists(rendered) -> None:
     """The rail is static markup and its targets are rendered: a card that
     fails to render leaves a link that scrolls nowhere, silently."""

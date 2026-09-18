@@ -111,6 +111,11 @@ LIMIT_RANGES: dict[str, LimitRange] = {
         0, 8_192, "0 uses the holdback clock alone"
     ),
     "rate_limit_cooldown_seconds": LimitRange(0.0, DAY, "0 does not pause"),
+    # The ceiling on a wait a provider published in a header. A day, because
+    # that is already the bound on the only other host-stated number MCC
+    # obeys, and because a ceiling above the longest wait it could ever cap
+    # is indistinguishable from having none.
+    "rate_limit_cooldown_max_seconds": LimitRange(0.0, DAY, "0 applies no ceiling"),
     # The proactive per-provider pace. 0 is the default and the only value that
     # means something other than a rate. The ceiling is a sanity bound on a
     # hand-typed number: above it the window can no longer be the thing that

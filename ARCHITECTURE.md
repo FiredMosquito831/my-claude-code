@@ -982,7 +982,7 @@ passed to `acquire` as an avoid set, so rotation cannot end with keys untried.
 *Charge the credential?* Only the three signals that describe it. A 401/403
 walks `CREDENTIAL_LOCKOUT_TIERS`; a 429 is benched for exactly the `Retry-After`
 the provider published, carried on `ExecutionFailure.retry_after_seconds`, or
-for `RATE_LIMIT_COOLDOWN_SECONDS` when it published none, under a one-hour cap;
+for `RATE_LIMIT_COOLDOWN_SECONDS` when it published none, under the operator's `RATE_LIMIT_COOLDOWN_MAX_SECONDS` (default 3600) and subject to `RATE_LIMIT_COOLDOWN_MODE`;
 a `QUOTA` failure whose body named an explicit billing phrase benches the whole
 key for `RATE_LIMIT_COOLDOWN_SECONDS`, carried on the same field, through the
 same fixed window (`RotationEngine.note_rate_limit`). No bench duration is

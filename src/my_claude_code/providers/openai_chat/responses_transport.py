@@ -333,6 +333,7 @@ class ResponsesTransport:
                         request_id=request_id,
                         read_timeout_s=self._config.http_read_timeout,
                         mark_rate_limited=self._rate_limiter.extend_reactive_block,
+                        cooldown=self._config.rate_limit_cooldown(),
                         mark_rate_limited_enabled=(
                             not self._config.routes_around_model
                         ),

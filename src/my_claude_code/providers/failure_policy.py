@@ -21,12 +21,23 @@ from my_claude_code.core.failures import (
     says_malformed_request,
 )
 from my_claude_code.core.rate_limit import (
+    DEFAULT_RATE_LIMIT_COOLDOWN,
     DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
-    MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+    RateLimitCooldown,
     retry_after_from_body,
     retry_after_seconds,
 )
+from my_claude_code.core.rate_limit import (
+    MAX_RATE_LIMIT_COOLDOWN_SECONDS as MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+)
 from my_claude_code.providers.recovery import upstream_complaint
+
+# ``MAX_RATE_LIMIT_COOLDOWN_SECONDS`` is re-exported from this module on
+# purpose -- the redundant alias in the second import above is what makes that
+# explicit to the linter. Callers have read the header ceiling from here since
+# it existed. It now names only the *default* of the operator's
+# ``RATE_LIMIT_COOLDOWN_MAX_SECONDS``; the live value arrives on a
+# ``RateLimitCooldown``.
 
 MarkRateLimited = Callable[[float], None]
 ProviderFailureOverride = Callable[[Exception], ExecutionFailure | None]
@@ -242,9 +253,14 @@ def classify_provider_failure(
     mark_rate_limited: MarkRateLimited,
     provider_failure_override: ProviderFailureOverride | None = None,
     cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+    cooldown: RateLimitCooldown | None = None,
     mark_rate_limited_enabled: bool = True,
 ) -> ExecutionFailure:
     """Return one detailed canonical failure after provider retries are exhausted.
+
+    ``cooldown`` is the operator's whole 429 policy -- mode, fallback and
+    ceiling. When it is omitted the bare ``cooldown_seconds`` float is read
+    exactly as it was before 7.22.0.
 
     ``mark_rate_limited_enabled`` is False when the pool routes around a
     rate-limited model. The rotation engine's (key, model) bench is then the
@@ -272,6 +288,7 @@ def classify_provider_failure(
             read_timeout_s=read_timeout_s,
             mark_rate_limited=mark_rate_limited,
             cooldown_seconds=cooldown_seconds,
+            cooldown=cooldown,
             mark_rate_limited_enabled=mark_rate_limited_enabled,
         )
     message = format_execution_failure_message(
@@ -456,22 +473,44 @@ def provider_error_message(
     return safe_exception_message(exc)
 
 
+def cooldown_policy(
+    cooldown: RateLimitCooldown | None, default_seconds: float
+) -> RateLimitCooldown:
+    """The operator's policy, or 7.21.0's from a bare fallback number.
+
+    Every entry point still accepts the plain ``cooldown_seconds`` float it
+    accepted before 7.22.0, so a caller with no settings in hand -- a test, a
+    provider constructed by hand -- keeps the old behaviour exactly.
+    """
+    if cooldown is not None:
+        return cooldown
+    if default_seconds == DEFAULT_RATE_LIMIT_COOLDOWN.fallback_seconds:
+        return DEFAULT_RATE_LIMIT_COOLDOWN
+    return RateLimitCooldown(fallback_seconds=default_seconds)
+
+
 def rate_limit_cooldown_seconds(
-    exc: BaseException, default_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+    exc: BaseException,
+    default_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+    cooldown: RateLimitCooldown | None = None,
 ) -> float:
     """How long the upstream says to wait, or a conservative default.
 
     Guessing a fixed minute either wastes a credential that resets in one
     second or hammers one that needs an hour. Providers publish the real reset
     on every 429, so use it when present.
+
+    The answer is :meth:`RateLimitCooldown.resolve`'s and nothing else's:
+    ``fixed`` ignores the published wait, ``off`` answers 0, and the ceiling
+    on a published header is the operator's.
     """
-    seconds = retry_after_from_error(exc)
-    if seconds is None:
-        return default_seconds
-    return seconds
+    policy = cooldown_policy(cooldown, default_seconds)
+    return policy.resolve(retry_after_from_error(exc, cooldown=policy))
 
 
-def retry_after_from_error(exc: BaseException) -> float | None:
+def retry_after_from_error(
+    exc: BaseException, cooldown: RateLimitCooldown | None = None
+) -> float | None:
     """The wait the upstream itself published, or ``None`` when it published none.
 
     Deliberately separate from :func:`rate_limit_cooldown_seconds`: that one
@@ -485,13 +524,22 @@ def retry_after_from_error(exc: BaseException) -> float | None:
     free tier publishes ``retryAfter`` as the seconds to the next UTC midnight
     -- was previously not heard at all, so its model was retried on the
     60-second default for the rest of that day. A header is capped at the
-    one-hour sanity bound a single header may request; a body-stated reset at
-    :data:`MAX_HOST_STATED_COOLDOWN_SECONDS`, for the reasons recorded there.
+    one-hour sanity bound a single header may request -- the operator's
+    ``RATE_LIMIT_COOLDOWN_MAX_SECONDS`` since 7.22.0, 3600 when nobody said
+    otherwise; a body-stated reset at
+    :data:`MAX_HOST_STATED_COOLDOWN_SECONDS`, for the reasons recorded there
+    and in :class:`RateLimitCooldown`.
+
+    This is *what the host published*, not what MCC will wait: the mode is
+    applied by :meth:`RateLimitCooldown.resolve`, so a request-log row still
+    records the header a host sent even when the operator has told MCC to
+    ignore it.
     """
+    policy = cooldown if cooldown is not None else DEFAULT_RATE_LIMIT_COOLDOWN
     response = getattr(exc, "response", None)
-    seconds = retry_after_seconds(getattr(response, "headers", None))
+    seconds = retry_after_seconds(getattr(response, "headers", None), policy.header_cap)
     if seconds is not None:
-        return min(seconds, MAX_RATE_LIMIT_COOLDOWN_SECONDS)
+        return policy.bound(seconds)
     return retry_after_from_body(_upstream_body_document(exc))
 
 
@@ -566,7 +614,9 @@ def _mark_rate_limited_when_positive(
 
     ``extend_reactive_block`` refuses durations <= 0, and upstreams do send
     ``Retry-After: 0`` -- meaning "nothing to wait for", not "misconfigured".
-    Skip the mark instead of crashing out of classification.
+    Skip the mark instead of crashing out of classification. It is also what
+    ``RATE_LIMIT_COOLDOWN_MODE=off`` resolves to, so "off" installs no block
+    by the same line that has always refused a zero-length one.
     """
 
     if seconds > 0:
@@ -579,19 +629,23 @@ def _classify_provider_failure(
     read_timeout_s: float | None,
     mark_rate_limited: MarkRateLimited,
     cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+    cooldown: RateLimitCooldown | None = None,
     mark_rate_limited_enabled: bool = True,
 ) -> ExecutionFailure:
     # Deferred: ~2 s to import, and no startup path asks it anything.
     import openai
+
+    policy = cooldown_policy(cooldown, cooldown_seconds)
+    cooldown_seconds = policy.fallback_seconds
 
     if isinstance(exc, ExecutionFailure):
         if exc.kind == FailureKind.RATE_LIMIT:
             if mark_rate_limited_enabled:
                 _mark_rate_limited_when_positive(
                     mark_rate_limited,
-                    rate_limit_cooldown_seconds(exc, cooldown_seconds),
+                    rate_limit_cooldown_seconds(exc, cooldown=policy),
                 )
-            published = retry_after_from_error(exc)
+            published = retry_after_from_error(exc, cooldown=policy)
             if exc.retry_after_seconds is None and published is not None:
                 # ExecutionFailure is frozen by design, so carry the header
                 # forward on a new one rather than mutating this one.
@@ -621,14 +675,14 @@ def _classify_provider_failure(
         if mark_rate_limited_enabled:
             _mark_rate_limited_when_positive(
                 mark_rate_limited,
-                rate_limit_cooldown_seconds(exc, cooldown_seconds),
+                rate_limit_cooldown_seconds(exc, cooldown=policy),
             )
         return _failure(
             FailureKind.RATE_LIMIT,
             429,
             _RATE_LIMIT_MESSAGE,
             True,
-            retry_after_from_error(exc),
+            retry_after_from_error(exc, cooldown=policy),
         )
     if isinstance(exc, openai.BadRequestError):
         if is_context_length_error(exc):
@@ -664,14 +718,14 @@ def _classify_provider_failure(
         if status == 429:
             _mark_rate_limited_when_positive(
                 mark_rate_limited,
-                rate_limit_cooldown_seconds(exc, cooldown_seconds),
+                rate_limit_cooldown_seconds(exc, cooldown=policy),
             )
             return _failure(
                 FailureKind.RATE_LIMIT,
                 429,
                 _RATE_LIMIT_MESSAGE,
                 True,
-                retry_after_from_error(exc),
+                retry_after_from_error(exc, cooldown=policy),
             )
         if is_transient_overload_error(exc):
             return overloaded_provider_failure()
@@ -700,14 +754,14 @@ def _classify_provider_failure(
         if status == 429:
             _mark_rate_limited_when_positive(
                 mark_rate_limited,
-                rate_limit_cooldown_seconds(exc, cooldown_seconds),
+                rate_limit_cooldown_seconds(exc, cooldown=policy),
             )
             return _failure(
                 FailureKind.RATE_LIMIT,
                 429,
                 _RATE_LIMIT_MESSAGE,
                 True,
-                retry_after_from_error(exc),
+                retry_after_from_error(exc, cooldown=policy),
             )
         if status == 400:
             if is_context_length_error(exc):

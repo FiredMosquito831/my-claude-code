@@ -329,6 +329,19 @@ FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 0.0
 STREAM_COMMIT_HOLDBACK_MAX_BYTES_DEFAULT = 65_536
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0
+# The ceiling on a wait a provider published in a header. 3600 was hard-coded
+# as ``MAX_RATE_LIMIT_COOLDOWN_SECONDS`` until 7.22.0 and is the default here
+# so that an install that says nothing behaves exactly as it did: an hour is
+# the longest a per-request courtesy header is worth obeying, and beyond it a
+# value is almost always a bug or a hostile number. 0 removes the ceiling and
+# obeys whatever the host asked for.
+RATE_LIMIT_COOLDOWN_MAX_SECONDS_DEFAULT = 3600.0
+# What a 429 costs the credential that met it. ``provider`` is 7.21.0 exactly.
+RATE_LIMIT_COOLDOWN_MODE_DEFAULT = "provider"
+# Mirrors ``core.rate_limit.RATE_LIMIT_COOLDOWN_MODES``, which ``config`` -- a
+# leaf package that imports nothing first-party -- may not import. Pinned in
+# both directions by ``tests/contracts/test_import_boundaries.py``.
+RATE_LIMIT_COOLDOWN_MODE_NAMES: tuple[str, ...] = ("provider", "fixed", "off")
 
 # How often the background sweep re-reads every usable provider's ``/models``.
 # Hourly is where the field converges (OpenCode 60 min, CLIProxyAPI 3 h,

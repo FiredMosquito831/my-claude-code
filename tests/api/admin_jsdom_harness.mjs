@@ -288,6 +288,30 @@ const FIELDS = [
     value: "300,3600,86400",
     default: "300,3600,86400",
   },
+  {
+    key: "RATE_LIMIT_COOLDOWN_MAX_SECONDS",
+    label: "Longest cooldown a provider may ask for",
+    section: "credential_health",
+    type: "number",
+    value: "3600",
+    default: "3600",
+    range_hint: "0 to 86400",
+    description: "The ceiling on a wait a provider asks for in a header.",
+  },
+  {
+    key: "RATE_LIMIT_COOLDOWN_MODE",
+    label: "What a 429 costs the key",
+    section: "credential_health",
+    type: "select",
+    value: "provider",
+    default: "provider",
+    options: [
+      { value: "provider", label: "Wait as long as the provider asked" },
+      { value: "fixed", label: "Always the cooldown above" },
+      { value: "off", label: "Never pause -- keep trying" },
+    ],
+    description: "What a 429 costs the key that met it.",
+  },
 ];
 
 const SECTIONS = [
@@ -3685,6 +3709,17 @@ const calcRowsNow = () =>
       )
     : [];
 const hintOf = (key) => textOf(rowIn(key), ".field-hint");
+// The sentence the credential-health card paints under its fields. It is the
+// only place the page states, in words, what a 429 costs a key -- so it has
+// to follow the mode rather than keep describing the 7.21.0 rule.
+const cooldownRuleNow = () => {
+  const card = doc.getElementById("section-credential_health");
+  const paragraphs = card
+    ? Array.from(card.querySelectorAll("p.field-description"))
+    : [];
+  const last = paragraphs[paragraphs.length - 1];
+  return last ? (last.textContent || "").replace(/\s+/g, " ").trim() : null;
+};
 const tocLinks = Array.from(doc.querySelectorAll("#limitsToc a")).map((a) =>
   a.getAttribute("href"),
 );
@@ -3727,6 +3762,11 @@ const limits = {
     FALLBACK_EJECT_SECONDS: hintOf("FALLBACK_EJECT_SECONDS"),
     CREDENTIAL_LOCKOUT_TIERS: hintOf("CREDENTIAL_LOCKOUT_TIERS"),
   },
+  cooldownRule: cooldownRuleNow(),
+  cooldownModeOptions: Array.from(
+    (controlIn("RATE_LIMIT_COOLDOWN_MODE") || { options: [] }).options,
+  ).map((option) => option.value),
+  cooldownMaxRange: textOf(rowIn("RATE_LIMIT_COOLDOWN_MAX_SECONDS"), ".field-range"),
   ranges: {
     count: limitsView ? limitsView.querySelectorAll(".field-range").length : 0,
     FALLBACK_FIRST_TOKEN_TIMEOUT: textOf(
@@ -3778,6 +3818,21 @@ if (benchSelect) {
   benchSelect.value = "false";
   benchSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
   limits.afterBenchOff = { benchGroups: benchGroupsNow() };
+}
+
+// (b1) the 429 cooldown mode. The card's rule sentence is the only place the
+// page says what a 429 costs a key, so it has to follow the select rather
+// than keep describing the mode the operator just turned off.
+const cooldownModeSelect = controlIn("RATE_LIMIT_COOLDOWN_MODE");
+if (cooldownModeSelect) {
+  cooldownModeSelect.value = "fixed";
+  cooldownModeSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  limits.afterCooldownFixed = { cooldownRule: cooldownRuleNow() };
+  cooldownModeSelect.value = "off";
+  cooldownModeSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  limits.afterCooldownOff = { cooldownRule: cooldownRuleNow() };
+  cooldownModeSelect.value = "provider";
+  cooldownModeSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
 }
 
 // (b2) the master switch renders twice on purpose -- once on Limits, where it

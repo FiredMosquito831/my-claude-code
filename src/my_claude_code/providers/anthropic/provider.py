@@ -126,7 +126,7 @@ class AnthropicProvider(BaseProvider):
                 read_timeout_s=self._config.http_read_timeout,
                 request_id=None,
                 mark_rate_limited=self._rate_limiter.extend_reactive_block,
-                cooldown_seconds=self._config.rate_limit_cooldown_seconds,
+                cooldown=self._config.rate_limit_cooldown(),
                 mark_rate_limited_enabled=not self._config.routes_around_model,
                 # Model discovery is where a credential problem shows up first,
                 # so it must classify the same way the request path does. A

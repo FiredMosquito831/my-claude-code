@@ -7,6 +7,7 @@ import re
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
@@ -239,11 +240,19 @@ def parse_rate_limit_duration(name: str, raw: str) -> float | None:
     return None
 
 
-def retry_after_seconds(headers: object) -> float | None:
+def retry_after_seconds(
+    headers: object, max_seconds: float | None = MAX_RATE_LIMIT_COOLDOWN_SECONDS
+) -> float | None:
     """Seconds the upstream asked us to wait, or None when it did not say.
 
     Returning None rather than a default keeps "the server told us" separate
     from "we guessed", so callers can decide what an absent header means.
+
+    ``max_seconds`` is the ceiling one header may request. It defaults to
+    :data:`MAX_RATE_LIMIT_COOLDOWN_SECONDS`, which is what every caller got
+    before it was a parameter; ``None`` removes the ceiling entirely. The
+    operator's ``RATE_LIMIT_COOLDOWN_MAX_SECONDS`` reaches here through
+    :class:`RateLimitCooldown`, and nowhere else invents a bound of its own.
     """
 
     # Duck-typed rather than annotated as Mapping: callers hand us whatever
@@ -260,7 +269,7 @@ def retry_after_seconds(headers: object) -> float | None:
             continue
         seconds = parse_rate_limit_duration(name, str(raw))
         if seconds is not None and seconds >= 0:
-            return min(seconds, MAX_RATE_LIMIT_COOLDOWN_SECONDS)
+            return seconds if max_seconds is None else min(seconds, max_seconds)
     return None
 
 
@@ -319,3 +328,92 @@ def _positive_seconds(value: object) -> float | None:
     if seconds != seconds or seconds < 0:  # NaN or negative
         return None
     return seconds
+
+
+#: The three answers to "what does a 429 cost the credential that met it".
+#:
+#: ``provider`` -- honour the wait the host published, under the operator's
+#: ceiling, and fall back to ``RATE_LIMIT_COOLDOWN_SECONDS`` when it published
+#: none. Every release up to 7.21.0 did exactly this and nothing else.
+#: ``fixed`` -- always ``RATE_LIMIT_COOLDOWN_SECONDS``, whatever the host says.
+#: ``off`` -- a 429 benches nothing at all.
+RATE_LIMIT_COOLDOWN_MODES: tuple[str, ...] = ("provider", "fixed", "off")
+DEFAULT_RATE_LIMIT_COOLDOWN_MODE = "provider"
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimitCooldown:
+    """The operator's 429 cooldown policy, and the one place it is applied.
+
+    Three numbers an operator sets on *Limits & Resilience*, carried together
+    because they only mean anything together:
+
+    - ``mode`` -- one of :data:`RATE_LIMIT_COOLDOWN_MODES`.
+    - ``fallback_seconds`` -- ``RATE_LIMIT_COOLDOWN_SECONDS``: the bench used
+      when the host published no wait, and the *only* bench in ``fixed`` mode.
+      0 means "do not pause", which it has meant since the setting existed.
+    - ``max_seconds`` -- ``RATE_LIMIT_COOLDOWN_MAX_SECONDS``: the ceiling on a
+      wait the host published in a *header*. Defaults to the 3600 that was
+      hard-coded until 7.22.0; 0 removes the ceiling.
+
+    :meth:`resolve` is the rule. Every bench, every (key, model) bench and
+    every reactive block in the codebase asks this one method how long, so
+    there is no second copy of the policy to drift from this one.
+
+    Deliberately **not** applied to a wait the host published in its response
+    *body*. That number is bounded by
+    :data:`MAX_HOST_STATED_COOLDOWN_SECONDS` (one day) for the reason recorded
+    there: a body-stated ``retryAfter`` is a statement about the account's
+    daily allowance, not a per-request courtesy, and clamping it to an hour is
+    the defect 7.6.3 was raised to fix. An operator who wants a body-stated
+    day-long wait ignored says so with ``fixed`` or ``off``, which do read the
+    body path -- lowering the header ceiling must not silently re-create
+    hammering a host that already said "not until midnight".
+    """
+
+    mode: str = DEFAULT_RATE_LIMIT_COOLDOWN_MODE
+    fallback_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+    max_seconds: float = MAX_RATE_LIMIT_COOLDOWN_SECONDS
+
+    @property
+    def benches(self) -> bool:
+        """Whether a 429 costs the credential anything at all."""
+        return self.mode != "off"
+
+    @property
+    def honours_provider(self) -> bool:
+        """Whether a wait the host published is read at all."""
+        return self.mode != "fixed" and self.benches
+
+    @property
+    def header_cap(self) -> float | None:
+        """The ceiling for :func:`retry_after_seconds`; ``None`` is uncapped."""
+        return None if self.max_seconds <= 0 else self.max_seconds
+
+    def bound(self, seconds: float) -> float:
+        """Clamp one host-stated wait to the operator's ceiling."""
+        cap = self.header_cap
+        return seconds if cap is None else min(seconds, cap)
+
+    def resolve(self, stated: float | None) -> float:
+        """How long one 429 pauses, given what the host published (or None).
+
+        The single owner of the rule. ``off`` is 0 -- and every caller checks
+        :attr:`benches` before it records anything, so 0 here never reads back
+        as "benched for no time at all".
+
+        ``stated`` has already met the ceiling, in the reader that produced it
+        (:func:`retry_after_seconds` for a header, and only there). Clamping
+        again here would apply the header ceiling to a *body*-stated wait too,
+        which is the one thing this policy must not do.
+        """
+        if not self.benches:
+            return 0.0
+        if stated is None or not self.honours_provider:
+            return self.fallback_seconds
+        return stated
+
+
+#: 7.21.0 behaviour exactly: honour the host, ceiling at one hour, fall back to
+#: sixty seconds. What a caller with no settings in hand gets.
+DEFAULT_RATE_LIMIT_COOLDOWN = RateLimitCooldown()

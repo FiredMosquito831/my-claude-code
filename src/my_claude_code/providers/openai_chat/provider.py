@@ -1293,7 +1293,7 @@ class _OpenAIChatStreamRunner:
                         provider_failure_override=(
                             self._provider._provider_failure_override
                         ),
-                        cooldown_seconds=config.rate_limit_cooldown_seconds,
+                        cooldown=config.rate_limit_cooldown(),
                         mark_rate_limited_enabled=not config.routes_around_model,
                     )
                     error_trace: dict[str, Any] = {

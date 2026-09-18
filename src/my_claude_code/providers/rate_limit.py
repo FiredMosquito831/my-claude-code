@@ -17,7 +17,9 @@ from my_claude_code.config.constants import (
 from my_claude_code.core.credential_attribution import current_credential
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
 from my_claude_code.core.rate_limit import (
+    DEFAULT_RATE_LIMIT_COOLDOWN,
     UNLIMITED_RATE_LIMIT,
+    RateLimitCooldown,
     StrictSlidingWindowLimiter,
 )
 from my_claude_code.core.trace import trace_event
@@ -124,6 +126,7 @@ class ProviderRateLimiter:
         backoff_max_seconds: float = PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
         backoff_jitter_seconds: float = PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
         routes_around_model: bool = False,
+        cooldown: RateLimitCooldown | None = None,
     ):
         if rate_limit < 0:
             raise ValueError("rate_limit must be >= 0")
@@ -148,6 +151,14 @@ class ProviderRateLimiter:
         # by a caller that has no settings in hand -- keeps 6.19.0 behaviour.
         # ``factory.py`` injects the operator's real value.
         self._routes_around_model = routes_around_model
+        # The operator's 429 policy. Only ``off`` is read here, and only to
+        # answer "does a 429 cost this provider a reactive block at all"; how
+        # long a block lasts is still the retry ladder's own delay, which is a
+        # schedule and not a cooldown. Defaults to 7.21.0's policy so a
+        # limiter built by hand behaves as it always has.
+        self._cooldown = (
+            cooldown if cooldown is not None else DEFAULT_RATE_LIMIT_COOLDOWN
+        )
         self._blocked_until: float = 0
         self._concurrency_sem = asyncio.Semaphore(max_concurrency)
         pace = (
@@ -369,7 +380,11 @@ class ProviderRateLimiter:
                     max_attempts=total_attempts,
                     delay_s=round(delay, 3),
                 )
-                if status == 429 and not self._routes_around_model:
+                if (
+                    status == 429
+                    and not self._routes_around_model
+                    and self._cooldown.benches
+                ):
                     # Only a rate limit, and only when this limiter is the
                     # thing that answers one. A 5xx is the gateway failing,
                     # not the credential being throttled, and blocking every
@@ -378,7 +393,11 @@ class ProviderRateLimiter:
                     # spent once, as the pool's (key, model) bench, and
                     # installing it again here would charge the same seconds
                     # twice -- once where a router can see them, once where
-                    # it cannot.
+                    # it cannot. ``RATE_LIMIT_COOLDOWN_MODE=off`` says a 429
+                    # benches nothing anywhere, and a reactive block is a
+                    # bench the whole provider serves, so it is not installed
+                    # either -- the retry above still happens, because
+                    # retrying and benching are separate questions.
                     self.extend_reactive_block(delay)
                 await asyncio.sleep(delay)
                 # Back-fills the try just recorded, so one ladder row carries
