@@ -87,3 +87,12 @@ MCC_INSTALL_NO_DESKTOP
 # merged; `--version X` sets it to the tag vX on its own. Read by the batch
 # file only -- the server never sees it.
 MCC_INSTALL_REF
+# npm's own prefix variable (7.24.0). MCC reads it to find where a global
+# opencode/codex install landed; it belongs to npm, not to MCC, so there is
+# nothing here that could set it.
+NPM_CONFIG_PREFIX
+# Not an environment variable at all: the name of the allow-list inside
+# tests/contracts/test_every_tunable_is_on_the_dashboard.py, cited by the
+# "Environment variables read at startup" section so a reader can find the
+# contract that keeps that section honest (7.24.0).
+BOOTSTRAP_ENVIRONMENT

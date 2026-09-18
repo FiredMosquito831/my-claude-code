@@ -619,3 +619,67 @@ def test_the_proxy_switch_bound_reaches_the_pool_that_spends_it(
         assert provider._max_switches == 1
     finally:
         reset_proxy_chains_cache()
+
+
+# ---------------------------------------------------------------------------
+# 7.24.0: six literals became settings. Each pair below is the promise that
+# nothing moved -- the setting's shipped default IS the number the code used
+# before it was settable -- read from the module that still holds that number
+# rather than restated here, so the two cannot drift.
+# ---------------------------------------------------------------------------
+
+
+def test_the_promoted_proxy_knobs_default_to_what_the_code_already_used() -> None:
+    from my_claude_code.api import admin_proxy_routes
+    from my_claude_code.application import proxy_check, proxy_fetch, proxy_ingest
+
+    settings = Settings.model_validate({})
+    assert settings.proxy_check_timeout_seconds == (
+        proxy_check.PROXY_CHECK_TIMEOUT_SECONDS
+    )
+    assert settings.proxy_check_max_concurrency == (
+        proxy_check.PROXY_CHECK_MAX_CONCURRENCY
+    )
+    assert settings.proxy_feed_timeout_seconds == proxy_ingest.FEED_TIMEOUT_SECONDS
+    assert settings.proxy_feed_max == admin_proxy_routes.PROXY_FEED_MAX
+    assert settings.proxy_candidate_bulk_max == (
+        admin_proxy_routes.PROXY_CANDIDATE_BULK_MAX
+    )
+    assert settings.proxy_fetch_persist_interval_seconds == (
+        proxy_fetch.FETCH_PERSIST_INTERVAL_SECONDS
+    )
+
+
+def test_the_promoted_proxy_knobs_still_ship_the_7_23_0_literals() -> None:
+    """The literal, written out once, so a change of default cannot be silent.
+
+    The test above pins setting-to-module; this one pins module-to-history. A
+    single edit that moved both would pass the first and fail this.
+    """
+
+    settings = Settings.model_validate({})
+    assert settings.proxy_check_timeout_seconds == 10.0
+    assert settings.proxy_check_max_concurrency == 4
+    assert settings.proxy_feed_timeout_seconds == 15.0
+    assert settings.proxy_feed_max == 20
+    assert settings.proxy_candidate_bulk_max == 100
+    assert settings.proxy_fetch_persist_interval_seconds == 5.0
+
+
+def test_the_fetch_persist_interval_reaches_the_sweep() -> None:
+    """The setting has to arrive at the loop that decides when to write."""
+
+    import inspect
+
+    from my_claude_code.application.proxy_fetch import run_fetch_pass, start_fetch
+
+    for func in (run_fetch_pass, start_fetch):
+        params = inspect.signature(func).parameters
+        assert "persist_interval" in params, f"{func.__name__} cannot be told"
+        assert "feed_timeout" in params, f"{func.__name__} cannot be told"
+
+    source = inspect.getsource(run_fetch_pass)
+    assert "waited >= persist_interval" in source, (
+        "run_fetch_pass reads the module constant again instead of the value "
+        "it was handed, so the setting would be a number that does nothing"
+    )

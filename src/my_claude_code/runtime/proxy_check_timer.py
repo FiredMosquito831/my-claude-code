@@ -304,7 +304,13 @@ class ProxyHealthTimer:
                 due,
                 targets,
                 exit_ip_url="",
-                concurrency=PROXY_CHECK_MAX_CONCURRENCY,
+                concurrency=int(
+                    getattr(
+                        settings,
+                        "proxy_check_max_concurrency",
+                        PROXY_CHECK_MAX_CONCURRENCY,
+                    )
+                ),
             )
         except asyncio.CancelledError:
             raise

@@ -359,7 +359,7 @@ Since 7.22.2 a sweep stops at the handshake by default. It still opens the tunne
 
 **It runs in the background and you can watch it.** A list of several hundred addresses takes minutes, so the press starts a job and returns; the page shows `Tested 212 of 834 · 41 working · 163 dead · 2 refused`, with a **Stop**. Stopping keeps everything that has already passed — it means "that is enough addresses", not "throw the work away". Reloading the page re-attaches to a sweep that is still running rather than losing it, and only one fetch runs at a time: a second press while one is going is refused, naming the one that is.
 
-**Five settings, all on Limits & Resilience → Credential health:**
+**Eleven settings, all on Limits & Resilience → Credential health.** Six of them became settings in 7.24.0; every one ships with exactly the number the code used before, so nothing about a fetch changes unless you change it.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -368,6 +368,12 @@ Since 7.22.2 a sweep stops at the handshake by default. It still opens the tunne
 | `PROXY_FETCH_CHECK_DEPTH` | `tls` | How far each address's test goes. `tls` opens the tunnel, completes a full TLS handshake to the provider's own host through it with ordinary strict trust, and closes — **no HTTP request is sent**. `request` is 7.22.1's check: the same tunnel, then a `HEAD`. Both catch an intercepting proxy identically, because that verdict arrives during the handshake. **Test**, **Add** and **Add all working** always use `request`, whatever this says. |
 | `PROXY_FETCH_CONNECT_TIMEOUT_SECONDS` | `5` | How long the TCP step waits before calling an address dead. Short on purpose: most of what a public list publishes has stopped listening. An address that *does* answer gets the checker's full ten seconds for the HTTPS handshake that follows — this shortens the first step only. |
 | `PROXY_CANDIDATES_MAX` | `0` | How many of the ranked addresses are tested and offered. **0 is unlimited and is what ships** — chains have held any number of entries since 7.19.0, so a ceiling on the offer would be one MCC invented. A number you set is applied in rank order, so a bounded fetch tests the best of what was found. |
+| `PROXY_CHECK_TIMEOUT_SECONDS` | `10` | How long any single leg of an address check may take — the TLS handshake through the tunnel, and the `HEAD` that follows it when one is sent. Ten seconds is what every release up to 7.23.0 hard-coded. Raise it for a chain that has to reach the other side of the world, where a working but distant address is otherwise written off; lower it to give up on a slow address sooner. Range 1–120. This is the *check*, not the request path: a real request through a proxy is bounded by `PROXY_CONNECT_TIMEOUT_SECONDS`. |
+| `PROXY_CHECK_MAX_CONCURRENCY` | `4` | How many addresses the **background health re-prober** tests at the same time — the loop that, since 7.19.0, is the only way a benched address gets back into the rotation. That loop is the single consumer; the fetch sweep and **Add all working** are paced by `PROXY_FETCH_TEST_CONCURRENCY`. Four is what 7.19.0–7.23.0 hard-coded. Each check sends the full end-to-end request to your provider's own host, which is why the ceiling is 128 rather than the fetch sweep's 500. Range 1–128. |
+| `PROXY_FEED_TIMEOUT_SECONDS` | `15` | How long one feed has to answer before it is skipped for that pass. Feeds are read one after another, so this is what bounds the **Fetch** button by the number of lists rather than by the patience of the slowest one. Fifteen seconds is 7.20.0's number. Range 1–300. |
+| `PROXY_FEED_MAX` | `20` | How many feed URLs the store will hold; saving a longer list on the Proxying page is refused, naming the count. Twenty is what 7.20.0–7.23.0 allowed. It bounds a list you type, not anything a chain holds: every feed is one request to somebody else's server on every refresh pass. Range 1–1000. |
+| `PROXY_CANDIDATE_BULK_MAX` | `100` | How many addresses one press of **Add all working**, or one bulk **Discard**, may carry. A hundred is 7.21.0's number. It bounds one HTTP request and the sweep it starts — never how many entries a chain may hold, which has had no limit since 7.19.0. Raise it to hand a whole sweep to a provider in one press; every address is still proven end to end on the way in. Range 1–100000. |
+| `PROXY_FETCH_PERSIST_INTERVAL_SECONDS` | `5` | The longest a proven address may sit unwritten while a fetch is still running. Since 7.22.0 a sweep saves in batches as it goes rather than only at the end, so a server that stops mid-sweep keeps what it had already proven; this is that clock. Five seconds is 7.22.0's number. Addresses are also written whenever twenty-five have accumulated, and always once at the end. Range 0.5–300. |
 
 **Then one press to use them.** **Add all N working to `<provider>`** takes the whole offer into that chain. It re-tests every address on the way in — with the **full `request` check**, and at the concurrency `PROXY_FETCH_TEST_CONCURRENCY` resolves to, so three hundred addresses are re-tested at the pace you set rather than four at a time — exactly as a hand-picked add does — the verdict you are looking at is about one destination, this button may be pointing at another, and the interception check is the one thing standing between a stranger's machine and your credentials. A few seconds is not worth skipping it for.
 
@@ -482,6 +488,47 @@ Each rule has three states rather than two, and the middle one is the point:
 | `TOOL_RESULT_TRIM_PROTECT_RECENT_RESULTS` | `2` | How many of the most recent results are exempt. This is the setting the measurement above is about. |
 
 Measure with `observe`, check your cache hit rate on the Token Optimizer page against the 90.9% break-even, and only then decide.
+
+<a id="environment-variables-read-at-startup"></a>
+
+## Environment variables read at startup
+
+**Every setting MCC has is on a page.** A contract test pins it both ways: each
+`Settings` field has a field in the admin manifest, and each manifest section is
+claimed by a page. If you can configure it, you can see it and change it in the
+browser — and since 7.24.0 a second contract pins that each one also has a line
+in `.env.example`, so the file and the form can never describe different
+installs.
+
+The names below are the exception, and they are an exception for one reason:
+**a dashboard field for any of them would be a field that does nothing.** Each
+is read before there is a settings file to read, or by a *different process*
+that never loads the server's settings at all. They are environment variables
+you set in your shell, your service unit or your CI job.
+
+| Variable | Read by | What it does |
+| --- | --- | --- |
+| `MCC_CONFIG_DIR` | every MCC process, first thing | Pins the config directory to an absolute path, overriding `~/.mcc`. It decides *which* `.env` is read, so it can never be a line inside one. Set it for the `mcc-*` launchers too, or they will read a different directory than the server does. |
+| `MCC_ENV_FILE` | the server, at load | Names the env file to load instead of the default. Same circularity. |
+| `LOG_FILE` | the server and the CLI, at load | Where a startup failure is written — including a failure that *is* "the settings would not load". |
+| `MCC_INSTALL_NO_START` | `install.ps1` / `install.sh` / the npm wrapper | `1` installs without stopping or starting any server. The environment form of `-NoStart` / `--no-start`. |
+| `MCC_INSTALL_NO_DESKTOP` | the installers | `1` restarts the server as usual but never opens the desktop app. |
+| `MCC_INSTALL_LOG` | the update helper | Where the in-place update writes its progress. |
+| `MCC_DESKTOP_SKIP_AUTOSTART` | `mcc-desktop` | `1` starts the tray without starting a server. |
+| `MCC_DESKTOP_SHELL_DIR`, `MCC_DESKTOP_SHELL_BASE_URL`, `MCC_DESKTOP_SHELL_TRAY`, `DESKTOP_SHELL` | the desktop **shell** | Where the shell lives, what it points at, whether it shows a tray, and whether it is used at all. The shell is a separate binary and never loads the server's settings. |
+| `MCC_SHELL_DESKTOP_COMMAND`, `MCC_SHELL_SERVER_COMMAND` | the desktop shell | The commands it launches. Packaging and test seams. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `NPM_CONFIG_PREFIX` | MCC, reading | **Other programs' own variables.** MCC looks at Claude Code's and Codex's configuration; it does not own where they keep it. |
+| `PORT` | `mcc-migrate` | Finds the running server before settings are loaded. `PORT` is also an ordinary setting, on Providers → Runtime, which is what the server itself binds to. |
+
+`MCC_OPEN_BROWSER` is **not** in this list even though `mcc-desktop` reads it
+from the environment: it is a real setting, and that read is the process-env
+layer of the same setting. `/admin/api/config` reports it as `process` when it
+is set that way.
+
+A new name cannot be added quietly. `tests/contracts/test_every_tunable_is_on_the_dashboard.py`
+fails on any `os.environ` read in `src/` whose name is neither a `Settings`
+alias nor listed in that file's `BOOTSTRAP_ENVIRONMENT`, whose entries carry
+the reason a dashboard field could not work.
 
 <a id="version--updates"></a>
 
