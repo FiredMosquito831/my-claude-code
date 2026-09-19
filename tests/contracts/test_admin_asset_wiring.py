@@ -81,6 +81,11 @@ KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
     # hovered row precisely so a drag leaks no nodes; it lives inside the rail
     # the settings renderer rebuilds, so it cannot be declared in index.html.
     "routeDropIndicator",
+    # loopLagReadout: created by renderLoopHealth() in admin.js, inside the
+    # Server responsiveness section the settings renderer builds. That
+    # container is emptied on every render, so the id cannot be declared in
+    # index.html; loadLoopLag() fills it when the Limits view is opened.
+    "loopLagReadout",
 }
 
 

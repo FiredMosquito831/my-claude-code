@@ -4289,6 +4289,18 @@ Open the request in **Analytics → Requests** and expand the attempt. The ladde
 
 Two numbers, both about honesty rather than speed. MCC serves everything on one event loop, and a long admin gesture — a three-hundred-address proxy add, a provider refresh — can keep that loop to itself for seconds at a time. `HEALTH_HEARTBEAT_INTERVAL_MS` (100) is how often MCC measures that: one task asks to sleep for exactly that long and records how much later it actually woke. `HEALTH_BUSY_LAG_MS` (500) is how late that has to be before `GET /health` answers with `x-mcc-busy: 1` and says, in the body, since when and which gesture it was. It is still a `200` and still carries `{"status": "healthy"}` — the busy fields are additive — and the desktop app reads that as *alive, working* rather than starting a second server. Set `HEALTH_BUSY_LAG_MS` to `0` to stop marking answers; the measurement continues regardless, and turns up in the server log as `LOOP: the event loop was N ms late` at DEBUG. See [And now the server says so itself](#and-now-the-server-says-so-itself).
 
+**And underneath the two numbers, what they measured (7.31.0).** The card now lists the last twenty gestures that named themselves, newest first, with the worst event-loop lateness recorded while each one ran and how long it took. A gesture at or over `HEALTH_BUSY_LAG_MS` is the one a `/health` probe would have been told about, and is coloured to say so. The same list is on `GET /admin/api/loop-health`, and under `loop_health` on `GET /admin/api/status`, which is how the before/after tables in the performance specs are reproduced without a harness. Nothing is recorded until a gesture finishes, so a quiet server says exactly that.
+
+**What 7.31.0 made faster.** Measured on a 52 KB managed `.env` with 475 set keys, 995 visibility patterns and the full 222-provider models.dev index, against a scratch server with a 20 Hz `/health` poller:
+
+| gesture | before | after |
+| --- | --- | --- |
+| Pause one route | 1,109-1,238 ms, loop held up to 1,227 ms | 306-425 ms, loop held up to 363 ms |
+| Resume one route | 1,001-1,326 ms, loop held up to 1,137 ms | 344-383 ms, loop held up to 291 ms |
+| Refresh models | 4,568 ms, loop held 1,337 ms | 3,411 ms, loop held 298 ms |
+
+None of it was the render of the managed file, which measures 2.7 ms. It was `dotenv` parsing the same unchanged files six times per click -- the parse is now memoised on the *bytes* it parsed, so a file that changed by any means is parsed again and there is no staleness window to reason about -- and the models.dev cross-provider table being rebuilt once per provider instead of once per index, which was 120 ms times however many providers you have configured. What is left of a pause is the provider generation swap, measured at 207-331 ms and deliberately untouched here.
+
 ### Diagnostics
 
 The logging flags, and the log level that used to sit on its own. Leave them off unless you are chasing something: they are verbose by design.

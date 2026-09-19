@@ -3592,6 +3592,12 @@ details.turn-pane > summary:focus-visible {
   font-weight: 500;
 }
 
+/* A gesture that was late enough for /health to have called the server
+   busy. Colour only -- the number beside it is the statement. */
+.calc-table tr.calc-over-budget td {
+  color: var(--warn);
+}
+
 .calc-caveat {
   color: var(--muted);
   font-size: 12px;

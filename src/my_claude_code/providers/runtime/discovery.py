@@ -281,6 +281,12 @@ class ProviderModelDiscovery:
                     failed_provider_ids.append(provider_id)
                     continue
                 previous_ids = cached_ids.get(provider_id)
+                # One yield per provider, for the same reason there is one
+                # before each resolve above: enriching and caching a catalogue
+                # is synchronous work, and a sweep of two dozen providers must
+                # hand the loop back between them rather than publish all of
+                # them in one uninterruptible block.
+                await asyncio.sleep(0)
                 try:
                     await cache_enriched_model_infos(
                         provider_id,

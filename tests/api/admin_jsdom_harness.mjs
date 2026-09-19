@@ -1366,6 +1366,26 @@ const ROUTES = {
     ok: true,
     models: ["m1", "m2", "m3"],
   },
+  /* The Server responsiveness card reads this: what the last gestures
+     cost the event loop. Two entries, one of them over the busy
+     threshold, so both the ordinary row and the late one are rendered. */
+  "/admin/api/loop-health": {
+    busy_lag_ms: 500,
+    gestures: [
+      {
+        reason: "the model catalogue is being refreshed",
+        max_lag_ms: 2755,
+        duration_ms: 4700,
+        finished_at: "2026-09-19T12:15:00.000+00:00",
+      },
+      {
+        reason: "a route is being paused",
+        max_lag_ms: 84,
+        duration_ms: 121,
+        finished_at: "2026-09-19T12:14:00.000+00:00",
+      },
+    ],
+  },
   "/admin/api/models": { models: [] },
   "/admin/api/model-admin": MODEL_ADMIN_PAGE,
   "/admin/api/model-admin/visibility/bulk": BULK_RESULT,
@@ -4282,6 +4302,28 @@ if (firstInput && totalInput && floorInput) {
     control.value = control.dataset.original;
     control.dispatchEvent(new window.Event("input", { bubbles: true }));
   });
+}
+
+/* The loop-lag readout on Limits & Resilience. Rendered by the
+   loop_health section renderer and filled by loadLoopLag() when the view
+   is opened, so it is read after a nav click and a settle rather than
+   from the initial paint. */
+{
+  const link = doc.querySelector('.nav-link[data-view="limits"]');
+  if (link) link.click();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const readout = doc.querySelector("#loopLagReadout");
+  limits.loopLag = {
+    present: Boolean(readout),
+    rows: readout
+      ? Array.from(readout.querySelectorAll("tbody tr")).map((row) => ({
+          reason: row.children[0].textContent.trim(),
+          lag: row.children[1].textContent.trim(),
+          took: row.children[2].textContent.trim(),
+          overBudget: row.classList.contains("calc-over-budget"),
+        }))
+      : [],
+  };
 }
 
 // Every control the drive touched goes back to what it loaded with: the

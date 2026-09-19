@@ -94,7 +94,17 @@ def _stub_checker(monkeypatch, verdicts: dict[str, ProxyCheckRecord]) -> list[di
     calls: list[dict] = []
 
     async def fake_check_endpoints(
-        proxy_ids, destinations, *, timeout=0.0, exit_ip_url="", persist=True
+        proxy_ids,
+        destinations,
+        *,
+        timeout=0.0,
+        exit_ip_url="",
+        persist=True,
+        # Signature only, so a keyword the route learns to pass does not read
+        # as a failed check. ``off_loop`` decides which thread the handshakes
+        # run on and nothing about the verdict, and this stub performs no
+        # handshake at all.
+        **_where_the_handshakes_run,
     ):
         from my_claude_code.application.proxy_check import apply_outcome
         from my_claude_code.config.credentials import mask_proxy_label

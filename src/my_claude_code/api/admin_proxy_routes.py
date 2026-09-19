@@ -357,12 +357,21 @@ async def check_proxy_chain(
             ),
         )
 
-    outcomes = await check_endpoints(
-        wanted,
-        dict.fromkeys(wanted, destination),
-        timeout=float(settings.proxy_check_timeout_seconds),
-        exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
-    )
+    with loop_health().working(
+        f"{len(wanted)} proxy address(es) are being tested for "
+        f"{providers[provider_id]['display_name']}"
+    ):
+        outcomes = await check_endpoints(
+            wanted,
+            dict.fromkeys(wanted, destination),
+            timeout=float(settings.proxy_check_timeout_seconds),
+            exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+            # One address, one operator waiting, and up to three legs of
+            # handshake through a stranger's machine: the same reason the bulk
+            # add moved in 7.27.0, at a smaller scale. Nothing else about the
+            # check changes -- same coroutine, same SSL context, same verdict.
+            off_loop=True,
+        )
     refreshed = await asyncio.to_thread(_payload, services)
     refreshed["checked"] = {
         proxy_id: outcome.record.as_document() | {"label": outcome.label}

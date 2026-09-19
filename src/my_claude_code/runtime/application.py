@@ -599,6 +599,31 @@ class ApplicationRuntime:
                 provider_id: sorted(model_ids)
                 for provider_id, model_ids in self.provider_manager.cached_model_ids().items()
             },
+            # What the long gestures actually cost the event loop, newest
+            # first. ``/health`` says "busy, because <gesture>" while a hold is
+            # happening; this says how late the loop was for each of the last
+            # gestures once they are over, so the follow-up table in the perf
+            # specs is reproducible from the dashboard rather than only from a
+            # harness. Additive: every existing key above is untouched.
+            "loop_health": self.loop_health_status(),
+        }
+
+    def loop_health_status(self) -> dict[str, Any]:
+        """What the last gestures cost the loop, newest first.
+
+        ``/health`` says "busy, because <gesture>" while a hold is happening;
+        this says how late the loop was for each of the last gestures once they
+        are over, so the follow-up tables in the perf specs are reproducible
+        from the dashboard rather than only from a harness.
+        """
+
+        record = loop_health()
+        return {
+            "busy_lag_ms": round(record.busy_lag_seconds * 1000.0),
+            "gestures": [
+                gesture.as_body_fields()
+                for gesture in reversed(record.recent_gestures())
+            ],
         }
 
     async def test_provider(self, provider_id: str) -> dict[str, Any]:
@@ -839,6 +864,10 @@ class ApplicationRuntime:
         }
 
     async def refresh_models(self) -> ProviderModelRefreshResult:
+        # Deliberately not named again here: ``refresh_model_list_cache``
+        # already declares "every provider's model list is being refreshed" for
+        # exactly this call, and a second frame around it put the same sweep in
+        # the Server responsiveness readout twice under two names.
         return await self.provider_manager.refresh_model_list_cache()
 
     async def request_restart(self) -> None:

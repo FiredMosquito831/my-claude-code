@@ -478,6 +478,13 @@ function setActiveView(viewId, { scroll = false } = {}) {
     loadOnboarding().catch((error) => showMessage(error.message, "error"));
   }
 
+  if (activeView.id === "limits") {
+    loadLoopLag().catch(() => {
+      // A readout is not a reason to interrupt somebody editing limits: the
+      // card keeps whatever it last said, and says so.
+    });
+  }
+
   if (activeView.id === "web_search") {
     loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error"));
   }
@@ -6407,6 +6414,7 @@ const SECTION_RENDERERS = {
   deadlines: renderDeadlines,
   benching: renderBenching,
   credential_health: renderCredentialHealth,
+  loop_health: renderLoopHealth,
 };
 
 /* ------------------------------------------------------------------ *
@@ -6592,6 +6600,96 @@ function renderSections(sections, fields) {
     limitsScrollspyBound = true;
     setupScrollspy("#limitsToc");
   }
+}
+
+/** The Server responsiveness card: its settings, and what they measured.
+ *
+ * The fields decide when a /health probe is told the loop is late and which
+ * gesture it names. Underneath them, the gestures that have already finished
+ * and the worst lateness each one caused -- the same table the perf specs
+ * record by hand, read off the running server instead.
+ */
+function renderLoopHealth(fields) {
+  const wrap = document.createElement("div");
+  const grid = document.createElement("div");
+  grid.className = "field-grid";
+  fields.forEach((field) => grid.appendChild(renderField(field)));
+  wrap.appendChild(grid);
+
+  const card = document.createElement("div");
+  card.className = "calc-card";
+  const title = document.createElement("h4");
+  title.textContent = "What recent gestures cost the event loop";
+  const readout = document.createElement("div");
+  readout.id = "loopLagReadout";
+  readout.setAttribute("aria-live", "polite");
+  const caveat = document.createElement("p");
+  caveat.className = "calc-caveat";
+  caveat.textContent =
+    "Newest first, and only gestures that named themselves. The lateness is " +
+    "measured against the heartbeat above, so it is how late the loop was " +
+    "for everything else -- a request, a probe, the desktop window's health " +
+    "check -- while that gesture ran.";
+  card.append(title, readout, caveat);
+  wrap.appendChild(card);
+  return wrap;
+}
+
+/** Paint the per-gesture loop-lag table from /admin/api/loop-health.
+ *
+ * The busy reason on the Server responsiveness card names the gesture the
+ * loop is inside *right now*; this is the other half -- what each finished
+ * gesture cost -- so the before/after table in the perf specs is reproducible
+ * from the dashboard rather than only from a harness.
+ *
+ * Tolerant of a server that does not send the key: an older server, or one
+ * whose monitor never armed, leaves the card saying nothing has finished,
+ * which is true.
+ */
+async function loadLoopLag() {
+  const readout = byId("loopLagReadout");
+  if (!readout) return;
+  const health = await api("/admin/api/loop-health");
+  const gestures = Array.isArray(health.gestures) ? health.gestures : [];
+  if (!gestures.length) {
+    readout.textContent = "";
+    const empty = document.createElement("p");
+    empty.className = "calc-caveat";
+    empty.textContent = "No gesture has finished in this server yet.";
+    readout.appendChild(empty);
+    return;
+  }
+  const busyMs = Number(health.busy_lag_ms) || 0;
+  const table = document.createElement("table");
+  table.className = "calc-table";
+  table.id = "loopLagTable";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  ["Gesture", "Max loop lag", "Took"].forEach((label) => {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    headRow.appendChild(cell);
+  });
+  head.appendChild(headRow);
+  table.appendChild(head);
+  const body = document.createElement("tbody");
+  gestures.forEach((gesture) => {
+    const row = document.createElement("tr");
+    const lag = Number(gesture.max_lag_ms) || 0;
+    if (busyMs > 0 && lag >= busyMs) row.classList.add("calc-over-budget");
+    const reason = document.createElement("td");
+    reason.textContent = String(gesture.reason || "a long operation");
+    const lagCell = document.createElement("td");
+    lagCell.textContent = `${lag} ms`;
+    lagCell.dataset.maxLagMs = String(lag);
+    const took = document.createElement("td");
+    took.textContent = `${Number(gesture.duration_ms) || 0} ms`;
+    row.append(reason, lagCell, took);
+    body.appendChild(row);
+  });
+  table.appendChild(body);
+  readout.textContent = "";
+  readout.appendChild(table);
 }
 
 function prefersReducedMotion() {
