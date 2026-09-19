@@ -49,6 +49,20 @@ uv run pytest -v --tb=short
 
 GitHub CI runs Ruff in check-only mode and also bans `# type: ignore`, `# ty: ignore`, and legacy annotation workarounds. Fix underlying typing and import-boundary problems instead of suppressing them.
 
+### The dashboard's jsdom suite
+
+`tests/api/test_admin_static_jsdom.py` is the only test that executes the dashboard's `admin.js`. It runs the real script in [jsdom](https://github.com/jsdom/jsdom) through a `node` subprocess, so it needs Node and jsdom installed — otherwise it skips itself, and a skipped suite proves nothing about the page.
+
+```bash
+npm ci --prefix tests            # installs the pinned jsdom from tests/package-lock.json
+uv run pytest tests/api/test_admin_static_jsdom.py -n 0
+```
+
+- Run the file **alone** and with `-n 0`. Every test in it reads one of two module-scoped harness runs; xdist would build a copy of the fixture per worker, and concurrent jsdom runs starve each other of CPU, miss their own debounce windows and report the half-rendered page as hundreds of script errors. The harness takes a lock (`tests/api/.admin_jsdom.lock`) and a second concurrent run against the same tree refuses rather than producing nonsense.
+- One harness run is about a minute on a CI runner and three to four on a loaded laptop. The subprocess bound is `MCC_JSDOM_TIMEOUT_SECONDS` (default 900); the payload reports `harnessWallMs` so the bound can be argued from measurement.
+- `npm install` is fine locally, but `tests/package-lock.json` is the pin CI installs from — change the version in `tests/package.json` and regenerate the lockfile together.
+- CI runs this in its own `jsdom` job, with `MCC_CI=1` so a missing `node` or a missing jsdom **fails** instead of skipping. The ordinary `pytest` job excludes the file for exactly that reason.
+
 ## Project Standards
 
 - Target Python 3.14 and rely on native lazy annotations; do not add `from __future__ import annotations`.

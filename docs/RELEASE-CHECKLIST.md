@@ -288,6 +288,7 @@ when that vendor changes its UI, not when MCC does.
 - [ ] `uv run pytest tests/test_brand_contract.py` passes (rebrand + kept contracts)
 - [ ] `uv run ruff format --check && uv run ruff check && uv run ty check`
 - [ ] `uv run pytest` green
+- [ ] The dashboard's JavaScript actually ran: `npm ci --prefix tests && uv run pytest tests/api/test_admin_static_jsdom.py -n 0` reports **0 skipped**. Without jsdom installed this file skips every test and says nothing about `admin.js` — which is how 7.16.1 shipped a page that lied to the server. CI's `jsdom` job runs the same thing with `MCC_CI=1`, where a skip is a failure.
 - [ ] Both remotes mirrored, tags pushed
 - [ ] Wheel contains `my_claude_code/` and NOT `free_claude_code/` (removed in 7.0.0)
 - [ ] Dashboard screenshots refreshed from a scratch `mcc-server` (§4), written to **both** image directories, and scanned for `sk-`

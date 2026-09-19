@@ -9,16 +9,79 @@
  *
  * Usage: node admin_jsdom_harness.mjs <admin_static_dir>
  * Prints one JSON object on stdout.
+ *
+ * ONE AT A TIME. Two of these running against the same tree produced roughly
+ * three hundred spurious "script error" lines: they share the page's
+ * localStorage shim only by accident, but they do share the machine, and a
+ * run starved of CPU misses its own debounce windows -- every timing-sensitive
+ * capture then reads a page that has not caught up yet, and reports it as a
+ * failure of the page. So the second run refuses instead of producing
+ * nonsense. Set MCC_JSDOM_ALLOW_CONCURRENT=1 if you genuinely want both.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { JSDOM, VirtualConsole } from "jsdom";
+
+const startedAt = Date.now();
 
 const dir = process.argv[2];
 if (!dir) {
   console.error("usage: admin_jsdom_harness.mjs <admin_static_dir>");
   process.exit(2);
 }
+
+/* ------------------------------------------------------------------- lock */
+const LOCK_PATH = fileURLToPath(new URL("./.admin_jsdom.lock", import.meta.url));
+// A lock older than this belonged to a run that was killed (Ctrl-C, a pytest
+// timeout, a reboot). Nothing is served by making the next run fail too.
+const LOCK_STALE_MS = Number(process.env.MCC_JSDOM_LOCK_STALE_MS || 1_800_000);
+let lockHeld = false;
+
+if (process.env.MCC_JSDOM_ALLOW_CONCURRENT !== "1") {
+  for (let attempt = 0; attempt < 2 && !lockHeld; attempt += 1) {
+    try {
+      writeFileSync(LOCK_PATH, `${process.pid} ${new Date().toISOString()}\n`, {
+        flag: "wx",
+      });
+      lockHeld = true;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let ageMs = LOCK_STALE_MS + 1;
+      try {
+        ageMs = Date.now() - statSync(LOCK_PATH).mtimeMs;
+      } catch {
+        /* vanished between the failed create and the stat: try again */
+        ageMs = LOCK_STALE_MS + 1;
+      }
+      if (ageMs > LOCK_STALE_MS) {
+        try {
+          unlinkSync(LOCK_PATH);
+        } catch {
+          /* someone else cleared it first, which is the same outcome */
+        }
+        continue;
+      }
+      console.error(
+        "another jsdom harness run is already holding " +
+          LOCK_PATH +
+          ". Two concurrent runs report each other's missed debounce windows " +
+          "as page failures, so this one refuses. Wait for it, or set " +
+          "MCC_JSDOM_ALLOW_CONCURRENT=1.",
+      );
+      process.exit(3);
+    }
+  }
+}
+
+process.on("exit", () => {
+  if (!lockHeld) return;
+  try {
+    unlinkSync(LOCK_PATH);
+  } catch {
+    /* nothing left to release */
+  }
+});
 
 const html = readFileSync(join(dir, "index.html"), "utf8");
 const script = readFileSync(join(dir, "admin.js"), "utf8");
@@ -353,6 +416,29 @@ const FIELDS = [
     ],
     description: "How far a fetch sweep's test of one address goes.",
   },
+  // Server responsiveness. Two fields, one of them advanced, exactly as the
+  // manifest declares them: the Limits rail links to `#section-loop_health`
+  // in static markup, so a fixture that omits the section renders a card that
+  // is not there and leaves the rail pointing at nothing.
+  {
+    key: "HEALTH_BUSY_LAG_MS",
+    label: "Busy threshold",
+    section: "loop_health",
+    type: "number",
+    value: "500",
+    default: "500",
+    description: "How late the loop has to be before /health says it is busy.",
+  },
+  {
+    key: "HEALTH_HEARTBEAT_INTERVAL_MS",
+    label: "Loop check interval",
+    section: "loop_health",
+    type: "number",
+    value: "100",
+    default: "100",
+    advanced: true,
+    description: "How often the server measures its own event-loop lag.",
+  },
 ];
 
 const SECTIONS = [
@@ -371,6 +457,11 @@ const SECTIONS = [
     id: "credential_health",
     label: "Credential health",
     description: "What a key's failures cost it.",
+  },
+  {
+    id: "loop_health",
+    label: "Server responsiveness",
+    description: "How the server measures whether it is keeping up.",
   },
   { id: "request_log", label: "Request log storage", description: "What the log keeps." },
   { id: "diagnostics", label: "Diagnostics", description: "Logging flags." },
@@ -5489,6 +5580,21 @@ const harnessAttr = {};
   harnessAttr.detailHasMeta = metaText().includes("Harness");
 
   // --- the breakdown panel, one row per by_harness entry, named
+  //
+  // The analytics block above left "boom" in the free-text box, and a
+  // free-text search is the one filter the page deliberately answers from
+  // `reqPlaceholderStats()` while the real figures are counted off the wait.
+  // Reading the panel in that state measures the deferral, not the panel, so
+  // the filter is cleared first and the debounced reload is waited out.
+  {
+    const search = doc.getElementById("reqFilterSearch");
+    if (search && search.value) {
+      doc.getElementById("reqClearFilters").dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    }
+  }
   harnessAttr.breakdown = Array.from(
     doc.querySelectorAll("#reqHarnessBreakdown tbody tr"),
   ).map((tr) => Array.from(tr.children).map((td) => td.textContent));
@@ -7174,6 +7280,10 @@ console.log(
   JSON.stringify(
     {
       fatal: null,
+      // What this run actually cost, so the subprocess bound in
+      // test_admin_static_jsdom.py can be tuned from evidence rather than
+      // from whichever machine last timed out.
+      harnessWallMs: Date.now() - startedAt,
       advancedFields,
       latencyViews,
       catalogueReadout,
