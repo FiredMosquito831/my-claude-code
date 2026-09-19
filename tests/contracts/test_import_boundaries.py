@@ -103,6 +103,32 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.oauth_account_store",
+    ): (
+        "Owner: admin dashboard multi-account OAuth card. "
+        "Reason: the card records which file an imported account came from, "
+        "and the origin constants belong to the store that persists them."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.oauth_names",
+    ): (
+        "Owner: admin dashboard multi-account OAuth card. "
+        "Reason: an account row shows the operator's name for that account, "
+        "resolved through the same naming store every other credential uses."
+    ),
+    (
+        "my_claude_code.api.credential_display",
+        "my_claude_code.providers.runtime.factory",
+    ): (
+        "Owner: the one credential-name resolver. "
+        "Reason: an OAuth pool's members are accounts in a store file rather "
+        "than keys in an env var, and the factory is what enumerates them -- "
+        "the same list the pool itself is built from, so a name and a slot "
+        "can never disagree about which accounts exist."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
         "my_claude_code.providers.anthropic_oauth.constants",
     ): (
         "Owner: admin dashboard Anthropic subscription card. "

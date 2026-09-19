@@ -152,6 +152,14 @@ class ProviderConfig:
     # when there are two or more rungs to move between; one rung is simply
     # ``proxy``, and zero is no chain at all.
     proxy_chain: ProxyChainPlan | None = None
+    # Which OAuth account this instance serves. Empty -- the default, and the
+    # value every non-OAuth provider will ever have -- means "whichever the
+    # store calls primary", which is exactly the behaviour that shipped.
+    # An OAuth provider with two or more accounts fans out one leaf per
+    # account, and this is the only thing that distinguishes them: their
+    # "credential" is a rotating token, so unlike an API-key pool there is no
+    # secret to put in ``api_key`` that would still be true after a refresh.
+    oauth_account_id: str = ""
 
     def rate_limit_cooldown(self) -> RateLimitCooldown:
         """The operator's whole 429 policy, as one value to hand around.

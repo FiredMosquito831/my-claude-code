@@ -25,6 +25,8 @@ from typing import Any
 
 import httpx
 
+from my_claude_code.providers.oauth_account_store import ORIGIN_MCC
+
 from .constants import (
     AUTHORIZE_URL,
     CLAUDE_CODE_CLIENT_ID,
@@ -35,9 +37,10 @@ from .constants import (
     TOKEN_URL,
 )
 from .credentials import (
+    AccountRecord,
     OAuthTokens,
     _tokens_from_payload,
-    store_tokens,
+    add_or_update_account,
     token_endpoint_headers,
 )
 
@@ -196,7 +199,32 @@ async def exchange_code(
     *,
     redirect_uri: str | None = None,
 ) -> OAuthTokens:
-    """Exchange an authorization code for a credential and store it."""
+    """Exchange an authorization code for a credential and store it.
+
+    The credential returned; the account it was stored as is available from
+    :func:`exchange_code_for_account`, which this is a thin wrapper over.
+    """
+    _, tokens = await exchange_code_for_account(
+        code, verifier, state, redirect_uri=redirect_uri
+    )
+    return tokens
+
+
+async def exchange_code_for_account(
+    code: str,
+    verifier: str,
+    state: str | None = None,
+    *,
+    redirect_uri: str | None = None,
+) -> tuple[AccountRecord, OAuthTokens]:
+    """Exchange an authorization code and **add** the account it names.
+
+    Adds. A second sign-in of a *different* account appends a second record;
+    signing the *same* account in again updates it in place and keeps its
+    name, origin and ``addedAt``. Before 7.30.0 this replaced whatever was
+    stored, which is precisely the behaviour that made a second Claude account
+    impossible.
+    """
     payload = _exchange_payload(code, verifier, state, redirect_uri)
     headers = token_endpoint_headers()
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -218,5 +246,5 @@ async def exchange_code(
     tokens = _tokens_from_payload(response.json(), source="mcc")
     if tokens is None:
         raise AnthropicOAuthLoginError(200, "response carried no access token")
-    store_tokens(tokens)
-    return tokens
+    record = add_or_update_account(tokens, origin=ORIGIN_MCC)
+    return record, tokens

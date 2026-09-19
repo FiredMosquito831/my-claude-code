@@ -17,11 +17,18 @@ import contextlib
 import sys
 import webbrowser
 from collections.abc import Sequence
+from datetime import UTC, datetime
+
+from my_claude_code.providers.oauth_names import account_name
 
 from .credentials import (
+    PROVIDER_ID,
+    AccountRecord,
     claude_credentials_path,
     detect_available_sources,
+    load_accounts,
     managed_store_path,
+    remove_account,
 )
 from .loopback import (
     AnthropicOAuthLoopbackUnavailableError,
@@ -42,10 +49,20 @@ _USAGE = """\
 mcc-anthropic-oauth-login -- sign in to a Claude subscription for My Claude Code
 
 Usage:
-  mcc-anthropic-oauth-login [--paste] [--no-browser]
+  mcc-anthropic-oauth-login [--add] [--paste] [--no-browser]
+  mcc-anthropic-oauth-login --list
+  mcc-anthropic-oauth-login --remove <account id>
   mcc-anthropic-oauth-login --help | --version
 
 Options:
+  --add          Add another account rather than replacing one. This is the
+                 default once any account is stored: signing the SAME account
+                 in again updates it in place, and a different one is added
+                 beside it.
+  --list         List the stored accounts -- id, name, plan, expiry, origin.
+                 Never prints a token.
+  --remove <id>  Disconnect one account. Its credential is kept in a
+                 '.dead-<epoch>' file rather than deleted.
   --paste        Skip the local callback server and paste the code by hand.
                  Use this when the browser cannot reach this machine's
                  localhost -- WSL, SSH, a container, a remote desktop.
@@ -112,9 +129,51 @@ def _describe_existing() -> None:
             "Signing in here stores a separate credential MCC owns and can\n"
             "refresh without disturbing your Claude Code login.\n"
         )
-    if sources["mcc"]:
-        print(f"An MCC credential already exists at {managed_store_path()}.")
-        print("Continuing will replace it.\n")
+    records = load_accounts(migrate=False)
+    if records:
+        print(f"{len(records)} account(s) already stored at {managed_store_path()}:")
+        for record in records:
+            print(f"  {_account_line(record)}")
+        print(
+            "Continuing ADDS another account. Signing the same account in\n"
+            "again updates that account in place and keeps its name.\n"
+        )
+    elif sources["mcc"]:
+        print(f"An MCC credential already exists at {managed_store_path()}.\n")
+
+
+def _account_line(record: AccountRecord) -> str:
+    """One account, as one line. Never a token, never a bare email field."""
+    name = account_name(PROVIDER_ID, record.id) or "(unnamed)"
+    plan = record.tokens.subscription_type or "unknown plan"
+    expiry = (
+        datetime.fromtimestamp(record.tokens.expires_at, UTC).isoformat(
+            timespec="seconds"
+        )
+        if record.tokens.expires_at
+        else "no stated expiry"
+    )
+    return f"{record.id}  {name}  [{plan}]  expires {expiry}  origin={record.origin}"
+
+
+def _list_accounts() -> None:
+    records = load_accounts(migrate=False)
+    if not records:
+        print("No Claude subscription accounts are stored.")
+        return
+    for record in records:
+        print(_account_line(record))
+
+
+def _remove_account(account_id: str) -> None:
+    removed = remove_account(account_id)
+    if removed is None:
+        _report(f"No stored Claude account {account_id}.")
+        raise SystemExit(1)
+    print(
+        f"Disconnected {account_id}. Its credential was kept in a "
+        "'.dead-' file rather than deleted."
+    )
 
 
 def _run_paste_flow(*, open_browser: bool) -> str | None:
@@ -183,11 +242,22 @@ def anthropic_oauth_login_command(argv: Sequence[str] | None = None) -> None:
         _print_usage()
         return
 
-    unknown = [
-        arg
-        for arg in args
-        if arg not in {"--paste", "--no-browser", "--version"} and arg.startswith("-")
-    ]
+    if "--list" in args:
+        # Also before the consent notice: listing what is already stored asks
+        # nothing of Anthropic and must work under a non-tty.
+        _list_accounts()
+        return
+
+    if "--remove" in args:
+        index = args.index("--remove")
+        if index + 1 >= len(args):
+            _report("--remove needs an account id. Try --list.")
+            raise SystemExit(1)
+        _remove_account(args[index + 1])
+        return
+
+    known = {"--paste", "--no-browser", "--version", "--add", "--list", "--remove"}
+    unknown = [arg for arg in args if arg not in known and arg.startswith("-")]
     if unknown:
         _report(f"Unknown option: {unknown[0]}. Try --help.")
         raise SystemExit(1)
@@ -231,7 +301,7 @@ def anthropic_oauth_login_command(argv: Sequence[str] | None = None) -> None:
     if subscription is None:
         return
 
-    print(f"\nSigned in. Credential stored at {managed_store_path()} (mode 0600).")
+    print(f"\nSigned in. The account was stored at {managed_store_path()} (0600).")
     if subscription:
         print(f"Subscription: {subscription}")
     print(

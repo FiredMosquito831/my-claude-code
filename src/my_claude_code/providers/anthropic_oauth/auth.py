@@ -70,6 +70,7 @@ from my_claude_code.core.client_fingerprint import (
     current_fingerprint,
 )
 from my_claude_code.providers.anthropic_messages import ANTHROPIC_API_VERSION
+from my_claude_code.providers.oauth_names import account_name
 
 from .betas import merge_betas
 from .constants import (
@@ -78,8 +79,11 @@ from .constants import (
     CLAUDE_CODE_USER_AGENT,
 )
 from .credentials import (
+    PROVIDER_ID,
+    AnthropicOAuthUnavailableError,
     OAuthTokens,
     load_tokens,
+    load_tokens_for,
     managed_store_path,
     refresh_tokens,
 )
@@ -117,7 +121,13 @@ class AnthropicOAuthAuth:
     rather than two that clobber each other.
     """
 
-    def __init__(self, tokens: OAuthTokens | None = None) -> None:
+    def __init__(
+        self, tokens: OAuthTokens | None = None, *, account_id: str = ""
+    ) -> None:
+        # One instance per **account** since 7.30.0. The stamp, the background
+        # task and the cached credential are all per account, so two accounts
+        # neither share a refresh nor invalidate each other's cache.
+        self._account_id = account_id
         self._tokens = tokens
         self._lock = asyncio.Lock()
         self._background: asyncio.Task[None] | None = None
@@ -139,7 +149,7 @@ class AnthropicOAuthAuth:
                 # Re-resolve rather than merely re-read: the managed store may
                 # have appeared, changed, or been quarantined since last time,
                 # and any of those can change *which source* wins.
-                self._tokens = load_tokens()
+                self._tokens = self._resolve()
                 self._stamp = stamp
                 self._stamp_read = True
             tokens = self._tokens
@@ -159,7 +169,7 @@ class AnthropicOAuthAuth:
         """
         async with self._lock:
             if self._tokens is None:
-                self._tokens = load_tokens()
+                self._tokens = self._resolve()
                 self._stamp = _store_stamp()
                 self._stamp_read = True
             tokens = self._tokens
@@ -171,8 +181,28 @@ class AnthropicOAuthAuth:
             logger.warning("Claude subscription refresh after a 401 failed: {}", error)
             return None
 
+    def _resolve(self) -> OAuthTokens:
+        """This instance's credential: its own account's, or the primary.
+
+        With no account id -- a single-account install, which is every install
+        that has not signed a second account in -- this is exactly
+        :func:`load_tokens`, viability fallback and all. With one, it is that
+        account's credential and nothing else: falling back to another
+        account's token would serve a request on a credential the pool did not
+        choose, and charge the failure to the wrong slot.
+        """
+        if not self._account_id:
+            return load_tokens()
+        tokens = load_tokens_for(self._account_id)
+        if tokens is None:
+            raise AnthropicOAuthUnavailableError(
+                f"The Claude subscription account {self._account_id} is no "
+                "longer stored. Sign in again from the dashboard."
+            )
+        return tokens
+
     async def _refresh_now(self, tokens: OAuthTokens) -> OAuthTokens:
-        refreshed = await refresh_tokens(tokens)
+        refreshed = await refresh_tokens(tokens, account_id=self._account_id)
         async with self._lock:
             self._tokens = refreshed
             # ``refresh_tokens`` just wrote the store, so adopt the stamp it
@@ -246,16 +276,22 @@ class AnthropicOAuthAuth:
         }
 
     def label(self) -> str | None:
-        """A log label for this credential: the plan and where it came from.
+        """A log label for this credential: its name, else plan and origin.
 
-        Never the token, never an email. ``subscription_type`` and ``source``
-        are both already on the credential and neither is a secret, while the
-        masked reference string every OAuth request-log row used to carry
-        ("fcc-...auth") said nothing about anything.
+        Never the token. Never an email **that the operator did not choose as
+        a name**: a default name seeded from the account's email is a name
+        like any other and the operator can clear or change it, but nothing
+        here ever reaches for the email field itself. With no name stored this
+        returns exactly what it returned before 7.30.0 -- ``plan · source`` --
+        so an unnamed account looks the way it always has.
         """
         tokens = self._tokens
         if tokens is None:
             return None
+        if self._account_id:
+            name = account_name(PROVIDER_ID, self._account_id)
+            if name:
+                return name
         plan = tokens.subscription_type or "unknown-plan"
         return f"{plan} · {tokens.source}"
 

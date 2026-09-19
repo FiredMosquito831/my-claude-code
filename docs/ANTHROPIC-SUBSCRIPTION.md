@@ -233,10 +233,39 @@ The dashboard offers the same two flows behind **Sign in with Anthropic**: it
 tries the loopback transport, and falls back to a paste field if the browser
 and MCC do not share a `localhost`.
 
+### Several accounts, each its own pool slot
+
+Since **7.30.0** MCC stores **N Claude accounts**, not one. Signing in while an
+account is already stored **adds** another; signing the *same* account in again
+updates it in place and keeps the name you gave it. Each account is a slot in
+the ordinary credential pool, so `ANTHROPIC_OAUTH_ACCESS_TOKEN_ROTATION`, the
+401/403 lockout ladder, the 429 bench and the (key, model) bench all apply per
+account — through the same rotation engine every API-key pool uses, which
+learned nothing about accounts to make this work.
+
+Each account carries a **name**. It defaults to the account's email address,
+which arrives on the token response itself at no extra upstream cost (MCC still
+never fetches the profile), or, for an account imported from Claude Code, from
+the `oauthAccount` block of `~/.claude.json`, read once and read-only. You can
+change or clear it on the card; a name you chose is never overwritten by a
+default. The name is what the card row, the request log and all three exports
+show, exactly as a named API key's is.
+
+On the command line:
+
+```
+mcc-anthropic-oauth-login            # adds an account
+mcc-anthropic-oauth-login --list     # id, name, plan, expiry, origin; never a token
+mcc-anthropic-oauth-login --remove <account id>
+```
+
+With **one** account stored, everything below behaves exactly as it did before
+7.30.0.
+
 ### Which credential MCC uses, and when it changes its mind
 
-MCC can see up to two credentials, and picks between them **on viability, not
-on existence**:
+With one account, MCC can see up to two credentials, and picks between them
+**on viability, not on existence**:
 
 1. **MCC's own store** (`~/.mcc/anthropic_oauth.json`; an install that has not yet been migrated has it under `~/.fcc/anthropic_oauth.json`
    on a legacy install that has not run `mcc-migrate`) — preferred *while it is
@@ -292,17 +321,64 @@ and you think that was wrong, the file is still there.
 
 ### The Refresh now and Disconnect buttons
 
-The dashboard's Anthropic card has two controls, both local-only:
+The dashboard's Anthropic card shows **one row per account**, with the name,
+the plan, the access-token expiry, the refresh-token expiry and that account's
+own rate-limit windows. Each row has two controls, both local-only:
 
-- **Refresh now** renews MCC's stored credential immediately and reports the
-  new expiry. If Anthropic is rate-limiting, it says so and leaves the
+- **Refresh now** renews **that account's** credential immediately and reports
+  the new expiry. If Anthropic is rate-limiting, it says so and leaves the
   credential alone; it does not tell you to sign in again.
-- **Disconnect** sets MCC's own store aside as
-  `anthropic_oauth.json.dead-<epoch>`. Your Claude Code login is untouched, so
-  if that credential is healthy MCC simply falls back to it. Nothing needs
-  restarting.
+- **Disconnect** removes **that account** and writes its record aside as
+  `anthropic_oauth.json.dead-<epoch>`. The other accounts keep serving. Your
+  Claude Code login is untouched, so if that credential is healthy MCC simply
+  falls back to it once the last account is gone. Nothing needs restarting.
 
-Neither button can renew or remove Claude Code's own file.
+Neither button can renew or remove Claude Code's own file — except through
+write-back, below, which is explicitly opt-out and never rotates a token away.
+
+### Writing a refreshed token back to Claude Code
+
+When MCC refreshes an account it **imported** from Claude Code, it writes the
+new token back into `~/.claude/.credentials.json` by default, so your real
+Claude Code session keeps working instead of finding its refresh token rotated
+away. This is `ANTHROPIC_OAUTH_WRITE_BACK` on the dashboard; set it to `false`
+to keep every refresh to MCC alone.
+
+It applies **only** to an imported account. An account MCC signed in itself has
+no source file to own, and MCC never claims one.
+
+How it is done safely:
+
+- **The lock.** Claude Code takes a `proper-lockfile` write lock on
+  `~/.claude/.storage-write` around its own credential writes (retries 10,
+  100–1000 ms backoff, 15 s stale). MCC takes the same lock, with the same
+  parameters, before it touches the file. A lock MCC cannot acquire inside that
+  budget is a **skipped write**, never a forced one. A lock older than the
+  stale window is broken — its owner's own rule.
+- **The monotonicity guard.** Inside that lock the target is re-read
+  immediately before the write. If its stored expiry is **greater than or equal
+  to** ours, the write is skipped: your real client refreshed more recently and
+  its token is the live one. Ties break on the refresh token's expiry. MCC can
+  never write an older token over a newer one.
+- **Only `claudeAiOauth` is replaced.** Every other key in that file is
+  preserved byte-for-byte, including the `mcpOAuth` block that holds your MCP
+  server logins. The file is backed up once, to
+  `.credentials.json.bak-<epoch>`, before the first write.
+- **Claude Code picks it up while running.** It revalidates its cached
+  credential against the file's mtime on access, so a token MCC writes is
+  honoured by a session already open — not just the next launch.
+
+**macOS is a no-op.** Claude Code there keeps the credential in the login
+keychain, not in that file, and a Windows install using the `windows-credman`
+backend is the same. MCC detects this by the file simply not being there, does
+nothing, and the card says so rather than reporting a success that did not
+happen.
+
+The Codex side (`CHATGPT_OAUTH_WRITE_BACK`) works the same way with one
+difference: Codex publishes no filesystem lock on its `auth.json`, so the
+monotonicity guard is the entire protection there. MCC leaves the `account_id`
+in that file exactly as found, so Codex's own account-id-guarded reload still
+matches.
 
 ### Changes take effect without a restart
 
@@ -347,11 +423,28 @@ that is expected rather than a bug. Sign in directly instead.
 - The access token is refreshed **before** it expires, in the background, so a
   request in flight goes out on the credential it already has. Only a genuinely
   expired token makes a request wait. A 401 refreshes once and retries once.
-- Refresh is single-flight per credential *file*, so a second MCC process or a
-  hot-reloaded provider cannot spend the refresh token twice.
-- The request log's `key_label` for this provider is the plan and the
-  credential's origin — `max · mcc`, `max · claude-code`. No email: MCC never
-  fetches the profile.
+- Refresh is single-flight per **(credential file, account id)**, so a second
+  MCC process or a hot-reloaded provider cannot spend one account's refresh
+  token twice, and two accounts never wait on each other.
+- The store holds an `accounts` list, and **mirrors the first account to the
+  seven legacy top-level keys** on every save. That is the whole downgrade
+  story, and it is **read-safe, not write-safe**: a 7.29.x build still finds
+  and serves the primary account, but the first write *it* performs replaces
+  the whole document and drops the rest. A `.bak-<epoch>` copy is taken once,
+  before the first migration, and is the recovery path. A single-account
+  document is migrated to a list on first read, once; the second read writes
+  nothing.
+- **MCC now stores your email address** on disk, in
+  `~/.mcc/anthropic_oauth.json` at mode `0600` beside the token, and as a
+  *name* in `credential_names.json` at default permissions. It arrives on the
+  token response — MCC still never fetches the profile — and it is used to
+  default the account's name. It appears on the dashboard card, so it will be
+  in any screenshot of it. Clear the name if you would rather it were not.
+- The request log's `key_label` for this provider is the account's **name**,
+  falling back to the plan and the credential's origin — `max · mcc`,
+  `max · claude-code` — for an account you have not named. Nothing there ever
+  reaches for the email field itself; a default name seeded from it is a name
+  like any other, and you can change or clear it.
 - A credential that is set aside — by a definitive rejection or by
   **Disconnect** — is renamed to `anthropic_oauth.json.dead-<epoch>` in the
   same directory. It is never deleted. Remove them yourself once you are

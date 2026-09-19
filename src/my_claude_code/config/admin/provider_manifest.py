@@ -709,9 +709,55 @@ def _chatgpt_oauth_account_field_specs() -> tuple[dict[str, Any], ...]:
             "provider": "chatgpt_oauth",
             "settings_attr": "chatgpt_oauth_account_id",
             "description": (
-                "Experimental/unsanctioned: ChatGPT account ID used for the "
-                "ChatGPT-Account-ID header. Leave empty when using MCC-managed "
-                "OAuth credentials so it is resolved from the current token."
+                "Deprecated since 7.30.0: with several ChatGPT accounts "
+                "stored, this pins the ChatGPT-Account-ID header of the FIRST "
+                "account only, and every other account sends its own. Leave "
+                "it empty -- the id is resolved from each account's own "
+                "token. It is kept because removing it would break anyone "
+                "relying on it today."
+            ),
+        },
+        {
+            "key": "CHATGPT_OAUTH_WRITE_BACK",
+            "label": "Write Refreshed ChatGPT Tokens Back to Codex",
+            "section_id": "providers",
+            "provider": "chatgpt_oauth",
+            "field_type": "boolean",
+            "default": "true",
+            "settings_attr": "chatgpt_oauth_write_back",
+            "description": (
+                "When MCC refreshes an account it IMPORTED from Codex, write "
+                "the new token back into that Codex auth.json so your real "
+                "Codex CLI keeps working instead of finding its refresh token "
+                "rotated away. Never applies to an account MCC signed in "
+                "itself -- that one has no source file. The target is re-read "
+                "immediately before the write and the write is skipped when "
+                "it already holds a token at least as new, so MCC can never "
+                "put an older token over a newer one. Codex publishes no lock "
+                "on that file, so that guard is the whole protection. Turn "
+                "this off to keep every refresh to MCC alone."
+            ),
+        },
+        {
+            "key": "ANTHROPIC_OAUTH_WRITE_BACK",
+            "label": "Write Refreshed Claude Tokens Back to Claude Code",
+            "section_id": "providers",
+            "provider": "anthropic_oauth",
+            "field_type": "boolean",
+            "default": "true",
+            "settings_attr": "anthropic_oauth_write_back",
+            "description": (
+                "When MCC refreshes an account it IMPORTED from Claude Code, "
+                "write the new token back into ~/.claude/.credentials.json so "
+                "your real Claude Code session keeps working. MCC takes Claude "
+                "Code's own .storage-write lock first and skips the write "
+                "rather than forcing it if it cannot; it re-reads the file "
+                "inside that lock and skips again if it already holds a token "
+                "at least as new. Only claudeAiOauth is replaced -- every "
+                "other key, mcpOAuth included, is preserved. No effect on "
+                "macOS or on a windows-credman install, where Claude Code "
+                "keeps the credential outside that file and there is nothing "
+                "to write. Never applies to an account MCC signed in itself."
             ),
         },
     )
@@ -760,8 +806,12 @@ def _anthropic_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
                 "Anthropic does not permit this: read "
                 "docs/ANTHROPIC-SUBSCRIPTION.md before using either option. "
                 "Import the credential Claude Code already has, or sign in "
-                "directly; either way MCC stores its own renewable copy and "
-                "never writes back to Claude Code's credential file."
+                "directly; either way MCC stores its own renewable copy. Sign "
+                "in again to ADD a second account -- each one is its own pool "
+                "slot with its own name, expiry and controls. A refresh of an "
+                "IMPORTED account is written back to the file it came from "
+                "(see the write-back setting above); an account MCC signed in "
+                "itself has no source file and none is ever written."
             ),
         },
         {

@@ -76,10 +76,13 @@ ALLOWED_FILES: dict[str, str] = {
     "src/my_claude_code/api/admin_static/admin.js": (
         "the config-home banner and the .fcc-backup notice on Coding agents"
     ),
-    "src/my_claude_code/providers/anthropic_oauth/auth.py": (
+    # ``anthropic_oauth/auth.py`` was on this list for naming the old
+    # "fcc-...auth" placeholder in a docstring. 7.30.0 rewrote that docstring
+    # -- the label is the account's name now -- so the entry is gone rather
+    # than left behind as a licence nobody revoked.
+    "src/my_claude_code/providers/anthropic_oauth/provider.py": (
         'names the old "fcc-...auth" placeholder the UI used to show'
     ),
-    "src/my_claude_code/providers/anthropic_oauth/provider.py": "same",
     "src/my_claude_code/providers/chatgpt_oauth/provider.py": (
         'compares against the stored "fcc-managed" source name'
     ),

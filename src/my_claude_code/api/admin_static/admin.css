@@ -7526,6 +7526,41 @@ details.turn-pane > summary:focus-visible {
   color: var(--error);
 }
 
+/* One account per row, with its own Refresh now and Disconnect. The heading
+   is what tells two subscriptions apart at a glance, so it carries the name
+   and the controls and the facts sit under it. */
+.oauth-account-row {
+  border-top: 1px solid var(--border, #333);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+.oauth-account-row:first-child {
+  border-top: 0;
+  margin-top: 0;
+}
+
+.oauth-account-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.oauth-account-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The per-row controls. They share the secondary-button look and only need
+   to stop growing to the full row width beside the name. */
+.oauth-account-refresh,
+.oauth-account-disconnect {
+  flex: 0 0 auto;
+}
+
 .anthropic-oauth-paste {
   display: flex;
   flex-wrap: wrap;

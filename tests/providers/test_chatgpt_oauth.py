@@ -995,15 +995,17 @@ async def test_stream_response_refreshes_managed_credentials_once_after_401(
         refresh_token="refresh_new",
         source_name="fcc-managed",
     )
-    refresh_calls: list[bool] = []
+    refresh_calls: list[str] = []
     monkeypatch.setattr(
         provider_module,
         "load_chatgpt_oauth_credentials",
         lambda **kwargs: rejected,
     )
 
-    def _refresh():
-        refresh_calls.append(True)
+    def _refresh(account_id=None):
+        # 7.30.0 threads the account id through, so the 401 path refreshes the
+        # account that served the request rather than whichever one is first.
+        refresh_calls.append(str(account_id))
         return refreshed
 
     monkeypatch.setattr(
@@ -1031,7 +1033,7 @@ async def test_stream_response_refreshes_managed_credentials_once_after_401(
     chunks = [chunk async for chunk in provider.stream_response(request)]
 
     assert any("text_delta" in chunk and "ok" in chunk for chunk in chunks)
-    assert refresh_calls == [True]
+    assert len(refresh_calls) == 1
     assert provider._send_stream_request.await_count == 2
     second_call = provider._send_stream_request.await_args_list[1]
     assert second_call.kwargs["headers"]["Authorization"] == "Bearer access_new"

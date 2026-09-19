@@ -86,14 +86,22 @@ class CodexResponseObserver:
     worse than no window.
     """
 
-    __slots__ = ("_latest",)
+    __slots__ = ("_by_account", "_latest")
 
     def __init__(self) -> None:
         self._latest: CodexResponseSnapshot | None = None
+        #: One snapshot per account since 7.30.0; see the Anthropic twin.
+        self._by_account: dict[str, CodexResponseSnapshot] = {}
 
     @property
     def latest(self) -> CodexResponseSnapshot | None:
         return self._latest
+
+    def latest_for(self, account_id: str) -> CodexResponseSnapshot | None:
+        """One account's most recent snapshot, or ``None``."""
+        if not account_id:
+            return self._latest
+        return self._by_account.get(account_id)
 
     def observe(
         self,
@@ -101,15 +109,19 @@ class CodexResponseObserver:
         *,
         status_code: int,
         now: float | None = None,
+        account_id: str = "",
     ) -> None:
         captured = capture_codex_response_headers(headers)
         if not captured:
             return
-        self._latest = CodexResponseSnapshot(
+        snapshot = CodexResponseSnapshot(
             observed_at=time.time() if now is None else now,
             status_code=status_code,
             values=captured,
         )
+        self._latest = snapshot
+        if account_id:
+            self._by_account[account_id] = snapshot
 
 
 # Process-wide, because the card is read by the admin API while the provider

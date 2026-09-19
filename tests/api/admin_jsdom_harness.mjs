@@ -6412,28 +6412,50 @@ const rtkToggles = rtkToggleContainer
 // a rate-limit header for. Both go through the same renderer.
 const anthropicOAuthCard = (() => {
   const render = (sources) => {
-    const list = doc.createElement("dl");
-    window.eval("renderAnthropicOAuthDetails")(list, sources);
+    const list = doc.createElement("div");
+    const buttons = [
+      doc.createElement("button"),
+      doc.createElement("button"),
+      doc.createElement("button"),
+      doc.createElement("button"),
+    ];
+    buttons.status = doc.createElement("div");
+    buttons.details = list;
+    window.eval("renderAnthropicOAuthDetails")(list, sources, buttons);
     return {
       hidden: list.hidden,
       text: (list.textContent || "").replace(/\s+/g, " ").trim(),
       expired: Array.from(list.querySelectorAll(".value-expired")).map((node) =>
         (node.textContent || "").trim(),
       ),
+      rows: Array.from(list.querySelectorAll(".oauth-account-row")).map((row) => ({
+        accountId: row.dataset.accountId,
+        name: (row.querySelector(".oauth-account-name")?.textContent || "").trim(),
+        refresh: (
+          row.querySelector(".oauth-account-refresh")?.textContent || ""
+        ).trim(),
+        disconnect: (
+          row.querySelector(".oauth-account-disconnect")?.textContent || ""
+        ).trim(),
+        text: (row.textContent || "").replace(/\s+/g, " ").trim(),
+      })),
+      loginLabel: buttons[1].textContent,
     };
   };
-  const live = render({
-    claude_code: { available: false },
-    mcc: {
-      available: true,
-      subscription_type: "max",
-      rate_limit_tier: "default_claude_max_5x",
-      source: "mcc",
-      expires_at: Math.round(Date.now() / 1000) + 3600,
-      refresh_token_expires_at: Math.round(Date.now() / 1000) + 259200,
-      scopes: ["user:inference", "user:profile"],
-      has_inference_scope: true,
-    },
+  const now = Math.round(Date.now() / 1000);
+  const liveAccount = {
+    available: true,
+    account_id: "uuid-one",
+    name: "first@example.test",
+    origin: "mcc",
+    ordinal: 1,
+    subscription_type: "max",
+    rate_limit_tier: "default_claude_max_5x",
+    source: "mcc",
+    expires_at: now + 3600,
+    refresh_token_expires_at: now + 259200,
+    scopes: ["user:inference", "user:profile"],
+    has_inference_scope: true,
     windows: {
       observed: true,
       status: "session-limit-reached",
@@ -6444,25 +6466,118 @@ const anthropicOAuthCard = (() => {
       overage_status: "rejected",
       reset: "not yet observed",
     },
+  };
+  const live = render({
+    claude_code: { available: false },
+    mcc: liveAccount,
+    accounts: [liveAccount],
+    windows: liveAccount.windows,
+  });
+  // Two accounts, each with its own name, its own origin and its own windows.
+  const twoAccounts = render({
+    claude_code: { available: false },
+    mcc: liveAccount,
+    accounts: [
+      liveAccount,
+      {
+        available: true,
+        account_id: "uuid-two",
+        name: "second@example.test",
+        origin: "claude-code",
+        origin_path: "C:/Users/someone/.claude/.credentials.json",
+        write_back_effective: true,
+        ordinal: 2,
+        subscription_type: "pro",
+        source: "mcc",
+        expires_at: now + 7200,
+        scopes: ["user:inference"],
+        has_inference_scope: true,
+        windows: { observed: false },
+      },
+    ],
+    windows: liveAccount.windows,
   });
   const unobserved = render({
     claude_code: { available: false },
-    mcc: {
-      available: true,
-      subscription_type: "max",
-      source: "mcc",
-      expires_at: Math.round(Date.now() / 1000) - 3600,
-      scopes: ["user:profile"],
-      has_inference_scope: false,
-    },
+    mcc: { available: false },
+    accounts: [
+      {
+        available: true,
+        account_id: "uuid-one",
+        name: "",
+        masked_token: "sk-a…z9",
+        origin: "mcc",
+        ordinal: 1,
+        subscription_type: "max",
+        source: "mcc",
+        expires_at: now - 3600,
+        scopes: ["user:profile"],
+        has_inference_scope: false,
+        windows: { observed: false },
+      },
+    ],
     windows: { observed: false },
   });
   const absent = render({
     claude_code: { available: false },
     mcc: { available: false },
+    accounts: [],
     windows: { observed: false },
   });
-  return { live, unobserved, absent };
+  return { live, twoAccounts, unobserved, absent };
+})();
+
+/* "Sign in" becomes "Sign in another account" the moment anything is stored.
+   That is the whole difference between "this will replace what I have" and
+   "this will give me a second account", so it is asserted from the real
+   refresher against the real payload rather than from the renderer alone. */
+const anthropicOAuthSignInLabel = await (async () => {
+  const read = async (accounts) => {
+    ROUTES["/admin/api/anthropic-oauth/sources"] = {
+      claude_code: { available: false },
+      mcc: accounts[0] || { available: false },
+      accounts,
+      windows: { observed: false },
+    };
+    const importButton = doc.createElement("button");
+    const loginButton = doc.createElement("button");
+    loginButton.textContent = "Sign in with Anthropic";
+    const status = doc.createElement("div");
+    const details = doc.createElement("div");
+    const buttons = [
+      importButton,
+      loginButton,
+      doc.createElement("button"),
+      doc.createElement("button"),
+    ];
+    buttons.status = status;
+    buttons.details = details;
+    await window.eval("refreshAnthropicOAuthSources")(
+      importButton,
+      status,
+      details,
+      buttons,
+    );
+    return {
+      label: loginButton.textContent,
+      status: (status.textContent || "").replace(/\s+/g, " ").trim(),
+      managedEnabled: !buttons[2].disabled,
+    };
+  };
+  const empty = await read([]);
+  const stored = await read([
+    {
+      available: true,
+      account_id: "uuid-one",
+      name: "first@example.test",
+      subscription_type: "max",
+      source: "mcc",
+      scopes: [],
+      windows: { observed: false },
+    },
+  ]);
+  delete ROUTES["/admin/api/anthropic-oauth/sources"];
+  return { empty, stored };
 })();
 
 /* --------------------------------------------------- the vision adapter mode
@@ -7118,6 +7233,7 @@ console.log(
       desktopApps,
       rtkToggles,
       anthropicOAuthCard,
+      anthropicOAuthSignInLabel,
       fetched: Array.from(new Set(fetchCalls)).sort(),
     },
     null,

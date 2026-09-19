@@ -46,6 +46,7 @@ import contextlib
 import json
 import os
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,26 @@ from loguru import logger
 
 from my_claude_code.config.paths import (
     anthropic_oauth_managed_store_path,
+)
+from my_claude_code.providers.oauth_account_store import (
+    ORIGIN_CLAUDE_CODE,
+    ORIGIN_CODEX,
+    ORIGIN_MCC,
+    STORAGE_WRITE_LOCK_NAME,
+    OAuthStorageLockUnavailable,
+    account_record_fields,
+    backup_once,
+    is_synthetic_account_id,
+    monotonic_write_allowed,
+    normalise_epoch_seconds,
+    now_iso,
+    storage_write_lock,
+    synthetic_account_id,
+)
+from my_claude_code.providers.oauth_names import (
+    forget_account_name,
+    move_name,
+    seed_default_name,
 )
 
 from .constants import (
@@ -68,6 +89,7 @@ from .constants import (
 
 CLAUDE_CREDENTIALS_DIRNAME = ".claude"
 CLAUDE_CREDENTIALS_FILENAME = ".credentials.json"
+CLAUDE_CONFIG_FILENAME = ".claude.json"
 CLAUDE_OAUTH_KEY = "claudeAiOauth"
 
 
@@ -238,6 +260,17 @@ class OAuthTokens:
     # again", and ``rateLimitTier`` is the plan detail the dashboard reports.
     refresh_token_expires_at: int | None = None
     rate_limit_tier: str | None = None
+    # The ``account`` object Anthropic's token response has always carried and
+    # every MCC release before 7.30.0 parsed away. Claude Code 2.1.278 maps it
+    # straight through (``formatTokens``, bundle offsets 214580619 and
+    # 198914238) and persists it to ``~/.claude.json`` ``oauthAccount``; it
+    # arrives on the exchange *and* on every refresh at **zero extra upstream
+    # cost**, which is the difference between "Claude account 2" and the user's
+    # real address. Optional, because ``formatTokens`` guards it with
+    # ``e.account?``: a refresh that omits it must never blank one we hold.
+    account_uuid: str | None = None
+    account_email: str | None = None
+    organization_name: str | None = None
     # Where this came from, for diagnostics. Never contains a secret.
     source: str = "unknown"
 
@@ -352,6 +385,40 @@ def _timestamp_seconds(payload: dict[str, Any], *keys: str) -> int | None:
     return None
 
 
+def _text(value: object) -> str | None:
+    """A non-empty string, or ``None``. Used for every identity field."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _identity_from_payload(
+    payload: dict[str, Any],
+) -> tuple[str | None, str | None, str | None]:
+    """Read ``account.uuid`` / ``account.email_address`` / the org name.
+
+    Parsed **defensively**. The key names are read out of Claude Code's own
+    mapping, not out of a captured response body -- no token call was made to
+    write this -- so ``uuid`` or ``id`` and ``email_address`` or ``email`` are
+    both accepted, and an absent object is simply an absent identity rather
+    than an error. The flat ``accountUuid`` / ``accountEmail`` spellings are
+    what :func:`store_tokens` writes, so a stored credential round-trips.
+    """
+    account = payload.get("account")
+    organization = payload.get("organization")
+    uuid = _text(payload.get("accountUuid")) or _text(payload.get("account_uuid"))
+    email = _text(payload.get("accountEmail")) or _text(payload.get("account_email"))
+    org_name = _text(payload.get("organizationName")) or _text(
+        payload.get("organization_name")
+    )
+    if isinstance(account, dict):
+        uuid = _text(account.get("uuid")) or _text(account.get("id")) or uuid
+        email = (
+            _text(account.get("email_address")) or _text(account.get("email")) or email
+        )
+    if isinstance(organization, dict):
+        org_name = _text(organization.get("name")) or org_name
+    return uuid, email, org_name
+
+
 def _tokens_from_payload(payload: dict[str, Any], *, source: str) -> OAuthTokens | None:
     access = payload.get("accessToken") or payload.get("access_token")
     if not isinstance(access, str) or not access.strip():
@@ -359,6 +426,7 @@ def _tokens_from_payload(payload: dict[str, Any], *, source: str) -> OAuthTokens
     refresh = payload.get("refreshToken") or payload.get("refresh_token")
     subscription = payload.get("subscriptionType") or payload.get("subscription_type")
     tier = payload.get("rateLimitTier") or payload.get("rate_limit_tier")
+    account_uuid, account_email, organization_name = _identity_from_payload(payload)
     return OAuthTokens(
         access_token=access.strip(),
         refresh_token=refresh.strip() if isinstance(refresh, str) else None,
@@ -369,6 +437,9 @@ def _tokens_from_payload(payload: dict[str, Any], *, source: str) -> OAuthTokens
             payload, "refreshTokenExpiresAt", "refresh_token_expires_at"
         ),
         rate_limit_tier=tier if isinstance(tier, str) else None,
+        account_uuid=account_uuid,
+        account_email=account_email,
+        organization_name=organization_name,
         source=source,
     )
 
@@ -522,30 +593,507 @@ def _atomic_write_private_json(path: Path, payload: dict[str, Any]) -> None:
         os.chmod(path, 0o600)
 
 
+def _token_document(tokens: OAuthTokens) -> dict[str, Any]:
+    """The seven legacy keys plus the three identity keys, as written."""
+    return {
+        "accessToken": tokens.access_token,
+        "refreshToken": tokens.refresh_token,
+        # Milliseconds, matching Claude Code's own file. MCC used to write
+        # seconds under a key Claude Code writes as milliseconds; the
+        # reader handled both, but the file was a trap for anything else
+        # that ever opened it.
+        "expiresAt": (
+            None if tokens.expires_at is None else int(tokens.expires_at) * 1000
+        ),
+        "scopes": list(tokens.scopes),
+        "subscriptionType": tokens.subscription_type,
+        "refreshTokenExpiresAt": (
+            None
+            if tokens.refresh_token_expires_at is None
+            else int(tokens.refresh_token_expires_at) * 1000
+        ),
+        "rateLimitTier": tokens.rate_limit_tier,
+        # Additive, and ignored by every parser that shipped before 7.30.0.
+        "accountUuid": tokens.account_uuid,
+        "accountEmail": tokens.account_email,
+        "organizationName": tokens.organization_name,
+    }
+
+
 def store_tokens(tokens: OAuthTokens) -> None:
-    """Persist a credential into MCC's own store."""
-    _atomic_write_private_json(
-        managed_store_path(),
+    """Persist a credential into MCC's own store.
+
+    Kept as the one-line entry point every caller already had. It is now a
+    thin wrapper over :func:`add_or_update_account`, so a refresh written
+    through it updates *that account's* record and re-mirrors the primary
+    rather than replacing the document and dropping the other accounts.
+    """
+    add_or_update_account(tokens, origin=ORIGIN_MCC)
+
+
+# ---------------------------------------------------------------------------
+# Accounts
+# ---------------------------------------------------------------------------
+
+#: Bumping this would be a breaking change for the *reader*, which is why it
+#: is not the top-level ``version`` of anything: the seven legacy keys stay
+#: mirrored at the top level precisely so a build that has never heard of
+#: ``accountsVersion`` still finds a credential.
+ACCOUNTS_VERSION = 1
+ACCOUNTS_VERSION_KEY = "accountsVersion"
+ACCOUNTS_KEY = "accounts"
+
+#: What an account with nothing to name it is called.
+PROVIDER_LABEL = "Claude"
+PROVIDER_ID = "anthropic_oauth"
+
+
+@dataclass(frozen=True, slots=True)
+class AccountRecord:
+    """One stored Claude subscription account."""
+
+    id: str
+    tokens: OAuthTokens
+    origin: str = ORIGIN_MCC
+    origin_path: str = ""
+    write_back: bool = False
+    added_at: str = ""
+    ordinal: int = 1
+
+    @property
+    def owns_a_source_file(self) -> bool:
+        return self.origin == ORIGIN_CLAUDE_CODE and bool(self.origin_path)
+
+
+def _account_from_entry(entry: dict[Any, Any], *, index: int) -> AccountRecord | None:
+    tokens = _tokens_from_payload(entry, source="mcc")
+    if tokens is None:
+        return None
+    fields = account_record_fields(entry)
+    account_id = fields["id"] or tokens.account_uuid or synthetic_account_id()
+    return AccountRecord(
+        id=account_id,
+        tokens=tokens,
+        origin=fields["origin"],
+        origin_path=fields["origin_path"],
+        write_back=fields["write_back"],
+        added_at=fields["added_at"] or now_iso(),
+        ordinal=fields["ordinal"] if fields["ordinal"] > 1 else index + 1,
+    )
+
+
+def _entry_from_account(record: AccountRecord) -> dict[str, Any]:
+    entry = _token_document(record.tokens)
+    entry.update(
         {
-            "accessToken": tokens.access_token,
-            "refreshToken": tokens.refresh_token,
-            # Milliseconds, matching Claude Code's own file. MCC used to write
-            # seconds under a key Claude Code writes as milliseconds; the
-            # reader handled both, but the file was a trap for anything else
-            # that ever opened it.
-            "expiresAt": (
-                None if tokens.expires_at is None else int(tokens.expires_at) * 1000
+            "id": record.id,
+            "origin": record.origin,
+            "originPath": record.origin_path,
+            "writeBack": record.write_back,
+            "addedAt": record.added_at,
+            "ordinal": record.ordinal,
+        }
+    )
+    return entry
+
+
+def load_accounts(*, migrate: bool = True) -> list[AccountRecord]:
+    """Every stored account, migrating the legacy single-account shape once.
+
+    Never raises. An unreadable store is an empty list, because a store this
+    build cannot parse must cost the operator a *credential*, not a server.
+
+    The migration is the whole downgrade story and it is deliberately narrow:
+    a document whose ``accounts`` key is already a non-empty list is the truth
+    and is returned untouched, so the second read of a migrated file writes
+    nothing. Only a document holding the legacy top-level shape is rewritten,
+    and only after a ``.bak-<epoch>`` copy is taken.
+    """
+    path = managed_store_path()
+    document = _load_json(path)
+    raw = document.get(ACCOUNTS_KEY)
+    if isinstance(raw, list) and raw:
+        records = []
+        for index, entry in enumerate(raw):
+            if not isinstance(entry, dict):
+                continue
+            record = _account_from_entry(entry, index=index)
+            if record is not None:
+                records.append(record)
+        if records:
+            return records
+    legacy = _tokens_from_payload(document, source="mcc")
+    if legacy is None:
+        return []
+    record = AccountRecord(
+        id=legacy.account_uuid or synthetic_account_id(),
+        tokens=legacy,
+        # Everything written before 7.30.0 was written by MCC into MCC's own
+        # store, whatever it was originally copied from: provenance was never
+        # persisted (there was no field for it), so claiming an origin now
+        # would be inventing one. ``mcc`` is the honest answer, and it is also
+        # the safe one -- it means write-back leaves the file alone until the
+        # user re-imports and says otherwise.
+        origin=ORIGIN_MCC,
+        write_back=False,
+        added_at=now_iso(),
+        ordinal=1,
+    )
+    if migrate:
+        backup_once(path)
+        save_accounts([record])
+    return [record]
+
+
+def save_accounts(records: Sequence[AccountRecord]) -> None:
+    """Write the account list, mirroring the primary to the legacy keys.
+
+    The mirror is not a convenience: it is the only reason a 7.29.x build can
+    still read this file. ``_tokens_from_payload`` as shipped reads top-level
+    keys only, so the seven of them beside ``accounts`` are what a downgrade
+    finds. It is read-safe, not write-safe -- an older build's own write
+    replaces the whole document and drops the list -- which is what the
+    ``.bak-<epoch>`` and the CHANGELOG note are for.
+    """
+    path = managed_store_path()
+    if not records:
+        # Nothing left to serve. Keep the promise that a store is renamed and
+        # never silently emptied: the caller that removed the last account has
+        # already written it aside.
+        with contextlib.suppress(OSError):
+            path.unlink()
+        return
+    document = _token_document(records[0].tokens)
+    document[ACCOUNTS_VERSION_KEY] = ACCOUNTS_VERSION
+    document[ACCOUNTS_KEY] = [_entry_from_account(record) for record in records]
+    _atomic_write_private_json(path, document)
+
+
+def _match_index(records: Sequence[AccountRecord], tokens: OAuthTokens) -> int | None:
+    """Which stored account these tokens belong to, or ``None`` for a new one.
+
+    The account id is the match. When the tokens carry no identity -- an
+    ``account`` object Anthropic did not send, on a store whose id is
+    synthetic -- the refresh token is the only other thing that ties a
+    credential to the record it came from, so it is the fallback. It is a
+    *fallback*: the refresh token rotates, so it can only ever match the
+    credential as last stored, which is exactly the case it is there for.
+    """
+    if tokens.account_uuid:
+        for index, record in enumerate(records):
+            if record.id == tokens.account_uuid:
+                return index
+            if record.tokens.account_uuid == tokens.account_uuid:
+                return index
+        return None
+    if tokens.has_refresh_token:
+        for index, record in enumerate(records):
+            if record.tokens.refresh_token == tokens.refresh_token:
+                return index
+    if tokens.access_token:
+        for index, record in enumerate(records):
+            if record.tokens.access_token == tokens.access_token:
+                return index
+    return None
+
+
+def add_or_update_account(
+    tokens: OAuthTokens,
+    *,
+    origin: str = ORIGIN_MCC,
+    origin_path: str | None = None,
+    write_back: bool | None = None,
+    default_email: str | None = None,
+    account_id: str | None = None,
+    match: OAuthTokens | None = None,
+) -> AccountRecord:
+    """Add an account, or update the one these tokens already belong to.
+
+    Signing a **second** account in appends. Signing in an account that is
+    already stored updates it in place -- tokens, expiry, plan, tier -- and
+    keeps its name, origin, origin path, write-back flag and ``addedAt``,
+    because none of those are things a fresh sign-in learned anything about.
+    Nothing is ever duplicated and no account ever replaces a different one.
+
+    ``account_id`` names the record outright, and ``match`` supplies the
+    credential the tokens *replace*. The refresh path passes both: a refresh
+    rotates the refresh token, so matching a refreshed credential against the
+    stored one by token value would fail and silently append a duplicate of
+    the account that had just been refreshed.
+    """
+    records = list(load_accounts())
+    index: int | None = None
+    if account_id:
+        index = next(
+            (i for i, record in enumerate(records) if record.id == account_id), None
+        )
+    if index is None and match is not None:
+        index = _match_index(records, match)
+    if index is None:
+        index = _match_index(records, tokens)
+    if index is None:
+        ordinal = max((record.ordinal for record in records), default=0) + 1
+        record = AccountRecord(
+            id=tokens.account_uuid or synthetic_account_id(),
+            tokens=tokens,
+            origin=origin,
+            origin_path=origin_path or "",
+            write_back=(
+                write_back
+                if write_back is not None
+                else origin in (ORIGIN_CLAUDE_CODE, ORIGIN_CODEX)
             ),
-            "scopes": list(tokens.scopes),
-            "subscriptionType": tokens.subscription_type,
+            added_at=now_iso(),
+            ordinal=ordinal,
+        )
+        records.append(record)
+    else:
+        previous = records[index]
+        new_id = previous.id
+        if (
+            tokens.account_uuid
+            and previous.id != tokens.account_uuid
+            and is_synthetic_account_id(previous.id)
+        ):
+            # The id upgrade, and **only** for an id this build minted. An
+            # imported or identity-less account whose first refresh brings the
+            # real ``account.uuid`` back adopts it, and the name moves with it.
+            #
+            # A record whose id is already a real one is never renamed, even
+            # when the response disagrees with it. A response naming a
+            # *different* account is not an upgrade -- it is either a confused
+            # endpoint or a credential that does not belong to this record,
+            # and adopting the new id would give two records the same id and
+            # silently merge two subscriptions into one pool slot. Caught in
+            # the scratch proof for 7.30.0, where exactly that happened.
+            new_id = tokens.account_uuid
+            move_name(PROVIDER_ID, previous.id, new_id)
+        record = AccountRecord(
+            id=new_id,
+            tokens=tokens,
+            origin=previous.origin,
+            origin_path=previous.origin_path,
+            write_back=previous.write_back,
+            added_at=previous.added_at,
+            ordinal=previous.ordinal,
+        )
+        records[index] = record
+    save_accounts(records)
+    seed_default_name(
+        PROVIDER_ID,
+        record.id,
+        email=tokens.account_email or default_email,
+        provider_label=PROVIDER_LABEL,
+        ordinal=record.ordinal,
+    )
+    return record
+
+
+def remove_account(account_id: str) -> AccountRecord | None:
+    """Disconnect one account. The others keep serving.
+
+    The removed record is written to ``anthropic_oauth.json.dead-<epoch>``
+    rather than dropped, which is the same "renamed, never deleted" promise
+    :func:`quarantine_managed_store` has kept for the whole store since 6.43.0
+    -- one file per retired account.
+    """
+    records = list(load_accounts())
+    remaining = [record for record in records if record.id != account_id]
+    if len(remaining) == len(records):
+        return None
+    removed = next(record for record in records if record.id == account_id)
+    path = managed_store_path()
+    target = path.with_name(f"{path.name}.dead-{int(time.time())}")
+    try:
+        _atomic_write_private_json(target, _entry_from_account(removed))
+    except OSError as error:  # pragma: no cover - defensive
+        logger.warning("Could not set aside the disconnected account: {}", error)
+    save_accounts(remaining)
+    forget_account_name(PROVIDER_ID, account_id)
+    logger.info(
+        "Disconnected Claude subscription account {}; {} account(s) still stored.",
+        account_id,
+        len(remaining),
+    )
+    return removed
+
+
+def load_tokens_for(account_id: str) -> OAuthTokens | None:
+    """The credential of one account, by id. ``None`` when it is gone."""
+    for record in load_accounts():
+        if record.id == account_id:
+            return record.tokens
+    return None
+
+
+def account_for(account_id: str) -> AccountRecord | None:
+    """One account's whole record, by id."""
+    for record in load_accounts():
+        if record.id == account_id:
+            return record
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Claude Code's own identity block, read-only
+# ---------------------------------------------------------------------------
+
+
+WRITE_BACK_ENV = "ANTHROPIC_OAUTH_WRITE_BACK"
+
+
+def write_back_enabled() -> bool:
+    """Whether write-back is on. Default on; one dashboard switch turns it off.
+
+    Read through ``Settings`` rather than ``os.environ``, because the
+    dashboard writes ``.env`` and ``pydantic-settings`` reads that file
+    *without* exporting it into the process environment -- a bare
+    ``os.environ`` read would silently ignore the switch the operator just
+    flipped. The environment is still honoured, because it is what
+    ``Settings`` checks first.
+    """
+    try:
+        from my_claude_code.config.settings import get_settings
+
+        return bool(getattr(get_settings(), "anthropic_oauth_write_back", True))
+    except Exception:  # pragma: no cover - a settings problem is not a refusal
+        raw = os.environ.get(WRITE_BACK_ENV, "").strip().lower()
+        return raw not in ("0", "false", "no", "off")
+
+
+def write_back_if_owned(record: AccountRecord, refreshed: OAuthTokens) -> bool:
+    """Write a refreshed token back into the file the account came from.
+
+    Returns whether the file was written. Every "no" is a *correct* no, and
+    each one is a separate case the card has to be able to explain:
+
+    * the account is one MCC signed in itself -- there is no source file to
+      own, and writing one would be inventing a claim on somebody else's file;
+    * ``ANTHROPIC_OAUTH_WRITE_BACK`` is off, or this account's ``writeBack``
+      flag is;
+    * the file is not there. On macOS Claude Code keeps the credential in the
+      login keychain, and a Windows install may be using the ``windows-credman``
+      backend instead; in both cases there is no file and write-back is a
+      documented no-op rather than a success that did not happen;
+    * Claude Code's own ``.storage-write`` lock could not be acquired inside
+      its retry budget -- a lock MCC cannot take is a skipped write, never a
+      forced one;
+    * the target already holds a token at least as new as ours. That is the
+      monotonicity guard (C8), and it is the case write-back exists for: the
+      user's real client refreshed in the meantime, its token is the live one,
+      and overwriting it with ours would log them out of their own client.
+
+    Everything else on the target file is preserved. This machine's
+    ``.credentials.json`` carries eight ``mcpOAuth`` entries beside
+    ``claudeAiOauth``; replacing the document rather than the one key would
+    silently disconnect every one of them.
+    """
+    if not record.owns_a_source_file or not record.write_back:
+        return False
+    if not write_back_enabled():
+        return False
+    target = Path(record.origin_path)
+    if not target.is_file():
+        logger.debug(
+            "Claude subscription write-back skipped for account {}: {} is not a "
+            "file (macOS keychain or windows-credman install).",
+            record.id,
+            target,
+        )
+        return False
+    try:
+        with storage_write_lock(target.parent):
+            return _write_back_locked(record, refreshed, target)
+    except OAuthStorageLockUnavailable:
+        logger.warning(
+            "Claude subscription write-back skipped for account {}: could not "
+            "take Claude Code's {} lock; its owner is mid-write.",
+            record.id,
+            STORAGE_WRITE_LOCK_NAME,
+        )
+        return False
+
+
+def _write_back_locked(
+    record: AccountRecord, refreshed: OAuthTokens, target: Path
+) -> bool:
+    """The write itself, with the target re-read inside the lock."""
+    document = _load_json(target)
+    existing = document.get(CLAUDE_OAUTH_KEY)
+    existing = existing if isinstance(existing, dict) else {}
+    if not monotonic_write_allowed(
+        target_expires_at=normalise_epoch_seconds(existing.get("expiresAt")),
+        target_refresh_expires_at=normalise_epoch_seconds(
+            existing.get("refreshTokenExpiresAt")
+        ),
+        ours_expires_at=refreshed.expires_at,
+        ours_refresh_expires_at=refreshed.refresh_token_expires_at,
+    ):
+        logger.info(
+            "Claude subscription write-back skipped for account {}: {} already "
+            "holds a token at least as new as ours.",
+            record.id,
+            target.name,
+        )
+        return False
+    backup_once(target)
+    # Replace the one key, keep the rest of the document exactly as found --
+    # including every key this build has never heard of.
+    block = dict(existing)
+    block.update(
+        {
+            "accessToken": refreshed.access_token,
+            "refreshToken": refreshed.refresh_token,
+            "expiresAt": (
+                None
+                if refreshed.expires_at is None
+                else int(refreshed.expires_at) * 1000
+            ),
+            "scopes": list(refreshed.scopes),
+            "subscriptionType": refreshed.subscription_type,
             "refreshTokenExpiresAt": (
                 None
-                if tokens.refresh_token_expires_at is None
-                else int(tokens.refresh_token_expires_at) * 1000
+                if refreshed.refresh_token_expires_at is None
+                else int(refreshed.refresh_token_expires_at) * 1000
             ),
-            "rateLimitTier": tokens.rate_limit_tier,
-        },
+            "rateLimitTier": refreshed.rate_limit_tier,
+        }
     )
+    document[CLAUDE_OAUTH_KEY] = block
+    _atomic_write_private_json(target, document)
+    logger.info(
+        "Wrote the refreshed Claude subscription token back to {} for account {}.",
+        target.name,
+        record.id,
+    )
+    return True
+
+
+def claude_config_path() -> Path:
+    """``~/.claude.json`` -- Claude Code's settings file, never written here."""
+    override = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(override) / CLAUDE_CONFIG_FILENAME
+    return _home() / CLAUDE_CONFIG_FILENAME
+
+
+def claude_code_oauth_account() -> dict[str, str]:
+    """The ``oauthAccount`` block of ``~/.claude.json``, or ``{}``.
+
+    Read **only** at import, and only to give an imported account a name
+    before its first refresh can bring the real ``account`` object back.
+    Claude Code's *credential* file carries no identity at all (measured), so
+    without this an imported account is called "Claude account 2" until it
+    happens to refresh. Strictly read-only: MCC never writes this file.
+    """
+    block = _load_json(claude_config_path()).get("oauthAccount")
+    if not isinstance(block, dict):
+        return {}
+    return {
+        key: str(value)
+        for key, value in block.items()
+        if isinstance(value, str) and value.strip()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -613,6 +1161,16 @@ def _tokens_from_refresh(
         refreshed = replace(refreshed, scopes=previous.scopes)
     if refreshed.subscription_type is None:
         refreshed = replace(refreshed, subscription_type=previous.subscription_type)
+    # The same rule, one field wider. ``formatTokens`` guards the account
+    # object with ``e.account?``, so a refresh may legitimately omit it --
+    # and blanking an id would detach the account's name from the account,
+    # which is the exact failure the naming store exists to prevent.
+    if refreshed.account_uuid is None:
+        refreshed = replace(refreshed, account_uuid=previous.account_uuid)
+    if refreshed.account_email is None:
+        refreshed = replace(refreshed, account_email=previous.account_email)
+    if refreshed.organization_name is None:
+        refreshed = replace(refreshed, organization_name=previous.organization_name)
     return refreshed
 
 
@@ -621,11 +1179,15 @@ def _tokens_from_refresh(
 # locks let both refresh at once, and the loser's write clobbers the winner's
 # with a refresh token Anthropic has already rotated away. Keyed by the
 # resolved store path, so a test pointing at a tmp_path gets its own.
-_REFRESH_LOCKS: dict[str, asyncio.Lock] = {}
+#
+# Keyed on ``(store path, account id)`` since 7.30.0: two accounts in one file
+# have two refresh tokens and must be able to refresh at the same time, while
+# two provider instances holding the *same* account must not.
+_REFRESH_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
 
 
-def _refresh_lock() -> asyncio.Lock:
-    key = str(managed_store_path())
+def _refresh_lock(account_id: str = "") -> asyncio.Lock:
+    key = (str(managed_store_path()), account_id)
     lock = _REFRESH_LOCKS.get(key)
     if lock is None:
         lock = asyncio.Lock()
@@ -670,25 +1232,28 @@ async def _post_refresh(refresh_token: str) -> httpx.Response:
         ) from error
 
 
-async def refresh_tokens(tokens: OAuthTokens) -> OAuthTokens:
+async def refresh_tokens(tokens: OAuthTokens, *, account_id: str = "") -> OAuthTokens:
     """Exchange a refresh token for a fresh credential and store it.
 
-    The result is always written to MCC's own store, never back into Claude
-    Code's file: rotating the token there would invalidate the copy the user's
-    real client is holding.
+    The result is always written to MCC's own store. It is written **back** to
+    the file the account was imported from only when that account's persisted
+    origin says MCC does not own it, write-back is on, and the monotonicity
+    guard in :func:`write_back_if_owned` says the write moves time forwards --
+    never for an account MCC signed in itself, which has no source file.
 
-    Single-flight per credential file, and double-checked inside the lock. A
-    burst of concurrent requests that all noticed the same ageing token
-    performs one exchange, and whichever of them takes the lock second finds a
-    fresh credential already stored and returns that rather than spending the
-    refresh token a second time.
+    Single-flight per ``(credential file, account id)``, and double-checked
+    inside the lock. A burst of concurrent requests that all noticed the same
+    ageing token performs one exchange, and whichever of them takes the lock
+    second finds a fresh credential already stored and returns that rather
+    than spending the refresh token a second time. Two *different* accounts
+    never wait on each other.
     """
     if not tokens.has_refresh_token:
         raise AnthropicOAuthRefreshRejected(400)
     assert tokens.refresh_token is not None
 
-    async with _refresh_lock():
-        stored = load_managed_tokens()
+    async with _refresh_lock(account_id):
+        stored = load_tokens_for(account_id) if account_id else load_managed_tokens()
         if (
             stored is not None
             and stored.has_access_token
@@ -709,17 +1274,31 @@ async def refresh_tokens(tokens: OAuthTokens) -> OAuthTokens:
             )
             if failure.definitive and tokens.source == "mcc":
                 # Only a definitive rejection may retire a store, and only the
-                # one MCC owns -- Claude Code's file is never touched.
-                quarantine_managed_store()
+                # one MCC owns -- Claude Code's file is never touched. With
+                # more than one account stored, retire **that account only**:
+                # the others are unaffected by this one's rejection and must
+                # keep serving.
+                if account_id and len(load_accounts()) > 1:
+                    remove_account(account_id)
+                else:
+                    quarantine_managed_store()
             raise failure
 
         refreshed = _tokens_from_refresh(response.json(), previous=tokens)
-        # Always into MCC's own store, whatever the credential was read from:
-        # a token refreshed off Claude Code's file must not be written back
-        # into it. This is also what upgrades a pre-6.36.0 store to the current
-        # shape (millisecond ``expiresAt``, ``refreshTokenExpiresAt``,
+        # Always into MCC's own store, whatever the credential was read from.
+        # This is also what upgrades a pre-6.36.0 store to the current shape
+        # (millisecond ``expiresAt``, ``refreshTokenExpiresAt``,
         # ``rateLimitTier``) on the first successful refresh.
-        store_tokens(refreshed)
+        record = add_or_update_account(
+            refreshed,
+            origin=ORIGIN_MCC,
+            account_id=account_id or None,
+            match=tokens,
+        )
+        # ...and, for an account MCC does *not* own, back to the file it came
+        # from. Inside this account's refresh lock, so no other MCC caller is
+        # mid-refresh on the same credential while the target is re-read.
+        write_back_if_owned(record, refreshed)
 
     logger.info(
         "Refreshed Claude subscription OAuth credential (source={} expires_at={})",

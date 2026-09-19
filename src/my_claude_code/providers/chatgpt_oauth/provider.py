@@ -47,6 +47,7 @@ from my_claude_code.core.wire_capture import (
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
+from my_claude_code.providers.oauth_names import account_name
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     ReasoningStripRecovery,
@@ -449,17 +450,43 @@ class ChatGPTOAuthProvider(BaseProvider):
             model,
         )
 
+    @property
+    def credential_label(self) -> str | None:
+        """This account's name, else the masked reference string.
+
+        ``mask_key_label`` of ``fcc-managed-oauth`` is the same four
+        characters for every account, which says nothing at all once there is
+        more than one. The name says which subscription served the request --
+        and it is the operator's own word for it, not an identity claim.
+        """
+        if self._credential_label_override:
+            return self._credential_label_override
+        return super().credential_label
+
     def __init__(
         self,
         config: ProviderConfig,
         *,
         rate_limiter: ProviderRateLimiter,
         account_id: str = "",
+        pinned_account_id: str = "",
     ):
         super().__init__(config)
         self._rate_limiter = rate_limiter
         self._base_url = (config.base_url or CHATGPT_OAUTH_DEFAULT_BASE).rstrip("/")
+        # Two different things that were one before 7.30.0. ``account_id`` is
+        # the ``ChatGPT-Account-ID`` **header** override and always was.
+        # ``pinned_account_id`` names **which stored account** this leaf
+        # serves, and without it a per-account leaf would resolve the primary
+        # account's credential and every slot in the pool would be the same
+        # credential wearing different labels.
         self._account_id = account_id
+        self._pinned_account_id = pinned_account_id
+        self._credential_label_override = (
+            account_name(CHATGPT_OAUTH_PROVIDER_ID, pinned_account_id)
+            if pinned_account_id
+            else ""
+        )
         self._api_key = config.api_key
         self._proxy = config.proxy
         self._session_id = str(uuid.uuid4())
@@ -562,7 +589,9 @@ class ChatGPTOAuthProvider(BaseProvider):
         # balance ride on both, and until now this provider threw all of them
         # away. Allow-listed, stored verbatim, never computed.
         RESPONSE_HEADER_OBSERVER.observe(
-            response.headers, status_code=response.status_code
+            response.headers,
+            status_code=response.status_code,
+            account_id=self._pinned_account_id,
         )
         if response.status_code >= 400 and response.status_code != 401:
             # Read raw and decoded afterwards, so a body whose
@@ -624,6 +653,7 @@ class ChatGPTOAuthProvider(BaseProvider):
             credentials = load_chatgpt_oauth_credentials(
                 access_token=self._api_key or None,
                 account_id=self._account_id or None,
+                pinned_account_id=self._pinned_account_id or None,
             )
         except ChatGPTOAuthError as exc:
             logger.error("{}_ERROR:{} {}", tag, req_tag, exc)
@@ -702,8 +732,14 @@ class ChatGPTOAuthProvider(BaseProvider):
                             ):
                                 await response.aclose()
                                 try:
+                                    # Per slot: the 401 refreshes the account
+                                    # that served *this* request and spends no
+                                    # other account's refresh token.
                                     active_credentials = await asyncio.to_thread(
-                                        force_refresh_managed_chatgpt_oauth_credentials
+                                        force_refresh_managed_chatgpt_oauth_credentials,
+                                        self._pinned_account_id
+                                        or active_credentials.account_id
+                                        or None,
                                     )
                                 except ChatGPTOAuthError as exc:
                                     raise ApplicationUnavailableError(str(exc)) from exc

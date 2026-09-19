@@ -26,6 +26,8 @@ credential as for a key in a rotation pool.
 
 MCC can route requests with the OAuth credential from a Claude Pro or Max subscription, discovered from Claude Code's own `~/.claude/.credentials.json` or obtained with `mcc-anthropic-oauth-login`.
 
+**Several accounts, since 7.30.0.** Signing in while an account is already stored **adds** another rather than replacing it; signing the same account in again updates it in place. Each account is a slot in the ordinary credential pool, so `ANTHROPIC_OAUTH_ACCESS_TOKEN_ROTATION` and the health ladder apply per account. Each carries a name, defaulted to the account's email address (which the token response already sends — MCC still never fetches the profile) and editable on the card, shown everywhere a key name is shown. The dashboard card is one row per account with its own **Refresh now** and **Disconnect**; `--list` and `--remove <id>` do the same from the command line. A refresh of an account **imported** from Claude Code is written back into `~/.claude/.credentials.json` under Claude Code's own `.storage-write` lock, skipping rather than clobbering when that file already holds a newer token — turn it off with `ANTHROPIC_OAUTH_WRITE_BACK=false`. **Downgrading to 7.29.x reads only the first account, and the first write an older build performs drops the rest**; a `.bak-<epoch>` copy is taken at migration and is the recovery path.
+
 **Anthropic's published terms forbid it.** From [Claude Code → Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance):
 
 > Anthropic does not permit third-party developers to offer Claude.ai login or to route requests through Free, Pro, or Max plan credentials on behalf of their users.
@@ -93,7 +95,11 @@ pattern" Anthropic's own policy names.
 
 ### ChatGPT OAuth Provider (experimental)
 
-MCC can talk directly to `chatgpt.com/backend-api/codex/responses` (OpenAI Responses API) using your ChatGPT subscription's OAuth tokens. Four login paths:
+MCC can talk directly to `chatgpt.com/backend-api/codex/responses` (OpenAI Responses API) using your ChatGPT subscription's OAuth tokens.
+
+**Several accounts, since 7.30.0**, on the same terms as the Anthropic side: signing in adds, the same account updates in place, each account is its own pool slot under `CHATGPT_OAUTH_ACCESS_TOKEN_ROTATION`, and the card now has the per-account **Refresh now** and **Disconnect** it never had. A name defaults to the `email` claim of the id_token already on disk — read for that and nothing else; `sub` is still never read. An account imported from Codex has its refreshed token written back into that `auth.json` (`CHATGPT_OAUTH_WRITE_BACK`, default on) under a monotonicity guard: Codex publishes no lock on that file, so MCC re-reads it immediately before the write and skips when it already holds a newer token. `CHATGPT_OAUTH_ACCOUNT_ID` is **deprecated**: with several accounts it pins the `ChatGPT-Account-ID` header of the first account only, and every other account sends its own.
+
+Four login paths:
 
 1. **Admin UI → Log in with device code** — the default and recommended path; it works across Windows/WSL, SSH, containers, and other remote environments without a localhost callback.
 2. **Admin UI → Browser login (same device)** — browser PKCE for cases where the browser and MCC definitely share the same localhost. Do not use it when MCC runs in WSL and the browser runs on Windows.

@@ -2573,6 +2573,74 @@ def test_subscription_card_hides_itself_when_there_is_no_credential(
     assert rendered["anthropicOAuthCard"]["absent"]["text"] == ""
 
 
+def test_the_subscription_card_renders_one_row_per_account(rendered: dict) -> None:
+    """Two accounts, two rows, each named by its own account."""
+    rows = rendered["anthropicOAuthCard"]["twoAccounts"]["rows"]
+
+    assert [row["accountId"] for row in rows] == ["uuid-one", "uuid-two"]
+    assert [row["name"] for row in rows] == [
+        "first@example.test",
+        "second@example.test",
+    ]
+    # Each row carries its own plan, not the primary's repeated twice.
+    assert "Planmax" in rows[0]["text"]
+    assert "Planpro" in rows[1]["text"]
+
+
+def test_every_account_row_has_its_own_refresh_and_disconnect(
+    rendered: dict,
+) -> None:
+    rows = rendered["anthropicOAuthCard"]["twoAccounts"]["rows"]
+
+    assert [row["refresh"] for row in rows] == ["Refresh now", "Refresh now"]
+    assert [row["disconnect"] for row in rows] == ["Disconnect", "Disconnect"]
+
+
+def test_an_account_row_says_where_a_refresh_of_it_is_written(
+    rendered: dict,
+) -> None:
+    """The imported row says write-back is on and names the file."""
+    rows = rendered["anthropicOAuthCard"]["twoAccounts"]["rows"]
+
+    assert "Added fromclaude-code" in rows[1]["text"]
+    assert ".credentials.json" in rows[1]["text"]
+    # And the account MCC signed in itself claims nothing about any file.
+    assert "Write-back" not in rows[0]["text"]
+
+
+def test_the_windows_are_reported_on_the_row_that_observed_them(
+    rendered: dict,
+) -> None:
+    rows = rendered["anthropicOAuthCard"]["twoAccounts"]["rows"]
+
+    assert "5-hour window used1.0" in rows[0]["text"]
+    assert "5-hour window used" not in rows[1]["text"]
+    assert "not yet observed" in rows[1]["text"]
+
+
+def test_an_unnamed_account_row_falls_back_to_todays_masked_label(
+    rendered: dict,
+) -> None:
+    """The same fallback every other credential row uses."""
+    rows = rendered["anthropicOAuthCard"]["unobserved"]["rows"]
+
+    assert [row["name"] for row in rows] == ["sk-a…z9"]
+
+
+def test_sign_in_becomes_sign_in_another_account_once_one_is_stored(
+    rendered: dict,
+) -> None:
+    labels = rendered["anthropicOAuthSignInLabel"]
+
+    assert labels["empty"]["label"] == "Sign in with Anthropic"
+    assert labels["stored"]["label"] == "Sign in another account"
+    assert "1 account(s) stored." in labels["stored"]["status"]
+    # And the card's own Refresh/Disconnect only come alive once there is
+    # something of MCC's own to act on.
+    assert labels["empty"]["managedEnabled"] is False
+    assert labels["stored"]["managedEnabled"] is True
+
+
 # --------------------------------------------------------------- agent tiers
 #
 # The Tiers section of each Coding agents card. jsdom proves what a gesture did
