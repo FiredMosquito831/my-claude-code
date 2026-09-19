@@ -150,6 +150,7 @@ TRIGGER_KIND_ORDER: tuple[str, ...] = (
     "timeout",
     "upstream",
     "unavailable",
+    "free_tier",
 )
 
 #: Refused outright, with the reason on the chip. Rotating on a 401/403 burns

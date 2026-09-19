@@ -528,6 +528,12 @@ _MUST_BE_DOCUMENTED: tuple[tuple[str, str], ...] = (
         "and reversible",
     ),
     (
+        "OPENCODE_FREE_TIER_MODELS",
+        "it is the only way to tell MCC that a free OpenCode model whose id "
+        "does not say so is on the tier whose tool names have to be "
+        "translated; a user whose model 403s has no other lever",
+    ),
+    (
         "MCC_CONFIG_DIR",
         "the only way to pin the config directory; it is an environment "
         "variable, so it cannot be discovered from the dashboard at all",

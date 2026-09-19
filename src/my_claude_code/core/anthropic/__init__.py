@@ -35,7 +35,7 @@ from .models import (
     Tool,
     Usage,
 )
-from .openai_tool_names import OpenAIToolNameCodec
+from .openai_tool_names import EMPTY_TOOL_CATALOGUE, OpenAIToolNameCodec
 from .request_modalities import (
     ImageInput,
     request_carries_image,
@@ -66,6 +66,7 @@ from .tools import FunctionTagToolParser, HeuristicToolParser
 from .utils import set_if_not_none
 
 __all__ = [
+    "EMPTY_TOOL_CATALOGUE",
     "TRIMMABLE_TOOL_NAMES",
     "TRIM_MARKER_OPEN",
     "TRIM_MODE_NAMES",

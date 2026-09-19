@@ -27,6 +27,10 @@ from my_claude_code.core.anthropic import (
     ThinkTagParser,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.openai_tool_names import (
+    EMPTY_TOOL_CATALOGUE,
+    OpenAIToolNameCodec,
+)
 from my_claude_code.core.anthropic.stream_contracts import REASONING_HEARTBEAT
 from my_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
@@ -98,6 +102,7 @@ from .chunks import adopt_chat_stream
 from .client_identity import identity_headers_for_body
 from .identity_enforcement import observe_identity_enforcement
 from .messages_transport import MessagesTransport
+from .opencode_catalogue import model_is_zero_cost
 from .opencode_identity import identity_wire_record
 from .profiles import OpenAIChatProfile
 from .request_policy import build_openai_chat_request_body
@@ -322,6 +327,7 @@ class OpenAIChatProvider(BaseProvider):
                 rate_limiter=self._rate_limiter,
                 api_key_provider=self._api_key_provider,
                 tool_name_max_length=self._profile.responses_tool_name_max_length,
+                tool_catalogue_for=self.tool_catalogue_for,
                 # The same memory the Chat Completions ladder writes to, so a
                 # Responses refusal survives a config apply exactly as an
                 # output cap does and shows up on the same Models page row.
@@ -344,6 +350,7 @@ class OpenAIChatProvider(BaseProvider):
                 api_key=self._api_key,
                 rate_limiter=self._rate_limiter,
                 api_key_provider=self._api_key_provider,
+                tool_catalogue_for=self.tool_catalogue_for,
             )
             self._messages_transport = transport
         return transport
@@ -435,6 +442,38 @@ class OpenAIChatProvider(BaseProvider):
             collection_field=listing.collection_field,
         )
 
+    def tool_catalogue_for(self, model_id: str) -> Mapping[str, str]:
+        """The tool spellings this host wants for one of its models.
+
+        Empty for every profile that declares no catalogue, and empty for a
+        model of a declaring profile that is outside the declared scope -- a
+        paid Zen model is not on the free tier and its body must not move.
+        The published price is resolved here and nowhere lower down, because
+        the provider is the only layer that knows which catalogue id this
+        model's prices are filed under.
+        """
+
+        catalogue = self._profile.free_tier_tool_catalogue
+        if catalogue is None:
+            return EMPTY_TOOL_CATALOGUE
+        return catalogue.catalogue_for(
+            model_id,
+            zero_cost=model_is_zero_cost(self._provider_id, model_id),
+        )
+
+    def tool_name_codec(self, request: MessagesRequest) -> OpenAIToolNameCodec | None:
+        """The codec one Chat Completions request was encoded with, or None.
+
+        ``None`` for every request whose host wants no spellings of its own,
+        and that is the answer that keeps the stream decoding to exactly what
+        it decoded before 7.28.0: nothing.
+        """
+
+        catalogue = self.tool_catalogue_for(request.model)
+        if not catalogue:
+            return None
+        return OpenAIToolNameCodec.from_request(request, catalogue=catalogue)
+
     def _build_request_body(
         self,
         request: MessagesRequest,
@@ -448,6 +487,7 @@ class OpenAIChatProvider(BaseProvider):
             policy=self._profile.request_policy,
             postprocessors=self._profile.request_postprocessors,
             provider_id=self._provider_id,
+            tool_catalogue=self.tool_catalogue_for(request.model),
         )
 
     def preflight_stream(
@@ -1033,7 +1073,10 @@ class _OpenAIChatStreamRunner:
         self._reasoning = reasoning
         self._message_id = f"msg_{uuid.uuid4()}"
         self._tool_calls = OpenAIToolCallAssembler(
-            record_extra_content=provider._record_tool_call_extra_content
+            record_extra_content=provider._record_tool_call_extra_content,
+            # Built from the same request the body was built from, so the two
+            # halves of one translation cannot disagree.
+            tool_names=provider.tool_name_codec(request),
         )
 
     async def run(self) -> AsyncIterator[str]:

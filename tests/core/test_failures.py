@@ -33,6 +33,7 @@ def test_failure_kind_has_only_protocol_neutral_semantics() -> None:
         FailureKind.TIMEOUT,
         FailureKind.UPSTREAM,
         FailureKind.UNAVAILABLE,
+        FailureKind.FREE_TIER,
     )
     assert tuple(kind.value for kind in FailureKind) == (
         "invalid_request",
@@ -46,6 +47,7 @@ def test_failure_kind_has_only_protocol_neutral_semantics() -> None:
         "timeout",
         "upstream",
         "unavailable",
+        "free_tier",
     )
 
 

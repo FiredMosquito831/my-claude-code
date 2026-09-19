@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.openai_tool_names import OpenAIToolNameCodec
 from my_claude_code.core.anthropic.stream_contracts import REASONING_HEARTBEAT
 from my_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
@@ -93,9 +94,24 @@ class OpenAIToolCallAssembler:
     """Assemble OpenAI tool-call deltas into Anthropic SSE tool blocks."""
 
     def __init__(
-        self, *, record_extra_content: RecordToolExtraContent | None = None
+        self,
+        *,
+        record_extra_content: RecordToolExtraContent | None = None,
+        tool_names: OpenAIToolNameCodec | None = None,
     ) -> None:
         self._record_extra_content = record_extra_content
+        #: The codec the request body was encoded with, when its host was sent
+        #: names other than the ones the client wrote. ``None`` -- every
+        #: provider on this funnel before 7.28.0, and every one of them still
+        #: whose host declares no catalogue -- passes each streamed name
+        #: through exactly as it arrived.
+        #:
+        #: Decoded here, at the first sight of the name, rather than where the
+        #: block is opened: ``state.name`` is also what the mid-stream
+        #: tool-argument repair looks a schema up by, and those schemas are
+        #: keyed by the names the *client* wrote. One decode at the door keeps
+        #: every reader of that state honest.
+        self._tool_names = tool_names
 
     def process_tool_call(
         self,
@@ -128,6 +144,8 @@ class OpenAIToolCallAssembler:
             ledger.blocks.set_tool_extra_content(tc_index, extra_content)
 
         if incoming_name is not None:
+            if self._tool_names is not None:
+                incoming_name = self._tool_names.decode(incoming_name)
             ledger.blocks.register_tool_name(tc_index, incoming_name)
 
         state = ledger.blocks.tool_states.get(tc_index)

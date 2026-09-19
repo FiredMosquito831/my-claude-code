@@ -166,6 +166,10 @@ UNLIKELY_REASON: dict[str, str] = {
     "overloaded": "The provider is busy. A different address occasionally helps.",
     "upstream": "A fault on the provider's side. A different address occasionally helps.",
     "unavailable": "A dead or refused connection. Often the proxy, sometimes the provider.",
+    "free_tier": (
+        "The host refused the model on this account's tier. The same account "
+        "is refused from every address, so a new one changes nothing."
+    ),
 }
 
 

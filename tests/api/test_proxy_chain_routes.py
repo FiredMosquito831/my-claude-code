@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.failures import FailureKind
 from tests.api.support import create_test_app
 
 SECRET_URL = "socks5h://alice:hunter2@203.0.113.7:1080"
@@ -101,11 +102,18 @@ def test_the_vocabulary_offers_the_four_rotation_policies_and_no_fifth() -> None
     assert "until it fails" in help_text["failover"]
 
 
-def test_all_eleven_kinds_are_offered_and_exactly_two_are_refused() -> None:
+def test_every_kind_is_offered_and_exactly_two_are_refused() -> None:
+    """The page offers the whole vocabulary, not a hand-kept subset of it.
+
+    Counted against the enum rather than against a literal: a kind added to
+    ``FailureKind`` and not reaching this page is a trigger an operator cannot
+    choose, and a number in a test is exactly what stops saying so.
+    """
+
     payload = _client().get("/admin/api/proxy-chains").json()
     kinds = payload["vocabulary"]["kinds"]
 
-    assert len(kinds) == 11
+    assert len(kinds) == len(FailureKind)
     refused = {kind["id"] for kind in kinds if kind["state"] == "refused"}
     recommended = [kind["id"] for kind in kinds if kind["state"] == "recommended"]
     assert refused == {"authentication", "permission"}

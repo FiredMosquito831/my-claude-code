@@ -10,6 +10,11 @@ from loguru import logger
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.openai_tool_names import (
+    OpenAIToolNameCodec,
+    decode_anthropic_sse_event,
+    encode_anthropic_body_tool_names,
+)
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningAdaptationKind,
@@ -388,6 +393,7 @@ class AnthropicMessagesProvider(BaseProvider):
         request_id: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         wire_surface: str = "",
+        tool_names: OpenAIToolNameCodec | None = None,
     ) -> AsyncIterator[str]:
         """Stream one request, optionally saying which door it went through.
 
@@ -399,6 +405,14 @@ class AnthropicMessagesProvider(BaseProvider):
         other. Empty -- and therefore absent from the record -- for every
         provider with only one endpoint, which is every caller but the
         re-pointed gateway.
+
+        ``tool_names`` is the codec a gateway in front of this endpoint wants
+        the body's tool names encoded with, and the stream's decoded back
+        with. A per-call argument for the reason ``wire_surface`` is one: two
+        concurrent requests through one provider may be on two different
+        models, and only one of them may be inside a host's catalogue scope.
+        ``None`` -- every caller but the re-pointed OpenCode gateway -- sends
+        and yields exactly the names the client wrote.
         """
 
         del input_tokens
@@ -407,6 +421,7 @@ class AnthropicMessagesProvider(BaseProvider):
             request_id=request_id,
             reasoning=reasoning,
             wire_surface=wire_surface,
+            tool_names=tool_names,
         )
 
     async def _stream_response(
@@ -416,10 +431,15 @@ class AnthropicMessagesProvider(BaseProvider):
         request_id: str | None,
         reasoning: ReasoningPolicy,
         wire_surface: str = "",
+        tool_names: OpenAIToolNameCodec | None = None,
     ) -> AsyncIterator[str]:
         tag = self._provider_name
         req_tag = f" request_id={request_id}" if request_id else ""
         body = build_anthropic_messages_body(request, reasoning=reasoning)
+        if tool_names is not None:
+            # Before the wire capture and before every recovery rung, so what
+            # is recorded and what is retried are both what actually went out.
+            body = encode_anthropic_body_tool_names(body, tool_names)
         if self._body_transform is not None:
             body = self._body_transform(body)
         body = self._output_cap_recovery.apply_learned(body)
@@ -490,9 +510,17 @@ class AnthropicMessagesProvider(BaseProvider):
                         response.aiter_bytes(), shape
                     ):
                         for held_event in recovery.push(event):
-                            yield held_event
+                            yield (
+                                held_event
+                                if tool_names is None
+                                else decode_anthropic_sse_event(held_event, tool_names)
+                            )
                     for held_event in recovery.flush():
-                        yield held_event
+                        yield (
+                            held_event
+                            if tool_names is None
+                            else decode_anthropic_sse_event(held_event, tool_names)
+                        )
                     record_response_shape(shape)
                     return
                 except asyncio.CancelledError, GeneratorExit:

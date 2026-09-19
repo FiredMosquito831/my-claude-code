@@ -20,6 +20,7 @@ from my_claude_code.core.anthropic.conversion import (
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
+    EMPTY_TOOL_CATALOGUE,
     MIN_TOOL_NAME_MAX_LENGTH,
     OpenAIToolNameCodec,
 )
@@ -33,7 +34,9 @@ RESPONSES_DEFAULT_REASONING_SUMMARY = "auto"
 
 
 def responses_tool_name_codec(
-    request: MessagesRequest, tool_name_max_length: int | None
+    request: MessagesRequest,
+    tool_name_max_length: int | None,
+    tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
 ) -> OpenAIToolNameCodec | None:
     """Return the tool-name codec a host's declared limit calls for, or None.
 
@@ -57,6 +60,12 @@ def responses_tool_name_codec(
     :data:`MIN_TOOL_NAME_MAX_LENGTH` it raises, because an alias that short
     stops naming the tool and inventing one would trade a visible failure for
     a call the model cannot make.
+
+    ``tool_catalogue`` is this host's own tool spellings, empty for every host
+    that has none. It turns the same codec from "alias what this host cannot
+    accept" into "alias that, *and* rename the tools this host already has a
+    name for". One codec either way, so encode and decode stay one decision;
+    see :data:`EMPTY_TOOL_CATALOGUE` for the rules it adds.
     """
     if tool_name_max_length is None:
         return None
@@ -65,7 +74,9 @@ def responses_tool_name_codec(
             "Responses tool-name aliasing needs a ceiling of at least "
             f"{MIN_TOOL_NAME_MAX_LENGTH}; got {tool_name_max_length}"
         )
-    return OpenAIToolNameCodec.from_request(request, max_length=tool_name_max_length)
+    return OpenAIToolNameCodec.from_request(
+        request, max_length=tool_name_max_length, catalogue=tool_catalogue
+    )
 
 
 def alias_responses_body_tool_names(
@@ -435,6 +446,7 @@ def build_responses_request_body(
     include_encrypted_reasoning: bool = True,
     extra_body: Mapping[str, Any] | None = None,
     tool_name_max_length: int | None = None,
+    tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
     include_tool_choice: bool = True,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
@@ -469,6 +481,10 @@ def build_responses_request_body(
         and replayed ``function_call`` items; see
         :func:`responses_tool_name_codec`. The stream converter must be handed
         the same codec to decode the model's calls back.
+    ``tool_catalogue``
+        this host's own tool spellings, for a host that classifies the
+        catalogue it is sent rather than merely accepting one. Empty -- every
+        host but OpenCode's free tier -- renames nothing.
     ``include_tool_choice``
         ``False`` omits the field entirely, for a host proven to accept no
         value but ``auto`` -- which is the Responses default, so omitting it
@@ -489,7 +505,9 @@ def build_responses_request_body(
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
 
-    tool_names = responses_tool_name_codec(request, tool_name_max_length)
+    tool_names = responses_tool_name_codec(
+        request, tool_name_max_length, tool_catalogue
+    )
     instructions = _extract_system_instructions(request)
     _, chat_messages = _strip_openai_system_message(openai_messages)
 

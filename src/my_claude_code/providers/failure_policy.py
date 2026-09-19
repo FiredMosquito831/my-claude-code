@@ -80,6 +80,27 @@ _CONTEXT_REQUESTED_PATTERN = re.compile(
 )
 _OVERLOADED_MESSAGE = "Provider is currently overloaded. Please retry."
 
+#: What a free-tier refusal says to the operator, and what it deliberately
+#: does not say. Not "check API key": the key is valid, and the sentence it
+#: replaced sent a whole investigation looking at credentials
+#: (``specs/INVESTIGATION-ZEN-403-FREETIER.md``, 2026-09-19).
+_FREE_TIER_MESSAGE = (
+    "This host will not serve this model on its free tier. The key is fine; "
+    "another model on the same host, or a paid key, may still work."
+)
+#: The one vendor wording measured, plus the machine-readable type beside it.
+#: As narrow as ``QUOTA_PHRASES`` and for the same reason: every phrase here
+#: takes a 403 away from the authentication branch, so a phrase is added only
+#: with a captured upstream body behind it. OpenCode Zen, 2026-09-18, 20
+#: recorded attempts:
+#:
+#:     {"type": "FreeTierError", "message": "OpenCode's free tier can only be
+#:      used from within OpenCode"}
+_FREE_TIER_PATTERN = re.compile(
+    r"\bfree[ _]?tier[ _]?error\b|free\s+tier\s+can\s+only\s+be\s+used",
+    re.IGNORECASE,
+)
+
 _QUOTA_MESSAGE = "Provider account is out of credits."
 #: HTTP statuses on which a billing phrase is read as a quota failure. ``402``
 #: is the status that *means* it and needs no phrase; ``400`` and ``403`` are
@@ -202,6 +223,22 @@ def is_model_not_supported_error(exc: BaseException) -> bool:
     if not isinstance(exc, Exception):
         return False
     return _MODEL_NOT_SUPPORTED_PATTERN.search(upstream_complaint(exc)) is not None
+
+
+def is_free_tier_error(exc: BaseException) -> bool:
+    """Whether the upstream said this model is not served on this tier.
+
+    The discriminator a 403 needs before it is allowed to blame the
+    credential -- the same shape as :func:`is_model_not_supported_error`, and
+    read through the same complaint reader, which prefers the structured error
+    body and prunes the keys under which a host echoes the submitted request
+    back. A prompt that happens to contain the words *free tier* is not a
+    refusal.
+    """
+
+    if not isinstance(exc, Exception):
+        return False
+    return _FREE_TIER_PATTERN.search(upstream_complaint(exc)) is not None
 
 
 def quota_failure(
@@ -661,6 +698,27 @@ def _classify_provider_failure(
         # key. Charging a key's lockout ladder for an empty wallet is what the
         # 401/403 branch would otherwise do.
         return quota_failure(exc, cooldown_seconds)
+    # Read before every status branch, for the reason the quota check above is:
+    # the status a tier refusal arrives on is 403, which is also the status a
+    # revoked key arrives on, and only the host's own words tell them apart.
+    # Nothing below this line could have made that distinction -- it filed the
+    # refusal as AUTHENTICATION and told the operator to check a key that was
+    # never wrong. The kind is its own because the answer differs in three
+    # ways: no key bench, no proxy bench, and the chain still falls through to
+    # the next model.
+    if is_free_tier_error(exc):
+        # 402, not the 403 the host sent, and for the same reason the
+        # AUTHENTICATION branch below answers 401 to a 403: the number on an
+        # ``ExecutionFailure`` is MCC's *conclusion*, not the upstream's byte.
+        # The conclusion here is "this account is not entitled to this model
+        # here, and the credential is not the problem", which is what 402
+        # says and what 403 -- a status the credential pool reads as a
+        # rejected key, and charges a lockout tier for -- does not.
+        #
+        # The client is unaffected: the wire status comes from the error
+        # *type*, and ``FailureKind.FREE_TIER`` maps to ``permission_error``,
+        # which is 403 on every one of the three protocols MCC answers.
+        return _failure(FailureKind.FREE_TIER, _QUOTA_STATUS, _FREE_TIER_MESSAGE, False)
     if isinstance(exc, openai.AuthenticationError):
         if is_model_not_supported_error(exc):
             # A 401 whose body names a model is this endpoint refusing that

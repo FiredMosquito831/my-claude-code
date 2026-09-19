@@ -69,9 +69,12 @@ from .constants import (
     MODEL_PROBE_NEW_MODELS_DEFAULT,
     MODEL_VISIBILITY_ALLOW_DEFAULT,
     MODEL_VISIBILITY_DENY_DEFAULT,
+    OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
     OPENCODE_CLIENT_IDENTITY_CHOICES,
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
+    OPENCODE_CLIENT_RUNTIME_DEFAULT,
     OPENCODE_CLIENT_VERSION_DEFAULT,
+    OPENCODE_FREE_TIER_MODELS_DEFAULT,
     PROVIDER_RATE_LIMIT_DEFAULT,
     PROVIDER_RATE_WINDOW_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
@@ -383,6 +386,25 @@ class Settings(BaseSettings):
     opencode_client_version: str = Field(
         default=OPENCODE_CLIENT_VERSION_DEFAULT,
         validation_alias="OPENCODE_CLIENT_VERSION",
+    )
+    # The other two user-agent segments the real client's ai-sdk transport
+    # appends. Empty means "send the pinned segment"; neither can be read off
+    # this machine, which is why unlike the release above they have no disk
+    # lookup behind them.
+    opencode_client_ai_sdk_version: str = Field(
+        default=OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
+        validation_alias="OPENCODE_CLIENT_AI_SDK_VERSION",
+    )
+    opencode_client_runtime: str = Field(
+        default=OPENCODE_CLIENT_RUNTIME_DEFAULT,
+        validation_alias="OPENCODE_CLIENT_RUNTIME",
+    )
+    # Which Zen/Go models are on the free tier without saying so in their id,
+    # and therefore need OpenCode's own tool-name spellings on the wire. See
+    # ``providers/openai_chat/opencode_catalogue.py``.
+    opencode_free_tier_models: str = Field(
+        default=OPENCODE_FREE_TIER_MODELS_DEFAULT,
+        validation_alias="OPENCODE_FREE_TIER_MODELS",
     )
 
     # ==================== Vercel AI Gateway ====================
@@ -2151,6 +2173,19 @@ class Settings(BaseSettings):
             )
         return mode
 
+    @field_validator("opencode_free_tier_models")
+    @classmethod
+    def validate_opencode_free_tier_models(cls, v: str) -> str:
+        """Normalise the roster to a deduplicated, lower-cased CSV.
+
+        Model ids are compared case-insensitively against a model name the
+        router already lower-cased, so normalising once here is cheaper than
+        normalising on every request -- and it makes the stored value and the
+        value the dashboard shows back the same string.
+        """
+        names = [part.strip().lower() for part in str(v or "").split(",")]
+        return ",".join(dict.fromkeys(name for name in names if name))
+
     @field_validator("tool_result_image_delivery")
     @classmethod
     def validate_tool_result_image_delivery(cls, v: str) -> str:
@@ -2564,6 +2599,31 @@ def configured_opencode_client_version() -> str:
     """
     settings = get_settings()
     return str(getattr(settings, "opencode_client_version", "") or "")
+
+
+def configured_opencode_client_ai_sdk_version() -> str:
+    """The ``ai-sdk/provider-utils`` version the operator pinned, or ``""``."""
+    settings = get_settings()
+    return str(getattr(settings, "opencode_client_ai_sdk_version", "") or "")
+
+
+def configured_opencode_client_runtime() -> str:
+    """The ``<runtime>/<version>`` the operator pinned, or ``""``."""
+    settings = get_settings()
+    return str(getattr(settings, "opencode_client_runtime", "") or "")
+
+
+def configured_opencode_free_tier_models() -> tuple[str, ...]:
+    """The operator's extra roster of free-tier OpenCode models.
+
+    Read per request, for the reason
+    :func:`configured_opencode_client_identity` states: the profile table is a
+    module-level dict literal and cannot follow a dashboard save.
+    """
+    settings = get_settings()
+    raw = str(getattr(settings, "opencode_free_tier_models", "") or "")
+    names = (part.strip().lower() for part in raw.split(","))
+    return tuple(dict.fromkeys(name for name in names if name))
 
 
 def configured_default_max_output_tokens() -> int | None:

@@ -33,6 +33,11 @@ KIND_BENCHES = {
     # was never going to take.
     FailureKind.MODEL_REJECTED: False,
     FailureKind.UNAVAILABLE: False,
+    # A host refusing one model on one tier says nothing about whether that
+    # model is up -- it is the same shape of answer as MODEL_REJECTED, and
+    # benching on it would park a model the next key or the next host serves
+    # perfectly well.
+    FailureKind.FREE_TIER: False,
 }
 
 
@@ -258,6 +263,7 @@ def test_only_model_shaped_failures_count_toward_the_bench(kind: FailureKind) ->
         FailureKind.INVALID_REQUEST,
         FailureKind.MODEL_REJECTED,
         FailureKind.UNAVAILABLE,
+        FailureKind.FREE_TIER,
     ],
 )
 def test_a_request_shaped_failure_never_benches_a_model(kind: FailureKind) -> None:
