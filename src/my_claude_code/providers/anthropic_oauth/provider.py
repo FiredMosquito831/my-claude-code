@@ -72,7 +72,7 @@ _ROTATION_REFUSAL = (
 )
 
 
-def _auth_for(config: ProviderConfig) -> AnthropicOAuthAuth:
+def _auth_for(config: ProviderConfig, account_id: str = "") -> AnthropicOAuthAuth:
     """Prefer an explicitly configured token, else discover one from disk.
 
     A raw ``ANTHROPIC_OAUTH_ACCESS_TOKEN`` carries no refresh token, so it
@@ -84,7 +84,11 @@ def _auth_for(config: ProviderConfig) -> AnthropicOAuthAuth:
     """
     raw = (config.api_key or "").strip()
     if not raw or raw == ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE:
-        return AnthropicOAuthAuth()
+        return AnthropicOAuthAuth(account_id=account_id)
+    # Unchanged, and deliberately checked *before* anything about accounts:
+    # a comma-separated RAW token is still refused. Multi-account OAuth is
+    # several *credentials MCC can refresh*, which is the opposite of several
+    # pasted tokens that all expire and stay expired.
     if "," in raw:
         raise InvalidRequestError(_ROTATION_REFUSAL)
     logger.warning(
@@ -105,8 +109,10 @@ class AnthropicOAuthProvider(AnthropicProvider):
         auth: AnthropicOAuthAuth | None = None,
         require_claude_code_cli: bool = True,
         provider_id: str = "",
+        account_id: str = "",
     ) -> None:
-        resolved = auth if auth is not None else _auth_for(config)
+        resolved = auth if auth is not None else _auth_for(config, account_id)
+        self._account_id = account_id
         super().__init__(
             config,
             rate_limiter=rate_limiter,
@@ -176,7 +182,12 @@ class AnthropicOAuthProvider(AnthropicProvider):
         The dashboard may say "you hit your 5-hour window" only because a real
         response said so. Nothing here infers a window from a status code.
         """
-        OBSERVER.observe(headers, status_code=status_code, now=time.time())
+        OBSERVER.observe(
+            headers,
+            status_code=status_code,
+            now=time.time(),
+            account_id=self._account_id,
+        )
 
     # -- failure classification --------------------------------------------
 
@@ -286,13 +297,20 @@ class AnthropicOAuthProvider(AnthropicProvider):
 
     @property
     def credential_label(self) -> str | None:
-        """The plan and the credential's origin -- never a token, never an email.
+        """The account's name, else the plan and the credential's origin.
 
         Every OAuth request-log row used to carry the masked *reference*
         string ("fcc-...auth"), which is the same for every account and says
-        nothing. MCC never fetches the profile, so there is no email to use and
-        adding a ``user:profile`` call per credential to populate a log label
-        would be a new upstream request for a cosmetic gain.
+        nothing.
+
+        The note that used to sit here said there was no email to use because
+        MCC never fetches the profile. MCC still never fetches the profile --
+        and since 7.30.0 it does not have to: the ``account`` object Anthropic
+        already sends on every exchange and every refresh carries the address,
+        at zero extra upstream cost. What reaches this label is not that field
+        but the **name** the operator holds in ``credential_names.json``, which
+        a default seeded from the address is one of, and which they can change
+        or clear. With no name stored, this is what it always was.
         """
         label = self._oauth.label()
         if label is not None:

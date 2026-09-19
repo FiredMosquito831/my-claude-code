@@ -16,6 +16,7 @@ the label a row already carries. A label two keys disagree about resolves to no
 name rather than to a guess.
 """
 
+import contextlib
 from collections.abc import Iterator, Sequence
 
 from my_claude_code.config.admin.values import load_value_state
@@ -23,6 +24,8 @@ from my_claude_code.config.credential_names import (
     custom_pool_id,
     env_pool_id,
     merged_label_names,
+    oauth_label_names,
+    oauth_pool_id,
     websearch_pool_id,
 )
 from my_claude_code.config.credentials import parse_credential_keys
@@ -42,13 +45,52 @@ def configured_pools() -> list[tuple[str, Sequence[str]]]:
     return list(_iter_pools())
 
 
-def credential_name_index() -> dict[str, str]:
-    """Return ``masked label -> name`` across every configured pool."""
+def configured_oauth_pools() -> list[tuple[str, Sequence[tuple[str, str]]]]:
+    """Every OAuth account pool, as ``(pool id, [(account id, label)])``.
 
-    try:
-        return merged_label_names(configured_pools())
-    except Exception:  # pragma: no cover - a name may never break a payload
-        return {}
+    Separate from :func:`configured_pools` because an OAuth credential has no
+    secret to fingerprint: the join is account-id-to-name, and the label is
+    the account id the pool already hands the request log.
+    """
+
+    return list(_iter_oauth_pools())
+
+
+def credential_name_index() -> dict[str, str]:
+    """Return ``masked label -> name`` across every configured pool.
+
+    Including the OAuth pools since 7.30.0, so an account's name reaches the
+    request log, the analytics breakdown and all three exports through the
+    same one resolver every other credential goes through. That is the point
+    of there being one function: a rename must not be visible on the card and
+    stale in the log.
+    """
+
+    index: dict[str, str] = {}
+    # Two suppressions rather than one try: a store problem on one side must
+    # cost that side's names, not both.
+    with contextlib.suppress(Exception):  # a name may never break a payload
+        index.update(merged_label_names(configured_pools()))
+    with contextlib.suppress(Exception):  # a name may never break a payload
+        index.update(oauth_label_names(configured_oauth_pools()))
+    return index
+
+
+def _iter_oauth_pools() -> Iterator[tuple[str, Sequence[tuple[str, str]]]]:
+    """The fourth loop. One entry per OAuth provider that has accounts."""
+
+    from my_claude_code.providers.runtime.factory import oauth_account_ids
+
+    for provider_id in ("anthropic_oauth", "chatgpt_oauth"):
+        try:
+            account_ids = oauth_account_ids(provider_id)
+        except Exception:  # pragma: no cover - defensive
+            continue
+        if account_ids:
+            yield (
+                oauth_pool_id(provider_id),
+                tuple((account_id, account_id) for account_id in account_ids),
+            )
 
 
 def _iter_pools() -> Iterator[tuple[str, Sequence[str]]]:

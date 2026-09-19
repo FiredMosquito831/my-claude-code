@@ -8720,6 +8720,11 @@ function buildAnthropicOAuthControl(wrapper) {
   // buttons[0] must stay the import button: refreshAnthropicOAuthSources
   // takes it positionally and is what enables or disables it.
   const buttons = [importButton, loginButton, refreshButton, disconnectButton];
+  // The per-row Refresh/Disconnect buttons are built inside the renderer,
+  // which has no other way back to the card's status line, so the array the
+  // card already passes around carries them.
+  buttons.status = status;
+  buttons.details = details;
   importButton.addEventListener("click", () => {
     importAnthropicOAuthClaudeCode(importButton, buttons, status, details);
   });
@@ -8826,15 +8831,84 @@ function appendOAuthDetail(list, term, value, options) {
 
 // Never invents a window. Every figure below is either a string Anthropic sent
 // on a real response or the literal "not yet observed".
-function renderAnthropicOAuthDetails(details, sources) {
+// One row per stored account, plus -- when nothing is stored yet -- the
+// read-only view of Claude Code's own credential, which is what this card
+// showed for its whole life before 7.30.0.
+function renderAnthropicOAuthDetails(details, sources, buttons) {
   details.replaceChildren();
-  const tokens = sources.mcc.available ? sources.mcc : sources.claude_code;
-  if (!tokens || !tokens.available) {
-    details.hidden = true;
+  const accounts = Array.isArray(sources.accounts) ? sources.accounts : [];
+  if (!accounts.length) {
+    const tokens = sources.claude_code;
+    if (!tokens || !tokens.available) {
+      details.hidden = true;
+      return;
+    }
+    details.hidden = false;
+    const list = document.createElement("dl");
+    list.className = "anthropic-oauth-details";
+    details.appendChild(list);
+    renderAnthropicOAuthTokenDetails(list, tokens, sources.windows || {});
     return;
   }
   details.hidden = false;
+  accounts.forEach((account) => {
+    const row = document.createElement("section");
+    row.className = "oauth-account-row";
+    row.dataset.accountId = account.account_id || "";
 
+    const heading = document.createElement("div");
+    heading.className = "oauth-account-heading";
+    const title = document.createElement("strong");
+    title.className = "oauth-account-name";
+    // The account's name, and only the mask when it has none: exactly the
+    // fallback every other credential row uses.
+    title.textContent =
+      account.name || account.masked_token || account.account_id || "account";
+    heading.appendChild(title);
+
+    const refreshRow = document.createElement("button");
+    refreshRow.type = "button";
+    refreshRow.className = "secondary-button oauth-account-refresh";
+    refreshRow.textContent = "Refresh now";
+    refreshRow.addEventListener("click", () => {
+      refreshAnthropicOAuthAccount(account.account_id, refreshRow, buttons);
+    });
+
+    const disconnectRow = document.createElement("button");
+    disconnectRow.type = "button";
+    disconnectRow.className = "secondary-button oauth-account-disconnect";
+    disconnectRow.textContent = "Disconnect";
+    disconnectRow.addEventListener("click", () => {
+      disconnectAnthropicOAuthAccount(
+        account.account_id,
+        disconnectRow,
+        buttons,
+      );
+    });
+
+    heading.append(refreshRow, disconnectRow);
+    row.appendChild(heading);
+
+    const list = document.createElement("dl");
+    list.className = "anthropic-oauth-details";
+    row.appendChild(list);
+    appendOAuthDetail(list, "Account", account.account_id || "unknown");
+    appendOAuthDetail(list, "Added from", account.origin || "mcc");
+    if (account.origin_path) {
+      appendOAuthDetail(
+        list,
+        "Write-back",
+        account.write_back_effective
+          ? `on -- refreshes are written to ${account.origin_path}`
+          : "off -- refreshes stay in MCC's own store",
+      );
+    }
+    renderAnthropicOAuthTokenDetails(list, account, account.windows || {});
+    details.appendChild(row);
+  });
+}
+
+function renderAnthropicOAuthTokenDetails(details, tokens, windows) {
   appendOAuthDetail(details, "Plan", tokens.subscription_type || "unknown");
   if (tokens.rate_limit_tier) {
     appendOAuthDetail(details, "Rate-limit tier", tokens.rate_limit_tier);
@@ -8879,8 +8953,7 @@ function renderAnthropicOAuthDetails(details, sources) {
     }
   }
 
-  const windows = sources.windows || {};
-  if (!windows.observed) {
+  if (!windows || !windows.observed) {
     appendOAuthDetail(
       details,
       "Usage windows",
@@ -8926,13 +8999,24 @@ async function refreshAnthropicOAuthSources(
 ) {
   try {
     const sources = await api("/admin/api/anthropic-oauth/sources");
-    if (details) renderAnthropicOAuthDetails(details, sources);
+    if (details) renderAnthropicOAuthDetails(details, sources, buttons);
+    const accounts = Array.isArray(sources.accounts) ? sources.accounts : [];
     // Refresh and Disconnect only mean anything against MCC's own store:
     // Claude Code's file is read-only to MCC and must never be renewed or
-    // removed from here.
-    setAnthropicOAuthManagedButtons(buttons, sources.mcc.available);
-    const mccNote = sources.mcc.available
-      ? `An MCC credential is already stored (${sources.mcc.masked_token}).`
+    // removed from here. With accounts stored the per-row buttons are the
+    // real controls and these two act on the primary account.
+    setAnthropicOAuthManagedButtons(buttons, accounts.length > 0);
+    // Once any account is stored, signing in ADDS one. Saying so on the
+    // button is the whole difference between "this will replace what I have"
+    // and "this will give me a second account".
+    const loginButton = Array.isArray(buttons) ? buttons[1] : null;
+    if (loginButton) {
+      loginButton.textContent = accounts.length
+        ? "Sign in another account"
+        : "Sign in with Anthropic";
+    }
+    const mccNote = accounts.length
+      ? `${accounts.length} account(s) stored.`
       : "No credential stored in MCC yet.";
     if (sources.claude_code.available) {
       importButton.disabled = false;
@@ -8941,7 +9025,7 @@ async function refreshAnthropicOAuthSources(
         mccNote;
     } else {
       importButton.disabled = true;
-      status.textContent = sources.mcc.available
+      status.textContent = accounts.length
         ? `Signed in. ${mccNote}`
         : "No credentials found. Sign in below, or log in to Claude Code first.";
     }
@@ -9049,6 +9133,56 @@ async function disconnectAnthropicOAuthCredential(
       candidate.disabled = false;
     });
     refreshAnthropicOAuthSources(buttons[0], status, details, buttons);
+  }
+}
+
+// The per-row controls. Both take the account id in the path, so each acts on
+// exactly one account and the rest of the pool is untouched either way.
+async function refreshAnthropicOAuthAccount(accountId, button, buttons) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Refreshing...";
+  try {
+    const result = await api(
+      `/admin/api/anthropic-oauth/accounts/${encodeURIComponent(accountId)}/refresh`,
+      { method: "POST", body: "{}" },
+    );
+    if (result.status === "complete") showMessage(result.message, "ok");
+  } catch (error) {
+    showMessage(`Could not refresh that account: ${error.message}`, "error");
+  } finally {
+    button.textContent = original;
+    button.disabled = false;
+    refreshAnthropicOAuthSources(
+      buttons[0],
+      buttons.status,
+      buttons.details,
+      buttons,
+    );
+  }
+}
+
+async function disconnectAnthropicOAuthAccount(accountId, button, buttons) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Disconnecting...";
+  try {
+    const result = await api(
+      `/admin/api/anthropic-oauth/accounts/${encodeURIComponent(accountId)}/disconnect`,
+      { method: "POST", body: "{}" },
+    );
+    if (result.status === "complete") showMessage(result.message, "ok");
+  } catch (error) {
+    showMessage(`Could not disconnect that account: ${error.message}`, "error");
+  } finally {
+    button.textContent = original;
+    button.disabled = false;
+    refreshAnthropicOAuthSources(
+      buttons[0],
+      buttons.status,
+      buttons.details,
+      buttons,
+    );
   }
 }
 
@@ -9227,6 +9361,27 @@ function promptForAnthropicOAuthCode(paste) {
    already on disk, the catalogue is the installed Codex CLI's own document,
    and the windows are headers a real OpenAI response carried. Nothing here
    contacts OpenAI, and no token, sub or email is ever fetched or shown. */
+// The two per-account controls, which this card did not have at all before
+// 7.30.0: ChatGPT had no refresh-now route and no disconnect route.
+async function chatgptOAuthAccountAction(accountId, action, button, details) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = action === "refresh" ? "Refreshing..." : "Disconnecting...";
+  try {
+    const result = await api(
+      `/admin/api/chatgpt-oauth/accounts/${encodeURIComponent(accountId)}/${action}`,
+      { method: "POST", body: "{}" },
+    );
+    if (result.status === "complete") showMessage(result.message, "ok");
+  } catch (error) {
+    showMessage(`Could not ${action} that account: ${error.message}`, "error");
+  } finally {
+    button.textContent = original;
+    button.disabled = false;
+    refreshChatGPTOAuthStatus(details);
+  }
+}
+
 async function refreshChatGPTOAuthStatus(details) {
   if (!details) return;
   let status;
@@ -9238,7 +9393,61 @@ async function refreshChatGPTOAuthStatus(details) {
   }
   details.replaceChildren();
   details.hidden = false;
-  appendOAuthDetail(details, "Plan", status.plan_type || "unknown");
+  const accounts = Array.isArray(status.accounts) ? status.accounts : [];
+  // One row per account, each with the two controls this card never had
+  // before 7.30.0: it could say a credential was stale and offer nothing.
+  accounts.forEach((account) => {
+    const row = document.createElement("div");
+    row.className = "oauth-account-heading";
+    row.dataset.accountId = account.account_id || "";
+    const title = document.createElement("strong");
+    title.className = "oauth-account-name";
+    title.textContent = account.name || account.account_id || "account";
+    row.appendChild(title);
+
+    const refreshRow = document.createElement("button");
+    refreshRow.type = "button";
+    refreshRow.className = "secondary-button oauth-account-refresh";
+    refreshRow.textContent = "Refresh now";
+    refreshRow.addEventListener("click", () => {
+      chatgptOAuthAccountAction(account.account_id, "refresh", refreshRow, details);
+    });
+
+    const disconnectRow = document.createElement("button");
+    disconnectRow.type = "button";
+    disconnectRow.className = "secondary-button oauth-account-disconnect";
+    disconnectRow.textContent = "Disconnect";
+    disconnectRow.addEventListener("click", () => {
+      chatgptOAuthAccountAction(
+        account.account_id,
+        "disconnect",
+        disconnectRow,
+        details,
+      );
+    });
+
+    row.append(refreshRow, disconnectRow);
+    details.appendChild(row);
+
+    const list = document.createElement("dl");
+    list.className = "anthropic-oauth-details";
+    appendOAuthDetail(list, "Account", account.account_id || "unknown");
+    appendOAuthDetail(list, "Plan", account.plan_type || "unknown");
+    appendOAuthDetail(list, "Added from", account.origin || "mcc");
+    if (account.origin_path) {
+      appendOAuthDetail(
+        list,
+        "Write-back",
+        account.write_back_effective
+          ? `on -- refreshes are written to ${account.origin_path}`
+          : "off -- refreshes stay in MCC's own store",
+      );
+    }
+    details.appendChild(list);
+  });
+  if (!accounts.length) {
+    appendOAuthDetail(details, "Plan", status.plan_type || "unknown");
+  }
   const catalogue = status.catalogue || {};
   if (catalogue.available) {
     appendOAuthDetail(

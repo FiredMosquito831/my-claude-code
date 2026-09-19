@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,20 @@ from my_claude_code.config.constants import (
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
 )
 from my_claude_code.config.paths import chatgpt_oauth_auth_path
+from my_claude_code.providers.oauth_account_store import (
+    ORIGIN_CODEX,
+    ORIGIN_MCC,
+    account_record_fields,
+    backup_once,
+    monotonic_write_allowed,
+    normalise_epoch_seconds,
+    now_iso,
+    synthetic_account_id,
+)
+from my_claude_code.providers.oauth_names import (
+    forget_account_name,
+    seed_default_name,
+)
 
 CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
@@ -30,6 +45,25 @@ CODEX_OAUTH_SCOPE = (
 MANAGED_CREDENTIAL_SCHEMA_VERSION = 1
 PRIVATE_DIR_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
+
+#: The leeway this module has always used, now named. It was inlined twice,
+#: which is how a constant drifts: the Anthropic side names its 120 in
+#: ``constants.py`` and ``tests/providers/test_oauth_refresh_parity.py`` exists
+#: because these two implementations diverged once already. The **value is
+#: unchanged**; only the number of places it is written down is.
+REFRESH_LEEWAY_SECONDS = 300
+
+#: The account list lives beside ``tokens``, and ``version`` deliberately
+#: **stays 1**: :func:`_load_managed_source` raises on a version it does not
+#: know, so bumping it would make a 7.29.x build fail loudly instead of
+#: degrading to the primary account. ``accounts`` is an additive key the old
+#: reader ignores, and ``tokens`` mirrors ``accounts[0]``.
+ACCOUNTS_VERSION = 1
+ACCOUNTS_VERSION_KEY = "accounts_version"
+ACCOUNTS_KEY = "accounts"
+
+PROVIDER_ID = "chatgpt_oauth"
+PROVIDER_LABEL = "ChatGPT"
 
 
 class ChatGPTOAuthError(Exception):
@@ -124,7 +158,16 @@ def _load_codex_cli_source() -> _TokenSource:
     )
 
 
-def _load_managed_source(path: Path | None = None) -> _TokenSource:
+def _load_managed_source(
+    path: Path | None = None, *, account_id: str | None = None
+) -> _TokenSource:
+    """Read the managed store's primary account, or one named account.
+
+    ``account_id`` is how a per-account leaf provider resolves *its own*
+    credential rather than whichever account happens to be first. With it
+    unset the behaviour is exactly what shipped: the ``tokens`` block, which
+    is always a mirror of ``accounts[0]``.
+    """
     path = path or chatgpt_oauth_auth_path()
     payload = _load_json(path)
     if payload and payload.get("version") != MANAGED_CREDENTIAL_SCHEMA_VERSION:
@@ -132,6 +175,8 @@ def _load_managed_source(path: Path | None = None) -> _TokenSource:
             f"Unsupported FCC ChatGPT OAuth credential schema at {path}."
         )
     tokens = payload.get("tokens") or {}
+    if account_id:
+        tokens = _account_tokens_from_document(payload, account_id) or tokens
     return _TokenSource(
         name="fcc-managed",
         path=path,
@@ -143,15 +188,29 @@ def _load_managed_source(path: Path | None = None) -> _TokenSource:
     )
 
 
+def _account_tokens_from_document(
+    payload: dict[str, Any], account_id: str
+) -> dict[str, Any] | None:
+    raw = payload.get(ACCOUNTS_KEY)
+    if not isinstance(raw, list):
+        return None
+    for entry in raw:
+        if not isinstance(entry, dict) or str(entry.get("id", "")) != account_id:
+            continue
+        tokens = entry.get("tokens")
+        return tokens if isinstance(tokens, dict) else None
+    return None
+
+
 def _reload_source(source: _TokenSource) -> _TokenSource:
     """Re-read one token source from disk (e.g. after another thread refreshed)."""
     if source.name == "fcc-managed":
-        return _load_managed_source(source.path)
+        return _load_managed_source(source.path, account_id=source.account_id)
     return source
 
 
-def _load_sources() -> list[_TokenSource]:
-    return [_load_managed_source()]
+def _load_sources(account_id: str | None = None) -> list[_TokenSource]:
+    return [_load_managed_source(account_id=account_id)]
 
 
 def _decode_jwt_claims(token: str | None) -> dict[str, Any]:
@@ -301,12 +360,322 @@ def _atomic_write_private_json(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+@dataclasses.dataclass(frozen=True)
+class ChatGPTAccountRecord:
+    """One stored ChatGPT/Codex account."""
+
+    id: str
+    tokens: dict[str, Any]
+    origin: str = ORIGIN_MCC
+    origin_path: str = ""
+    write_back: bool = False
+    added_at: str = ""
+    ordinal: int = 1
+
+    @property
+    def owns_a_source_file(self) -> bool:
+        return self.origin == ORIGIN_CODEX and bool(self.origin_path)
+
+
+def _entry_has_access_token(entry: dict[Any, Any]) -> bool:
+    """Whether one stored entry actually carries a credential."""
+    tokens = entry.get("tokens")
+    return isinstance(tokens, dict) and bool(tokens.get("access_token"))
+
+
+def _record_from_entry(entry: dict[Any, Any], *, index: int) -> ChatGPTAccountRecord:
+    fields = account_record_fields(
+        entry,
+        origin_path_key="origin_path",
+        write_back_key="write_back",
+        added_at_key="added_at",
+    )
+    tokens = entry.get("tokens")
+    tokens = dict(tokens) if isinstance(tokens, dict) else {}
+    return ChatGPTAccountRecord(
+        id=fields["id"] or str(tokens.get("account_id") or ""),
+        tokens=tokens,
+        origin=fields["origin"],
+        origin_path=fields["origin_path"],
+        write_back=fields["write_back"],
+        added_at=fields["added_at"] or now_iso(),
+        ordinal=fields["ordinal"] if fields["ordinal"] > 1 else index + 1,
+    )
+
+
+def _entry_from_record(record: ChatGPTAccountRecord) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "tokens": dict(record.tokens),
+        "origin": record.origin,
+        "origin_path": record.origin_path,
+        "write_back": record.write_back,
+        "added_at": record.added_at,
+        "ordinal": record.ordinal,
+    }
+
+
+def load_chatgpt_accounts(
+    *, auth_path: Path | None = None, migrate: bool = True
+) -> list[ChatGPTAccountRecord]:
+    """Every stored ChatGPT account, migrating the single-account shape once.
+
+    Never raises -- not even on the version mismatch the runtime reader raises
+    on, because an account *listing* that throws is a dashboard that cannot
+    render, and a store this build cannot parse is a credential problem, not a
+    page problem.
+    """
+    path = auth_path or chatgpt_oauth_auth_path()
+    try:
+        payload = _load_json(path)
+    except ChatGPTOAuthError:
+        return []
+    if payload.get("version") not in (None, MANAGED_CREDENTIAL_SCHEMA_VERSION):
+        return []
+    raw = payload.get(ACCOUNTS_KEY)
+    if isinstance(raw, list) and raw:
+        records = [
+            _record_from_entry(entry, index=index)
+            for index, entry in enumerate(raw)
+            if isinstance(entry, dict) and _entry_has_access_token(entry)
+        ]
+        if records:
+            return records
+    tokens = payload.get("tokens")
+    if not isinstance(tokens, dict) or not tokens.get("access_token"):
+        return []
+    record = ChatGPTAccountRecord(
+        id=str(tokens.get("account_id") or "")
+        or extract_account_id_from_tokens(
+            access_token=tokens.get("access_token"),
+            id_token=tokens.get("id_token"),
+        )
+        or synthetic_account_id(),
+        tokens=dict(tokens),
+        # Provenance was never persisted before 7.30.0, so claiming this was
+        # imported from Codex would be inventing a fact. ``mcc`` is the honest
+        # answer and also the safe one: write-back leaves Codex's file alone
+        # until the user imports again and says otherwise.
+        origin=ORIGIN_MCC,
+        write_back=False,
+        added_at=now_iso(),
+        ordinal=1,
+    )
+    if migrate:
+        backup_once(path)
+        save_chatgpt_accounts([record], auth_path=path)
+    return [record]
+
+
+def save_chatgpt_accounts(
+    records: Sequence[ChatGPTAccountRecord], *, auth_path: Path | None = None
+) -> Path:
+    """Write the account list, mirroring the primary to ``tokens``.
+
+    ``version`` stays 1 on purpose: the shipped reader raises on a mismatch,
+    so a bump would turn a downgrade into a hard failure rather than a
+    degradation to the primary account.
+    """
+    path = auth_path or chatgpt_oauth_auth_path()
+    if not records:
+        path.unlink(missing_ok=True)
+        return path
+    _atomic_write_private_json(
+        path,
+        {
+            "version": MANAGED_CREDENTIAL_SCHEMA_VERSION,
+            "tokens": dict(records[0].tokens),
+            ACCOUNTS_VERSION_KEY: ACCOUNTS_VERSION,
+            ACCOUNTS_KEY: [_entry_from_record(record) for record in records],
+        },
+    )
+    return path
+
+
+def stored_chatgpt_account_email(
+    *, auth_path: Path | None = None, account_id: str = ""
+) -> str:
+    """The ``email`` claim of a stored id_token, read **only** to seed a name.
+
+    The card's "never reads the identity claims" invariant is narrowed here
+    rather than dropped: ``sub`` is still never read, the raw claim is never
+    returned by an endpoint, and the email's only destination is
+    ``credential_names.json``, as a name like any other the operator can
+    change or clear. No network call is involved -- the claim is already on
+    disk, in the id_token this store has always kept.
+    """
+    for record in load_chatgpt_accounts(auth_path=auth_path, migrate=False):
+        if account_id and record.id != account_id:
+            continue
+        claims = _decode_jwt_claims(record.tokens.get("id_token"))
+        email = claims.get("email")
+        if isinstance(email, str) and email.strip():
+            return email.strip()
+        if account_id:
+            return ""
+    return ""
+
+
+def add_or_update_chatgpt_account(
+    tokens: dict[str, Any],
+    *,
+    origin: str = ORIGIN_MCC,
+    origin_path: str = "",
+    write_back: bool | None = None,
+    auth_path: Path | None = None,
+) -> ChatGPTAccountRecord:
+    """Add an account, or update in place the one with the same account id.
+
+    The ChatGPT account id is preserved across refresh by OpenAI itself, so
+    unlike the Anthropic side there is never any doubt about which record a
+    credential belongs to.
+    """
+    path = auth_path or chatgpt_oauth_auth_path()
+    records = list(load_chatgpt_accounts(auth_path=path))
+    account_id = str(tokens.get("account_id") or "")
+    index = next(
+        (i for i, record in enumerate(records) if record.id == account_id), None
+    )
+    if index is None:
+        ordinal = max((record.ordinal for record in records), default=0) + 1
+        record = ChatGPTAccountRecord(
+            id=account_id,
+            tokens=dict(tokens),
+            origin=origin,
+            origin_path=origin_path,
+            write_back=(
+                write_back if write_back is not None else origin == ORIGIN_CODEX
+            ),
+            added_at=now_iso(),
+            ordinal=ordinal,
+        )
+        records.append(record)
+    else:
+        previous = records[index]
+        record = dataclasses.replace(previous, tokens=dict(tokens))
+        records[index] = record
+    save_chatgpt_accounts(records, auth_path=path)
+    seed_default_name(
+        PROVIDER_ID,
+        record.id,
+        email=stored_chatgpt_account_email(auth_path=path, account_id=record.id),
+        provider_label=PROVIDER_LABEL,
+        ordinal=record.ordinal,
+    )
+    return record
+
+
+def remove_chatgpt_account(
+    account_id: str, *, auth_path: Path | None = None
+) -> ChatGPTAccountRecord | None:
+    """Disconnect one ChatGPT account. The file survives while any remain."""
+    path = auth_path or chatgpt_oauth_auth_path()
+    records = list(load_chatgpt_accounts(auth_path=path))
+    remaining = [record for record in records if record.id != account_id]
+    if len(remaining) == len(records):
+        return None
+    removed = next(record for record in records if record.id == account_id)
+    save_chatgpt_accounts(remaining, auth_path=path)
+    forget_account_name(PROVIDER_ID, account_id)
+    return removed
+
+
+WRITE_BACK_ENV = "CHATGPT_OAUTH_WRITE_BACK"
+
+
+def chatgpt_write_back_enabled() -> bool:
+    """Whether Codex write-back is on. Default on; one switch turns it off.
+
+    Read through ``Settings`` for the reason the Anthropic twin is: the
+    dashboard writes ``.env``, which ``pydantic-settings`` reads without
+    exporting, so an ``os.environ`` read would ignore the operator's switch.
+    """
+    try:
+        from my_claude_code.config.settings import get_settings
+
+        return bool(getattr(get_settings(), "chatgpt_oauth_write_back", True))
+    except Exception:  # pragma: no cover - a settings problem is not a refusal
+        return os.environ.get(WRITE_BACK_ENV, "").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+
+
+def chatgpt_write_back_if_owned(
+    record: ChatGPTAccountRecord, tokens: dict[str, Any]
+) -> bool:
+    """Write a refreshed token back into the Codex ``auth.json`` it came from.
+
+    Codex has **no** filesystem lock on its primary auth file -- it has locks
+    for its MCP OAuth, its secrets store, its daemon and its pid, but not for
+    this -- so unlike the Anthropic side there is no protocol to join and the
+    monotonicity guard is the entire protection. Written carefully, because
+    OpenAI rotates the refresh token: writing an older bundle over a newer one
+    is precisely the failure write-back exists to prevent.
+
+    ``account_id`` on the target is left exactly as found, so Codex's own
+    account-id-guarded reload still matches and it does not skip the file as
+    changed underneath it.
+    """
+    if not record.owns_a_source_file or not record.write_back:
+        return False
+    if not chatgpt_write_back_enabled():
+        return False
+    target = Path(record.origin_path)
+    if not target.is_file():
+        return False
+    try:
+        document = _load_json(target)
+    except ChatGPTOAuthError:
+        return False
+    existing = document.get("tokens")
+    existing = dict(existing) if isinstance(existing, dict) else {}
+    if not monotonic_write_allowed(
+        target_expires_at=_expiry_for_guard(existing),
+        target_refresh_expires_at=None,
+        ours_expires_at=_expiry_for_guard(tokens),
+        ours_refresh_expires_at=None,
+    ):
+        return False
+    backup_once(target)
+    existing.update(
+        {
+            "access_token": tokens.get("access_token"),
+            "refresh_token": tokens.get("refresh_token"),
+            "id_token": tokens.get("id_token") or existing.get("id_token"),
+            "expires_at": tokens.get("expires_at"),
+        }
+    )
+    document["tokens"] = existing
+    _atomic_write_private_json(target, document)
+    return True
+
+
+def _expiry_for_guard(tokens: dict[str, Any]) -> int | None:
+    """The expiry the race rule compares, falling back to the id_token ``exp``."""
+    expires_at = normalise_epoch_seconds(tokens.get("expires_at"))
+    if expires_at is not None:
+        return expires_at
+    claims = _decode_jwt_claims(tokens.get("id_token"))
+    return normalise_epoch_seconds(claims.get("exp"))
+
+
 def store_managed_chatgpt_oauth_tokens(
     tokens: dict[str, Any],
     *,
     auth_path: Path | None = None,
+    origin: str = ORIGIN_MCC,
+    origin_path: str = "",
+    write_back: bool | None = None,
 ) -> Path:
-    """Validate and atomically persist FCC-owned renewable OAuth credentials."""
+    """Validate and atomically persist FCC-owned renewable OAuth credentials.
+
+    A thin wrapper over :func:`add_or_update_chatgpt_account` since 7.30.0, so
+    a refresh written through it updates *that account's* record and re-mirrors
+    the primary rather than replacing the document and dropping the rest.
+    """
 
     access_token = tokens.get("access_token")
     refresh_token = tokens.get("refresh_token")
@@ -329,18 +698,18 @@ def store_managed_chatgpt_oauth_tokens(
             "OpenAI OAuth response did not contain a ChatGPT account identifier."
         )
     path = auth_path or chatgpt_oauth_auth_path()
-    _atomic_write_private_json(
-        path,
+    add_or_update_chatgpt_account(
         {
-            "version": MANAGED_CREDENTIAL_SCHEMA_VERSION,
-            "tokens": {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "id_token": id_token,
-                "account_id": account_id,
-                "expires_at": _token_expiry(tokens),
-            },
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "id_token": id_token,
+            "account_id": account_id,
+            "expires_at": _token_expiry(tokens),
         },
+        origin=origin,
+        origin_path=origin_path,
+        write_back=write_back,
+        auth_path=path,
     )
     return path
 
@@ -386,24 +755,42 @@ def _persist_refreshed_tokens(
     id_token: str | None,
     expires_at: int | None,
 ) -> None:
-    """Write refreshed tokens back to FCC's private credential store."""
+    """Write refreshed tokens back to FCC's private credential store.
+
+    ...and, when that account was imported from Codex and write-back is on,
+    onwards into Codex's own ``auth.json`` under the monotonicity guard.
+    """
     if source.name != "fcc-managed":
         raise ChatGPTOAuthError(
             "Refusing to write refreshed credentials outside FCC's auth store."
         )
-    store_managed_chatgpt_oauth_tokens(
-        {
-            "access_token": access_token,
-            "refresh_token": refresh_token or source.refresh_token,
-            "id_token": id_token or source.id_token,
-            "account_id": source.account_id,
-            "expires_at": expires_at,
-        },
-        auth_path=source.path,
-    )
+    bundle = {
+        "access_token": access_token,
+        "refresh_token": refresh_token or source.refresh_token,
+        "id_token": id_token or source.id_token,
+        "account_id": source.account_id,
+        "expires_at": expires_at,
+    }
+    record = add_or_update_chatgpt_account(bundle, auth_path=source.path)
+    chatgpt_write_back_if_owned(record, bundle)
 
 
-_REFRESH_LOCK = threading.Lock()
+#: One lock per ``(store path, account id)``. This was a single global
+#: ``threading.Lock``, which was right while there was one credential and
+#: wrong the moment there were two: a second account's refresh would queue
+#: behind the first's network round trip for no reason.
+_REFRESH_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_REFRESH_LOCKS_GUARD = threading.Lock()
+
+
+def _refresh_lock(path: Path, account_id: str | None) -> threading.Lock:
+    key = (str(path), account_id or "")
+    with _REFRESH_LOCKS_GUARD:
+        lock = _REFRESH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _REFRESH_LOCKS[key] = lock
+        return lock
 
 
 def _ensure_fresh_source(source: _TokenSource) -> _TokenSource:
@@ -412,20 +799,20 @@ def _ensure_fresh_source(source: _TokenSource) -> _TokenSource:
         if source.access_token
         else None
     )
-    if remaining is None or remaining > 300:
+    if remaining is None or remaining > REFRESH_LEEWAY_SECONDS:
         return source
     if not source.has_refresh_token or source.refresh_token is None:
         # Token is expiring and we cannot refresh; return as-is and let the
         # upstream request fail with a clear 401 if expired.
         return source
 
-    with _REFRESH_LOCK:
+    with _refresh_lock(source.path, source.account_id):
         # Another thread may have refreshed while we waited on the lock.
         current = _reload_source(source)
         current_access_token = current.access_token
         if current.has_access_token and current_access_token is not None:
             remaining = _access_token_seconds_remaining(current_access_token)
-            if remaining is not None and remaining > 300:
+            if remaining is not None and remaining > REFRESH_LEEWAY_SECONDS:
                 return current
         if not current.has_refresh_token or current.refresh_token is None:
             return source
@@ -475,12 +862,18 @@ def load_chatgpt_oauth_credentials(
     *,
     access_token: str | None = None,
     account_id: str | None = None,
+    pinned_account_id: str | None = None,
 ) -> ChatGPTOAuthCredentials:
     """Resolve OAuth credentials from explicit values or auth files.
 
     Priority:
       1. Explicit access_token / account_id.
       2. FCC's private renewable credential store.
+
+    ``pinned_account_id`` selects **which stored account** to resolve, and is
+    how a per-account leaf provider gets its own credential instead of
+    whichever one happens to be primary. ``account_id`` is a different thing
+    and always was: the value of the ``ChatGPT-Account-ID`` *header*.
     """
     normalized_access_token = (access_token or "").strip()
     if (
@@ -495,7 +888,7 @@ def load_chatgpt_oauth_credentials(
             account_id=resolved_account_id,
         )
 
-    source = _choose_runtime_source(_load_sources())
+    source = _choose_runtime_source(_load_sources(pinned_account_id))
     resolved_account_id = (
         (account_id or "").strip()
         or (source.account_id or "").strip()
@@ -513,11 +906,18 @@ def load_chatgpt_oauth_credentials(
     )
 
 
-def force_refresh_managed_chatgpt_oauth_credentials() -> ChatGPTOAuthCredentials:
-    """Refresh FCC-owned credentials after an upstream unauthorized response."""
+def force_refresh_managed_chatgpt_oauth_credentials(
+    account_id: str | None = None,
+) -> ChatGPTOAuthCredentials:
+    """Refresh FCC-owned credentials after an upstream unauthorized response.
 
-    with _REFRESH_LOCK:
-        source = _load_managed_source()
+    ``account_id`` names the account the request that got the 401 was served
+    by, so a 401 on one account refreshes **that** account and leaves the
+    others -- and their refresh tokens -- untouched.
+    """
+
+    with _refresh_lock(chatgpt_oauth_auth_path(), account_id):
+        source = _load_managed_source(account_id=account_id)
         if not source.has_refresh_token or source.refresh_token is None:
             raise ChatGPTOAuthError(
                 "MCC ChatGPT OAuth credentials cannot be refreshed. Reconnect in Admin."
@@ -528,7 +928,15 @@ def force_refresh_managed_chatgpt_oauth_credentials() -> ChatGPTOAuthCredentials
             )
         except ChatGPTOAuthRefreshError as exc:
             if exc.status_code in DEFINITIVE_REFRESH_STATUSES:
-                source.path.unlink(missing_ok=True)
+                # Retire **that account only**. Unlinking the file was right
+                # while it held one credential and is wrong now: one dead
+                # account must not take every other account's credential with
+                # it. The file survives while any account remains.
+                retired = source.account_id or account_id or ""
+                if retired and remove_chatgpt_account(retired, auth_path=source.path):
+                    pass
+                else:
+                    source.path.unlink(missing_ok=True)
                 raise ChatGPTOAuthError(
                     "ChatGPT OAuth session expired. Reconnect in Admin."
                 ) from exc
@@ -584,9 +992,15 @@ def import_codex_cli_tokens() -> ChatGPTOAuthCredentials:
             "id_token": source.id_token,
             "account_id": source.account_id,
             "expires_at": source.expires_at,
-        }
+        },
+        # Provenance, persisted. Without it write-back is impossible -- there
+        # is nothing on disk that says this credential belongs to a file MCC
+        # does not own.
+        origin=ORIGIN_CODEX,
+        origin_path=str(source.path),
+        write_back=True,
     )
-    managed = _ensure_fresh_source(_load_managed_source())
+    managed = _ensure_fresh_source(_load_managed_source(account_id=source.account_id))
     return ChatGPTOAuthCredentials(
         access_token=managed.access_token or "",
         account_id=(managed.account_id or "")

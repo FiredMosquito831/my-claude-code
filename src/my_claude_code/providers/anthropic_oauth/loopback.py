@@ -34,16 +34,19 @@ from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
 
+from my_claude_code.providers.oauth_names import account_name
+
 from .constants import (
     LOOPBACK_BIND_HOST,
     LOOPBACK_REDIRECT_PATH,
     LOOPBACK_TIMEOUT_SECONDS,
     loopback_redirect_uri,
 )
+from .credentials import PROVIDER_ID
 from .oauth_login import (
     AnthropicOAuthLoginError,
     build_authorize_url,
-    exchange_code,
+    exchange_code_for_account,
     generate_pkce_verifier,
 )
 
@@ -275,7 +278,7 @@ async def loopback_login_status() -> dict[str, str]:
 
     assert flow.code is not None
     try:
-        tokens = await exchange_code(
+        record, tokens = await exchange_code_for_account(
             flow.code,
             flow.verifier,
             flow.state,
@@ -291,7 +294,12 @@ async def loopback_login_status() -> dict[str, str]:
     return {
         "status": "complete",
         "subscription_type": tokens.subscription_type or "",
-        "message": "Signed in. Credential stored in MCC's private store.",
+        # Which account this sign-in produced, so the card can highlight the
+        # row it just added rather than re-rendering and leaving the operator
+        # to work out which of three rows is new.
+        "account_id": record.id,
+        "account_name": account_name(PROVIDER_ID, record.id),
+        "message": "Signed in. The account was added to MCC's private store.",
     }
 
 

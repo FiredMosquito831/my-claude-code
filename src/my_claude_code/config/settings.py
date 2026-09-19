@@ -366,6 +366,17 @@ class Settings(BaseSettings):
     chatgpt_oauth_base_url: str = Field(
         default="", validation_alias="CHATGPT_OAUTH_BASE_URL"
     )
+    # Whether a refresh of an account MCC **imported** is written back to the
+    # file it came from. Default on, for imported accounts only: an account
+    # MCC signed in itself has no source file to own, and nothing here ever
+    # touches one. Off here means MCC keeps the refreshed token to itself and
+    # the other client goes on managing its own.
+    chatgpt_oauth_write_back: bool = Field(
+        default=True, validation_alias="CHATGPT_OAUTH_WRITE_BACK"
+    )
+    anthropic_oauth_write_back: bool = Field(
+        default=True, validation_alias="ANTHROPIC_OAUTH_WRITE_BACK"
+    )
 
     # ==================== Wafer Config ====================
     wafer_api_key: str = Field(default="", validation_alias="WAFER_API_KEY")

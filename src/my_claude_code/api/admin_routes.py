@@ -1,6 +1,7 @@
 """Local admin UI routes and APIs."""
 
 import asyncio
+import dataclasses
 import ipaddress
 import os
 import sys
@@ -92,10 +93,13 @@ from my_claude_code.config.credential_names import (
     credential_fingerprint,
     env_pool_id,
     forget_credentials,
+    oauth_credential_id,
+    oauth_pool_id,
     pool_names,
     set_name,
     websearch_pool_id,
 )
+from my_claude_code.config.credential_names import set_name as set_credential_name
 from my_claude_code.config.credentials import (
     mask_key_label as mask_credential_label,
 )
@@ -186,13 +190,28 @@ from my_claude_code.providers.anthropic_oauth.constants import (
     INFERENCE_SCOPE as ANTHROPIC_INFERENCE_SCOPE,
 )
 from my_claude_code.providers.anthropic_oauth.credentials import (
+    AccountRecord as AnthropicAccountRecord,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
     AnthropicOAuthRefreshError,
     AnthropicOAuthUnavailableError,
     OAuthTokens,
+    claude_code_oauth_account,
     claude_credentials_path,
     load_claude_code_tokens,
-    load_managed_tokens,
     load_tokens,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
+    add_or_update_account as add_anthropic_oauth_account,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
+    load_accounts as load_anthropic_oauth_accounts,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
+    load_tokens_for as load_anthropic_tokens_for,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
+    managed_store_path as anthropic_oauth_store_path,
 )
 from my_claude_code.providers.anthropic_oauth.credentials import (
     quarantine_managed_store as quarantine_anthropic_oauth_store,
@@ -201,7 +220,10 @@ from my_claude_code.providers.anthropic_oauth.credentials import (
     refresh_tokens as refresh_anthropic_oauth_tokens,
 )
 from my_claude_code.providers.anthropic_oauth.credentials import (
-    store_tokens as store_anthropic_oauth_tokens,
+    remove_account as remove_anthropic_oauth_account,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
+    write_back_enabled as anthropic_write_back_enabled,
 )
 from my_claude_code.providers.anthropic_oauth.loopback import (
     AnthropicOAuthLoopbackUnavailableError,
@@ -230,9 +252,23 @@ from my_claude_code.providers.chatgpt_oauth.codex_catalogue import (
     retired_entries,
 )
 from my_claude_code.providers.chatgpt_oauth.credentials import (
+    DEFINITIVE_REFRESH_STATUSES as CHATGPT_DEFINITIVE_REFRESH_STATUSES,
+)
+from my_claude_code.providers.chatgpt_oauth.credentials import (
     ChatGPTOAuthError,
+    ChatGPTOAuthRefreshError,
+    chatgpt_write_back_enabled,
     import_codex_cli_tokens,
     stored_chatgpt_plan_type,
+)
+from my_claude_code.providers.chatgpt_oauth.credentials import (
+    force_refresh_managed_chatgpt_oauth_credentials as force_refresh_chatgpt_oauth_credentials,
+)
+from my_claude_code.providers.chatgpt_oauth.credentials import (
+    load_chatgpt_accounts as load_chatgpt_oauth_accounts,
+)
+from my_claude_code.providers.chatgpt_oauth.credentials import (
+    remove_chatgpt_account as remove_chatgpt_oauth_account,
 )
 from my_claude_code.providers.chatgpt_oauth.oauth_login import (
     CHATGPT_OAUTH_DEVICE_VERIFICATION_URL,
@@ -244,6 +280,10 @@ from my_claude_code.providers.chatgpt_oauth.oauth_login import (
 )
 from my_claude_code.providers.chatgpt_oauth.response_headers import (
     OBSERVER as CHATGPT_RESPONSE_OBSERVER,
+)
+from my_claude_code.providers.oauth_account_store import ORIGIN_CLAUDE_CODE
+from my_claude_code.providers.oauth_names import (
+    account_name as oauth_account_name,
 )
 from my_claude_code.providers.runtime.rotating import RotatingProvider
 from my_claude_code.websearch.errors import WebSearchError
@@ -2569,9 +2609,33 @@ class _AnthropicOAuthWindows(BaseModel):
     usage_limit: str = NOT_YET_OBSERVED
 
 
+class _AnthropicOAuthAccountInfo(_AnthropicOAuthSourceInfo):
+    """One stored account's row on the card.
+
+    Everything the single-account card showed, plus the four things that only
+    mean something once there are two: which account this is, what the
+    operator calls it, which file it came from, and whether a refresh of it is
+    written back there. The **windows are this account's own**, because a
+    5-hour utilisation belongs to the subscription that observed it.
+    """
+
+    account_id: str = ""
+    name: str = ""
+    origin: str = ""
+    origin_path: str = ""
+    write_back: bool = False
+    write_back_effective: bool = False
+    ordinal: int = 1
+    windows: _AnthropicOAuthWindows = _AnthropicOAuthWindows()
+
+
 class _AnthropicOAuthSourcesResponse(BaseModel):
     claude_code: _AnthropicOAuthSourceInfo
+    #: Deprecated alias for ``accounts[0]``, kept for one release so an older
+    #: cached dashboard bundle does not render a blank card against a newer
+    #: server. ``admin.js`` reads ``accounts``.
     mcc: _AnthropicOAuthSourceInfo
+    accounts: list[_AnthropicOAuthAccountInfo] = []
     windows: _AnthropicOAuthWindows = _AnthropicOAuthWindows()
 
 
@@ -2595,9 +2659,35 @@ def _anthropic_oauth_source_info(
     )
 
 
-def _anthropic_oauth_windows() -> _AnthropicOAuthWindows:
+def _anthropic_oauth_account_info(
+    record: AnthropicAccountRecord,
+) -> _AnthropicOAuthAccountInfo:
+    """One account row. Never a token, never a raw email field."""
+    base = _anthropic_oauth_source_info(record.tokens)
+    return _AnthropicOAuthAccountInfo(
+        **base.model_dump(),
+        account_id=record.id,
+        # The operator's own word for this account. Defaulted from the email
+        # the token response carries, which is why it is a *name* in
+        # ``credential_names.json`` and not an identity field on this payload:
+        # it can be changed, cleared, and is never a request dimension.
+        name=oauth_account_name("anthropic_oauth", record.id),
+        origin=record.origin,
+        origin_path=record.origin_path,
+        write_back=record.write_back,
+        write_back_effective=(
+            record.write_back
+            and record.owns_a_source_file
+            and anthropic_write_back_enabled()
+        ),
+        ordinal=record.ordinal,
+        windows=_anthropic_oauth_windows(account_id=record.id),
+    )
+
+
+def _anthropic_oauth_windows(account_id: str = "") -> _AnthropicOAuthWindows:
     """Report the last observed rate-limit headers, or that there are none."""
-    snapshot = ANTHROPIC_RATE_LIMIT_OBSERVER.latest
+    snapshot = ANTHROPIC_RATE_LIMIT_OBSERVER.latest_for(account_id)
     if snapshot is None:
         return _AnthropicOAuthWindows()
     values = snapshot.values
@@ -2628,10 +2718,16 @@ async def anthropic_oauth_sources(request: Request):
     """
     require_loopback_admin(request)
     claude_code_tokens = await asyncio.to_thread(load_claude_code_tokens)
-    mcc_tokens = await asyncio.to_thread(load_managed_tokens)
+    records = await asyncio.to_thread(load_anthropic_oauth_accounts)
+    accounts = [_anthropic_oauth_account_info(record) for record in records]
     return _AnthropicOAuthSourcesResponse(
         claude_code=_anthropic_oauth_source_info(claude_code_tokens),
-        mcc=_anthropic_oauth_source_info(mcc_tokens),
+        mcc=(
+            _anthropic_oauth_source_info(records[0].tokens)
+            if records
+            else _AnthropicOAuthSourceInfo(available=False)
+        ),
+        accounts=accounts,
         windows=_anthropic_oauth_windows(),
     )
 
@@ -2672,18 +2768,71 @@ class _ChatGPTOAuthCatalogue(BaseModel):
     retired_model_ids: list[str] = []
 
 
-class _ChatGPTOAuthStatusResponse(BaseModel):
-    #: Decoded locally out of the stored ID token's claims -- no network call
-    #: and no token refresh. Empty means unknown, which applies no plan filter
-    #: at all. The token itself, ``sub`` and ``email`` are never read out here.
+class _ChatGPTOAuthAccountInfo(BaseModel):
+    """One stored ChatGPT account's row on the card.
+
+    ``plan_type`` is still decoded locally from the stored id_token, exactly
+    as it always was. ``name`` is the operator's word for this account --
+    seeded from the id_token's ``email`` claim, stored in
+    ``credential_names.json``, changeable and clearable. The raw claim itself
+    is **not** on this payload, and ``sub`` is still never read at all.
+    """
+
+    account_id: str = ""
+    name: str = ""
     plan_type: str = ""
-    catalogue: _ChatGPTOAuthCatalogue = _ChatGPTOAuthCatalogue()
+    origin: str = ""
+    origin_path: str = ""
+    write_back: bool = False
+    write_back_effective: bool = False
+    ordinal: int = 1
+    expires_at: int | None = None
     windows: _ChatGPTOAuthWindows = _ChatGPTOAuthWindows()
 
 
-def _chatgpt_oauth_windows() -> _ChatGPTOAuthWindows:
+class _ChatGPTOAuthAccountActionResponse(BaseModel):
+    status: str
+    account_id: str = ""
+    expires_at: int | None = None
+    message: str = ""
+
+
+class _ChatGPTOAuthStatusResponse(BaseModel):
+    #: Decoded locally out of the stored ID token's claims -- no network call
+    #: and no token refresh. Empty means unknown, which applies no plan filter
+    #: at all. The token itself and ``sub`` are never read out here.
+    plan_type: str = ""
+    catalogue: _ChatGPTOAuthCatalogue = _ChatGPTOAuthCatalogue()
+    windows: _ChatGPTOAuthWindows = _ChatGPTOAuthWindows()
+    accounts: list[_ChatGPTOAuthAccountInfo] = []
+
+
+def _chatgpt_oauth_accounts() -> list[_ChatGPTOAuthAccountInfo]:
+    """One row per stored ChatGPT account. Never a token."""
+    return [
+        _ChatGPTOAuthAccountInfo(
+            account_id=record.id,
+            name=oauth_account_name("chatgpt_oauth", record.id),
+            plan_type=stored_chatgpt_plan_type(),
+            origin=record.origin,
+            origin_path=record.origin_path,
+            write_back=record.write_back,
+            write_back_effective=(
+                record.write_back
+                and record.owns_a_source_file
+                and chatgpt_write_back_enabled()
+            ),
+            ordinal=record.ordinal,
+            expires_at=record.tokens.get("expires_at"),
+            windows=_chatgpt_oauth_windows(account_id=record.id),
+        )
+        for record in load_chatgpt_oauth_accounts(migrate=False)
+    ]
+
+
+def _chatgpt_oauth_windows(account_id: str = "") -> _ChatGPTOAuthWindows:
     """Report the last observed Codex response headers, or that there are none."""
-    snapshot = CHATGPT_RESPONSE_OBSERVER.latest
+    snapshot = CHATGPT_RESPONSE_OBSERVER.latest_for(account_id)
     if snapshot is None:
         return _ChatGPTOAuthWindows()
     values = snapshot.values
@@ -2734,10 +2883,12 @@ async def chatgpt_oauth_status(request: Request):
     require_loopback_admin(request)
     plan_type = await asyncio.to_thread(stored_chatgpt_plan_type)
     catalogue = await asyncio.to_thread(_chatgpt_oauth_catalogue)
+    accounts = await asyncio.to_thread(_chatgpt_oauth_accounts)
     return _ChatGPTOAuthStatusResponse(
         plan_type=plan_type,
         catalogue=catalogue,
         windows=_chatgpt_oauth_windows(),
+        accounts=accounts,
     )
 
 
@@ -2772,12 +2923,39 @@ async def anthropic_oauth_import_claude_code(request: Request):
                 "'Sign in with Anthropic' above instead of importing."
             )
         raise HTTPException(status_code=400, detail=detail)
-    await asyncio.to_thread(store_anthropic_oauth_tokens, tokens)
+    # Claude Code's *credential* file carries no identity at all, so without
+    # this the imported account has no name until its first refresh brings the
+    # ``account`` object back. ``~/.claude.json`` has it immediately, and is
+    # read strictly read-only, only the ``oauthAccount`` block, only here.
+    identity = await asyncio.to_thread(claude_code_oauth_account)
+    uuid = identity.get("accountUuid", "")
+    email = identity.get("emailAddress", "")
+    # Carrying the uuid onto the credential is what makes the imported
+    # account's id the *same* id its first refresh will report, so the refresh
+    # updates it in place instead of appending a second copy of it.
+    identified = (
+        dataclasses.replace(tokens, account_uuid=uuid, account_email=email or None)
+        if uuid or email
+        else tokens
+    )
+    record = await asyncio.to_thread(
+        lambda: add_anthropic_oauth_account(
+            identified,
+            origin=ORIGIN_CLAUDE_CODE,
+            origin_path=str(claude_credentials_path()),
+            write_back=True,
+            default_email=email,
+        )
+    )
     return _AnthropicOAuthImportResponse(
         status="complete",
         credential_reference=ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
         subscription_type=tokens.subscription_type,
-        message="Copied Claude Code's credential into MCC's private store.",
+        message=(
+            "Copied Claude Code's credential into MCC's private store as "
+            f"account {record.id}. Refreshes of it are written back to "
+            "Claude Code's own file."
+        ),
     )
 
 
@@ -2977,6 +3155,171 @@ async def anthropic_oauth_disconnect(request: Request):
             f"Disconnected. The credential was kept as {quarantined.name} "
             "rather than deleted."
         ),
+    )
+
+
+# ------------------------------------------------------- per-account OAuth routes
+#
+# The old paths above act on the **primary** account and keep working, so a
+# bookmarked request and an older dashboard bundle both still do what they did.
+# These name the account, which is the only thing that can be right once there
+# is more than one of them.
+
+
+class _OAuthAccountNameRequest(BaseModel):
+    name: str = ""
+
+
+class _OAuthAccountNameResponse(BaseModel):
+    status: str
+    account_id: str
+    name: str
+
+
+@router.post("/admin/api/anthropic-oauth/accounts/{account_id}/refresh")
+async def anthropic_oauth_account_refresh(account_id: str, request: Request):
+    """Refresh **one** Claude account, now, on demand.
+
+    The status mapping is the 6.43.0 one, unchanged and for the same reason:
+    a *transient* failure is a 503 and the credential is untouched, a
+    *definitive* rejection is a 401 and that account has already been retired
+    by the time this returns. The other accounts are not involved either way.
+    """
+    require_loopback_admin(request)
+    tokens = await asyncio.to_thread(load_anthropic_tokens_for, account_id)
+    if tokens is None:
+        raise HTTPException(
+            status_code=404, detail=f"No stored Claude account {account_id}."
+        )
+    if not tokens.has_refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "That account has no refresh token, so it cannot be renewed. "
+                "Sign in again, or import your Claude Code credential."
+            ),
+        )
+    try:
+        refreshed = await refresh_anthropic_oauth_tokens(tokens, account_id=account_id)
+    except AnthropicOAuthRefreshError as exc:
+        raise HTTPException(
+            status_code=401 if exc.definitive else 503,
+            detail=str(exc),
+        ) from exc
+    return _AnthropicOAuthRefreshResponse(
+        status="complete",
+        credential_reference=ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+        expires_at=refreshed.expires_at,
+        subscription_type=refreshed.subscription_type,
+        message="Refreshed that Claude subscription account.",
+    )
+
+
+@router.post("/admin/api/anthropic-oauth/accounts/{account_id}/disconnect")
+async def anthropic_oauth_account_disconnect(account_id: str, request: Request):
+    """Disconnect **one** Claude account. The others keep serving.
+
+    The removed record is written to ``anthropic_oauth.json.dead-<epoch>``,
+    never deleted -- the same promise the whole-store disconnect keeps.
+    """
+    require_loopback_admin(request)
+    removed = await asyncio.to_thread(remove_anthropic_oauth_account, account_id)
+    if removed is None:
+        raise HTTPException(
+            status_code=404, detail=f"No stored Claude account {account_id}."
+        )
+    return _AnthropicOAuthDisconnectResponse(
+        status="complete",
+        quarantined_as=f"{anthropic_oauth_store_path().name}.dead-*",
+        message=(
+            "Disconnected that account. Its credential was kept in a "
+            "'.dead-' file rather than deleted."
+        ),
+    )
+
+
+@router.put("/admin/api/anthropic-oauth/accounts/{account_id}/name")
+async def anthropic_oauth_account_name(
+    account_id: str, payload: _OAuthAccountNameRequest, request: Request
+):
+    """Name one Claude account.
+
+    A thin wrapper over the 7.29.0 naming store and **deliberately nothing
+    else**: naming a credential must not rebuild the provider generation, or
+    renaming a key would cost every in-flight request its provider.
+    """
+    require_loopback_admin(request)
+    stored = await asyncio.to_thread(
+        set_credential_name,
+        oauth_pool_id("anthropic_oauth"),
+        oauth_credential_id(account_id),
+        payload.name,
+    )
+    return _OAuthAccountNameResponse(
+        status="complete", account_id=account_id, name=stored
+    )
+
+
+@router.post("/admin/api/chatgpt-oauth/accounts/{account_id}/refresh")
+async def chatgpt_oauth_account_refresh(account_id: str, request: Request):
+    """Refresh **one** ChatGPT account, now, on demand.
+
+    The ChatGPT card had no refresh control at all before 7.30.0 -- it could
+    say the credential was stale and offer nothing to do about it. The status
+    mapping mirrors the Anthropic one exactly, so the two cards cannot drift.
+    """
+    require_loopback_admin(request)
+    try:
+        credentials = await asyncio.to_thread(
+            force_refresh_chatgpt_oauth_credentials, account_id
+        )
+    except ChatGPTOAuthRefreshError as exc:
+        raise HTTPException(
+            status_code=(
+                401 if exc.status_code in CHATGPT_DEFINITIVE_REFRESH_STATUSES else 503
+            ),
+            detail=str(exc),
+        ) from exc
+    except ChatGPTOAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return _ChatGPTOAuthAccountActionResponse(
+        status="complete",
+        account_id=credentials.account_id or account_id,
+        expires_at=credentials.expires_at,
+        message="Refreshed that ChatGPT account.",
+    )
+
+
+@router.post("/admin/api/chatgpt-oauth/accounts/{account_id}/disconnect")
+async def chatgpt_oauth_account_disconnect(account_id: str, request: Request):
+    """Disconnect **one** ChatGPT account. The file survives the others."""
+    require_loopback_admin(request)
+    removed = await asyncio.to_thread(remove_chatgpt_oauth_account, account_id)
+    if removed is None:
+        raise HTTPException(
+            status_code=404, detail=f"No stored ChatGPT account {account_id}."
+        )
+    return _ChatGPTOAuthAccountActionResponse(
+        status="complete",
+        account_id=account_id,
+        message="Disconnected that ChatGPT account.",
+    )
+
+
+@router.put("/admin/api/chatgpt-oauth/accounts/{account_id}/name")
+async def chatgpt_oauth_account_name(
+    account_id: str, payload: _OAuthAccountNameRequest, request: Request
+):
+    """Name one ChatGPT account. See the Anthropic twin."""
+    require_loopback_admin(request)
+    stored = await asyncio.to_thread(
+        set_credential_name,
+        oauth_pool_id("chatgpt_oauth"),
+        oauth_credential_id(account_id),
+        payload.name,
+    )
+    return _OAuthAccountNameResponse(
+        status="complete", account_id=account_id, name=stored
     )
 
 

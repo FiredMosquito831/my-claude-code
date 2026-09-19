@@ -29,13 +29,17 @@ import httpx
 from my_claude_code.config.constants import (
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
 )
+from my_claude_code.providers.oauth_names import account_name
 
 from .credentials import (
     CODEX_OAUTH_CLIENT_ID,
     CODEX_OAUTH_ORIGINATOR,
     CODEX_OAUTH_SCOPE,
     CODEX_OAUTH_TOKEN_URL,
+    PROVIDER_ID,
     extract_account_id_from_tokens,
+    load_chatgpt_accounts,
+    remove_chatgpt_account,
 )
 from .oauth_login import (
     ChatGPTOAuthLoginError,
@@ -507,6 +511,42 @@ def perform_browser_login(
     return tokens
 
 
+_ACCOUNT_USAGE = """\
+mcc-chatgpt-oauth-login -- sign a ChatGPT/Codex account in to My Claude Code
+
+Usage:
+  mcc-chatgpt-oauth-login [--add] [--device | --browser]
+  mcc-chatgpt-oauth-login --list
+  mcc-chatgpt-oauth-login --remove <account id>
+  mcc-chatgpt-oauth-login --help
+
+Options:
+  --add          Add another account rather than replacing one. This is the
+                 default once any account is stored.
+  --list         List the stored accounts -- id, name, plan, origin. Never
+                 prints a token.
+  --remove <id>  Disconnect one account. The others keep serving.
+  --device       Force the headless device-code login.
+  --browser      Force the browser PKCE login (the browser must share this
+                 machine's localhost).
+"""
+
+
+def _print_chatgpt_accounts() -> None:
+    """One line per stored account. Never a token, never a raw claim."""
+    records = load_chatgpt_accounts(migrate=False)
+    if not records:
+        print("No ChatGPT accounts are stored.", flush=True)
+        return
+    for record in records:
+        name = account_name(PROVIDER_ID, record.id) or "(unnamed)"
+        print(
+            f"{record.id}  {name}  origin={record.origin}"
+            f"  write_back={'on' if record.write_back else 'off'}",
+            flush=True,
+        )
+
+
 def chatgpt_oauth_login_command() -> None:
     """CLI entry point for ``mcc-chatgpt-oauth-login``.
 
@@ -514,9 +554,33 @@ def chatgpt_oauth_login_command() -> None:
     device-code login when the callback may be remote or unavailable.
     ``--device`` forces device login; ``--browser`` explicitly allows browser
     login when the caller knows the browser shares FCC's localhost.
+
+    ``--list`` and ``--remove <id>`` manage the accounts already stored, and
+    both work under a non-tty because neither asks OpenAI anything. A sign-in
+    **adds**: the same account signed in again updates in place, a different
+    one is appended beside it.
     """
-    force_device = "--device" in sys.argv[1:]
-    force_browser = "--browser" in sys.argv[1:]
+    args = sys.argv[1:]
+    if "--help" in args or "-h" in args:
+        print(_ACCOUNT_USAGE, flush=True)
+        return
+    if "--list" in args:
+        _print_chatgpt_accounts()
+        return
+    if "--remove" in args:
+        index = args.index("--remove")
+        if index + 1 >= len(args):
+            print("--remove needs an account id. Try --list.", file=sys.stderr)
+            raise SystemExit(2)
+        account_id = args[index + 1]
+        if remove_chatgpt_account(account_id) is None:
+            print(f"No stored ChatGPT account {account_id}.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"Disconnected {account_id}.", flush=True)
+        return
+
+    force_device = "--device" in args
+    force_browser = "--browser" in args
 
     if force_device and force_browser:
         print(

@@ -296,6 +296,45 @@ def merged_label_names(
     return {label: name for label, name in by_label.items() if name}
 
 
+def oauth_label_names(
+    pools: Iterable[tuple[str, Sequence[tuple[str, str]]]],
+    path: Path | None = None,
+) -> dict[str, str]:
+    """The same join for OAuth pools, whose credentials cannot be hashed.
+
+    An API key is joined mask-to-name through ``credential_fingerprint``,
+    which works because the secret does not change. An OAuth token rotates on
+    every refresh, so there is nothing stable to hash: the credential id is
+    ``account:<id>`` and the label the pool, the health rows and the request
+    log carry is the account id itself, not a ``mask_key_label`` value.
+
+    Each entry is ``(pool id, [(account id, label), ...])``. Ambiguity is
+    resolved exactly as :func:`merged_label_names` resolves it -- a label two
+    pools disagree about resolves to no name rather than to a guess.
+    """
+
+    document = load_document(path)
+    stored_pools = document[POOLS_KEY]
+    by_label: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for pool_id, accounts in pools:
+        entry = stored_pools.get(pool_id, {})
+        stored = {
+            credential_id: value[NAME_KEY]
+            for credential_id, value in entry.get(CREDENTIALS_KEY, {}).items()
+        }
+        for account_id, label in accounts:
+            if not label or label in ambiguous:
+                continue
+            name = stored.get(oauth_credential_id(account_id), "")
+            if label in by_label and by_label[label] != name:
+                ambiguous.add(label)
+                by_label.pop(label, None)
+                continue
+            by_label[label] = name
+    return {label: name for label, name in by_label.items() if name}
+
+
 def _empty_document() -> dict[str, Any]:
     return {VERSION_KEY: STORE_VERSION, POOLS_KEY: {}}
 

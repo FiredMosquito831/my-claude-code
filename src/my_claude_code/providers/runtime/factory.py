@@ -105,6 +105,7 @@ def _create_anthropic_oauth(
             getattr(settings, "anthropic_oauth_require_claude_code", True)
         ),
         provider_id="anthropic_oauth",
+        account_id=config.oauth_account_id,
     )
 
 
@@ -214,10 +215,23 @@ def _create_chatgpt_oauth(
     if base_url != config.base_url:
         config = dataclasses.replace(config, base_url=base_url)
 
+    # ``CHATGPT_OAUTH_ACCOUNT_ID`` pins the ``ChatGPT-Account-ID`` **header**,
+    # and since 7.30.0 it pins it for the **first account only**: it is a
+    # single-valued override from the days when there was one account, it is
+    # marked deprecated in the dashboard's help text, and removing it outright
+    # would break anyone relying on it today. Every other account sends its
+    # own id, which is the only thing that can be right for it.
+    pinned = config.oauth_account_id
+    header_account_id = (
+        settings.chatgpt_oauth_account_id
+        if not pinned or pinned == _first_chatgpt_account_id()
+        else ""
+    )
     return ChatGPTOAuthProvider(
         config,
         rate_limiter=rate_limiter,
-        account_id=settings.chatgpt_oauth_account_id,
+        account_id=header_account_id,
+        pinned_account_id=pinned,
     )
 
 
@@ -416,6 +430,117 @@ def _create_leaf_provider(
     return create_openai_chat_provider(descriptor.provider_id, config, rate_limiter)
 
 
+#: The two provider ids whose "credential" is a rotating OAuth token rather
+#: than a secret the operator pasted. Their pool is a list of *accounts*, and
+#: it lives in a store file, not in the env var -- which is why the
+#: ``len(keys) <= 1`` short-circuit below can never see it: both of them
+#: always present exactly one non-secret marker key.
+_OAUTH_PROVIDER_IDS = frozenset({"anthropic_oauth", "chatgpt_oauth", "openai"})
+
+
+def _anthropic_oauth_account_ids() -> list[str]:
+    """Every stored Claude account id. Never raises, never a secret."""
+    try:
+        from my_claude_code.providers.anthropic_oauth.credentials import load_accounts
+
+        return [record.id for record in load_accounts(migrate=False) if record.id]
+    except Exception:  # pragma: no cover - a store problem is not a page
+        return []
+
+
+def _chatgpt_oauth_account_ids() -> list[str]:
+    """Every stored ChatGPT account id. Never raises, never a secret."""
+    try:
+        from my_claude_code.providers.chatgpt_oauth.credentials import (
+            load_chatgpt_accounts,
+        )
+
+        return [
+            record.id for record in load_chatgpt_accounts(migrate=False) if record.id
+        ]
+    except Exception:  # pragma: no cover - a store problem is not a page
+        return []
+
+
+def _first_chatgpt_account_id() -> str:
+    ids = _chatgpt_oauth_account_ids()
+    return ids[0] if ids else ""
+
+
+def oauth_account_ids(provider_id: str) -> list[str]:
+    """The account ids that make up one OAuth provider's pool, in slot order.
+
+    The list order **is** the slot order, exactly as the comma-separated
+    ``.env`` value is for an API-key pool, so ``core/credential_rotation.py``
+    keys on an integer index without knowing anything about accounts.
+    """
+    if provider_id == "anthropic_oauth":
+        return _anthropic_oauth_account_ids()
+    if provider_id in ("chatgpt_oauth", "openai"):
+        return _chatgpt_oauth_account_ids()
+    return []
+
+
+def _oauth_account_pool(
+    provider_id: str,
+) -> Callable[[ProviderDescriptor, ProviderConfig, Settings], BaseProvider] | None:
+    """The OAuth fan-out for this provider, or ``None`` when there is none.
+
+    Returns ``None`` -- so construction falls through to the line it has
+    always taken -- for every non-OAuth provider, and for an OAuth provider
+    with fewer than two accounts. **One account keeps today's shape exactly**:
+    a single leaf provider, no ``RotatingProvider``, no state, no labels. That
+    is what keeps every single-account test green and the blast radius of this
+    change the size of the feature rather than the size of the file.
+    """
+    if provider_id not in _OAUTH_PROVIDER_IDS:
+        return None
+    account_ids = oauth_account_ids(provider_id)
+    if len(account_ids) < 2:
+        return None
+
+    def build(
+        descriptor: ProviderDescriptor,
+        config: ProviderConfig,
+        settings: Settings,
+    ) -> BaseProvider:
+        providers = [
+            _create_single_provider(
+                descriptor,
+                dataclasses.replace(
+                    config,
+                    credential_rotation="single",
+                    oauth_account_id=account_id,
+                ),
+                settings,
+            )
+            for account_id in account_ids
+        ]
+        state = CredentialRotationState(
+            len(providers),
+            config.credential_rotation,
+            rate_limit_seconds=config.rate_limit_cooldown_seconds,
+            lockout_tiers=config.lockout_tiers,
+            model_bench_escalation=config.credential_model_bench_escalation,
+            cooldown=config.rate_limit_cooldown(),
+        )
+        # The label channel. ``mask_key_label`` of a rotating OAuth token is
+        # meaningless -- it changes on every refresh, so the name the operator
+        # gave the account would detach from it -- so the account id is the
+        # label the pool, the health rows and the request log see, and
+        # ``api/credential_display`` joins it to the name.
+        return RotatingProvider(
+            config,
+            providers,
+            state,
+            key_labels=tuple(account_ids),
+            provider_id=descriptor.provider_id,
+            routes_around_model=config.routes_around_model,
+        )
+
+    return build
+
+
 def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
     """Create a provider instance for a supported provider id.
 
@@ -429,6 +554,9 @@ def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
         raise UnknownProviderError.for_provider(provider_id, descriptors)
 
     config = build_provider_config(descriptor, settings)
+    oauth_pool = _oauth_account_pool(provider_id)
+    if oauth_pool is not None:
+        return oauth_pool(descriptor, config, settings)
     keys = config.api_keys or ((config.api_key,) if config.api_key else ())
     if len(keys) <= 1:
         return _create_single_provider(descriptor, config, settings)

@@ -96,14 +96,31 @@ class RateLimitObserver:
     this account right now?", and a stale window is worse than no window.
     """
 
-    __slots__ = ("_latest",)
+    __slots__ = ("_by_account", "_latest")
 
     def __init__(self) -> None:
         self._latest: RateLimitSnapshot | None = None
+        # One snapshot per account since 7.30.0. A window belongs to the
+        # subscription that observed it: reporting one account's 5-hour
+        # utilisation on another account's row is not a rounding error, it is
+        # a wrong answer to the only question the card is asked.
+        self._by_account: dict[str, RateLimitSnapshot] = {}
 
     @property
     def latest(self) -> RateLimitSnapshot | None:
+        """The most recent snapshot from any account.
+
+        Kept unkeyed so the pre-7.30.0 card payload -- which has exactly one
+        windows block -- keeps meaning what it meant. Per-account rows read
+        :meth:`latest_for`.
+        """
         return self._latest
+
+    def latest_for(self, account_id: str) -> RateLimitSnapshot | None:
+        """One account's most recent snapshot, or ``None``."""
+        if not account_id:
+            return self._latest
+        return self._by_account.get(account_id)
 
     def observe(
         self,
@@ -111,13 +128,17 @@ class RateLimitObserver:
         *,
         status_code: int,
         now: float,
+        account_id: str = "",
     ) -> None:
         captured = capture_rate_limit_headers(headers)
         if not captured:
             return
-        self._latest = RateLimitSnapshot(
+        snapshot = RateLimitSnapshot(
             observed_at=now, status_code=status_code, values=captured
         )
+        self._latest = snapshot
+        if account_id:
+            self._by_account[account_id] = snapshot
 
 
 # Process-wide, because the card is read by the admin API while the provider
