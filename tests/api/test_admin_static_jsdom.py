@@ -4680,3 +4680,127 @@ def test_the_display_join_shows_a_name_instead_of_a_mask(rendered) -> None:
     assert "key 0 sk-o…1111" in names["ladderUnnamed"]
     # With no index, every surface is byte-identical to before.
     assert names["afterClear"] == "sk-t\u20262222"
+
+
+# --------------------------------------------------------- advanced fields
+# 7.29.1. A user could not find RATE_LIMIT_COOLDOWN_MODE or
+# RATE_LIMIT_COOLDOWN_MAX_SECONDS on Limits & Resilience. Both existed; both
+# carried `advanced`, which rendered as `display: none` behind a "Show
+# advanced" button, while CREDENTIAL_LOCKOUT_TIERS beside them did not -- so
+# the card looked whole with two thirds of it missing. On the Providers page
+# there was no button at all: `renderSections` skipped that section, and the
+# per-card control it deferred to had never been written, so 110 provider
+# fields were unreachable from the dashboard entirely.
+#
+# The static half of the contract is in
+# `tests/contracts/test_no_setting_is_hidden_by_default.py`. What these add is
+# the DOM: the field is really in the document on first paint, the tag is
+# really on it, and the collapse a reader chooses really comes back.
+
+COOLDOWN_FIELDS = ("RATE_LIMIT_COOLDOWN_MAX_SECONDS", "RATE_LIMIT_COOLDOWN_MODE")
+SECTION_STORAGE_KEY = "mcc.advancedCollapsed.section:credential_health"
+
+
+def test_jsdom_every_field_in_a_card_renders_without_a_click(rendered) -> None:
+    """The bug, stated as a test: shown-on-load == every field the card owns."""
+
+    section = rendered["advancedFields"]["section"]
+
+    assert section is not None, "the Credential health card did not render"
+    assert section["shownOnLoad"] == section["all"]
+    for key in COOLDOWN_FIELDS:
+        assert key in section["shownOnLoad"], (
+            f"{key} is still not on the page until something is clicked -- "
+            "which is exactly how it came to look like it did not exist"
+        )
+
+
+def test_jsdom_the_old_hiding_class_is_applied_nowhere(rendered) -> None:
+    advanced = rendered["advancedFields"]
+    assert advanced["showAdvancedInScript"] is False
+    assert advanced["showAdvancedClassAnywhere"] == 0
+
+
+def test_jsdom_advanced_fields_sort_after_the_common_ones(rendered) -> None:
+    """`advanced` moves a field down the card. That is all it does to order."""
+
+    order = rendered["advancedFields"]["section"]["all"]
+    tagged = set(rendered["advancedFields"]["section"]["tagged"])
+
+    assert tagged == set(COOLDOWN_FIELDS)
+    first_advanced = min(order.index(key) for key in tagged)
+    assert all(key in tagged for key in order[first_advanced:]), (
+        f"a common field sits below an advanced one: {order}"
+    )
+    # ...and the common ones keep the order the manifest gave them.
+    assert order[:first_advanced] == [key for key in order if key not in tagged]
+
+
+def test_jsdom_an_advanced_field_says_it_is_advanced(rendered) -> None:
+    assert set(rendered["advancedFields"]["section"]["tagged"]) == set(COOLDOWN_FIELDS)
+    assert rendered["advancedFields"]["provider"]["tagged"] == ["HARNESS_PROXY"]
+
+
+def test_jsdom_the_collapse_control_starts_expanded(rendered) -> None:
+    section = rendered["advancedFields"]["section"]
+
+    assert section["collapsedOnLoad"] is False
+    assert section["storedOnLoad"] is None, (
+        "a reader who never touched the control should leave no stored state"
+    )
+    assert section["toggleLabel"] == "Collapse advanced"
+
+
+def test_jsdom_collapsing_hides_only_the_advanced_fields(rendered) -> None:
+    section = rendered["advancedFields"]["section"]
+    collapsed = rendered["advancedFields"]["afterCollapse"]
+
+    assert collapsed["collapsed"] is True
+    assert collapsed["label"] == "Show advanced"
+    assert collapsed["shown"] == [
+        key for key in section["all"] if key not in COOLDOWN_FIELDS
+    ]
+
+
+def test_jsdom_the_collapse_survives_a_reload_and_the_expand_clears_it(
+    rendered,
+) -> None:
+    advanced = rendered["advancedFields"]
+    collapsed = advanced["afterCollapse"]
+    reloaded = advanced["afterReload"]
+    expanded = advanced["afterExpand"]
+
+    assert collapsed["stored"] == "1"
+    # A re-render is what a reload is: same page, same stored choice.
+    assert reloaded["collapsed"] is True
+    assert reloaded["label"] == "Show advanced"
+    assert reloaded["shown"] == collapsed["shown"]
+    # The fields are still in the document even while collapsed -- they are
+    # hidden, not dropped, or `changedValues()` would stop finding them.
+    assert reloaded["all"] == advanced["section"]["all"]
+
+    assert expanded["collapsed"] is False
+    assert expanded["label"] == "Collapse advanced"
+    assert expanded["shown"] == advanced["section"]["all"]
+    assert expanded["stored"] is None, "expanded is the default, stored as absence"
+
+
+def test_jsdom_a_provider_card_shows_its_advanced_fields_and_can_collapse_them(
+    rendered,
+) -> None:
+    """The section that had no control at all now has one per card."""
+
+    provider = rendered["advancedFields"]["provider"]
+
+    assert provider is not None, "the provider card did not render"
+    assert provider["shownOnLoad"] == provider["order"]
+    assert "HARNESS_PROXY" in provider["shownOnLoad"]
+    assert provider["order"][-1] == "HARNESS_PROXY", "the advanced field sorts last"
+    assert provider["collapsedOnLoad"] is False
+    assert provider["toggleLabel"] == "Collapse advanced"
+
+    collapsed = rendered["advancedFields"]["providerAfterCollapse"]
+    assert collapsed["collapsed"] is True
+    assert collapsed["shown"] == ["HARNESS_API_KEY", "HARNESS_BASE_URL"]
+    # Namespaced per card: collapsing one provider must not collapse 34 others.
+    assert collapsed["stored"] == "1"

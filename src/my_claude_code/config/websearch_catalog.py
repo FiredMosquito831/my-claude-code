@@ -382,7 +382,12 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 label="Extra snippets (web mode)",
                 field_type="boolean",
                 default="",
-                cost_note="plan-gated",
+                cost_note=(
+                    "Ask Brave for additional snippets per result, so each hit "
+                    "carries more page text. Plan-gated: on a plan that does "
+                    "not include it the parameter is ignored rather than "
+                    "refused."
+                ),
             ),
             WebSearchOptionSpec(
                 env="BRAVE_FRESHNESS",
@@ -710,7 +715,11 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                     ("month", "month"),
                     ("year", "year"),
                 ),
-                cost_note="Empty = any time.",
+                cost_note=(
+                    "Empty searches any time. Narrow it to the last hour, day, "
+                    "week or month when a stale answer would be worse than "
+                    "no answer; too narrow a window returns nothing at all."
+                ),
             ),
             WebSearchOptionSpec(
                 env="PERPLEXITY_CONTEXT_SIZE",
@@ -836,7 +845,11 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                     ("last_month", "last_month"),
                     ("last_year", "last_year"),
                 ),
-                cost_note="Empty = any time.",
+                cost_note=(
+                    "Empty searches any time. Narrow it to the last hour, day, "
+                    "week or month when a stale answer would be worse than "
+                    "no answer; too narrow a window returns nothing at all."
+                ),
             ),
             WebSearchOptionSpec(
                 env="SEARCHAPI_GL",

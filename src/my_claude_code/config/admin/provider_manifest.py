@@ -609,6 +609,15 @@ def _credential_field_specs() -> tuple[dict[str, Any], ...]:
             "field_type": "secret",
             "settings_attr": descriptor.credential_attr,
             "secret": True,
+            # Generated before the override is applied, so a provider with
+            # something specific to say still says it, and a provider nobody
+            # wrote a line for is never shipped with a blank help slot.
+            "description": (
+                f"API key for {descriptor.display_name}. Masked in the request "
+                "log and in this form. One key, or a pool of keys added below "
+                "and spread by the rotation policy. Without it the provider is "
+                "skipped and the fallback chain moves to the next model."
+            ),
         }
         spec.update(_PROVIDER_FIELD_OVERRIDES.get(descriptor.credential_env, {}))
         specs.append(spec)
@@ -673,6 +682,18 @@ def _base_url_field_specs() -> tuple[dict[str, Any], ...]:
             "provider": descriptor.provider_id,
             "settings_attr": descriptor.base_url_attr,
             "default": descriptor.default_base_url or "",
+            "description": (
+                f"Endpoint MCC sends {descriptor.display_name} requests to. "
+                + (
+                    f"Leave empty for {descriptor.default_base_url}; set it to "
+                    "reach another region, a self-hosted build or a mirror. "
+                    if descriptor.default_base_url
+                    else "Required -- there is no default, because the host "
+                    "names your own resource. "
+                )
+                + "A wrong host makes every request to this provider fail, "
+                "not just some."
+            ),
         }
         spec.update(_PROVIDER_FIELD_OVERRIDES.get(key, {}))
         specs.append(spec)
@@ -784,18 +805,27 @@ def _proxy_field_specs() -> tuple[dict[str, Any], ...]:
     for descriptor in PROVIDER_CATALOG.values():
         if descriptor.proxy_attr is None:
             continue
-        specs.append(
-            {
-                "key": _settings_env_key(descriptor.proxy_attr),
-                "label": f"{descriptor.display_name} Proxy",
-                "section_id": "providers",
-                "provider": descriptor.provider_id,
-                "field_type": "secret",
-                "settings_attr": descriptor.proxy_attr,
-                "secret": True,
-                "advanced": True,
-            }
-        )
+        key = _settings_env_key(descriptor.proxy_attr)
+        spec: dict[str, Any] = {
+            "key": key,
+            "label": f"{descriptor.display_name} Proxy",
+            "section_id": "providers",
+            "provider": descriptor.provider_id,
+            "field_type": "secret",
+            "settings_attr": descriptor.proxy_attr,
+            "secret": True,
+            "advanced": True,
+            "description": (
+                f"Send {descriptor.display_name} traffic through this HTTP or "
+                "SOCKS5 proxy, e.g. http://user:pass@host:1080. Treated as a "
+                "secret because the URL can carry credentials, so it is masked "
+                "here and never written to the request log. Leave empty to "
+                "connect directly; a proxy that is down takes this provider "
+                "down with it."
+            ),
+        }
+        spec.update(_PROVIDER_FIELD_OVERRIDES.get(key, {}))
+        specs.append(spec)
     return tuple(specs)
 
 

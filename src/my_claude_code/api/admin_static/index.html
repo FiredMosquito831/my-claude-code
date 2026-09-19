@@ -1684,6 +1684,7 @@
                 <a href="#guide-openai-clients">Connect any OpenAI-compatible client</a>
                 <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
+                <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
                 <a href="#guide-cost">What a request cost</a>
@@ -3262,7 +3263,23 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Firecrawl returns US results unless told otherwise</strong>
                   (<code>FIRECRAWL_COUNTRY=DE</code>). Safe search is available on Brave,
                   SearXNG, SerpAPI, SearchAPI and DDGS. All 66 advanced options live in the
-                  Advanced options drawers, and each states what leaving it blank does.
+                  Advanced options drawers, which are open when the page loads, and each
+                  states what leaving it blank does.
+                </p>
+
+                <h3 id="guide-advanced">Where the advanced settings went</h3>
+                <p>
+                  Nowhere &mdash; they are all on the page. Since 7.29.1 nothing on this
+                  dashboard is hidden behind a toggle. A setting marked
+                  <span class="advanced-tag">advanced</span> simply sorts after the common
+                  ones in its card and carries that tag; every one of them renders the
+                  moment the page loads. Before 7.29.1 the mark meant the field was not
+                  drawn at all until you found a <em>Show advanced</em> button, and on the
+                  <strong>Providers</strong> page that button was never added, so a
+                  provider's proxy and base-URL overrides could not be reached from the
+                  dashboard at all. If you would rather see the short form, each card has a
+                  <em>Collapse advanced</em> control; it starts expanded and remembers your
+                  choice in this browser.
                 </p>
 
                 <h3 id="guide-images">Images, and what they cost</h3>

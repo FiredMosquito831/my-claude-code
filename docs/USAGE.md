@@ -3649,7 +3649,7 @@ FIRECRAWL_CATEGORIES=github,research   # restrict to GitHub or papers
 TAVILY_CHUNKS_PER_SOURCE=3             # more text per source, cheaply
 ```
 
-All **66** advanced options are editable from the Web Search tab's **Advanced options** drawers, and every one states what leaving it blank does.
+All **66** advanced options are editable from the Web Search tab's **Advanced options** drawers, which are open when the page loads, and every one states what leaving it blank does. Collapse a drawer if you want the short form; the choice is remembered in that browser.
 
 ---
 
@@ -4192,7 +4192,9 @@ MCC reads RTK's own `rtk gain` report and shows the resulting savings on the [To
   <img src="../assets/admin-limits.png" alt="Limits and resilience configuration" width="860">
 </div>
 
-**Admin UI → Limits & Resilience** holds every setting that decides how long MCC waits, how hard it retries, and when it stops. Seven cards — **Budgets**, **Deadlines**, **Chain benching**, **Retries & throughput**, **Credential health**, **Server responsiveness**, **Diagnostics** — each stating in one line what it decides, reachable from the sticky section rail down the side of the page. It replaced a single flat grid of 37 fields, two thirds of which were only reachable behind a *Show advanced* toggle; the cost of the split is a long page, which is why the rail follows you down it. Every numeric field carries its accepted range on its own line under the input, so you can see what a box will take without reading the help text.
+**Admin UI → Limits & Resilience** holds every setting that decides how long MCC waits, how hard it retries, and when it stops. Seven cards — **Budgets**, **Deadlines**, **Chain benching**, **Retries & throughput**, **Credential health**, **Server responsiveness**, **Diagnostics** — each stating in one line what it decides, reachable from the sticky section rail down the side of the page. It replaced a single flat grid of 37 fields; the cost of the split is a long page, which is why the rail follows you down it. Every numeric field carries its accepted range on its own line under the input, so you can see what a box will take without reading the help text.
+
+**Nothing is hidden.** Since 7.29.1 every setting the manifest declares renders the moment its page loads, on every card, on every page. A setting marked *advanced* sorts after the common ones in its card and carries a small `advanced` tag — that is all the mark does now. Until 7.29.1 it meant `display: none` behind a *Show advanced* button, which is why `RATE_LIMIT_COOLDOWN_MODE` and `RATE_LIMIT_COOLDOWN_MAX_SECONDS` looked absent from **Credential health** while `CREDENTIAL_LOCKOUT_TIERS` sat visible beside them — and why a provider card's proxy and base-URL overrides could not be reached at all, because the providers section was never given that button. If you prefer the short form, each card has a **Collapse advanced** control; it starts expanded and the choice is remembered in that browser only.
 
 ### Output & thinking budgets
 

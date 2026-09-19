@@ -211,6 +211,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "model",
         settings_attr="model",
         default="nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+        description=(
+            "The provider/model ref every request lands on when its tier names no "
+            "override of its own, e.g. groq/llama-3.3-70b. Changing it moves all unrouted "
+            "traffic at once, for every connected client."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_FALLBACKS",
@@ -218,6 +223,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_fallbacks",
+        description=(
+            "Ordered provider/model refs tried, left to right, after MODEL fails, is "
+            "paused or is benched, for any tier with no override of its own. Each entry "
+            "costs one attempt and its own deadline, so a long chain buys an answer with "
+            "latency. Empty means one attempt and the upstream error goes back to the "
+            "client."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_PAUSED",
@@ -243,6 +255,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "optional_model",
         settings_attr="model_mythos",
+        description=(
+            "Model serving requests Claude Code routes to Mythos. Leave it None and the "
+            "Mythos tier uses the Default Model and the Default Fallback Chain; set it "
+            "and this tier uses only its own model and its own chain -- the two are never "
+            "merged."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_MYTHOS_FALLBACKS",
@@ -250,6 +268,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_mythos_fallbacks",
+        description=(
+            "Ordered provider/model refs tried, left to right, after the Mythos override "
+            "fails, is paused or is benched. Each entry costs one attempt and its own "
+            "deadline. Only used when the Mythos override is set: an unset tier falls to "
+            "MODEL and MODEL_FALLBACKS instead."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_MYTHOS_PAUSED",
@@ -275,6 +299,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "optional_model",
         settings_attr="model_fable",
+        description=(
+            "Model serving requests Claude Code routes to Fable. Leave it None and the "
+            "Fable tier uses the Default Model and the Default Fallback Chain; set it and "
+            "this tier uses only its own model and its own chain -- the two are never "
+            "merged."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_FABLE_FALLBACKS",
@@ -282,6 +312,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_fable_fallbacks",
+        description=(
+            "Ordered provider/model refs tried, left to right, after the Fable override "
+            "fails, is paused or is benched. Each entry costs one attempt and its own "
+            "deadline. Only used when the Fable override is set: an unset tier falls to "
+            "MODEL and MODEL_FALLBACKS instead."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_FABLE_PAUSED",
@@ -307,6 +343,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "optional_model",
         settings_attr="model_opus",
+        description=(
+            "Model serving requests Claude Code routes to Opus. Leave it None and the "
+            "Opus tier uses the Default Model and the Default Fallback Chain; set it and "
+            "this tier uses only its own model and its own chain -- the two are never "
+            "merged."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_OPUS_FALLBACKS",
@@ -314,6 +356,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_opus_fallbacks",
+        description=(
+            "Ordered provider/model refs tried, left to right, after the Opus override "
+            "fails, is paused or is benched. Each entry costs one attempt and its own "
+            "deadline. Only used when the Opus override is set: an unset tier falls to "
+            "MODEL and MODEL_FALLBACKS instead."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_OPUS_PAUSED",
@@ -339,6 +387,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "optional_model",
         settings_attr="model_sonnet",
+        description=(
+            "Model serving requests Claude Code routes to Sonnet. Leave it None and the "
+            "Sonnet tier uses the Default Model and the Default Fallback Chain; set it "
+            "and this tier uses only its own model and its own chain -- the two are never "
+            "merged."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_SONNET_FALLBACKS",
@@ -346,6 +400,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_sonnet_fallbacks",
+        description=(
+            "Ordered provider/model refs tried, left to right, after the Sonnet override "
+            "fails, is paused or is benched. Each entry costs one attempt and its own "
+            "deadline. Only used when the Sonnet override is set: an unset tier falls to "
+            "MODEL and MODEL_FALLBACKS instead."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_SONNET_PAUSED",
@@ -371,6 +431,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "optional_model",
         settings_attr="model_haiku",
+        description=(
+            "Model serving requests Claude Code routes to Haiku. Leave it None and the "
+            "Haiku tier uses the Default Model and the Default Fallback Chain; set it and "
+            "this tier uses only its own model and its own chain -- the two are never "
+            "merged."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_HAIKU_FALLBACKS",
@@ -378,6 +444,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_haiku_fallbacks",
+        description=(
+            "Ordered provider/model refs tried, left to right, after the Haiku override "
+            "fails, is paused or is benched. Each entry costs one attempt and its own "
+            "deadline. Only used when the Haiku override is set: an unset tier falls to "
+            "MODEL and MODEL_FALLBACKS instead."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_HAIKU_PAUSED",
@@ -403,6 +475,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "optional_model",
         settings_attr="model_vision",
+        description=(
+            "Model that handles a request carrying an image when the routed model cannot "
+            "take one. In route mode the whole request is diverted here; in describe mode "
+            "each image is sent here alone and its description replaces the image. None "
+            "leaves an image request on the routed model, which is where it fails."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_VISION_FALLBACKS",
@@ -410,6 +488,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_vision_fallbacks",
+        description=(
+            "Ordered provider/model refs tried after MODEL_VISION fails, is paused or is "
+            "benched. The vision adapter has its own chain and its own deadline, so a "
+            "blind fallback model is never asked to read a picture."
+        ),
     ),
     ConfigFieldSpec(
         "VISION_ADAPTER_MODE",
@@ -703,6 +786,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="reasoning_mythos",
         default="inherit",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
+        description=(
+            "Thinking effort MCC asks for on the Mythos tier. inherit keeps the Default "
+            "Reasoning policy, client preserves whatever the CLI asked for, off "
+            "suppresses thinking, and minimal..max pin a level. A provider translates "
+            "only the levels its own API supports, so a pinned level can arrive rounded "
+            "rather than refused."
+        ),
     ),
     ConfigFieldSpec(
         "REASONING_FABLE",
@@ -712,6 +802,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="reasoning_fable",
         default="inherit",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
+        description=(
+            "Thinking effort MCC asks for on the Fable tier. inherit keeps the Default "
+            "Reasoning policy, client preserves whatever the CLI asked for, off "
+            "suppresses thinking, and minimal..max pin a level. A provider translates "
+            "only the levels its own API supports, so a pinned level can arrive rounded "
+            "rather than refused."
+        ),
     ),
     ConfigFieldSpec(
         "REASONING_OPUS",
@@ -721,6 +818,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="reasoning_opus",
         default="inherit",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
+        description=(
+            "Thinking effort MCC asks for on the Opus tier. inherit keeps the Default "
+            "Reasoning policy, client preserves whatever the CLI asked for, off "
+            "suppresses thinking, and minimal..max pin a level. A provider translates "
+            "only the levels its own API supports, so a pinned level can arrive rounded "
+            "rather than refused."
+        ),
     ),
     ConfigFieldSpec(
         "REASONING_SONNET",
@@ -730,6 +834,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="reasoning_sonnet",
         default="inherit",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
+        description=(
+            "Thinking effort MCC asks for on the Sonnet tier. inherit keeps the Default "
+            "Reasoning policy, client preserves whatever the CLI asked for, off "
+            "suppresses thinking, and minimal..max pin a level. A provider translates "
+            "only the levels its own API supports, so a pinned level can arrive rounded "
+            "rather than refused."
+        ),
     ),
     ConfigFieldSpec(
         "REASONING_HAIKU",
@@ -739,6 +850,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="reasoning_haiku",
         default="inherit",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
+        description=(
+            "Thinking effort MCC asks for on the Haiku tier. inherit keeps the Default "
+            "Reasoning policy, client preserves whatever the CLI asked for, off "
+            "suppresses thinking, and minimal..max pin a level. A provider translates "
+            "only the levels its own API supports, so a pinned level can arrive rounded "
+            "rather than refused."
+        ),
     ),
     ConfigFieldSpec(
         "ANTHROPIC_AUTH_TOKEN",
@@ -758,6 +876,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="host",
         default="127.0.0.1",
         restart_required=True,
+        description=(
+            "Network interface the proxy binds to. 127.0.0.1 answers only this machine; "
+            "0.0.0.0 exposes MCC to the whole network, where anyone who can reach the "
+            "port can spend your keys unless ANTHROPIC_AUTH_TOKEN is set. Requires "
+            "restart."
+        ),
     ),
     ConfigFieldSpec(
         "PORT",
@@ -767,6 +891,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="port",
         default="8082",
         restart_required=True,
+        description=(
+            "TCP port the proxy listens on. Every client's base URL must name the same "
+            "port, so changing it means changing them too, and a port already in use "
+            "stops the server from starting at all. Requires restart."
+        ),
     ),
     ConfigFieldSpec(
         "MCC_OPEN_BROWSER",
@@ -786,6 +915,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="discord",
         options=("telegram", "discord", "none"),
         session_sensitive=True,
+        description=(
+            "Which chat bridge runs: telegram, discord, or none to run no bridge at all. "
+            "The chosen platform's token and allow-list below are what decide who may "
+            "talk to it; none leaves both unused."
+        ),
     ),
     ConfigFieldSpec(
         "MESSAGING_RATE_LIMIT",
@@ -795,6 +929,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="messaging_rate_limit",
         default="1",
         session_sensitive=True,
+        description=(
+            "How many messages one chat may send inside the rate window before the bridge "
+            "starts refusing them. Raising it lets a busy chat spend keys faster; too low "
+            "and normal conversation gets dropped."
+        ),
     ),
     ConfigFieldSpec(
         "MESSAGING_RATE_WINDOW",
@@ -804,6 +943,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="messaging_rate_window",
         default="1",
         session_sensitive=True,
+        description=(
+            "Length of the rate-limit window in seconds. MESSAGING_RATE_LIMIT over "
+            "MESSAGING_RATE_WINDOW is the whole rule, so 1 and 1 means at most one "
+            "message a second per chat."
+        ),
     ),
     ConfigFieldSpec(
         "TELEGRAM_BOT_TOKEN",
@@ -813,6 +957,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="telegram_bot_token",
         secret=True,
         session_sensitive=True,
+        description=(
+            "Bot token from Telegram's BotFather. Masked here and never written to the "
+            "log. Without it the Telegram bridge does not start; with it and no "
+            "allow-list, anyone who finds the bot can spend your keys."
+        ),
     ),
     ConfigFieldSpec(
         "ALLOWED_TELEGRAM_USER_ID",
@@ -820,6 +969,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "messaging",
         settings_attr="allowed_telegram_user_id",
         session_sensitive=True,
+        description=(
+            "Comma-separated numeric Telegram user IDs allowed to talk to the bot. Empty "
+            "means EVERY Telegram user is allowed, which is the open state the dashboard "
+            "warns about."
+        ),
     ),
     ConfigFieldSpec(
         "TELEGRAM_PROXY_URL",
@@ -839,6 +993,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="discord_bot_token",
         secret=True,
         session_sensitive=True,
+        description=(
+            "Bot token from the Discord developer portal. Masked here and never written "
+            "to the log. Without it the Discord bridge does not start; with it and no "
+            "channel allow-list, any channel the bot can see can spend your keys."
+        ),
     ),
     ConfigFieldSpec(
         "ALLOWED_DISCORD_CHANNELS",
@@ -846,6 +1005,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "messaging",
         settings_attr="allowed_discord_channels",
         session_sensitive=True,
+        description=(
+            "Comma-separated Discord channel IDs the bot will answer in. Empty means "
+            "EVERY channel the bot can see, which is the open state the dashboard warns "
+            "about."
+        ),
     ),
     ConfigFieldSpec(
         "ALLOWED_DIR",
@@ -853,6 +1017,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "messaging",
         settings_attr="allowed_dir",
         session_sensitive=True,
+        description=(
+            "Working directory the messaging bridge may run Claude Code in. It is the "
+            "boundary on what a chat message can read or write on this machine, so "
+            "widening it widens exactly that."
+        ),
     ),
     ConfigFieldSpec(
         "MAX_MESSAGE_LOG_ENTRIES_PER_CHAT",
@@ -862,6 +1031,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="max_message_log_entries_per_chat",
         advanced=True,
         session_sensitive=True,
+        description=(
+            "How many past messages the bridge keeps per chat for edit and reply "
+            "tracking. Empty uses the built-in cap. Larger keeps more history in memory; "
+            "smaller makes older messages stop being recognised."
+        ),
     ),
     ConfigFieldSpec(
         "VOICE_NOTE_ENABLED",
@@ -871,6 +1045,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="voice_note_enabled",
         default="false",
         session_sensitive=True,
+        description=(
+            "Transcribe voice notes sent to the messaging bridge instead of ignoring "
+            "them. On, every voice note costs a Whisper transcription before it is "
+            "answered."
+        ),
     ),
     ConfigFieldSpec(
         "WHISPER_DEVICE",
@@ -881,6 +1060,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="nvidia_nim",
         options=("cpu", "cuda", "nvidia_nim"),
         session_sensitive=True,
+        description=(
+            "Where transcription runs: cpu (slow, no GPU needed), cuda (local GPU), or "
+            "nvidia_nim (remote, spends NVIDIA NIM credit). cuda on a machine with no "
+            "usable GPU fails rather than falling back."
+        ),
     ),
     ConfigFieldSpec(
         "WHISPER_MODEL",
@@ -889,6 +1073,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="whisper_model",
         default="openai/whisper-large-v3",
         session_sensitive=True,
+        description=(
+            "Whisper model used to transcribe voice notes, e.g. openai/whisper-large-v3. "
+            "A larger model is more accurate and slower, and on cpu that difference is "
+            "minutes rather than seconds."
+        ),
     ),
     ConfigFieldSpec(
         "ENABLE_TITLE_GENERATION_SKIP",
@@ -898,6 +1087,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="enable_title_generation_skip",
         default="true",
         advanced=True,
+        description=(
+            "Answer Claude Code's 'name this session' call locally instead of spending an "
+            "upstream request on it. Off sends every title request to the routed model, "
+            "which costs tokens for a string you rarely read."
+        ),
     ),
     ConfigFieldSpec(
         "ENABLE_SUGGESTION_MODE_SKIP",
@@ -907,6 +1101,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="enable_suggestion_mode_skip",
         default="true",
         advanced=True,
+        description=(
+            "Answer Claude Code's suggested-next-message call locally with an empty reply "
+            "instead of spending an upstream request. Off restores the suggestions and "
+            "pays for each one."
+        ),
     ),
     ConfigFieldSpec(
         "ENABLE_PROBE_AUTO_RESPONSE",
@@ -916,6 +1115,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="enable_probe_auto_response",
         default="true",
         advanced=True,
+        description=(
+            "Answer a harness's startup reachability probe locally with OK instead of "
+            "spending an upstream call. The reply echoes the routed model, so a silent "
+            "model substitution is still visible. Off sends every probe upstream."
+        ),
     ),
     ConfigFieldSpec(
         "ENABLE_WEB_SERVER_TOOLS",
@@ -924,6 +1128,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="enable_web_server_tools",
         default="true",
+        description=(
+            "Fulfil Claude Code's web_search and web_fetch at the proxy. Off leaves both "
+            "tools unavailable to every client, whatever the Web Search page is "
+            "configured with."
+        ),
     ),
     ConfigFieldSpec(
         "WEB_FETCH_ALLOWED_SCHEMES",
@@ -931,6 +1140,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "web_tools",
         settings_attr="web_fetch_allowed_schemes",
         default="http,https",
+        description=(
+            "Comma-separated URL schemes web_fetch will follow, e.g. http,https. Anything "
+            "not listed is refused before a connection is opened; adding file would let a "
+            "prompt read this machine's disk."
+        ),
     ),
     ConfigFieldSpec(
         "WEB_FETCH_ALLOW_PRIVATE_NETWORKS",
@@ -939,6 +1153,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="web_fetch_allow_private_networks",
         default="true",
+        description=(
+            "Let web_fetch reach private and loopback addresses (10.x, 192.168.x, "
+            "localhost). On, a prompt can ask the proxy to fetch from your LAN, which is "
+            "what makes a local docs server work and also what makes server-side request "
+            "forgery possible. Off refuses those hosts."
+        ),
     ),
     # ---- Server responsiveness: is the loop keeping up ---------------------
     ConfigFieldSpec(
@@ -1024,6 +1244,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        description=(
+            "Log every message edit the messaging bridge performs, with the reason it "
+            "fired. For diagnosing a chat whose messages keep rewriting themselves; "
+            "noisy, so leave it off in normal use. Requires restart."
+        ),
     ),
     ConfigFieldSpec(
         "DEBUG_SUBAGENT_STACK",
@@ -1034,6 +1259,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        description=(
+            "Log how MCC tracks nested subagent calls and which stack frame a reply "
+            "belongs to. For diagnosing a subagent answer landing in the wrong place; "
+            "very noisy. Requires restart."
+        ),
     ),
     ConfigFieldSpec(
         "LOG_RAW_API_PAYLOADS",
@@ -1044,6 +1274,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        description=(
+            "Write the full request and response bodies of every API call to the server "
+            "log. The most useful setting for diagnosing a provider that misbehaves, and "
+            "the most dangerous: prompts, file contents and tool output all land on disk "
+            "in clear text. Requires restart."
+        ),
     ),
     ConfigFieldSpec(
         "LOG_RAW_SSE_EVENTS",
@@ -1053,6 +1289,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="log_raw_sse_events",
         default="false",
         advanced=True,
+        description=(
+            "Write every raw server-sent event from a streaming provider to the log. Use "
+            "it when a stream truncates or a tool call arrives malformed; the volume is "
+            "large and the events carry the answer text."
+        ),
     ),
     ConfigFieldSpec(
         "LOG_API_ERROR_TRACEBACKS",
@@ -1063,6 +1304,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        description=(
+            "Include Python tracebacks with API errors in the log, and return fuller "
+            "error detail to the client. Helpful while debugging; the detail reaches "
+            "whoever is calling the proxy. Requires restart."
+        ),
     ),
     ConfigFieldSpec(
         "LOG_RAW_MESSAGING_CONTENT",
@@ -1073,6 +1319,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        description=(
+            "Write the text of every Telegram or Discord message through the bridge to "
+            "the server log. Private conversation ends up on disk in clear text, so this "
+            "is for reproducing a bridge bug and not for leaving on. Requires restart."
+        ),
     ),
     ConfigFieldSpec(
         "LOG_RAW_CLI_DIAGNOSTICS",
@@ -1083,6 +1334,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        description=(
+            "Write the managed Claude Code CLI's own stderr diagnostics to the server "
+            "log. Use it when the managed CLI fails to start or exits without saying why. "
+            "Requires restart."
+        ),
     ),
     ConfigFieldSpec(
         "LOG_MESSAGING_ERROR_DETAILS",
@@ -1093,6 +1349,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        description=(
+            "Log the platform's full error payload when a Telegram or Discord send fails, "
+            "instead of a one-line summary. The payload can quote the message that "
+            "failed. Requires restart."
+        ),
     ),
     # ---- Budgets: how long one answer may be -----------------------------
     ConfigFieldSpec(
