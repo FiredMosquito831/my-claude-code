@@ -311,7 +311,7 @@ The Admin UI at `http://127.0.0.1:8082/admin` is local-only and is where everyth
 | Page | What it is for |
 | --- | --- |
 | **Get Started** | The first-run checklist: provider, tiers, an agent, optionally web search and analytics. |
-| **Providers** | One searchable card per provider — keys and key pools, per-key health and usage, rotation policy, live **Refresh models**. |
+| **Providers** | One searchable card per provider — keys and key pools you can reorder and name, per-key health and usage, rotation policy, live **Refresh models**. |
 | **Configure Claude Code** | Pointing Claude Code at this proxy, per session or permanently. |
 | **Coding agents** | Every launcher's installed state and flags, and the **Configure**/**Undo** buttons for the apps MCC does not launch. |
 | **Model Config** | `MODEL`, the tier map, fallback chains, the vision adapter and reasoning control. |

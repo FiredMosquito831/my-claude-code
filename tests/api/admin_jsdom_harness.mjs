@@ -575,6 +575,24 @@ const ROUTES = {
     count: 2,
     locked: false,
     keys: ["nvap...ubCk", "nvap...9fQt"],
+    rows: [
+      {
+        index: 0,
+        id: "sha256:1111111111111111",
+        masked: "nvap...ubCk",
+        key_label: "nvap\u2026ubCk",
+        name: "",
+        health: null,
+      },
+      {
+        index: 1,
+        id: "sha256:2222222222222222",
+        masked: "nvap...9fQt",
+        key_label: "nvap\u20269fQt",
+        name: "",
+        health: null,
+      },
+    ],
     health: [
       {
         index: 0,
@@ -607,6 +625,16 @@ const ROUTES = {
     count: 1,
     locked: false,
     keys: ["cc...9fQt"],
+    rows: [
+      {
+        index: 0,
+        id: "sha256:3333333333333333",
+        masked: "cc...9fQt",
+        key_label: "cc\u20269fQt",
+        name: "",
+        health: null,
+      },
+    ],
     health: [
       {
         index: 0,
@@ -624,6 +652,16 @@ const ROUTES = {
     count: 1,
     locked: false,
     keys: ["nvap...2vLm"],
+    rows: [
+      {
+        index: 0,
+        id: "sha256:4444444444444444",
+        masked: "nvap...2vLm",
+        key_label: "nvap\u20262vLm",
+        name: "",
+        health: null,
+      },
+    ],
     health: [
       {
         index: 0,
@@ -633,6 +671,40 @@ const ROUTES = {
         cooldown_remaining: 0,
         lockout_remaining: 0,
         model_benches: [],
+      },
+    ],
+  },
+  /* Three keys, the middle one named. The rail, the name boxes, the Move
+     buttons at the ends and the status line are all read off this one. */
+  "/admin/api/credentials/NAMED_API_KEY/keys": {
+    count: 3,
+    locked: false,
+    keys: ["sk-one...1111", "sk-two...2222", "sk-thr...3333"],
+    health: [null, null, null],
+    rows: [
+      {
+        index: 0,
+        id: "sha256:aaaaaaaaaaaaaaaa",
+        masked: "sk-one...1111",
+        key_label: "sk-o\u20261111",
+        name: "",
+        health: null,
+      },
+      {
+        index: 1,
+        id: "sha256:bbbbbbbbbbbbbbbb",
+        masked: "sk-two...2222",
+        key_label: "sk-t\u20262222",
+        name: "Personal <b>card</b>",
+        health: null,
+      },
+      {
+        index: 2,
+        id: "sha256:cccccccccccccccc",
+        masked: "sk-thr...3333",
+        key_label: "sk-t\u20263333",
+        name: "",
+        health: null,
       },
     ],
   },
@@ -2183,6 +2255,19 @@ if (process.env.EMPTY === "1") {
     reason: "not_installed",
     detail: "No RTK binary was found.",
   };
+}
+
+/* The key listing sends each row its own health; the older positional
+   `health` array is still sent beside it. Mirror that here rather than
+   duplicating the objects, so a stub can never disagree with itself. */
+for (const path of [
+  "/admin/api/credentials/SCOPED_API_KEY/keys",
+  "/admin/api/credentials/CREDITS_API_KEY/keys",
+  "/admin/api/credentials/PLAIN_API_KEY/keys",
+]) {
+  ROUTES[path].rows.forEach((row, index) => {
+    row.health = ROUTES[path].health[index] || null;
+  });
 }
 
 function routeFor(url) {
@@ -5469,6 +5554,104 @@ for (const [name, key] of [
   }));
 }
 
+/* ------------------------------------------------------------- key rail
+   The pool is an ordered list and the order is the failover order, so it is
+   driven here the way the route rail is: render it, press a Move button, and
+   read what went out on the wire and what the status line said. */
+const keyRail = {};
+{
+  const panel = doc.createElement("div");
+  doc.body.appendChild(panel);
+  await window.eval(`renderKeyManager`)(panel, { key: "NAMED_API_KEY" });
+  const rows = () => Array.from(panel.querySelectorAll(".key-manager-row"));
+  const moves = (row) => Array.from(row.querySelectorAll(".key-manager-move"));
+  keyRail.rows = rows().map((row) => ({
+    id: row.dataset.keyId,
+    display: row.dataset.keyDisplay,
+    keyText: (row.querySelector(".key-manager-key")?.textContent || "").trim(),
+    keyTitle: row.querySelector(".key-manager-key")?.title || "",
+    grip: Boolean(row.querySelector(".key-drag-grip")),
+    gripLabel: row.querySelector(".key-drag-grip")?.getAttribute("aria-label") || "",
+    nameValue: row.querySelector(".key-name-input")?.value ?? null,
+    nameMax: row.querySelector(".key-name-input")?.maxLength ?? null,
+    moveLabels: moves(row).map((button) => button.textContent),
+    moveDisabled: moves(row).map((button) => button.disabled),
+  }));
+  keyRail.addNamePlaceholder =
+    panel.querySelector(".key-add-name")?.placeholder || "";
+  keyRail.statusBefore = panel.querySelector(".key-pool-status")?.hidden ?? null;
+
+  // A name that is markup must be text, not markup: this box lands in a page
+  // that also renders log rows.
+  keyRail.namedRowHtml = rows()[1]?.querySelector(".key-manager-key")?.innerHTML || "";
+
+  // Move the last key to the top, one press at a time.
+  fetchBodies.length = 0;
+  moves(rows()[2])[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  keyRail.orderPut =
+    fetchBodies.filter((entry) => entry.path.endsWith("/keys/order")).pop() || null;
+  const status = panel.querySelector(".key-pool-status");
+  keyRail.statusText = (status?.querySelector("p")?.textContent || "").trim();
+  keyRail.statusRole = status?.getAttribute("role") || "";
+  keyRail.statusLive = status?.getAttribute("aria-live") || "";
+  keyRail.undoLabel = status?.querySelector(".key-pool-undo")?.textContent || "";
+
+  // Undo re-PUTs the order we started from.
+  fetchBodies.length = 0;
+  status?.querySelector(".key-pool-undo")?.dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  keyRail.undoPut =
+    fetchBodies.filter((entry) => entry.path.endsWith("/keys/order")).pop() || null;
+
+  // Renaming: one PUT, to the name route, and nothing to the order route.
+  const fresh = doc.createElement("div");
+  doc.body.appendChild(fresh);
+  await window.eval(`renderKeyManager`)(fresh, { key: "NAMED_API_KEY" });
+  fetchBodies.length = 0;
+  const box = fresh.querySelectorAll(".key-name-input")[0];
+  box.value = "Work laptop";
+  box.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  keyRail.renamePut = fetchBodies.pop() || null;
+  keyRail.renameStatus =
+    (fresh.querySelector(".key-pool-status p")?.textContent || "").trim();
+
+  // The keyboard equivalent: ArrowDown on a focused grip is the same move.
+  const keyed = doc.createElement("div");
+  doc.body.appendChild(keyed);
+  await window.eval(`renderKeyManager`)(keyed, { key: "NAMED_API_KEY" });
+  fetchBodies.length = 0;
+  keyed.querySelectorAll(".key-drag-grip")[0].dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  keyRail.keyboardPut =
+    fetchBodies.filter((entry) => entry.path.endsWith("/keys/order")).pop() || null;
+}
+
+/* The display join everything else renders through, exercised directly: the
+   same function paints the log row, the modal, the ladder and the breakdown. */
+const keyNames = {};
+{
+  window.eval(`adoptKeyNames({"sk-t\u20262222": "Personal"})`);
+  keyNames.named = window.eval(`keyReferenceText("sk-t\u20262222")`);
+  keyNames.unnamed = window.eval(`keyReferenceText("sk-o\u20261111")`);
+  keyNames.missing = window.eval(`keyReferenceText("")`);
+  keyNames.breakdownNamed = window.eval(`keyBreakdownLabel("sk-t\u20262222")`);
+  keyNames.breakdownUnnamed = window.eval(`keyBreakdownLabel("sk-o\u20261111")`);
+  keyNames.ladderNamed = window.eval(
+    `ladderTryText({key_index: 1, key_label: "sk-t\u20262222", status: 200}, 1)`,
+  );
+  keyNames.ladderUnnamed = window.eval(
+    `ladderTryText({key_index: 0, key_label: "sk-o\u20261111", status: 200}, 1)`,
+  );
+  window.eval(`adoptKeyNames({})`);
+  keyNames.afterClear = window.eval(`keyReferenceText("sk-t\u20262222")`);
+}
+
 requestDetail.reasoningRow = window.eval(
   `formatRequestReasoningEmitted({route_attempts:[{outcome:"succeeded",reasoning_emitted:0}]})`,
 );
@@ -6744,6 +6927,8 @@ console.log(
       requestCards,
       requestDetail,
       keyManager,
+      keyRail,
+      keyNames,
       dialectPanels,
       docs,
       limits,

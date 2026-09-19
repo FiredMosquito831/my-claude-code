@@ -58,6 +58,7 @@ OTHER_SERVERS_FILENAME = "other-servers.json"
 LEARNED_FACTS_FILENAME = "learned_facts.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
 PROXY_CHAINS_FILENAME = "proxy_chains.json"
+CREDENTIAL_NAMES_FILENAME = "credential_names.json"
 PROXY_FETCH_STATUS_FILENAME = "proxy_fetch_status.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
@@ -556,6 +557,17 @@ def harness_tiers_path() -> Path:
     """Return the per-coding-agent tier override file."""
 
     return config_dir_path() / HARNESS_TIERS_FILENAME
+
+
+def credential_names_path() -> Path:
+    """Return the store of human names for credentials.
+
+    Beside the other structured stores, for the same reason
+    :func:`proxy_chains_path` is: a name is something the operator typed, and
+    it must survive the *Clear* button that empties the request log.
+    """
+
+    return config_dir_path() / CREDENTIAL_NAMES_FILENAME
 
 
 def proxy_chains_path() -> Path:

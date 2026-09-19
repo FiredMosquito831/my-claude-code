@@ -4534,3 +4534,149 @@ def test_jsdom_the_value_control_is_disabled_until_force_value_is_chosen(
     mode says Inherit would make "inherit" and "force" look the same."""
 
     assert rendered["models"]["preferences"]["0"]["valueDisabledWhileInherit"] is True
+
+
+# ------------------------------------------------------------- key pool rail
+# The pool is an ordered list and the order is the failover order, so it is a
+# rail. jsdom cannot prove the drag (no PointerEvent) or the layout (no boxes);
+# it proves the structure, the keyboard equivalent, what goes out on the wire
+# and what the status line says.
+
+
+def test_the_key_pool_renders_a_reorder_grip_and_move_buttons(rendered) -> None:
+    rows = rendered["keyRail"]["rows"]
+
+    assert len(rows) == 3
+    assert all(row["grip"] for row in rows)
+    assert [row["moveLabels"] for row in rows] == [["Move up", "Move down"]] * 3
+    assert rows[0]["gripLabel"] == "Reorder sk-one...1111"
+
+
+def test_the_first_key_cannot_move_up_and_the_last_cannot_move_down(
+    rendered,
+) -> None:
+    """The ends are the whole reason a rail needs buttons as well as a drag."""
+
+    rows = rendered["keyRail"]["rows"]
+
+    assert rows[0]["moveDisabled"] == [True, False]
+    assert rows[1]["moveDisabled"] == [False, False]
+    assert rows[2]["moveDisabled"] == [False, True]
+
+
+def test_an_unnamed_key_reads_as_its_masked_label_alone(rendered) -> None:
+    """A key nobody renamed renders exactly as it did before this release."""
+
+    rows = rendered["keyRail"]["rows"]
+
+    assert rows[0]["keyText"] == "sk-one...1111"
+    assert rows[0]["keyTitle"] == ""
+    assert rows[0]["nameValue"] == ""
+    assert rows[0]["display"] == "sk-one...1111"
+
+
+def test_a_named_key_reads_as_its_name_with_the_mask_on_hover(rendered) -> None:
+    rows = rendered["keyRail"]["rows"]
+
+    assert rows[1]["keyText"] == "Personal <b>card</b>"
+    assert rows[1]["keyTitle"] == "sk-two...2222"
+    assert rows[1]["nameValue"] == "Personal <b>card</b>"
+    assert rows[1]["nameMax"] == 60
+
+
+def test_a_name_containing_markup_is_rendered_as_text(rendered) -> None:
+    """The name is user input landing in a page that also renders log rows."""
+
+    assert rendered["keyRail"]["namedRowHtml"] == "Personal &lt;b&gt;card&lt;/b&gt;"
+
+
+def test_the_add_form_offers_an_optional_name(rendered) -> None:
+    assert rendered["keyRail"]["addNamePlaceholder"] == "Name (optional)"
+
+
+def test_moving_a_key_puts_the_new_id_order(rendered) -> None:
+    rail = rendered["keyRail"]
+    put = rail["orderPut"]
+
+    assert put["method"] == "PUT"
+    assert put["path"] == "/admin/api/credentials/NAMED_API_KEY/keys/order"
+    # The last key moved up one: ids, never positions.
+    assert put["body"]["order"] == [
+        "sha256:aaaaaaaaaaaaaaaa",
+        "sha256:cccccccccccccccc",
+        "sha256:bbbbbbbbbbbbbbbb",
+    ]
+
+
+def test_moving_a_key_announces_its_new_position_and_says_health_restarts(
+    rendered,
+) -> None:
+    """Q1: the sentence that explains a badge which just went back to HEALTHY."""
+
+    rail = rendered["keyRail"]
+
+    # The line is created only when there is something to say.
+    assert rail["statusBefore"] is None
+    assert rail["statusRole"] == "status"
+    assert rail["statusLive"] == "polite"
+    assert rail["statusText"] == (
+        "Moved sk-thr...3333 to position 2 of 3. "
+        "Reordering rebuilds this pool, so its health counters start again."
+    )
+    assert rail["undoLabel"] == "Undo"
+
+
+def test_undo_puts_the_order_back(rendered) -> None:
+    put = rendered["keyRail"]["undoPut"]
+
+    assert put["method"] == "PUT"
+    assert put["body"]["order"] == [
+        "sha256:aaaaaaaaaaaaaaaa",
+        "sha256:bbbbbbbbbbbbbbbb",
+        "sha256:cccccccccccccccc",
+    ]
+
+
+def test_the_keyboard_equivalent_makes_the_same_move(rendered) -> None:
+    """WCAG 2.2: the drag is not the only way to reorder."""
+
+    put = rendered["keyRail"]["keyboardPut"]
+
+    assert put["method"] == "PUT"
+    assert put["body"]["order"] == [
+        "sha256:bbbbbbbbbbbbbbbb",
+        "sha256:aaaaaaaaaaaaaaaa",
+        "sha256:cccccccccccccccc",
+    ]
+
+
+def test_renaming_a_key_puts_only_the_name(rendered) -> None:
+    """A rename is store-only: it must never touch the order route."""
+
+    rail = rendered["keyRail"]
+    put = rail["renamePut"]
+
+    assert put["method"] == "PUT"
+    assert put["path"] == (
+        "/admin/api/credentials/NAMED_API_KEY/keys/sha256%3Aaaaaaaaaaaaaaaaa/name"
+    )
+    assert put["body"] == {"name": "Work laptop"}
+    assert "stored on this machine only" in rail["renameStatus"]
+
+
+def test_the_display_join_shows_a_name_instead_of_a_mask(rendered) -> None:
+    """One resolver feeds the log row, the modal, the ladder and the breakdown."""
+
+    names = rendered["keyNames"]
+
+    assert names["named"] == "Personal"
+    assert names["unnamed"] == "sk-o\u20261111"
+    assert names["missing"] == ""
+    # The breakdown groups by label, so it keeps the label in view.
+    assert names["breakdownNamed"] == "Personal (sk-t\u20262222)"
+    assert names["breakdownUnnamed"] == "sk-o\u20261111"
+    # The ladder keeps `key <index>` untouched and renders the name after it.
+    assert "key 1 Personal" in names["ladderNamed"]
+    assert "key 0 sk-o…1111" in names["ladderUnnamed"]
+    # With no index, every surface is byte-identical to before.
+    assert names["afterClear"] == "sk-t\u20262222"

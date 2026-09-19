@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel
 
@@ -21,6 +21,13 @@ from my_claude_code.config.admin.route_refs import (
     updates_pausing_provider,
     updates_removing_provider,
     updates_unpausing,
+)
+from my_claude_code.config.credential_names import (
+    credential_fingerprint,
+    custom_pool_id,
+    forget_credentials,
+    forget_pool,
+    set_name,
 )
 from my_claude_code.config.provider_registry import (
     CustomProviderEntry,
@@ -32,7 +39,15 @@ from my_claude_code.config.reasoning_enum import normalize_effort_words
 from my_claude_code.config.settings import Settings
 from my_claude_code.providers.runtime.rotating import RotatingProvider
 
-from .admin_routes import _mask_credential_key, require_loopback_admin
+from .admin_routes import (
+    _CredentialKeyNameRequest,
+    _CredentialKeyOrderRequest,
+    _fingerprints,
+    _key_rows,
+    _mask_credential_key,
+    _reordered_pool,
+    require_loopback_admin,
+)
 from .dependencies import get_services
 from .ports import ApiServices
 
@@ -80,6 +95,7 @@ class CustomProviderKeyPayload(BaseModel):
     """Single API key appended to one custom provider."""
 
     api_key: str
+    name: str = ""
 
 
 def _validate_display_name(value: str) -> str:
@@ -426,6 +442,13 @@ async def add_custom_provider_key(
         _serialize_entry(stored, services.admin.cached_model_ids()), discovery
     )
     result["added"] = _mask_credential_key(api_key)
+    result["name"] = (
+        set_name(
+            custom_pool_id(provider_id), credential_fingerprint(api_key), payload.name
+        )
+        if payload.name.strip()
+        else ""
+    )
     return result
 
 
@@ -434,15 +457,25 @@ async def delete_custom_provider_key(
     provider_id: str,
     index: int,
     request: Request,
+    key_id: str | None = Query(default=None, alias="id"),
     registry: ProviderRegistry = Depends(get_custom_provider_registry),
     services: ApiServices = Depends(get_services),
 ):
-    """Remove one API key by index and hot reload (last key keeps the entry)."""
+    """Remove one API key by index and hot reload (last key keeps the entry).
+
+    ``id`` is the fingerprint the dashboard believed sat at ``index``; a stale
+    one is refused rather than acted on, because the order is now editable.
+    """
     require_loopback_admin(request)
     entry = _registry_get_or_404(registry, provider_id)
     keys: list[str] = list(entry.api_keys)
     if index < 0 or index >= len(keys):
         raise HTTPException(status_code=404, detail="Key index out of range")
+    if key_id is not None and credential_fingerprint(keys[index]) != key_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The key list changed - reopen the pool and try again.",
+        )
     removed = keys.pop(index)
     try:
         registry.update(provider_id, api_keys=tuple(keys))
@@ -457,6 +490,7 @@ async def delete_custom_provider_key(
         _serialize_entry(stored, services.admin.cached_model_ids()), discovery
     )
     result["removed"] = _mask_credential_key(removed)
+    forget_credentials(custom_pool_id(provider_id), [credential_fingerprint(removed)])
     return result
 
 
@@ -491,6 +525,9 @@ async def delete_custom_provider(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown custom provider") from exc
     await _reload_provider_runtime(services)
+    # The provider is gone, so its key names are dead weight that would come
+    # back to life under a new provider that happened to reuse the id.
+    forget_pool(custom_pool_id(provider_id))
     return {
         "applied": True,
         "provider_id": provider_id,
@@ -607,4 +644,60 @@ async def list_custom_provider_keys(
         "count": len(keys),
         "keys": [_mask_credential_key(key) for key in keys],
         "health": health,
+        "rows": _key_rows(custom_pool_id(provider_id), keys, health),
     }
+
+
+@router.put("/admin/api/custom-providers/{provider_id}/keys/order")
+async def reorder_custom_provider_keys(
+    provider_id: str,
+    payload: _CredentialKeyOrderRequest,
+    request: Request,
+    registry: ProviderRegistry = Depends(get_custom_provider_registry),
+    services: ApiServices = Depends(get_services),
+):
+    """Rewrite one custom pool in a new order and hot reload.
+
+    The same write the add and delete routes already make -- the whole key
+    tuple, then a runtime reload -- so a reorder costs exactly what a key edit
+    costs, including resetting that pool's health.
+    """
+
+    require_loopback_admin(request)
+    entry = _registry_get_or_404(registry, provider_id)
+    keys = list(entry.api_keys)
+    if not keys:
+        raise HTTPException(status_code=404, detail="This provider has no keys")
+    reordered = _reordered_pool(keys, payload.order)
+    try:
+        registry.update(provider_id, api_keys=tuple(reordered))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown custom provider") from exc
+    stored = _registry_get_or_404(registry, provider_id)
+    discovery = await _reload_provider_runtime(
+        services, refresh_provider_id=_discovery_target(stored)
+    )
+    stored = _registry_get_or_404(registry, provider_id)
+    result = _attach_discovery(
+        _serialize_entry(stored, services.admin.cached_model_ids()), discovery
+    )
+    result["order"] = [_mask_credential_key(key) for key in reordered]
+    return result
+
+
+@router.put("/admin/api/custom-providers/{provider_id}/keys/{key_id}/name")
+async def rename_custom_provider_key(
+    provider_id: str,
+    key_id: str,
+    payload: _CredentialKeyNameRequest,
+    request: Request,
+    registry: ProviderRegistry = Depends(get_custom_provider_registry),
+):
+    """Name one custom-pool key. Store only: no registry write, no reload."""
+
+    require_loopback_admin(request)
+    entry = _registry_get_or_404(registry, provider_id)
+    if key_id not in _fingerprints(entry.api_keys):
+        raise HTTPException(status_code=404, detail="Unknown key for this provider")
+    stored = set_name(custom_pool_id(provider_id), key_id, payload.name)
+    return {"provider_id": provider_id, "id": key_id, "name": stored}

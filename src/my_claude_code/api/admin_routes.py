@@ -5,7 +5,7 @@ import ipaddress
 import os
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from functools import lru_cache
 from pathlib import Path
@@ -13,10 +13,18 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from my_claude_code.api.credential_display import credential_name_index
 from my_claude_code.api.docs_content import available_documents
 from my_claude_code.api.docs_render import render_document
 from my_claude_code.api.model_admin import (
@@ -79,6 +87,14 @@ from my_claude_code.config.claude_settings import (
 from my_claude_code.config.constants import (
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+)
+from my_claude_code.config.credential_names import (
+    credential_fingerprint,
+    env_pool_id,
+    forget_credentials,
+    pool_names,
+    set_name,
+    websearch_pool_id,
 )
 from my_claude_code.config.credentials import (
     mask_key_label as mask_credential_label,
@@ -257,6 +273,7 @@ class WebSearchKeyPayload(BaseModel):
     """Single web search credential key submitted by the admin UI."""
 
     key: str
+    name: str = ""
 
 
 class ClaudeSettingsPathPayload(BaseModel):
@@ -639,6 +656,88 @@ _CREDENTIAL_ENV_KEYS = frozenset(
 
 class _CredentialKeyAddRequest(BaseModel):
     key: str
+    #: Optional, and honoured only when exactly one key is submitted: a paste
+    #: of five keys has one name field and no way to say which key it meant.
+    name: str = ""
+
+
+class _CredentialKeyOrderRequest(BaseModel):
+    """The pool's credential ids, in the order the operator wants them."""
+
+    order: list[str]
+
+
+class _CredentialKeyNameRequest(BaseModel):
+    """One credential's display name. Empty clears it."""
+
+    name: str = ""
+
+
+def _fingerprints(keys: Iterable[str]) -> list[str]:
+    return [credential_fingerprint(key) for key in keys]
+
+
+def _reordered_pool(keys: Sequence[str], order: Sequence[str]) -> list[str]:
+    """Return ``keys`` in ``order``, or refuse.
+
+    The body is accepted only when it is an exact permutation of the pool's
+    fingerprints -- same ids, same count, each once. Anything else means the
+    browser is working from a list that has since changed, and the one thing a
+    reorder must never do is drop or duplicate a key nobody asked it to touch.
+    """
+
+    identifiers = _fingerprints(keys)
+    if sorted(order) != sorted(identifiers):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The key list changed - reopen the pool and try again."
+                if len(order) != len(identifiers)
+                else "The submitted order is not this pool's keys."
+            ),
+        )
+    remaining = dict(zip(identifiers, keys, strict=True))
+    return [remaining[identifier] for identifier in order]
+
+
+def _key_rows(
+    pool_id: str,
+    keys: Sequence[str],
+    health: Sequence[dict[str, Any] | None],
+) -> list[dict[str, Any]]:
+    """Build the structured per-key rows the dashboard renders.
+
+    Carries **both** masks on purpose. ``masked`` is what the card has always
+    shown (``first6…last4``); ``key_label`` is the mask analytics is keyed on
+    (``first4…last4``). The browser needs the second to join a name to a log
+    row, and guessing one from the other is not possible.
+    """
+
+    names = pool_names(pool_id)
+    rows: list[dict[str, Any]] = []
+    for index, key in enumerate(keys):
+        identifier = credential_fingerprint(key)
+        label = mask_credential_label(key)
+        snapshot = health[index] if index < len(health) else None
+        # A badge whose label is not this key's label belongs to whatever used
+        # to sit at this position. Drop it rather than show the wrong key's
+        # health: the zip below is positional and the runtime may be a rebuild
+        # behind the list we just read.
+        if isinstance(snapshot, Mapping):
+            reported = snapshot.get("key_label")
+            if reported is not None and reported != label:
+                snapshot = None
+        rows.append(
+            {
+                "index": index,
+                "id": identifier,
+                "masked": _mask_credential_key(key),
+                "key_label": label,
+                "name": names.get(identifier, ""),
+                "health": snapshot,
+            }
+        )
+    return rows
 
 
 def _mask_credential_key(key: str) -> str:
@@ -706,9 +805,78 @@ async def list_credential_keys(
         "source": entry["source"],
         "locked": is_locked_source(entry["source"]),
         "count": len(keys),
+        # ``keys`` and ``health`` stay exactly as they were: an older dashboard
+        # left open across an upgrade still renders. ``rows`` is the structured
+        # form everything new reads.
         "keys": [_mask_credential_key(key) for key in keys],
         "health": health,
+        "rows": _key_rows(env_pool_id(env_key), keys, health),
     }
+
+
+@router.put("/admin/api/credentials/{env_key}/keys/order")
+async def reorder_credential_keys(
+    env_key: str,
+    payload: _CredentialKeyOrderRequest,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Rewrite one pool in a new order, and apply it immediately.
+
+    The order *is* the failover order -- ``failover`` serves the lowest healthy
+    slot, ``single`` serves slot 0 and nothing else -- so this endpoint is the
+    whole feature. It writes the same comma-joined value adding and removing a
+    key already write, through the same ``apply_admin_config`` path, which
+    means it applies hot and needs no restart. It also means it rebuilds the
+    provider, so that pool's health counters start again; the dashboard says so.
+    """
+
+    require_loopback_admin(request)
+    entry = _credential_entry_or_404(env_key)
+    _require_unlocked_credential(entry)
+
+    keys = list(parse_credential_keys(str(entry["value"])))
+    if not keys:
+        raise HTTPException(status_code=404, detail="This credential has no keys")
+    reordered = _reordered_pool(keys, payload.order)
+
+    result = await services.admin.apply_admin_config({env_key: ",".join(reordered)})
+    if not result.get("applied"):
+        raise HTTPException(
+            status_code=400,
+            detail="; ".join(result.get("errors", [])) or "Update rejected",
+        )
+    return {
+        "applied": True,
+        "env_key": env_key,
+        "count": len(reordered),
+        "order": [_mask_credential_key(key) for key in reordered],
+        "restart": result.get("restart"),
+    }
+
+
+@router.put("/admin/api/credentials/{env_key}/keys/{key_id}/name")
+async def rename_credential_key(
+    env_key: str,
+    key_id: str,
+    payload: _CredentialKeyNameRequest,
+    request: Request,
+):
+    """Name one key. Store only.
+
+    Deliberately does **not** call ``apply_admin_config``: a name is not
+    configuration the proxy reads, and rebuilding a provider generation -- which
+    would throw away every counter and bench in that pool -- to record a piece
+    of display text would be an absurd price for typing a word.
+    """
+
+    require_loopback_admin(request)
+    entry = _credential_entry_or_404(env_key)
+    keys = parse_credential_keys(str(entry["value"]))
+    if key_id not in _fingerprints(keys):
+        raise HTTPException(status_code=404, detail="Unknown key for this credential")
+    stored = set_name(env_pool_id(env_key), key_id, payload.name)
+    return {"env_key": env_key, "id": key_id, "name": stored}
 
 
 @router.post("/admin/api/credentials/{env_key}/keys")
@@ -760,11 +928,17 @@ async def add_credential_key(
             status_code=400,
             detail="; ".join(result.get("errors", [])) or "Update rejected",
         )
+    named = ""
+    if len(added) == 1 and payload.name.strip():
+        named = set_name(
+            env_pool_id(env_key), credential_fingerprint(added[0]), payload.name
+        )
     return {
         "applied": True,
         "env_key": env_key,
         "count": len(keys),
         "added": ", ".join(_mask_credential_key(key) for key in added),
+        "name": named,
         "added_count": len(added),
         "skipped": len(submitted) - len(added),
         "restart": result.get("restart"),
@@ -776,9 +950,17 @@ async def delete_credential_key(
     env_key: str,
     index: int,
     request: Request,
+    key_id: str | None = Query(default=None, alias="id"),
     services: ApiServices = Depends(get_services),
 ):
-    """Remove one key from a provider credential and apply immediately."""
+    """Remove one key from a provider credential and apply immediately.
+
+    ``id`` is the credential fingerprint the dashboard believed sat at
+    ``index``. It is optional so a dashboard left open across the upgrade still
+    works, and checked when present because the order is now editable: a second
+    tab that reordered the pool underneath this one would otherwise delete a
+    key the operator never pointed at.
+    """
     require_loopback_admin(request)
     entry = _credential_entry_or_404(env_key)
     _require_unlocked_credential(entry)
@@ -786,6 +968,11 @@ async def delete_credential_key(
     keys = list(parse_credential_keys(str(entry["value"])))
     if index < 0 or index >= len(keys):
         raise HTTPException(status_code=404, detail="Key index out of range")
+    if key_id is not None and credential_fingerprint(keys[index]) != key_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The key list changed - reopen the pool and try again.",
+        )
     removed = keys.pop(index)
 
     result = await services.admin.apply_admin_config({env_key: ",".join(keys)})
@@ -794,6 +981,7 @@ async def delete_credential_key(
             status_code=400,
             detail="; ".join(result.get("errors", [])) or "Update rejected",
         )
+    forget_credentials(env_pool_id(env_key), [credential_fingerprint(removed)])
     return {
         "applied": True,
         "env_key": env_key,
@@ -1928,15 +2116,75 @@ async def list_websearch_credential_keys(env_key: str, request: Request):
     state = load_value_state()
     entry = state.get(env_key, {"value": "", "source": "default"})
     keys = parse_credential_keys(entry["value"])
+    names = pool_names(websearch_pool_id(env_key))
     return {
         "provider_id": descriptor.provider_id,
         "env_key": env_key,
         "locked": is_locked_source(entry["source"]),
+        # Unchanged, to the byte: a dashboard from before 7.29.0 still renders.
         "keys": [
             {"index": index, "key_label": mask_credential_label(key)}
             for index, key in enumerate(keys)
         ],
+        # The structured form, matching the provider-pool listing's ``rows``.
+        "rows": [
+            {
+                "index": index,
+                "id": credential_fingerprint(key),
+                "masked": _mask_credential_key(key),
+                "key_label": mask_credential_label(key),
+                "name": names.get(credential_fingerprint(key), ""),
+                "health": None,
+            }
+            for index, key in enumerate(keys)
+        ],
         "health": cached_key_pool_snapshot(descriptor.provider_id),
+    }
+
+
+@router.put("/admin/api/websearch/credentials/{env_key}/keys/order")
+async def reorder_websearch_credential_keys(
+    env_key: str,
+    payload: _CredentialKeyOrderRequest,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Rewrite one web search pool in a new order, and apply it immediately."""
+
+    require_loopback_admin(request)
+    descriptor = _websearch_descriptor_for_env(env_key)
+    keys = _editable_websearch_keys(env_key)
+    if not keys:
+        raise HTTPException(status_code=404, detail="This credential has no keys")
+    reordered = _reordered_pool(keys, payload.order)
+    result = await services.admin.apply_admin_config({env_key: ",".join(reordered)})
+    return result | {
+        "provider_id": descriptor.provider_id,
+        "keys": _masked_keys(env_key),
+    }
+
+
+@router.put("/admin/api/websearch/credentials/{env_key}/keys/{key_id}/name")
+async def rename_websearch_credential_key(
+    env_key: str,
+    key_id: str,
+    payload: _CredentialKeyNameRequest,
+    request: Request,
+):
+    """Name one web search key. Store only, like its provider-pool twin."""
+
+    require_loopback_admin(request)
+    descriptor = _websearch_descriptor_for_env(env_key)
+    entry = load_value_state().get(env_key, {"value": "", "source": "default"})
+    keys = parse_credential_keys(entry["value"])
+    if key_id not in _fingerprints(keys):
+        raise HTTPException(status_code=404, detail="Unknown key for this credential")
+    stored = set_name(websearch_pool_id(env_key), key_id, payload.name)
+    return {
+        "provider_id": descriptor.provider_id,
+        "env_key": env_key,
+        "id": key_id,
+        "name": stored,
     }
 
 
@@ -1957,9 +2205,15 @@ async def add_websearch_credential_key(
         )
     keys = _editable_websearch_keys(env_key)
     result = await services.admin.apply_admin_config({env_key: ",".join([*keys, key])})
+    named = ""
+    if payload.name.strip():
+        named = set_name(
+            websearch_pool_id(env_key), credential_fingerprint(key), payload.name
+        )
     return result | {
         "provider_id": descriptor.provider_id,
         "keys": _masked_keys(env_key),
+        "name": named,
     }
 
 
@@ -1968,6 +2222,7 @@ async def delete_websearch_credential_key(
     env_key: str,
     index: int,
     request: Request,
+    key_id: str | None = Query(default=None, alias="id"),
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
@@ -1975,8 +2230,15 @@ async def delete_websearch_credential_key(
     keys = _editable_websearch_keys(env_key)
     if index < 0 or index >= len(keys):
         raise HTTPException(status_code=404, detail="Web search key index out of range")
+    if key_id is not None and credential_fingerprint(keys[index]) != key_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The key list changed - reopen the pool and try again.",
+        )
+    removed = keys[index]
     del keys[index]
     result = await services.admin.apply_admin_config({env_key: ",".join(keys)})
+    forget_credentials(websearch_pool_id(env_key), [credential_fingerprint(removed)])
     return result | {
         "provider_id": descriptor.provider_id,
         "keys": _masked_keys(env_key),
@@ -2834,6 +3096,9 @@ async def list_request_log(
         "has_more": has_more,
         "limit": limit,
         "offset": offset,
+        # The table renders a name instead of a mask when the operator gave the
+        # key one; the store cannot say which, so the index rides along.
+        "key_names": credential_name_index(),
     }
 
 
@@ -2983,6 +3248,10 @@ async def request_log_stats(
     result["harness_labels"] = _harness_labels(
         row["key"] for row in result.get("by_harness", [])
     )
+    # Beside the numbers for the same reason the harness labels are: ``core``
+    # may not import ``config``, so the store cannot resolve a name, and the
+    # dashboard should not have to hold a copy of the pools to render one.
+    result["key_names"] = credential_name_index()
     # Lets the dashboard say "these totals have stopped rising" when the table
     # is at its cap, instead of leaving the plateau unexplained.
     result["retained_rows_max"] = int(settings.request_log_max_rows)

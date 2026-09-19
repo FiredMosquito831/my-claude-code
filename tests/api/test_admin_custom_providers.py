@@ -687,3 +687,167 @@ def test_add_key_republishes_the_catalogue(monkeypatch, tmp_path):
     assert body["model_count"] == 2
     assert body["discovery"]["ok"] is True
     assert upstream.calls == calls_after_create + 1
+
+
+# --------------------------------------------------------------- key order ---
+# A custom pool is the same ordered list an env pool is, with the same failover
+# meaning, so it gets the same rail. Its keys live in custom_providers.json
+# rather than .env, which is the only difference these tests care about.
+
+
+def _stored_keys(registry: ProviderRegistry, provider_id: str) -> tuple[str, ...]:
+    """The keys as the registry holds them, refusing a provider that vanished."""
+
+    entry = registry.get(provider_id)
+    assert entry is not None
+    return entry.api_keys
+
+
+def _custom_rows(client, provider_id="custom_acme"):
+    listed = client.get(f"/admin/api/custom-providers/{provider_id}/keys")
+    assert listed.status_code == 200, listed.text
+    return listed.json()["rows"]
+
+
+def test_custom_pool_reorder_writes_custom_providers_json_in_the_new_order(
+    monkeypatch, tmp_path
+):
+    registry = _registry(tmp_path)
+    entry = registry.add(
+        display_name="Acme",
+        base_url="https://api.acme.example/v1",
+        api_keys=("sk-one-1111", "sk-two-2222", "sk-three-3333"),
+        credential_rotation="failover",
+    )
+    app, _ = _make_app(monkeypatch, tmp_path, registry)
+    client = _local_client(app)
+    ids = [row["id"] for row in _custom_rows(client, entry.provider_id)]
+
+    response = client.put(
+        f"/admin/api/custom-providers/{entry.provider_id}/keys/order",
+        json={"order": [ids[2], ids[0], ids[1]]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _stored_keys(registry, entry.provider_id) == (
+        "sk-three-3333",
+        "sk-one-1111",
+        "sk-two-2222",
+    )
+    stored = (tmp_path / "custom_providers.json").read_text(encoding="utf-8")
+    assert stored.index("sk-three-3333") < stored.index("sk-one-1111")
+
+
+def test_custom_pool_reorder_rejects_a_body_that_is_not_a_permutation(
+    monkeypatch, tmp_path
+):
+    registry = _seeded_registry(tmp_path)
+    app, _ = _make_app(monkeypatch, tmp_path, registry)
+    client = _local_client(app)
+
+    response = client.put(
+        "/admin/api/custom-providers/custom_acme/keys/order",
+        json={"order": ["sha256:deadbeefdeadbeef"]},
+    )
+
+    assert response.status_code == 409
+    assert _stored_keys(registry, "custom_acme") == ("sk-acme-aaaa1111bbbb",)
+
+
+def test_custom_pool_names_live_in_the_same_store_as_env_pools(monkeypatch, tmp_path):
+    from my_claude_code.config.credential_names import custom_pool_id, pool_names
+
+    registry = _seeded_registry(tmp_path)
+    app, _ = _make_app(monkeypatch, tmp_path, registry)
+    client = _local_client(app)
+    key_id = _custom_rows(client)[0]["id"]
+
+    response = client.put(
+        f"/admin/api/custom-providers/custom_acme/keys/{key_id}/name",
+        json={"name": "Spare"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Spare"
+    store = tmp_path / ".mcc" / "credential_names.json"
+    assert pool_names(custom_pool_id("custom_acme"), store) == {key_id: "Spare"}
+    # The one store, and still no secret in it.
+    assert "sk-acme-aaaa1111bbbb" not in store.read_text(encoding="utf-8")
+    assert _custom_rows(client)[0]["name"] == "Spare"
+
+
+def test_custom_key_delete_refuses_a_stale_id(monkeypatch, tmp_path):
+    registry = _registry(tmp_path)
+    entry = registry.add(
+        display_name="Acme",
+        base_url="https://api.acme.example/v1",
+        api_keys=("sk-one-1111", "sk-two-2222"),
+        credential_rotation="failover",
+    )
+    app, _ = _make_app(monkeypatch, tmp_path, registry)
+    client = _local_client(app)
+    ids = [row["id"] for row in _custom_rows(client, entry.provider_id)]
+    client.put(
+        f"/admin/api/custom-providers/{entry.provider_id}/keys/order",
+        json={"order": list(reversed(ids))},
+    )
+
+    response = client.delete(
+        f"/admin/api/custom-providers/{entry.provider_id}/keys/0?id={ids[0]}"
+    )
+
+    assert response.status_code == 409
+    assert _stored_keys(registry, entry.provider_id) == ("sk-two-2222", "sk-one-1111")
+
+
+def test_custom_key_delete_drops_the_name_with_the_key(monkeypatch, tmp_path):
+    from my_claude_code.config.credential_names import custom_pool_id, pool_names
+
+    registry = _registry(tmp_path)
+    entry = registry.add(
+        display_name="Acme",
+        base_url="https://api.acme.example/v1",
+        api_keys=("sk-one-1111", "sk-two-2222"),
+        credential_rotation="failover",
+    )
+    app, _ = _make_app(monkeypatch, tmp_path, registry)
+    client = _local_client(app)
+    ids = [row["id"] for row in _custom_rows(client, entry.provider_id)]
+    client.put(
+        f"/admin/api/custom-providers/{entry.provider_id}/keys/{ids[0]}/name",
+        json={"name": "Spare"},
+    )
+
+    client.delete(f"/admin/api/custom-providers/{entry.provider_id}/keys/0?id={ids[0]}")
+
+    store = tmp_path / ".mcc" / "credential_names.json"
+    assert pool_names(custom_pool_id(entry.provider_id), store) == {}
+
+
+def test_a_custom_key_can_be_named_as_it_is_added(monkeypatch, tmp_path):
+    registry = _seeded_registry(tmp_path)
+    app, _ = _make_app(monkeypatch, tmp_path, registry)
+    client = _local_client(app)
+
+    response = client.post(
+        "/admin/api/custom-providers/custom_acme/keys",
+        json={"api_key": "sk-acme-cccc2222dddd", "name": "Backup"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "Backup"
+    assert [row["name"] for row in _custom_rows(client)] == ["", "Backup"]
+
+
+def test_the_custom_key_listing_carries_an_id_and_both_masks(monkeypatch, tmp_path):
+    registry = _seeded_registry(tmp_path)
+    app, _ = _make_app(monkeypatch, tmp_path, registry)
+    client = _local_client(app)
+
+    row = _custom_rows(client)[0]
+
+    assert row["id"].startswith("sha256:")
+    assert row["masked"] == "sk-acm…bbbb"
+    assert row["key_label"] == "sk-a…bbbb"
+    assert row["name"] == ""
+    assert "sk-acme-aaaa1111bbbb" not in str(row)

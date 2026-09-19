@@ -651,8 +651,13 @@ class TestLadderColumns:
         # export rather than gated by a field: both its inputs are always
         # present columns, and a TTFT exported without it is the
         # misattributed number with nothing to say so.
+        # ``key_name`` joins it for the same reason: it is resolved per row
+        # from the credential name store rather than selected from SQL, and it
+        # is present whatever the field selection, beside the ``key_label``
+        # that is also always present.
         assert export_engine.request_detail_derived_columns(["ladder"]) == [
             "ttft_lost_to_fallbacks_ms",
+            "key_name",
             "ladder_tries",
             "ladder_statuses",
             "ladder_root_cause",

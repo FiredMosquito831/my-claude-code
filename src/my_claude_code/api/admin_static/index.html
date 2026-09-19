@@ -4565,6 +4565,29 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   <code>single</code> with one.
                 </p>
                 <p>
+                  <strong>The order is the failover order.</strong> Every policy reads the
+                  pool top to bottom: <code>failover</code> serves the first healthy key,
+                  <code>single</code> serves the first key and nothing else, and
+                  <code>round_robin</code> cycles in that order. Open <em>Manage keys</em>
+                  on any provider card and drag a key by its grip, or use
+                  <em>Move up</em> / <em>Move down</em> (or the arrow keys on a focused
+                  grip). It applies at once and needs no restart, but it rebuilds the pool,
+                  so that pool's health counters and benches start again &mdash; exactly as
+                  they do when you add or remove a key.
+                </p>
+                <p>
+                  <strong>You can name a key.</strong> Type a name in the box beside it, or
+                  in the optional Name field when you add one. A named key then reads as its
+                  name wherever a credential is shown &mdash; the card, the request log, the
+                  retry ladder, the per-key analytics and the CSV &mdash; with its masked
+                  label still there on hover and still in the <code>key_label</code> export
+                  column beside the new <code>key_name</code> one. Names live in
+                  <code>~/.mcc/credential_names.json</code>, keyed by a hash of the key and
+                  never by the key itself; they never reach an upstream request, the request
+                  log or a rollup. A name is display only, so renaming a key rewrites no
+                  history. Renaming never restarts or rebuilds anything.
+                </p>
+                <p>
                   Health is tracked per key, and only the provider's own verdict on the
                   key changes it: a <strong>401/403</strong> locks the key out on an
                   escalating ladder, and a <strong>429</strong> benches it for exactly as
