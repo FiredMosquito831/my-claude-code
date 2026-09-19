@@ -2644,6 +2644,68 @@ first thing to suspect. `OPENCODE_CLIENT_VERSION` pins the
 release named in the user-agent; empty, the default, reads it from the
 `opencode-ai` package installed on this machine.
 
+Since 7.28.0 the user-agent has all three of the real client's segments —
+`opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14`, captured
+off that client's own wire on 2026-09-19. MCC used to send only the first,
+because the first is the only one the client's source writes: its HTTP
+transport appends the other two underneath. Neither appended segment can be
+read off this machine, so both are pinned and both are overridable —
+`OPENCODE_CLIENT_AI_SDK_VERSION` and `OPENCODE_CLIENT_RUNTIME`.
+
+### The free tier now reads your tool names
+
+Some time before 2026-09-18 00:52 UTC the Zen free tier stopped checking only
+those headers and started classifying the request's **tool catalogue**. Since
+then it answers `403 FreeTierError` — *"OpenCode's free tier can only be used
+from within OpenCode"* — to any request whose tool names are not its own
+client's. Measured on 2026-09-18, with MCC's headers untouched in every row:
+
+| tools on the request | answer |
+| --- | --- |
+| `bash, edit, glob, grep, read` (the client's own spellings) | **200** |
+| `Bash, Edit, Glob, Grep, Read` (Claude Code's) | `403` |
+| no tools at all | `403` |
+| both casings at once | `500 server_error` |
+
+So from 7.28.0 MCC **translates**, on free-tier OpenCode models only: on the
+way out `Bash`, `Read`, `Edit`, `Glob` and `Grep` are sent under the names
+OpenCode's own client uses, every other tool name is aliased through the codec
+that already handles this host's 64-character limit, and on the way back every
+tool call the model makes is mapped to the name your agent actually sent. Your
+agent never sees the wire names. No decoy tool is ever added — that is the
+`500` in the table.
+
+Which models: any whose id ends in `-free` or `:free`, any the catalogue
+prices at zero on this host, and anything you list in
+`OPENCODE_FREE_TIER_MODELS` (`big-pickle` by default — it is free and its name
+does not say so). **Every other model is untouched**, on OpenCode and
+everywhere else: a paid Zen model gets the byte-identical request it got in
+7.27.0, and a contract test pins that.
+
+`OPENCODE_CLIENT_IDENTITY="mcc"` turns the translation off along with the rest
+of the impersonation. A free-tier model will then answer `403`, which is the
+truthful outcome rather than a hidden one.
+
+A tool-less request on a free-tier model still fails, and that is deliberate:
+the real OpenCode client sends no `tools` key at all on its own title and
+compaction sub-requests — captured on 2026-09-19 — so those sub-requests are
+refused inside the genuine client too
+([#49592](https://github.com/anomalyco/opencode/issues/49592),
+[#49723](https://github.com/anomalyco/opencode/issues/49723)). Adding a
+catalogue MCC cannot honour, to a request the client it names would not have
+added one to, would be a worse lie than the one being refused.
+
+Such a refusal is now its own failure kind, `free_tier`, instead of
+`authentication`. It does not bench the key (the key is fine), it does not
+bench the proxy (the same account is refused from every address), and the
+route falls through to the next model.
+
+**Expect this to break again.** The vendor tightened this gate three times in
+48 hours and has said on the record that the free tier is harness-locked
+policy. Everything above is written to be re-measured — one mapping, one
+predicate, three settings — rather than to be clever. The durable paths remain
+a paid Zen key or OpenCode Go.
+
 **OpenCode Go is unverified.** The vendor said on 2026-09-03 that Go requests
 must carry the conversation header and began enforcing it on 2026-09-06. MCC
 sends it, under the same rule as Zen. Both live Go probes were answered
@@ -4734,6 +4796,9 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/cyber`, `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.mcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
 | `OPENCODE_CLIENT_IDENTITY` | `opencode` | **New in 6.69.0.** Which client MCC identifies as to OpenCode Zen and OpenCode Go, both of which read identity headers off every request. `opencode` sends the official client's user-agent and client id, which is what the free tier's limiter recognises; `mcc` sends `my-claude-code` and this version instead. The conversation, request and project headers go either way. See [OpenCode Zen and OpenCode Go: what MCC sends about itself](#opencode-zen-and-opencode-go-what-mcc-sends-about-itself). |
 | `OPENCODE_CLIENT_VERSION` | *(empty)* | **New in 6.69.0.** Pins the OpenCode release named in that user-agent. Empty reads it from the `opencode-ai` package installed on this machine, and falls back to the release this build was verified against. Only used when `OPENCODE_CLIENT_IDENTITY` is `opencode`. |
+| `OPENCODE_CLIENT_AI_SDK_VERSION` | *(empty)* | **New in 7.28.0.** The middle segment of the user-agent the real OpenCode client sends — `ai-sdk/provider-utils/<this>`. Its own HTTP transport appends it, so unlike the release above it cannot be read off this machine; empty sends the version captured from the client this release was built against. Only used when `OPENCODE_CLIENT_IDENTITY` is `opencode`. |
+| `OPENCODE_CLIENT_RUNTIME` | *(empty)* | **New in 7.28.0.** The last user-agent segment, written `<runtime>/<version>` and sent as `runtime/<that>` — `bun/1.3.14` on the captured client. Empty sends the captured value. Only used when `OPENCODE_CLIENT_IDENTITY` is `opencode`. |
+| `OPENCODE_FREE_TIER_MODELS` | `big-pickle` | **New in 7.28.0.** Comma-separated Zen/Go model ids that are on the free tier without saying so in their name. On these — and on any id ending `-free` or `:free`, and any model the catalogue prices at zero here — MCC sends OpenCode's own tool-name spellings and translates the model's calls back, because that tier answers `403` to any other catalogue. Every other model keeps the request it has always been sent. See [The free tier now reads your tool names](#the-free-tier-now-reads-your-tool-names). |
 | `SERVER_STALE_SERVER_ACTION` | `report` | **New in 6.72.2.** What the server does about other My Claude Code servers it finds at start. `report` names each one in the server log — pid, session, recorded port, start time, last heartbeat, and the files it holds open — and stops nothing. `stop` also stops the ones this install can prove are finished: a heartbeat silent past `SERVER_STALE_SESSION_SECONDS` whose recorded port is now served by a different MCC, or a launcher whose server process is gone. A server is never stopped merely for owning no listening socket. |
 | `SERVER_STALE_SESSION_SECONDS` | `900` | **New in 6.72.2.** How long another server's heartbeat must be silent before the word "stale" is available for it. A running server checks in every 30 s, so the default is thirty missed beats. Silence alone never stops anything. Range 60–86400. |
 | `SERVER_PORT_TAKEOVER` | `always` | **New in 6.59.0.** What happens when the server starts and its port is already held. `always` stops the holder and takes the port; a holder that is not MCC is named in one `WARNING` line first. Setting it to mcc-only stops only processes this install can identify as its own; never is the pre-6.59.0 behaviour — name the holder and refuse to start. Identification is by process, never by the HTTP answer. |

@@ -4,8 +4,11 @@ from typing import Any
 
 from my_claude_code.config.admin.spec import ConfigOptionSpec
 from my_claude_code.config.constants import (
+    OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
+    OPENCODE_CLIENT_RUNTIME_DEFAULT,
     OPENCODE_CLIENT_VERSION_DEFAULT,
+    OPENCODE_FREE_TIER_MODELS_DEFAULT,
 )
 from my_claude_code.config.provider_catalog import (
     AZURE_OPENAI_BASE_URL_EXAMPLE,
@@ -488,6 +491,59 @@ def _opencode_identity_field_specs() -> tuple[dict[str, Any], ...]:
                 "Which OpenCode release the user-agent names. Empty -- the default -- reads it from the "
                 "opencode-ai package installed on this machine, and falls back to the release this "
                 "version of MCC was built against. Only used when OpenCode Client Identity is opencode."
+            ),
+        },
+        {
+            "key": "OPENCODE_CLIENT_AI_SDK_VERSION",
+            "label": "OpenCode ai-sdk Version",
+            "section_id": "providers",
+            "provider": "opencode",
+            "settings_attr": "opencode_client_ai_sdk_version",
+            "default": OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
+            "advanced": True,
+            "restart_required": True,
+            "description": (
+                "The middle segment of the user-agent the real OpenCode client sends: "
+                "opencode/<release> ai-sdk/provider-utils/<this> runtime/<below>. Its own "
+                "transport appends it, so it cannot be read off the installed package. "
+                "Empty -- the default -- sends the version captured from the client this "
+                "release was built against. Only used when OpenCode Client Identity is opencode."
+            ),
+        },
+        {
+            "key": "OPENCODE_CLIENT_RUNTIME",
+            "label": "OpenCode Runtime Segment",
+            "section_id": "providers",
+            "provider": "opencode",
+            "settings_attr": "opencode_client_runtime",
+            "default": OPENCODE_CLIENT_RUNTIME_DEFAULT,
+            "advanced": True,
+            "restart_required": True,
+            "description": (
+                "The last user-agent segment, written as <runtime>/<version> and sent as "
+                "runtime/<that> -- bun/1.3.14 on the client captured for this release. "
+                "Empty sends the captured value. Only used when OpenCode Client Identity "
+                "is opencode."
+            ),
+        },
+        {
+            "key": "OPENCODE_FREE_TIER_MODELS",
+            "label": "OpenCode free-tier models (comma-separated)",
+            "section_id": "providers",
+            "provider": "opencode",
+            "settings_attr": "opencode_free_tier_models",
+            "default": OPENCODE_FREE_TIER_MODELS_DEFAULT,
+            "restart_required": True,
+            "description": (
+                "Comma-separated Zen and Go model ids that are on the free tier without "
+                "saying so in their name. Since 2026-09-18 that tier answers 403 to any "
+                "request whose tool names are not its own client's, so MCC translates "
+                "Bash/Read/Edit/Glob/Grep to bash/read/edit/glob/grep on these models and "
+                "translates the answer back -- and on nothing else, so every paid model "
+                "keeps the request it has always been sent. Models whose id already ends "
+                "in -free or :free, and models the catalogue prices at zero here, need no "
+                "entry. Set OpenCode Client Identity to mcc to turn the translation off "
+                "entirely."
             ),
         },
     )

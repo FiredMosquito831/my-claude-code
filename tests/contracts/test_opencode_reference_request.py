@@ -22,10 +22,13 @@ What is asserted, and why each is the strongest available form:
   ``opencode_identity.py``'s third correction); what must hold is that MCC's
   two surfaces do not disagree with *each other*.
 * **the constant header values.** ``x-opencode-client`` must match exactly.
-  ``User-Agent`` must be a prefix of the captured one -- MCC deliberately sends
-  the first of its three segments (correction 1 in the same docstring), and a
-  prefix check is what states that deliberately rather than pinning a value
-  nobody chose.
+  ``User-Agent`` is compared *segment by segment* since 7.28.0: MCC now sends
+  all three of the captured client's segments, but the release named in the
+  first one is read off whatever ``opencode-ai`` this machine has, so pinning
+  the whole string would fail on any machine whose install differs from the
+  one the capture was taken on. What is pinned is the shape -- three segments,
+  the first naming ``opencode``, the two the client's transport appends equal
+  to the captured ones.
 
 What is deliberately NOT asserted: the credential, the two per-call ids, the
 ``x-stainless-*`` family (it carries the runner's Python and OS versions, which
@@ -168,7 +171,7 @@ def test_mccs_two_surfaces_emit_the_identity_in_the_same_sequence() -> None:
 def test_the_constant_header_values_still_match_the_captured_client(
     surface: str,
 ) -> None:
-    """``x-opencode-client`` exactly; ``User-Agent`` as the prefix MCC chose."""
+    """``x-opencode-client`` exactly; ``User-Agent`` segment by segment."""
 
     provider = _provider()
     _, headers = provider._responses.build_body(
@@ -178,12 +181,20 @@ def test_the_constant_header_values_still_match_the_captured_client(
     )
     constants = _reference(surface)["constant_header_values"]
     assert headers["x-opencode-client"] == constants["x-opencode-client"]
-    # Deliberately a prefix, not an equality: OpenCode's transport appends
-    # three more segments underneath the literal MCC reads out of the bundle,
-    # and 6.69.0's decision was to send the first one only. A byte-faithful
-    # user-agent is its own PATCH.
-    assert constants["User-Agent"].startswith(headers["User-Agent"])
-    assert headers["User-Agent"].startswith("opencode/")
+    # Segment by segment, not a whole-string equality: the release in the
+    # first segment comes from the ``opencode-ai`` installed on the machine
+    # running this, and the capture was taken on one particular machine. The
+    # two segments MCC could not read off any machine -- the ones the client's
+    # own transport appends -- are pinned exactly, because a pinned constant
+    # that has drifted from the capture is the whole defect this file exists
+    # to catch.
+    sent = headers["User-Agent"].split(" ")
+    captured = constants["User-Agent"].split(" ")
+    assert len(sent) == 3, headers["User-Agent"]
+    assert len(captured) == 3, constants["User-Agent"]
+    assert sent[0].startswith("opencode/")
+    assert captured[0].startswith("opencode/")
+    assert sent[1:] == captured[1:]
 
 
 def test_the_responses_body_carries_every_key_the_real_client_sent() -> None:

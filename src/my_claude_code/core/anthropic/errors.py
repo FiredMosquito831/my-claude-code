@@ -33,6 +33,10 @@ _FAILURE_ERROR_TYPES = {
     FailureKind.TIMEOUT: "api_error",
     FailureKind.UPSTREAM: "api_error",
     FailureKind.UNAVAILABLE: "api_error",
+    # A tier refusal is a permission answer, not an authentication one: the
+    # credential proved who it was and the host still declined to serve this
+    # model on it.
+    FailureKind.FREE_TIER: "permission_error",
 }
 
 

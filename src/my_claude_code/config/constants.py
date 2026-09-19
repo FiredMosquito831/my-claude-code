@@ -255,6 +255,7 @@ FAILURE_KIND_NAMES: frozenset[str] = frozenset(
         "timeout",
         "upstream",
         "unavailable",
+        "free_tier",
     }
 )
 
@@ -954,3 +955,47 @@ OPENCODE_CLIENT_VERSION_FALLBACK = "1.18.30"
 # An operator's pin for the version above. Empty -- the default -- means "read
 # it from this machine, and fall back to the pinned release".
 OPENCODE_CLIENT_VERSION_DEFAULT = ""
+
+# The other two segments of the real client's user-agent.
+#
+# `opencode/<ver>` is the only segment the client's own source writes. The
+# other two are appended underneath by the ai-sdk fetch wrapper, which sets
+# `user-agent` to `[existing, "ai-sdk/provider-utils/<ver>",
+# runtimeEnvironmentUserAgent()].join(" ")`. Captured off the real
+# `opencode-ai@1.18.31` wire on 2026-09-19 (scratch HOME, provider baseURL
+# pointed at a local recorder):
+#
+#     opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14
+#
+# Neither segment can be read off this machine: the ai-sdk version lives
+# inside the compiled bundle and the bun version is the runtime that bundle
+# was built with, so unlike the release above there is nothing on disk to
+# prefer. They are pinned, and overridable, for the reason the survey in
+# `specs/INVESTIGATION-ZEN-403-FREETIER.md` gives: one env var is the whole
+# cost of following the vendor the next time the floor moves.
+#
+# Sending them is not what lifts the 403 -- probe B says the three-segment
+# form alone is still refused -- it removes the last known divergence between
+# what MCC puts on the wire and what the client it names puts on the wire.
+OPENCODE_CLIENT_AI_SDK_VERSION_FALLBACK = "4.0.40"
+OPENCODE_CLIENT_RUNTIME_FALLBACK = "bun/1.3.14"
+
+# Operator pins for the two segments above. Empty -- the default -- means
+# "send the pinned segment". A single space or any other blank-looking value
+# is normalised away rather than emitted into a header.
+OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT = ""
+OPENCODE_CLIENT_RUNTIME_DEFAULT = ""
+
+# The Zen and Go models that are on the free tier without saying so in their
+# id.
+#
+# The free-tier gate (2026-09-18, see
+# `providers/openai_chat/opencode_catalogue.py`) refuses any request whose
+# tool catalogue is not OpenCode's own, and MCC answers it by translating tool
+# names -- but only for models actually on that tier, because every other
+# model is entitled to the request MCC has always sent. Most free Zen models
+# carry `-free` in the id and need no help. `big-pickle` is free and untagged,
+# which is why this list exists and why it is a setting rather than a
+# constant: the vendor's free roster changes without a release, and so should
+# this.
+OPENCODE_FREE_TIER_MODELS_DEFAULT = "big-pickle"

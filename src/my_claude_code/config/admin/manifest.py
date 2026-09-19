@@ -636,10 +636,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "refusal ends the whole route. Leave empty to fall back on every "
             "failure. Known kinds: invalid_request, model_rejected, "
             "context_length, authentication, permission, quota, rate_limit, "
-            "overloaded, timeout, upstream, unavailable. Listing quota here "
-            "means an account out of credits ends the route instead of trying "
-            "the next key and the next model, which is almost never what you "
-            "want."
+            "overloaded, timeout, upstream, unavailable, free_tier. Listing "
+            "quota here means an account out of credits ends the route instead "
+            "of trying the next key and the next model, which is almost never "
+            "what you want, and listing free_tier means one host's refusal to "
+            "serve one model on its free tier ends the route instead of trying "
+            "the next model on the same host."
         ),
     ),
     # ---- Keeping the catalogue current ---------------------------------

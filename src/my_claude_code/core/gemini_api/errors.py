@@ -32,6 +32,7 @@ _FAILURE_STATUSES: dict[FailureKind, str] = {
     FailureKind.TIMEOUT: "DEADLINE_EXCEEDED",
     FailureKind.UPSTREAM: "INTERNAL",
     FailureKind.UNAVAILABLE: "UNAVAILABLE",
+    FailureKind.FREE_TIER: "PERMISSION_DENIED",
 }
 
 #: HTTP status -> canonical status, for the statuses this proxy answers with

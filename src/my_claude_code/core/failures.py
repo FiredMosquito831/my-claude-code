@@ -19,6 +19,22 @@ class FailureKind(StrEnum):
     TIMEOUT = "timeout"
     UPSTREAM = "upstream"
     UNAVAILABLE = "unavailable"
+    # "This host will not serve this model to this account on this tier."
+    #
+    # Added in 7.28.0 for OpenCode Zen's free-tier gate, which answers 403
+    # ``FreeTierError`` and was until now filed as AUTHENTICATION -- "Provider
+    # authentication failed. Check API key." The key was fine; the whole
+    # investigation in ``specs/INVESTIGATION-ZEN-403-FREETIER.md`` opened by
+    # looking at credentials because of that sentence.
+    #
+    # It is its own kind because it answers three questions differently from
+    # every kind above it: the credential is not at fault (so no key bench),
+    # the exit address is not at fault (so no proxy bench -- the same account
+    # is refused from every IP), and another model on the same host may well
+    # work (so the chain falls through rather than stopping). Appended rather
+    # than inserted: ``config/proxy_chains.py`` mirrors this declaration
+    # *order*, and a test pins the tuple.
+    FREE_TIER = "free_tier"
 
 
 @dataclass(slots=True, eq=False)

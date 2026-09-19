@@ -1,6 +1,6 @@
 """Request-body policy for OpenAI-compatible chat providers."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -19,6 +19,7 @@ from my_claude_code.config.settings import (
     configured_image_detail,
 )
 from my_claude_code.core.anthropic import (
+    EMPTY_TOOL_CATALOGUE,
     OpenAIToolNameCodec,
     ReasoningReplayMode,
     build_base_request_body,
@@ -74,6 +75,7 @@ def build_openai_chat_request_body(
     postprocessors: Iterable[OpenAIChatPostprocessor] = (),
     provider_id: str = "",
     overrides: ModelParameterOverrides | None = None,
+    tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
 ) -> dict[str, Any]:
     """Build an OpenAI-compatible chat request body from an Anthropic request.
 
@@ -84,6 +86,11 @@ def build_openai_chat_request_body(
 
     ``overrides`` defaults to the process-wide table read from
     ``~/.mcc/model_overrides.json``; tests pass their own.
+
+    ``tool_catalogue`` is this host's own tool spellings, empty for every host
+    that has none -- which is every host this funnel has ever served but
+    OpenCode's free tier. Empty leaves the encoding below exactly the encoding
+    it has always done: alias what the host could not accept, rename nothing.
     """
     logger.debug(
         "{}_REQUEST: conversion start model={} msgs={}",
@@ -134,7 +141,10 @@ def build_openai_chat_request_body(
             overrides=table,
         )
 
-    _encode_openai_tool_names(body, OpenAIToolNameCodec.from_request(request_data))
+    _encode_openai_tool_names(
+        body,
+        OpenAIToolNameCodec.from_request(request_data, catalogue=tool_catalogue),
+    )
 
     logger.debug(
         "{}_REQUEST: conversion done model={} msgs={} tools={}",

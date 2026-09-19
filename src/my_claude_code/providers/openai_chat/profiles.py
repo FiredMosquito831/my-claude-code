@@ -23,6 +23,10 @@ from my_claude_code.providers.model_listing import RequiredPathValues
 from .base_url import openai_v1_base_url
 from .client_identity import ClientIdentity
 from .extra_body import validate_extra_body_does_not_override_canonical_fields
+from .opencode_catalogue import (
+    OPENCODE_FREE_TIER_CATALOGUE,
+    FreeTierToolCatalogue,
+)
 from .opencode_identity import OPENCODE_CLIENT_IDENTITY
 from .reasoning import (
     LLAMACPP_REASONING,
@@ -191,6 +195,19 @@ class OpenAIChatProfile:
     # Chat Completions is not governed by this field: that funnel has always
     # aliased through the same codec, so one tool has one alias on both doors.
     responses_tool_name_max_length: int | None = None
+    # This host classifies the request's *tool catalogue* on one tier, and
+    # these are the spellings it wants. ``None`` -- every profile but the two
+    # OpenCode ones -- means the tool names the client wrote go on the wire as
+    # the client wrote them, which is what every release before 7.28.0 sent to
+    # every host on every surface.
+    #
+    # A field rather than a branch, and declared next to the tool-name ceiling
+    # above because it is the same kind of statement: "what this deployment
+    # does to a body". The scope inside it is data too -- a free tag, an
+    # operator's roster, a published price of zero -- so no model name appears
+    # in any decision this profile drives. See
+    # ``openai_chat/opencode_catalogue.py`` for the measurements.
+    free_tier_tool_catalogue: FreeTierToolCatalogue | None = None
 
     @property
     def provider_name(self) -> str:
@@ -357,6 +374,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
         responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
+        free_tier_tool_catalogue=OPENCODE_FREE_TIER_CATALOGUE,
     ),
     "opencode_go": OpenAIChatProfile(
         _policy(
@@ -381,6 +399,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
         responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
+        free_tier_tool_catalogue=OPENCODE_FREE_TIER_CATALOGUE,
     ),
     "vercel": OpenAIChatProfile(
         _policy(

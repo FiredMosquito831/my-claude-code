@@ -39,13 +39,14 @@ rather than dressed up. What it changes today is that such a model is
 *reachable* the moment one returns, instead of being listed as unservable.
 """
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
 from loguru import logger
 
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.openai_tool_names import OpenAIToolNameCodec
 from my_claude_code.core.client_fingerprint import current_fingerprint
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.anthropic_messages import (
@@ -114,8 +115,14 @@ class MessagesTransport:
         api_key: str | None,
         rate_limiter: ProviderRateLimiter,
         api_key_provider: Any | None = None,
+        tool_catalogue_for: Callable[[str], Mapping[str, str]] | None = None,
     ) -> None:
         self._identity = identity
+        # The same resolver the other two doors read, so a model that is
+        # inside a host's free-tier scope is inside it whichever surface it
+        # resolves to. ``None`` -- every profile that declares no catalogue --
+        # sends this protocol exactly as it has always been sent.
+        self._tool_catalogue_for = tool_catalogue_for
         self._provider_name = provider_name
         self._base_url = base_url.rstrip("/")
         # ``replace`` rather than a fresh ``ProviderConfig``: every timeout,
@@ -198,4 +205,15 @@ class MessagesTransport:
             request_id=request_id,
             reasoning=reasoning,
             wire_surface=surface_label,
+            tool_names=self._tool_name_codec(request),
         )
+
+    def _tool_name_codec(self, request: MessagesRequest) -> OpenAIToolNameCodec | None:
+        """The codec this request's model calls for, or ``None`` for none."""
+
+        if self._tool_catalogue_for is None:
+            return None
+        catalogue = self._tool_catalogue_for(request.model)
+        if not catalogue:
+            return None
+        return OpenAIToolNameCodec.from_request(request, catalogue=catalogue)

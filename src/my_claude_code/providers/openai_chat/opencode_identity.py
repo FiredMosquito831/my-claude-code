@@ -83,7 +83,9 @@ header list, and a byte-faithful user-agent belongs in a PATCH of its own.
    because the ai-sdk transport appends the rest underneath. The limiter's own
    check is a substring ``includes()``, so the first segment still matches any
    plausible entry -- this matters only if the vendor ever matches on the bun
-   runtime.
+   runtime. **Corrected in 7.28.0**: :func:`opencode_user_agent` now emits all
+   three, and a re-capture of ``opencode-ai@1.18.31`` on 2026-09-19 shows the
+   two appended segments unchanged at ``4.0.40`` and ``bun/1.3.14``.
 2. **``x-opencode-project`` is usually a git SHA.** The capture carried a
    40-hex commit id, not the literal ``global``. ``global`` is the fallback for
    a working directory that is not a repository, and it is rarer than 6.69.0
@@ -111,11 +113,15 @@ from pathlib import Path
 from loguru import logger
 
 from my_claude_code.config.constants import (
+    OPENCODE_CLIENT_AI_SDK_VERSION_FALLBACK,
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
+    OPENCODE_CLIENT_RUNTIME_FALLBACK,
     OPENCODE_CLIENT_VERSION_FALLBACK,
 )
 from my_claude_code.config.settings import (
+    configured_opencode_client_ai_sdk_version,
     configured_opencode_client_identity,
+    configured_opencode_client_runtime,
     configured_opencode_client_version,
 )
 from my_claude_code.core.version import package_version
@@ -252,6 +258,38 @@ def reset_version_cache() -> None:
     _VERSION_CACHE = None
 
 
+def opencode_user_agent(version: str) -> str:
+    """The three-segment user-agent the real client puts on the wire.
+
+    ``opencode/<ver>`` is the only segment the client's own source writes; the
+    ai-sdk fetch wrapper appends ``ai-sdk/provider-utils/<ver>`` and the
+    runtime's own token underneath, joined by single spaces. Captured from
+    ``opencode-ai@1.18.31`` on 2026-09-19::
+
+        opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14
+
+    6.69.0 sent the first segment alone because that was all the bundle's
+    source showed. It is not what lifts the free-tier 403 -- probe B measured
+    the three-segment form still refused, and the refusal turned out to be
+    about the tool catalogue -- but it is the last known divergence between
+    what MCC says it is and what that client says it is, and a claim that is
+    faithful in four places and wrong in one is still wrong in one.
+
+    An operator who blanks either pin gets the pinned segment back rather than
+    a ragged user-agent with a hole in it; a segment is either a real value or
+    it is not emitted at all.
+    """
+
+    sdk = configured_opencode_client_ai_sdk_version().strip()
+    runtime = configured_opencode_client_runtime().strip()
+    segments = (
+        f"opencode/{version}",
+        f"ai-sdk/provider-utils/{sdk or OPENCODE_CLIENT_AI_SDK_VERSION_FALLBACK}",
+        f"runtime/{runtime or OPENCODE_CLIENT_RUNTIME_FALLBACK}",
+    )
+    return " ".join(segment for segment in segments if segment.rsplit("/", 1)[-1])
+
+
 def opencode_identity_mode() -> str:
     """Which identity the operator asked for, normalised."""
     mode = configured_opencode_client_identity().strip().lower()
@@ -270,7 +308,7 @@ def opencode_constant_headers() -> dict[str, str]:
     return {
         OPENCODE_PROJECT_HEADER: OPENCODE_PROJECT_VALUE,
         OPENCODE_CLIENT_HEADER: OPENCODE_CLIENT_VALUE,
-        USER_AGENT_HEADER: f"opencode/{version}",
+        USER_AGENT_HEADER: opencode_user_agent(version),
     }
 
 
@@ -338,5 +376,6 @@ __all__ = [
     "opencode_client_version",
     "opencode_constant_headers",
     "opencode_identity_mode",
+    "opencode_user_agent",
     "reset_version_cache",
 ]

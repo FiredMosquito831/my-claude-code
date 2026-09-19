@@ -28,7 +28,7 @@ of the real ``opencode-ai@1.18.30`` CLI taken on 2026-09-11
 """
 
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +36,7 @@ import httpx
 from loguru import logger
 
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.openai_tool_names import EMPTY_TOOL_CATALOGUE
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.client_fingerprint import current_fingerprint
 from my_claude_code.core.reasoning import ReasoningPolicy
@@ -116,6 +117,7 @@ def _next_responses_recovery(
     error: Exception,
     body: Mapping[str, Any],
     used: set[str],
+    tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
 ) -> _ResponsesLearning | None:
     """The next rewrite this refusal calls for, or ``None`` to raise it.
 
@@ -128,7 +130,7 @@ def _next_responses_recovery(
     if _RUNG_TOOL_NAME_LENGTH not in used:
         stated = rejected_tool_name_max_length(error)
         if stated is not None:
-            codec = responses_tool_name_codec(request, stated)
+            codec = responses_tool_name_codec(request, stated, tool_catalogue)
             retry = (
                 alias_responses_body_tool_names(dict(body), codec)
                 if codec is not None
@@ -177,10 +179,19 @@ class ResponsesTransport:
         rate_limiter: ProviderRateLimiter,
         api_key_provider: Any | None = None,
         tool_name_max_length: int | None = None,
+        tool_catalogue_for: Callable[[str], Mapping[str, str]] | None = None,
         memory: RecoveryMemory | None = None,
     ) -> None:
         self._config = config
         self._declared_tool_name_max_length = tool_name_max_length
+        # Which tool spellings this host wants for one model, or ``None`` for
+        # a host with no catalogue of its own -- which is every host but
+        # OpenCode's free tier, and is why a transport built without it sends
+        # exactly the bytes it sent before 7.28.0. A callable rather than a
+        # mapping because the answer is per *model*: the profile that declares
+        # it fronts paid models too, and those are entitled to their own tool
+        # names.
+        self._tool_catalogue_for = tool_catalogue_for
         # What this host has taught MCC about its own Responses validator.
         # A bare transport (a unit test, an embedded use) gets an unpersisted
         # memory and behaves exactly as one built before 7.23.0 did: nothing
@@ -222,6 +233,19 @@ class ResponsesTransport:
         if self._declared_tool_name_max_length is not None:
             return self._declared_tool_name_max_length
         return self._memory.responses_tool_name_max_length
+
+    def tool_catalogue(self, request: MessagesRequest) -> Mapping[str, str]:
+        """This host's own tool spellings for one request's model.
+
+        Resolved in one place for the same reason
+        :attr:`tool_name_max_length` is: the body encoder and the stream
+        decoder must be handed the same answer or the model's call comes back
+        under a name the client never sent.
+        """
+
+        if self._tool_catalogue_for is None:
+            return EMPTY_TOOL_CATALOGUE
+        return self._tool_catalogue_for(request.model)
 
     @property
     def url(self) -> str:
@@ -307,6 +331,7 @@ class ResponsesTransport:
             max_output_tokens=max_output_tokens,
             extra_body=extra_body,
             tool_name_max_length=self.tool_name_max_length,
+            tool_catalogue=self.tool_catalogue(request),
             include_tool_choice=not self._tool_choice_refused(request),
         )
         headers = self._headers(body)
@@ -481,7 +506,9 @@ class ResponsesTransport:
                     self.send, body=current, headers=headers
                 )
             except Exception as error:
-                learning = _next_responses_recovery(request, error, current, used)
+                learning = _next_responses_recovery(
+                    request, error, current, used, self.tool_catalogue(request)
+                )
                 if learning is None:
                     # Classified here rather than left raw so a Responses
                     # refusal reaches routing as the same ``ExecutionFailure``
@@ -582,7 +609,9 @@ class ResponsesTransport:
                     log_raw_events=self._config.log_raw_sse_events,
                     output_reasoning=reasoning.output_enabled,
                     tool_names=responses_tool_name_codec(
-                        request, self.tool_name_max_length
+                        request,
+                        self.tool_name_max_length,
+                        self.tool_catalogue(request),
                     ),
                 )
                 try:
