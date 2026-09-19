@@ -6409,6 +6409,86 @@ const SECTION_RENDERERS = {
   credential_health: renderCredentialHealth,
 };
 
+/* ------------------------------------------------------------------ *
+ * Advanced fields: ordered and tagged, never hidden by default.
+ *
+ * `advanced` used to mean `display: none` behind a per-card "Show advanced"
+ * button. A reader looking for RATE_LIMIT_COOLDOWN_MODE on Limits &
+ * Resilience found CREDENTIAL_LOCKOUT_TIERS beside it and concluded the
+ * cooldown settings did not exist -- and the providers section never grew
+ * that button at all, so 110 provider fields had no control anywhere.
+ *
+ * Now `advanced` only sorts a field after the common ones in its card and
+ * tags it. A collapse control stays for people who want the short form: it
+ * is opt-in, per card, and remembered per browser.
+ * ------------------------------------------------------------------ */
+
+const ADVANCED_COLLAPSE_PREFIX = "mcc.advancedCollapsed.";
+
+/** Is this card's advanced block collapsed for this browser?
+ *
+ * Absent, unreadable (private mode, blocked site data) and malformed all
+ * answer "no": expanded is the default the whole feature rests on, so the
+ * failure mode of storage must be the default, never a blank card.
+ */
+function advancedCollapsed(scopeKey) {
+  try {
+    return window.localStorage.getItem(ADVANCED_COLLAPSE_PREFIX + scopeKey) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Remember one card's collapse choice. Expanded is stored as *absence*, so a
+ *  reader who never touches the control leaves no key behind. */
+function rememberAdvancedCollapsed(scopeKey, collapsed) {
+  try {
+    const name = ADVANCED_COLLAPSE_PREFIX + scopeKey;
+    if (collapsed) window.localStorage.setItem(name, "1");
+    else window.localStorage.removeItem(name);
+  } catch {
+    /* Storage is a convenience here; the page works without it. */
+  }
+}
+
+/** Common fields first, advanced after, original order kept inside each half.
+ *
+ * `Array.prototype.sort` is specified stable, so this is the whole ordering
+ * rule: `advanced` moves a field down, it never reshuffles its neighbours.
+ */
+function advancedLast(fields) {
+  return [...fields].sort(
+    (left, right) => Number(Boolean(left.advanced)) - Number(Boolean(right.advanced)),
+  );
+}
+
+/** Attach the per-card "Collapse advanced" control to `container`.
+ *
+ * `container` is the element the CSS collapse rule is written against (a
+ * `.settings-section` or a `.pv-card`). `scopeKey` namespaces the stored
+ * choice so two cards never share one memory. The control is appended to
+ * `host`, which defaults to the container.
+ */
+function attachAdvancedCollapse(container, scopeKey, host) {
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "ghost-button advanced-toggle";
+  const paint = (collapsed) => {
+    toggle.textContent = collapsed ? "Show advanced" : "Collapse advanced";
+    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  };
+  const collapsed = advancedCollapsed(scopeKey);
+  if (collapsed) container.classList.add("collapse-advanced");
+  paint(collapsed);
+  toggle.addEventListener("click", () => {
+    const nowCollapsed = container.classList.toggle("collapse-advanced");
+    paint(nowCollapsed);
+    rememberAdvancedCollapsed(scopeKey, nowCollapsed);
+  });
+  (host || container).appendChild(toggle);
+  return toggle;
+}
+
 function renderSections(sections, fields) {
   state.modelComboboxes.clear();
   // Rebuilt rails mean stale editors and stale ids; the drag's whole state is
@@ -6447,10 +6527,15 @@ function renderSections(sections, fields) {
       // Rotation selects are rendered inside the credential key manager
       // instead of the generic grid. Websearch advanced option fields are
       // rendered inside the provider cards' collapsed groups.
-      const gridFields = sectionFields.filter(
-        (field) =>
-          !field.key.endsWith("_ROTATION") &&
-          !(field.section === "websearch" && field.advanced),
+      // Advanced last, common first -- the only thing `advanced` now does to
+      // a field's placement. Sorted before the renderer sees the list so a
+      // section with its own renderer gets the same order as the grid.
+      const gridFields = advancedLast(
+        sectionFields.filter(
+          (field) =>
+            !field.key.endsWith("_ROTATION") &&
+            !(field.section === "websearch" && field.advanced),
+        ),
       );
 
       const heading = document.createElement("div");
@@ -6490,18 +6575,10 @@ function renderSections(sections, fields) {
         sectionEl.appendChild(grid);
       }
 
-      // The providers section handles "advanced" per-card (see
-      // renderProviderGroups) rather than with this section-wide toggle.
+      // The providers section collapses per provider card (see
+      // renderProviderCard) rather than for all 35 cards at once.
       if (section.id !== "providers" && gridFields.some((field) => field.advanced)) {
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "ghost-button advanced-toggle";
-        toggle.textContent = "Show advanced";
-        toggle.addEventListener("click", () => {
-          const showing = sectionEl.classList.toggle("show-advanced");
-          toggle.textContent = showing ? "Hide advanced" : "Show advanced";
-        });
-        sectionEl.appendChild(toggle);
+        attachAdvancedCollapse(sectionEl, `section:${section.id}`);
       }
 
       container.appendChild(sectionEl);
@@ -6749,8 +6826,8 @@ function renderProviderCard(provider, fields) {
   // remove, per-key health and rotation policy -- not a single input.
   const body = document.createElement("div");
   body.className = "pv-card-body";
-  fields.forEach((field) => body.appendChild(renderField(field)));
-
+  const ordered = advancedLast(fields);
+  ordered.forEach((field) => body.appendChild(renderField(field)));
   // Two providers can be one account behind two endpoints (OpenCode Zen and
   // OpenCode Go). Only one of them owns the credential input, because a second
   // control bound to the same variable would be two ways to write one value.
@@ -6763,6 +6840,14 @@ function renderProviderCard(provider, fields) {
     if (shared) body.appendChild(renderSharedCredential(provider, shared));
   } else if ((provider.credential_shared_with || []).length) {
     body.appendChild(renderSharedCredentialNote(provider));
+  }
+  // Until 7.29.1 a provider's advanced fields (proxy, base URL override) were
+  // `display: none`, and this section was explicitly excluded from the
+  // section-wide toggle -- so no control anywhere in the dashboard could
+  // reveal them. They render now; the collapse is the reader's choice and is
+  // remembered for this card alone.
+  if (ordered.some((field) => field.advanced)) {
+    attachAdvancedCollapse(card, `provider:${provider.provider_id}`, body);
   }
   card.appendChild(body);
 
@@ -6916,6 +7001,15 @@ function renderField(field) {
   const labelText = document.createElement("span");
   labelText.textContent = field.label;
   label.appendChild(labelText);
+
+  // `advanced` is a label, not a hiding place: the field is on the page
+  // either way, this only says it is one of the rarer knobs.
+  if (field.advanced) {
+    const tag = document.createElement("span");
+    tag.className = "advanced-tag";
+    tag.textContent = "advanced";
+    label.appendChild(tag);
+  }
 
   const source = sourceText(field);
   if (source) {
@@ -9646,6 +9740,13 @@ function renderWebSearchAdvanced(provider) {
   if (fields.length === 0) return null;
   const details = document.createElement("details");
   details.className = "ws-advanced";
+  // Open unless this browser was told otherwise: a collapsed-by-default group
+  // is the same "the setting does not exist" problem in a different shape.
+  const scopeKey = `websearch:${provider.id}`;
+  details.open = !advancedCollapsed(scopeKey);
+  details.addEventListener("toggle", () =>
+    rememberAdvancedCollapsed(scopeKey, !details.open),
+  );
   const summary = document.createElement("summary");
   summary.textContent = "Advanced options";
   details.appendChild(summary);

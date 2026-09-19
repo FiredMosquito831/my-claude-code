@@ -1682,19 +1682,55 @@ textarea:focus-visible,
   }
 }
 
-/* Show/Hide Advanced fields */
+/* Advanced fields.
+
+   7.29.1: nothing is hidden by default. `advanced` now only ORDERS a field
+   after the common ones in its card and tags it, so every setting the
+   manifest declares is on the page the moment the page loads. Before this,
+   `display: none` plus a per-card "Show advanced" button meant a reader who
+   did not know the button existed could not find RATE_LIMIT_COOLDOWN_MODE at
+   all -- and the providers section never grew that button, so its 110
+   advanced fields had no control anywhere and were simply unreachable.
+
+   The collapse below is opt-in, per card, remembered per browser, and starts
+   off. `.collapse-advanced` is what a reader who wants the short form turns
+   on; it is never applied by the initial render. */
 .field.advanced-field {
-  display: none;
+  display: flex;
 }
 
-.settings-section.show-advanced .advanced-field {
-  display: flex;
+.settings-section.collapse-advanced .advanced-field,
+.pv-card.collapse-advanced .advanced-field {
+  display: none;
 }
 
 .advanced-toggle {
   margin-top: 20px;
   font-size: 12px;
   border: 1px solid var(--line-strong);
+}
+
+/* Per-provider-card collapse control: the card body is already tight, so it
+   sits flush rather than 20px down like the section-wide one. */
+.pv-card .advanced-toggle {
+  margin-top: 12px;
+  align-self: flex-start;
+}
+
+/* The tag that says "this one is advanced" now that the ordering, not a
+   hidden state, is what `advanced` means. Deliberately quiet: it labels a
+   field, it does not warn about it. */
+.advanced-tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 /* Fixed Bottom Action Bar */
@@ -1863,8 +1899,9 @@ textarea:focus-visible,
   margin: 0 0 12px 8px;
 }
 
-/* Advanced option fields live outside .settings-section.show-advanced, so
-   undo the generic grid's advanced-field hiding inside the card group. */
+/* Web-search option fields carry `advanced` only so they group under their
+   provider card instead of the flat grid; the group itself opens by default
+   (see renderWebSearchAdvanced) and the reader's collapse is remembered. */
 .ws-advanced .field.advanced-field {
   display: flex;
 }

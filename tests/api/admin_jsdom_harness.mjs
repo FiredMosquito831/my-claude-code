@@ -297,11 +297,16 @@ const FIELDS = [
     default: "3600",
     range_hint: "0 to 86400",
     description: "The ceiling on a wait a provider asks for in a header.",
+    // Both cooldown fields carry `advanced` in the shipped manifest, which is
+    // exactly why a reader could not find them beside the lockout ladder.
+    // Flagged here so the harness proves they render anyway.
+    advanced: true,
   },
   {
     key: "RATE_LIMIT_COOLDOWN_MODE",
     label: "What a 429 costs the key",
     section: "credential_health",
+    advanced: true,
     type: "select",
     value: "provider",
     default: "provider",
@@ -6903,10 +6908,158 @@ const latencyViews = {};
   ).length;
 }
 
+/* --------------------------------------------------- advanced fields
+   7.29.1: nothing is hidden by default. `advanced` orders a field after the
+   common ones in its card and tags it; a collapse control stays for readers
+   who want the short form, starts expanded, and is remembered per browser.
+
+   Deliberately LAST in this file: it re-renders the sections to prove the
+   stored collapse survives a reload, and every other readout above must be
+   taken from the first paint. */
+const advancedFields = (() => {
+  const SECTION_STORAGE = "mcc.advancedCollapsed.section:credential_health";
+  const keysIn = (el) =>
+    Array.from(el.querySelectorAll(".field")).map((f) => f.dataset.key);
+  // What a reader can actually see: a field is out of sight only when it is
+  // advanced AND an ancestor card is collapsed.
+  const shownIn = (el) =>
+    Array.from(el.querySelectorAll(".field"))
+      .filter(
+        (f) =>
+          !(f.classList.contains("advanced-field") && f.closest(".collapse-advanced")),
+      )
+      .map((f) => f.dataset.key);
+  const read = (name) => {
+    try {
+      return window.localStorage.getItem(name);
+    } catch {
+      return "<unreadable>";
+    }
+  };
+
+  const out = {
+    showAdvancedClassAnywhere: doc.querySelectorAll(".show-advanced").length,
+    showAdvancedInScript: /show-advanced/.test(script),
+  };
+
+  const card = doc.getElementById("section-credential_health");
+  out.section = card
+    ? {
+        all: keysIn(card),
+        shownOnLoad: shownIn(card),
+        tagged: Array.from(card.querySelectorAll(".field"))
+          .filter((f) => f.querySelector(".advanced-tag"))
+          .map((f) => f.dataset.key),
+        collapsedOnLoad: card.classList.contains("collapse-advanced"),
+        storedOnLoad: read(SECTION_STORAGE),
+        toggleLabel: (card.querySelector(".advanced-toggle")?.textContent || "").trim(),
+      }
+    : null;
+
+  const toggle = card ? card.querySelector(".advanced-toggle") : null;
+  if (toggle) {
+    toggle.click();
+    out.afterCollapse = {
+      collapsed: card.classList.contains("collapse-advanced"),
+      shown: shownIn(card),
+      label: toggle.textContent.trim(),
+      stored: read(SECTION_STORAGE),
+    };
+    // A reload is a fresh render against the same stored choice.
+    window.eval("renderSections")(SECTIONS, FIELDS);
+    const again = doc.getElementById("section-credential_health");
+    const againToggle = again ? again.querySelector(".advanced-toggle") : null;
+    out.afterReload = again
+      ? {
+          collapsed: again.classList.contains("collapse-advanced"),
+          shown: shownIn(again),
+          all: keysIn(again),
+          label: (againToggle?.textContent || "").trim(),
+        }
+      : null;
+    if (againToggle) {
+      againToggle.click();
+      out.afterExpand = {
+        collapsed: again.classList.contains("collapse-advanced"),
+        shown: shownIn(again),
+        label: againToggle.textContent.trim(),
+        stored: read(SECTION_STORAGE),
+      };
+    }
+  }
+
+  /* One provider card, rendered straight from renderProviderGroups the way
+     the key manager above is driven, because this fixture's /admin/api/config
+     carries no provider fields. Until 7.29.1 the proxy field below rendered
+     `display: none` with no control anywhere that could reveal it. */
+  const providerFields = [
+    {
+      key: "HARNESS_API_KEY",
+      label: "Harness API Key",
+      section: "providers",
+      provider: "harness_provider",
+      type: "secret",
+      value: "",
+      default: "",
+      secret: true,
+      description: "API key for the fixture provider.",
+    },
+    {
+      key: "HARNESS_PROXY",
+      label: "Harness Proxy",
+      section: "providers",
+      provider: "harness_provider",
+      type: "secret",
+      value: "",
+      default: "",
+      secret: true,
+      advanced: true,
+      description: "Send fixture traffic through this proxy.",
+    },
+    {
+      key: "HARNESS_BASE_URL",
+      label: "Harness Base URL",
+      section: "providers",
+      provider: "harness_provider",
+      type: "text",
+      value: "",
+      default: "https://example.invalid/v1",
+      description: "Endpoint the fixture provider is reached on.",
+    },
+  ];
+  const host = doc.createElement("div");
+  doc.body.appendChild(host);
+  host.appendChild(window.eval("renderProviderGroups")(providerFields));
+  const pv = host.querySelector(".pv-card");
+  out.provider = pv
+    ? {
+        order: keysIn(pv),
+        shownOnLoad: shownIn(pv),
+        tagged: Array.from(pv.querySelectorAll(".field"))
+          .filter((f) => f.querySelector(".advanced-tag"))
+          .map((f) => f.dataset.key),
+        collapsedOnLoad: pv.classList.contains("collapse-advanced"),
+        toggleLabel: (pv.querySelector(".advanced-toggle")?.textContent || "").trim(),
+      }
+    : null;
+  const pvToggle = pv ? pv.querySelector(".advanced-toggle") : null;
+  if (pvToggle) {
+    pvToggle.click();
+    out.providerAfterCollapse = {
+      collapsed: pv.classList.contains("collapse-advanced"),
+      shown: shownIn(pv),
+      stored: read("mcc.advancedCollapsed.provider:harness_provider"),
+    };
+  }
+  host.remove();
+  return out;
+})();
+
 console.log(
   JSON.stringify(
     {
       fatal: null,
+      advancedFields,
       latencyViews,
       catalogueReadout,
       desktopAppBanner,
