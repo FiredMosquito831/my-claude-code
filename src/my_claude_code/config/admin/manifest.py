@@ -104,6 +104,18 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "Web Search",
         "Web search provider selection, API keys, and key rotation.",
     ),
+    # After `websearch` rather than between it and `web_tools`: those two are
+    # adjacent by contract (`test_websearch_section_follows_web_tools_section`)
+    # because one is the local tool and the other is what serves it.
+    ConfigSectionSpec(
+        "catalogue",
+        "Model catalogue & learned facts",
+        "Where model capabilities come from when the provider does not "
+        "publish them, how long that answer is kept, and how long a fact MCC "
+        "learned from a rejection stays applicable. Nothing here is on the "
+        "request path: a refresh that does not land leaves the last good "
+        "answer in place.",
+    ),
     ConfigSectionSpec(
         "optimizer",
         "Tool-result trimming",
@@ -521,6 +533,129 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "DESCRIBE_CONCURRENCY",
+        "Images described at once",
+        "models",
+        "number",
+        settings_attr="describe_concurrency",
+        default="3",
+        restart_required=True,
+        advanced=True,
+        minimum=1,
+        maximum=64,
+        description=(
+            "How many pictures of one request describe mode has in flight at "
+            "the same time. Only the setting above, on describe, reads it. "
+            "Three is what MCC has always used: concurrency is what keeps a "
+            "five-screenshot turn from costing five round trips in series, "
+            "and the bound is what keeps it from opening five upstream "
+            "connections on a vision provider that meters by concurrency. Set "
+            "1 to describe them strictly one after another."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODELS_DEV_CACHE_TTL_SECONDS",
+        "models.dev catalogue freshness (seconds)",
+        "catalogue",
+        "number",
+        settings_attr="models_dev_cache_ttl_seconds",
+        default="86400",
+        restart_required=False,
+        advanced=True,
+        minimum=0,
+        maximum=31536000,
+        description=(
+            "How long the models.dev catalogue on disk is treated as current. "
+            "A day is what MCC has always used. Past it the next refresh "
+            "revalidates with the ETag models.dev served, so an unchanged "
+            "catalogue costs one conditional request rather than 4.4 MB, and "
+            "a stale copy is still used while that runs -- nothing is ever "
+            "deleted for being old. Lower it to pick up a newly published "
+            "model sooner; 0 revalidates on every pass."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODELS_DEV_FETCH_TIMEOUT_SECONDS",
+        "models.dev fetch timeout (seconds)",
+        "catalogue",
+        "number",
+        settings_attr="models_dev_fetch_timeout_seconds",
+        default="10",
+        restart_required=False,
+        advanced=True,
+        minimum=1,
+        maximum=300,
+        description=(
+            "How long one fetch of the models.dev catalogue may take before "
+            "that pass is written off. Ten seconds, unchanged. The catalogue "
+            "is never on the request path, so the honest failure is 'this "
+            "pass did not land' rather than a long wait -- the copy already "
+            "on disk goes on being used. Raise it on a slow link."
+        ),
+    ),
+    ConfigFieldSpec(
+        "STATED_FACT_TTL_SECONDS",
+        "Stated fact lifetime (seconds)",
+        "catalogue",
+        "number",
+        settings_attr="stated_fact_ttl_seconds",
+        default="2592000",
+        restart_required=False,
+        advanced=True,
+        minimum=60,
+        maximum=31536000,
+        description=(
+            "How long a fact the host stated in its own words -- an output "
+            "cap, an effort enum, a tool-name length -- stays applicable. "
+            "Thirty days, unchanged. Past it the fact is still shown on the "
+            "Models page, marked stale, and simply not applied, so the next "
+            "real request re-pays one rejection and the row becomes fresh "
+            "again. Nothing is ever deleted for expiring. Read per fact, so a "
+            "change here applies without a restart."
+        ),
+    ),
+    ConfigFieldSpec(
+        "INFERRED_FACT_TTL_SECONDS",
+        "Inferred fact lifetime (seconds)",
+        "catalogue",
+        "number",
+        settings_attr="inferred_fact_ttl_seconds",
+        default="604800",
+        restart_required=False,
+        advanced=True,
+        minimum=60,
+        maximum=31536000,
+        description=(
+            "The same clock for a weaker kind of evidence: a refusal nobody "
+            "stated, proven only by a retry that worked once a field was "
+            "dropped. Seven days, unchanged, and shorter than a stated fact "
+            "on purpose -- a gateway rearranges which of its APIs serves a "
+            "model far more often than it changes a published ceiling. Read "
+            "per fact; no restart."
+        ),
+    ),
+    ConfigFieldSpec(
+        "WITHHELD_FACT_TTL_SECONDS",
+        "Withheld model lifetime (seconds)",
+        "catalogue",
+        "number",
+        settings_attr="withheld_fact_ttl_seconds",
+        default="259200",
+        restart_required=False,
+        advanced=True,
+        minimum=60,
+        maximum=31536000,
+        description=(
+            "How long a model id that went missing from a provider's "
+            "catalogue stays hidden. Seventy-two hours, unchanged, and the "
+            "shortest clock here on purpose: a 404 that was really an outage, "
+            "or a model the vendor has since launched, must not become a "
+            "permanent hole in your picker. Forgetting this one is the safety "
+            "property, so raise it only if a provider's catalogue flaps. Read "
+            "per fact; no restart."
+        ),
+    ),
+    ConfigFieldSpec(
         "TOOL_RESULT_IMAGE_DELIVERY",
         "Tool-Returned Images",
         "models",
@@ -889,6 +1024,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "runtime",
         "number",
         settings_attr="port",
+        minimum=1,
+        maximum=65535,
         default="8082",
         restart_required=True,
         description=(
@@ -927,6 +1064,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "messaging",
         "number",
         settings_attr="messaging_rate_limit",
+        minimum=0,
+        maximum=1000000,
         default="1",
         session_sensitive=True,
         description=(
@@ -941,6 +1080,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "messaging",
         "number",
         settings_attr="messaging_rate_window",
+        minimum=0,
+        maximum=86400,
         default="1",
         session_sensitive=True,
         description=(
@@ -1029,6 +1170,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "messaging",
         "number",
         settings_attr="max_message_log_entries_per_chat",
+        minimum=0,
+        maximum=1000000,
         advanced=True,
         session_sensitive=True,
         description=(
@@ -1224,6 +1367,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "diagnostics",
         "number",
         settings_attr="server_log_retain_files",
+        minimum=0,
+        maximum=100000,
         default="10",
         restart_required=True,
         description=(
@@ -1570,6 +1715,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_reasoning_answer_timeout",
+        minimum=0,
+        maximum=86400,
         default="0",
         restart_required=True,
         description=(
@@ -1697,6 +1844,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="http_read_timeout",
+        minimum=0,
+        maximum=86400,
         default="300",
         description=(
             "Transport ceiling on waiting for bytes from a provider. It sits under "
@@ -1711,6 +1860,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="http_write_timeout",
+        minimum=0,
+        maximum=86400,
         default="60",
         description=(
             "Transport ceiling on sending one request body to a provider. Large "
@@ -1723,6 +1874,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="http_connect_timeout",
+        minimum=0,
+        maximum=86400,
         default="60",
         description=(
             "Transport ceiling on opening the connection. A provider that is down "
@@ -2089,6 +2242,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_rate_window",
+        minimum=1,
+        maximum=86400,
         default="2",
         description="Length of the window the request count above is measured over.",
     ),
@@ -2098,6 +2253,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_max_concurrency",
+        minimum=0,
+        maximum=1000000,
         default="300",
         description=(
             "Streams one provider may have open at once. A further request waits "
@@ -2683,6 +2840,75 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_COOLDOWN_SECONDS",
+        "Address bench after an armed failure (seconds)",
+        "credential_health",
+        "number",
+        settings_attr="proxy_cooldown_seconds",
+        default="300",
+        restart_required=True,
+        advanced=True,
+        affects_providers=False,
+        minimum=0,
+        maximum=86400,
+        description=(
+            "How long one address sits out after the provider answered with a "
+            "failure class you armed on the Proxying page and published no "
+            "wait of its own. Five minutes is what MCC has always used: long "
+            "enough that a per-address allowance has a chance of rolling "
+            "over, short enough that a chain of two recovers inside one "
+            "working session. A wait the provider did publish is honoured "
+            "instead, capped by the setting below. 0 means nothing is benched "
+            "unless the provider timed the bench itself -- the same reading "
+            "RATE_LIMIT_COOLDOWN_SECONDS has for a key."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_COOLDOWN_MAX_SECONDS",
+        "Cap on a published wait for an address (seconds)",
+        "credential_health",
+        "number",
+        settings_attr="proxy_cooldown_max_seconds",
+        default="3600",
+        restart_required=True,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=86400,
+        description=(
+            "The longest a Retry-After the provider sent may hold one address "
+            "out of the chain. An hour, not the day the credential pool "
+            "allows: a key the host refused until midnight really is refused "
+            "until midnight, while an address is one of several and the cheap "
+            "move is to try it again. Raise it to take a provider at its word "
+            "for longer; lower it to re-try a benched address sooner than the "
+            "provider asked."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_REACHABILITY_TIERS",
+        "Dead-address re-probe ladder (seconds, comma-separated)",
+        "credential_health",
+        "text",
+        settings_attr="proxy_reachability_tiers",
+        default="60,300,3600",
+        restart_required=True,
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "How long an address that would not carry a request at all -- a "
+            "refused CONNECT, a connect timeout, a 407 -- waits before it is "
+            "re-probed, one step per consecutive failure and staying at the "
+            "last entry. The same shape and the same rules as "
+            "CREDENTIAL_LOCKOUT_TIERS, for the connection instead of the key. "
+            "A failed address stays out of every chain until a check PASSES; "
+            "this ladder only decides how soon that check is owed. Shortening "
+            "it re-arms benches already on the books, including ones read "
+            "back from disk at startup: a pending hour becomes the new last "
+            "entry rather than running out the old one."
+        ),
+    ),
+    ConfigFieldSpec(
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
         "Route around a rate-limited model",
         "credential_health",
@@ -2750,6 +2976,49 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "integrity-checked on every refresh, never shipped in the package."
         ),
     ),
+    ConfigFieldSpec(
+        "LITELLM_CACHE_TTL_SECONDS",
+        "LiteLLM price table freshness (seconds)",
+        "cost",
+        "number",
+        settings_attr="litellm_cache_ttl_seconds",
+        default="86400",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=0,
+        maximum=31536000,
+        description=(
+            "How long the LiteLLM price table on disk is treated as current, "
+            "while the source above is on. A day is what MCC has always used. "
+            "Past it the next refresh revalidates with the ETag, so an "
+            "unchanged table costs one conditional request rather than 2.3 "
+            "MB, and the copy on disk keeps pricing requests meanwhile. "
+            "Prices move more often than capabilities do, which is why this "
+            "is a separate number from the catalogue's. 0 revalidates every "
+            "pass."
+        ),
+    ),
+    ConfigFieldSpec(
+        "LITELLM_FETCH_TIMEOUT_SECONDS",
+        "LiteLLM fetch timeout (seconds)",
+        "cost",
+        "number",
+        settings_attr="litellm_fetch_timeout_seconds",
+        default="10",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=300,
+        description=(
+            "How long one fetch of the LiteLLM price table may take before "
+            "that pass is written off. Ten seconds, unchanged. A pass that "
+            "does not land changes nothing: the table already on disk goes on "
+            "being used, and a payload that fails the integrity check is "
+            "discarded rather than written. Raise it on a slow link."
+        ),
+    ),
     # ---- Request log: what to keep ---------------------------------------
     ConfigFieldSpec(
         "REQUEST_LOG_ENABLED",
@@ -2808,6 +3077,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "request_log",
         "number",
         settings_attr="request_log_ladder_body_max_chars",
+        minimum=0,
+        maximum=10000000,
         default="800",
         restart_required=True,
         description=(

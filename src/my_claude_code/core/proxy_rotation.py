@@ -152,6 +152,55 @@ class ReachabilityLedger:
         self._records: dict[str, ReachabilityRecord] = {}
         self._listener: Callable[[str], None] | None = None
 
+    @property
+    def tiers(self) -> tuple[float, ...]:
+        """The ladder this ledger is currently walking."""
+
+        return self._tiers
+
+    def _window_for(self, failures: int) -> float:
+        """The ladder entry a record with this many failures waits out.
+
+        One expression, used by every path that arms a bench, so a stored tier
+        index beyond the ladder's length can only ever mean "the last entry"
+        -- which is what a shortened ladder has to mean for a record written
+        by a longer one.
+        """
+
+        if failures <= 0:
+            return 0.0
+        return self._tiers[min(failures, len(self._tiers)) - 1]
+
+    def set_tiers(self, tiers: tuple[float, ...]) -> None:
+        """Replace the ladder and re-arm every bench already on the books.
+
+        The operator changed the ladder; the records were written by the old
+        one. Two rules, and they are the same rule read from both ends:
+
+        * A **shorter ladder** clamps a record whose tier index no longer
+          exists to the last entry -- the deepest bench the new ladder has.
+        * A **shorter window** shortens a pending bench rather than letting it
+          run out the old one. An address benched for an hour under
+          ``60,300,3600`` and re-laddered to ``5,10,20`` is due for a re-probe
+          in twenty seconds, not in fifty-nine minutes, because the operator
+          just said twenty is what a third failure is worth.
+
+        A bench is never *lengthened* by this: a record already past the new
+        window is due immediately, which is the honest reading -- it has not
+        passed a check, and :meth:`is_unhealthy` still says so. Nothing here
+        clears a bench; only a pass does.
+        """
+
+        self._tiers = tuple(tiers) or PROXY_REACHABILITY_TIERS
+        now = self._clock()
+        for endpoint, record in self._records.items():
+            if record.failures <= 0:
+                continue
+            ceiling = now + self._window_for(record.failures)
+            if record.until > ceiling:
+                record.until = ceiling
+                self._announce(endpoint)
+
     def set_listener(self, listener: Callable[[str], None] | None) -> None:
         """Register one callback told which address's record just moved.
 
@@ -217,6 +266,13 @@ class ReachabilityLedger:
         restart. A non-positive ``remaining`` re-arms the address as unhealthy
         and immediately due, which is the honest reading of a bench that
         expired while the process was down: it has not passed a check.
+
+        ``remaining`` is clamped to the ladder's own window for this tier.
+        With an unchanged ladder that clamp never fires -- the number in the
+        file was produced by this same ladder -- but an operator who shortened
+        the ladder between two runs gets the shorter wait they asked for
+        instead of one last bench on the old numbers, and a ``failures`` count
+        past the end of a shortened ladder reads as its last entry.
         """
 
         if not endpoint or failures <= 0:
@@ -230,7 +286,7 @@ class ReachabilityLedger:
         record.failures = failures
         record.reason = reason
         record.last_seen_at = now
-        record.until = now + max(0.0, remaining)
+        record.until = now + min(max(0.0, remaining), self._window_for(failures))
 
     def note_failure(self, endpoint: str, reason: str = "") -> float:
         """Bench ``endpoint`` one tier deeper; return the seconds it now waits."""
@@ -246,7 +302,7 @@ class ReachabilityLedger:
         record.failures += 1
         record.reason = reason
         record.last_seen_at = now
-        window = self._tiers[min(record.failures, len(self._tiers)) - 1]
+        window = self._window_for(record.failures)
         record.until = now + window
         self._announce(endpoint)
         return window
@@ -319,6 +375,49 @@ class ReachabilityLedger:
 
 #: The one reachability table this process has.
 PROXY_REACHABILITY = ReachabilityLedger()
+
+
+def configure_proxy_rotation(
+    *,
+    cooldown_seconds: float = PROXY_COOLDOWN_SECONDS_DEFAULT,
+    cooldown_max_seconds: float = PROXY_COOLDOWN_MAX_SECONDS,
+    reachability_tiers: tuple[float, ...] = PROXY_REACHABILITY_TIERS,
+) -> None:
+    """Hand this engine the operator's ladder and cooldown pair.
+
+    The 7.22.0 shape, repeated for the connection: the policy is built in the
+    layer that owns ``Settings`` -- ``runtime.application``, at startup, just
+    before the durable bench store is re-armed -- and passed *in*, because
+    ``core`` may not import ``config``. The three constants above stay exactly
+    what they were: they are this function's defaults, so a caller that never
+    arrives leaves the engine on the numbers 7.19.0 shipped.
+
+    Two things are armed, and they are different mechanisms:
+
+    * :data:`PROXY_REACHABILITY` gets the ladder, and re-arms what is already
+      on its books -- see :meth:`ReachabilityLedger.set_tiers`.
+    * :data:`PROXY_TUNING` gets the cooldown pair. It is updated **in place**
+      rather than replaced: ``providers/runtime/proxy_rotating`` holds an
+      imported reference to this exact object and hands it to every
+      :class:`RotationEngine` it builds, and that module is invariant for this
+      release. A replacement would be a new object nobody reads.
+      :class:`RotationTuning` is frozen because nothing on the request path
+      may edit a running policy; this is the one writer, it runs once at
+      startup before any pool exists, and it goes through
+      ``object.__setattr__`` so the frozen guarantee still holds for everybody
+      else.
+    """
+
+    PROXY_REACHABILITY.set_tiers(tuple(reachability_tiers) or PROXY_REACHABILITY_TIERS)
+    object.__setattr__(PROXY_TUNING, "rate_limit_seconds", float(cooldown_seconds))
+    object.__setattr__(
+        PROXY_TUNING, "rate_limit_max_seconds", float(cooldown_max_seconds)
+    )
+    object.__setattr__(
+        PROXY_TUNING,
+        "lockout_tiers",
+        tuple(reachability_tiers) or PROXY_REACHABILITY_TIERS,
+    )
 
 
 class InterceptionLedger:
@@ -512,6 +611,11 @@ def reset_proxy_health() -> None:
     PROXY_REACHABILITY.clear()
     PROXY_HEALTH.clear()
     PROXY_INTERCEPTION.clear()
+    # The policy is deliberately NOT reset here. This clears *measurements*,
+    # and one of its callers is a chain edit's republish on a running server:
+    # an operator who configured a five-second ladder and then edited a chain
+    # would otherwise silently get the shipped ladder back. A test that
+    # changes the policy restores it itself.
 
 
 __all__ = [
@@ -529,5 +633,6 @@ __all__ = [
     "ProxyHealthRecord",
     "ReachabilityLedger",
     "ReachabilityRecord",
+    "configure_proxy_rotation",
     "reset_proxy_health",
 ]

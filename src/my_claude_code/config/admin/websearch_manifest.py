@@ -72,6 +72,8 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "section_id": "websearch",
             "field_type": "number",
             "settings_attr": "websearch_log_content_max_chars",
+            "minimum": 512,
+            "maximum": 1000000000,
             "default": "2000000",
             "restart_required": True,
             "description": (
@@ -86,6 +88,8 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "section_id": "websearch",
             "field_type": "number",
             "settings_attr": "websearch_log_max_rows",
+            "minimum": 0,
+            "maximum": 100000000,
             "default": "500000",
             "restart_required": True,
             "description": "Maximum retained provider-attempt and route rows.",
@@ -96,6 +100,8 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "section_id": "websearch",
             "field_type": "number",
             "settings_attr": "websearch_digest_chars",
+            "minimum": 0,
+            "maximum": 10000000,
             "default": "600",
             "description": (
                 "Characters kept from each result's snippet in the digest "
@@ -110,6 +116,8 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "section_id": "websearch",
             "field_type": "number",
             "settings_attr": "websearch_digest_content_chars",
+            "minimum": 0,
+            "maximum": 10000000,
             "default": "4000",
             "description": (
                 "Separate, larger cap for the full page text a provider "
@@ -272,6 +280,15 @@ def _advanced_option_field_specs() -> tuple[dict[str, Any], ...]:
                 "advanced": True,
                 "description": option.cost_note or "Dotenv-only advanced option.",
             }
+            # Same tolerance as the loop above: a catalog entry that predates
+            # the two attributes simply publishes no bound, exactly as every
+            # one of them did before 7.32.0.
+            minimum = getattr(option, "minimum", None)
+            maximum = getattr(option, "maximum", None)
+            if minimum is not None:
+                spec["minimum"] = minimum
+            if maximum is not None:
+                spec["maximum"] = maximum
             if option.field_type == "select":
                 spec["options"] = tuple(
                     ConfigOptionSpec(value, label) for value, label in option.options

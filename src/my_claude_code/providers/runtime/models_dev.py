@@ -33,6 +33,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.config.paths import config_dir_path
+from my_claude_code.config.settings import get_settings
 from my_claude_code.core.model_ids import (
     STRIPPABLE_MODEL_ID_TAGS,
     ResolutionTier,
@@ -44,10 +45,40 @@ from my_claude_code.core.model_ids import (
 from my_claude_code.core.reasoning import EFFORT_BY_VALUE, ReasoningEffort
 
 MODELS_DEV_URL = "https://models.dev/api.json"
+#: The shipped defaults, and nothing more. Since 7.32.0 both numbers are
+#: settings -- ``MODELS_DEV_CACHE_TTL_SECONDS`` and
+#: ``MODELS_DEV_FETCH_TIMEOUT_SECONDS`` -- read through the two accessors
+#: below. They stay here so a caller that has no settings (a test building a
+#: cache record by hand) still gets the numbers this module shipped with.
 MODELS_DEV_CACHE_TTL_SECONDS = 24 * 60 * 60
 MODELS_DEV_FETCH_TIMEOUT_SECONDS = 10.0
 MODELS_DEV_CACHE_DIRNAME = "cache"
 MODELS_DEV_CACHE_FILENAME = "models-dev.json"
+
+
+def models_dev_cache_ttl_seconds() -> float:
+    """How long the cache on disk counts as fresh, per the operator.
+
+    Read per call rather than captured at import: the refresh loop asks this
+    question on every pass, so a change on the Model Config page applies to
+    the next pass without a restart.
+    """
+
+    try:
+        return float(get_settings().models_dev_cache_ttl_seconds)
+    except Exception:
+        # A catalogue refresh is never the reason a settings problem should
+        # surface, and the shipped number is a correct answer.
+        return float(MODELS_DEV_CACHE_TTL_SECONDS)
+
+
+def models_dev_fetch_timeout_seconds() -> float:
+    """How long one fetch of the catalogue may take, per the operator."""
+
+    try:
+        return float(get_settings().models_dev_fetch_timeout_seconds)
+    except Exception:
+        return MODELS_DEV_FETCH_TIMEOUT_SECONDS
 
 
 def models_dev_cache_path() -> Path:
@@ -174,7 +205,7 @@ def read_models_dev_cache(path: Path | None = None) -> ModelsDevCache | None:
     return ModelsDevCache(
         index=index,
         fetched_at=fetched_at,
-        fresh=age < MODELS_DEV_CACHE_TTL_SECONDS,
+        fresh=age < models_dev_cache_ttl_seconds(),
         etag=raw_etag if isinstance(raw_etag, str) and raw_etag else None,
         validated_at=validated_at,
     )
@@ -295,7 +326,7 @@ async def fetch_models_dev_index(etag: str | None = None) -> ModelsDevFetch | No
     headers = {"If-None-Match": etag} if etag else {}
     try:
         async with httpx.AsyncClient(
-            timeout=MODELS_DEV_FETCH_TIMEOUT_SECONDS
+            timeout=models_dev_fetch_timeout_seconds()
         ) as client:
             response = await client.get(MODELS_DEV_URL, headers=headers)
             if response.status_code == 304:

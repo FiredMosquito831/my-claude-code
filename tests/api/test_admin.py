@@ -496,8 +496,10 @@ def test_admin_static_places_reasoning_fields_in_model_config():
         encoding="utf-8"
     )
 
-    assert 'sections: ["models", "reasoning", "web_tools"]' in script
-    assert 'sections: ["models", "thinking", "web_tools"]' not in script
+    # `catalogue` joined the view in 7.32.0; what this pins is that reasoning
+    # is on Model Config and that the old `thinking` spelling is gone.
+    assert 'sections: ["models", "reasoning", "web_tools", "catalogue"]' in script
+    assert 'sections: ["models", "thinking"' not in script
 
 
 def test_admin_static_model_combobox_owns_dropdown_and_search_behavior():

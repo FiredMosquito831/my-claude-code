@@ -126,6 +126,9 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
         "PROXY_FEED_MAX",
         "PROXY_CANDIDATE_BULK_MAX",
         "PROXY_FETCH_PERSIST_INTERVAL_SECONDS",
+        "PROXY_COOLDOWN_SECONDS",
+        "PROXY_COOLDOWN_MAX_SECONDS",
+        "PROXY_REACHABILITY_TIERS",
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
     ),
     "request_log": (
@@ -410,6 +413,10 @@ MODELS_KEYS = (
     "MODEL_VISION",
     "MODEL_VISION_FALLBACKS",
     "VISION_ADAPTER_MODE",
+    # Beside the mode it belongs to, for the reason the test below gives about
+    # VISION_ADAPTER_MODE itself: "images described at once" means nothing
+    # until you can see that describe mode is what reads it.
+    "DESCRIBE_CONCURRENCY",
     "TOOL_RESULT_IMAGE_DELIVERY",
     "IMAGE_MAX_LONG_EDGE",
     "IMAGE_JPEG_QUALITY",

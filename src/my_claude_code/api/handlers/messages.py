@@ -157,6 +157,11 @@ class MessagesHandler:
             router=self._model_router,
             executor=self._provider_executor,
             store=store_from_settings(settings),
+            # Read here, once, because the adapter is built once. That is why
+            # DESCRIBE_CONCURRENCY is marked restart-required on the page:
+            # saving it re-reads settings, and a handler already holding an
+            # adapter goes on using the number it was built with.
+            concurrency=settings.describe_concurrency,
         )
         self._message_intercepts: tuple[MessageIntercept, ...] = (
             self._intercept_web_server_tool,

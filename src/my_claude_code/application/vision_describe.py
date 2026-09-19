@@ -85,6 +85,10 @@ DESCRIBE_MAX_TOKENS = 1024
 #: is what keeps a five-screenshot turn from costing five round trips in
 #: series; the bound is what keeps it from opening five upstream connections on
 #: a provider that rate-limits by concurrency.
+#: Since 7.32.0 this is the shipped default of the ``DESCRIBE_CONCURRENCY``
+#: setting rather than the only number there is. It stays here because the
+#: adapter's own signature needs a default, and because a caller that builds
+#: one without settings deserves the number this module shipped with.
 DESCRIBE_CONCURRENCY = 3
 
 #: Attempt indexes for describe calls start here, so they cannot collide with

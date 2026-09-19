@@ -683,3 +683,136 @@ def test_the_fetch_persist_interval_reaches_the_sweep() -> None:
         "run_fetch_pass reads the module constant again instead of the value "
         "it was handed, so the setting would be a number that does nothing"
     )
+
+
+def test_the_proxy_ladder_and_cooldown_pair_reach_the_engine() -> None:
+    """7.32.0's three, plumbed the way 7.22.0 plumbed the credential pool.
+
+    ``core`` may not import ``config``, and ``providers/runtime/proxy_rotating``
+    -- which holds the imported reference to ``PROXY_TUNING`` and hands it to
+    every engine it builds -- is invariant for this release. So the policy is
+    built where ``Settings`` is and passed in, and the engine's own object is
+    what moves. A field that never reached it would be a form that offers a
+    ladder and benches on the old one.
+    """
+
+    from my_claude_code.core.proxy_rotation import (
+        PROXY_COOLDOWN_MAX_SECONDS,
+        PROXY_COOLDOWN_SECONDS_DEFAULT,
+        PROXY_REACHABILITY,
+        PROXY_REACHABILITY_TIERS,
+        PROXY_TUNING,
+        configure_proxy_rotation,
+    )
+
+    settings = _settings(
+        PROXY_COOLDOWN_SECONDS=11.0,
+        PROXY_COOLDOWN_MAX_SECONDS=22.0,
+        PROXY_REACHABILITY_TIERS="5,10,20",
+    )
+    try:
+        configure_proxy_rotation(
+            cooldown_seconds=settings.proxy_cooldown_seconds,
+            cooldown_max_seconds=settings.proxy_cooldown_max_seconds,
+            reachability_tiers=parse_lockout_tiers(settings.proxy_reachability_tiers),
+        )
+        assert PROXY_TUNING.rate_limit_seconds == 11.0
+        assert PROXY_TUNING.rate_limit_max_seconds == 22.0
+        assert PROXY_TUNING.lockout_tiers == (5.0, 10.0, 20.0)
+        assert PROXY_REACHABILITY.tiers == (5.0, 10.0, 20.0)
+    finally:
+        configure_proxy_rotation()
+    assert PROXY_TUNING.rate_limit_seconds == PROXY_COOLDOWN_SECONDS_DEFAULT
+    assert PROXY_TUNING.rate_limit_max_seconds == PROXY_COOLDOWN_MAX_SECONDS
+    assert PROXY_REACHABILITY.tiers == PROXY_REACHABILITY_TIERS
+
+
+def test_the_startup_path_is_what_calls_configure_proxy_rotation() -> None:
+    """A function nobody calls is a setting that does nothing.
+
+    Pinned on the source rather than by running startup: the call sits inside
+    the readiness sequence, and its *ordering* is the load-bearing part -- the
+    ladder has to be the operator's before the durable bench store is re-armed
+    against it.
+    """
+
+    import inspect
+
+    from my_claude_code.runtime import application
+
+    source = inspect.getsource(application)
+    assert "configure_proxy_rotation(" in source
+    assert source.index("configure_proxy_rotation(\n") < source.index(
+        "arm_health_from_store)"
+    )
+
+
+def test_the_catalogue_clocks_reach_their_readers() -> None:
+    """Each accessor asks ``Settings`` rather than its module constant."""
+
+    from my_claude_code.providers.runtime import litellm_prices, models_dev
+
+    settings = _settings(
+        MODELS_DEV_CACHE_TTL_SECONDS=111,
+        MODELS_DEV_FETCH_TIMEOUT_SECONDS=12.0,
+        LITELLM_CACHE_TTL_SECONDS=222,
+        LITELLM_FETCH_TIMEOUT_SECONDS=13.0,
+    )
+    with patch.object(models_dev, "get_settings", _fixed(settings)):
+        assert models_dev.models_dev_cache_ttl_seconds() == 111.0
+        assert models_dev.models_dev_fetch_timeout_seconds() == 12.0
+    with patch.object(litellm_prices, "get_settings", _fixed(settings)):
+        assert litellm_prices.litellm_cache_ttl_seconds() == 222.0
+        assert litellm_prices.litellm_fetch_timeout_seconds() == 13.0
+
+
+def test_the_learned_fact_clocks_reach_the_store_per_fact() -> None:
+    """Hot, not restart-required: the answer is asked for each fact."""
+
+    from my_claude_code.providers.recovery import facts
+
+    settings = _settings(
+        STATED_FACT_TTL_SECONDS=100.0,
+        INFERRED_FACT_TTL_SECONDS=200.0,
+        WITHHELD_FACT_TTL_SECONDS=300.0,
+    )
+    with patch.object(facts, "get_settings", _fixed(settings)):
+        assert facts.fact_ttl_seconds(facts.FACT_OUTPUT_CAP) == 100.0
+        assert facts.fact_ttl_seconds(facts.FACT_RESPONSE_SURFACE) == 200.0
+        assert facts.fact_ttl_seconds(facts.FACT_MODEL_WITHHELD) == 300.0
+        # An unknown kind keeps the weaker of the two clocks, as it always did.
+        assert facts.fact_ttl_seconds("not-a-kind") == 200.0
+
+    # And the fact object itself reads through the same function, so a store
+    # walking its rows sees the change on the next row rather than on restart.
+    fact = facts.LearnedFact(
+        provider_id="p",
+        model_id="m",
+        fact_kind=facts.FACT_OUTPUT_CAP,
+        value=1,
+        learned_at="2026-01-01T00:00:00+00:00",
+        last_confirmed_at="2026-01-01T00:00:00+00:00",
+        source=facts.SOURCE_REJECTION,
+    )
+    with patch.object(facts, "get_settings", _fixed(settings)):
+        assert fact.ttl_seconds == 100.0
+
+
+def test_describe_concurrency_reaches_the_adapter() -> None:
+    """Built once, in the handler's constructor, from the handler's settings."""
+
+    import inspect
+
+    from my_claude_code.api.handlers import messages
+
+    source = inspect.getsource(messages)
+    assert "concurrency=settings.describe_concurrency" in source
+
+    from my_claude_code.application.vision_describe import VisionDescribeAdapter
+
+    # And the adapter really takes it, rather than reading the module constant
+    # after being handed a number: the parameter is what the body uses.
+    parameters = inspect.signature(VisionDescribeAdapter.__init__).parameters
+    assert "concurrency" in parameters
+    body = inspect.getsource(VisionDescribeAdapter.__init__)
+    assert "self._concurrency = max(1, concurrency)" in body
