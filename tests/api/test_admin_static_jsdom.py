@@ -15,12 +15,14 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
 from my_claude_code.core.upstream_ladder import _TIMES
 
 HARNESS = Path(__file__).with_name("admin_jsdom_harness.mjs")
+LOCK = Path(__file__).with_name(".admin_jsdom.lock")
 STATIC_DIR = (
     Path(__file__).resolve().parents[2]
     / "src"
@@ -29,11 +31,41 @@ STATIC_DIR = (
     / "admin_static"
 )
 
+# Every test in this module reads one of two module-scoped harness runs. Under
+# `--dist loadgroup` (the repo's addopts) an ungrouped module is spread over
+# every worker, and each worker then builds its own copy of the fixture: four
+# workers meant four concurrent jsdom runs, which starve each other of CPU,
+# miss their own debounce windows and report the resulting half-rendered page
+# as three hundred script errors. The group pins the whole file to one worker,
+# so it costs exactly the two runs it looks like it costs.
+pytestmark = pytest.mark.xdist_group("admin_static_jsdom")
+
+# The bound is generous on purpose and settable, because it is the one number
+# here that is about the machine rather than about the page: the harness takes
+# about a minute on a GitHub runner and three to four on a loaded laptop, and
+# the old hard-coded 180 s was under the local figure. `harnessWallMs` in the
+# payload is what a tuned value should be argued from.
+TIMEOUT_SECONDS = float(os.environ.get("MCC_JSDOM_TIMEOUT_SECONDS", "900"))
+
+# CI must not quietly pass a suite it never ran. The jsdom job sets MCC_CI=1;
+# there, a missing node or a missing jsdom is the job's own bug and fails.
+ON_CI = os.environ.get("MCC_CI", "") not in ("", "0", "false")
+
+
+def _missing(reason: str) -> NoReturn:
+    if ON_CI:
+        pytest.fail(
+            f"MCC_CI=1 and {reason}. This suite is the only thing that runs "
+            "admin.js; skipping it on CI is how a dashboard that lied to the "
+            "server shipped. Install Node and `npm ci --prefix tests`."
+        )
+    pytest.skip(reason)
+
 
 def _run(**env_extra) -> dict:
     node = shutil.which("node")
     if node is None:
-        pytest.skip("node is not on PATH")
+        _missing("node is not on PATH")
     result = subprocess.run(
         [node, str(HARNESS), str(STATIC_DIR)],
         capture_output=True,
@@ -42,14 +74,18 @@ def _run(**env_extra) -> dict:
         # the default console codec turns every one of them into U+FFFD --
         # which would quietly make an "is this an em dash" assertion untestable.
         encoding="utf-8",
-        timeout=180,
+        timeout=TIMEOUT_SECONDS,
         env={**os.environ, **env_extra},
     )
     if result.returncode != 0:
         if "Cannot find package 'jsdom'" in result.stderr:
-            pytest.skip("jsdom is not installed")
+            _missing("jsdom is not installed")
         pytest.fail(f"harness failed: {result.stderr[-2000:]}")
-    return json.loads(result.stdout)
+    payload = json.loads(result.stdout)
+    # Printed rather than asserted on: the number is evidence for the bound,
+    # not a property of the page. `-s` or a failure shows it.
+    print(f"jsdom harness wall time: {payload.get('harnessWallMs')} ms")
+    return payload
 
 
 @pytest.fixture(scope="module")
@@ -107,8 +143,13 @@ def test_the_settings_views_still_render_their_sections(rendered) -> None:
     and dropped five. The numbers are what this fixture's SECTIONS claims.
     """
     views = rendered["views"]
-    assert views["providers"]["sections"] == 4
-    assert views["limits"]["sections"] == 6
+    # Providers carries four static cards in index.html -- version, Deployment
+    # (added with the desktop server-ownership modes), other servers on this
+    # machine, and the token-optimizer card -- plus the one settings section
+    # this fixture gives it fields for (`desktop`). `providers` and `runtime`
+    # have no fields here, so they render nothing.
+    assert views["providers"]["sections"] == 5
+    assert views["limits"]["sections"] == 7
     assert views["limits"]["fieldInputs"] >= 1
     assert views["requests"]["sections"] == 1
     assert views["optimizer"]["sections"] >= 1
@@ -310,12 +351,12 @@ def test_registering_the_docs_view_did_not_break_the_other_views(rendered) -> No
 
     expected = {
         "get_started": 1,
-        "providers": 4,
+        "providers": 5,
         "claude": 3,
         "requests": 1,
         "optimizer": 6,
         "web_search": 1,
-        "limits": 6,
+        "limits": 7,
         "guide": 0,
         "docs": 0,
     }
@@ -393,6 +434,11 @@ LIMITS_CARDS = [
     "section-benching",
     "section-provider_retries",
     "section-credential_health",
+    # `loop_health` is claimed by the Limits view in admin.js and declared in
+    # config/admin/manifest.py; the rail in index.html links to it. It is
+    # listed here because a rail link with no card is exactly what
+    # test_the_in_page_rail_links_to_a_section_that_exists is for.
+    "section-loop_health",
     "section-diagnostics",
 ]
 
@@ -4872,3 +4918,58 @@ def test_jsdom_a_provider_card_shows_its_advanced_fields_and_can_collapse_them(
     assert collapsed["shown"] == ["HARNESS_API_KEY", "HARNESS_BASE_URL"]
     # Namespaced per card: collapsing one provider must not collapse 34 others.
     assert collapsed["stored"] == "1"
+
+
+# --------------------------------------------------------------- the lock
+# Two harness runs against one tree do not merely take twice as long: starved
+# of CPU, each misses its own debounce windows, reads a page that has not
+# caught up, and reports it. That produced roughly three hundred spurious
+# "script error" lines the one time it happened. The second run now refuses.
+
+
+def test_a_second_concurrent_harness_run_refuses_instead_of_cascading() -> None:
+    """The lock is held here, so the harness must decline and say why."""
+
+    node = shutil.which("node")
+    if node is None:
+        _missing("node is not on PATH")
+
+    if LOCK.exists():
+        pytest.skip("a harness run is already holding the lock")
+
+    LOCK.write_text("0 held by the test\n", encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [node, str(HARNESS), str(STATIC_DIR)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            # If the guard is gone this runs the whole harness instead, which
+            # is why the bound is the real one rather than a short one.
+            timeout=TIMEOUT_SECONDS,
+            env=os.environ,
+        )
+    finally:
+        LOCK.unlink(missing_ok=True)
+
+    if "Cannot find package 'jsdom'" in result.stderr:
+        _missing("jsdom is not installed")
+
+    assert result.returncode == 3, (
+        f"the harness ran anyway: rc={result.returncode} stderr={result.stderr[-500:]}"
+    )
+    assert "already holding" in result.stderr
+    assert "MCC_JSDOM_ALLOW_CONCURRENT" in result.stderr
+    # It must not have produced a payload a caller could mistake for a run.
+    assert result.stdout.strip() == ""
+
+
+def test_the_lock_is_released_so_the_next_run_is_not_blocked(rendered) -> None:
+    """A lock left behind would fail every later run on the machine.
+
+    `rendered` is requested so this runs after a real harness run rather than
+    before one.
+    """
+
+    assert rendered["fatal"] is None
+    assert not LOCK.exists(), f"{LOCK} survived the run that took it"

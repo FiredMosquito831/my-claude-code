@@ -55,7 +55,14 @@ jobs:
           - id: ty
             run: uv run ty check
           - id: pytest
-            run: uv run pytest -v --tb=short
+            # The jsdom suite is excluded here and owned by the `jsdom` job
+            # below. It needs Node and an installed jsdom, which this job has
+            # no reason to provision, and without them every one of its ~360
+            # tests SKIPS -- a green pytest job that never ran the dashboard's
+            # JavaScript at all, which is precisely what happened for months.
+            run: >-
+              uv run pytest -v --tb=short
+              --ignore=tests/api/test_admin_static_jsdom.py
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -72,6 +79,67 @@ jobs:
 
       - name: Run
         run: ${{ matrix.run }}
+
+  jsdom:
+    # tests/api/test_admin_static_jsdom.py is the ONLY thing in this repo that
+    # executes the dashboard's admin.js. It runs the real script in jsdom
+    # through a node subprocess, so it needs two things the pytest job above
+    # does not have: node (which ubuntu-latest does ship) and jsdom (which it
+    # does not). Without jsdom the harness exits with "Cannot find package
+    # 'jsdom'" and every test in the file skips -- so for months this suite
+    # reported green on CI while running nothing. 7.16.1 shipped a dashboard
+    # page that lied to the server because the jsdom fixture was missing a
+    # field; a suite that skips cannot catch the next one.
+    #
+    # MCC_CI=1 turns the two skips in that file into failures, so this job
+    # cannot go quietly green by not running. tests/contracts/
+    # test_jsdom_ci_contract.py asserts that from the other side.
+    name: jsdom (dashboard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.11.15"
+          enable-cache: true
+          cache-python: true
+
+      - name: Install Node LTS
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          # tests/package-lock.json pins jsdom exactly, and this is what makes
+          # the download cached rather than fetched on every run.
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+
+      - name: Install jsdom
+        # `npm ci`, not `npm install`: the lockfile is the pin, and ci fails
+        # rather than silently resolving a different jsdom. node_modules lands
+        # in tests/, which is where node resolves it from for a harness in
+        # tests/api/.
+        run: npm ci --prefix tests
+
+      - name: Run the dashboard's jsdom suite
+        env:
+          # Missing node or missing jsdom is a failure here, never a skip.
+          MCC_CI: "1"
+          # The whole file is two harness runs; a runner does one in about a
+          # minute. The bound is per subprocess, not per file.
+          MCC_JSDOM_TIMEOUT_SECONDS: "600"
+        # `-n 0`: the file's two module-scoped fixtures are two node
+        # subprocesses, and the harness refuses to run twice at once against
+        # the same tree. xdist would buy nothing and the lock would refuse it.
+        run: uv run pytest tests/api/test_admin_static_jsdom.py -n 0 -v --tb=short
 
   desktop-shell:
     # The shell is a Rust binary, so nothing above would ever compile it. This

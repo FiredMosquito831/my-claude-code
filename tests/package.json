@@ -1,0 +1,10 @@
+{
+  "name": "mcc-test-harness",
+  "version": "0.0.0",
+  "private": true,
+  "description": "jsdom for tests/api/admin_jsdom_harness.mjs. Nothing MCC ships imports this; it exists so the dashboard's admin.js can be executed by tests/api/test_admin_static_jsdom.py. It lives in tests/ rather than tests/jsdom/ because node resolves a bare import by walking up from the harness, and tests/ is the nearest directory both the harness and the CI job can agree on. Install with `npm ci --prefix tests`.",
+  "license": "MIT",
+  "dependencies": {
+    "jsdom": "26.1.0"
+  }
+}

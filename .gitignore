@@ -36,3 +36,11 @@ JOURNAL.md
 # Staged documentation and the rendered site (scripts/build_docs_site.py,
 # mkdocs). Both are build output for the docs workflow.
 /build/
+
+# Node modules for the dashboard jsdom harness (tests/package.json). The
+# lockfile is committed; what npm installs from it is not.
+node_modules/
+
+# The jsdom harness lock: one run at a time against a tree (see
+# tests/api/admin_jsdom_harness.mjs). Released on exit, never committed.
+tests/api/.admin_jsdom.lock
