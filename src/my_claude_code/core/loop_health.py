@@ -27,6 +27,7 @@ beats it lives in ``runtime/application.py``.
 """
 
 import time
+from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -55,6 +56,44 @@ DEFAULT_BUSY_LAG_SECONDS = 0.5
 #: What a busy answer says when nothing named itself. Not "unknown": the
 #: operator asking is owed a sentence, and "some work" is the truth.
 DEFAULT_BUSY_REASON = "a long operation"
+
+#: How many finished gestures to remember. Enough for an operator to click
+#: Pause, Resume and Refresh models and see all three; small enough that the
+#: record is a fixed-size object for the life of the process.
+GESTURE_HISTORY = 20
+
+
+@dataclass(frozen=True)
+class GestureLag:
+    """What one finished gesture cost the event loop.
+
+    ``max_lag_seconds`` is the worst lateness measured *while this gesture was
+    running*, including the lateness still accumulating at the moment it
+    finished -- which is the whole measurement for a gesture that held the loop
+    outright, because no beat could run to record anything during it.
+    """
+
+    reason: str
+    max_lag_seconds: float
+    duration_seconds: float
+    finished_at: str
+
+    def as_body_fields(self) -> dict[str, object]:
+        return {
+            "reason": self.reason,
+            "max_lag_ms": round(self.max_lag_seconds * 1000.0),
+            "duration_ms": round(self.duration_seconds * 1000.0),
+            "finished_at": self.finished_at,
+        }
+
+
+@dataclass
+class _Frame:
+    """One gesture that has named itself and has not finished yet."""
+
+    reason: str
+    started: float
+    max_lag: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -99,7 +138,8 @@ class LoopHealth:
         self._last_lag = 0.0
         self._busy_since_monotonic: float | None = None
         self._busy_since_wall = ""
-        self._reasons: list[str] = []
+        self._frames: list[_Frame] = []
+        self._gestures: deque[GestureLag] = deque(maxlen=GESTURE_HISTORY)
         self._last_reason = ""
         # Whether anything is actually beating. A record nobody is measuring
         # must never claim the loop is late: without this, a process that never
@@ -137,7 +177,8 @@ class LoopHealth:
             self._last_lag = 0.0
             self._busy_since_monotonic = None
             self._busy_since_wall = ""
-            self._reasons = []
+            self._frames = []
+            self._gestures.clear()
             self._last_reason = ""
             self._armed = False
 
@@ -211,13 +252,30 @@ class LoopHealth:
         describe a window it did not cause.
         """
 
-        if self._reasons:
-            return self._reasons[-1]
+        if self._frames:
+            return self._frames[-1].reason
         return self._last_reason or DEFAULT_BUSY_REASON
+
+    def recent_gestures(self) -> tuple[GestureLag, ...]:
+        """The last :data:`GESTURE_HISTORY` finished gestures, oldest first.
+
+        This is what makes the follow-up table reproducible from the dashboard
+        rather than from a harness: every gesture that named itself carries the
+        worst event-loop lateness measured while it ran.
+        """
+
+        with self._lock:
+            return tuple(self._gestures)
 
     def _note_busy_locked(self, lag: float, now: float) -> None:
         """Open or close the current busy window. Caller holds the lock."""
 
+        # Every reading of the lag counts against every gesture that is running
+        # while it is taken, innermost and outermost alike: a nested gesture
+        # holding the loop is the outer gesture holding the loop.
+        for frame in self._frames:
+            if lag > frame.max_lag:
+                frame.max_lag = lag
         if self._busy_lag_seconds > 0.0 and lag >= self._busy_lag_seconds:
             if self._busy_since_monotonic is None:
                 # The window started when the loop was last on time, not when
@@ -243,14 +301,34 @@ class LoopHealth:
         """
 
         text = reason.strip() or DEFAULT_BUSY_REASON
+        frame = _Frame(reason=text, started=time.monotonic())
         with self._lock:
-            self._reasons.append(text)
+            self._frames.append(frame)
         try:
             yield
         finally:
+            now = time.monotonic()
             with self._lock:
                 with suppress(ValueError):
-                    self._reasons.remove(text)
+                    self._frames.remove(frame)
+                # The lateness still in flight at the moment the gesture ends.
+                # For a gesture that held the loop outright this is the entire
+                # measurement: no beat could run while it ran, so nothing else
+                # could have recorded anything.
+                if self._armed:
+                    pending = max(0.0, now - self._last_beat - self._interval_seconds)
+                    if pending > frame.max_lag:
+                        frame.max_lag = pending
+                self._gestures.append(
+                    GestureLag(
+                        reason=text,
+                        max_lag_seconds=frame.max_lag,
+                        duration_seconds=max(0.0, now - frame.started),
+                        finished_at=datetime.now(UTC).isoformat(
+                            timespec="milliseconds"
+                        ),
+                    )
+                )
                 # Remembered, not forgotten: a gesture that held the loop
                 # outright is over by the time anything can read this, and it
                 # is the answer to "why was the server late". Cleared the
@@ -273,6 +351,8 @@ __all__ = [
     "DEFAULT_BEAT_INTERVAL_SECONDS",
     "DEFAULT_BUSY_LAG_SECONDS",
     "DEFAULT_BUSY_REASON",
+    "GESTURE_HISTORY",
+    "GestureLag",
     "LoopHealth",
     "LoopHealthSnapshot",
     "loop_health",

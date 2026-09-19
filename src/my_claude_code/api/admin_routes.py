@@ -665,6 +665,26 @@ async def admin_status(
     return services.admin.admin_status()
 
 
+@router.get("/admin/api/loop-health")
+async def admin_loop_health(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """What the last gestures cost the event loop, and the busy threshold.
+
+    A route of its own rather than the dashboard reading
+    ``/admin/api/status``: that payload rebuilds the whole provider status and
+    the cached-model map, which is a great deal of work for a readout, and the
+    page deliberately stopped polling it when the global status header was
+    removed (``test_admin_static_no_longer_fetches_global_status_header``).
+    The same keys are still *on* the status payload for anything reading the
+    server rather than the page.
+    """
+
+    require_loopback_admin(request)
+    return services.admin.loop_health_status()
+
+
 @router.get("/admin/api/providers/local-status")
 async def local_provider_status(request: Request):
     require_loopback_admin(request)

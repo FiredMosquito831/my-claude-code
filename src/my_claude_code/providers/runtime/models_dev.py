@@ -139,8 +139,12 @@ def _read_models_dev_payload(cache_path: Path) -> dict[str, Any] | None:
 def reset_models_dev_payload_cache() -> None:
     """Forget every parsed payload. Tests only."""
 
+    global _FLATTENED_CACHE
     with _payload_lock:
         _payload_cache.clear()
+    # The flattened index is derived from a payload; dropping the payloads
+    # without dropping it would leave a derivative of a forgotten parse alive.
+    _FLATTENED_CACHE = None
 
 
 def read_models_dev_cache(path: Path | None = None) -> ModelsDevCache | None:
@@ -368,7 +372,47 @@ class _ModelsDevModelMetadata:
     supports_vision: bool | None
 
 
+#: The flattened index, beside the exact index object it was flattened from.
+#: A *strong* reference on purpose: identity is the key, so the object it names
+#: must not be collected and have its identity reused by another dict while the
+#: entry is live. It costs one extra reference to a mapping the payload cache
+#: is already holding.
+_FLATTENED_CACHE: (
+    tuple[Mapping[str, Any], dict[str, _ModelsDevModelMetadata]] | None
+) = None
+
+
 def _flatten_index(index: Mapping[str, Any]) -> dict[str, _ModelsDevModelMetadata]:
+    """Flatten models.dev providers, once per index rather than once per call.
+
+    Measured on the reporting machine's 5 MB cache (222 providers, ~4,000
+    models): the flatten itself costs **98-130 ms and does not depend on how
+    many models the caller brought** -- 100 models and 3,000 models cost the
+    same, because the work is the index, not the argument. A "Refresh models"
+    sweep calls this once per provider, so twenty-three configured providers
+    paid for twenty-three identical flattenings of the same unchanged
+    dictionary: **2.8 s of held event loop**, which is exactly the F16 number
+    in ``PR-DASHBOARD-PERF-SPEC.md``.
+
+    The answer is a pure function of the index, and the index is a shared,
+    never-mutated object owned by the payload cache -- so the second call for
+    the same object returns the first call's answer. Nothing about the result
+    changes; a different index (a refreshed cache, a test's own) is a different
+    object and is flattened again.
+    """
+
+    global _FLATTENED_CACHE
+    cached = _FLATTENED_CACHE
+    if cached is not None and cached[0] is index:
+        return cached[1]
+    flattened = _flatten_index_uncached(index)
+    _FLATTENED_CACHE = (index, flattened)
+    return flattened
+
+
+def _flatten_index_uncached(
+    index: Mapping[str, Any],
+) -> dict[str, _ModelsDevModelMetadata]:
     """Flatten models.dev providers into normalized model-id match keys.
 
     Used only as the fallback for a model whose own provider models.dev does

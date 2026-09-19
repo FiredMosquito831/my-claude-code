@@ -4973,3 +4973,24 @@ def test_the_lock_is_released_so_the_next_run_is_not_blocked(rendered) -> None:
 
     assert rendered["fatal"] is None
     assert not LOCK.exists(), f"{LOCK} survived the run that took it"
+
+
+def test_the_loop_lag_readout_states_what_each_gesture_cost(rendered) -> None:
+    """The follow-up table, read off the dashboard instead of a harness.
+
+    Two gestures, newest first, each with the worst event-loop lateness
+    measured while it ran -- and the one over the busy threshold marked as
+    such, because that is the one a ``/health`` probe would have been told
+    about.
+    """
+
+    readout = rendered["limits"]["loopLag"]
+    assert readout["present"] is True
+    rows = readout["rows"]
+    assert [row["reason"] for row in rows] == [
+        "the model catalogue is being refreshed",
+        "a route is being paused",
+    ]
+    assert [row["lag"] for row in rows] == ["2755 ms", "84 ms"]
+    assert [row["took"] for row in rows] == ["4700 ms", "121 ms"]
+    assert [row["overBudget"] for row in rows] == [True, False]

@@ -66,7 +66,17 @@ class PreparedAdminUpdate:
             ),
         }
 
-    def applied_response(self) -> dict[str, Any]:
+    def applied_response(self, env_preview: str | None = None) -> dict[str, Any]:
+        """The response a committed update returns.
+
+        ``env_preview`` lets the commit hand back the masked text it already
+        rendered beside the file it wrote. The two differ only in that secrets
+        are masked, so rendering them from one walk of the manifest and one
+        read of the unmanaged entries is the same answer for half the work --
+        and, more to the point, it is one answer: a preview rendered from a
+        second, later read of the file cannot disagree with what was written.
+        """
+
         if not self.valid:
             return self.validation_response() | {
                 "applied": False,
@@ -77,10 +87,14 @@ class PreparedAdminUpdate:
             "valid": True,
             "errors": [],
             "warnings": list(self.warnings),
-            "env_preview": render_env_file(
-                self.target_values,
-                mask_secrets=True,
-                preserved=unmanaged_env_values(),
+            "env_preview": (
+                render_env_file(
+                    self.target_values,
+                    mask_secrets=True,
+                    preserved=unmanaged_env_values(),
+                )
+                if env_preview is None
+                else env_preview
             ),
             "path": str(self.path),
             "pending_fields": list(self.pending_fields),
@@ -244,18 +258,22 @@ def commit_prepared_admin_update(prepared: PreparedAdminUpdate) -> dict[str, Any
     path = prepared.path
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
+    # One walk of the manifest, one read of the unmanaged entries, two texts:
+    # the file, and the masked preview the response carries. They were rendered
+    # by two separate calls either side of the write until 7.31.0, which read
+    # the managed file twice more for the same ``preserved`` mapping -- the
+    # entries are written back verbatim, so the read after the write and the
+    # read before it are the same entries by construction.
+    written, preview = render_env_pair(
+        prepared.target_values,
+        preserved=unmanaged_env_values(path),
+    )
     try:
-        temp_path.write_text(
-            render_env_file(
-                prepared.target_values,
-                preserved=unmanaged_env_values(path),
-            ),
-            encoding="utf-8",
-        )
+        temp_path.write_text(written, encoding="utf-8")
         os.replace(temp_path, path)
     finally:
         temp_path.unlink(missing_ok=True)
-    return prepared.applied_response()
+    return prepared.applied_response(preview)
 
 
 def quote_env_value(value: str) -> str:
@@ -385,6 +403,36 @@ def render_env_file(
     verbatim so saving a form cannot delete a setting the form never showed.
     """
 
+    return _render_env_lines(values, preserved=preserved, masked=mask_secrets)[0]
+
+
+def render_env_pair(
+    values: Mapping[str, str],
+    *,
+    preserved: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """Render the file and its masked preview from one walk.
+
+    Returns ``(plain, masked)``. Each is byte-for-byte what
+    :func:`render_env_file` returns for the same arguments -- the two texts
+    differ only at the secret lines, which is the one place the walk branches.
+    """
+
+    plain, masked = _render_env_lines(values, preserved=preserved, masked=None)
+    assert masked is not None
+    return plain, masked
+
+
+def _render_env_lines(
+    values: Mapping[str, str],
+    *,
+    preserved: Mapping[str, str] | None,
+    masked: bool | None,
+) -> tuple[str, str | None]:
+    """The one renderer. ``masked=None`` means "render both texts at once"."""
+
+    both = masked is None
+    mask_secrets = bool(masked)
     lines: list[str] = [
         "# Managed by My Claude Code /admin.",
         "# Edit in the server UI when possible.",
@@ -396,25 +444,48 @@ def render_env_file(
     for field in FIELDS:
         fields_by_section.setdefault(field.section_id, []).append(field)
 
+    masked_lines: list[str] | None = list(lines) if both else None
+
     for section in SECTIONS:
-        lines.append(f"# {section.label}")
+        label = f"# {section.label}"
+        lines.append(label)
+        if masked_lines is not None:
+            masked_lines.append(label)
         for field in fields_by_section.get(section.section_id, []):
             if field.key not in values:
-                lines.append(_placeholder_line(field))
+                line = _placeholder_line(field)
+                lines.append(line)
+                if masked_lines is not None:
+                    masked_lines.append(line)
                 continue
             value = values[field.key]
+            if masked_lines is not None:
+                lines.append(f"{field.key}={quote_env_value(value)}")
+                masked_lines.append(
+                    f"{field.key}="
+                    f"{quote_env_value(MASKED_SECRET if field.secret and value else value)}"
+                )
+                continue
             if mask_secrets and field.secret and value:
                 value = MASKED_SECRET
             lines.append(f"{field.key}={quote_env_value(value)}")
         lines.append("")
+        if masked_lines is not None:
+            masked_lines.append("")
 
     if preserved:
-        lines.append("# Not shown in the admin UI, kept exactly as written.")
-        lines.extend(
+        tail = ["# Not shown in the admin UI, kept exactly as written."]
+        tail.extend(
             f"{key}={quote_env_value(preserved[key])}" for key in sorted(preserved)
         )
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+        tail.append("")
+        lines.extend(tail)
+        if masked_lines is not None:
+            masked_lines.extend(tail)
+    plain = "\n".join(lines).rstrip() + "\n"
+    if masked_lines is None:
+        return plain, None
+    return plain, "\n".join(masked_lines).rstrip() + "\n"
 
 
 def _placeholder_line(field: ConfigFieldSpec) -> str:
