@@ -407,9 +407,17 @@ def test_saving_a_chain_republishes_the_provider_generation(monkeypatch) -> None
     from my_claude_code.runtime.application import ApplicationRuntime
 
     seen: list[str] = []
+    swept: list[bool] = []
 
-    async def _reload(self, reason: str, *, refresh_provider_id: str | None = None):
+    async def _reload(
+        self,
+        reason: str,
+        *,
+        refresh_provider_id: str | None = None,
+        sweep: bool = True,
+    ):
         seen.append(reason)
+        swept.append(sweep)
         return {}
 
     monkeypatch.setattr(ApplicationRuntime, "reload_providers", _reload)
@@ -436,6 +444,10 @@ def test_saving_a_chain_republishes_the_provider_generation(monkeypatch) -> None
         "/admin/api/proxy-chains", json={"provider": "nvidia_nim", "remove": True}
     )
     assert seen == ["proxy_chains", "proxy_chains"]
+    # 7.27.0: the generation is still replaced -- that is what makes the new
+    # chain the one that routes -- but neither save asks for the blanket
+    # /models sweep of every configured provider that used to come with it.
+    assert swept == [False, False]
 
 
 def test_every_entry_reports_the_health_the_pools_measured(monkeypatch) -> None:

@@ -40,6 +40,7 @@ import asyncio
 import base64
 import contextlib
 import ssl
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -851,6 +852,93 @@ def arm_refusals_from_store(store: ProxyChains | None = None) -> int:
     return armed
 
 
+class _CheckLoop:
+    """One thread with one event loop, for the duration of one sweep.
+
+    **What this is for, and what it measured.** A TLS handshake is not Python
+    work: ``SSLObject.do_handshake`` and the certificate-chain verification
+    under it are OpenSSL C calls that release the GIL while they run. A hundred
+    of them *scheduled on the server's own event loop*, however, are a hundred
+    callbacks between that loop and anything else it was going to do -- and the
+    2026-09-18 report is what that costs. Measured here, on the reporting
+    machine, against 300 addresses (100 honest tunnels to a local https origin,
+    100 listeners that accept and answer nothing, 100 black-holed 192.0.2.x) at
+    concurrency 100, with a task asking for 100 ms of sleep as the instrument:
+
+    ==================================  ==============  ========  ==========
+    mechanism                           max loop gap    p99       wall
+    ==================================  ==============  ========  ==========
+    today (on the server's loop)        650 / 614 /     265 /     24.9 s
+                                        478 ms          275 ms
+    ``asyncio.to_thread`` per address   681 ms          53 ms     23.5 s
+    bounded ThreadPoolExecutor (8)      35 ms           16 ms     277.6 s
+    **this: one worker loop**           **40 / 65 ms**  13-15 ms  24.7 s
+    ==================================  ==============  ========  ==========
+
+    Three runs of the first row and two of the last, so the spread is the
+    measurement's own. The 9 ms median in every run is this machine's timer
+    granularity, which is the floor the worker loop's p99 sits on. ``to_thread``
+    per address was rejected on the measurement -- a hundred threads each
+    running ``asyncio.run`` cost the loop as much as the loop doing the work
+    itself, the same finding the 2026-09-11 dashboard work recorded for a
+    GIL-bound hold. The bounded pool reached the target and took **eleven times
+    as long**, because eight threads cannot hold a hundred checks in flight. A
+    subprocess worker was specified as the fallback and was not built: there
+    was nothing left for it to win.
+
+    **What does NOT move.** Only :func:`check_proxy` runs here -- the same
+    coroutine, with the same :func:`default_ssl_context`, reached through the
+    same call. The semaphore, the per-address yield, the verdict handling, the
+    ledgers and the single save all stay on the caller's loop and in the
+    caller's order, so every ledger mutation in this process still happens on
+    one thread and a verdict is applied exactly where and when it always was.
+    Measured verdict equality on the population above: 100 of 300 pass, either
+    way.
+    """
+
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="mcc-proxy-check-loop", daemon=True
+        )
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._ready.set()
+        try:
+            self._loop.run_forever()
+        finally:
+            with contextlib.suppress(Exception):
+                self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            self._loop.close()
+
+    def start(self) -> None:
+        self._thread.start()
+        self._ready.wait()
+
+    async def run(self, coroutine: Any) -> Any:
+        """Await ``coroutine`` on the worker loop from the caller's loop.
+
+        Cancellation crosses both ways: cancelling the caller cancels the task
+        on the worker, which is what lets a stop settle rather than wait out a
+        ten-second connect timeout.
+        """
+
+        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        try:
+            return await asyncio.wrap_future(future)
+        except asyncio.CancelledError:
+            future.cancel()
+            raise
+
+    async def close(self) -> None:
+        """Stop the loop and join the thread, never on the caller's loop."""
+
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        await asyncio.to_thread(self._thread.join, 10.0)
+
+
 async def check_endpoints(
     proxy_ids: Iterable[str],
     destinations: dict[str, str],
@@ -861,6 +949,7 @@ async def check_endpoints(
     concurrency: int = 1,
     max_concurrency: int = PROXY_CHECK_MAX_CONCURRENCY,
     budget: float | None = None,
+    off_loop: bool = False,
 ) -> dict[str, ProxyCheckOutcome]:
     """Check several stored addresses, persist the verdicts, arm the ledgers.
 
@@ -889,6 +978,16 @@ async def check_endpoints(
     checker and the Test button behave exactly as they did. A caller that
     raises the concurrency passes one: with a hundred checks in flight, one
     address that leaks a future would hold a slot for the rest of the job.
+
+    ``off_loop`` moves the handshakes -- and only the handshakes -- onto one
+    worker thread with an event loop of its own, for the duration of this call.
+    It is ``False`` by default, so the background checker, the Test button and
+    every caller written before 7.27.0 behave exactly as they did, down to the
+    thread they run on. The bulk add passes it, because a hundred concurrent
+    tunnels through strangers' machines is the one gesture that was measured
+    holding the server's loop for two thirds of a second at a time. See
+    :class:`_CheckLoop` for the measurement and for what deliberately does not
+    move.
     """
 
     table = load_proxy_chains()
@@ -900,6 +999,17 @@ async def check_endpoints(
     outcomes: dict[str, ProxyCheckOutcome] = {}
     ceiling = max(1, int(max_concurrency))
     limit = asyncio.Semaphore(max(1, min(int(concurrency), ceiling)))
+
+    worker = _CheckLoop() if off_loop and wanted else None
+    if worker is not None:
+        worker.start()
+
+    async def run_one(coroutine: Any) -> ProxyCheckRecord:
+        """One check, here or on the worker loop. Nothing else differs."""
+
+        if worker is None:
+            return await coroutine
+        return await worker.run(coroutine)
 
     async def measure(proxy_id: str) -> None:
         endpoint = table.endpoint(proxy_id)
@@ -914,10 +1024,10 @@ async def check_endpoints(
                 exit_ip_url=exit_ip_url,
             )
             if budget is None:
-                record = await checking
+                record = await run_one(checking)
             else:
                 try:
-                    record = await asyncio.wait_for(checking, budget)
+                    record = await run_one(asyncio.wait_for(checking, budget))
                 except TimeoutError:
                     logger.warning(
                         "PROXY CHECK: {} did not finish within {:.0f}s -- "
@@ -938,7 +1048,13 @@ async def check_endpoints(
         # calls and this is what keeps them from sitting in front of a request.
         await asyncio.sleep(0)
 
-    await asyncio.gather(*(measure(proxy_id) for proxy_id in wanted))
+    try:
+        await asyncio.gather(*(measure(proxy_id) for proxy_id in wanted))
+    finally:
+        # Always, including on a cancellation: a worker loop that outlived its
+        # sweep is a thread this process never gets back.
+        if worker is not None:
+            await worker.close()
     # Back into the order asked for: a caller reports these to a person reading
     # a list, and gather finishes them in whatever order the network allows.
     outcomes = {

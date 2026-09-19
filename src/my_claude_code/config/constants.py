@@ -757,6 +757,19 @@ DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT = 30.0
 # dead, FORCE start it on that tick." There is no attempt cap above it and no
 # exponential backoff beyond it, which is why the page can honestly say "next
 # start attempt in M s" instead of parking on a Retry button.
+# How often the server measures its own event loop, in milliseconds. One task
+# asks for this much sleep and records how much later than that it woke; the
+# difference is the only honest measure of how long a gesture held the loop.
+# Ten times a second is small enough that half a second of lateness is five
+# missed beats rather than a rounding error, and cheap enough to be free.
+HEALTH_HEARTBEAT_INTERVAL_MS_DEFAULT = 100
+# How late that beat has to be before /health says so. Half a second is well
+# above any healthy scheduling jitter on the machines this runs on and well
+# below the shortest probe timeout any client uses, so a busy answer means the
+# loop really was held. 0 turns the marker off entirely without touching the
+# beat, which is the measurement.
+HEALTH_BUSY_LAG_MS_DEFAULT = 500
+
 DESKTOP_TICK_SECONDS_DEFAULT = 10.0
 # The shortest gap between two starts. Equal to the tick on purpose: Q4 asks
 # for one attempt per tick. An operator whose server crash-loops on start can

@@ -25,7 +25,11 @@ class AdminRuntimePort(Protocol):
     def cached_model_ids(self) -> dict[str, frozenset[str]]: ...
 
     async def reload_providers(
-        self, reason: str, *, refresh_provider_id: str | None = None
+        self,
+        reason: str,
+        *,
+        refresh_provider_id: str | None = None,
+        sweep: bool = True,
     ) -> dict[str, Any]: ...
 
     async def test_provider(self, provider_id: str) -> dict[str, Any]: ...

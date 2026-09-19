@@ -183,6 +183,17 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "already running.",
     ),
     ConfigSectionSpec(
+        "loop_health",
+        "Server responsiveness",
+        "How the server measures whether it is keeping up, and when it starts "
+        "telling callers so. A long admin gesture -- a bulk proxy add, a "
+        "provider refresh -- can hold the server's one event loop for seconds "
+        "at a time. While it does, /health answers with x-mcc-busy: 1 and says "
+        'since when and why, so the desktop app paints "working" instead of '
+        "deciding the server is gone. Neither number changes what the server "
+        "does; they change what it is able to say about it.",
+    ),
+    ConfigSectionSpec(
         "diagnostics",
         "Diagnostics",
         "Logging and debugging flags. The log level decides how much the "
@@ -926,6 +937,49 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="web_fetch_allow_private_networks",
         default="true",
+    ),
+    # ---- Server responsiveness: is the loop keeping up ---------------------
+    ConfigFieldSpec(
+        "HEALTH_HEARTBEAT_INTERVAL_MS",
+        "Loop check interval",
+        "loop_health",
+        "number",
+        settings_attr="health_heartbeat_interval_ms",
+        default="100",
+        restart_required=True,
+        advanced=True,
+        affects_providers=False,
+        minimum=10,
+        maximum=10000,
+        description=(
+            "How often the server checks how far behind its own event loop "
+            "is, in milliseconds. One task asks to sleep this long and records "
+            "how much later than that it actually woke; that difference is the "
+            "measurement. A hundred milliseconds costs nothing and is what "
+            "ships. Raising it makes the server slower to notice it is busy, "
+            "not faster."
+        ),
+    ),
+    ConfigFieldSpec(
+        "HEALTH_BUSY_LAG_MS",
+        "Busy threshold",
+        "loop_health",
+        "number",
+        settings_attr="health_busy_lag_ms",
+        default="500",
+        restart_required=True,
+        affects_providers=False,
+        minimum=0,
+        maximum=60000,
+        description=(
+            "How late the loop has to be before /health answers with "
+            "x-mcc-busy: 1 and the reason. Half a second is far above normal "
+            "scheduling jitter and far below any client's probe timeout, so a "
+            "busy answer means the server really was held. The answer is still "
+            "a 200 with the same body it always had -- these are extra fields "
+            "beside it, never instead of it. Set 0 to stop marking answers "
+            "busy at all; the measurement itself continues either way."
+        ),
     ),
     ConfigFieldSpec(
         "LOG_LEVEL",

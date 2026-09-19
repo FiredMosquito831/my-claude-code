@@ -1180,6 +1180,8 @@ Nineteen settings live under **Admin → Providers → Desktop**, beside the liv
 | `DESKTOP_HEALTH_PROBE_TIMEOUT` | 1.5 | 0.1–60 |
 | `DESKTOP_HEALTH_PROBE_TIMEOUTS` | 5,10,15 | seconds, comma-separated |
 | `DESKTOP_BUSY_GRACE_SECONDS` | 15 | 0–3600 |
+| `HEALTH_HEARTBEAT_INTERVAL_MS` | 100 | 10–10000 |
+| `HEALTH_BUSY_LAG_MS` | 500 | 0–60000 |
 | `DESKTOP_FOREIGN_GRACE_SECONDS` | 45 | 0–3600 |
 | `DESKTOP_STATUS_WALL_SECONDS` | 15 | 1–600 |
 | `DESKTOP_SHELL_AUTO_UPDATE` | true | true / false |
@@ -1236,6 +1238,44 @@ it always was — none of the three settings above applies to a server the app h
 never seen answer. `SERVER_PORT_TAKEOVER=always` still means what it has always
 meant for a server you start yourself from a terminal: it takes the port. And
 nothing about updating or installing changes.
+
+<a id="and-now-the-server-says-so-itself"></a>
+
+#### And now the server says so itself (7.27.0)
+
+7.26.0 taught the desktop app to wait. 7.27.0 is the other half: the server stops
+holding its own event loop for that long, and while it *is* busy it says so.
+
+**Two settings, on Limits & Resilience under _Server responsiveness_.**
+`HEALTH_HEARTBEAT_INTERVAL_MS` (100) is how often one task asks to sleep and
+records how much later than that it actually woke — that difference is how long
+something held the loop, and it is the only honest measure of it.
+`HEALTH_BUSY_LAG_MS` (500) is how late the loop has to be before `GET /health`
+answers with `x-mcc-busy: 1` and three extra fields: `busy` , `busy_since` and
+`busy_reason` (*"300 proxy address(es) are being tested for NVIDIA NIM"*). The
+status is still `200` and the body still carries `{"status": "healthy"}` — the
+busy fields are beside it, never instead of it, so anything that has never heard
+of them reads exactly what it always read. Set `HEALTH_BUSY_LAG_MS` to `0` to
+stop marking answers at all; the measurement carries on either way.
+
+**What actually got faster.** Three things that used to hold the loop, measured
+on the reporting machine:
+
+- **A chain save no longer sweeps every provider.** Saving a proxy chain used to
+  fire a background `/models` query against *every* configured provider —
+  1.6–9.7 s of held loop per call. A chain edit changes the address a provider
+  dials *from*, not the models it has, so it no longer asks. The generation is
+  still rebuilt before the save answers, so the new chain routes immediately.
+- **A bulk add rebuilds once, not once per batch.** The page sends a long
+  selection in batches of ten and used to republish after each one — thirty
+  generation rebuilds for three hundred addresses. Now only the last batch
+  republishes, and a run you **Stop** part-way republishes when it stops, so
+  nothing that landed waits for a restart.
+- **The TLS handshakes moved off the server's loop.** "Add all working" opens up
+  to a hundred tunnels at once. Measured against 300 addresses at concurrency
+  100: the loop was up to **650 ms** late, and is now up to **65 ms** — with the
+  same checks, the same trust, the same verdicts and the same wall-clock time.
+  Only `check_proxy` moved, onto one worker thread for the length of the sweep.
 
 `DESKTOP_BROWSER_PATH` points at a browser binary in a nonstandard location; if the path no longer exists, `mcc-desktop` warns and falls back to the built-in search instead of failing to start. `DESKTOP_WINDOW_WIDTH`/`HEIGHT` are only the window's *initial* size — once it has opened, its size and position are remembered across launches, so changing these later applies on first run or when you actually change the setting, not every launch.
 
@@ -4086,7 +4126,7 @@ MCC reads RTK's own `rtk gain` report and shows the resulting savings on the [To
   <img src="../assets/admin-limits.png" alt="Limits and resilience configuration" width="860">
 </div>
 
-**Admin UI → Limits & Resilience** holds every setting that decides how long MCC waits, how hard it retries, and when it stops. Six cards — **Budgets**, **Deadlines**, **Chain benching**, **Retries & throughput**, **Credential health**, **Diagnostics** — each stating in one line what it decides, reachable from the sticky section rail down the side of the page. It replaced a single flat grid of 37 fields, two thirds of which were only reachable behind a *Show advanced* toggle; the cost of the split is a long page, which is why the rail follows you down it. Every numeric field carries its accepted range on its own line under the input, so you can see what a box will take without reading the help text.
+**Admin UI → Limits & Resilience** holds every setting that decides how long MCC waits, how hard it retries, and when it stops. Seven cards — **Budgets**, **Deadlines**, **Chain benching**, **Retries & throughput**, **Credential health**, **Server responsiveness**, **Diagnostics** — each stating in one line what it decides, reachable from the sticky section rail down the side of the page. It replaced a single flat grid of 37 fields, two thirds of which were only reachable behind a *Show advanced* toggle; the cost of the split is a long page, which is why the rail follows you down it. Every numeric field carries its accepted range on its own line under the input, so you can see what a box will take without reading the help text.
 
 ### Output & thinking budgets
 
@@ -4170,6 +4210,10 @@ Since 6.20.0 that 429 also stops costing the *request* anything. `RATE_LIMIT_ROU
 ### Tutorial: why my request took 57 seconds
 
 Open the request in **Analytics → Requests** and expand the attempt. The ladder under it is the whole story: how many times MCC knocked, what each knock met, which key carried it, and — the number that matters here — how much of the attempt was MCC asleep rather than waiting on the model. A real one read *"3 keys × 5 tries: 14×429, 1×502 — 50s of the 57s were MCC backoff sleeps; keys 0, 1 and 2 benched 60s for moonshotai/kimi-k3"*. Fifteen knocks, six seconds of actual upstream time, and a healthy model on the same three keys sitting one chain slot away that was never asked. If you see a line like that on an install running 6.20.0 or later, check that **Credential health → Route around a rate-limited model** is on, and that the model that refused actually has a sibling configured on the same provider.
+
+### Server responsiveness
+
+Two numbers, both about honesty rather than speed. MCC serves everything on one event loop, and a long admin gesture — a three-hundred-address proxy add, a provider refresh — can keep that loop to itself for seconds at a time. `HEALTH_HEARTBEAT_INTERVAL_MS` (100) is how often MCC measures that: one task asks to sleep for exactly that long and records how much later it actually woke. `HEALTH_BUSY_LAG_MS` (500) is how late that has to be before `GET /health` answers with `x-mcc-busy: 1` and says, in the body, since when and which gesture it was. It is still a `200` and still carries `{"status": "healthy"}` — the busy fields are additive — and the desktop app reads that as *alive, working* rather than starting a second server. Set `HEALTH_BUSY_LAG_MS` to `0` to stop marking answers; the measurement continues regardless, and turns up in the server log as `LOOP: the event loop was N ms late` at DEBUG. See [And now the server says so itself](#and-now-the-server-says-so-itself).
 
 ### Diagnostics
 

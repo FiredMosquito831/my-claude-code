@@ -11,6 +11,7 @@ from typing import Any
 from loguru import logger
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.startup_state import (
     STARTING_MARKER_HEADER,
     STARTING_MARKER_VALUE,
@@ -25,7 +26,13 @@ from my_claude_code.core.stop_deadline import (
 )
 
 from .application import ApplicationRuntime, startup_failure_message
+from .loop_heartbeat import busy_health_answer, cached_health_answer
 from .warmup import start_request_path_warmup
+
+#: The one path this layer answers on its own behalf, and the only method it
+#: answers it for. ``HEAD`` and ``OPTIONS`` stay with the router: they are
+#: probes about the route's shape, not about whether the server is alive.
+_HEALTH_PATH = "/health"
 
 # What a request that arrives during the drain is told. A plain 503 rather than
 # a new wire frame: the harness already knows how to retry one, and inventing a
@@ -283,6 +290,23 @@ def reset_desktop_shell_auto_update_for_tests() -> None:
 SERVING_POLL_SECONDS = 0.01
 
 
+async def _answer_health(send: Send) -> None:
+    """Answer one ``GET /health`` from the pre-rendered document.
+
+    The healthy answer is the cached one, byte for byte what the route has
+    always returned. A late loop takes the second branch, which is the same 200
+    with ``x-mcc-busy: 1`` and the fields that name the window -- additive, so a
+    reader that has never heard of the header sees no change at all.
+    """
+
+    if loop_health().snapshot().busy:
+        body, headers = busy_health_answer()
+    else:
+        body, headers = cached_health_answer()
+    await send({"type": "http.response.start", "status": 200, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
 async def _refuse_during_shutdown(send: Send) -> None:
     """Answer one HTTP request with 503 + ``connection: close``."""
 
@@ -368,6 +392,26 @@ class RuntimeASGIApp:
                 # "service restart".
                 await send({"type": "websocket.close", "code": 1013})
                 return
+        # The health gate, and the last of the three. Checked strictly after
+        # both of the others, because a server that is going away or not yet
+        # up has something more specific to say than "alive" -- those two
+        # answers and their markers are unchanged.
+        #
+        # Everything below this line is one dict lookup, one snapshot read and
+        # two ``send`` calls against a body rendered by the heartbeat. It exists
+        # because the route it replaces was not slow in itself: it was slow
+        # because it sat behind the router, the dependency graph and the
+        # middleware stack, on a loop that a long admin gesture had already
+        # filled with work. The answer a probe gets is the same 200 and the same
+        # ``{"status": "healthy"}``; when the loop is late it gains
+        # ``x-mcc-busy: 1`` and the three fields that say since when and why.
+        if (
+            scope["type"] == "http"
+            and scope.get("path") == _HEALTH_PATH
+            and scope.get("method") == "GET"
+        ):
+            await _answer_health(send)
+            return
         await self.app(scope, receive, send)
 
     async def _run_startup(self) -> None:

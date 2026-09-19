@@ -53,6 +53,8 @@ from .constants import (
     FALLBACK_SKIP_KINDS_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
+    HEALTH_BUSY_LAG_MS_DEFAULT,
+    HEALTH_HEARTBEAT_INTERVAL_MS_DEFAULT,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
     IMAGE_DETAIL_DEFAULT,
     IMAGE_DETAIL_NAMES,
@@ -1799,6 +1801,18 @@ class Settings(BaseSettings):
     desktop_reconnect_restatus_seconds: float = Field(
         default=DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT,
         validation_alias="DESKTOP_RECONNECT_RESTATUS_SECONDS",
+    )
+    # How often the server measures its own event loop, in milliseconds, and
+    # how late that measurement has to be before /health says "busy" rather
+    # than only "healthy". The beat is the instrument; the lag threshold is
+    # what a reader is told about. See core/loop_health.py.
+    health_heartbeat_interval_ms: int = Field(
+        default=HEALTH_HEARTBEAT_INTERVAL_MS_DEFAULT,
+        validation_alias="HEALTH_HEARTBEAT_INTERVAL_MS",
+    )
+    health_busy_lag_ms: int = Field(
+        default=HEALTH_BUSY_LAG_MS_DEFAULT,
+        validation_alias="HEALTH_BUSY_LAG_MS",
     )
     # The desktop app's lifecycle tick: how often it probes the server and,
     # when the server is dead, how often it starts one. Decision Q4: ten
