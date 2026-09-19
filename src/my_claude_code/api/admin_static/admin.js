@@ -258,6 +258,7 @@ const VIEW_GROUPS = [
       "benching",
       "provider_retries",
       "credential_health",
+      "loop_health",
       "diagnostics",
     ],
     containerId: "limitsSections",
@@ -2643,6 +2644,12 @@ async function runProxyCandidateBulk(request) {
 
   let token = "";
   let stopped = false;
+  // Whether a batch has landed addresses that nothing has rebuilt the provider
+  // generation for yet. Every batch but the last asks the server NOT to
+  // republish -- a generation replace per ten addresses is thirty replaces for
+  // three hundred, each one a sweep the event loop pays for while the operator
+  // is still waiting -- so a run that is stopped part-way owes one republish.
+  let owesRepublish = false;
   try {
     for (let index = 0; index < proxies.length; index += PROXY_CANDIDATE_BATCH) {
       if (proxyState.run.stop) {
@@ -2650,6 +2657,7 @@ async function runProxyCandidateBulk(request) {
         break;
       }
       const batch = proxies.slice(index, index + PROXY_CANDIDATE_BATCH);
+      const isLastBatch = index + PROXY_CANDIDATE_BATCH >= proxies.length;
       proxyState.run.inflight = batch.length;
       paintProxyCandidateList();
       const payload = await api("/admin/api/proxy-chains/candidates/bulk", {
@@ -2659,8 +2667,10 @@ async function runProxyCandidateBulk(request) {
           provider: request.providerId || "",
           proxies: batch,
           undo_token: token,
+          republish: isLastBatch,
         }),
       });
+      owesRepublish = !isLastBatch;
       const bulk = payload.bulk || {};
       token = bulk.undo_token || token;
       (bulk.results || []).forEach((row) =>
@@ -2675,6 +2685,20 @@ async function runProxyCandidateBulk(request) {
     announceProxy(error.message);
     showMessage(error.message, "error");
     return;
+  }
+  // A stopped run still has to start routing through what it did add. One
+  // call, no store write, and a failure here is not a failure of the add:
+  // the addresses are saved either way and a restart would pick them up.
+  if (owesRepublish) {
+    try {
+      const republished = await api("/admin/api/proxy-chains/republish", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      applyProxyCandidateBulk(republished, request.providerId);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
   }
   proxyState.run = null;
   renderProxying();

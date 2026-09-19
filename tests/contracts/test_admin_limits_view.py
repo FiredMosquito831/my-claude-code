@@ -39,6 +39,9 @@ LIMITS_SECTIONS = (
     "benching",
     "provider_retries",
     "credential_health",
+    # 7.27.0: how the server measures whether its own event loop is keeping up,
+    # and when /health starts saying so.
+    "loop_health",
     "diagnostics",
 )
 
@@ -64,7 +67,7 @@ def _function_source(name: str) -> str:
 
 
 def test_the_limits_view_claims_every_resilience_section() -> None:
-    """Six cards in the order the page reads, top to bottom."""
+    """Seven cards in the order the page reads, top to bottom."""
 
     assert _view_sections()["limits"] == list(LIMITS_SECTIONS)
 

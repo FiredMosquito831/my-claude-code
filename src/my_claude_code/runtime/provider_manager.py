@@ -18,6 +18,7 @@ from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.provider_catalog import configured_credential_values
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningDialect
 from my_claude_code.core.stop_deadline import stop_deadline
@@ -530,12 +531,23 @@ class ProviderRuntimeManager:
         )
 
     async def refresh_model_list_cache(self) -> ProviderModelRefreshResult:
-        """Run an explicit full refresh without racing replacement."""
-        async with self._replace_lock:
-            if self._closing or self._closed:
-                raise ApplicationUnavailableError("Provider runtime is shutting down.")
-            await self._cancel_refresh()
-            return await self._refresh_generation(self._current, only_missing=False)
+        """Run an explicit full refresh without racing replacement.
+
+        Named for ``/health`` since 7.27.0, and named only. Measured at 2.8 s
+        on a 52-provider scratch config, with concurrent probes at 1.5 s; the
+        2026-09-11 addendum's F16 -- give the per-provider parse a worker or
+        yield between providers -- is the fix, and it is a follow-up with its
+        own release rather than a passenger on this one.
+        """
+
+        with loop_health().working("every provider's model list is being refreshed"):
+            async with self._replace_lock:
+                if self._closing or self._closed:
+                    raise ApplicationUnavailableError(
+                        "Provider runtime is shutting down."
+                    )
+                await self._cancel_refresh()
+                return await self._refresh_generation(self._current, only_missing=False)
 
     @property
     def refresh_in_flight(self) -> bool:

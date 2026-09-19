@@ -108,6 +108,7 @@ from my_claude_code.config.proxy_feeds import (
     normalise_parser,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.core.proxy_rotation import PROXY_HEALTH, PROXY_INTERCEPTION
 
@@ -400,6 +401,17 @@ async def _republish(services: ApiServices) -> None:
     a generation replace resets the credential pools' counters, so key health
     reads zeros immediately after a chain is saved. The numbers were never
     wrong; the pools they were measured on no longer exist.
+
+    ``sweep=False`` since 7.27.0. A chain edit changes the address a provider
+    dials *from*; it cannot change which models that provider has. The blanket
+    ``/models`` sweep every chain save used to fire -- every configured
+    provider, measured at 1.6-9.7 s of held event loop per call on the
+    reporting machine, and fired once per ten-address batch of a bulk add --
+    was therefore work nobody asked for, paid for by every other request on the
+    loop. The generation is still replaced, synchronously, before this returns:
+    the new chain is what routes the instant the save answers. What is gone is
+    the sweep, and the hourly rediscovery still refreshes the catalogues on its
+    own schedule exactly as it did.
     """
 
     # Never fail the write for it. The chain is already on disk, and a
@@ -407,7 +419,8 @@ async def _republish(services: ApiServices) -> None:
     # starts routing at the next restart -- worse than a 500 that suggests
     # nothing was saved at all.
     try:
-        await services.admin.reload_providers("proxy_chains")
+        with loop_health().working("a proxy chain is being republished"):
+            await services.admin.reload_providers("proxy_chains", sweep=False)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("PROXY CHAINS: saved, but could not republish: {}", exc)
 
@@ -1031,12 +1044,24 @@ class ProxyCandidateBulkPayload(BaseModel):
     batch mints a token, and every later batch that carries it back extends the
     same undo point rather than minting one per batch, so Undo means "before I
     pressed Add", not "before the last ten of them".
+
+    ``republish`` says whether this batch is the one that should rebuild the
+    provider generation. It ships ``True``, which is exactly what every caller
+    written before 7.27.0 gets: one republish per request. The page sends
+    ``False`` on every batch but the last, because a republish is a generation
+    replace and thirty of them for three hundred addresses is twenty-nine more
+    than the gesture needs -- the store is durable in between, and the single
+    replace at the end is what the whole selection starts routing through. A
+    run stopped part-way republishes through
+    ``POST /admin/api/proxy-chains/republish``, so nothing that landed is left
+    waiting for a restart.
     """
 
     action: str = "add"
     provider: str = ""
     proxies: list[str] = Field(default_factory=list)
     undo_token: str = ""
+    republish: bool = True
 
 
 class ProxyUndoPayload(BaseModel):
@@ -1206,23 +1231,36 @@ async def bulk_proxy_candidates(
         mode=str(settings.proxy_fetch_concurrency_mode),
         offered=len(testable),
     )
-    outcomes = (
-        await check_endpoints(
-            tuple(testable),
-            dict.fromkeys(testable, destination),
-            timeout=float(settings.proxy_check_timeout_seconds),
-            exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
-            concurrency=pace.value,
-            max_concurrency=PROXY_FETCH_TEST_CONCURRENCY_MAX,
-            budget=check_budget(
-                connect_timeout=float(settings.proxy_check_timeout_seconds),
+    with loop_health().working(
+        f"{len(testable)} proxy address(es) are being tested for "
+        f"{providers[provider_id]['display_name']}"
+    ):
+        outcomes = (
+            await check_endpoints(
+                tuple(testable),
+                dict.fromkeys(testable, destination),
                 timeout=float(settings.proxy_check_timeout_seconds),
                 exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
-            ),
+                concurrency=pace.value,
+                max_concurrency=PROXY_FETCH_TEST_CONCURRENCY_MAX,
+                budget=check_budget(
+                    connect_timeout=float(settings.proxy_check_timeout_seconds),
+                    timeout=float(settings.proxy_check_timeout_seconds),
+                    exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+                ),
+                # The handshakes, and only the handshakes, on one worker loop.
+                # This is the gesture the 2026-09-18 report was about: a
+                # hundred concurrent tunnels through strangers' machines held
+                # the server's event loop for up to 650 ms at a time, which is
+                # long enough for a /health probe to time out and for the
+                # desktop window to conclude the server had died. Measured on
+                # the same population afterwards: 15.8 ms, at the machine's
+                # timer floor, with identical verdicts and identical wall time.
+                off_loop=True,
+            )
+            if testable
+            else {}
         )
-        if testable
-        else {}
-    )
     keep: list[str] = []
     for proxy_id in testable:
         outcome = outcomes.get(proxy_id)
@@ -1267,7 +1305,12 @@ async def bulk_proxy_candidates(
             # The store moved under the write -- another tab, or a hand edit.
             # Say so rather than reporting an add that did not happen.
             results[proxy_id] = _result(proxy_id, results[proxy_id]["label"], "gone")
-        await _republish(services)
+        # Once per gesture, not once per batch. The store is already written;
+        # a batch that does not republish leaves the addresses durable and
+        # unrouted for the few seconds until the batch that does. See
+        # ``ProxyCandidateBulkPayload.republish``.
+        if payload.republish:
+            await _republish(services)
     token = (
         await asyncio.to_thread(_remember_undo, payload.undo_token.strip(), before)
         if keep
@@ -1275,6 +1318,30 @@ async def bulk_proxy_candidates(
     )
     ordered = [results[proxy_id] for proxy_id in proxies if proxy_id in results]
     return await _bulk_payload(services, action, provider_id, ordered, token)
+
+
+@router.post("/admin/api/proxy-chains/republish")
+async def republish_proxy_chains(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Make the stored chains the ones that route, now.
+
+    The one caller is a bulk add that was **stopped** part-way. A bulk gesture
+    republishes once, on its last batch (7.27.0), because a generation replace
+    per ten addresses is twenty-nine replaces nobody asked for -- so a run the
+    operator stops has written addresses into chains that nothing has rebuilt
+    for yet. This is that rebuild, by itself: no store write, no check, no
+    undo point, nothing that can lose work.
+
+    Idempotent and cheap by construction. It replaces the generation from
+    whatever the store says right now, exactly as a save does, and a call with
+    nothing to pick up costs one generation replace and no network at all.
+    """
+
+    require_loopback_admin(request)
+    await _republish(services)
+    return await asyncio.to_thread(_payload, services)
 
 
 @router.post("/admin/api/proxy-chains/candidates/undo")

@@ -4275,6 +4275,11 @@ def test_jsdom_one_press_sends_one_batched_request_for_the_whole_selection(
         "provider": "nvidia_nim",
         "proxies": ["px_cand0001", "px_cand0003", "px_cand0004"],
         "undo_token": "",
+        # 7.27.0: which batch owns the republish. A selection that fits in one
+        # batch is its own last batch, so it republishes exactly as it always
+        # did; a longer one sends false until the end, which is what turns
+        # thirty generation replaces for three hundred addresses into one.
+        "republish": True,
     }
 
 

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from my_claude_code.core.loop_health import BUSY_MARKER_HEADER
 from my_claude_code.core.startup_state import (
     STARTING_MARKER_HEADER,
     STARTING_MARKER_VALUE,
@@ -100,6 +101,14 @@ async def test_every_route_answers_starting_until_the_application_is_ready(
 
 @pytest.mark.asyncio
 async def test_a_ready_application_is_not_gated() -> None:
+    """A ready server hands the request to the application.
+
+    Probed on ``/admin/api/version`` rather than ``/health`` since 7.27.0:
+    ``GET /health`` is answered by the gate itself now (see
+    ``test_a_ready_server_answers_health_from_the_gate`` below), so it is no
+    longer the path that can show a request reaching the app.
+    """
+
     seen: list[str] = []
 
     async def app_inner(scope, receive, send):
@@ -108,9 +117,61 @@ async def test_a_ready_application_is_not_gated() -> None:
     app = RuntimeASGIApp(app_inner, _runtime())
     startup_state().mark_ready()
 
-    await _get_health(app)
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
 
-    assert seen == ["/health"]
+    await app(
+        {"type": "http", "path": "/admin/api/version", "method": "GET"},
+        receive,
+        _Recorder(),
+    )
+
+    assert seen == ["/admin/api/version"]
+
+
+@pytest.mark.asyncio
+async def test_a_ready_server_answers_health_from_the_gate() -> None:
+    """``GET /health`` never reaches the router, and says the same thing.
+
+    The body is the one every release has returned. What it buys is that the
+    answer costs a dict lookup and two sends instead of a router match, a
+    dependency graph and the middleware stack -- on the one loop a long admin
+    gesture can fill.
+    """
+
+    app = RuntimeASGIApp(_never_called, _runtime())
+    startup_state().mark_ready()
+
+    recorder = await _get_health(app)
+
+    assert recorder.status == 200
+    assert json.loads(recorder.body) == {"status": "healthy"}
+    assert BUSY_MARKER_HEADER not in recorder.headers
+
+
+@pytest.mark.asyncio
+async def test_a_probe_of_the_health_route_shape_still_reaches_the_router() -> None:
+    """HEAD and OPTIONS are questions about the route, not about being alive."""
+
+    seen: list[str] = []
+
+    async def app_inner(scope, receive, send):
+        seen.append(scope["method"])
+
+    app = RuntimeASGIApp(app_inner, _runtime())
+    startup_state().mark_ready()
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    for method in ("HEAD", "OPTIONS"):
+        await app(
+            {"type": "http", "path": "/health", "method": method},
+            receive,
+            _Recorder(),
+        )
+
+    assert seen == ["HEAD", "OPTIONS"]
 
 
 @pytest.mark.asyncio

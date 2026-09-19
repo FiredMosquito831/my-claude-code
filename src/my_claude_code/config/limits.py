@@ -307,6 +307,16 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     # something anyway. Out of the shell's binary in 6.61.0: it decides whether
     # a slow machine gets a window at all.
     "desktop_status_wall_seconds": LimitRange(1.0, 600.0),
+    # How often the server measures its own event loop. The floor is 10 ms
+    # because a beat faster than that measures the beat rather than the loop;
+    # the ceiling is ten seconds because a beat slower than the shortest client
+    # probe timeout cannot notice a hold before somebody else does.
+    "health_heartbeat_interval_ms": LimitRange(10.0, 10_000.0),
+    # How late the loop has to be before /health marks itself busy. 0 turns the
+    # marker off without touching the measurement.
+    "health_busy_lag_ms": LimitRange(
+        0.0, 60_000.0, "0 never marks an answer busy, however late the loop is"
+    ),
 }
 
 

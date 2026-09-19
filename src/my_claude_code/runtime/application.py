@@ -51,6 +51,7 @@ from my_claude_code.config.proxy_chains import (
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
+from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.request_log import (
     reset_request_log_stores,
     set_cost_backfill_pricer,
@@ -91,6 +92,7 @@ from my_claude_code.providers.runtime.reasoning_probe import (
 )
 
 from .discovery_timer import ProviderDiscoveryTimer, resolve_refresh_interval
+from .loop_heartbeat import LoopHeartbeat
 from .provider_manager import ProviderRuntimeManager
 from .proxy_check_timer import ProxyCheckTimer, ProxyHealthTimer
 from .proxy_feed_timer import ProxyFeedTimer
@@ -199,6 +201,22 @@ def _withheld_sink(store: LearnedFactStore) -> Callable[[str], None]:
     return remember
 
 
+def _config_gesture(updates: Mapping[str, Any]) -> str:
+    """What to call this settings write in a busy ``/health`` answer.
+
+    One short sentence an operator can act on, built from the keys being
+    written and never from their values -- a settings update can carry an API
+    key, and the busy answer is served to anything that can reach the port.
+    """
+
+    keys = [str(key) for key in updates]
+    if not keys:
+        return "a settings change is being applied"
+    if len(keys) == 1:
+        return f"the setting {keys[0]} is being applied"
+    return f"{len(keys)} settings are being applied"
+
+
 class ApplicationRuntime:
     """Own every process-lifetime resource used by one server instance."""
 
@@ -231,6 +249,10 @@ class ApplicationRuntime:
         # for the same reason: the shutdown cancels it rather than leaving a
         # file read outliving the runtime that started it.
         self._shell_pin_task: asyncio.Task[None] | None = None
+        # The loop-lag monitor. One sleep and one subtraction, ten times a
+        # second, and the only thing in this process that can tell a server
+        # that is busy from a server that is gone.
+        self._loop_heartbeat: LoopHeartbeat | None = None
         self._provider_manager_closed = False
         self._close_lock = asyncio.Lock()
         # The durable store of what every host has taught this proxy about
@@ -298,6 +320,12 @@ class ApplicationRuntime:
         logger.info("Starting Claude Code Proxy...")
         state = startup_state()
         try:
+            # First of everything, and deliberately: the instrument that
+            # measures how long the rest of this start holds the loop has to be
+            # running before the rest of this start runs. It is one task, one
+            # sleep and one subtraction; it cannot fail and it waits for
+            # nothing.
+            self._start_loop_heartbeat()
             warn_if_process_auth_token(self.settings)
             # Before the first sweep and before the first request: a provider
             # built during the sweep asks the store for its memory, and a
@@ -443,6 +471,22 @@ class ApplicationRuntime:
         self,
         updates: Mapping[str, Any],
     ) -> dict[str, Any]:
+        # Named, not moved. Measured on a 52-provider scratch config with the
+        # reporting machine's 995 visibility patterns: a one-key pause costs
+        # 2.1 s and a resume 2.3 s, all of it a ``Settings`` rebuild and a
+        # 51 KB managed-file render on the loop. 7.27.0 does not change that --
+        # the 2026-09-11 measurements rejected ``asyncio.to_thread`` for it,
+        # because the work holds the GIL and a worker thread stalls the loop
+        # just as hard -- so the honest thing this release can do is let
+        # ``/health`` say which gesture the loop is inside. The fix is a
+        # follow-up with its own release.
+        with loop_health().working(_config_gesture(updates)):
+            return await self._apply_admin_config_prepared(updates)
+
+    async def _apply_admin_config_prepared(
+        self,
+        updates: Mapping[str, Any],
+    ) -> dict[str, Any]:
         prepared = prepare_admin_update(updates)
         if not prepared.valid:
             return prepared.applied_response()
@@ -485,7 +529,11 @@ class ApplicationRuntime:
         return self.provider_manager.cached_model_ids()
 
     async def reload_providers(
-        self, reason: str, *, refresh_provider_id: str | None = None
+        self,
+        reason: str,
+        *,
+        refresh_provider_id: str | None = None,
+        sweep: bool = True,
     ) -> dict[str, Any]:
         """Republish the provider generation after a non-Settings mutation.
 
@@ -497,13 +545,24 @@ class ApplicationRuntime:
         It replaces the generation's blanket background sweep with a single
         scoped, awaited discovery, and returns what that discovery found -- so
         the caller reports the catalogue, not a second independent probe.
+
+        ``sweep=False`` says the opposite thing about the same sweep: the
+        mutation did not change any provider's *catalogue*, so nothing needs
+        re-querying at all. A proxy chain is the case it exists for -- a chain
+        edit changes the address a provider dials from, not the models that
+        provider has -- and until 7.27.0 every chain save fired the blanket
+        ``/models`` sweep of *every* configured provider, measured on the
+        reporting machine at 1.6-9.7 s of held event loop per call and fired
+        three or more times by one bulk add. The generation is still replaced,
+        so the new chain is what routes the instant the save returns; only the
+        sweep it never needed is gone.
         """
         async with self._config_lock:
             await self.provider_manager.replace(
                 self.settings,
                 commit=lambda: None,
                 reason=reason,
-                background_refresh=refresh_provider_id is None,
+                background_refresh=sweep and refresh_provider_id is None,
             )
             if refresh_provider_id is None:
                 return {}
@@ -1041,7 +1100,31 @@ class ApplicationRuntime:
             report.get("shell_pinned_tag"),
         )
 
+    def _start_loop_heartbeat(self) -> None:
+        """Adopt the operator's two numbers and start the beat.
+
+        Called at the top of ``start``. The record itself is process-wide (it
+        is read by the ASGI gate, which has no runtime in hand), so the numbers
+        are pushed into it here rather than read from ``Settings`` per answer --
+        ``core`` may not import ``config``, and a health answer may not resolve
+        configuration.
+        """
+
+        settings = self.settings
+        interval = max(10, int(settings.health_heartbeat_interval_ms)) / 1000.0
+        loop_health().configure(
+            interval_seconds=interval,
+            busy_lag_seconds=max(0, int(settings.health_busy_lag_ms)) / 1000.0,
+        )
+        heartbeat = LoopHeartbeat(interval_seconds=interval)
+        heartbeat.start()
+        self._loop_heartbeat = heartbeat
+
     async def _close_owned_resources(self) -> bool:
+        heartbeat = self._loop_heartbeat
+        self._loop_heartbeat = None
+        if heartbeat is not None:
+            await heartbeat.close()
         # Cancelled before the provider manager closes, so a probe in flight is
         # abandoned rather than racing the shutdown that asked for it. Same
         # reason as the discovery timer below, and for the same task shape.
