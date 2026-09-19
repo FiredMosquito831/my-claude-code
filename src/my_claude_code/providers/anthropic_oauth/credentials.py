@@ -65,6 +65,7 @@ from my_claude_code.providers.oauth_account_store import (
     OAuthStorageLockUnavailable,
     account_record_fields,
     backup_once,
+    is_synthetic_account_id,
     monotonic_write_allowed,
     normalise_epoch_seconds,
     now_iso,
@@ -849,10 +850,22 @@ def add_or_update_account(
     else:
         previous = records[index]
         new_id = previous.id
-        if tokens.account_uuid and previous.id != tokens.account_uuid:
-            # The id upgrade: an imported or synthetic account whose first
-            # refresh brought the real ``account.uuid`` back. Move the name
-            # with it, so the operator's name follows the account.
+        if (
+            tokens.account_uuid
+            and previous.id != tokens.account_uuid
+            and is_synthetic_account_id(previous.id)
+        ):
+            # The id upgrade, and **only** for an id this build minted. An
+            # imported or identity-less account whose first refresh brings the
+            # real ``account.uuid`` back adopts it, and the name moves with it.
+            #
+            # A record whose id is already a real one is never renamed, even
+            # when the response disagrees with it. A response naming a
+            # *different* account is not an upgrade -- it is either a confused
+            # endpoint or a credential that does not belong to this record,
+            # and adopting the new id would give two records the same id and
+            # silently merge two subscriptions into one pool slot. Caught in
+            # the scratch proof for 7.30.0, where exactly that happened.
             new_id = tokens.account_uuid
             move_name(PROVIDER_ID, previous.id, new_id)
         record = AccountRecord(

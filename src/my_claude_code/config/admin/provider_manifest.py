@@ -806,8 +806,12 @@ def _anthropic_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
                 "Anthropic does not permit this: read "
                 "docs/ANTHROPIC-SUBSCRIPTION.md before using either option. "
                 "Import the credential Claude Code already has, or sign in "
-                "directly; either way MCC stores its own renewable copy and "
-                "never writes back to Claude Code's credential file."
+                "directly; either way MCC stores its own renewable copy. Sign "
+                "in again to ADD a second account -- each one is its own pool "
+                "slot with its own name, expiry and controls. A refresh of an "
+                "IMPORTED account is written back to the file it came from "
+                "(see the write-back setting above); an account MCC signed in "
+                "itself has no source file and none is ever written."
             ),
         },
         {

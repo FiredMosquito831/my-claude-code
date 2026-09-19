@@ -110,7 +110,18 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def synthetic_account_id(prefix: str = "local-") -> str:
+#: The prefix every minted id carries, so "did we make this up?" is a question
+#: the record can answer about itself rather than one the caller has to track.
+SYNTHETIC_ID_PREFIX = "local-"
+
+
+def is_synthetic_account_id(account_id: str) -> bool:
+    """Whether this id was minted here rather than reported by the provider."""
+
+    return not account_id or account_id.startswith(SYNTHETIC_ID_PREFIX)
+
+
+def synthetic_account_id(prefix: str = SYNTHETIC_ID_PREFIX) -> str:
     """Mint an account id for a credential that carries no identity.
 
     Minted once, persisted, and never recomputed. Fingerprinting the refresh

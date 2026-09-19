@@ -122,6 +122,38 @@ def test_the_account_object_on_a_refresh_upgrades_a_synthetic_id_in_place() -> N
     assert [record.id for record in creds.load_accounts()] == ["uuid-1"]
 
 
+def test_a_real_id_is_never_replaced_by_a_different_real_id() -> None:
+    """Two accounts must never be merged into one pool slot.
+
+    Caught in the scratch proof for 7.30.0: refreshing account B against an
+    endpoint that answered with account A's identity renamed B to A, and the
+    store ended up holding two records with the same id -- two subscriptions
+    collapsed into one slot, and one of them unreachable. A response naming a
+    *different* account is not an id upgrade. Only an id this build minted is
+    ever replaced.
+    """
+    creds.add_or_update_account(
+        creds.OAuthTokens(access_token="a", refresh_token="r", account_uuid="uuid-a"),
+        origin=ORIGIN_MCC,
+    )
+    creds.add_or_update_account(
+        creds.OAuthTokens(access_token="b", refresh_token="r", account_uuid="uuid-b"),
+        origin=ORIGIN_MCC,
+    )
+
+    creds.add_or_update_account(
+        creds.OAuthTokens(
+            access_token="b-fresh", refresh_token="r2", account_uuid="uuid-a"
+        ),
+        account_id="uuid-b",
+    )
+
+    records = creds.load_accounts()
+    assert [record.id for record in records] == ["uuid-a", "uuid-b"]
+    assert len({record.id for record in records}) == 2
+    assert records[1].tokens.access_token == "b-fresh"
+
+
 def test_upgrading_an_id_moves_the_name_with_it() -> None:
     minted = creds.add_or_update_account(
         creds.OAuthTokens(access_token="old", refresh_token="r1"), origin=ORIGIN_MCC
