@@ -22,6 +22,7 @@ from my_claude_code.core.request_log import RequestLogStore, store_from_settings
 from my_claude_code.websearch.analytics import WebSearchLogStore
 
 from .admin_routes import require_loopback_admin
+from .credential_display import credential_name_index
 from .dependencies import get_settings
 
 router = APIRouter()
@@ -290,9 +291,11 @@ def _request_export(
         harness=harness,
     )
 
+    key_names = credential_name_index()
+
     def detail_rows() -> Iterator[dict[str, Any]]:
         for row in iterator:
-            export_engine.compute_request_detail_derived(row, selected)
+            export_engine.compute_request_detail_derived(row, selected, key_names)
             yield {column: row.get(column) for column in output_columns}
 
     return _stream(fmt, detail_rows(), output_columns, headers, filename, exported_at)
@@ -360,9 +363,11 @@ def _attempt_export(
         harness=harness,
     )
 
+    key_names = credential_name_index()
+
     def attempt_rows() -> Iterator[dict[str, Any]]:
         for row in iterator:
-            export_engine.compute_attempt_detail_derived(row, selected)
+            export_engine.compute_attempt_detail_derived(row, selected, key_names)
             # Projected to the output columns last, which is also what drops
             # the private params blob the derived pass read.
             yield {column: row.get(column) for column in output_columns}
@@ -436,7 +441,9 @@ def _websearch_export(
         )
 
     columns = export_engine.websearch_detail_columns(selected)
-    headers = export_engine.websearch_detail_headers(columns)
+    derived_columns = export_engine.websearch_detail_derived_columns()
+    output_columns = columns + derived_columns
+    headers = export_engine.websearch_detail_headers(output_columns)
     include_content = bool(_WEBSEARCH_BODY_FIELDS.intersection(selected))
     iterator = store.iter_export_rows(
         columns=columns,
@@ -448,8 +455,11 @@ def _websearch_export(
         until_epoch=until_epoch,
     )
 
+    key_names = credential_name_index()
+
     def detail_rows() -> Iterator[dict[str, Any]]:
         for row in iterator:
-            yield {column: row.get(column) for column in columns}
+            export_engine.compute_websearch_detail_derived(row, key_names)
+            yield {column: row.get(column) for column in output_columns}
 
-    return _stream(fmt, detail_rows(), columns, headers, filename, exported_at)
+    return _stream(fmt, detail_rows(), output_columns, headers, filename, exported_at)

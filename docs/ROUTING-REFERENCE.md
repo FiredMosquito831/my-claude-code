@@ -22,6 +22,10 @@ Policies:
 
 Each key gets its own upstream client and its own rate-limit window, so one key saturating or stalling never throttles the others.
 
+**The order in the pool is the order these policies read.** `failover` serves the first healthy key, `single` serves the first key and nothing else, and `round_robin` cycles in that sequence. Since 7.29.0 that order is editable without retyping the variable: open **Configure** on the provider's card and drag a key by its grip, or use **Move up** / **Move down** (or ArrowUp / ArrowDown on a focused grip). It applies at once with no restart. It does rebuild the pool, so that pool's health counters and benches start again -- exactly as they do when you add or remove a key.
+
+**A key can also carry a name.** Type one beside the key, or in the optional Name field when you add it, and that key then reads as its name wherever a credential is shown: the card, the request log row and modal, the retry ladder, the per-key analytics and the CSV. Its masked label stays on hover, and the exports keep their `key_label` column and gain a `key_name` one beside it. Names live in `~/.mcc/credential_names.json`, keyed by `sha256(key)[:16]` and never by the key itself; they never reach an upstream request, the request log or a rollup. A name is a display join resolved from the pool as it stands now, so renaming a key rewrites no history -- and a masked label two keys share resolves to no name at all rather than to a guess.
+
 **Health model — a key is only ever judged on signals about the key.** There are exactly three:
 
 - **401/403** — the provider rejected the credential. It is locked out on an escalating ladder (`CREDENTIAL_LOCKOUT_TIERS`, 5 min → 1 h → 24 h by default), on its own counter.
@@ -56,7 +60,7 @@ Failover happens before the first streamed chunk; once output has started, switc
 
 **The deliberate cost of that rule.** A key that fails with a 5xx or a dropped connection on *every* request is no longer benched — rotation tries it once per request and the chain absorbs the wasted attempt. That was the trade: on a live three-key pool, the failure classes that could have identified a dead key were the same ones benching healthy keys **1,529 times in one day** (a `410 model gone`, a rejected `top_p`, a model that stayed silent). A truly dead credential still answers 401/403, and that still locks it out.
 
-All of this is visible and manageable from **Admin UI → Providers**: press **Configure** on a provider's card to open its key pool, which lists every key with its own health and usage, lets you add keys (one, or several comma-separated) and remove them individually, and carries the rotation policy. **Refresh models** on the card face makes a real call to the provider. For historical per-key request volume, error rate, tokens, and latency, see [Per-Key Attribution](#per-key-attribution).
+All of this is visible and manageable from **Admin UI → Providers**: press **Configure** on a provider's card to open its key pool, which lists every key with its own health and usage, lets you add keys (one, or several comma-separated), reorder them, give each one a name, and remove them individually, and carries the rotation policy. **Refresh models** on the card face makes a real call to the provider. For historical per-key request volume, error rate, tokens, and latency, see [Per-Key Attribution](#per-key-attribution).
 
 Web search provider keys share the same rotation engine — see [Web Search → Multi-key rotation](#multi-key-rotation-web-search-keys).
 

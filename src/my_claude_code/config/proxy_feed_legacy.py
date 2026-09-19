@@ -20,16 +20,18 @@ picker. A fresh install passes through this module without it producing
 anything, because a fresh install has no built-in ids to convert.
 
 **When this can be deleted.** After two or three releases, once no store in
-circulation can still hold a built-in id -- **7.29.0** is the earliest sensible
+circulation can still hold a built-in id -- **7.30.0** is the earliest sensible
 point. It used to say 7.21.0, then 7.22.0, then 7.23.0, then 7.24.0, then
-7.25.0, then 7.26.0, then 7.27.0, then 7.28.0; all eight releases went to
+7.25.0, then 7.26.0, then 7.27.0, then 7.28.0, then 7.29.0; all nine releases
+went to
 something else (the
 proxy fetch pass, the 429 cooldown controls, the Responses surface learning what
 a host refuses, putting every remaining proxy tunable on the dashboard,
 per-model reasoning and output preferences, the desktop app waiting for a busy
 server instead of replacing it, the server no longer holding its own event
-loop while it works, then OpenCode's free tier learning to read the tool
-catalogue), and deleting this in any of them would
+loop while it works, OpenCode's free tier learning to read the tool
+catalogue, then key pools you can reorder and name), and deleting this in any
+of them would
 have bundled an unrelated removal onto it. One concern per release,
 so the note moves rather than the deletion happening quietly beside something
 else. Deleting it is: remove this module,

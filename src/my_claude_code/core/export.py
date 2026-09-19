@@ -12,7 +12,7 @@ import csv
 import io
 import json
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, Literal, cast
 
 from my_claude_code.core.request_log import ATTEMPT_PARAMS_KEY, PROVIDER_KEY_SQL
@@ -339,7 +339,15 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
 # fact about the row rather than one of the metrics the checklist selects --
 # and a reader who exports TTFT without it has the misattributed number and no
 # way to see that it is misattributed.
-_REQUEST_ALWAYS_DERIVED: tuple[str, ...] = ("ttft_lost_to_fallbacks_ms",)
+_REQUEST_ALWAYS_DERIVED: tuple[str, ...] = (
+    "ttft_lost_to_fallbacks_ms",
+    # The human name the operator gave this credential, resolved from the
+    # *current* pool at export time. ``key_label`` and ``key_index`` keep their
+    # meanings exactly: a name is a display join, never a stored dimension, so
+    # renaming a key cannot rewrite a single historical row. An unknown or
+    # ambiguous label exports the empty string rather than a guess.
+    "key_name",
+)
 
 # Derived detail columns computed per row (not raw SQL columns).
 _REQUEST_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
@@ -367,6 +375,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "requested_model",
     "resolved_model",
     "key_label",
+    "key_name",
     "status",
     "error_kind",
     "error_message",
@@ -420,6 +429,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "requested_model": "Requested model",
     "resolved_model": "Resolved model",
     "key_label": "Key",
+    "key_name": "Key name",
     "status": "Status",
     "error_kind": "Error kind",
     "error_message": "Error message",
@@ -530,13 +540,35 @@ def request_detail_headers(columns: Iterable[str]) -> list[str]:
     return [_REQUEST_COLUMN_LABELS.get(column, column) for column in columns]
 
 
+def resolve_key_name(
+    row: Mapping[str, Any], key_names: Mapping[str, str] | None
+) -> str:
+    """Return the operator's name for this row's credential, or ``""``.
+
+    The whole naming feature reaches an export through this one line. The map
+    is built by the caller from the pools as they are configured *now* and is
+    keyed on the same masked label the row stores, so nothing in ``core`` has
+    to know that names exist, let alone where they live.
+    """
+
+    if not key_names:
+        return ""
+    label = row.get("key_label")
+    if not isinstance(label, str) or not label:
+        return ""
+    return key_names.get(label, "")
+
+
 def compute_request_detail_derived(
-    row: dict[str, Any], field_ids: Iterable[str]
+    row: dict[str, Any],
+    field_ids: Iterable[str],
+    key_names: Mapping[str, str] | None = None,
 ) -> None:
     """Mutate ``row`` in place, filling derived columns for selected fields."""
     selected = set(field_ids)
     if "ttft_lost_to_fallbacks_ms" not in row:
         row["ttft_lost_to_fallbacks_ms"] = _ttft_lost_to_fallbacks(row)
+    row["key_name"] = resolve_key_name(row, key_names)
     if "cache_hit" in selected and "cache_hit_rate" not in row:
         row["cache_hit_rate"] = _cache_hit_ratio(row)
 
@@ -748,6 +780,11 @@ _WEBSEARCH_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     "content_captured": ("content_captured",),
 }
 
+#: Computed per row rather than selected from SQL, exactly as the request and
+#: attempt scopes compute theirs: a web-search pool is named in the same file
+#: and joined by the same mask.
+_WEBSEARCH_ALWAYS_DERIVED: tuple[str, ...] = ("key_name",)
+
 _WEBSEARCH_COLUMN_FIELD: dict[str, str] = {}
 for _field, _columns in _WEBSEARCH_FIELD_COLUMNS.items():
     for _column in _columns:
@@ -758,6 +795,7 @@ _WEBSEARCH_COLUMN_ORDER: tuple[str, ...] = (
     "ts_iso",
     "provider",
     "key_label",
+    "key_name",
     "query",
     "status",
     "results_count",
@@ -778,6 +816,7 @@ _WEBSEARCH_COLUMN_LABELS: dict[str, str] = {
     "ts_iso": "Time",
     "provider": "Provider",
     "key_label": "Key",
+    "key_name": "Key name",
     "query": "Query",
     "status": "Status",
     "results_count": "Results",
@@ -824,11 +863,27 @@ _WEBSEARCH_DIMENSION_SQL: dict[str, str] = {
 }
 
 
+def websearch_detail_derived_columns() -> list[str]:
+    """Return the web-search detail columns computed per row, not selected."""
+
+    return list(_WEBSEARCH_ALWAYS_DERIVED)
+
+
+def compute_websearch_detail_derived(
+    row: dict[str, Any], key_names: Mapping[str, str] | None = None
+) -> None:
+    """Mutate ``row`` in place, filling the derived web-search columns."""
+
+    row["key_name"] = resolve_key_name(row, key_names)
+
+
 def websearch_detail_columns(field_ids: Iterable[str]) -> list[str]:
     selected = set(field_ids)
     chosen: list[str] = []
     chosen_set: set[str] = set()
     for column in _WEBSEARCH_COLUMN_ORDER:
+        if column in _WEBSEARCH_ALWAYS_DERIVED:
+            continue
         if column in _WEBSEARCH_ALWAYS_COLUMNS:
             if column not in chosen_set:
                 chosen.append(column)
@@ -961,7 +1016,7 @@ _ATTEMPT_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
 #: Derived on every attempt export: the two or three words that say what ended
 #: this attempt, assembled the same way the request modal's timeline assembles
 #: them so a download and the page it came from cannot disagree.
-_ATTEMPT_ALWAYS_DERIVED: tuple[str, ...] = ("ended_by",)
+_ATTEMPT_ALWAYS_DERIVED: tuple[str, ...] = ("ended_by", "key_name")
 
 _ATTEMPT_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
     # Why the router refused to try this model. A skipped attempt has no
@@ -994,6 +1049,7 @@ _ATTEMPT_COLUMN_ORDER: tuple[str, ...] = (
     "error_message",
     "bench_reason",
     "key_label",
+    "key_name",
     "key_index",
     "ttft_ms",
     "first_reasoning_ms",
@@ -1028,6 +1084,7 @@ _ATTEMPT_COLUMN_LABELS: dict[str, str] = {
     "error_message": "Failure or skip reason",
     "bench_reason": "Bench reason",
     "key_label": "Key",
+    "key_name": "Key name",
     "key_index": "Key index",
     "ttft_ms": "TTFT (ms)",
     "first_reasoning_ms": "First reasoning (ms)",
@@ -1096,7 +1153,9 @@ def attempt_detail_headers(columns: Iterable[str]) -> list[str]:
 
 
 def compute_attempt_detail_derived(
-    row: dict[str, Any], field_ids: Iterable[str]
+    row: dict[str, Any],
+    field_ids: Iterable[str],
+    key_names: Mapping[str, str] | None = None,
 ) -> None:
     """Mutate ``row`` in place, filling the derived attempt columns.
 
@@ -1114,6 +1173,7 @@ def compute_attempt_detail_derived(
     ladder = ladder if isinstance(ladder, dict) else None
 
     row["ended_by"] = _attempt_ended_by(row, bench, ladder)
+    row["key_name"] = resolve_key_name(row, key_names)
     if "failure" in selected:
         row["bench_reason"] = _bench_reason(bench)
     if "ladder" in selected:

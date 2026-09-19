@@ -282,3 +282,130 @@ def test_websearch_provider_test_unknown_provider_is_404(monkeypatch, tmp_path):
     response = client.post("/admin/api/websearch/providers/nope/test")
 
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------- key order ---
+# The third pool. Same ordered list, same failover meaning, same store: leaving
+# web search out would mean a rail on one card and none on the next.
+
+
+def _ws_rows(client):
+    listed = client.get("/admin/api/websearch/credentials/EXA_API_KEY/keys")
+    assert listed.status_code == 200, listed.text
+    return listed.json()["rows"]
+
+
+def test_websearch_key_listing_adds_rows_without_changing_keys(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    env_file = tmp_path / ".mcc" / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("EXA_API_KEY=k1-aaaa1111bbbb,k2-cccc2222dddd\n", "utf-8")
+    client = _local_client(create_test_app())
+
+    body = client.get("/admin/api/websearch/credentials/EXA_API_KEY/keys").json()
+
+    assert body["keys"] == [
+        {"index": 0, "key_label": "k1-a…bbbb"},
+        {"index": 1, "key_label": "k2-c…dddd"},
+    ]
+    assert [row["id"].startswith("sha256:") for row in body["rows"]] == [True, True]
+    assert [row["name"] for row in body["rows"]] == ["", ""]
+    assert (
+        "k1-aaaa1111bbbb"
+        not in client.get("/admin/api/websearch/credentials/EXA_API_KEY/keys").text
+    )
+
+
+def test_websearch_pool_reorder_rewrites_the_env_value(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    env_file = tmp_path / ".mcc" / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("EXA_API_KEY=k1-aaaa1111bbbb,k2-cccc2222dddd\n", "utf-8")
+    client = _local_client(create_test_app())
+    ids = [row["id"] for row in _ws_rows(client)]
+
+    response = client.put(
+        "/admin/api/websearch/credentials/EXA_API_KEY/keys/order",
+        json={"order": list(reversed(ids))},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "EXA_API_KEY=k2-cccc2222dddd,k1-aaaa1111bbbb" in _managed_env_text(tmp_path)
+    assert [row["id"] for row in _ws_rows(client)] == list(reversed(ids))
+
+
+def test_websearch_pool_reorder_rejects_a_non_permutation(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    env_file = tmp_path / ".mcc" / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("EXA_API_KEY=k1-aaaa1111bbbb,k2-cccc2222dddd\n", "utf-8")
+    client = _local_client(create_test_app())
+
+    response = client.put(
+        "/admin/api/websearch/credentials/EXA_API_KEY/keys/order",
+        json={"order": ["sha256:deadbeefdeadbeef", "sha256:0000000000000000"]},
+    )
+
+    assert response.status_code == 409
+    assert "EXA_API_KEY=k1-aaaa1111bbbb,k2-cccc2222dddd" in _managed_env_text(tmp_path)
+
+
+def test_websearch_key_can_be_named_and_the_name_survives_a_reorder(
+    monkeypatch, tmp_path
+):
+    _set_home(monkeypatch, tmp_path)
+    env_file = tmp_path / ".mcc" / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("EXA_API_KEY=k1-aaaa1111bbbb,k2-cccc2222dddd\n", "utf-8")
+    client = _local_client(create_test_app())
+    ids = [row["id"] for row in _ws_rows(client)]
+
+    named = client.put(
+        f"/admin/api/websearch/credentials/EXA_API_KEY/keys/{ids[1]}/name",
+        json={"name": "Backup search"},
+    )
+    client.put(
+        "/admin/api/websearch/credentials/EXA_API_KEY/keys/order",
+        json={"order": list(reversed(ids))},
+    )
+
+    assert named.status_code == 200
+    assert named.json()["name"] == "Backup search"
+    rows = _ws_rows(client)
+    assert rows[0]["id"] == ids[1]
+    assert rows[0]["name"] == "Backup search"
+    assert "Backup search" not in _managed_env_text(tmp_path)
+
+
+def test_websearch_key_delete_refuses_a_stale_id(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    env_file = tmp_path / ".mcc" / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("EXA_API_KEY=k1-aaaa1111bbbb,k2-cccc2222dddd\n", "utf-8")
+    client = _local_client(create_test_app())
+    ids = [row["id"] for row in _ws_rows(client)]
+    client.put(
+        "/admin/api/websearch/credentials/EXA_API_KEY/keys/order",
+        json={"order": list(reversed(ids))},
+    )
+
+    response = client.delete(
+        f"/admin/api/websearch/credentials/EXA_API_KEY/keys/0?id={ids[0]}"
+    )
+
+    assert response.status_code == 409
+    assert "EXA_API_KEY=k2-cccc2222dddd,k1-aaaa1111bbbb" in _managed_env_text(tmp_path)
+
+
+def test_a_websearch_key_can_be_named_as_it_is_added(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    client = _local_client(create_test_app())
+
+    response = client.post(
+        "/admin/api/websearch/credentials/EXA_API_KEY/keys",
+        json={"key": "k1-aaaa1111bbbb", "name": "Primary"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Primary"
+    assert _ws_rows(client)[0]["name"] == "Primary"

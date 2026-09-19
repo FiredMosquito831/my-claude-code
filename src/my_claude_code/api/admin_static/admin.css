@@ -714,6 +714,97 @@ textarea:focus-visible,
   text-overflow: ellipsis;
 }
 
+/* The pool is a rail: the order it is in is the order failover reads. The
+   grip copies .route-drag-grip so the two reorder gestures on this page feel
+   like one gesture, and the row stays flex-wrap so a narrow card still
+   degrades to two lines rather than clipping the Remove button. */
+.key-drag-grip {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: grab;
+}
+
+.key-drag-grip:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.key-drag-grip:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.key-name-input {
+  flex: 1 1 140px;
+  min-width: 96px;
+  max-width: 220px;
+  padding: 2px 8px;
+  font-size: 0.85rem;
+}
+
+.key-manager-move {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 0.8rem;
+}
+
+/* A Move button at either end of the rail is disabled rather than hidden, so
+   the row keeps its shape as a key travels up it. It has to LOOK disabled:
+   the ghost button's only other state cue is a hover border. */
+.key-manager-move:disabled,
+.key-drag-grip:disabled {
+  opacity: 0.4;
+}
+
+/* Takes the slack so the row reads as one group of controls rather than five
+   islands: the row is `justify-content: space-between`, and without a grower
+   the free space is dealt out between every pair of children. */
+.key-manager-row .key-manager-key {
+  flex: 1 1 auto;
+}
+
+.key-manager-list.is-dragging .key-manager-row,
+.cp-key-list.is-dragging .cp-key-row,
+.ws-key-list.is-dragging .ws-key-row {
+  cursor: grabbing;
+}
+
+.key-manager-row.is-drop-target,
+.cp-key-row.is-drop-target,
+.ws-key-row.is-drop-target {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+}
+
+.key-pool-status {
+  margin-bottom: var(--space-3);
+}
+
+.key-pool-undo {
+  flex-shrink: 0;
+}
+
+/* Narrower than the name box on a rendered row: it sits beside the key field
+   in the add form, which already carries the wider control. */
+.key-add-name {
+  flex: 0 1 160px;
+  max-width: 180px;
+}
+
+.cp-key-remove {
+  flex-shrink: 0;
+}
+
 .key-manager-remove {
   flex-shrink: 0;
   padding: 2px 8px;

@@ -7093,6 +7093,355 @@ function keyManagerForField(field, { idSuffix = "" } = {}) {
   return container;
 }
 
+/* ------------------------------------------------------------------ key pools
+   A credential pool is an ordered list, and the order *is* the failover order:
+   `failover` serves the lowest healthy slot and `single` serves slot 0 and
+   nothing else. So the pool is a rail, built the same way the route rail is --
+   pointer events rather than HTML5 drag-and-drop (see the note above
+   startRouteDrag), one mutate point, one `role="status"` line with one level
+   of Undo.
+
+   A key may also carry a name. The name is display only: it is stored in
+   ~/.mcc/credential_names.json against a hash of the secret, never sent
+   upstream, and never written to the request log. Everywhere a key is shown,
+   a named key reads as its name and keeps its masked label in the tooltip. */
+
+let keyPoolDrag = null;
+let keyPoolUndo = null;
+
+/** What to call this credential: its name if it has one, else its mask. */
+function credentialDisplay(name, label) {
+  const named = typeof name === "string" ? name.trim() : "";
+  return named || String(label || "");
+}
+
+/** Adopt the server's masked-label to name index. */
+function adoptKeyNames(names) {
+  state.keyNames = names && typeof names === "object" ? names : {};
+}
+
+/** Render "<name>" for a named key and "<mask>" for an unnamed one.
+ *
+ * A key nobody renamed reads exactly as it did before this release. */
+function keyReferenceText(label) {
+  return credentialDisplay(keyNameForLabel(label), label);
+}
+
+/** The name the server resolved for one masked label, or "". */
+function keyNameForLabel(label) {
+  if (!label || !state.keyNames) return "";
+  const name = state.keyNames[label];
+  return typeof name === "string" ? name : "";
+}
+
+/** Render a key reference as text: the name when there is one, else the mask.
+ *
+ * The mask never disappears -- it moves to the tooltip -- because "track them
+ * either by key or by name" was the whole ask. */
+function paintKeyReference(node, label, name) {
+  const resolved = name === undefined ? keyNameForLabel(label) : name;
+  const display = credentialDisplay(resolved, label);
+  node.textContent = display;
+  if (resolved && label && display !== label) {
+    node.title = label;
+    node.dataset.keyLabel = label;
+  }
+  return display;
+}
+
+/** The status line for one key panel, created on demand. */
+function keyPoolStatus(panel) {
+  let status = panel.querySelector(".route-status.key-pool-status");
+  if (!status) {
+    status = document.createElement("div");
+    status.className = "route-status key-pool-status";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.setAttribute("aria-atomic", "true");
+    status.hidden = true;
+    panel.insertBefore(status, panel.firstChild);
+  }
+  return status;
+}
+
+function announceKeyPool(panel, sentence, undoLabel, undoAction) {
+  const target = keyPoolStatus(panel);
+  target.textContent = "";
+  if (!sentence) {
+    target.hidden = true;
+    return;
+  }
+  target.hidden = false;
+  const lead = document.createElement("p");
+  lead.textContent = sentence;
+  target.appendChild(lead);
+  if (undoLabel && undoAction) {
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.className = "secondary-button route-status-button key-pool-undo";
+    undo.textContent = undoLabel;
+    undo.addEventListener("click", () => {
+      undo.disabled = true;
+      undoAction();
+    });
+    target.appendChild(undo);
+  }
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "secondary-button route-status-button";
+  dismiss.textContent = "Dismiss";
+  dismiss.addEventListener("click", () => {
+    target.textContent = "";
+    target.hidden = true;
+  });
+  target.appendChild(dismiss);
+}
+
+/* Why a reorder says something about health: it rides the same apply path an
+   add and a remove ride, which rebuilds the provider and therefore discards
+   that pool's counters and benches. That was already true; it was never said,
+   and a badge that silently went back to HEALTHY looked like a bug. */
+const KEY_POOL_HEALTH_NOTE =
+  "Reordering rebuilds this pool, so its health counters start again.";
+
+/** The ids of a panel's rows, top to bottom. */
+function keyPoolIds(list) {
+  return Array.from(list.querySelectorAll("[data-key-id]")).map(
+    (row) => row.dataset.keyId,
+  );
+}
+
+function keyPoolBusy(panel, busy) {
+  panel
+    .querySelectorAll("button, input")
+    .forEach((node) => {
+      if (busy) node.setAttribute("data-key-pool-busy", "1");
+      else node.removeAttribute("data-key-pool-busy");
+      node.disabled = busy ? true : node.dataset.keyPoolStaysDisabled === "1";
+    });
+}
+
+/** The one mutate point for an order change. Everything else calls this. */
+async function applyKeyOrder(pool, ids, sentence, previous) {
+  const panel = pool.panel;
+  keyPoolBusy(panel, true);
+  try {
+    await api(pool.orderUrl, {
+      method: "PUT",
+      body: JSON.stringify({ order: ids }),
+    });
+  } catch (error) {
+    keyPoolBusy(panel, false);
+    announceKeyPool(panel, `Could not reorder: ${error.message}`);
+    return false;
+  }
+  keyPoolUndo = previous ? { pool, ids: previous } : null;
+  const message = {
+    key: pool.stateKey,
+    sentence: `${sentence} ${KEY_POOL_HEALTH_NOTE}`,
+    undo: Boolean(previous),
+  };
+  // Said at once, and again after the reload. The reload replaces the panel,
+  // and a status line that only appeared afterwards would leave the two or
+  // three seconds an apply takes with nothing on screen saying what happened.
+  announceKeyPool(
+    panel,
+    message.sentence,
+    message.undo ? "Undo" : "",
+    message.undo ? undoKeyPoolOrder : null,
+  );
+  state.keyPoolMessage = message;
+  await pool.reload();
+  return true;
+}
+
+function undoKeyPoolOrder() {
+  if (!keyPoolUndo) return;
+  const { pool, ids } = keyPoolUndo;
+  keyPoolUndo = null;
+  applyKeyOrder(pool, ids, "Order restored.", null);
+}
+
+/** Move one row by an offset and apply, sharing the drag's mutate point. */
+function moveKeyRow(pool, list, id, offset) {
+  const ids = keyPoolIds(list);
+  const from = ids.indexOf(id);
+  const to = from + offset;
+  if (from < 0 || to < 0 || to >= ids.length) return;
+  const next = ids.slice();
+  next.splice(to, 0, next.splice(from, 1)[0]);
+  const row = list.querySelector(`[data-key-id="${cssEscape(id)}"]`);
+  const display = row ? row.dataset.keyDisplay || id : id;
+  applyKeyOrder(
+    pool,
+    next,
+    `Moved ${display} to position ${to + 1} of ${next.length}.`,
+    ids,
+  );
+}
+
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(value);
+  }
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
+}
+
+function startKeyDrag(pool, list, id, event) {
+  if (
+    event.pointerType === "touch" &&
+    !(event.target.classList && event.target.classList.contains("key-drag-grip"))
+  ) {
+    return;
+  }
+  if (typeof event.button === "number" && event.button !== 0) return;
+  keyPoolDrag = { pool, list, id, target: null, before: keyPoolIds(list) };
+  list.classList.add("is-dragging");
+}
+
+function continueKeyDrag(event) {
+  if (!keyPoolDrag) return;
+  const node = event.target.closest ? event.target.closest("[data-key-id]") : null;
+  if (!node || !keyPoolDrag.list.contains(node)) return;
+  keyPoolDrag.target = node.dataset.keyId;
+  keyPoolDrag.list
+    .querySelectorAll(".is-drop-target")
+    .forEach((row) => row.classList.remove("is-drop-target"));
+  node.classList.add("is-drop-target");
+}
+
+function endKeyDrag() {
+  const drag = keyPoolDrag;
+  keyPoolDrag = null;
+  if (!drag) return;
+  drag.list.classList.remove("is-dragging");
+  drag.list
+    .querySelectorAll(".is-drop-target")
+    .forEach((row) => row.classList.remove("is-drop-target"));
+  if (!drag.target || drag.target === drag.id) return;
+  const ids = drag.before;
+  const from = ids.indexOf(drag.id);
+  const to = ids.indexOf(drag.target);
+  if (from < 0 || to < 0) return;
+  const next = ids.slice();
+  next.splice(to, 0, next.splice(from, 1)[0]);
+  const row = drag.list.querySelector(`[data-key-id="${cssEscape(drag.id)}"]`);
+  const display = row ? row.dataset.keyDisplay || drag.id : drag.id;
+  applyKeyOrder(
+    drag.pool,
+    next,
+    `Moved ${display} to position ${to + 1} of ${next.length}.`,
+    ids,
+  );
+}
+
+/** Rename one key. Store only: no restart, no rebuild, no lost counters. */
+async function renameKeyInPool(pool, id, value, previous, input) {
+  const next = String(value || "").trim().slice(0, 60);
+  if (next === (previous || "")) return;
+  const panel = pool.panel;
+  try {
+    await api(pool.nameUrl(id), {
+      method: "PUT",
+      body: JSON.stringify({ name: next }),
+    });
+  } catch (error) {
+    if (input) input.value = previous || "";
+    announceKeyPool(panel, `Could not rename: ${error.message}`);
+    return;
+  }
+  const row = panel.querySelector(`[data-key-id="${cssEscape(id)}"]`);
+  const label = row ? row.dataset.keyLabel || "" : "";
+  if (row) {
+    row.dataset.keyDisplay = credentialDisplay(next, row.dataset.keyMasked || label);
+    const code = row.querySelector(".key-manager-key");
+    if (code) paintKeyReference(code, row.dataset.keyMasked || label, next);
+  }
+  announceKeyPool(
+    panel,
+    next
+      ? `Renamed to ${next}. The name is stored on this machine only.`
+      : "Name cleared.",
+    "Undo",
+    () => {
+      if (input) input.value = previous || "";
+      renameKeyInPool(pool, id, previous || "", next, input);
+    },
+  );
+}
+
+/** The controls that turn one key row into a rail row. */
+function keyRowControls(pool, list, row, entry, index, total) {
+  row.dataset.keyId = entry.id;
+  row.dataset.keyLabel = entry.key_label || "";
+  row.dataset.keyMasked = entry.masked || entry.key_label || "";
+  row.dataset.keyDisplay = credentialDisplay(entry.name, row.dataset.keyMasked);
+
+  const grip = document.createElement("button");
+  grip.type = "button";
+  grip.className = "key-drag-grip";
+  grip.textContent = "⠿";
+  grip.setAttribute("aria-label", `Reorder ${row.dataset.keyDisplay}`);
+  grip.disabled = pool.locked;
+  if (pool.locked) grip.dataset.keyPoolStaysDisabled = "1";
+  grip.addEventListener("pointerdown", (event) =>
+    startKeyDrag(pool, list, entry.id, event),
+  );
+  grip.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveKeyRow(pool, list, entry.id, -1);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveKeyRow(pool, list, entry.id, 1);
+    }
+  });
+
+  const name = document.createElement("input");
+  name.type = "text";
+  name.className = "key-name-input";
+  name.maxLength = 60;
+  name.placeholder = "Name this key";
+  name.value = entry.name || "";
+  name.setAttribute("aria-label", `Name for ${row.dataset.keyMasked}`);
+  name.disabled = pool.locked;
+  if (pool.locked) name.dataset.keyPoolStaysDisabled = "1";
+  let previousName = entry.name || "";
+  const commit = () => {
+    const wanted = name.value;
+    const before = previousName;
+    previousName = String(wanted || "").trim().slice(0, 60);
+    renameKeyInPool(pool, entry.id, wanted, before, name);
+  };
+  name.addEventListener("change", commit);
+  name.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    }
+  });
+
+  const up = document.createElement("button");
+  up.type = "button";
+  up.className = "ghost-button key-manager-move";
+  up.textContent = "Move up";
+  up.disabled = pool.locked || index === 0;
+  if (up.disabled) up.dataset.keyPoolStaysDisabled = "1";
+  up.setAttribute("aria-label", `Move ${row.dataset.keyDisplay} up`);
+  up.addEventListener("click", () => moveKeyRow(pool, list, entry.id, -1));
+
+  const down = document.createElement("button");
+  down.type = "button";
+  down.className = "ghost-button key-manager-move";
+  down.textContent = "Move down";
+  down.disabled = pool.locked || index === total - 1;
+  if (down.disabled) down.dataset.keyPoolStaysDisabled = "1";
+  down.setAttribute("aria-label", `Move ${row.dataset.keyDisplay} down`);
+  down.addEventListener("click", () => moveKeyRow(pool, list, entry.id, 1));
+
+  return { grip, name, up, down };
+}
+
 async function renderKeyManager(panel, field) {
   panel.textContent = "Loading keys...";
   let info;
@@ -7105,6 +7454,20 @@ async function renderKeyManager(panel, field) {
 
   panel.innerHTML = "";
 
+  const pool = {
+    stateKey: `env:${field.key}`,
+    panel,
+    locked: Boolean(info.locked),
+    orderUrl: `/admin/api/credentials/${field.key}/keys/order`,
+    nameUrl: (id) =>
+      `/admin/api/credentials/${field.key}/keys/${encodeURIComponent(id)}/name`,
+    // Just this panel, not the whole dashboard. A reorder changes the pool's
+    // order and nothing else on the page, and re-reading every card to redraw
+    // six rows would cost the two seconds a full Apply costs. Add and Remove
+    // still reload everything: they change the key count the card face shows.
+    reload: () => renderKeyManager(panel, field),
+  };
+
   const list = document.createElement("div");
   list.className = "key-manager-list";
   if (info.count === 0) {
@@ -7113,28 +7476,48 @@ async function renderKeyManager(panel, field) {
     empty.textContent = "No keys configured.";
     list.appendChild(empty);
   }
-  info.keys.forEach((masked, index) => {
+  // `rows` is the structured listing; `keys` is the pre-7.29.0 shape, still
+  // sent, and still all a dashboard from before this release needs.
+  const entries = Array.isArray(info.rows)
+    ? info.rows
+    : info.keys.map((masked, index) => ({
+        index,
+        id: "",
+        masked,
+        key_label: "",
+        name: "",
+        health: Array.isArray(info.health) ? info.health[index] : null,
+      }));
+  entries.forEach((entry, index) => {
     const row = document.createElement("div");
     row.className = "key-manager-row";
 
+    const controls = entry.id
+      ? keyRowControls(pool, list, row, entry, index, entries.length)
+      : null;
+    if (controls) row.append(controls.grip, controls.name);
+
     const label = document.createElement("code");
     label.className = "key-manager-key";
-    label.textContent = masked;
+    paintKeyReference(label, entry.masked, entry.name || "");
 
     row.appendChild(label);
 
-    const health = Array.isArray(info.health) ? info.health[index] : null;
+    const health = entry.health || null;
     if (health && health.state) {
       row.appendChild(keyHealthBadge(health));
     }
+
+    if (controls) row.append(controls.up, controls.down);
 
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ghost-button key-manager-remove";
     remove.textContent = "Remove";
     remove.disabled = info.locked;
+    if (info.locked) remove.dataset.keyPoolStaysDisabled = "1";
     remove.addEventListener("click", () =>
-      removeCredentialKey(field, index, remove),
+      removeCredentialKey(field, index, remove, entry.id),
     );
 
     row.appendChild(remove);
@@ -7145,7 +7528,22 @@ async function renderKeyManager(panel, field) {
     }
     list.appendChild(row);
   });
+  list.addEventListener("pointerover", continueKeyDrag);
   panel.appendChild(list);
+
+  const pending =
+    state.keyPoolMessage && state.keyPoolMessage.key === pool.stateKey
+      ? state.keyPoolMessage
+      : null;
+  state.keyPoolMessage = null;
+  if (pending) {
+    announceKeyPool(
+      panel,
+      pending.sentence,
+      pending.undo ? "Undo" : "",
+      pending.undo ? undoKeyPoolOrder : null,
+    );
+  }
 
   const addRow = document.createElement("div");
   addRow.className = "key-manager-add";
@@ -7157,19 +7555,32 @@ async function renderKeyManager(panel, field) {
     : "Paste a key, or several separated by commas";
   input.disabled = info.locked;
 
+  // Optional, and honoured only for a single key: a paste of five keys has
+  // one name box and no way to say which key it meant.
+  const addName = document.createElement("input");
+  addName.type = "text";
+  addName.className = "key-name-input key-add-name";
+  addName.maxLength = 60;
+  addName.placeholder = "Name (optional)";
+  addName.setAttribute("aria-label", "Name for the key being added");
+  addName.disabled = info.locked;
+
   const add = document.createElement("button");
   add.type = "button";
   add.className = "secondary-button";
   add.textContent = "Add key";
   add.disabled = info.locked;
 
-  const submit = () => addCredentialKey(field, input, add);
+  const submit = () => addCredentialKey(field, input, add, addName);
   add.addEventListener("click", submit);
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter") submit();
   });
+  addName.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") submit();
+  });
 
-  addRow.append(input, add);
+  addRow.append(input, addName, add);
   panel.appendChild(addRow);
 
   if (info.locked) {
@@ -7256,21 +7667,23 @@ function modelBenchList(benches) {
 async function reloadAndReopenKeyManager(field, message) {
   state.reopenKeyManager = field.key;
   await load();
-  showMessage(message, "ok");
+  if (message) showMessage(message, "ok");
 }
 
-async function addCredentialKey(field, input, button) {
+async function addCredentialKey(field, input, button, nameInput) {
   const value = input.value.trim();
   if (!value) return;
+  const name = nameInput ? nameInput.value.trim().slice(0, 60) : "";
   button.disabled = true;
   try {
     const result = await api(`/admin/api/credentials/${field.key}/keys`, {
       method: "POST",
-      body: JSON.stringify({ key: value }),
+      body: JSON.stringify({ key: value, name }),
     });
+    const called = result.name ? ` Called ${result.name}.` : "";
     await reloadAndReopenKeyManager(
       field,
-      `Added key ${result.added} (${result.count} configured). Applied.`,
+      `Added key ${result.added} (${result.count} configured). Applied.${called}`,
     );
   } catch (error) {
     button.disabled = false;
@@ -7278,11 +7691,15 @@ async function addCredentialKey(field, input, button) {
   }
 }
 
-async function removeCredentialKey(field, index, button) {
+async function removeCredentialKey(field, index, button, id) {
   button.disabled = true;
+  // The id the row was rendered with rides along: if another tab reordered
+  // this pool underneath us, the server refuses rather than removing whatever
+  // now sits at this position.
+  const guard = id ? `?id=${encodeURIComponent(id)}` : "";
   try {
     const result = await api(
-      `/admin/api/credentials/${field.key}/keys/${index}`,
+      `/admin/api/credentials/${field.key}/keys/${index}${guard}`,
       { method: "DELETE" },
     );
     await reloadAndReopenKeyManager(
@@ -9469,12 +9886,34 @@ async function loadKeyManager(provider, panel) {
     empty.textContent = "No keys configured.";
     list.appendChild(empty);
   }
-  result.keys.forEach((entry) => {
+  const pool = {
+    stateKey: `websearch:${provider.envKey}`,
+    panel,
+    locked: Boolean(result.locked),
+    orderUrl: `/admin/api/websearch/credentials/${provider.envKey}/keys/order`,
+    nameUrl: (id) =>
+      `/admin/api/websearch/credentials/${provider.envKey}/keys/${encodeURIComponent(id)}/name`,
+    reload: () => loadKeyManager(provider, panel),
+  };
+  // `rows` carries the id and the name; `keys` is the pre-7.29.0 shape and
+  // is still what the add and delete responses return.
+  const wsEntries = Array.isArray(result.rows) ? result.rows : result.keys;
+  wsEntries.forEach((entry, index) => {
     const row = document.createElement("div");
     row.className = "ws-key-row";
     const label = document.createElement("span");
     label.className = "ws-key-label";
-    label.textContent = entry.key_label || "(empty)";
+    const controls = entry.id
+      ? keyRowControls(
+          pool,
+          list,
+          row,
+          { ...entry, masked: entry.masked || entry.key_label || "(empty)" },
+          index,
+          wsEntries.length,
+        )
+      : null;
+    paintKeyReference(label, entry.key_label || "(empty)", entry.name || "");
     const health = healthByIndex.get(entry.index);
     const healthEl = document.createElement("span");
     healthEl.className = `status-pill ${keyHealthClass(health)}`;
@@ -9485,11 +9924,28 @@ async function loadKeyManager(provider, panel) {
     remove.textContent = "Delete";
     remove.disabled = result.locked;
     remove.addEventListener("click", () =>
-      deleteWebSearchKey(provider, entry.index, panel, remove),
+      deleteWebSearchKey(provider, entry.index, panel, remove, entry.id),
     );
-    row.append(label, healthEl, remove);
+    if (controls) row.append(controls.grip, controls.name);
+    row.append(label, healthEl);
+    if (controls) row.append(controls.up, controls.down);
+    row.append(remove);
     list.appendChild(row);
   });
+  list.addEventListener("pointerover", continueKeyDrag);
+  const pendingWs =
+    state.keyPoolMessage && state.keyPoolMessage.key === pool.stateKey
+      ? state.keyPoolMessage
+      : null;
+  state.keyPoolMessage = null;
+  if (pendingWs) {
+    announceKeyPool(
+      panel,
+      pendingWs.sentence,
+      pendingWs.undo ? "Undo" : "",
+      pendingWs.undo ? undoKeyPoolOrder : null,
+    );
+  }
   const form = document.createElement("div");
   form.className = "ws-key-add";
   const input = document.createElement("input");
@@ -9502,8 +9958,17 @@ async function loadKeyManager(provider, panel) {
   add.className = "secondary-button";
   add.textContent = "Add key";
   add.disabled = result.locked;
-  add.addEventListener("click", () => addWebSearchKey(provider, input, panel, add));
-  form.append(input, add);
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "key-name-input key-add-name";
+  nameInput.maxLength = 60;
+  nameInput.placeholder = "Name (optional)";
+  nameInput.setAttribute("aria-label", "Name for the key being added");
+  nameInput.disabled = result.locked;
+  add.addEventListener("click", () =>
+    addWebSearchKey(provider, input, panel, add, nameInput),
+  );
+  form.append(input, nameInput, add);
   panel.appendChild(form);
   if (result.locked) {
     const note = document.createElement("div");
@@ -9513,17 +9978,18 @@ async function loadKeyManager(provider, panel) {
   }
 }
 
-async function addWebSearchKey(provider, input, panel, button) {
+async function addWebSearchKey(provider, input, panel, button, nameInput) {
   const key = input.value.trim();
   if (!key) {
     showMessage("Enter a key first", "warn");
     return;
   }
+  const name = nameInput ? nameInput.value.trim().slice(0, 60) : "";
   button.disabled = true;
   try {
     const result = await api(
       `/admin/api/websearch/credentials/${provider.envKey}/keys`,
-      { method: "POST", body: JSON.stringify({ key }) },
+      { method: "POST", body: JSON.stringify({ key, name }) },
     );
     if (!result.applied) {
       showMessage((result.errors || []).join("; ") || "Key was not applied", "error");
@@ -9539,11 +10005,12 @@ async function addWebSearchKey(provider, input, panel, button) {
   }
 }
 
-async function deleteWebSearchKey(provider, index, panel, button) {
+async function deleteWebSearchKey(provider, index, panel, button, id) {
   button.disabled = true;
+  const guard = id ? `?id=${encodeURIComponent(id)}` : "";
   try {
     const result = await api(
-      `/admin/api/websearch/credentials/${provider.envKey}/keys/${index}`,
+      `/admin/api/websearch/credentials/${provider.envKey}/keys/${index}${guard}`,
       { method: "DELETE" },
     );
     if (!result.applied) {
@@ -10653,10 +11120,12 @@ function customProviderCard(provider) {
     label.textContent = masked;
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "ghost-button";
+    remove.className = "ghost-button cp-key-remove";
     remove.textContent = "Remove";
+    // The id arrives with the key listing a moment later; until it does the
+    // remove behaves exactly as it always has.
     remove.addEventListener("click", () =>
-      removeCustomProviderKey(provider, index, remove),
+      removeCustomProviderKey(provider, index, remove, row.dataset.keyId),
     );
     row.append(label, remove);
     keyList.appendChild(row);
@@ -10672,12 +11141,22 @@ function customProviderCard(provider) {
   addButton.type = "button";
   addButton.className = "secondary-button";
   addButton.textContent = "Add key";
-  const submitKey = () => addCustomProviderKey(provider, keyInput, addButton);
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "key-name-input key-add-name";
+  nameInput.maxLength = 60;
+  nameInput.placeholder = "Name (optional)";
+  nameInput.setAttribute("aria-label", "Name for the key being added");
+  const submitKey = () =>
+    addCustomProviderKey(provider, keyInput, addButton, nameInput);
   addButton.addEventListener("click", submitKey);
   keyInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") submitKey();
   });
-  addRow.append(keyInput, addButton);
+  nameInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") submitKey();
+  });
+  addRow.append(keyInput, nameInput, addButton);
   keyList.appendChild(addRow);
 
   const actions = document.createElement("div");
@@ -10860,6 +11339,30 @@ async function loadCustomProviderKeyHealth(providerId) {
   const card = document.querySelector(`[data-custom-provider="${providerId}"]`);
   if (!card) return;
   const rows = card.querySelectorAll(".cp-key-row");
+  const list = card.querySelector(".cp-key-list");
+  const entries = Array.isArray(info.rows) ? info.rows : [];
+  const pool = {
+    stateKey: `custom:${providerId}`,
+    panel: card,
+    locked: false,
+    orderUrl: `/admin/api/custom-providers/${providerId}/keys/order`,
+    nameUrl: (id) =>
+      `/admin/api/custom-providers/${providerId}/keys/${encodeURIComponent(id)}/name`,
+    reload: () => loadCustomProviders(),
+  };
+  entries.forEach((entry, index) => {
+    const row = rows[index];
+    if (!row) return;
+    const controls = keyRowControls(pool, list, row, entry, index, entries.length);
+    row.insertBefore(controls.name, row.firstChild);
+    row.insertBefore(controls.grip, row.firstChild);
+    const label = row.querySelector(".cp-key-label");
+    if (label) paintKeyReference(label, entry.masked, entry.name || "");
+    const remove = row.querySelector(".cp-key-remove");
+    if (remove) row.insertBefore(controls.up, remove);
+    if (remove) row.insertBefore(controls.down, remove);
+  });
+  if (list) list.addEventListener("pointerover", continueKeyDrag);
   (info.health || []).forEach((health, index) => {
     const row = rows[index];
     if (!row || !health) return;
@@ -10870,6 +11373,19 @@ async function loadCustomProviderKeyHealth(providerId) {
     if (benched.length) slot.appendChild(modelBenchList(benched));
     row.insertBefore(slot, row.lastElementChild);
   });
+  const pending =
+    state.keyPoolMessage && state.keyPoolMessage.key === pool.stateKey
+      ? state.keyPoolMessage
+      : null;
+  state.keyPoolMessage = null;
+  if (pending) {
+    announceKeyPool(
+      card,
+      pending.sentence,
+      pending.undo ? "Undo" : "",
+      pending.undo ? undoKeyPoolOrder : null,
+    );
+  }
 }
 
 async function probeCustomProviderDialect(provider, button) {
@@ -11014,19 +11530,24 @@ async function refreshCustomProviderModels(provider, button) {
   }
 }
 
-async function addCustomProviderKey(provider, input, button) {
+async function addCustomProviderKey(provider, input, button, nameInput) {
   const key = input.value.trim();
   if (!key) {
     showMessage("Enter a key first", "warn");
     return;
   }
+  const name = nameInput ? nameInput.value.trim().slice(0, 60) : "";
   button.disabled = true;
   try {
     const result = await api(
       `/admin/api/custom-providers/${provider.provider_id}/keys`,
-      { method: "POST", body: JSON.stringify({ api_key: key }) },
+      { method: "POST", body: JSON.stringify({ api_key: key, name }) },
     );
-    showMessage(`Added key ${result.added} (${result.key_count} configured).`, "ok");
+    const called = result.name ? ` Called ${result.name}.` : "";
+    showMessage(
+      `Added key ${result.added} (${result.key_count} configured).${called}`,
+      "ok",
+    );
     await loadCustomProviders();
   } catch (error) {
     showMessage(`Could not add key: ${error.message}`, "error");
@@ -11035,11 +11556,12 @@ async function addCustomProviderKey(provider, input, button) {
   }
 }
 
-async function removeCustomProviderKey(provider, index, button) {
+async function removeCustomProviderKey(provider, index, button, id) {
   button.disabled = true;
+  const guard = id ? `?id=${encodeURIComponent(id)}` : "";
   try {
     const result = await api(
-      `/admin/api/custom-providers/${provider.provider_id}/keys/${index}`,
+      `/admin/api/custom-providers/${provider.provider_id}/keys/${index}${guard}`,
       { method: "DELETE" },
     );
     showMessage(`Removed key ${result.removed} (${result.key_count} remaining).`, "ok");
@@ -14627,6 +15149,10 @@ async function loadRequestsView() {
     stats.harness_labels && typeof stats.harness_labels === "object"
       ? stats.harness_labels
       : {};
+  // The one name index, resolved by the server from the pools as they are
+  // configured now. Every key rendered below reads through it, so a rename is
+  // consistent across the table, the modal, the ladder and the breakdown.
+  adoptKeyNames(list.key_names || stats.key_names);
   reqState.lastStats = stats;
   renderRequestStatsCards(stats);
   renderRequestRetentionNote(stats);
@@ -14704,6 +15230,7 @@ async function loadRequestDeferredStats(loadId, params) {
       stats.harness_labels && typeof stats.harness_labels === "object"
         ? stats.harness_labels
         : {};
+    adoptKeyNames(stats.key_names);
     reqState.lastStats = stats;
     renderRequestStatsCards(stats);
     renderRequestRetentionNote(stats);
@@ -15645,6 +16172,13 @@ function renderRequestHarnessBreakdown(rows) {
 /* The aggregates below are SQL COALESCE(...,0) sums, so their zeros are
    measured zeros and Number(x || 0) is honest here. avg_duration_ms is the
    one genuinely NULL-able column and uses the dash convention. */
+/** The breakdown still groups by masked label; it just reads it out loud. */
+function keyBreakdownLabel(key) {
+  if (!key) return "unknown";
+  const name = keyNameForLabel(key);
+  return name ? `${name} (${key})` : key;
+}
+
 function renderRequestKeyBreakdown(rows) {
   const container = byId("reqKeyBreakdown");
   container.innerHTML = "";
@@ -15664,7 +16198,7 @@ function renderRequestKeyBreakdown(rows) {
         const requests = Number(row.requests || 0);
         const errors = Number(row.errors || 0);
         return [
-          row.key || "unknown",
+          keyBreakdownLabel(row.key),
           formatAnalyticsNumber(requests),
           requests ? `${((errors / requests) * 100).toFixed(1)}%` : "0%",
           formatAnalyticsNumber(uncachedInputTokens(row)),
@@ -15945,7 +16479,9 @@ function renderRequestsTable(rows) {
     // say what MCC did with it.
     tr.appendChild(buildHarnessCell(row));
     addText(providerDisplayLabel(row.provider, row.optimization));
-    addText(row.key_label || "");
+    // A named key reads as its name; the mask stays in the tooltip so the
+    // row can still be matched to a key by sight.
+    addKeyReference(tr, row.key_label || "");
     tr.appendChild(buildModelCell(row));
     addText(row.status);
     tr.appendChild(buildTurnShapeCell(row));
@@ -16276,7 +16812,7 @@ async function openRequestDetail(requestId) {
     ["Vision model", formatVisionModel(row)],
     ["Status", row.status],
     ["Error", row.error_kind ? `${row.error_kind}: ${row.error_message || ""}` : ""],
-    ["Key", row.key_label],
+    ["Key", keyReferenceText(row.key_label)],
     ["Total input", formatAnalyticsNumber(totalInputTokens(row))],
     ["Input (uncached)", formatOptionalNumber(row.tokens_in)],
     ["Cached input", formatOptionalNumber(row.cache_read_tokens)],
@@ -16661,13 +17197,26 @@ function ladderHeadline(attempt) {
   return parts.join(" · ");
 }
 
+/** Append the "Key" cell: the name when there is one, else the mask. */
+function addKeyReference(tr, label) {
+  const td = document.createElement("td");
+  const name = keyNameForLabel(label);
+  td.textContent = credentialDisplay(name, label);
+  if (name && label) td.title = label;
+  tr.appendChild(td);
+}
+
 /** One line per try: what it met, on which key, and what it cost. */
 function ladderTryText(entry, position) {
   const parts = [`#${position}`];
   if (entry.key_index === -1) {
     parts.push("no key available");
   } else if (entry.key_index != null) {
-    parts.push(entry.key_label ? `key ${entry.key_index} ${entry.key_label}` : `key ${entry.key_index}`);
+    parts.push(
+      entry.key_label
+        ? `key ${entry.key_index} ${keyReferenceText(entry.key_label)}`
+        : `key ${entry.key_index}`,
+    );
   }
   const what = entry.status != null ? String(entry.status) : entry.kind || entry.error_kind;
   // A try with no status and no exception name is a wait, not a knock.
@@ -16738,7 +17287,7 @@ function ladderDecisionText(decision) {
     decision.key_index === -1
       ? "no key available"
       : decision.key_label
-        ? `key ${decision.key_index} ${decision.key_label}`
+        ? `key ${decision.key_index} ${keyReferenceText(decision.key_label)}`
         : `key ${decision.key_index}`;
   // A (key, model) bench is a different fact from a whole-key bench, and
   // the reader needs to see which one happened.
@@ -17144,7 +17693,9 @@ function renderRequestChain(row) {
       credential.textContent = "no key available";
       credential.title = "Every credential in the pool was benched; this attempt never reached a key.";
     } else if (attempt.key_label) {
-      credential.textContent = attempt.key_label;
+      const name = keyNameForLabel(attempt.key_label);
+      credential.textContent = credentialDisplay(name, attempt.key_label);
+      if (name) credential.title = attempt.key_label;
     } else {
       credential.textContent = NOT_MEASURED;
       credential.title = "No credential was recorded for this attempt.";
@@ -22310,6 +22861,15 @@ function initRouteRails() {
   const agents = byId("view-coding_agents");
   if (agents) agents.addEventListener("pointerover", continueRouteDrag);
   document.addEventListener("pointerup", endRouteDrag);
+  // The key rails live on other views entirely, so they get their own
+  // document-level release rather than sharing the route one.
+  document.addEventListener("pointerup", endKeyDrag);
+  document.addEventListener("pointercancel", () => {
+    if (keyPoolDrag) {
+      keyPoolDrag.target = null;
+      endKeyDrag();
+    }
+  });
   document.addEventListener("pointercancel", () => {
     if (state.routeDrag) endRouteDrag(null);
   });
