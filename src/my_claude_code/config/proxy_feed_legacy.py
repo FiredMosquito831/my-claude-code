@@ -20,10 +20,10 @@ picker. A fresh install passes through this module without it producing
 anything, because a fresh install has no built-in ids to convert.
 
 **When this can be deleted.** After two or three releases, once no store in
-circulation can still hold a built-in id -- **7.33.0** is the earliest sensible
+circulation can still hold a built-in id -- **7.34.0** is the earliest sensible
 point. It used to say 7.21.0, then 7.22.0, then 7.23.0, then 7.24.0, then
 7.25.0, then 7.26.0, then 7.27.0, then 7.28.0, then 7.29.0, then 7.30.0, then
-7.31.0, then 7.32.0; all twelve releases went to
+7.31.0, then 7.32.0, then 7.33.0; all thirteen releases went to
 something else (the
 proxy fetch pass, the 429 cooldown controls, the Responses surface learning what
 a host refuses, putting every remaining proxy tunable on the dashboard,
@@ -33,7 +33,8 @@ loop while it works, OpenCode's free tier learning to read the tool
 catalogue, key pools you can reorder and name, several OAuth accounts per
 provider, then Pause, Resume and Refresh models letting go of the event
 loop, then the last of the 7.24.0 audit's tunables reaching the
-dashboard), and deleting this in any of them would
+dashboard, then a hand-configured host being able to declare that it serves
+Responses or Messages), and deleting this in any of them would
 have bundled an unrelated removal onto it. One concern per release,
 so the note moves rather than the deletion happening quietly beside something
 else. Deleting it is: remove this module,

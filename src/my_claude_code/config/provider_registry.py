@@ -44,6 +44,24 @@ CUSTOM_CREDENTIAL_ROTATION_POLICIES = frozenset(
     {"single", "round_robin", "least_used", "failover"}
 )
 
+#: The wire APIs a hand-configured host may declare that it serves, in the
+#: order MCC tries them. The spellings are
+#: :class:`~my_claude_code.application.model_metadata.ResponseSurface`'s own
+#: values, written out here as strings because this module is config-local and
+#: must not import ``application``; a contract test asserts the two lists stay
+#: equal so a surface cannot be added on one side alone.
+CUSTOM_PROVIDER_SURFACES: tuple[str, ...] = (
+    "chat_completions",
+    "responses",
+    "messages",
+)
+
+#: What an entry that says nothing serves. Exactly what every custom provider
+#: has spoken since 6.25.0, so an entry written by an older build -- or by an
+#: operator who never opens the control -- keeps sending the same bytes to the
+#: same endpoint.
+DEFAULT_CUSTOM_PROVIDER_SURFACES: tuple[str, ...] = ("chat_completions",)
+
 _UNSET: object = object()
 
 
@@ -72,6 +90,19 @@ class CustomProviderEntry:
     # ("401"). Never the key, never the response body.
     reasoning_probe_status: str = ""
     reasoning_probed_at: str = ""
+    # Which wire APIs this host serves, in the order MCC should try them.
+    # Defaults to Chat Completions alone -- what every custom provider has
+    # spoken since 6.25.0 -- and an entry that keeps the default is routed
+    # exactly as it was before this field existed: no surface resolution, no
+    # extra row in its request log, the same body on the same endpoint.
+    #
+    # Declared rather than probed because only the operator knows what their
+    # gateway fronts: a vLLM deployment serves one API, a corporate gateway may
+    # serve three, and asking every custom host three questions at startup
+    # would be a guess paid for on every install. What MCC *measures* is which
+    # of the declared surfaces a given model answers on -- that is the 6.74.0
+    # probe, and it can only choose between doors the operator said exist.
+    surfaces: tuple[str, ...] = DEFAULT_CUSTOM_PROVIDER_SURFACES
     # ``(MODEL_*_PAUSED key, model ref)`` pairs that disabling this provider
     # paused. Recorded rather than recomputed so re-enabling lifts its own
     # pauses and leaves a hand-paused ref exactly where the operator put it.
@@ -110,6 +141,58 @@ def _effort_enum_from_payload(value: object) -> tuple[str, ...] | None:
         return None
     words = normalize_effort_words(value)
     return words or None
+
+
+def _surfaces_from_payload(value: object) -> tuple[str, ...]:
+    """Read back a declared surface list, falling back to today's default.
+
+    Anything unrecognised is dropped rather than refused: a file written by a
+    newer build may name a surface this one cannot speak, and the entry's keys,
+    credentials and routes are all still good. An empty result -- a hand-edited
+    ``[]``, or a list of nothing but unknown words -- reads back as the default
+    rather than as "serves nothing", because a provider that serves no surface
+    is not a configuration anyone means to write.
+    """
+
+    if not isinstance(value, list):
+        return DEFAULT_CUSTOM_PROVIDER_SURFACES
+    named = tuple(
+        surface
+        for surface in CUSTOM_PROVIDER_SURFACES
+        if any(item == surface for item in value)
+    )
+    return named or DEFAULT_CUSTOM_PROVIDER_SURFACES
+
+
+def normalize_custom_surfaces(value: object) -> tuple[str, ...]:
+    """Validate a surface list an operator submitted, in canonical order.
+
+    Raises rather than repairing, because this one reaches the registry from a
+    form: a word the build does not know is a mistake worth showing, where the
+    same word on disk is a file from a newer release.
+    """
+
+    if value is None:
+        return DEFAULT_CUSTOM_PROVIDER_SURFACES
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Custom provider surfaces must be a list")
+    unknown = sorted(
+        str(item) for item in value if item not in CUSTOM_PROVIDER_SURFACES
+    )
+    if unknown:
+        raise ValueError(
+            f"Unknown wire surface(s): {unknown}. "
+            f"Valid: {list(CUSTOM_PROVIDER_SURFACES)}"
+        )
+    named = tuple(
+        surface for surface in CUSTOM_PROVIDER_SURFACES if surface in tuple(value)
+    )
+    if not named:
+        raise ValueError(
+            "Custom provider must serve at least one wire surface; "
+            f"valid: {list(CUSTOM_PROVIDER_SURFACES)}"
+        )
+    return named
 
 
 def _paused_pair(item: object) -> tuple[str, str] | None:
@@ -225,6 +308,7 @@ class ProviderRegistry:
             reasoning_field_ignored=bool(item.get("reasoning_field_ignored", False)),
             reasoning_probe_status=_text_or_empty(item.get("reasoning_probe_status")),
             reasoning_probed_at=_text_or_empty(item.get("reasoning_probed_at")),
+            surfaces=_surfaces_from_payload(item.get("surfaces")),
             auto_paused_refs=_paused_pairs_from_payload(item.get("auto_paused_refs")),
         )
 
@@ -251,6 +335,10 @@ class ProviderRegistry:
                     "reasoning_field_ignored": entry.reasoning_field_ignored,
                     "reasoning_probe_status": entry.reasoning_probe_status,
                     "reasoning_probed_at": entry.reasoning_probed_at,
+                    # Always written, including the default, so the file says
+                    # what this install serves rather than leaving a reader to
+                    # infer it. An older build ignores the key entirely.
+                    "surfaces": list(entry.surfaces),
                     "auto_paused_refs": [
                         [paused_key, model_ref]
                         for paused_key, model_ref in entry.auto_paused_refs
@@ -325,6 +413,7 @@ class ProviderRegistry:
             default_base_url=entry.base_url,
             dynamic=True,
             reasoning_effort_enum=entry.reasoning_effort_enum,
+            response_surfaces=entry.surfaces,
         )
 
     # ---------------------------------------------------------------- mutations
@@ -337,6 +426,7 @@ class ProviderRegistry:
         credential_rotation: str = DEFAULT_CUSTOM_CREDENTIAL_ROTATION,
         proxy: str | None = None,
         enabled: bool = True,
+        surfaces: tuple[str, ...] | list[str] | None = None,
     ) -> CustomProviderEntry:
         """Register a new custom provider; the id is slugged from the name."""
         name = display_name.strip()
@@ -359,6 +449,7 @@ class ProviderRegistry:
                 f"Unknown credential_rotation: {credential_rotation!r}. "
                 f"Valid: {sorted(CUSTOM_CREDENTIAL_ROTATION_POLICIES)}"
             )
+        declared = normalize_custom_surfaces(surfaces)
         with self._lock:
             self._ensure_loaded()
             provider_id = self._unique_provider_id_locked(name)
@@ -373,6 +464,7 @@ class ProviderRegistry:
                 else None,
                 enabled=enabled,
                 added_at=_utc_now_iso(),
+                surfaces=declared,
             )
             self._custom[provider_id] = entry
             self._persist_locked()
@@ -403,6 +495,7 @@ class ProviderRegistry:
         reasoning_field_ignored: bool | None = None,
         reasoning_probe_status: str | None = None,
         reasoning_probed_at: str | None = None,
+        surfaces: tuple[str, ...] | list[str] | None = None,
         auto_paused_refs: tuple[tuple[str, str], ...] | None = None,
     ) -> CustomProviderEntry:
         """Update fields of one custom provider and return the new entry."""
@@ -470,6 +563,11 @@ class ProviderRegistry:
                     current.reasoning_probed_at
                     if reasoning_probed_at is None
                     else reasoning_probed_at
+                ),
+                surfaces=(
+                    current.surfaces
+                    if surfaces is None
+                    else normalize_custom_surfaces(surfaces)
                 ),
                 auto_paused_refs=(
                     current.auto_paused_refs

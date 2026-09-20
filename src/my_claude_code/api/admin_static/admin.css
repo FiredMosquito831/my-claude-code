@@ -3179,6 +3179,55 @@ details.turn-pane > summary:focus-visible {
   font-size: 12px;
 }
 
+.cp-surfaces {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ``.field label`` is ``space-between`` -- it exists to push a source badge to
+   the right of a field's name -- and a tick box plus its words is the one
+   label in the form that is not a name and a badge. Overridden rather than
+   restructured: the group is a ``.field`` so it inherits the form's spacing,
+   and the alignment is the only thing about it that differs. */
+.field label.cp-surface {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.cp-surface input {
+  flex: 0 0 auto;
+}
+
+.models-surface-override {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: var(--space-3);
+}
+
+.models-surface-override .models-subhead {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.models-surface-select {
+  min-width: 260px;
+}
+
+.models-surface-save {
+  white-space: nowrap;
+}
+
+.cp-edit {
+  white-space: nowrap;
+}
+
 .cp-key-list {
   display: flex;
   flex-direction: column;

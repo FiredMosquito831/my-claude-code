@@ -29,6 +29,7 @@ from my_claude_code.api.credential_display import credential_name_index
 from my_claude_code.api.docs_content import available_documents
 from my_claude_code.api.docs_render import render_document
 from my_claude_code.api.model_admin import (
+    INHERIT_SENTINEL,
     MODEL_SCOPE,
     MODEL_VISIBILITY_BULK_LIMIT,
     PROVIDER_SCOPE,
@@ -41,8 +42,10 @@ from my_claude_code.api.model_admin import (
     migrate_exact_patterns_to_globs,
     model_refs_by_provider,
     render_patterns,
+    speakable_surfaces,
     visibility_payload,
     with_override_row,
+    with_surface_override_row,
 )
 from my_claude_code.api.model_catalog import settings_model_visibility
 from my_claude_code.api.models_page_cache import (
@@ -415,6 +418,18 @@ class ModelOverridePayload(BaseModel):
     scope: str
     key: str
     updates: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelSurfacePayload(BaseModel):
+    """Which endpoint one model is pinned to, as the wire surface row submits it.
+
+    ``surface`` empty -- or the inherit sentinel the rest of the editor speaks
+    -- means "unpin", and the resolver goes back to what it proved, then what
+    the vendor published, then the default.
+    """
+
+    key: str
+    surface: str = ""
 
 
 class RtkUpdatePayload(BaseModel):
@@ -1969,6 +1984,47 @@ async def save_model_override_row(
         scope=payload.scope,
         key=payload.key,
         updates=payload.updates,
+    )
+    await asyncio.to_thread(save_model_overrides, updated)
+    return await asyncio.to_thread(_models_page_payload, services)
+
+
+@router.post("/admin/api/model-admin/surface")
+async def save_model_surface_override(
+    payload: ModelSurfacePayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Pin one model to one of the surfaces its host declares, or unpin it.
+
+    A route of its own rather than a key in the parameter grid, because the
+    validation is one the grid could not do: whether ``responses`` is a legal
+    answer for this model depends on what its *provider* declares it serves --
+    a profile's declaration for a shipped provider, the registry entry's for a
+    hand-configured one. A surface outside that list is refused here rather
+    than written and then quietly resolved to ``unservable``.
+    """
+
+    require_loopback_admin(request)
+    key = payload.key.strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="key must not be empty")
+    provider_id = key.split("/", 1)[0]
+    surface = payload.surface.strip()
+    if surface == INHERIT_SENTINEL:
+        surface = ""
+    if surface:
+        offered = [item.value for item in speakable_surfaces(provider_id)]
+        if surface not in offered:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{provider_id} does not declare the {surface!r} surface. "
+                    f"It serves: {offered or ['chat_completions']}."
+                ),
+            )
+    updated = with_surface_override_row(
+        current_model_overrides(), key=key, surface=surface
     )
     await asyncio.to_thread(save_model_overrides, updated)
     return await asyncio.to_thread(_models_page_payload, services)

@@ -23,6 +23,7 @@ from my_claude_code.providers.openai_chat import (
     GENERIC_OPENAI_PROFILE,
     OPENAI_CHAT_PROFILES,
     create_openai_chat_provider,
+    profile_with_declared_surfaces,
     profile_with_learned_dialect,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
@@ -424,6 +425,10 @@ def _create_leaf_provider(
             profile = profile_with_learned_dialect(
                 profile, descriptor.reasoning_effort_enum
             )
+        # The same seam for the *endpoints* this host serves. A declaration of
+        # Chat Completions alone -- the default, and every entry written before
+        # 7.33.0 -- leaves the profile exactly as it was.
+        profile = profile_with_declared_surfaces(profile, descriptor.response_surfaces)
         return create_openai_chat_provider(
             descriptor.provider_id, config, rate_limiter, profile=profile
         )

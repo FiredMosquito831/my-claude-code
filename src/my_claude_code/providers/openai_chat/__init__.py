@@ -12,6 +12,7 @@ from .complaint import (
     sampling_parameter_evidence,
     upstream_complaint,
 )
+from .declared_surfaces import declared_surfaces, profile_with_declared_surfaces
 from .extra_body import (
     validate_extra_body_does_not_override_canonical_fields,
     validate_extra_body_does_not_override_reasoning_fields,
@@ -44,6 +45,7 @@ from .request_policy import OpenAIChatRequestPolicy, build_openai_chat_request_b
 from .response_surface import (
     NPM_SURFACES,
     catalogue_surface,
+    declared_surfaces_for,
     resolve_response_surface,
 )
 from .usage import usage_int
@@ -94,6 +96,8 @@ __all__ = [
     "catalogue_surface",
     "complaint_evidence_snippet",
     "create_openai_chat_provider",
+    "declared_surfaces",
+    "declared_surfaces_for",
     "free_quota_reset",
     "identity_headers_for_body",
     "identity_wire_record",
@@ -103,6 +107,7 @@ __all__ = [
     "matched_token",
     "observe_identity_enforcement",
     "openai_v1_base_url",
+    "profile_with_declared_surfaces",
     "profile_with_learned_dialect",
     "resolve_response_surface",
     "sampling_parameter_evidence",

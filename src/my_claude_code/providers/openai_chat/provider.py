@@ -351,6 +351,10 @@ class OpenAIChatProvider(BaseProvider):
                 rate_limiter=self._rate_limiter,
                 api_key_provider=self._api_key_provider,
                 tool_catalogue_for=self.tool_catalogue_for,
+                # The same memory the other two doors write to, so a ceiling
+                # this host stated on one surface is applied on all three and
+                # shows up once on the Models page.
+                memory=self._recovery_memory,
             )
             self._messages_transport = transport
         return transport
