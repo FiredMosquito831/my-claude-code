@@ -145,10 +145,11 @@ def test_the_settings_views_still_render_their_sections(rendered) -> None:
     views = rendered["views"]
     # Providers carries four static cards in index.html -- version, Deployment
     # (added with the desktop server-ownership modes), other servers on this
-    # machine, and the token-optimizer card -- plus the one settings section
-    # this fixture gives it fields for (`desktop`). `providers` and `runtime`
-    # have no fields here, so they render nothing.
-    assert views["providers"]["sections"] == 5
+    # machine, and the token-optimizer card -- plus the settings sections this
+    # fixture gives it fields for: `desktop`, and since 7.34.0 the `providers`
+    # section itself, which now has the two OpenCode Zen fields that hold the
+    # free-tier credential toggle. `runtime` still has no fields here.
+    assert views["providers"]["sections"] == 6
     assert views["limits"]["sections"] == 7
     assert views["limits"]["fieldInputs"] >= 1
     assert views["requests"]["sections"] == 1
@@ -351,7 +352,9 @@ def test_registering_the_docs_view_did_not_break_the_other_views(rendered) -> No
 
     expected = {
         "get_started": 1,
-        "providers": 5,
+        # 6 since 7.34.0: the fixture now supplies the OpenCode Zen card, so
+        # the `providers` settings section renders beside the static four.
+        "providers": 6,
         "claude": 3,
         "requests": 1,
         "optimizer": 6,
@@ -5058,3 +5061,39 @@ def test_the_loop_lag_readout_states_what_each_gesture_cost(rendered) -> None:
     assert [row["lag"] for row in rows] == ["2755 ms", "84 ms"]
     assert [row["took"] for row in rows] == ["4700 ms", "121 ms"]
     assert [row["overBudget"] for row in rows] == [True, False]
+
+
+# ------------------------------------------- OpenCode Zen free-tier credential
+# 7.34.0: free Zen models go out on OpenCode's shared `public` credential, so
+# the operator's own key stops paying for them. That is a decision about whose
+# allowance is spent, so it has to be visible on the card whose key it is about
+# -- not in a release note and not only in `.env`.
+
+
+def test_the_opencode_card_offers_the_free_tier_credential_choice(rendered) -> None:
+    control = rendered["fields"]["opencodeCredential"]
+
+    assert control is not None, "the toggle must render on the OpenCode Zen card"
+    assert control["tag"] == "select"
+    assert control["cardHasApiKey"], "the switch belongs beside the key it spends"
+    # Never chosen is its own state: an untouched form saves nothing.
+    assert control["value"] == ""
+    assert control["original"] == ""
+    assert control["optionValues"] == ["", "public", "key"]
+    # The dashboard writes "Default (<the default option's own label>)", so
+    # what proves the default is `public` is that option's wording, not the
+    # bare word -- the labels are written for an operator, not for a parser.
+    assert control["optionLabels"][0].startswith("Default (")
+    assert "shared anonymous credential" in control["optionLabels"][0]
+    assert control["optionLabels"][2] == "Use my own key for everything"
+
+
+def test_the_opencode_credential_toggle_explains_the_shared_bucket(rendered) -> None:
+    """The 7.29.1 contract, and the one caveat that cannot be left implicit."""
+
+    help_text = rendered["fields"]["opencodeCredential"]["help"]
+
+    assert "metered per credential" in help_text
+    assert "shared anonymous credential" in help_text
+    assert "your own key's free allowance is not spent" in help_text
+    assert "Paid Zen models always use your key" in help_text

@@ -8,6 +8,7 @@ from my_claude_code.config.constants import (
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
     OPENCODE_CLIENT_RUNTIME_DEFAULT,
     OPENCODE_CLIENT_VERSION_DEFAULT,
+    OPENCODE_FREE_TIER_CREDENTIAL_DEFAULT,
     OPENCODE_FREE_TIER_MODELS_DEFAULT,
 )
 from my_claude_code.config.provider_catalog import (
@@ -544,6 +545,34 @@ def _opencode_identity_field_specs() -> tuple[dict[str, Any], ...]:
                 "in -free or :free, and models the catalogue prices at zero here, need no "
                 "entry. Set OpenCode Client Identity to mcc to turn the translation off "
                 "entirely."
+            ),
+        },
+        {
+            "key": "OPENCODE_FREE_TIER_CREDENTIAL",
+            "label": "OpenCode free-tier credential",
+            "section_id": "providers",
+            "provider": "opencode",
+            "settings_attr": "opencode_free_tier_credential",
+            "field_type": "select",
+            "default": OPENCODE_FREE_TIER_CREDENTIAL_DEFAULT,
+            "options": (
+                ConfigOptionSpec(
+                    "public", "Use OpenCode's shared anonymous credential (default)"
+                ),
+                ConfigOptionSpec("key", "Use my own key for everything"),
+            ),
+            "description": (
+                "Which credential free OpenCode Zen models are fetched with. Free models are "
+                "metered per credential, not per address: on 2026-09-20 the same machine was "
+                "refused 429 on this operator's key and served 200 on OpenCode's shared one "
+                "inside the same minute. public -- the default -- uses OpenCode's shared "
+                "anonymous credential exactly as the OpenCode CLI does when no key is "
+                "configured, so your own key's free allowance is not spent and neither are "
+                "the hourly model-discovery sweep or the Test button; key uses your key for "
+                "everything, as releases before 7.34.0 did. Paid Zen models always use your "
+                "key, OpenCode Go is never affected, and the shared credential is shared -- "
+                "its allowance can be exhausted by anyone. Scope is the same free-tier scope "
+                "as OpenCode free-tier models. Applied on Save; no restart."
             ),
         },
     )

@@ -29,6 +29,7 @@ from my_claude_code.providers.openai_chat import (
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .config import build_provider_config
+from .opencode_credentials import build_opencode_provider
 from .proxy_leg import ProxiedLegRateLimiter
 from .proxy_rotating import ProxyRotatingProvider, ProxyRotationState
 from .rotating import RotatingProvider
@@ -558,7 +559,33 @@ def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
     if descriptor is None:
         raise UnknownProviderError.for_provider(provider_id, descriptors)
 
+    # The one fan-out that is not about credentials the operator typed. Zen's
+    # free tier is metered per key and the vendor's own client spends a shared
+    # anonymous one; ``build_opencode_provider`` returns ``None`` -- and every
+    # line below runs exactly as it did in 7.33.0 -- for every other provider
+    # and whenever the operator opted out of it.
+    opencode = build_opencode_provider(
+        descriptor, settings, _create_credential_pool, _create_single_provider
+    )
+    if opencode is not None:
+        return opencode
+
     config = build_provider_config(descriptor, settings)
+    return _create_credential_pool(descriptor, config, settings)
+
+
+def _create_credential_pool(
+    descriptor: ProviderDescriptor,
+    config: ProviderConfig,
+    settings: Settings,
+) -> BaseProvider:
+    """One provider over the credentials its configuration names.
+
+    Lifted out of :func:`create_provider` unchanged so the OpenCode split can
+    build its paid side from the very same lines, rather than from a second
+    copy of them that could drift.
+    """
+    provider_id = descriptor.provider_id
     oauth_pool = _oauth_account_pool(provider_id)
     if oauth_pool is not None:
         return oauth_pool(descriptor, config, settings)

@@ -23,6 +23,10 @@ from .learned_dialect import (
     learned_named_effort_reasoning,
     profile_with_learned_dialect,
 )
+from .opencode_catalogue import (
+    OPENCODE_FREE_TIER_CATALOGUE,
+    model_is_zero_cost,
+)
 from .opencode_identity import (
     OPENCODE_CLIENT_IDENTITY,
     identity_wire_record,
@@ -84,6 +88,7 @@ __all__ = [
     "OPENAI_CHAT_PROFILES",
     "OPENAI_STANDARD_REASONING",
     "OPENCODE_CLIENT_IDENTITY",
+    "OPENCODE_FREE_TIER_CATALOGUE",
     "ChatTemplateReasoning",
     "ClientIdentity",
     "NamedEffortReasoning",
@@ -105,6 +110,7 @@ __all__ = [
     "learned_effort_values",
     "learned_named_effort_reasoning",
     "matched_token",
+    "model_is_zero_cost",
     "observe_identity_enforcement",
     "openai_v1_base_url",
     "profile_with_declared_surfaces",

@@ -288,7 +288,6 @@ from my_claude_code.providers.oauth_account_store import ORIGIN_CLAUDE_CODE
 from my_claude_code.providers.oauth_names import (
     account_name as oauth_account_name,
 )
-from my_claude_code.providers.runtime.rotating import RotatingProvider
 from my_claude_code.websearch.errors import WebSearchError
 from my_claude_code.websearch.registry import search_with_logging
 
@@ -868,8 +867,14 @@ async def list_credential_keys(
             async with await services.requests.acquire() as lease:
                 if lease.is_provider_cached(provider_id):
                     provider = lease.resolve_provider(provider_id)
-                    if isinstance(provider, RotatingProvider):
-                        snapshots = provider.key_health()
+                    # Duck-typed rather than ``isinstance(RotatingProvider)``
+                    # since 7.34.0: OpenCode Zen's provider is a split over
+                    # two credentials that publishes the operator pool's rows
+                    # through the same method, and an isinstance check would
+                    # have silently dropped that card's health badges.
+                    reporter = getattr(provider, "key_health", None)
+                    if callable(reporter):
+                        snapshots = reporter()
                         for i in range(min(len(keys), len(snapshots))):
                             health[i] = snapshots[i]
         except Exception:
