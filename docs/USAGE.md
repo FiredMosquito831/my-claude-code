@@ -2739,6 +2739,65 @@ requests asking the host directly, and records *"checked <date>, no difference
 observed"* when it cannot tell — which is the honest answer, not a clean bill
 of health.
 
+### The free tier is metered per key, so free models use OpenCode's own
+
+**New in 7.34.0.** The Zen free-usage limit is keyed on the **API key**, not
+on the address you call from. Measured on 2026-09-20 from one machine behind
+one exit IP, inside seventy seconds:
+
+| UTC | who | credential | answer |
+| --- | --- | --- | --- |
+| 00:43:49 | MCC | the operator's key | `429 FreeUsageLimitError` |
+| 00:44:16 | the real `opencode` CLI | `public` | **200**, 29 807 tokens, cost 0 |
+| 00:44:56 | MCC | the operator's key | `429 FreeUsageLimitError` |
+
+One machine, one address, two credentials, two outcomes. Rotating exit IPs,
+new session ids and different headers cannot lift that 429 — MCC's five
+identity headers were already byte-identical to the client's, and the `200` in
+the middle of that table proves the headers were never the difference.
+
+`public` is not a trick: it is the vendor's own anonymous tenant. With no
+credential configured, `opencode-ai@1.18.31` sends the literal key `public`
+and deletes every model whose `cost.input` is non-zero — the rule appears
+twice in the shipped bundle. An unauthenticated OpenCode CLI *is* a `public`
+client.
+
+So from 7.34.0, **free Zen models go out as `Bearer public` by default** and
+your own key's free allowance is not spent on them. Concretely:
+
+- scope is the same free-tier scope as the tool-name translation above — a
+  `-free`/`:free` tag, anything in `OPENCODE_FREE_TIER_MODELS`, or a model the
+  catalogue prices at zero here. One predicate, so the credential and the tool
+  names can never disagree;
+- **paid Zen models always use your key**, byte-identical to 7.33.0. `public`
+  cannot buy them and your key is what makes them reachable at all;
+- **OpenCode Go is untouched.** It is a paid subscription endpoint;
+- `public` is its own credential slot. A 429 on the shared bucket benches the
+  shared bucket, your key's health is not touched, and the request log,
+  Analytics and the CSV exports show `public` for those attempts rather than
+  naming a key that was never spent;
+- **the housekeeping stops spending your key too.** The hourly model-discovery
+  sweep and the **Test** button name no model at all, so under the default
+  they ask anonymously. One 429 an hour for two and a half days was that sweep
+  re-confirming a limit on a key it had already exhausted. If the anonymous
+  listing fails or comes back empty, MCC asks again with your key, so a pruned
+  or refused anonymous catalogue can never remove a paid model from
+  **Models**. **Probe capabilities** picks per model: a free model is probed
+  anonymously, a paid one on your key;
+- with **no `OPENCODE_API_KEY` at all**, free Zen models now work. A paid one
+  is refused with the same sentence it was refused with before.
+
+**The caveat, stated plainly: `public` is a *shared* bucket.** Anyone can
+exhaust it, and its scope — per address, per device, global — is not known;
+all that was measured is that it was not exhausted from this machine at that
+minute. If your own key still has free allowance and you would rather spend
+it, set `OPENCODE_FREE_TIER_CREDENTIAL="key"` on the OpenCode Zen card, which
+restores 7.33.0 exactly.
+
+`OPENCODE_CLIENT_IDENTITY` is a different switch and stays one: it chooses
+what MCC claims to *be*, not whose allowance it spends. Setting it to `mcc`
+does not move the credential.
+
 ### OpenCode Zen serves different models on different endpoints
 
 **New in 6.74.0.** OpenCode Zen is not one API. It is a front door onto four,
@@ -4835,6 +4894,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `OPENCODE_CLIENT_AI_SDK_VERSION` | *(empty)* | **New in 7.28.0.** The middle segment of the user-agent the real OpenCode client sends — `ai-sdk/provider-utils/<this>`. Its own HTTP transport appends it, so unlike the release above it cannot be read off this machine; empty sends the version captured from the client this release was built against. Only used when `OPENCODE_CLIENT_IDENTITY` is `opencode`. |
 | `OPENCODE_CLIENT_RUNTIME` | *(empty)* | **New in 7.28.0.** The last user-agent segment, written `<runtime>/<version>` and sent as `runtime/<that>` — `bun/1.3.14` on the captured client. Empty sends the captured value. Only used when `OPENCODE_CLIENT_IDENTITY` is `opencode`. |
 | `OPENCODE_FREE_TIER_MODELS` | `big-pickle` | **New in 7.28.0.** Comma-separated Zen/Go model ids that are on the free tier without saying so in their name. On these — and on any id ending `-free` or `:free`, and any model the catalogue prices at zero here — MCC sends OpenCode's own tool-name spellings and translates the model's calls back, because that tier answers `403` to any other catalogue. Every other model keeps the request it has always been sent. See [The free tier now reads your tool names](#the-free-tier-now-reads-your-tool-names). |
+| `OPENCODE_FREE_TIER_CREDENTIAL` | `public` | **New in 7.34.0.** Which credential free OpenCode Zen models are fetched with. The free-usage limit is metered per credential, not per address. `public` uses OpenCode's shared anonymous credential exactly as the OpenCode CLI does when no key is configured, so your own key's free allowance is not spent — and neither are the hourly model-discovery sweep or the **Test** button. `key` uses your key for everything, as 7.33.0 did. Paid Zen models always use your key; OpenCode Go is never affected; the shared credential is shared. Same scope as `OPENCODE_FREE_TIER_MODELS`. See [The free tier is metered per key](#the-free-tier-is-metered-per-key-so-free-models-use-opencodes-own). |
 | `SERVER_STALE_SERVER_ACTION` | `report` | **New in 6.72.2.** What the server does about other My Claude Code servers it finds at start. `report` names each one in the server log — pid, session, recorded port, start time, last heartbeat, and the files it holds open — and stops nothing. `stop` also stops the ones this install can prove are finished: a heartbeat silent past `SERVER_STALE_SESSION_SECONDS` whose recorded port is now served by a different MCC, or a launcher whose server process is gone. A server is never stopped merely for owning no listening socket. |
 | `SERVER_STALE_SESSION_SECONDS` | `900` | **New in 6.72.2.** How long another server's heartbeat must be silent before the word "stale" is available for it. A running server checks in every 30 s, so the default is thirty missed beats. Silence alone never stops anything. Range 60–86400. |
 | `SERVER_PORT_TAKEOVER` | `always` | **New in 6.59.0.** What happens when the server starts and its port is already held. `always` stops the holder and takes the port; a holder that is not MCC is named in one `WARNING` line first. Setting it to mcc-only stops only processes this install can identify as its own; never is the pre-6.59.0 behaviour — name the holder and refuse to start. Identification is by process, never by the HTTP answer. |

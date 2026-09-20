@@ -441,6 +441,42 @@ const FIELDS = [
   },
 ];
 
+/* The OpenCode Zen card. Two fields, because the credential toggle is only
+   meaningful beside the key it is an alternative to spending: 7.34.0 sends
+   free Zen models on OpenCode's shared `public` credential, and the operator
+   has to be able to find the switch and read why. */
+FIELDS.push(
+  {
+    key: "OPENCODE_API_KEY",
+    label: "OpenCode Zen API Key",
+    section: "providers",
+    provider: "opencode",
+    type: "text",
+    value: "",
+    default: "",
+    description: "The key paid OpenCode Zen models are fetched with.",
+  },
+  {
+    key: "OPENCODE_FREE_TIER_CREDENTIAL",
+    label: "OpenCode free-tier credential",
+    section: "providers",
+    provider: "opencode",
+    type: "select",
+    value: "",
+    default: "public",
+    options: [
+      { value: "public", label: "Use OpenCode's shared anonymous credential (default)" },
+      { value: "key", label: "Use my own key for everything" },
+    ],
+    description:
+      "Which credential free OpenCode Zen models are fetched with. Free models are " +
+      "metered per credential, not per address. public -- the default -- uses " +
+      "OpenCode's shared anonymous credential exactly as the OpenCode CLI does when " +
+      "no key is configured, so your own key's free allowance is not spent; key uses " +
+      "your key for everything. Paid Zen models always use your key.",
+  },
+);
+
 const SECTIONS = [
   { id: "providers", label: "Providers", description: "" },
   { id: "models", label: "Model Routing", description: "Where each tier sends." },
@@ -3995,6 +4031,42 @@ const metaTextIn = (key) => {
   return meta ? meta.textContent.trim() : null;
 };
 
+/* The OpenCode Zen card's credential toggle. Read off the Providers view
+   rather than Limits, because the whole point of 7.34.0's switch is that an
+   operator finds it on the card whose key it decides the spending of. */
+const providersView = doc.querySelector('.admin-view[data-view="providers"]');
+const opencodeCard = providersView
+  ? Array.from(providersView.querySelectorAll(".provider-card")).find((card) =>
+      card.querySelector('[data-key="OPENCODE_FREE_TIER_CREDENTIAL"]'),
+    )
+  : null;
+const opencodeCredentialControl = opencodeCard
+  ? opencodeCard.querySelector('select[data-key="OPENCODE_FREE_TIER_CREDENTIAL"]')
+  : null;
+const opencodeCredentialRow = opencodeCard
+  ? opencodeCard.querySelector('.field[data-key="OPENCODE_FREE_TIER_CREDENTIAL"]')
+  : null;
+const opencodeCredential = opencodeCredentialControl
+  ? {
+      tag: opencodeCredentialControl.tagName.toLowerCase(),
+      value: opencodeCredentialControl.value,
+      original: opencodeCredentialControl.dataset.original,
+      optionValues: Array.from(opencodeCredentialControl.options).map(
+        (item) => item.value,
+      ),
+      optionLabels: Array.from(opencodeCredentialControl.options).map((item) =>
+        item.textContent.trim(),
+      ),
+      help: opencodeCredentialRow
+        ? (opencodeCredentialRow.textContent || "").replace(/\s+/g, " ").trim()
+        : "",
+      // The key it is an alternative to spending is on the same card.
+      cardHasApiKey: Boolean(
+        opencodeCard.querySelector('[data-key="OPENCODE_API_KEY"]'),
+      ),
+    }
+  : null;
+
 const unsetSelect = describeControl(controlIn("FALLBACK_BENCH_ENABLED"));
 const setSelect = describeControl(controlIn("LOG_LEVEL"));
 const booleanControl = describeControl(
@@ -7452,6 +7524,7 @@ console.log(
         resetButtons,
         dirtyOnLoad,
         useDefault,
+        opencodeCredential,
       },
       requestCards,
       requestDetail,

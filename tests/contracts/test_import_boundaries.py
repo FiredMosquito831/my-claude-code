@@ -199,13 +199,11 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "Owner: admin dashboard ChatGPT OAuth browser login API. "
         "Reason: admin routes expose browser-based OAuth login endpoints backed by the provider utility."
     ),
-    (
-        "my_claude_code.api.admin_routes",
-        "my_claude_code.providers.runtime.rotating",
-    ): (
-        "Owner: admin dashboard credential key health API. "
-        "Reason: admin routes read live per-key health from cached rotating providers."
-    ),
+    # 7.34.0 removed the built-in-provider half of this pair: OpenCode Zen is
+    # now a split over two credentials that publishes the operator pool's rows
+    # through the same ``key_health`` method, so ``admin_routes`` duck-types
+    # the reporter instead of naming one wrapper class. The custom-provider
+    # listing below still holds a real ``isinstance``.
     (
         "my_claude_code.api.admin_custom_routes",
         "my_claude_code.providers.runtime.rotating",

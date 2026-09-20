@@ -1089,3 +1089,21 @@ OPENCODE_CLIENT_RUNTIME_DEFAULT = ""
 # constant: the vendor's free roster changes without a release, and so should
 # this.
 OPENCODE_FREE_TIER_MODELS_DEFAULT = "big-pickle"
+
+# Which credential a *free* Zen model is fetched with.
+#
+# OpenCode's free-usage limiter is keyed on the API key, not on the source
+# address: on 2026-09-20 one machine, one exit IP and one minute produced a
+# 429 on the operator's key at 00:43:49Z, a 200 on `public` at 00:44:16Z and
+# another 429 on the operator's key at 00:44:56Z
+# (`specs/INVESTIGATION-ZEN-429-FREEUSAGELIMIT.md`). The official client with
+# no credential configured sends the literal key `public` and prunes every
+# priced model -- `apiKey:"public"` appears twice in `opencode-ai@1.18.31` --
+# so `public` is the vendor's own anonymous tenant rather than a trick.
+#
+# `public` (the default) spends that shared anonymous bucket on free models
+# and leaves the operator's own free allowance unspent; `key` is the opt-out
+# for an operator who would rather spend their own. Paid models are never
+# affected: `public` cannot buy them, and the operator's key is what makes
+# them reachable at all.
+OPENCODE_FREE_TIER_CREDENTIAL_DEFAULT = "public"

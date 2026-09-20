@@ -87,6 +87,10 @@ from my_claude_code.providers.runtime.discovery import cache_enriched_model_info
 from my_claude_code.providers.runtime.identity_probe import (
     probe_client_identity,
 )
+from my_claude_code.providers.runtime.opencode_credentials import (
+    probe_credential,
+    probe_fallback_credential,
+)
 from my_claude_code.providers.runtime.reasoning_probe import (
     ReasoningProbeOutcome,
     probe_reasoning_dialect,
@@ -751,8 +755,17 @@ class ApplicationRuntime:
         results: list[dict[str, Any]] = []
         unprobeable = ""
         for model in chosen:
+            # Per model, not per press: a probe of a free Zen model is exactly
+            # the request its free tier meters, so under
+            # ``OPENCODE_FREE_TIER_CREDENTIAL=public`` it is spent out of the
+            # shared bucket. Identity for every other provider and every paid
+            # model, so nothing else here moves.
             outcomes = await probe_model_capabilities(
-                base_url, api_key, model, probes=probes, proxy=proxy
+                base_url,
+                probe_credential(provider_id, model, api_key),
+                model,
+                probes=probes,
+                proxy=proxy,
             )
             for outcome in outcomes:
                 results.append(outcome.as_payload())
@@ -821,7 +834,9 @@ class ApplicationRuntime:
             configured = getattr(self.settings, descriptor.base_url_attr, "")
             if isinstance(configured, str) and configured.strip():
                 base_url = configured.strip()
-        credential = provider_credential(descriptor, self.settings)
+        credential = probe_fallback_credential(
+            provider_id, provider_credential(descriptor, self.settings)
+        )
         if not base_url or not credential:
             return None
         proxy = None

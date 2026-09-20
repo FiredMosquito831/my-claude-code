@@ -92,6 +92,7 @@ from .constants import (
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
     OPENCODE_CLIENT_RUNTIME_DEFAULT,
     OPENCODE_CLIENT_VERSION_DEFAULT,
+    OPENCODE_FREE_TIER_CREDENTIAL_DEFAULT,
     OPENCODE_FREE_TIER_MODELS_DEFAULT,
     PROVIDER_RATE_LIMIT_DEFAULT,
     PROVIDER_RATE_WINDOW_DEFAULT,
@@ -443,6 +444,14 @@ class Settings(BaseSettings):
     opencode_free_tier_models: str = Field(
         default=OPENCODE_FREE_TIER_MODELS_DEFAULT,
         validation_alias="OPENCODE_FREE_TIER_MODELS",
+    )
+    # Which credential those same free models are fetched with. The limiter is
+    # per key, so this is the difference between spending the operator's free
+    # allowance and spending OpenCode's shared anonymous one. See
+    # ``providers/runtime/opencode_credentials.py``.
+    opencode_free_tier_credential: str = Field(
+        default=OPENCODE_FREE_TIER_CREDENTIAL_DEFAULT,
+        validation_alias="OPENCODE_FREE_TIER_CREDENTIAL",
     )
 
     # ==================== Vercel AI Gateway ====================
@@ -2762,6 +2771,22 @@ def configured_opencode_free_tier_models() -> tuple[str, ...]:
     raw = str(getattr(settings, "opencode_free_tier_models", "") or "")
     names = (part.strip().lower() for part in raw.split(","))
     return tuple(dict.fromkeys(name for name in names if name))
+
+
+def configured_opencode_free_tier_credential() -> str:
+    """Which credential free Zen models are fetched with, normalised.
+
+    Read per request rather than captured when the provider is built, so the
+    dashboard's Save moves the very next free-model request instead of waiting
+    for a restart. Anything that is not the opt-out reads as the default, for
+    the reason a typo in a rotation policy reads as ``single``: an unusable
+    value must never be the difference between a served request and a 429.
+    """
+
+    settings = get_settings()
+    raw = str(getattr(settings, "opencode_free_tier_credential", "") or "")
+    mode = raw.strip().lower()
+    return mode if mode in ("public", "key") else OPENCODE_FREE_TIER_CREDENTIAL_DEFAULT
 
 
 def configured_default_max_output_tokens() -> int | None:

@@ -481,6 +481,12 @@ def test_create_provider_instantiates_each_builtin():
         provider_rate_limit=7,
         provider_rate_window=11,
         provider_max_concurrency=3,
+        # This test is about one class per catalogue entry and one limiter
+        # each. Since 7.34.0 OpenCode Zen's default builds a *second*
+        # credential slot on `public` -- the point of that feature, with its
+        # own file of tests -- so the opt-out is asked for here, which is the
+        # line every release before it took.
+        opencode_free_tier_credential="key",
         sambanova_api_key="test_sambanova_key",
         azure_openai_api_key="test_azure_key",
         # Azure ships no default endpoint: the host names the user's own
