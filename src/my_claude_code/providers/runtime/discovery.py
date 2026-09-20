@@ -23,6 +23,7 @@ from my_claude_code.providers.recovery import (
 from . import models_dev
 from .config import provider_credential
 from .model_cache import ProviderModelCache
+from .opencode_credentials import credential_or_public
 from .validation import provider_query_failure_reason
 
 ProviderResolver = Callable[[str], BaseProvider]
@@ -152,7 +153,17 @@ def model_cache_provider_ids_for_settings(
     settings: Settings,
     connected_provider_ids: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
-    """Return providers whose model metadata is valid for these settings."""
+    """Return providers whose model metadata is valid for these settings.
+
+    "Has a credential" is asked through
+    :func:`~.opencode_credentials.credential_or_public`, which is identity for
+    every provider but one. Zen with no key used to answer "no credential" and
+    was therefore swept for nothing and listed as nothing -- an empty
+    catalogue on the Models page of exactly the install 7.34.0 gave free
+    models to. It has had a credential since that release: the anonymous
+    ``public`` slot, which ``GET /zen/v1/models`` answers with the full
+    catalogue, and one that costs the operator's key nothing to spend.
+    """
     descriptors = get_provider_registry().all_descriptors()
     available = {
         provider_id
@@ -160,7 +171,11 @@ def model_cache_provider_ids_for_settings(
         if descriptor.local
         or (
             descriptor.credential_env is not None
-            and provider_credential(descriptor, settings).strip()
+            and credential_or_public(
+                provider_id,
+                provider_credential(descriptor, settings).strip(),
+                settings,
+            )
         )
         or (descriptor.dynamic and descriptor.static_credential)
     } | set(connected_provider_ids)

@@ -187,6 +187,17 @@ class OpenAIChatProfile:
     # which surface each model is on. Empty means "nothing published", and the
     # resolver falls through to the learned facts and then to the default.
     surface_registry_provider: str = ""
+    # Which of ``response_surfaces`` to knock on when *nobody* has an opinion:
+    # no operator override, no learned fact, and no registry entry -- which is
+    # every model on a fresh or keyless install, because its models.dev cache
+    # is not fetched yet, and on any install whose fetch failed.
+    #
+    # ``None`` -- every profile but the two OpenCode ones -- keeps
+    # ``response_surface.DEFAULT_SURFACE`` and the ``DEFAULT`` source, byte for
+    # byte what a single-surface provider has always resolved to. A profile
+    # that fronts several APIs states its own answer here instead of inheriting
+    # a constant written for providers that have no choice to make.
+    no_information_surface: ResponseSurface | None = None
     # The longest tool name this host's *Responses* endpoint accepts. ``None``
     # -- every profile but the two OpenCode ones -- sends names as the client
     # wrote them on that surface. OpenCode Zen refuses a name past 64
@@ -373,6 +384,20 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             ResponseSurface.MESSAGES,
         ),
         surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
+        # Chat Completions, and the count is the argument. Of the seven free
+        # models Zen lists today five are on Chat Completions and two -- both
+        # Muse Spark contributor models -- are on Responses, and the paid
+        # roster spreads across all three. So the first door to knock on when
+        # nobody knows is the one most of the roster is behind, and the two
+        # that are not are carried by the surface rung in ``provider.py``: a
+        # bare 500 on the wrong door is probed, proved and written down as a
+        # learned fact within the same request. Measured against a fake Zen on
+        # 2026-09-20 with no models.dev cache at all: a Responses-only model
+        # answered 200 through the rung and its second request went straight
+        # to ``/responses``, while a chat-only model was served on the first
+        # call with no probe at all. Declaring ``responses`` here would invert
+        # that -- five models paying a probe so two need not.
+        no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
         responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
         free_tier_tool_catalogue=OPENCODE_FREE_TIER_CATALOGUE,
     ),
@@ -398,6 +423,13 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             ResponseSurface.MESSAGES,
         ),
         surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
+        # The same door as Zen, for the same reason and with one more: the Go
+        # endpoint's roster is the Zen registry behind another path prefix, so
+        # the majority argument above is the same argument, and nothing about
+        # this host has been measured -- which is precisely when a default
+        # should be the surface the rung can correct in one probe rather than
+        # a guess that reroutes every model at once.
+        no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
         responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
         free_tier_tool_catalogue=OPENCODE_FREE_TIER_CATALOGUE,
     ),

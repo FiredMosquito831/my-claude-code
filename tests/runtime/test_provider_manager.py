@@ -59,8 +59,17 @@ def _settings(model: str) -> Settings:
 
 
 def _catalog_settings(model: str) -> Settings:
+    # ``opencode_free_tier_credential="key"`` keeps this a one-provider world.
+    # Since 7.35.0 Zen is discoverable with no key at all -- it has the shared
+    # anonymous credential to reach its free models with -- so leaving the
+    # shipped default on would put a second provider in every sweep planned
+    # here, which is a fact about Zen and not about catalogue publication.
     return Settings().model_copy(
-        update={"model": model, "nvidia_nim_api_key": "test-key"}
+        update={
+            "model": model,
+            "nvidia_nim_api_key": "test-key",
+            "opencode_free_tier_credential": "key",
+        }
     )
 
 

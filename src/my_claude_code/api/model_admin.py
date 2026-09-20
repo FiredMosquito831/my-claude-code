@@ -146,6 +146,13 @@ SURFACE_SOURCE_LABELS: dict[str, str] = {
     ResponseSurfaceSource.OVERRIDE: "an operator override",
     ResponseSurfaceSource.LEARNED: "a probe of this deployment",
     ResponseSurfaceSource.REGISTRY: "the vendor's published registry",
+    # Two silences, two sentences. ``DEFAULT`` is reached only by a provider
+    # that has one surface, where "only surface" is the whole truth. A gateway
+    # that fronts three and has been told nothing about this model made a
+    # *choice*, and saying "only surface" there would be false -- so it gets
+    # its own label, and ``note`` carries which silence produced it: no entry
+    # in the vendor's registry, or no cached copy of that registry yet.
+    ResponseSurfaceSource.PROFILE: "this provider's declared first door",
     ResponseSurfaceSource.DEFAULT: "this provider's only surface",
 }
 

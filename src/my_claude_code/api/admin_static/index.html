@@ -1930,7 +1930,11 @@
                   model and shows it on <a href="#guide-learned">Models</a> as a
                   <em>wire surface</em> row: <code>responses (registry)</code> when the
                   vendor published it, <code>(learned)</code> when MCC probed this
-                  deployment and found out, <code>(override)</code> when you pinned it. If
+                  deployment and found out, <code>(override)</code> when you pinned it, and
+                  <code>chat_completions (profile)</code> when nobody has said anything at
+                  all &mdash; which is what a fresh install sees, because its copy of the
+                  vendor registry has not been fetched yet. The note beside that one says
+                  which silence it was. If
                   the endpoint MCC picked refuses in a way that is about the endpoint, MCC
                   spends one tiny probe on the other one, remembers the answer and retries
                   your request there. Nothing is ever hidden: a model Zen serves through an

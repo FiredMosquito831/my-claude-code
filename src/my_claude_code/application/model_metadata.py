@@ -285,6 +285,11 @@ class ResponseSurfaceSource(StrEnum):
     LEARNED = "learned"
     #: The vendor's own published registry (models.dev ``provider.npm``).
     REGISTRY = "registry"
+    #: Nothing said anything, and the *profile* named the door to knock on
+    #: first anyway. Only a profile that declares more than one surface can
+    #: produce this: for a single-surface provider there is nothing to choose
+    #: between, so it keeps :data:`DEFAULT` exactly as it always had.
+    PROFILE = "profile"
     #: Nothing said anything, so the family's long-standing surface stands.
     DEFAULT = "default"
 
