@@ -7638,6 +7638,102 @@ function keyRowControls(pool, list, row, entry, index, total) {
   return { grip, name, up, down };
 }
 
+/* ----------------------------------------------------------- the one rail --
+   One rail, three pools. Env-key providers, custom providers and web-search
+   providers all build their rows, their list, their key label and their Add
+   form through the four builders below, so the rail cannot look one way on a
+   built-in card and another way on a custom one -- which is exactly what
+   happened when 7.29.0 gave every row a grip, a name box and two Move
+   buttons: `.key-manager-row` wrapped, `.cp-key-row` and `.ws-key-row` did
+   not, and ~280px of controls hung off the right edge of a 240px grid column.
+
+   Each builder keeps the caller's pre-7.34.1 class beside the shared one, so
+   a selector written against `.cp-key-row`, `.ws-key-label` or `.cp-key-add`
+   still finds the same element. The shared class is what admin.css styles;
+   the legacy class is an alias and carries no rules of its own. */
+
+/** A rail's list container. `legacy` is this pool's pre-7.34.1 class. */
+function keyRailList(legacy) {
+  const list = document.createElement("div");
+  list.className = legacy ? `key-manager-list ${legacy}` : "key-manager-list";
+  return list;
+}
+
+/** One rail row. */
+function keyRailRow(legacy) {
+  const row = document.createElement("div");
+  row.className = legacy ? `key-manager-row ${legacy}` : "key-manager-row";
+  return row;
+}
+
+/** The masked-or-named key label: one element, so one ellipsis rule covers
+ *  every pool and a 40-character name cannot push a row wider than its card. */
+function keyRailLabel(legacy) {
+  const label = document.createElement("code");
+  label.className = legacy ? `key-manager-key ${legacy}` : "key-manager-key";
+  return label;
+}
+
+/** Say that this card is showing a rail, so the stylesheet can widen it.
+ *
+ * A rail is six controls across and a provider-grid column is 240px. A
+ * built-in card has always taken the whole grid row while its pool is open
+ * (`.pv-card.pv-open`, "so the key pool has room to breathe"); this is the
+ * same rule, said once, for every card that opens a pool. */
+function markKeyRailHost(node, showing) {
+  const card = node && node.closest ? node.closest(".provider-card") : null;
+  if (!card) return;
+  card.classList.toggle("has-key-rail", showing !== false);
+}
+
+/** The Add-a-key form: the secret box, the optional name, and the button.
+ *
+ * `onSubmit(secretInput, addButton, nameInput)` is the pool's own add call --
+ * the routes and payloads are unchanged; only the markup is now shared. */
+function keyRailAddForm(options) {
+  const form = document.createElement("div");
+  form.className = options.legacy
+    ? `key-manager-add ${options.legacy}`
+    : "key-manager-add";
+
+  const secret = document.createElement("input");
+  secret.type = "password";
+  secret.className = "key-add-secret";
+  secret.autocomplete = "off";
+  secret.placeholder = options.placeholder;
+  secret.disabled = Boolean(options.locked);
+
+  // Optional, and honoured only for a single key: a paste of five keys has
+  // one name box and no way to say which key it meant.
+  const name = document.createElement("input");
+  name.type = "text";
+  name.className = "key-name-input key-add-name";
+  name.maxLength = 60;
+  name.placeholder = "Name (optional)";
+  name.setAttribute("aria-label", "Name for the key being added");
+  name.disabled = Boolean(options.locked);
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "secondary-button key-add-submit";
+  add.textContent = "Add key";
+  add.disabled = Boolean(options.locked);
+
+  const submit = () => options.onSubmit(secret, add, name);
+  add.addEventListener("click", submit);
+  for (const control of [secret, name]) {
+    control.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      }
+    });
+  }
+
+  form.append(secret, name, add);
+  return { element: form, secret, name, add };
+}
+
 async function renderKeyManager(panel, field) {
   panel.textContent = "Loading keys...";
   let info;
@@ -7664,8 +7760,8 @@ async function renderKeyManager(panel, field) {
     reload: () => renderKeyManager(panel, field),
   };
 
-  const list = document.createElement("div");
-  list.className = "key-manager-list";
+  const list = keyRailList();
+  markKeyRailHost(panel);
   if (info.count === 0) {
     const empty = document.createElement("div");
     empty.className = "key-manager-empty";
@@ -7685,16 +7781,14 @@ async function renderKeyManager(panel, field) {
         health: Array.isArray(info.health) ? info.health[index] : null,
       }));
   entries.forEach((entry, index) => {
-    const row = document.createElement("div");
-    row.className = "key-manager-row";
+    const row = keyRailRow();
 
     const controls = entry.id
       ? keyRowControls(pool, list, row, entry, index, entries.length)
       : null;
     if (controls) row.append(controls.grip, controls.name);
 
-    const label = document.createElement("code");
-    label.className = "key-manager-key";
+    const label = keyRailLabel();
     paintKeyReference(label, entry.masked, entry.name || "");
 
     row.appendChild(label);
@@ -7741,43 +7835,15 @@ async function renderKeyManager(panel, field) {
     );
   }
 
-  const addRow = document.createElement("div");
-  addRow.className = "key-manager-add";
-  const input = document.createElement("input");
-  input.type = "password";
-  input.autocomplete = "off";
-  input.placeholder = info.locked
-    ? "Locked by process environment"
-    : "Paste a key, or several separated by commas";
-  input.disabled = info.locked;
-
-  // Optional, and honoured only for a single key: a paste of five keys has
-  // one name box and no way to say which key it meant.
-  const addName = document.createElement("input");
-  addName.type = "text";
-  addName.className = "key-name-input key-add-name";
-  addName.maxLength = 60;
-  addName.placeholder = "Name (optional)";
-  addName.setAttribute("aria-label", "Name for the key being added");
-  addName.disabled = info.locked;
-
-  const add = document.createElement("button");
-  add.type = "button";
-  add.className = "secondary-button";
-  add.textContent = "Add key";
-  add.disabled = info.locked;
-
-  const submit = () => addCredentialKey(field, input, add, addName);
-  add.addEventListener("click", submit);
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") submit();
+  const addForm = keyRailAddForm({
+    placeholder: info.locked
+      ? "Locked by process environment"
+      : "Paste a key, or several separated by commas",
+    locked: info.locked,
+    onSubmit: (secret, button, name) =>
+      addCredentialKey(field, secret, button, name),
   });
-  addName.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") submit();
-  });
-
-  addRow.append(input, addName, add);
-  panel.appendChild(addRow);
+  panel.appendChild(addForm.element);
 
   if (info.locked) {
     const note = document.createElement("div");
@@ -10258,6 +10324,8 @@ async function toggleKeyManager(provider, panel, button) {
   } else {
     panel.hidden = true;
     button.textContent = "Manage keys";
+    // The card only needs the whole grid row while a rail is on it.
+    markKeyRailHost(panel, false);
   }
 }
 
@@ -10276,8 +10344,8 @@ function keyHealthText(health) {
 
 async function loadKeyManager(provider, panel) {
   panel.innerHTML = "";
-  const list = document.createElement("div");
-  list.className = "ws-key-list";
+  const list = keyRailList("ws-key-list");
+  markKeyRailHost(panel);
   panel.appendChild(list);
   let result;
   try {
@@ -10311,10 +10379,8 @@ async function loadKeyManager(provider, panel) {
   // is still what the add and delete responses return.
   const wsEntries = Array.isArray(result.rows) ? result.rows : result.keys;
   wsEntries.forEach((entry, index) => {
-    const row = document.createElement("div");
-    row.className = "ws-key-row";
-    const label = document.createElement("span");
-    label.className = "ws-key-label";
+    const row = keyRailRow("ws-key-row");
+    const label = keyRailLabel("ws-key-label");
     const controls = entry.id
       ? keyRowControls(
           pool,
@@ -10358,30 +10424,14 @@ async function loadKeyManager(provider, panel) {
       pendingWs.undo ? undoKeyPoolOrder : null,
     );
   }
-  const form = document.createElement("div");
-  form.className = "ws-key-add";
-  const input = document.createElement("input");
-  input.type = "password";
-  input.placeholder = "Paste a new API key";
-  input.autocomplete = "off";
-  input.disabled = result.locked;
-  const add = document.createElement("button");
-  add.type = "button";
-  add.className = "secondary-button";
-  add.textContent = "Add key";
-  add.disabled = result.locked;
-  const nameInput = document.createElement("input");
-  nameInput.type = "text";
-  nameInput.className = "key-name-input key-add-name";
-  nameInput.maxLength = 60;
-  nameInput.placeholder = "Name (optional)";
-  nameInput.setAttribute("aria-label", "Name for the key being added");
-  nameInput.disabled = result.locked;
-  add.addEventListener("click", () =>
-    addWebSearchKey(provider, input, panel, add, nameInput),
-  );
-  form.append(input, nameInput, add);
-  panel.appendChild(form);
+  const form = keyRailAddForm({
+    legacy: "ws-key-add",
+    placeholder: "Paste a new API key",
+    locked: result.locked,
+    onSubmit: (secret, button, name) =>
+      addWebSearchKey(provider, secret, panel, button, name),
+  });
+  panel.appendChild(form.element);
   if (result.locked) {
     const note = document.createElement("div");
     note.className = "field-description";
@@ -11591,13 +11641,10 @@ function customProviderCard(provider) {
   details.className = "cp-details";
   details.textContent = customProviderDetailsText(provider);
 
-  const keyList = document.createElement("div");
-  keyList.className = "cp-key-list";
+  const keyList = keyRailList("cp-key-list");
   provider.masked_keys.forEach((masked, index) => {
-    const row = document.createElement("div");
-    row.className = "cp-key-row";
-    const label = document.createElement("code");
-    label.className = "cp-key-label";
+    const row = keyRailRow("cp-key-row");
+    const label = keyRailLabel("cp-key-label");
     label.textContent = masked;
     const remove = document.createElement("button");
     remove.type = "button";
@@ -11612,33 +11659,16 @@ function customProviderCard(provider) {
     keyList.appendChild(row);
   });
 
-  const addRow = document.createElement("div");
-  addRow.className = "cp-key-add";
-  const keyInput = document.createElement("input");
-  keyInput.type = "password";
-  keyInput.autocomplete = "off";
-  keyInput.placeholder = "Paste a key, or several separated by commas";
-  const addButton = document.createElement("button");
-  addButton.type = "button";
-  addButton.className = "secondary-button";
-  addButton.textContent = "Add key";
-  const nameInput = document.createElement("input");
-  nameInput.type = "text";
-  nameInput.className = "key-name-input key-add-name";
-  nameInput.maxLength = 60;
-  nameInput.placeholder = "Name (optional)";
-  nameInput.setAttribute("aria-label", "Name for the key being added");
-  const submitKey = () =>
-    addCustomProviderKey(provider, keyInput, addButton, nameInput);
-  addButton.addEventListener("click", submitKey);
-  keyInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") submitKey();
+  const addForm = keyRailAddForm({
+    legacy: "cp-key-add",
+    placeholder: "Paste a key, or several separated by commas",
+    onSubmit: (secret, button, name) =>
+      addCustomProviderKey(provider, secret, button, name),
   });
-  nameInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") submitKey();
-  });
-  addRow.append(keyInput, nameInput, addButton);
-  keyList.appendChild(addRow);
+  keyList.appendChild(addForm.element);
+  // A custom card renders its rail inline and never behind a Configure
+  // toggle, so it declares itself a rail host the moment it is built.
+  card.classList.add("has-key-rail");
 
   const actions = document.createElement("div");
   actions.className = "card-actions";
@@ -11855,7 +11885,13 @@ async function loadCustomProviderKeyHealth(providerId) {
     slot.appendChild(keyHealthBadge(health));
     const benched = Array.isArray(health.model_benches) ? health.model_benches : [];
     if (benched.length) slot.appendChild(modelBenchList(benched));
-    row.insertBefore(slot, row.lastElementChild);
+    // Between the key and the Move buttons, which is where an env-key row
+    // and a web-search row both put it. It used to land after Move down, so
+    // the same rail read in a different order on a custom card.
+    row.insertBefore(
+      slot,
+      row.querySelector(".key-manager-move") || row.lastElementChild,
+    );
   });
   const pending =
     state.keyPoolMessage && state.keyPoolMessage.key === pool.stateKey
@@ -22663,12 +22699,9 @@ function buildCapabilityRow(label, field, labels, format) {
     warn.textContent = `guessed from ${matches} same-named row(s) in other providers, ${agreement}${reporters}`;
     source.appendChild(warn);
   }
-  if (field.note) {
-    const note = document.createElement("span");
-    note.className = "models-approx-note";
-    note.textContent = field.note;
-    source.appendChild(note);
-  }
+  // `field.note` is rendered once, above, beside the badge it explains. A
+  // second copy used to be appended here, so every row carrying a note read
+  // its sentence twice.
   tr.appendChild(source);
   return tr;
 }

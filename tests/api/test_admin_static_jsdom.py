@@ -4845,6 +4845,126 @@ def test_renaming_a_key_puts_only_the_name(rendered) -> None:
     assert "stored on this machine only" in rail["renameStatus"]
 
 
+# ------------------------------------------------------------ the one rail
+# 7.34.1. A user reported that "custom provider cards overflow the options for
+# adding a key with name etc." 7.29.0 had given every key row a grip, a name
+# box and two Move buttons, but each of the three pools built its own row and
+# add-form markup against its own copy of four CSS rules -- and only the
+# env-key copy carried `flex-wrap: wrap`. Measured in Chrome at a 1500px
+# viewport: `.cp-key-row` wanted 538px inside a 228px card, `.ws-key-row` 536.
+#
+# The three now share one builder and one rule set, so the guard is not "the
+# custom card wraps" -- that would pass again the day someone forks it -- but
+# "the three render the same classes and the same add form".
+
+
+def test_every_key_pool_renders_the_same_rail(rendered) -> None:
+    """One builder, three pools: same list, row, label and add-form classes."""
+
+    rail = rendered["sharedRail"]
+    env, websearch, custom = rail["env"], rail["websearch"], rail["custom"]
+
+    assert custom is not None, "the custom_acme card did not render"
+    for pool in (env, websearch, custom):
+        assert pool["list"] is not None
+        assert pool["row"] is not None
+        assert pool["label"] is not None
+        # The class the stylesheet addresses, on all three.
+        assert "key-manager-list" in pool["list"]
+        assert "key-manager-row" in pool["row"]
+        assert "key-manager-key" in pool["label"]
+        assert "key-manager-add" in pool["addClasses"]
+        # And the same element, so one ellipsis rule covers all three.
+        assert pool["labelTag"] == "CODE"
+
+    # The pre-7.34.1 names ride along, so selectors written against them --
+    # in this repo's own tests, and in anyone's user stylesheet -- resolve.
+    assert websearch["list"] == ["key-manager-list", "ws-key-list"]
+    assert websearch["row"] == ["key-manager-row", "ws-key-row"]
+    assert websearch["label"] == ["key-manager-key", "ws-key-label"]
+    assert websearch["addClasses"] == ["key-manager-add", "ws-key-add"]
+    assert custom["list"] == ["cp-key-list", "key-manager-list"]
+    assert custom["row"] == ["cp-key-row", "key-manager-row"]
+    assert custom["label"] == ["cp-key-label", "key-manager-key"]
+    assert custom["addClasses"] == ["cp-key-add", "key-manager-add"]
+
+
+def test_every_key_pool_offers_the_same_add_form(rendered) -> None:
+    """The secret, then the optional name, then the button. Everywhere."""
+
+    rail = rendered["sharedRail"]
+    shape = [
+        "INPUT|password|key-add-secret",
+        "INPUT|text|key-name-input key-add-name",
+        "BUTTON|button|secondary-button key-add-submit",
+    ]
+
+    assert rail["env"]["addShape"] == shape
+    assert rail["websearch"]["addShape"] == shape
+    assert rail["custom"]["addShape"] == shape
+    for pool in ("env", "websearch", "custom"):
+        assert rail[pool]["addNamePlaceholder"] == "Name (optional)"
+
+
+def test_every_key_pool_row_carries_the_reorder_controls(rendered) -> None:
+    """The rail's gestures, not just its markup, are the same on all three."""
+
+    rail = rendered["sharedRail"]
+    for pool in ("env", "websearch", "custom"):
+        assert rail[pool]["grip"] is True, pool
+        assert rail[pool]["nameBox"] is True, pool
+        assert rail[pool]["moves"] == ["Move up", "Move down"], pool
+
+
+def test_a_custom_card_showing_a_rail_says_so(rendered) -> None:
+    """`has-key-rail` is what gives the card the whole grid row.
+
+    A `minmax(240px, 1fr)` column cannot hold six controls; a built-in card
+    has taken the whole row since `.pv-card.pv-open` existed, and this is the
+    same rule for the card that renders its rail inline.
+    """
+
+    assert rendered["sharedRail"]["customIsRailHost"] is True
+
+
+def test_the_health_badge_sits_where_it_does_on_a_built_in_row(rendered) -> None:
+    """Between the key and the Move buttons, not after Move down."""
+
+    rail = rendered["sharedRail"]
+    assert rail["customRowOrder"] is not None
+    assert rail["customRowOrder"] == [
+        "key-drag-grip",
+        "key-name-input",
+        "key-manager-key",
+        "cp-key-health",
+        "ghost-button",
+        "ghost-button",
+        "ghost-button",
+    ]
+    # The env row it is copying: grip, name, key, then the Move buttons.
+    assert rail["envRowOrder"][:3] == [
+        "key-drag-grip",
+        "key-name-input",
+        "key-manager-key",
+    ]
+
+
+# ----------------------------------------------------------- capability row
+# 7.33.0 added `field.note` to the Models capability table and appended it
+# twice, so a row carrying one read its sentence out two times.
+
+
+def test_a_capability_note_is_rendered_once(rendered) -> None:
+    """One note, one element -- beside the badge it explains."""
+
+    row = rendered["capabilityRow"]
+    assert row["noteCount"] == 1
+    assert row["notes"][0] == "the npm package selected this door"
+    # The tier line and the guessed-from line are still there, and still once.
+    assert sum(1 for text in row["notes"] if text.startswith("matched at tier")) == 1
+    assert sum(1 for text in row["notes"] if text.startswith("guessed from")) == 1
+
+
 def test_the_display_join_shows_a_name_instead_of_a_mask(rendered) -> None:
     """One resolver feeds the log row, the modal, the ladder and the breakdown."""
 
