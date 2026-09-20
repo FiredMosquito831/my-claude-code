@@ -818,3 +818,57 @@ async def test_the_tls_depth_latency_is_the_handshake_and_never_the_dial(
     slow = await measure()
 
     assert slow < fast + 2500, f"the dial leaked into the latency: {fast} -> {slow}"
+
+
+class _TlsFrontedProxy(_Server):
+    """An ``https://`` proxy: the client's very first bytes are a TLS handshake.
+
+    It never gets as far as speaking HTTP, because the certificate it presents
+    is the rogue one. That is the whole point of the fixture: for this class of
+    proxy the trust decision now happens inside the single dial rather than
+    after it, and the verdict must still be interception rather than death.
+    """
+
+    def __init__(self, certificate: Path) -> None:
+        self._context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self._context.load_cert_chain(certificate)
+        super().__init__()
+
+    def _serve(self, conn: socket.socket) -> None:
+        try:
+            with self._context.wrap_socket(conn, server_side=True):
+                pass
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+
+async def test_an_https_proxys_own_bad_certificate_is_interception_not_death(
+    origin: _Origin, pki: dict[str, Path]
+) -> None:
+    """The one verdict folding the dial in could have quietly changed.
+
+    An ``https://`` proxy is reached over TLS, so from 7.35.1 its certificate
+    is checked during the dial -- and ``ssl.SSLError`` is a subclass of
+    ``OSError``, which is the exception the dial turns into "this address is
+    dead". Swap those two clauses and a proxy that terminates its own TLS stops
+    being refused and starts being retried as an ordinary unreachable address,
+    with nothing to show it happened. This is the test that would notice.
+    """
+
+    proxy = _TlsFrontedProxy(pki["rogue"])
+    try:
+        record = await check_proxy(
+            f"https://{HOSTNAME}:{proxy.port}",
+            f"https://{HOSTNAME}:{origin.port}/",
+            timeout=10.0,
+            depth="tls",
+        )
+    finally:
+        proxy.close()
+
+    assert record.tls == TLS_INTERCEPTED, record.detail
+    assert record.ok is False
+    assert record.intercepted is True
+    assert "certificate validation" in record.detail

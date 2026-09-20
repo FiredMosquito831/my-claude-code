@@ -591,7 +591,10 @@ async def _verified_handshake(
         # An https proxy whose own certificate does not check out. That is a
         # statement about trust, not about reachability, so it goes to the
         # caller's certificate classifier -- and it has to be caught ahead of
-        # ``OSError``, which it inherits from.
+        # ``OSError``, which it inherits from. Delete this clause and an
+        # intercepting https proxy becomes an ordinary unreachable address;
+        # ``test_an_https_proxys_own_bad_certificate_is_interception_not_death``
+        # is the test that says so.
         raise
     except OSError as exc:
         raise _Unreachable(
