@@ -33,7 +33,7 @@ _ISS = _REPO_ROOT / "desktop-shell" / "installer" / "windows" / "MyClaudeCode.is
 #: read from ``desktop_shell.py``'s pin: a winget submission is a separate,
 #: slower act than moving the Path A pin, and the day those two versions differ
 #: this test should keep passing while saying which release it is checking.
-MANIFEST_TAG = "v7.13.1"
+MANIFEST_TAG = "v7.35.2"
 MANIFEST_VERSION = MANIFEST_TAG[1:]
 
 _SUMS = (
@@ -45,10 +45,10 @@ _SUMS = (
     / "SHA256SUMS-desktop-shell.txt"
 )
 
-#: The release's publication date, as ``gh release view v7.13.1 --json
+#: The release's publication date, as ``gh release view v7.35.2 --json
 #: publishedAt`` reports it. ``render.py`` reads this from the GitHub API when
 #: it is not given one; a test may not.
-RELEASE_DATE = "2026-09-14"
+RELEASE_DATE = "2026-09-20"
 
 
 def _render_module():
