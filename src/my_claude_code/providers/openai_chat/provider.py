@@ -90,6 +90,7 @@ from my_claude_code.providers.recovery import (
     learned_fact_store,
     surface_shaped_failure,
 )
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 from my_claude_code.providers.stream_recovery import (
     MIDSTREAM_RECOVERY_ATTEMPTS,
     RecoveryController,
@@ -189,11 +190,18 @@ def _proxied_http_client(
 
     Nothing is said about trust, deliberately -- that is what makes this client
     verify exactly as the un-proxied one does.
+
+    Since 7.36.1 the finished client also has its SOCKS5 handshake bounded by
+    its own connect timeout; see :mod:`my_claude_code.providers.socks_deadline`.
+    Nothing about the client's configuration changes, and for an ``http`` rung
+    the call is a no-op.
     """
 
     from openai import DefaultAsyncHttpxClient
 
-    return DefaultAsyncHttpxClient(base_url=base_url, timeout=timeout, proxy=proxy)
+    return bound_socks_handshake(
+        DefaultAsyncHttpxClient(base_url=base_url, timeout=timeout, proxy=proxy)
+    )
 
 
 class OpenAIChatProvider(BaseProvider):

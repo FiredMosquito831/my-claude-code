@@ -29,6 +29,7 @@ from my_claude_code.providers.failure_policy import (
     classify_provider_failure,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .models import extract_anthropic_model_infos
 
@@ -65,14 +66,16 @@ class AnthropicProvider(BaseProvider):
             body_transform=body_transform,
             provider_id=provider_id,
         )
-        self._client = httpx.AsyncClient(
-            proxy=config.proxy or None,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
+        self._client = bound_socks_handshake(
+            httpx.AsyncClient(
+                proxy=config.proxy or None,
+                timeout=httpx.Timeout(
+                    config.http_read_timeout,
+                    connect=config.http_connect_timeout,
+                    read=config.http_read_timeout,
+                    write=config.http_write_timeout,
+                ),
+            )
         )
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:

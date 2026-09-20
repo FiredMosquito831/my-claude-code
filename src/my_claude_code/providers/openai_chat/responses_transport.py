@@ -72,6 +72,7 @@ from my_claude_code.providers.recovery import (
     tool_schema_recovery,
     upstream_complaint,
 )
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .client_identity import ClientIdentity, identity_headers_for_body
 from .opencode_identity import identity_wire_record
@@ -232,14 +233,16 @@ class ResponsesTransport:
         self._identity = identity
         self._api_key = api_key
         self._api_key_provider = api_key_provider
-        self._client = httpx.AsyncClient(
-            proxy=config.proxy or None,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
+        self._client = bound_socks_handshake(
+            httpx.AsyncClient(
+                proxy=config.proxy or None,
+                timeout=httpx.Timeout(
+                    config.http_read_timeout,
+                    connect=config.http_connect_timeout,
+                    read=config.http_read_timeout,
+                    write=config.http_write_timeout,
+                ),
+            )
         )
 
     @property

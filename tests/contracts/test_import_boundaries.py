@@ -32,6 +32,22 @@ ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
 
 IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     (
+        "my_claude_code.application.proxy_check",
+        "my_claude_code.providers.socks_deadline",
+    ): (
+        "Owner: the proxy checker. "
+        "Reason: the checker's whole claim is that it measures the same "
+        "transport the request path uses, and since 7.36.1 that transport "
+        "includes a bounded SOCKS5 handshake. A mirror of the bound in the "
+        "application package would be a second answer to the question the "
+        "check exists to answer, and the two would drift; worse, without it a "
+        "SOCKS5 candidate that accepts and stalls holds the background "
+        "re-prober for ever, because that caller passes no per-address "
+        "budget. The module is a pure httpx/httpcore shim with no MCC "
+        "dependency of its own, so nothing else travels across the boundary "
+        "with it."
+    ),
+    (
         "my_claude_code.cli.commands",
         "my_claude_code.runtime.bootstrap",
     ): (

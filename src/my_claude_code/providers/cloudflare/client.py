@@ -26,6 +26,7 @@ from my_claude_code.providers.openai_chat import (
     validate_extra_body_does_not_override_canonical_fields,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 _REQUEST_POLICY = OpenAIChatRequestPolicy(
     provider_name="CLOUDFLARE",
@@ -76,14 +77,16 @@ class CloudflareProvider(OpenAIChatProvider):
         self._model_search_url = _cloudflare_model_search_url(
             config.base_url, account_id
         )
-        self._model_list_client = httpx.AsyncClient(
-            proxy=config.proxy or None,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
+        self._model_list_client = bound_socks_handshake(
+            httpx.AsyncClient(
+                proxy=config.proxy or None,
+                timeout=httpx.Timeout(
+                    config.http_read_timeout,
+                    connect=config.http_connect_timeout,
+                    read=config.http_read_timeout,
+                    write=config.http_write_timeout,
+                ),
+            )
         )
         super().__init__(
             replace(config, base_url=base_url),

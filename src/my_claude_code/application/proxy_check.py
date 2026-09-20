@@ -69,6 +69,7 @@ from my_claude_code.config.proxy_chains import (
     save_proxy_chains,
 )
 from my_claude_code.core.proxy_rotation import PROXY_INTERCEPTION, PROXY_REACHABILITY
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 #: How long any single leg of the check may take. Deliberately shorter than the
 #: request path's own connect timeout: a checker that waits sixty seconds on a
@@ -714,8 +715,8 @@ async def check_proxy(
             # for byte the client the request path builds for this same proxy.
             # A check made with anything more permissive would measure nothing
             # at all.
-            client = httpx.AsyncClient(
-                proxy=url, timeout=timeout, follow_redirects=False
+            client = bound_socks_handshake(
+                httpx.AsyncClient(proxy=url, timeout=timeout, follow_redirects=False)
             )
             try:
                 response = await client.head(destination)
@@ -805,8 +806,8 @@ async def _exit_ip(proxy_url: str, exit_ip_url: str, timeout: float) -> str:
     """
 
     try:
-        client = httpx.AsyncClient(
-            proxy=proxy_url, timeout=timeout, follow_redirects=True
+        client = bound_socks_handshake(
+            httpx.AsyncClient(proxy=proxy_url, timeout=timeout, follow_redirects=True)
         )
         try:
             response = await client.get(exit_ip_url)

@@ -45,6 +45,7 @@ from my_claude_code.providers.recovery import (
     OPENAI_CHAT_OUTPUT_FIELDS,
     parse_output_token_cap,
 )
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .reasoning_probe import PROBE_MAX_TOKENS, PROBE_TIMEOUT_SECONDS
 
@@ -341,8 +342,8 @@ async def probe_model_capabilities(
             ),
         )
     owned = client is None
-    http = client or httpx.AsyncClient(
-        proxy=proxy or None, timeout=PROBE_TIMEOUT_SECONDS
+    http = client or bound_socks_handshake(
+        httpx.AsyncClient(proxy=proxy or None, timeout=PROBE_TIMEOUT_SECONDS)
     )
     try:
         outcomes: list[CapabilityProbeOutcome] = []

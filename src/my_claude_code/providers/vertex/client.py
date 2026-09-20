@@ -23,6 +23,7 @@ from my_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .auth import GoogleAccessTokenProvider
 from .endpoint import vertex_openai_base_url, vertex_publisher_models_url
@@ -56,14 +57,16 @@ class VertexProvider(GoogleOpenAIProvider):
         self._access_token_provider = (
             access_token_provider or GoogleAccessTokenProvider(proxy=config.proxy)
         )
-        self._model_list_client = httpx.AsyncClient(
-            proxy=config.proxy,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
+        self._model_list_client = bound_socks_handshake(
+            httpx.AsyncClient(
+                proxy=config.proxy,
+                timeout=httpx.Timeout(
+                    config.http_read_timeout,
+                    connect=config.http_connect_timeout,
+                    read=config.http_read_timeout,
+                    write=config.http_write_timeout,
+                ),
+            )
         )
         super().__init__(
             replace(config, base_url=base_url),

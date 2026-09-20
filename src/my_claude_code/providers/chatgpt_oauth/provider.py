@@ -61,6 +61,7 @@ from my_claude_code.providers.recovery import (
     tool_schema_recovery,
 )
 from my_claude_code.providers.runtime.served_models import resolve_served_models
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .codex_catalogue import (
     catalogue_evidence,
@@ -516,14 +517,16 @@ class ChatGPTOAuthProvider(BaseProvider):
                 ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
             )
         )
-        self._client = httpx.AsyncClient(
-            proxy=config.proxy if config.proxy else None,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout or HTTP_CONNECT_TIMEOUT_DEFAULT,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
+        self._client = bound_socks_handshake(
+            httpx.AsyncClient(
+                proxy=config.proxy if config.proxy else None,
+                timeout=httpx.Timeout(
+                    config.http_read_timeout,
+                    connect=config.http_connect_timeout or HTTP_CONNECT_TIMEOUT_DEFAULT,
+                    read=config.http_read_timeout,
+                    write=config.http_write_timeout,
+                ),
+            )
         )
 
     def throttle_remaining(self, model: str | None = None) -> float:

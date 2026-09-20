@@ -29,6 +29,7 @@ import httpx
 from loguru import logger
 
 from my_claude_code.config.reasoning_enum import parse_effort_enum
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 PROBE_INVALID_EFFORT = "bogus_value"
 """A value no effort scale can contain, so a 200 proves the field is ignored."""
@@ -99,8 +100,8 @@ async def probe_reasoning_dialect(
             status="unknown", detail="not configured", probed_at=_now()
         )
     owned = client is None
-    http = client or httpx.AsyncClient(
-        proxy=proxy or None, timeout=PROBE_TIMEOUT_SECONDS
+    http = client or bound_socks_handshake(
+        httpx.AsyncClient(proxy=proxy or None, timeout=PROBE_TIMEOUT_SECONDS)
     )
     try:
         return await _probe(http, base_url.rstrip("/"), api_key, model)

@@ -51,6 +51,7 @@ from my_claude_code.providers.recovery import (
     RecoveryMemory,
     learned_fact_store,
 )
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 from my_claude_code.providers.stream_recovery import (
     RecoveryController,
     RecoveryFailureAction,
@@ -174,14 +175,16 @@ class AnthropicMessagesProvider(BaseProvider):
             )
         )
         self._rate_limiter = rate_limiter
-        self._client = httpx.AsyncClient(
-            proxy=config.proxy or None,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
+        self._client = bound_socks_handshake(
+            httpx.AsyncClient(
+                proxy=config.proxy or None,
+                timeout=httpx.Timeout(
+                    config.http_read_timeout,
+                    connect=config.http_connect_timeout,
+                    read=config.http_read_timeout,
+                    write=config.http_write_timeout,
+                ),
+            )
         )
 
     def set_response_observer(
