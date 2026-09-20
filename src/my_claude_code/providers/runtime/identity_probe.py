@@ -58,6 +58,7 @@ from my_claude_code.providers.runtime.reasoning_probe import (
     PROBE_MAX_TOKENS,
     PROBE_TIMEOUT_SECONDS,
 )
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 #: The detail that separates a probe's answer from the passive observation's.
 DETAIL_PROBED = "probed"
@@ -176,8 +177,8 @@ async def probe_client_identity(
     good, omitted = declared
     bad = {name: value for name, value in good.items() if name != omitted}
     owned = client is None
-    http = client or httpx.AsyncClient(
-        proxy=proxy or None, timeout=PROBE_TIMEOUT_SECONDS
+    http = client or bound_socks_handshake(
+        httpx.AsyncClient(proxy=proxy or None, timeout=PROBE_TIMEOUT_SECONDS)
     )
     try:
         good_status, good_text = await _leg(http, base_url, api_key, model, good)

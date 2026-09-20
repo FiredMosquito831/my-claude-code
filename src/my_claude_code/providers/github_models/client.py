@@ -20,6 +20,7 @@ from my_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 GITHUB_MODELS_CATALOG_URL = "https://models.github.ai/catalog/models"
 GITHUB_MODELS_API_VERSION = "2026-03-10"
@@ -39,14 +40,16 @@ class GitHubModelsProvider(OpenAIChatProvider):
 
     def __init__(self, config: ProviderConfig, *, rate_limiter: ProviderRateLimiter):
         self._catalog_url = GITHUB_MODELS_CATALOG_URL
-        self._model_list_client = httpx.AsyncClient(
-            proxy=config.proxy or None,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
+        self._model_list_client = bound_socks_handshake(
+            httpx.AsyncClient(
+                proxy=config.proxy or None,
+                timeout=httpx.Timeout(
+                    config.http_read_timeout,
+                    connect=config.http_connect_timeout,
+                    read=config.http_read_timeout,
+                    write=config.http_write_timeout,
+                ),
+            )
         )
         super().__init__(
             config,

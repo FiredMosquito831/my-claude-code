@@ -2435,13 +2435,16 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         maximum=120,
         description=(
             "How long a request waits for the handshake with a proxy address "
-            "before giving up on it and trying the next one. Only the connect "
-            "step, and only when the request is going out through a proxy: "
-            "the read and write timeouts are the provider's own, and a "
-            "provider with no chain is not affected at all. A dead address "
-            "costs this many seconds, once -- MCC no longer dials the same "
-            "address a second time after a connect failure, because another "
-            "address is what fixes one."
+            "before giving up on it and trying the next one. Establishing the "
+            "connection only, and only when the request is going out through "
+            "a proxy: the read and write timeouts are the provider's own, and "
+            "a provider with no chain is not affected at all. Since 7.36.1 it "
+            "also bounds the SOCKS5 handshake itself, which the HTTP library "
+            "ran with no deadline at all -- a socks5 address that accepted "
+            "the connection and then said nothing held the request for ever. "
+            "A dead address costs this many seconds, once -- MCC no longer "
+            "dials the same address a second time after a connect failure, "
+            "because another address is what fixes one."
         ),
     ),
     ConfigFieldSpec(

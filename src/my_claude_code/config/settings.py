@@ -1134,8 +1134,10 @@ class Settings(BaseSettings):
         ge=PROXY_MAX_LIVE_FAILURES_MIN,
         le=PROXY_MAX_LIVE_FAILURES_MAX,
     )
-    # The connect timeout of a proxied leg's HTTP client. Connect only, and
-    # proxied legs only: an unproxied client keeps HTTP_CONNECT_TIMEOUT.
+    # The connect timeout of a proxied leg's HTTP client, and since 7.36.1 the
+    # bound on that leg's SOCKS5 handshake too -- establishing the connection,
+    # in other words, rather than the TCP dial alone. Proxied legs only: an
+    # unproxied client keeps HTTP_CONNECT_TIMEOUT.
     proxy_connect_timeout_seconds: float = Field(
         default=PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
         validation_alias="PROXY_CONNECT_TIMEOUT_SECONDS",
