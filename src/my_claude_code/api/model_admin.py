@@ -136,6 +136,11 @@ FACT_KIND_LABELS: dict[str, str] = {
     "response_surface": "wire surface",
     "responses_tool_name_max_length": "tool-name limit",
     "responses_tool_choice_auto_only": "tool_choice auto only",
+    # Labelled here in the same commit that introduces the kind, deliberately:
+    # 7.12.0 shipped ``effort_value_rejected`` without a row in this table, and
+    # every value-level reasoning refusal drew its own raw identifier in the
+    # Learned column until 7.23.0 noticed.
+    "responses_tool_schema_keyword": "tool-schema keyword refused",
 }
 
 # Where a resolved wire surface came from, in the operator's words. A separate
@@ -511,7 +516,15 @@ def models_dev_cache_mark() -> str:
 #: -- it decides what the next body carries for this model -- and before
 #: 7.23.0 a fact stored under :data:`PROVIDER_WIDE_MODEL_ID` had no row
 #: anywhere at all.
-ROW_WIDE_FACT_KINDS: frozenset[str] = frozenset({"responses_tool_name_max_length"})
+ROW_WIDE_FACT_KINDS: frozenset[str] = frozenset(
+    {
+        "responses_tool_name_max_length",
+        # Same test, same answer: a refused schema keyword decides what the
+        # next body carries for every model behind this host's validator, so
+        # it belongs on every model's row rather than on none of them.
+        "responses_tool_schema_keyword",
+    }
+)
 
 
 def facts_for_row(

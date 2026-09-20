@@ -59,11 +59,17 @@ from my_claude_code.providers.openai_responses import (
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
+    RUNG_TOOL_SCHEMA,
     RecoveryMemory,
+    SchemaKeywordRefusal,
+    ToolSchemaRecovery,
+    apply_learned_tool_schema_refusals,
     clone_body_without_tool_choice,
     complaint_evidence_snippet,
     is_tool_choice_auto_only,
+    refusal_from_detail,
     rejected_tool_name_max_length,
+    tool_schema_recovery,
     upstream_complaint,
 )
 
@@ -80,10 +86,13 @@ PROBE_MAX_OUTPUT_TOKENS = 16
 #: asking a second question at the same time.
 PROBE_PROMPT = "hi"
 
-#: The two rungs this surface adds, named once so the ladder row, the log line
-#: and the learning all agree on the word the operator reads.
+#: The three rungs this surface adds, named once so the ladder row, the log
+#: line and the learning all agree on the word the operator reads.
 _RUNG_TOOL_NAME_LENGTH = "responses_tool_name_length"
 _RUNG_TOOL_CHOICE = "responses_tool_choice"
+#: Shared with ``chatgpt_oauth``, which registers the same recovery on its own
+#: ladder: one word for one event, whichever of the two senders paid for it.
+_RUNG_TOOL_SCHEMA = RUNG_TOOL_SCHEMA
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +136,26 @@ def _next_responses_recovery(
     requests through one transport therefore never share a rung budget.
     """
 
+    if _RUNG_TOOL_SCHEMA not in used:
+        # First, and not merely by convention. This is the one refusal of the
+        # three that carries a machine-readable verdict (``code:
+        # invalid_json_schema``), and it is the one that can be *mistaken* for
+        # another: a schema path ending ``$.properties.name.maxLength`` names
+        # the ``name`` parameter and talks about length, which is exactly what
+        # ``rejected_tool_name_max_length`` reads -- and that matcher falls
+        # back to 64 when it finds no number, so it would answer a schema
+        # refusal by aliasing every tool name and fixing nothing. Neither of
+        # the other two matchers can produce this code, so the order is total.
+        schema = tool_schema_recovery(error, body)
+        if schema is not None:
+            used.add(_RUNG_TOOL_SCHEMA)
+            return _ResponsesLearning(
+                kind=_RUNG_TOOL_SCHEMA,
+                body=schema.body,
+                value=schema,
+                evidence=schema.evidence,
+                log_line=schema.log_line,
+            )
     if _RUNG_TOOL_NAME_LENGTH not in used:
         stated = rejected_tool_name_max_length(error)
         if stated is not None:
@@ -340,6 +369,21 @@ class ResponsesTransport:
             body["prompt_cache_key"] = cache_key
         return body, headers
 
+    def _learned_schema_refusals(self) -> tuple[SchemaKeywordRefusal, ...]:
+        """Every schema-keyword class this host has been proven to refuse.
+
+        Read off the memory on every send rather than captured once, so a
+        *Forget* on the Models page reaches the very next request -- the store
+        rebuilds the memory in place, and a transport holding its own copy
+        would keep sweeping a keyword nobody believes in any more.
+        """
+
+        return tuple(
+            refusal
+            for detail in self._memory.responses_tool_schema_details()
+            if (refusal := refusal_from_detail(detail)) is not None
+        )
+
     def _tool_choice_refused(self, request: MessagesRequest) -> bool:
         """Whether this model has been proven to accept only ``auto``.
 
@@ -480,7 +524,17 @@ class ResponsesTransport:
         # states and this one keeps: a rewrite that did not fix anything is not
         # evidence about the host.
         pending: list[_ResponsesLearning] = []
-        current = dict(body)
+        # What this host has already been proven to refuse, applied before the
+        # first send rather than after it: the 400 is then paid once per
+        # provider instead of once per request, and the catalogue is the same
+        # on every turn and after every restart -- which is what keeps the
+        # vendor's implicit tools prefix cached from request two onward.
+        # Identity when there is nothing to apply, so a host that has never
+        # refused a schema sends exactly the bytes it always did.
+        swept, schema_marker = apply_learned_tool_schema_refusals(
+            body, self._learned_schema_refusals()
+        )
+        current = dict(swept)
         while True:
             identity = self.identity_headers(current)
             marker = (
@@ -500,6 +554,7 @@ class ResponsesTransport:
                     else {}
                 ),
                 **marker,
+                **schema_marker,
             )
             try:
                 response = await self._rate_limiter.execute_with_retry(
@@ -532,6 +587,11 @@ class ResponsesTransport:
                     learning.evidence,
                 )
                 current = learning.body
+                if isinstance(learning.value, ToolSchemaRecovery):
+                    # Carried onto the retry row, so the modal names what the
+                    # second body lost rather than leaving the operator to
+                    # infer it from a rung name.
+                    schema_marker = learning.value.marker
                 pending.append(learning)
                 # Carried on the *retry* row, so the ladder in the modal reads
                 # "400 ... / 200 (responses_tool_choice)" and the operator can
@@ -545,6 +605,18 @@ class ResponsesTransport:
     def _remember(self, request: MessagesRequest, learning: _ResponsesLearning) -> None:
         """Write one rung's learning down, now that a send has proven it."""
 
+        if isinstance(learning.value, ToolSchemaRecovery):
+            recovery = learning.value
+            self._memory.remember_responses_tool_schema_refusal(
+                recovery.refusal.detail, evidence=learning.evidence
+            )
+            logger.warning(
+                "{}_RESPONSES: this host refuses {} in tool schemas -- later "
+                "requests are swept before the first send",
+                self._provider_name,
+                recovery.refusal.words,
+            )
+            return
         if learning.kind == _RUNG_TOOL_NAME_LENGTH:
             self._memory.learn_responses_tool_name_limit(
                 int(learning.value), evidence=learning.evidence

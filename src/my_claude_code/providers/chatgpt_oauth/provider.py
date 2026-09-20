@@ -36,7 +36,7 @@ from my_claude_code.core.reasoning import (
 )
 from my_claude_code.core.request_log import observed_served_models
 from my_claude_code.core.trace import trace_event
-from my_claude_code.core.upstream_ladder import note_response_head
+from my_claude_code.core.upstream_ladder import note_recovery_rung, note_response_head
 from my_claude_code.core.version import package_version
 from my_claude_code.core.wire_capture import (
     record_reasoning_adaptation,
@@ -50,9 +50,15 @@ from my_claude_code.providers.http import error_response_headers, read_error_bod
 from my_claude_code.providers.oauth_names import account_name
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
+    RUNG_TOOL_SCHEMA,
     ReasoningStripRecovery,
     RecoveryLadder,
+    SchemaKeywordRefusal,
+    ToolSchemaRefusalRecovery,
+    apply_learned_tool_schema_refusals,
     learned_fact_store,
+    refusal_from_detail,
+    tool_schema_recovery,
 )
 from my_claude_code.providers.runtime.served_models import resolve_served_models
 
@@ -497,8 +503,18 @@ class ChatGPTOAuthProvider(BaseProvider):
         self._recovery_memory = learned_fact_store().memory_for(
             CHATGPT_OAUTH_PROVIDER_ID
         )
+        # Two rungs, schema first. This backend does not go through
+        # ``ResponsesTransport._send_with_recovery`` -- it has its own client
+        # and this ladder -- so the recovery has to be registered here as well
+        # as there, and one more entry in this tuple is the whole of it. The
+        # order is the ladder's own rule: the schema refusal carries a
+        # machine-readable ``code`` and rewrites nothing the model can see,
+        # while a reasoning strip removes an instruction the request meant.
         self._recovery_ladder = RecoveryLadder(
-            (ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),)
+            (
+                ToolSchemaRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+                ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+            )
         )
         self._client = httpx.AsyncClient(
             proxy=config.proxy if config.proxy else None,
@@ -709,13 +725,29 @@ class ChatGPTOAuthProvider(BaseProvider):
                     # A local of this generator, not the enclosing function's
                     # body: a recovery rewrites what goes on the wire for this
                     # attempt only.
-                    attempt_body = body
+                    # What this host has already been proven to refuse in a
+                    # tool schema, swept out before the first send rather than
+                    # after it: the 400 is paid once per provider instead of
+                    # once per request, and the catalogue is byte-stable
+                    # across turns and restarts, so the vendor's implicit
+                    # tools prefix stays cached. Content-identical to ``body``
+                    # -- same ``tools`` list, same schema dicts -- when there
+                    # is nothing to apply.
+                    attempt_body, schema_marker = apply_learned_tool_schema_refusals(
+                        body, self._learned_schema_refusals()
+                    )
+                    # What the sweep took out, written down only once the
+                    # swept catalogue has actually been accepted.
+                    pending_schema: SchemaKeywordRefusal | None = None
+                    schema_evidence = ""
                     while True:
                         # Commit boundary: the body is final once it is handed
                         # to the sender, and the surface it was sent on is
                         # recorded beside it. Headers are not recorded -- they
                         # carry the bearer token.
-                        record_wire_request(attempt_body, surface=WIRE_SURFACE)
+                        record_wire_request(
+                            attempt_body, surface=WIRE_SURFACE, **schema_marker
+                        )
                         try:
                             response = await self._rate_limiter.execute_with_retry(
                                 self._send_stream_request,
@@ -764,6 +796,25 @@ class ChatGPTOAuthProvider(BaseProvider):
                             )
                             if recovered.body is None:
                                 raise
+                            if recovered.kind == RUNG_TOOL_SCHEMA:
+                                # Recomputed from the same error and the same
+                                # body rather than threaded back through
+                                # ``RecoveryDecision``: the read is pure, and
+                                # widening that decision would change the
+                                # arity every rung in the fleet returns to
+                                # carry a value one rung can produce -- the
+                                # reason ``rejected_effort_values`` is read at
+                                # the ladder too.
+                                schema = tool_schema_recovery(error, attempt_body)
+                                if schema is not None:
+                                    pending_schema = schema.refusal
+                                    schema_evidence = schema.evidence
+                                    schema_marker = schema.marker
+                            # Carried on the *retry* row, so the ladder in the
+                            # modal reads "400 ... / 200 (responses_tool_schema)"
+                            # and the operator can see which rewrite the second
+                            # body is.
+                            note_recovery_rung(recovered.kind)
                             if recovered.stripped_reasoning_field is not None:
                                 stripped_reasoning = recovered.stripped_reasoning_field
                                 stripped_evidence = recovered.evidence
@@ -771,6 +822,10 @@ class ChatGPTOAuthProvider(BaseProvider):
                             attempt_body = recovered.body
                             continue
                         break
+                    if pending_schema is not None:
+                        self._remember_tool_schema_refusal(
+                            pending_schema, schema_evidence
+                        )
                     if stripped_reasoning is not None:
                         self._remember_reasoning_rejection(
                             attempt_body,
@@ -843,6 +898,35 @@ class ChatGPTOAuthProvider(BaseProvider):
                     raise failure from error
 
         return _stream()
+
+    def _learned_schema_refusals(self) -> tuple[SchemaKeywordRefusal, ...]:
+        """Every schema-keyword class this host has been proven to refuse.
+
+        Read off the memory on every request rather than captured once, so a
+        *Forget* on the Models page reaches the very next request: the store
+        rebuilds this memory in place, and a provider holding its own copy
+        would keep sweeping a keyword nobody believes in any more.
+        """
+
+        return tuple(
+            refusal
+            for detail in self._recovery_memory.responses_tool_schema_details()
+            if (refusal := refusal_from_detail(detail)) is not None
+        )
+
+    def _remember_tool_schema_refusal(
+        self, refusal: SchemaKeywordRefusal, evidence: str
+    ) -> None:
+        """Write down a schema refusal the swept catalogue has just proven."""
+
+        if self._recovery_memory.remember_responses_tool_schema_refusal(
+            refusal.detail, evidence=evidence
+        ):
+            logger.warning(
+                "CHATGPT_OAUTH_STREAM: this host refuses {} in tool schemas -- "
+                "later requests are swept before the first send",
+                refusal.words,
+            )
 
     def _provider_failure_override(self, error: Exception) -> ExecutionFailure | None:
         return None
