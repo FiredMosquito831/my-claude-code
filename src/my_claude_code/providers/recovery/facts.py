@@ -33,6 +33,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Self
 
+from my_claude_code.config.settings import get_settings
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
 
 #: An output-token maximum the host stated in a 400. Value: ``int``.
@@ -185,6 +186,36 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     FACT_MODEL_WITHHELD: WITHHELD_FACT_TTL_SECONDS,
 }
 
+#: The three literals above, by the evidence class each one names. Since
+#: 7.32.0 each class is also a setting; this is how a class is turned into the
+#: setting that overrides it, and the shipped value when there is none.
+_TTL_SETTING_BY_SHIPPED: Mapping[float, str] = {
+    STATED_FACT_TTL_SECONDS: "stated_fact_ttl_seconds",
+    INFERRED_FACT_TTL_SECONDS: "inferred_fact_ttl_seconds",
+    WITHHELD_FACT_TTL_SECONDS: "withheld_fact_ttl_seconds",
+}
+
+
+def fact_ttl_seconds(fact_kind: str) -> float:
+    """How long a fact of this kind stays applicable, per the operator.
+
+    Asked per fact rather than captured once, which is what makes the three
+    settings hot: the store reads this while it walks its rows, so a shortened
+    clock applies to the next row rather than to the next restart. A settings
+    object that will not load is never a reason a learned fact changes meaning
+    -- the shipped number answers instead.
+    """
+
+    shipped = FACT_TTL_SECONDS.get(fact_kind, INFERRED_FACT_TTL_SECONDS)
+    attribute = _TTL_SETTING_BY_SHIPPED.get(shipped)
+    if attribute is None:
+        return shipped
+    try:
+        return float(getattr(get_settings(), attribute))
+    except Exception:
+        return shipped
+
+
 #: Long enough to recognise the sentence, short enough that no transcript,
 #: prompt echo or key fragment can survive being stored.
 MAX_EVIDENCE_CHARS = 160
@@ -320,9 +351,16 @@ class LearnedFact:
 
     @property
     def ttl_seconds(self) -> float:
-        """How long this evidence class stays applicable."""
+        """How long this evidence class stays applicable.
 
-        return FACT_TTL_SECONDS.get(self.fact_kind, INFERRED_FACT_TTL_SECONDS)
+        Read through :func:`fact_ttl_seconds`, which asks ``Settings`` rather
+        than the table above, so the three clocks are live: an operator who
+        shortens ``INFERRED_FACT_TTL_SECONDS`` on the Model Config page
+        changes what the very next row is worth, with no restart. The table
+        stays the shipped answer and the mapping from kind to class.
+        """
+
+        return fact_ttl_seconds(self.fact_kind)
 
     def age_seconds(self, now: datetime) -> float:
         """Seconds since the last piece of evidence re-affirmed this fact."""

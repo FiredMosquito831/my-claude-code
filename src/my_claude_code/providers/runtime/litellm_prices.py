@@ -50,6 +50,7 @@ from loguru import logger
 
 from my_claude_code.application.cost import SOURCE_LITELLM, RateCard
 from my_claude_code.config.paths import config_dir_path
+from my_claude_code.config.settings import get_settings
 from my_claude_code.core.model_ids import bare_model_id, candidate_ladder
 
 #: The commit this integration was written and measured against. Immutable, so
@@ -74,6 +75,10 @@ LITELLM_MIN_ENTRIES = 3_000
 #: A refresh may not shrink the table past this fraction of what is on disk.
 LITELLM_MAX_SHRINK_RATIO = 0.5
 
+#: The shipped defaults, and nothing more. Since 7.32.0 both numbers are
+#: settings -- ``LITELLM_CACHE_TTL_SECONDS`` and
+#: ``LITELLM_FETCH_TIMEOUT_SECONDS`` -- read through the accessors below. They
+#: stay here as the answer for a caller that has no settings to read.
 LITELLM_CACHE_TTL_SECONDS = 24 * 60 * 60
 LITELLM_FETCH_TIMEOUT_SECONDS = 10.0
 LITELLM_CACHE_DIRNAME = "cache"
@@ -98,6 +103,29 @@ _RATE_FIELDS: tuple[tuple[str, str], ...] = (
 #: The shortest provider name that may be matched by prefix. Below this,
 #: "ai" would agree with half the catalogue.
 _MIN_PROVIDER_PREFIX = 4
+
+
+def litellm_cache_ttl_seconds() -> float:
+    """How long the price table on disk counts as fresh, per the operator.
+
+    Read per call, so a change on the Cost estimation card applies to the next
+    refresh pass rather than to the next restart.
+    """
+
+    try:
+        return float(get_settings().litellm_cache_ttl_seconds)
+    except Exception:
+        # Pricing a request must never fail because settings would not load.
+        return float(LITELLM_CACHE_TTL_SECONDS)
+
+
+def litellm_fetch_timeout_seconds() -> float:
+    """How long one fetch of the price table may take, per the operator."""
+
+    try:
+        return float(get_settings().litellm_fetch_timeout_seconds)
+    except Exception:
+        return LITELLM_FETCH_TIMEOUT_SECONDS
 
 
 def litellm_cache_path() -> Path:
@@ -142,7 +170,7 @@ def read_litellm_cache(path: Path | None = None) -> LiteLLMPriceCache | None:
     return LiteLLMPriceCache(
         index=index,
         fetched_at=fetched_at,
-        fresh=age < LITELLM_CACHE_TTL_SECONDS,
+        fresh=age < litellm_cache_ttl_seconds(),
         etag=etag if isinstance(etag, str) and etag else None,
         source_url=source if isinstance(source, str) and source else None,
     )
@@ -214,7 +242,7 @@ async def fetch_litellm_prices(
     headers = {"If-None-Match": etag} if etag else {}
     try:
         async with httpx.AsyncClient(
-            timeout=LITELLM_FETCH_TIMEOUT_SECONDS, follow_redirects=True
+            timeout=litellm_fetch_timeout_seconds(), follow_redirects=True
         ) as client:
             response = await client.get(url, headers=headers)
             if response.status_code == 304:

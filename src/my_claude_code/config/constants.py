@@ -590,6 +590,34 @@ PROXY_CANDIDATE_BULK_MAX_MAX = 100000
 PROXY_FETCH_PERSIST_INTERVAL_SECONDS_DEFAULT = 5.0
 PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MIN = 0.5
 PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MAX = 300.0
+# How long an address is benched for a *triggering* failure -- the upstream
+# answered with a class the operator armed -- when the provider published no
+# wait of its own. Five minutes is what 7.19.0 through 7.31.0 used and is the
+# default here: this setting exposes the number, it does not change it. Long
+# enough that a per-address allowance has a chance of rolling over, short
+# enough that a chain of two recovers inside one working session. 0 means an
+# address is never benched for a trigger the provider did not time itself,
+# the same reading RATE_LIMIT_COOLDOWN_SECONDS has for a credential.
+#
+# Mirrored by ``core.proxy_rotation.PROXY_COOLDOWN_SECONDS_DEFAULT``, which is
+# where the engine reads it -- ``config`` is a leaf package and may not import
+# ``core``, so the literal lives in both and is pinned in both directions.
+PROXY_COOLDOWN_SECONDS_DEFAULT = 300.0
+PROXY_COOLDOWN_SECONDS_MIN = 0.0
+PROXY_COOLDOWN_SECONDS_MAX = 86400.0
+# The ceiling on a wait the provider *did* publish for an address. An hour,
+# not a day: the credential pool's day-long cap exists because a key the host
+# refused until midnight really is refused until midnight, while an address is
+# one of several and the cheap move is to try it again. 7.19.0's number,
+# unchanged.
+PROXY_COOLDOWN_MAX_SECONDS_DEFAULT = 3600.0
+PROXY_COOLDOWN_MAX_SECONDS_MIN = 1.0
+PROXY_COOLDOWN_MAX_SECONDS_MAX = 86400.0
+# The reachability ladder: how long a *dead* address sits out before it is
+# re-probed, one step per consecutive failure and clamped at the last entry.
+# Comma-separated seconds, the same shape CREDENTIAL_LOCKOUT_TIERS uses.
+# "60,300,3600" is 7.19.0's ladder written out, so the default changes nothing.
+PROXY_REACHABILITY_TIERS_DEFAULT = "60,300,3600"
 # What a 429 on a pooled credential means. True: it benches the (key, model)
 # pair and the executor moves to another model on the SAME provider first,
 # because a gateway that limits one model usually still answers another on the
@@ -895,6 +923,68 @@ IMAGE_JPEG_QUALITY_DEFAULT = 0
 # the question it was asked.
 VISION_ADAPTER_MODE_NAMES: frozenset[str] = frozenset({"route", "describe"})
 VISION_ADAPTER_MODE_DEFAULT = "route"
+
+# How many images of one request describe mode has in flight at once. Three is
+# what 6.51.0 through 7.31.0 used and is the default here: the setting exposes
+# the number, it does not change it. Concurrency is what keeps a
+# five-screenshot turn from costing five round trips in series; the bound is
+# what keeps it from opening five upstream connections on a provider that
+# meters by concurrency. 1 describes them strictly one at a time.
+DESCRIBE_CONCURRENCY_DEFAULT = 3
+DESCRIBE_CONCURRENCY_MIN = 1
+DESCRIBE_CONCURRENCY_MAX = 64
+
+# --------------------------------------------------------------------------
+# Catalogue caches and learned facts
+#
+# Every number below is the literal the module that reads it shipped with, so
+# exposing them moves nothing. They are the two model catalogues MCC keeps on
+# disk and the three clocks the learned-fact store runs.
+# --------------------------------------------------------------------------
+# How long the models.dev catalogue on disk is treated as fresh. A day is what
+# 6.x through 7.31.0 used. Past it the next refresh revalidates with the
+# server's ETag rather than re-downloading blindly, so a longer TTL saves a
+# conditional request and a shorter one asks more often; nothing is deleted
+# either way. 0 means "always stale", i.e. revalidate on every pass.
+MODELS_DEV_CACHE_TTL_SECONDS_DEFAULT = 86_400
+MODELS_DEV_CACHE_TTL_SECONDS_MIN = 0
+MODELS_DEV_CACHE_TTL_SECONDS_MAX = 31_536_000
+# How long one models.dev fetch may take before that pass is written off. Ten
+# seconds, unchanged. The catalogue is a convenience, never the request path,
+# so the honest failure is "this pass did not land" rather than a long wait.
+MODELS_DEV_FETCH_TIMEOUT_SECONDS_DEFAULT = 10.0
+MODELS_DEV_FETCH_TIMEOUT_SECONDS_MIN = 1.0
+MODELS_DEV_FETCH_TIMEOUT_SECONDS_MAX = 300.0
+# The same two numbers for the LiteLLM price table, which is the other half of
+# what a request costs. Identical defaults, separate settings: the price table
+# is 2.3 MB and the catalogue is not, and an operator who wants prices checked
+# more often rarely wants capabilities checked more often too.
+LITELLM_CACHE_TTL_SECONDS_DEFAULT = 86_400
+LITELLM_CACHE_TTL_SECONDS_MIN = 0
+LITELLM_CACHE_TTL_SECONDS_MAX = 31_536_000
+LITELLM_FETCH_TIMEOUT_SECONDS_DEFAULT = 10.0
+LITELLM_FETCH_TIMEOUT_SECONDS_MIN = 1.0
+LITELLM_FETCH_TIMEOUT_SECONDS_MAX = 300.0
+# The three clocks of the learned-fact store, one per evidence class. A fact
+# older than its class's TTL stops being applied and is asked again.
+#
+# STATED: a cap or an enum the host published in its own sentence. Thirty days.
+# INFERRED: a refusal proven by a retry that worked once a field was dropped.
+# Seven days -- weaker evidence, shorter clock.
+# WITHHELD: a model id that went missing from a catalogue. Seventy-two hours,
+# the weakest negative here: a 404 that was really an outage, or a model the
+# vendor has since launched, must not be a permanent hole in the catalogue.
+#
+# All three are read per fact rather than at startup, so a change applies to
+# the next row the store reads without a restart.
+STATED_FACT_TTL_SECONDS_DEFAULT = 2_592_000.0
+INFERRED_FACT_TTL_SECONDS_DEFAULT = 604_800.0
+WITHHELD_FACT_TTL_SECONDS_DEFAULT = 259_200.0
+# One shared bound for all three. The floor is 60 rather than 0 because a TTL
+# of zero would expire every fact the instant it was written, which is not
+# "learn less" but "never learn"; the ceiling is a year.
+FACT_TTL_SECONDS_MIN = 60.0
+FACT_TTL_SECONDS_MAX = 31_536_000.0
 
 # Nous Portal rejects an API-key request that carries no `tags` array with a
 # `user=` entry: HTTP 400 "This request is not valid. Check the model name and

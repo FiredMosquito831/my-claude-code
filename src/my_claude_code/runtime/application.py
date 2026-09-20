@@ -49,9 +49,10 @@ from my_claude_code.config.proxy_chains import (
     migrate_proxy_feeds,
 )
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
-from my_claude_code.config.settings import Settings, get_settings
+from my_claude_code.config.settings import Settings, get_settings, parse_lockout_tiers
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
 from my_claude_code.core.loop_health import loop_health
+from my_claude_code.core.proxy_rotation import configure_proxy_rotation
 from my_claude_code.core.request_log import (
     reset_request_log_stores,
     set_cost_backfill_pricer,
@@ -355,6 +356,20 @@ class ApplicationRuntime:
             # process-lifetime state and the store is durable, so without this
             # a restart would quietly re-admit every address already found
             # terminating TLS.
+            # First, and before either store is read: the engine in ``core``
+            # is handed the operator's ladder and cooldown pair, exactly as
+            # 7.22.0 hands the credential pool its ``RateLimitCooldown``.
+            # ``core`` may not import ``config``, so the policy is built here,
+            # where ``Settings`` is, and passed in. Ordering matters -- the
+            # re-arm below clamps each stored bench to the ladder's own
+            # window, so the ladder has to be the new one by then.
+            configure_proxy_rotation(
+                cooldown_seconds=self.settings.proxy_cooldown_seconds,
+                cooldown_max_seconds=self.settings.proxy_cooldown_max_seconds,
+                reachability_tiers=parse_lockout_tiers(
+                    self.settings.proxy_reachability_tiers
+                ),
+            )
             state.mark("proxy-refusals")
             await asyncio.to_thread(arm_refusals_from_store)
             # And the other half of the same argument. A reachability bench is

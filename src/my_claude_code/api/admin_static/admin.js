@@ -193,7 +193,11 @@ const VIEW_GROUPS = [
     id: "model_config",
     label: "Model Config",
     title: "Model Config",
-    sections: ["models", "reasoning", "web_tools"],
+    // `catalogue` joins them in 7.32.0: where a model's capabilities and
+    // prices come from when the provider publishes none, and how long a fact
+    // learned from a rejection stays applicable. It is model configuration,
+    // and the Models page owns no manifest section of its own.
+    sections: ["models", "reasoning", "web_tools", "catalogue"],
     containerId: "modelConfigSections",
   },
   {

@@ -36,6 +36,15 @@ class WebSearchOptionSpec:
     default: str  # default/empty selection value ("" unless documented)
     options: tuple[tuple[str, str], ...] = ()  # (value, label) pairs for select
     cost_note: str = ""  # "" or a short cost/gating warning
+    # Published bounds for a ``number`` option, 7.32.0. These are dotenv-only
+    # strings with no pydantic field behind them, so a bound here is what the
+    # number input shows and nothing more -- it cannot refuse a value an
+    # install is running on, and an empty value stays the "provider default"
+    # it has always been. Two of them (Brave, Tavily) are the host's own
+    # published range; the rest are wide sanity bounds on a count of
+    # characters, tokens or hours.
+    minimum: float | None = None
+    maximum: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +216,8 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 field_type="number",
                 default="",
                 cost_note="Empty = Exa serves cached pages of any age; lower forces fresher crawls and costs more.",
+                minimum=0,
+                maximum=876000,
             ),
             WebSearchOptionSpec(
                 env="EXA_START_PUBLISHED_DATE",
@@ -250,6 +261,8 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 field_type="number",
                 default="",
                 cost_note="Empty = provider default (3). Higher returns more text.",
+                minimum=1,
+                maximum=3,
             ),
             WebSearchOptionSpec(
                 env="TAVILY_COUNTRY",
@@ -423,6 +436,8 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 field_type="number",
                 default="",
                 cost_note="llm-context mode only",
+                minimum=1024,
+                maximum=32768,
             ),
         ),
     ),
@@ -507,6 +522,8 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 field_type="number",
                 default="",
                 cost_note="token-billed; best cost guardrail",
+                minimum=1,
+                maximum=10000000,
             ),
             WebSearchOptionSpec(
                 env="JINA_SITE",
@@ -740,6 +757,8 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 field_type="number",
                 default="",
                 cost_note="Empty = provider default. Caps text extracted per result.",
+                minimum=1,
+                maximum=10000000,
             ),
         ),
     ),
@@ -782,6 +801,8 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 field_type="number",
                 default="",
                 cost_note="Empty = provider default. Caps characters per individual result.",
+                minimum=1,
+                maximum=10000000,
             ),
             WebSearchOptionSpec(
                 env="PARALLEL_TOTAL_CHARS",
@@ -789,6 +810,8 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 field_type="number",
                 default="",
                 cost_note="Empty = provider default. Caps characters across all results.",
+                minimum=1,
+                maximum=10000000,
             ),
         ),
     ),

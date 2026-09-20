@@ -13,12 +13,12 @@ asked about, found by the 7.24.0 audit in
    ``test_shipped_defaults_agree`` -- which only checks keys the template
    mentions -- never looked at.
 2. **Twenty-three numeric fields published no bound.** A number input with no
-   minimum and no maximum accepts anything and finds out at the server. The
-   twenty-three are frozen by name below rather than given invented ceilings:
-   a bound on ``PORT`` or ``HTTP_READ_TIMEOUT`` would reject a value some
-   install is running on today, and the seven per-adapter web-search knobs are
-   numbers the search host itself validates. What this pins is that there is
-   never a twenty-fourth.
+   minimum and no maximum accepts anything and finds out at the server. 7.24.0
+   froze the twenty-three by name rather than inventing ceilings for them;
+   7.32.0 gave every one of them a wide bound, published inline on the field
+   and therefore offered by the input without ever refusing a value an install
+   is running on. The list below is now empty, and what this pins is that
+   there is never a twenty-fourth.
 3. **Nothing stopped a new ``os.environ`` read appearing.** Every name read in
    ``src/`` is either a ``Settings`` alias -- and therefore on a page, by the
    6.11.0 contract -- or one of the bootstrap names listed here, each of which
@@ -104,36 +104,23 @@ def test_every_dashboard_field_is_in_the_shipped_template() -> None:
 #: value is refused". Each deserves a bound argued on its own; this list is
 #: what makes that a deliberate choice instead of a blank space, and what
 #: stops a twenty-fourth joining them quietly.
-UNBOUNDED_BEFORE_7_24_0 = frozenset(
-    {
-        "PORT",
-        "MESSAGING_RATE_LIMIT",
-        "MESSAGING_RATE_WINDOW",
-        "MAX_MESSAGE_LOG_ENTRIES_PER_CHAT",
-        "SERVER_LOG_RETAIN_FILES",
-        "FALLBACK_REASONING_ANSWER_TIMEOUT",
-        "HTTP_READ_TIMEOUT",
-        "HTTP_WRITE_TIMEOUT",
-        "HTTP_CONNECT_TIMEOUT",
-        "PROVIDER_RATE_WINDOW",
-        "PROVIDER_MAX_CONCURRENCY",
-        "REQUEST_LOG_LADDER_BODY_MAX_CHARS",
-        "WEBSEARCH_LOG_CONTENT_MAX_CHARS",
-        "WEBSEARCH_LOG_MAX_ROWS",
-        "WEBSEARCH_DIGEST_CHARS",
-        "WEBSEARCH_DIGEST_CONTENT_CHARS",
-        # Per-adapter web-search knobs. Each is a number the search host
-        # itself validates and re-prices; MCC does not know that host's
-        # ceiling and must not invent one.
-        "BRAVE_LLM_MAX_TOKENS",
-        "EXA_MAX_AGE_HOURS",
-        "JINA_MAX_TOKENS",
-        "PARALLEL_EXCERPT_CHARS",
-        "PARALLEL_TOTAL_CHARS",
-        "PERPLEXITY_MAX_TOKENS_PER_PAGE",
-        "TAVILY_CHUNKS_PER_SOURCE",
-    }
-)
+#: **Empty since 7.32.0.** All twenty-three were given a bound, and the reason
+#: the 7.24.0 audit gave for holding off -- "a ceiling for PORT or
+#: HTTP_READ_TIMEOUT would reject a value some install is running on" -- was
+#: answered rather than repeated: every bound added there is published on the
+#: ``ConfigFieldSpec`` *inline*, and none of them is a ``LIMIT_RANGES`` entry
+#: or a pydantic ``ge``/``le``. A published bound is what the number input
+#: offers; it is not a validator, it does not clamp on load, and no value any
+#: install already runs on is refused by it. The numbers themselves are wide
+#: on purpose -- a port is 1-65535 because that is what a port is, a timeout
+#: is 0-86400 because a day is longer than any request, a count is
+#: 0-1,000,000 -- and two of the seven per-adapter knobs (Brave, Tavily) use
+#: the range the search host publishes and MCC's own label already stated.
+#:
+#: The set stays here, empty, rather than being deleted: it is the shape the
+#: escape hatch has, and a future field that genuinely cannot be bounded is
+#: meant to be argued into this list by name.
+UNBOUNDED_BEFORE_7_24_0: frozenset[str] = frozenset()
 
 
 def test_every_new_numeric_field_publishes_a_bound() -> None:

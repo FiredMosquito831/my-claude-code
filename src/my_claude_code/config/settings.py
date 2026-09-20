@@ -17,6 +17,9 @@ from .constants import (
     COST_ESTIMATION_MODE_DEFAULT,
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
     CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
+    DESCRIBE_CONCURRENCY_DEFAULT,
+    DESCRIBE_CONCURRENCY_MAX,
+    DESCRIBE_CONCURRENCY_MIN,
     DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT,
     DESKTOP_ADMIN_REQUEST_TIMEOUT_DEFAULT,
     DESKTOP_BUSY_GRACE_SECONDS_DEFAULT,
@@ -34,6 +37,8 @@ from .constants import (
     DESKTOP_TICK_SECONDS_DEFAULT,
     DESKTOP_WINDOW_HEIGHT_DEFAULT,
     DESKTOP_WINDOW_WIDTH_DEFAULT,
+    FACT_TTL_SECONDS_MAX,
+    FACT_TTL_SECONDS_MIN,
     FAILURE_KIND_NAMES,
     FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT,
     FALLBACK_BEHAVIOR_DEFAULT,
@@ -60,6 +65,13 @@ from .constants import (
     IMAGE_DETAIL_NAMES,
     IMAGE_JPEG_QUALITY_DEFAULT,
     IMAGE_MAX_LONG_EDGE_DEFAULT,
+    INFERRED_FACT_TTL_SECONDS_DEFAULT,
+    LITELLM_CACHE_TTL_SECONDS_DEFAULT,
+    LITELLM_CACHE_TTL_SECONDS_MAX,
+    LITELLM_CACHE_TTL_SECONDS_MIN,
+    LITELLM_FETCH_TIMEOUT_SECONDS_DEFAULT,
+    LITELLM_FETCH_TIMEOUT_SECONDS_MAX,
+    LITELLM_FETCH_TIMEOUT_SECONDS_MIN,
     MAX_OUTPUT_TOKENS_CEILING,
     MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
@@ -69,6 +81,12 @@ from .constants import (
     MODEL_PROBE_NEW_MODELS_DEFAULT,
     MODEL_VISIBILITY_ALLOW_DEFAULT,
     MODEL_VISIBILITY_DENY_DEFAULT,
+    MODELS_DEV_CACHE_TTL_SECONDS_DEFAULT,
+    MODELS_DEV_CACHE_TTL_SECONDS_MAX,
+    MODELS_DEV_CACHE_TTL_SECONDS_MIN,
+    MODELS_DEV_FETCH_TIMEOUT_SECONDS_DEFAULT,
+    MODELS_DEV_FETCH_TIMEOUT_SECONDS_MAX,
+    MODELS_DEV_FETCH_TIMEOUT_SECONDS_MIN,
     OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
     OPENCODE_CLIENT_IDENTITY_CHOICES,
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
@@ -102,6 +120,12 @@ from .constants import (
     PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
     PROXY_CONNECT_TIMEOUT_SECONDS_MAX,
     PROXY_CONNECT_TIMEOUT_SECONDS_MIN,
+    PROXY_COOLDOWN_MAX_SECONDS_DEFAULT,
+    PROXY_COOLDOWN_MAX_SECONDS_MAX,
+    PROXY_COOLDOWN_MAX_SECONDS_MIN,
+    PROXY_COOLDOWN_SECONDS_DEFAULT,
+    PROXY_COOLDOWN_SECONDS_MAX,
+    PROXY_COOLDOWN_SECONDS_MIN,
     PROXY_FEED_MAX_DEFAULT,
     PROXY_FEED_MAX_MAX,
     PROXY_FEED_MAX_MIN,
@@ -135,6 +159,7 @@ from .constants import (
     PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
     PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
     PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
+    PROXY_REACHABILITY_TIERS_DEFAULT,
     RATE_LIMIT_COOLDOWN_MAX_SECONDS_DEFAULT,
     RATE_LIMIT_COOLDOWN_MODE_DEFAULT,
     RATE_LIMIT_COOLDOWN_MODE_NAMES,
@@ -155,6 +180,7 @@ from .constants import (
     SERVER_STALE_SERVER_ACTION_CHOICES,
     SERVER_STALE_SERVER_ACTION_DEFAULT,
     SERVER_STALE_SESSION_SECONDS_DEFAULT,
+    STATED_FACT_TTL_SECONDS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
@@ -168,6 +194,7 @@ from .constants import (
     TRIM_MODE_NAMES,
     VISION_ADAPTER_MODE_DEFAULT,
     VISION_ADAPTER_MODE_NAMES,
+    WITHHELD_FACT_TTL_SECONDS_DEFAULT,
 )
 from .env_files import (
     ANTHROPIC_AUTH_TOKEN_ENV,
@@ -1222,6 +1249,33 @@ class Settings(BaseSettings):
         ge=PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MIN,
         le=PROXY_FETCH_PERSIST_INTERVAL_SECONDS_MAX,
     )
+    # How long an address sits out after the upstream answered with a failure
+    # class the operator armed and published no wait of its own. The address
+    # equivalent of RATE_LIMIT_COOLDOWN_SECONDS, and 0 reads the same way:
+    # nothing is benched unless the provider timed the bench itself.
+    proxy_cooldown_seconds: float = Field(
+        default=PROXY_COOLDOWN_SECONDS_DEFAULT,
+        validation_alias="PROXY_COOLDOWN_SECONDS",
+        ge=PROXY_COOLDOWN_SECONDS_MIN,
+        le=PROXY_COOLDOWN_SECONDS_MAX,
+    )
+    # The ceiling on a wait the provider did publish for an address, so a
+    # hostile or mistaken Retry-After cannot hold one out of the chain for a
+    # day.
+    proxy_cooldown_max_seconds: float = Field(
+        default=PROXY_COOLDOWN_MAX_SECONDS_DEFAULT,
+        validation_alias="PROXY_COOLDOWN_MAX_SECONDS",
+        ge=PROXY_COOLDOWN_MAX_SECONDS_MIN,
+        le=PROXY_COOLDOWN_MAX_SECONDS_MAX,
+    )
+    # The escalating re-probe ladder for an address that would not carry a
+    # request at all. Comma-separated seconds, one step per consecutive
+    # failure, clamped at the last entry -- the same shape and the same rules
+    # as CREDENTIAL_LOCKOUT_TIERS, for the connection instead of the key.
+    proxy_reachability_tiers: str = Field(
+        default=PROXY_REACHABILITY_TIERS_DEFAULT,
+        validation_alias="PROXY_REACHABILITY_TIERS",
+    )
     # Backoff between a provider's own retries of a 429 or 5xx.
     provider_retry_backoff_base_seconds: float = Field(
         default=PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
@@ -1429,6 +1483,63 @@ class Settings(BaseSettings):
     vision_adapter_mode: str = Field(
         default=VISION_ADAPTER_MODE_DEFAULT,
         validation_alias="VISION_ADAPTER_MODE",
+    )
+    # How many images of one request describe mode has in flight at once.
+    describe_concurrency: int = Field(
+        default=DESCRIBE_CONCURRENCY_DEFAULT,
+        validation_alias="DESCRIBE_CONCURRENCY",
+        ge=DESCRIBE_CONCURRENCY_MIN,
+        le=DESCRIBE_CONCURRENCY_MAX,
+    )
+
+    # ==================== Catalogue caches and learned facts ================
+    # How long the models.dev catalogue on disk counts as fresh, and how long
+    # one fetch of it may take. Neither is on the request path.
+    models_dev_cache_ttl_seconds: int = Field(
+        default=MODELS_DEV_CACHE_TTL_SECONDS_DEFAULT,
+        validation_alias="MODELS_DEV_CACHE_TTL_SECONDS",
+        ge=MODELS_DEV_CACHE_TTL_SECONDS_MIN,
+        le=MODELS_DEV_CACHE_TTL_SECONDS_MAX,
+    )
+    models_dev_fetch_timeout_seconds: float = Field(
+        default=MODELS_DEV_FETCH_TIMEOUT_SECONDS_DEFAULT,
+        validation_alias="MODELS_DEV_FETCH_TIMEOUT_SECONDS",
+        ge=MODELS_DEV_FETCH_TIMEOUT_SECONDS_MIN,
+        le=MODELS_DEV_FETCH_TIMEOUT_SECONDS_MAX,
+    )
+    # The same pair for the LiteLLM price table, which is what a request is
+    # costed against when the host reported no price of its own.
+    litellm_cache_ttl_seconds: int = Field(
+        default=LITELLM_CACHE_TTL_SECONDS_DEFAULT,
+        validation_alias="LITELLM_CACHE_TTL_SECONDS",
+        ge=LITELLM_CACHE_TTL_SECONDS_MIN,
+        le=LITELLM_CACHE_TTL_SECONDS_MAX,
+    )
+    litellm_fetch_timeout_seconds: float = Field(
+        default=LITELLM_FETCH_TIMEOUT_SECONDS_DEFAULT,
+        validation_alias="LITELLM_FETCH_TIMEOUT_SECONDS",
+        ge=LITELLM_FETCH_TIMEOUT_SECONDS_MIN,
+        le=LITELLM_FETCH_TIMEOUT_SECONDS_MAX,
+    )
+    # How long each evidence class of a learned fact stays applicable. Read per
+    # fact, so a change here applies without a restart.
+    stated_fact_ttl_seconds: float = Field(
+        default=STATED_FACT_TTL_SECONDS_DEFAULT,
+        validation_alias="STATED_FACT_TTL_SECONDS",
+        ge=FACT_TTL_SECONDS_MIN,
+        le=FACT_TTL_SECONDS_MAX,
+    )
+    inferred_fact_ttl_seconds: float = Field(
+        default=INFERRED_FACT_TTL_SECONDS_DEFAULT,
+        validation_alias="INFERRED_FACT_TTL_SECONDS",
+        ge=FACT_TTL_SECONDS_MIN,
+        le=FACT_TTL_SECONDS_MAX,
+    )
+    withheld_fact_ttl_seconds: float = Field(
+        default=WITHHELD_FACT_TTL_SECONDS_DEFAULT,
+        validation_alias="WITHHELD_FACT_TTL_SECONDS",
+        ge=FACT_TTL_SECONDS_MIN,
+        le=FACT_TTL_SECONDS_MAX,
     )
 
     # ==================== Tool-Result Trimming (Read / Grep / Glob) ==========
@@ -2089,6 +2200,22 @@ class Settings(BaseSettings):
             parse_lockout_tiers(v)
         except ValueError as exc:
             raise ValueError(f"CREDENTIAL_LOCKOUT_TIERS: {exc}") from exc
+        return v
+
+    @field_validator("proxy_reachability_tiers")
+    @classmethod
+    def validate_proxy_reachability_tiers(cls, v: str) -> str:
+        """The same check as the credential ladder, for the connection.
+
+        Rejected at load rather than at the first dead proxy, and stored
+        exactly as typed so the admin form round-trips the string it showed.
+        An empty ladder would silently mean "a dead address is never benched",
+        which is the opposite of what configuring it says.
+        """
+        try:
+            parse_lockout_tiers(v)
+        except ValueError as exc:
+            raise ValueError(f"PROXY_REACHABILITY_TIERS: {exc}") from exc
         return v
 
     @field_validator("rate_limit_cooldown_mode")
