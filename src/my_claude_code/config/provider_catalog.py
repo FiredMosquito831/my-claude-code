@@ -199,6 +199,11 @@ class ProviderDescriptor:
     # provider that had them probed. Static providers declare theirs in a
     # profile instead, so this stays ``None`` for the whole catalog.
     reasoning_effort_enum: tuple[str, ...] | None = None
+    # The wire APIs a hand-configured host declares that it serves, spelled as
+    # ``ResponseSurface`` values. Empty for the whole static catalog: a static
+    # provider states its surfaces in its profile instead, next to the rest of
+    # its transport behaviour. See ``config.provider_registry.surfaces``.
+    response_surfaces: tuple[str, ...] = ()
     # Settings attributes beyond a credential that must be non-empty to configure
     # the provider (e.g. VERTEX_PROJECT_ID for Application Default Credentials).
     required_settings_attrs: tuple[str, ...] = ()

@@ -11491,9 +11491,78 @@ function renderCustomProviders() {
 function customProviderDetailsText(provider) {
   return (
     `${provider.key_count} key${provider.key_count === 1 ? "" : "s"} · ` +
-    `${provider.credential_rotation} · ${provider.model_count} models` +
+    `${provider.credential_rotation}` +
+    // Before the model count rather than after it, which is not cosmetic: the
+    // count is the clause that moves when a refresh lands, and a reader --
+    // like the test that watches it -- follows it at the end of the line.
+    customProviderSurfacesText(provider) +
+    ` · ${provider.model_count} models` +
     (provider.proxy ? ` · proxy ${provider.proxy}` : "")
   );
+}
+
+/* What this host was told to serve, on the card, and nothing at all for the
+   default. An entry that speaks Chat Completions alone is every custom
+   provider that existed before 7.33.0, so saying so on its card would be a new
+   sentence about an unchanged thing; a host that serves two doors is a fact
+   worth reading without opening the form. */
+function customProviderSurfacesText(provider) {
+  const surfaces = Array.isArray(provider.surfaces) ? provider.surfaces : [];
+  if (surfaces.length < 2) return "";
+  return ` · serves ${surfaces.join(", ")}`;
+}
+
+/* The checkbox group, built from the vocabulary the server sent rather than
+   from a list in the page: adding a surface must be one change, in the
+   registry, not two. */
+function renderCustomProviderSurfaces(provider) {
+  const host = byId("cpSurfaces");
+  if (!host) return;
+  host.textContent = "";
+  const available =
+    (provider && Array.isArray(provider.available_surfaces)
+      ? provider.available_surfaces
+      : null) || CUSTOM_PROVIDER_SURFACE_FALLBACK;
+  const declared =
+    provider && Array.isArray(provider.surfaces)
+      ? provider.surfaces
+      : ["chat_completions"];
+  available.forEach((surface) => {
+    const row = document.createElement("label");
+    row.className = "cp-surface";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = surface.value;
+    box.checked = declared.indexOf(surface.value) !== -1;
+    box.dataset.cpSurface = surface.value;
+    const text = document.createElement("span");
+    text.textContent = surface.label;
+    row.append(box, text);
+    host.appendChild(row);
+  });
+}
+
+/* Only reached by a page that somehow has no provider to read the vocabulary
+   off -- the Add form before any provider exists. The server sends the same
+   three with every entry. */
+const CUSTOM_PROVIDER_SURFACE_FALLBACK = [
+  { value: "chat_completions", label: "Chat Completions (/chat/completions)" },
+  { value: "responses", label: "Responses (/responses)" },
+  { value: "messages", label: "Messages (/messages)" },
+];
+
+/* What the form submits: every ticked box, or Chat Completions when the
+   operator unticked all three. A host that serves nothing is not a
+   configuration anybody means, and the registry refuses it -- answering that
+   with a 422 the operator has to read would be a worse way to say the same
+   thing. */
+function customProviderSurfacesValue() {
+  const host = byId("cpSurfaces");
+  if (!host) return ["chat_completions"];
+  const ticked = Array.from(host.querySelectorAll("input[type=checkbox]"))
+    .filter((box) => box.checked)
+    .map((box) => box.value);
+  return ticked.length ? ticked : ["chat_completions"];
 }
 
 function customProviderCard(provider) {
@@ -11588,7 +11657,10 @@ function customProviderCard(provider) {
 
   const editButton = document.createElement("button");
   editButton.type = "button";
-  editButton.className = "secondary-button";
+  // ``cp-edit`` beside the shared class so the gesture is addressable: every
+  // other control on this card already is, and a test that has to find "Edit"
+  // by its label is a test that breaks when the label is translated.
+  editButton.className = "secondary-button cp-edit";
   editButton.textContent = "Edit";
   editButton.addEventListener("click", () => openCustomProviderForm(provider));
 
@@ -12020,6 +12092,7 @@ function openCustomProviderForm(provider) {
   byId("cpApiKeyField").hidden = Boolean(provider);
   byId("cpRotation").value = provider ? provider.credential_rotation : "failover";
   byId("cpProxy").value = provider && provider.proxy ? provider.proxy : "";
+  renderCustomProviderSurfaces(provider);
   byId("cpSubmitButton").textContent = provider ? "Save changes" : "Add provider";
   byId("customProviderForm").hidden = false;
   byId("cpDisplayName").focus();
@@ -12045,6 +12118,7 @@ async function submitCustomProviderForm(event) {
           base_url: byId("cpBaseUrl").value,
           credential_rotation: byId("cpRotation").value,
           proxy: byId("cpProxy").value,
+          surfaces: customProviderSurfacesValue(),
         }),
       });
       showMessage(`Updated ${editingId}.`, "ok");
@@ -12057,6 +12131,7 @@ async function submitCustomProviderForm(event) {
           api_key: byId("cpApiKey").value,
           credential_rotation: byId("cpRotation").value,
           proxy: byId("cpProxy").value,
+          surfaces: customProviderSurfacesValue(),
         }),
       });
       const discovery = result.discovery || {};
@@ -21659,7 +21734,11 @@ function fillModelReadouts(readouts, model) {
   readouts.textContent = "";
   readouts.appendChild(buildEffectiveTable(model.effective || []));
   readouts.appendChild(
-    buildCapabilityPanel(model.capabilities, (data && data.source_labels) || {}),
+    buildCapabilityPanel(
+      model.capabilities,
+      (data && data.source_labels) || {},
+      model,
+    ),
   );
   const listing = buildListingPanel(model.listing);
   if (listing) readouts.appendChild(listing);
@@ -22327,7 +22406,7 @@ function buildEffectiveTable(rows) {
    reasoning_effort" is a declaration about a gateway. MCC sends a control only
    when both say yes, so a model that sends nothing needs both halves visible
    to explain which one said no. */
-function buildCapabilityPanel(capabilities, labels) {
+function buildCapabilityPanel(capabilities, labels, model) {
   const wrap = document.createElement("div");
   wrap.className = "models-capabilities";
   const head = document.createElement("p");
@@ -22380,8 +22459,78 @@ function buildCapabilityPanel(capabilities, labels) {
     return wrap;
   }
   wrap.appendChild(table);
+  const surfaceEditor = buildSurfaceOverrideEditor(
+    capabilities && capabilities.response_surface,
+    model,
+  );
+  if (surfaceEditor) wrap.appendChild(surfaceEditor);
   const dialect = buildDialectPanel(capabilities && capabilities.reasoning_dialect);
   if (dialect) wrap.appendChild(dialect);
+  return wrap;
+}
+
+/* The one writable thing in a read-only panel, and it sits here rather than in
+   the parameter grid because it is not a parameter: `response_surface` never
+   reaches a body, it picks which endpoint the body is posted to. It offers
+   exactly the surfaces the HOST declares -- a profile's for a shipped
+   provider, the registry entry's for a hand-configured one -- because a
+   surface the host does not serve would be folded straight back to
+   "unservable" with a reason, which is a worse way of saying "you cannot pick
+   that". Absent for every single-surface provider, which is 39 of the 41 and
+   every custom entry that did not opt in. */
+function buildSurfaceOverrideEditor(field, model) {
+  if (!field || !model || !model.model_ref) return null;
+  const offered = Array.isArray(field.offered) ? field.offered : [];
+  if (offered.length < 2) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "models-surface-override";
+  const head = document.createElement("p");
+  head.className = "models-subhead";
+  head.textContent = "Which endpoint to use for this model";
+  wrap.appendChild(head);
+
+  const select = document.createElement("select");
+  select.className = "models-surface-select";
+  select.setAttribute("aria-label", "Wire surface override");
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "Automatic (learned, then published, then default)";
+  select.appendChild(auto);
+  offered.forEach((surface) => {
+    const option = document.createElement("option");
+    option.value = surface.value;
+    option.textContent = surface.label;
+    select.appendChild(option);
+  });
+  select.value = field.override || "";
+  wrap.appendChild(select);
+
+  const status = document.createElement("span");
+  status.className = "models-status";
+  const save = document.createElement("button");
+  save.className = "ghost-button models-surface-save";
+  save.type = "button";
+  save.textContent = "Pin endpoint";
+  save.addEventListener("click", () => {
+    save.disabled = true;
+    status.className = "models-status";
+    status.textContent = "Saving...";
+    saveModelSurface(model.model_ref, select.value)
+      .then(() => {
+        status.textContent = "Saved";
+        status.className = "models-status ok";
+      })
+      .catch((error) => {
+        status.textContent = error.message;
+        status.className = "models-status error";
+        showMessage(error.message, "error");
+      })
+      .finally(() => {
+        save.disabled = false;
+      });
+  });
+  wrap.appendChild(save);
+  wrap.appendChild(status);
   return wrap;
 }
 
@@ -23091,6 +23240,20 @@ function renderModelsPatternProvenance() {
   const exact = deny.length + allow.length - globs;
   target.hidden = deny.length + allow.length === 0;
   target.textContent = `${globs} glob pattern(s) and ${exact} exact model pattern(s) in your two lists.`;
+}
+
+/* The wire surface has a writer of its own because it has a validator of its
+   own: the server checks the chosen endpoint against what that provider
+   declares it serves, which the parameter grid's route cannot do. Empty
+   unpins. */
+async function saveModelSurface(key, surface) {
+  applyModelsData(
+    await api("/admin/api/model-admin/surface", {
+      method: "POST",
+      body: JSON.stringify({ key, surface }),
+    }),
+  );
+  refreshModelRows([key]);
 }
 
 async function saveModelOverrides(scope, key, updates) {

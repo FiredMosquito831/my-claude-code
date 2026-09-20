@@ -256,6 +256,19 @@
                   <label for="cpProxy"><span>Proxy (optional)</span></label>
                   <input id="cpProxy" type="text" autocomplete="off" placeholder="http://127.0.0.1:7890" />
                 </div>
+                <div class="field" id="cpSurfacesField">
+                  <label id="cpSurfacesLabel"><span>Wire APIs</span></label>
+                  <div
+                    id="cpSurfaces"
+                    class="cp-surfaces"
+                    role="group"
+                    aria-labelledby="cpSurfacesLabel"
+                    aria-describedby="desc-cpSurfaces"
+                  ></div>
+                  <div class="field-description" id="desc-cpSurfaces">
+                    Which wire APIs this host serves. MCC routes each model to the first one that works, and remembers what it proved. Leave Chat Completions ticked on its own unless you know your gateway also answers /responses or /messages — that is what every OpenAI-compatible host speaks.
+                  </div>
+                </div>
                 <div class="cp-form-actions">
                   <button id="cpSubmitButton" class="primary-button" type="submit">Add provider</button>
                   <button id="cpCancelButton" class="secondary-button" type="button">Cancel</button>

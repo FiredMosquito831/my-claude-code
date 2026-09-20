@@ -2839,6 +2839,18 @@ MCC now asks the host directly. On create, and again on every **Refresh models**
 
 **Probe reasoning dialect** on the card re-runs it on demand, and the field beside it takes a comma list (`low, high, max`) if you would rather state the answer than measure it; clearing the field forgets what was learned. Nothing about reasoning gating changes: the vocabulary is still intersected with the model's own, a clamp is still recorded in the request log, and an unknown dialect still behaves exactly as it did before.
 
+**Wire APIs.** A gateway is not always one API, and since 7.33.0 a custom provider can say which ones it fronts. The card's **Wire APIs** control offers three tick boxes — Chat Completions (`/chat/completions`), Responses (`/responses`) and Messages (`/messages`) — and the default is Chat Completions alone, which is what every custom provider has spoken since 6.25.0. An entry that keeps the default is routed exactly as it was: same body, same endpoint, nothing added to its request log.
+
+Tick a second door and three things become available, all of them the machinery the built-in OpenCode cards have used since 6.74.0:
+
+| | What happens |
+| --- | --- |
+| **Per-model override** | The Models page's *wire surface* row gains a **Pin endpoint** select, offering only the surfaces you ticked. Before 7.33.0 a `response_surface` override on a custom provider resolved to `unservable`, because the resolver folds what a model needs against what the provider *declares* and a custom entry declared nothing. |
+| **The probe** | When a model fails on one door in a way that names the endpoint — the bare `500` a gateway answers when the model lives elsewhere — MCC asks the other declared door one 16-token question and, if it answers, remembers that for seven days. Nothing is guessed: a probe that fails leaves the original failure exactly as it was. |
+| **The nets** | Both alternative doors carry the recovery ladders: a host that states a tool-name ceiling in a `400` is retried once with aliased names and the ceiling is remembered, and a host that accepts only `tool_choice: auto` is retried once without the field. Each rung fires at most once per request, and a `400` nothing recognises is raised unchanged. |
+
+A custom host's Responses and Messages requests carry **its** base URL and **its** key pool, and no vendor identity headers: those are declared by the two OpenCode profiles and nothing else. The Messages door sends the credential in both shapes (`Authorization: Bearer` and `x-api-key` with `anthropic-version`), because that is what a gateway fronting Anthropic's protocol authenticates with.
+
 One caveat on capabilities. models.dev, which supplies context windows, output caps and reasoning-effort vocabularies, is keyed by *its* provider ids — and a provider you invented is not in it. That turns out to be an advantage rather than a gap: without a bucket, custom models fall through to the cross-provider vote (the same model id as served by other providers), which in practice resolves *more* than a bucket does. `supported_parameters` and `default_parameters` are the fields that genuinely stay unknown, and they are unknown for nine of the eleven live providers, built-in ones included. Routing, rotation, key health, benching, fallback chains, visibility globs and analytics are all identical to a built-in provider.
 
 ---

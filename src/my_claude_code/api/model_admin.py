@@ -31,6 +31,7 @@ from my_claude_code.application.model_metadata import (
     ModelListingProvenance,
     ModelReasoningCapability,
     ProviderModelInfo,
+    ResponseSurface,
     ResponseSurfaceSource,
 )
 from my_claude_code.config.model_overrides import (
@@ -39,7 +40,10 @@ from my_claude_code.config.model_overrides import (
     OWNED_ELSEWHERE_PARAMETERS,
     PREFERENCE_OVERRIDE_PARAMETERS,
     REASONING_PREFERENCE_OVERRIDE,
+    RESPONSE_SURFACE_OVERRIDE,
     ModelParameterOverrides,
+    current_model_overrides,
+    model_ref_for,
     normalize_override_key,
 )
 from my_claude_code.config.model_refs import (
@@ -61,7 +65,9 @@ from my_claude_code.core.reasoning import (
     ReasoningEffort,
 )
 from my_claude_code.providers.openai_chat import (
+    OPENAI_CHAT_PROFILES,
     catalogue_surface,
+    declared_surfaces_for,
     learned_effort_values,
 )
 from my_claude_code.providers.runtime.models_dev import (
@@ -141,6 +147,15 @@ SURFACE_SOURCE_LABELS: dict[str, str] = {
     ResponseSurfaceSource.LEARNED: "a probe of this deployment",
     ResponseSurfaceSource.REGISTRY: "the vendor's published registry",
     ResponseSurfaceSource.DEFAULT: "this provider's only surface",
+}
+
+# What each wire API is called in the override control. The enum values are
+# what goes in the file and on the wire; these are what a person reads.
+SURFACE_VALUE_LABELS: dict[ResponseSurface, str] = {
+    ResponseSurface.CHAT_COMPLETIONS: "Chat Completions (/chat/completions)",
+    ResponseSurface.RESPONSES: "Responses (/responses)",
+    ResponseSurface.MESSAGES: "Messages (/messages)",
+    ResponseSurface.UNSERVABLE: "Unservable",
 }
 
 # Which capability field a fact narrows, so the chip can be drawn beside the
@@ -767,7 +782,41 @@ def response_surface_payload(provider_id: str, model_id: str) -> dict[str, Any] 
         "tier_label": None,
         "note": resolved.detail,
         "label": resolved.label,
+        # The surfaces this host *declares*, which is exactly the set the
+        # operator may choose between. Offering more would be offering a door
+        # the resolver would fold straight back to ``unservable``; offering
+        # fewer would hide one the host says it serves.
+        "offered": [
+            {"value": surface.value, "label": SURFACE_VALUE_LABELS[surface]}
+            for surface in speakable_surfaces(provider_id)
+        ],
+        "override": override_response_surface(provider_id, model_id),
     }
+
+
+def speakable_surfaces(provider_id: str) -> tuple[ResponseSurface, ...]:
+    """Which wire APIs this provider says it serves, in the order it tries them.
+
+    One question, two answers, and the same answer either way: a static
+    provider declares its surfaces in its profile, a custom one on its registry
+    entry. ``()`` for every single-surface provider -- 39 of the 41 and every
+    custom entry that did not opt in -- so no control is offered where there is
+    nothing to choose between.
+    """
+
+    profile = OPENAI_CHAT_PROFILES.get(provider_id)
+    if profile is not None:
+        return profile.response_surfaces
+    return declared_surfaces_for(provider_id)
+
+
+def override_response_surface(provider_id: str, model_id: str) -> str:
+    """The surface an operator pinned for this model, or ``""`` for none."""
+
+    raw = current_model_overrides().non_body_override(
+        RESPONSE_SURFACE_OVERRIDE, provider_id, model_ref_for(provider_id, model_id)
+    )
+    return raw if isinstance(raw, str) else ""
 
 
 def exact_pattern(model_ref: str) -> str:
@@ -1681,7 +1730,10 @@ def merged_override_row(
     that ``apply_model_parameter_overrides`` refuses to write into a body at
     all. The whole non-body set is deliberately not admitted --
     ``response_surface`` is written by the surface machinery and has no cell
-    in this grid, so accepting it here would newly expose it.
+    in this grid, so accepting it here would newly expose it. Its own control
+    (7.33.0, the select on the wire surface row) writes through
+    :func:`with_surface_override_row` instead, which validates the value
+    against what the host declares -- something this grid could not do.
     """
 
     row = dict(existing)
@@ -1693,6 +1745,38 @@ def merged_override_row(
             continue
         row[name] = value
     return row
+
+
+def with_surface_override_row(
+    overrides: ModelParameterOverrides, *, key: str, surface: str
+) -> ModelParameterOverrides:
+    """Pin one model to a wire surface, or unpin it when ``surface`` is ``""``.
+
+    A writer of its own rather than a widening of :func:`merged_override_row`,
+    and the distinction is the point. That function is the parameter grid's,
+    and the grid cannot check this value: whether ``responses`` is a legal
+    answer depends on what the *provider* declares it serves, which is a
+    question about a host and not about a row. The route above this validates
+    against exactly that declaration, so the only surfaces that can be written
+    here are ones the operator was actually offered.
+
+    Model scope only. A whole provider pinned to one door would be a statement
+    about every model it serves, and which door a model lives behind is a
+    property of the model -- the premise the whole surface feature rests on.
+    """
+
+    folded = normalize_override_key(key)
+    table = {name: dict(row) for name, row in overrides.models.items()}
+    row = dict(table.get(folded, {}))
+    if surface:
+        row[RESPONSE_SURFACE_OVERRIDE] = surface
+    else:
+        row.pop(RESPONSE_SURFACE_OVERRIDE, None)
+    if row:
+        table[folded] = row
+    else:
+        table.pop(folded, None)
+    return replace(overrides, models=table)
 
 
 def with_override_row(

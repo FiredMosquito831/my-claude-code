@@ -497,6 +497,30 @@ const modelsFor = (providerId, hiddenTail) =>
     capabilities: {
       max_output_tokens: { value: 40960, source: "provider", source_label: "" },
       supports_vision: { value: true, source: "provider", source_label: "" },
+      // The 6.74.0 wire-surface row, on a model whose host serves more than
+      // one door -- which is what makes the 7.33.0 override control appear.
+      response_surface:
+        index === 6
+          ? {
+              value: "chat_completions",
+              source: "default",
+              source_label: "this provider's only surface",
+              approximate: false,
+              reference: false,
+              tier: null,
+              tier_label: null,
+              note: "",
+              label: "chat_completions (default)",
+              offered: [
+                {
+                  value: "chat_completions",
+                  label: "Chat Completions (/chat/completions)",
+                },
+                { value: "responses", label: "Responses (/responses)" },
+              ],
+              override: "",
+            }
+          : null,
     },
     // One fresh fact, one stale one, and one probe verdict that contradicts
     // the catalogue -- the three states the Learned column has to draw.
@@ -1344,6 +1368,17 @@ const ROUTES = {
         status: "configured",
         models: [],
         added_at: "2026-01-01T00:00:00Z",
+        // This host was told it serves two doors, which is what puts a second
+        // clause on the card's details line and two ticked boxes in its form.
+        surfaces: ["chat_completions", "responses"],
+        available_surfaces: [
+          {
+            value: "chat_completions",
+            label: "Chat Completions (/chat/completions)",
+          },
+          { value: "responses", label: "Responses (/responses)" },
+          { value: "messages", label: "Messages (/messages)" },
+        ],
       },
       {
         provider_id: "custom_bad_ai",
@@ -5413,6 +5448,33 @@ if (modelsLink) {
     };
   };
   const alpha = MODEL_ADMIN_PAGE.providers[0];
+
+  /* --- the wire surface row (6.74.0) and its override control (7.33.0).
+     Built directly for the same reason the preference editors above are: the
+     panel is a pure function of (capabilities, labels, model), and what is
+     under test is which surfaces it offers -- only the ones the host declares
+     -- not the disclosure that reveals it. */
+  const describeSurfacePanel = (model) => {
+    const panel = window.eval("buildCapabilityPanel")(
+      model.capabilities,
+      MODEL_ADMIN_PAGE.source_labels || {},
+      model,
+    );
+    const editor = panel.querySelector(".models-surface-override");
+    const select = panel.querySelector("select.models-surface-select");
+    return {
+      rows: Array.from(panel.querySelectorAll("tr th")).map(flat),
+      hasEditor: Boolean(editor),
+      head: editor ? flat(editor.querySelector(".models-subhead")) : "",
+      options: select
+        ? Array.from(select.options).map((option) => option.value)
+        : [],
+      selected: select ? select.value : "",
+    };
+  };
+  models.surfaceMultiDoor = describeSurfacePanel(alpha.models[6]);
+  models.surfaceSingleDoor = describeSurfacePanel(alpha.models[0]);
+
   models.preferences = {};
   [0, 1, 2, 3, 4, 5, 6].forEach((index) => {
     const model = alpha.models[index];
@@ -6296,6 +6358,53 @@ const customProviders = {};
     ).map((el) => el.textContent);
     customProviders.keyRowCount = acme.querySelectorAll(".cp-key-row").length;
   }
+
+  // The 7.33.0 control: which wire APIs this host serves. The create above
+  // went out with the default ticked; opening Edit on a host that declares two
+  // must tick exactly those two, and the help text must be on the page beside
+  // them (the 7.29.1 contract, which the hand-written custom form is not
+  // otherwise covered by).
+  customProviders.createdSurfaces = (() => {
+    const sent = fetchBodies.filter(
+      (entry) =>
+        entry.path === "/admin/api/custom-providers" && entry.method === "POST",
+    );
+    return sent.length ? sent[sent.length - 1].body.surfaces : null;
+  })();
+  const acmeEdit = doc.querySelector(
+    '[data-custom-provider="custom_acme"] .cp-edit',
+  );
+  if (acmeEdit) acmeEdit.click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  customProviders.surfaceLabels = Array.from(
+    doc.querySelectorAll("#cpSurfaces .cp-surface span"),
+  ).map((el) => el.textContent);
+  customProviders.surfaceChecked = Array.from(
+    doc.querySelectorAll("#cpSurfaces input[type=checkbox]"),
+  )
+    .filter((box) => box.checked)
+    .map((box) => box.value);
+  customProviders.surfaceHelp = textOf(doc, "#desc-cpSurfaces");
+  const messagesBox = doc.querySelector(
+    '#cpSurfaces input[data-cp-surface="messages"]',
+  );
+  if (messagesBox) {
+    messagesBox.checked = true;
+    doc
+      .getElementById("customProviderForm")
+      .dispatchEvent(
+        new window.Event("submit", { bubbles: true, cancelable: true }),
+      );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  customProviders.patchedSurfaces = (() => {
+    const sent = fetchBodies.filter(
+      (entry) =>
+        entry.path.startsWith("/admin/api/custom-providers/") &&
+        entry.method === "PATCH",
+    );
+    return sent.length ? sent[sent.length - 1].body.surfaces : null;
+  })();
 }
 
 // ------------------------------------------------------------ coding agents

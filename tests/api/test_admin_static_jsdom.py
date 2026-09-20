@@ -2114,6 +2114,70 @@ def test_the_custom_card_offers_disable_as_a_gesture(rendered) -> None:
     assert rendered["customProviders"]["toggleLabel"] == "Disable"
 
 
+def test_the_custom_card_offers_every_wire_api_the_build_speaks(rendered) -> None:
+    """7.33.0: the card says which doors this host serves, and can change it."""
+
+    card = rendered["customProviders"]
+
+    assert card["surfaceLabels"] == [
+        "Chat Completions (/chat/completions)",
+        "Responses (/responses)",
+        "Messages (/messages)",
+    ]
+    # Exactly what the entry declares, not everything and not the default.
+    assert card["surfaceChecked"] == ["chat_completions", "responses"]
+
+
+def test_the_wire_api_field_carries_its_own_help_text(rendered) -> None:
+    """The 7.29.1 contract, kept by hand for a form outside the manifest."""
+
+    help_text = rendered["customProviders"]["surfaceHelp"] or ""
+
+    assert len(help_text) > 20
+    assert "routes each model" in help_text
+
+
+def test_a_created_provider_declares_chat_completions_by_default(rendered) -> None:
+    """Nothing changes for an operator who never opens the control."""
+
+    assert rendered["customProviders"]["createdSurfaces"] == ["chat_completions"]
+
+
+def test_ticking_a_door_on_the_card_submits_it(rendered) -> None:
+    assert rendered["customProviders"]["patchedSurfaces"] == [
+        "chat_completions",
+        "responses",
+        "messages",
+    ]
+
+
+def test_the_models_page_draws_the_wire_surface_row(rendered) -> None:
+    """The 6.74.0 row, which had no jsdom coverage until 7.33.0."""
+
+    assert "wire surface" in rendered["models"]["surfaceMultiDoor"]["rows"]
+
+
+def test_the_surface_override_offers_only_the_doors_the_host_declares(
+    rendered,
+) -> None:
+    """A surface the host does not serve would fold back to unservable."""
+
+    panel = rendered["models"]["surfaceMultiDoor"]
+
+    assert panel["hasEditor"] is True
+    assert panel["options"] == ["", "chat_completions", "responses"]
+    assert panel["selected"] == ""
+
+
+def test_a_single_surface_model_is_offered_no_choice_at_all(rendered) -> None:
+    """39 of the 41 providers, and every custom entry that did not opt in."""
+
+    panel = rendered["models"]["surfaceSingleDoor"]
+
+    assert panel["hasEditor"] is False
+    assert "wire surface" not in panel["rows"]
+
+
 def test_a_custom_pool_shows_per_key_health_like_a_static_one(rendered) -> None:
     """``key_health()`` had exactly one caller, and no custom pool could reach it.
 

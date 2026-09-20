@@ -234,15 +234,22 @@ def catalogue_surface(
     """The resolved surface for one catalogue row, for the Models page.
 
     ``None`` for every provider whose profile declares no surfaces -- 39 of the
-    41 -- so their rows are byte-identical to what they were. The lookup is a
-    registry read, not a branch: the profile table is keyed by catalogue id
-    exactly as the provider factory keys it.
+    41 -- and for every custom entry that serves Chat Completions alone, so
+    their rows are byte-identical to what they were. The lookup is a registry
+    read, not a branch: the profile table is keyed by catalogue id exactly as
+    the provider factory keys it, and a custom entry's declaration is read from
+    the same registry the factory builds it from.
     """
 
     from .profiles import OPENAI_CHAT_PROFILES
 
     profile = OPENAI_CHAT_PROFILES.get(provider_id)
-    if profile is None or not profile.response_surfaces:
+    if profile is None:
+        declared = declared_surfaces_for(provider_id)
+        if not declared:
+            return None
+        return resolve_response_surface(provider_id, model_id, declared=declared)
+    if not profile.response_surfaces:
         return None
     return resolve_response_surface(
         provider_id,
@@ -250,6 +257,31 @@ def catalogue_surface(
         registry_provider=profile.surface_registry_provider,
         declared=profile.response_surfaces,
     )
+
+
+def declared_surfaces_for(provider_id: str) -> tuple[ResponseSurface, ...]:
+    """What a custom entry says its host serves, or ``()`` for anything else.
+
+    ``()`` for a static provider, for an unknown id, and -- the case that keeps
+    every existing install unchanged -- for a custom entry that declares Chat
+    Completions alone, because one surface is the same routing decision as no
+    statement at all (see ``declared_surfaces.py``).
+
+    Deferred import for the same reason the models.dev read above is deferred:
+    this module is imported while the provider package is still being built.
+    """
+
+    if not provider_id:
+        return ()
+    from my_claude_code.config.provider_registry import get_provider_registry
+
+    from .declared_surfaces import declared_surfaces
+
+    entry = get_provider_registry().get(provider_id)
+    if entry is None:
+        return ()
+    surfaces = declared_surfaces(entry.surfaces)
+    return () if surfaces == (DEFAULT_SURFACE,) else surfaces
 
 
 def alternative_surfaces(

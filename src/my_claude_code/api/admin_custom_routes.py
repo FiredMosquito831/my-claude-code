@@ -30,10 +30,12 @@ from my_claude_code.config.credential_names import (
     set_name,
 )
 from my_claude_code.config.provider_registry import (
+    CUSTOM_PROVIDER_SURFACES,
     CustomProviderEntry,
     ProviderRegistry,
     custom_provider_id,
     get_provider_registry,
+    normalize_custom_surfaces,
 )
 from my_claude_code.config.reasoning_enum import normalize_effort_words
 from my_claude_code.config.settings import Settings
@@ -52,6 +54,14 @@ from .dependencies import get_services
 from .ports import ApiServices
 
 router = APIRouter()
+
+#: What each wire API is called on the card. The values are the registry's;
+#: these are the words beside the checkboxes.
+CUSTOM_PROVIDER_SURFACE_LABELS: dict[str, str] = {
+    "chat_completions": "Chat Completions (/chat/completions)",
+    "responses": "Responses (/responses)",
+    "messages": "Messages (/messages)",
+}
 
 ROTATION_POLICIES = ("single", "round_robin", "least_used", "failover")
 DEFAULT_ROTATION = "failover"
@@ -75,6 +85,10 @@ class CustomProviderCreatePayload(BaseModel):
     api_key: str
     credential_rotation: str = DEFAULT_ROTATION
     proxy: str | None = None
+    # Which wire APIs this host serves. Absent -- every client written before
+    # 7.33.0, and the card with nothing ticked beyond the default -- means Chat
+    # Completions alone, which is what a custom provider has always spoken.
+    surfaces: list[str] | None = None
 
 
 class CustomProviderUpdatePayload(BaseModel):
@@ -89,6 +103,10 @@ class CustomProviderUpdatePayload(BaseModel):
     # An empty string forgets the learned vocabulary and restores the generic
     # OpenAI enum; ``None`` (absent) leaves it untouched.
     reasoning_effort_enum: str | list[str] | None = None
+    # The wire APIs this host serves. ``None`` (absent) leaves the declaration
+    # untouched; a list replaces it wholesale, which is what a checkbox group
+    # submits.
+    surfaces: list[str] | None = None
 
 
 class CustomProviderKeyPayload(BaseModel):
@@ -207,6 +225,15 @@ def _serialize_entry(
         "reasoning_probe_status": entry.reasoning_probe_status,
         "reasoning_probed_at": entry.reasoning_probed_at,
         "reasoning_dialect_label": _dialect_label(entry),
+        # What this host serves, and the whole vocabulary the card may offer.
+        # The second is sent rather than hardcoded in the page for the same
+        # reason ``editable_parameters`` is on the Models payload: adding a
+        # surface must be one change here, not two.
+        "surfaces": list(entry.surfaces),
+        "available_surfaces": [
+            {"value": value, "label": CUSTOM_PROVIDER_SURFACE_LABELS[value]}
+            for value in CUSTOM_PROVIDER_SURFACES
+        ],
         "auto_paused_refs": [
             {"paused_key": paused_key, "model_ref": model_ref}
             for paused_key, model_ref in entry.auto_paused_refs
@@ -318,6 +345,7 @@ async def create_custom_provider(
             api_keys=(api_key,),
             credential_rotation=rotation,
             proxy=proxy,
+            surfaces=payload.surfaces,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -380,6 +408,14 @@ async def update_custom_provider(
         changes["proxy"] = _normalize_proxy(payload.proxy)
     if payload.enabled is not None:
         changes["enabled"] = payload.enabled
+    if payload.surfaces is not None:
+        # Validated by the registry, which owns the vocabulary; a word this
+        # build does not know is a mistake worth showing rather than a silent
+        # repair.
+        try:
+            changes["surfaces"] = normalize_custom_surfaces(payload.surfaces)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if payload.reasoning_effort_enum is not None:
         words = normalize_effort_words(payload.reasoning_effort_enum)
         changes["reasoning_effort_enum"] = list(words) if words else None

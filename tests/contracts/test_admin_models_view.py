@@ -147,6 +147,9 @@ def test_the_models_page_talks_to_the_endpoints_that_exist() -> None:
         "/admin/api/model-admin/visibility/bulk",
         "/admin/api/model-admin/visibility/migrate-globs",
         "/admin/api/model-admin/overrides",
+        # 7.33.0: the wire surface pin, which has a writer of its own because
+        # it has a validator of its own.
+        "/admin/api/model-admin/surface",
     ):
         assert f'"{path}"' in script, f"admin.js never calls {path}"
         assert f'"{path}"' in routes, f"admin_routes.py does not serve {path}"
