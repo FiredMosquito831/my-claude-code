@@ -27,6 +27,7 @@ Every socket and thread opened here is closed in a fixture's teardown.
 """
 
 import asyncio
+import contextlib
 import datetime
 import socket
 import ssl
@@ -462,23 +463,26 @@ async def test_an_intercepting_proxy_is_refused_across_the_process(
     assert PROXY_INTERCEPTION.is_refused(good_label) is False
 
 
-async def test_a_dead_address_walks_the_reachability_ladder(
-    origin: _Origin, clean_proxy: _ConnectProxy
-) -> None:
+async def test_a_dead_address_walks_the_reachability_ladder(origin: _Origin) -> None:
     """A proxy that is not listening is benched without the operator doing anything.
 
-    The port is one the fixture bound and then closed, so it is a refused
-    connection rather than a hang -- which is what a dead free proxy actually
-    looks like the day after somebody scraped it.
+    The port is bound by this test and never listened on, and the socket is
+    held for the duration -- which is what a dead free proxy looks like the day
+    after somebody scraped it, and, unlike a closed port's number, is a port
+    nothing else in a parallel run can be handed.
     """
 
-    clean_proxy.close()
-    dead_url = f"http://127.0.0.1:{clean_proxy.port}"
+    dead = socket.socket()
+    dead.bind(("127.0.0.1", 0))
+    dead_url = f"http://127.0.0.1:{dead.getsockname()[1]}"
     label = mask_proxy_label(dead_url)
 
-    record = await check_proxy(
-        dead_url, f"https://{HOSTNAME}:{origin.port}/", timeout=2.0
-    )
+    try:
+        record = await check_proxy(
+            dead_url, f"https://{HOSTNAME}:{origin.port}/", timeout=2.0
+        )
+    finally:
+        dead.close()
     apply_outcome(label, record)
 
     assert record.ok is False
@@ -512,9 +516,19 @@ async def test_a_refusal_survives_the_proxy_simply_going_offline(
     apply_outcome(label, await check_proxy(url, destination, timeout=10.0))
     assert PROXY_INTERCEPTION.is_refused(label) is True
 
-    # The same address, now simply not listening.
+    # The same address, now simply not listening. The port is taken over by a
+    # socket that never listens, so that "the same address, dead" stays the
+    # same address: a closed port's number is free for the next server a
+    # parallel run starts, and this test would then be measuring that.
     mitm_proxy.close()
-    dead = await check_proxy(url, destination, timeout=2.0)
+    keeper = socket.socket()
+    keeper.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    with contextlib.suppress(OSError):
+        keeper.bind(("127.0.0.1", mitm_proxy.port))
+    try:
+        dead = await check_proxy(url, destination, timeout=2.0)
+    finally:
+        keeper.close()
     apply_outcome(label, dead)
 
     assert dead.ok is False
@@ -630,18 +644,29 @@ async def test_the_tls_depth_refuses_an_intercepting_proxy(
     assert PROXY_INTERCEPTION.is_refused(mask_proxy_label(url)) is True
 
 
-async def test_the_tls_depth_calls_a_dead_address_dead(
-    origin: _Origin, clean_proxy: _ConnectProxy
-) -> None:
-    """A closed port is dead at either depth, and is never an interception."""
+async def test_the_tls_depth_calls_a_dead_address_dead(origin: _Origin) -> None:
+    """An address with nothing accepting on it is dead, and never an interception.
 
-    clean_proxy.close()
-    record = await check_proxy(
-        f"http://127.0.0.1:{clean_proxy.port}",
-        f"https://{HOSTNAME}:{origin.port}/",
-        timeout=2.0,
-        depth="tls",
-    )
+    The dead address is a socket this test binds and never listens on, held
+    open for the duration. Closing a proxy and reusing its port number -- what
+    this test did until 7.35.1 -- asks the operating system not to hand that
+    port to anything else, and it makes no such promise: on a parallel run it
+    was handed to another test's honest proxy, and a port that was supposed to
+    be dead answered, verified a certificate and passed.
+    """
+
+    dead = socket.socket()
+    dead.bind(("127.0.0.1", 0))
+    port = dead.getsockname()[1]
+    try:
+        record = await check_proxy(
+            f"http://127.0.0.1:{port}",
+            f"https://{HOSTNAME}:{origin.port}/",
+            timeout=2.0,
+            depth="tls",
+        )
+    finally:
+        dead.close()
 
     assert record.ok is False
     assert record.tls == TLS_UNKNOWN
