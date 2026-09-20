@@ -25,32 +25,58 @@ newest schema the repository accepts, and `winget validate` passing proves only
 that your local client understands the file.* Fixed; `render.py` pins 1.12.0
 with the reasoning written at the constant.
 
-**2. `Validation-Executable-Error` (2026-09-11).** The pipeline installed the
-package on a clean validator VM, ran `MyClaudeCode.exe`, and got
-`-1073741515` = `0xC0000135` = `STATUS_DLL_NOT_FOUND`:
+**2. `Validation-Executable-Error` (2026-09-11), and the wrong fix for it
+(2026-09-15).** The pipeline installed the package on a clean validator VM, ran
+`MyClaudeCode.exe`, and got `-1073741515` = `0xC0000135` = `STATUS_DLL_NOT_FOUND`:
 
 > Executable C:\Users\validator\AppData\Local\Programs\My Claude Code\MyClaudeCode.exe returned exit code: -1073741515
 
-The shell is a Tauri app, so its window is drawn by the **Edge WebView2
-runtime** — a system component we do not bundle. Without it the executable
-cannot resolve its imports and Windows kills it before any of our code runs.
-The installer *does* carry a WebView2 bootstrapper, but it runs it only when its
-EdgeUpdate `pv` registry probe reports the runtime absent, and that probe does
-not answer usefully inside the validation image.
+This was read as a missing **Edge WebView2 runtime** — the shell is a Tauri app,
+so its window is drawn by WebView2 — and 7.13.1 went out declaring
+`Dependencies.PackageDependencies: [Microsoft.EdgeWebView2Runtime]`. **It did not
+work.** The pipeline re-ran on the new head and re-applied
+`Validation-Executable-Error` on 2026-09-15T00:12:45Z.
 
-The fix is to declare the dependency rather than to add a second detection
-heuristic, so the installer manifest now carries:
+The diagnosis was wrong, and the exit code says so if you read it carefully:
+`0xC0000135` is raised by the Windows **loader**, resolving the executable's
+imports, before a single instruction of the program runs. A missing WebView2
+runtime cannot produce it — Tauri links `WebView2Loader` **statically** and asks
+for the runtime at run time, so a missing runtime is a failed *window*, not a
+dead *process*. Dumping the shipped executable's import table settles it:
+
+```
+$ objdump -p MyClaudeCode.exe | grep 'DLL Name'
+    DLL Name: VCRUNTIME140.dll        <-- Visual C++ redistributable
+    DLL Name: VCRUNTIME140_1.dll      <-- Visual C++ redistributable
+    DLL Name: api-ms-win-crt-*.dll    (UCRT: part of Windows 10+)
+    DLL Name: kernel32.dll, user32.dll, ole32.dll, ...   (Windows)
+```
+
+No WebView2 anything; two DLLs from the **Visual C++ 2015-2022 redistributable**,
+which a clean Windows image does not have. The validator's own error table said
+as much in the first comment on the pull request — *"The most common dependency
+is `Microsoft.VCRedist.2015+.x64`"*.
+
+**The fix is in the build, not in the manifest.** From 7.35.2 the Windows binary
+is compiled with `-C target-feature=+crt-static`
+(`desktop-shell/src-tauri/.cargo/config.toml`), so it imports nothing Windows
+does not ship, and `desktop-shell/smoke/windows.ps1` fails the release if a
+redistributable import ever returns. Bundling `VC_redist.x64.exe` was rejected:
+25 MB, and it requires administrator rights that a `PrivilegesRequired=lowest`
+installer does not have.
+
+The `Dependencies` block **stays**. It was not the fix, but it is not wrong: a
+user on a fresh Windows install still needs the runtime for the window to open.
+Belt and braces, the installer now also **bundles** the 1.8 MB WebView2
+Evergreen bootstrapper (`[Files]` + `dontcopy`) instead of downloading it
+mid-install, and its `pv` registry probe now also checks that the version it
+found has `msedgewebview2.exe` on disk.
 
 ```yaml
 Dependencies:
   PackageDependencies:
     - PackageIdentifier: Microsoft.EdgeWebView2Runtime
 ```
-
-winget installs that before this package — which is what the validator needs and
-also what a user on a fresh Windows install needs. No `MinimumVersion`: every
-runtime the community repository ships is newer than the one Tauri requires, and
-a floor nobody measured is an invented limit.
 
 ## 1. What already holds
 

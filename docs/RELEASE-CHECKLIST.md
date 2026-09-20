@@ -411,6 +411,27 @@ Control-click bypass, the one-time fix is
 zero-friction macOS route remains the install script plus `mcc-desktop`, which
 fetches the binary from Python and is never quarantined.
 
+**What the Windows leg proves about the two system components (7.35.2).** The
+shell needs the Visual C++ runtime and the Edge WebView2 runtime, and they fail
+in completely different ways -- a missing VC runtime is a *dead process*
+(`0xC0000135`, killed by the loader before `main`), a missing WebView2 is a
+*window that will not open*. So:
+
+* `smoke/windows.ps1` parses the built binary's **PE import table** and fails if
+  any redistributable DLL (`vcruntime*`, `msvcp*`, `msvcr*`, `ucrtbase*`) is in
+  it. It cannot be in it, because `src-tauri/.cargo/config.toml` links the CRT
+  statically -- but that is one deletable line, and the runner has every
+  redistributable installed, so nothing else would notice;
+* a *Fetch the WebView2 bootstrapper* step downloads Microsoft's Evergreen
+  bootstrapper, **checks its Authenticode signer is Microsoft** (its bytes roll,
+  so there is no digest to pin), prints its size and digest into the log, and
+  the compile step passes it to `iscc` as `/DWebView2Setup` -- and errors out if
+  it is missing rather than silently producing the old download-at-install-time
+  installer. The setup grows by about 1.7 MB;
+* `smoke/windows-installer.ps1` installs with `/VERIFYWEBVIEW2`, which makes the
+  installer unpack its bundled copy and log the size, and asserts that line. If
+  a future edit drops the define, this is what goes red.
+
 **Smoke the Windows installer once per release.** The workflow already runs
 `desktop-shell/smoke/windows-installer.ps1` on the runner -- silent install,
 Start Menu shortcut, `HKCU` Apps & Features entry, silent uninstall, and a
@@ -697,8 +718,14 @@ Only relevant once the manifest has been **accepted** into
 `desktop-shell/installer/winget/SUBMIT.md` is both its history and the runbook.
 Read its §0 before touching the manifests: the submission has been rejected
 twice, once for declaring a schema version the repository does not accept, and
-once because the app could not start on a clean validator VM without the Edge
-WebView2 runtime. Both are fixed; the dependency is pinned by a test.
+once because the executable would not start on a clean validator VM at all
+(`0xC0000135`). The second one was **misdiagnosed as WebView2 and was actually
+the Visual C++ redistributable** — declaring `Microsoft.EdgeWebView2Runtime` as
+a package dependency in 7.13.1 did not change the result. The real fix is in the
+build, not the manifest: since 7.35.2 the Windows binary links the CRT
+statically and imports nothing Windows does not ship (§7,
+`desktop-shell/README.md`). The dependency declaration stays, because a user on
+a fresh install still needs the runtime, and it is pinned by a test.
 
 Each release that ships a `MyClaudeCode-Setup-windows-x86_64.exe` needs its own
 version folder in the community repository, and the repository side of that is
