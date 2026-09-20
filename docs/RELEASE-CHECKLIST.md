@@ -13,7 +13,7 @@
 | PyPI / wheel name | `my-claude-code` |
 | Server command | `mcc-server` (primary); `fcc-server` retired in 7.0.0 (tombstone) |
 | Launchers | `mcc-claude`/`mcc-codex`/`mcc-pi`/`mcc-claude-old` (primary); `fcc-*` retired in 7.0.0 |
-| **GitHub repo slug** | **UNCHANGED** â€” `free-claude-code` (do not rename) |
+| **GitHub repo slug** | **CHANGED on 2026-09-05** â€” `my-claude-code`. The repository is `FiredMosquito831/my-claude-code`, standalone: not a fork, and no longer named after the upstream |
 | **Release repo** | **UNCHANGED** â€” `FiredMosquito831/my-claude-code` (`RELEASE_REPO`) |
 | **FCC_* env vars** | **RETIRED in 7.0.0** — `FCC_ENV_FILE`, `FCC_OPEN_BROWSER`, `FCC_SMOKE_*`, `FCC_CODEX_API_KEY`, `FCC_PI_*` all became `MCC_*`; a managed `.env` is rewritten once on the first 7.x start, with a `.env.bak-<stamp>` |
 | **Proxy port** | **UNCHANGED** â€” `:8082` |
@@ -24,10 +24,11 @@
 
 ## 2. Dual-repo mirroring plan
 
-The product rebrand does **not** rename the GitHub repository. The repo stays
-`free-claude-code`; only the package, product name, and command family rebrand.
-Two remotes stay in play, and the roles below are the ones actually in use —
-this section previously described them the other way round:
+The product rebrand did not rename the GitHub repository, but a later move did:
+since 2026-09-05 development happens in `FiredMosquito831/my-claude-code`, a
+standalone repository rather than a fork. Two remotes stay in play, and the
+roles below are the ones actually in use — this section previously described
+them the other way round:
 
 - `FiredMosquito831/my-claude-code` — **development and release repo.** All
   branches, pull requests, merges and GitHub releases happen here, and

@@ -8846,6 +8846,63 @@ details.turn-pane > summary:focus-visible {
   white-space: nowrap;
 }
 
+/* -------------------------------------------------- the refused addresses
+   Read-only rows, and they are meant to look it: no checkbox rail, no action
+   column, and a border that separates them from the offers above rather than
+   continuing the same list. An operator scanning this panel for something to
+   add must not find these by accident. */
+.proxy-refused-panel {
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--line);
+}
+
+.proxy-refused-toggle {
+  white-space: nowrap;
+}
+
+.proxy-refused-note {
+  margin: var(--space-2) 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.proxy-refused {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.proxy-refused-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.proxy-refused-label {
+  font-family: var(--mono, monospace);
+  font-weight: 600;
+}
+
+.proxy-refused-reason {
+  color: var(--danger, var(--muted));
+}
+
+.proxy-refused-when {
+  margin-left: auto;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .proxy-feed-bound {
   margin: var(--space-1) 0 0;
 }

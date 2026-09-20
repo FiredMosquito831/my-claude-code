@@ -1993,6 +1993,38 @@ const ROUTES = {
         untested: false,
       },
     ],
+    /* The durably-refused addresses, which are counted by a fetch and, since
+       7.35.1, listed. They are NOT candidates -- the store keeps them so a
+       later sweep does not offer them again -- so they arrive on their own
+       key, carrying only what a person needs to recognise one: what it was,
+       why it was refused, and when. Nothing here is a handle an Add gesture
+       reads, and the tests check that no such gesture appears beside them. */
+    refused_addresses: [
+      {
+        proxy: "px_ref0001",
+        label: "198.51.100.70:8080",
+        scheme: "http",
+        reason:
+          "this proxy breaks certificate validation -- MCC will not route through it",
+        at: new Date(Date.now() - 1800000).toISOString(),
+        checked_for: "nvidia_nim",
+        checked_for_name: "NVIDIA NIM",
+      },
+      {
+        proxy: "px_ref0002",
+        label: "198.51.100.71:1080",
+        scheme: "socks5h",
+        reason:
+          "this proxy breaks certificate validation -- MCC will not route through it",
+        at: new Date(Date.now() - 7200000).toISOString(),
+        checked_for: "nvidia_nim",
+        checked_for_name: "NVIDIA NIM",
+      },
+    ],
+    // Addresses in a chain that got there by passing a check. It is what tells
+    // "every address that passed is already in a chain" apart from "you
+    // discarded them", and the page must read it as a number, not truthiness.
+    chained_passing: 1,
     providers: [
       {
         provider_id: "nvidia_nim",
@@ -3555,6 +3587,15 @@ if (withChain) {
     PROXY_FETCH.state = "running";
     PROXY_FETCH.stopping = false;
     PROXY_FETCH.total = 834;
+    /* And wound back to the start of the sweep, which is what makes this
+       block deterministic rather than nearly deterministic. The fake server
+       flips the job to "done" the moment `tested` reaches `total`, and it
+       advances 200 per poll -- so with the counter left where the stop above
+       put it, one or two polls inside the 1.8 seconds below could finish the
+       run, take the Stop button away, and fail an assertion about re-attaching
+       for a reason that has nothing to do with re-attaching. From zero it
+       takes five polls, which is far outside the window. */
+    PROXY_FETCH.tested = 0;
     const navTo = (id) => {
       const link = doc.querySelector(`.nav-link[data-view="${id}"]`);
       if (link) link.click();
@@ -3948,6 +3989,115 @@ if (withChain) {
     sentence: statusText(),
     chain: proxyEntryLabels(proxyCardFor("nvidia_nim")).length,
   };
+}
+
+/* 7.35.1: the refused addresses, and the sentence an emptied offer list gets.
+
+   Both are about the same failure -- a panel reporting a number with nothing
+   behind it, or reporting the wrong reason for an empty list -- so they are
+   driven together, as gestures, on the page the operator is looking at. */
+{
+  const panel = () => doc.querySelector("#proxyingCandidates");
+  const toggle = () => panel().querySelector(".proxy-refused-toggle");
+  const rows = () => Array.from(panel().querySelectorAll(".proxy-refused-row"));
+  const read = () => ({
+    label: (panel().querySelector(".proxy-refused-label")?.textContent || "").trim(),
+    labels: rows().map((row) =>
+      (row.querySelector(".proxy-refused-label")?.textContent || "").trim(),
+    ),
+    reasons: rows().map((row) =>
+      (row.querySelector(".proxy-refused-reason")?.textContent || "").trim(),
+    ),
+    whens: rows().map((row) =>
+      (row.querySelector(".proxy-refused-when")?.textContent || "").trim(),
+    ),
+    // The read-only claim, measured rather than asserted in prose: anything
+    // that could be pressed or ticked inside these rows would be a way into a
+    // chain for an address the server refuses.
+    controls: panel().querySelectorAll(
+      ".proxy-refused button, .proxy-refused input, .proxy-refused select, .proxy-refused a",
+    ).length,
+  });
+
+  proxying.refusedList = {
+    collapsed: {
+      toggle: (toggle()?.textContent || "").trim(),
+      expanded: toggle()?.getAttribute("aria-expanded"),
+      rows: rows().length,
+    },
+  };
+  toggle().click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  proxying.refusedList.expanded = {
+    toggle: (panel().querySelector(".proxy-refused-toggle")?.textContent || "").trim(),
+    ariaExpanded: panel()
+      .querySelector(".proxy-refused-toggle")
+      .getAttribute("aria-expanded"),
+    note: (panel().querySelector(".proxy-refused-note")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    ...read(),
+  };
+  // And it folds away again, remembering the choice with the other filters.
+  panel().querySelector(".proxy-refused-toggle").click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  proxying.refusedList.reCollapsed = { rows: rows().length };
+  panel().querySelector(".proxy-refused-toggle").click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  /* The empty-offer sentence. Three states that used to share one sentence:
+     nothing passed; everything that passed is in a chain; everything that
+     passed was discarded. */
+  const emptySentence = () =>
+    (panel().querySelector("p.field-description")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  /* The page is reloaded through its own load path rather than by reaching
+     into its state: the server is what decides all three of these, and a test
+     that set the page's variables directly would not prove the payload carries
+     what the sentence needs. */
+  const state = ROUTES["/admin/api/proxy-chains"];
+  const savedCandidates = state.candidates;
+  const savedWorking = PROXY_FETCH.working;
+  const savedState = PROXY_FETCH.state;
+  const reload = async () => {
+    navLinks.find((link) => link.dataset.view === "providers").click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    navLinks.find((link) => link.dataset.view === "proxying").click();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+  };
+
+  state.candidates = [];
+  state.chained_passing = 1;
+  PROXY_FETCH.state = "done";
+  PROXY_FETCH.working = 5;
+  await reload();
+  proxying.emptyOffer = {
+    allInAChain: emptySentence(),
+    // The progress line above it must not still be claiming things about rows
+    // that are not there.
+    progressLine: (panel().querySelector(".proxy-fetch-line")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  };
+
+  state.chained_passing = 0;
+  await reload();
+  proxying.emptyOffer.allDiscarded = emptySentence();
+
+  PROXY_FETCH.working = 0;
+  await reload();
+  proxying.emptyOffer.nonePassed = emptySentence();
+  // The refused rows are reachable from the empty panel too, which is exactly
+  // the state an operator reaches them in. The toggle's own memory survived
+  // three reloads, so it is still open.
+  proxying.emptyOffer.refusedToggle = (toggle()?.textContent || "").trim();
+
+  state.candidates = savedCandidates;
+  state.chained_passing = 1;
+  PROXY_FETCH.working = savedWorking;
+  PROXY_FETCH.state = savedState;
+  await reload();
 }
 
 /* The card's own bulk remove: tick two entries, press once, and the draft is

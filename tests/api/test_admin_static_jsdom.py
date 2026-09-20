@@ -4238,6 +4238,83 @@ def test_jsdom_a_candidate_row_says_what_mcc_measured_and_for_whom(rendered) -> 
     assert all("proxy-candidate-untested" in row["className"] for row in untested)
 
 
+def test_jsdom_the_refused_addresses_can_be_looked_at(rendered) -> None:
+    """A count with nothing behind it is not a report.
+
+    A fetch says "12 refused" and, until 7.35.1, showed none of them: the
+    operator could not see which address it meant or whether the verdict was an
+    hour old or from March. The toggle is off by default -- these are not
+    offers -- and turning it on lists them with the reason and the age.
+    """
+
+    refused = rendered["proxying"]["refusedList"]
+
+    assert refused["collapsed"]["toggle"] == "Show the 2 refused"
+    assert refused["collapsed"]["expanded"] == "false"
+    assert refused["collapsed"]["rows"] == 0, "refused rows were shown unasked"
+
+    shown = refused["expanded"]
+    assert shown["toggle"] == "Hide the 2 refused"
+    assert shown["ariaExpanded"] == "true"
+    assert shown["labels"] == [
+        "http://198.51.100.70:8080",
+        "socks5h://198.51.100.71:1080",
+    ]
+    assert all("certificate validation" in reason for reason in shown["reasons"])
+    assert shown["whens"] == [
+        "Refused 30m ago against NVIDIA NIM",
+        "Refused 2h ago against NVIDIA NIM",
+    ]
+    assert "a later test that succeeds is what clears one" in shown["note"].lower()
+    assert refused["reCollapsed"]["rows"] == 0
+
+
+def test_jsdom_a_refused_address_is_offered_no_way_into_a_chain(rendered) -> None:
+    """The page's half of a refusal the server already enforces.
+
+    Every path that could add an address re-checks it and refuses an
+    intercepting one, so a button here could only ever produce a 422 -- but an
+    operator who presses it has been invited to try, which is worse than not
+    showing the row at all. So the rows carry nothing pressable: measured, not
+    promised in a comment.
+    """
+
+    shown = rendered["proxying"]["refusedList"]["expanded"]
+
+    assert shown["controls"] == 0, "a refused row carried a control"
+
+
+def test_jsdom_an_empty_offer_list_says_which_emptiness_it_is(rendered) -> None:
+    """ "None passed" and "all of them are in a chain" are opposite outcomes.
+
+    Until 7.35.1 the panel printed the first sentence for both, so the ordinary
+    end of a *successful* sweep -- every address that passed promoted into a
+    chain -- read as a sweep that found nothing. Three states, three sentences,
+    and the one that was always true is still there for when it is true.
+    """
+
+    empty = rendered["proxying"]["emptyOffer"]
+
+    assert empty["allInAChain"].startswith("5 passed -- all of them are already")
+    assert "nothing left here to choose from" in empty["allInAChain"]
+
+    assert empty["allDiscarded"].startswith("5 passed, and none of them is still")
+    assert "goes into a chain or is discarded" in empty["allDiscarded"]
+
+    assert empty["nonePassed"].startswith("None of the addresses those lists offered")
+
+    # And the progress line above stopped contradicting it: "every address on
+    # offer below verified ..." is a claim about rows, and there are none.
+    assert "Every address on offer below" not in empty["progressLine"]
+    assert "none is in a chain" not in empty["progressLine"]
+    assert empty["progressLine"].startswith("Tested 834 of 834")
+    assert "5 working" in empty["progressLine"]
+
+    # And the refused list is reachable from the empty panel, which is the
+    # state an operator most often meets it in.
+    assert empty["refusedToggle"] == "Hide the 2 refused"
+
+
 def test_jsdom_the_subscription_card_says_what_it_risks_and_starts_unticked(
     rendered,
 ) -> None:

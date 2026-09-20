@@ -26,6 +26,8 @@ catch that, and it is there precisely so this proof cannot be faked.
 Every socket and thread opened here is closed in a fixture's teardown.
 """
 
+import asyncio
+import contextlib
 import datetime
 import socket
 import ssl
@@ -461,23 +463,26 @@ async def test_an_intercepting_proxy_is_refused_across_the_process(
     assert PROXY_INTERCEPTION.is_refused(good_label) is False
 
 
-async def test_a_dead_address_walks_the_reachability_ladder(
-    origin: _Origin, clean_proxy: _ConnectProxy
-) -> None:
+async def test_a_dead_address_walks_the_reachability_ladder(origin: _Origin) -> None:
     """A proxy that is not listening is benched without the operator doing anything.
 
-    The port is one the fixture bound and then closed, so it is a refused
-    connection rather than a hang -- which is what a dead free proxy actually
-    looks like the day after somebody scraped it.
+    The port is bound by this test and never listened on, and the socket is
+    held for the duration -- which is what a dead free proxy looks like the day
+    after somebody scraped it, and, unlike a closed port's number, is a port
+    nothing else in a parallel run can be handed.
     """
 
-    clean_proxy.close()
-    dead_url = f"http://127.0.0.1:{clean_proxy.port}"
+    dead = socket.socket()
+    dead.bind(("127.0.0.1", 0))
+    dead_url = f"http://127.0.0.1:{dead.getsockname()[1]}"
     label = mask_proxy_label(dead_url)
 
-    record = await check_proxy(
-        dead_url, f"https://{HOSTNAME}:{origin.port}/", timeout=2.0
-    )
+    try:
+        record = await check_proxy(
+            dead_url, f"https://{HOSTNAME}:{origin.port}/", timeout=2.0
+        )
+    finally:
+        dead.close()
     apply_outcome(label, record)
 
     assert record.ok is False
@@ -511,9 +516,19 @@ async def test_a_refusal_survives_the_proxy_simply_going_offline(
     apply_outcome(label, await check_proxy(url, destination, timeout=10.0))
     assert PROXY_INTERCEPTION.is_refused(label) is True
 
-    # The same address, now simply not listening.
+    # The same address, now simply not listening. The port is taken over by a
+    # socket that never listens, so that "the same address, dead" stays the
+    # same address: a closed port's number is free for the next server a
+    # parallel run starts, and this test would then be measuring that.
     mitm_proxy.close()
-    dead = await check_proxy(url, destination, timeout=2.0)
+    keeper = socket.socket()
+    keeper.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    with contextlib.suppress(OSError):
+        keeper.bind(("127.0.0.1", mitm_proxy.port))
+    try:
+        dead = await check_proxy(url, destination, timeout=2.0)
+    finally:
+        keeper.close()
     apply_outcome(label, dead)
 
     assert dead.ok is False
@@ -629,18 +644,29 @@ async def test_the_tls_depth_refuses_an_intercepting_proxy(
     assert PROXY_INTERCEPTION.is_refused(mask_proxy_label(url)) is True
 
 
-async def test_the_tls_depth_calls_a_dead_address_dead(
-    origin: _Origin, clean_proxy: _ConnectProxy
-) -> None:
-    """A closed port is dead at either depth, and is never an interception."""
+async def test_the_tls_depth_calls_a_dead_address_dead(origin: _Origin) -> None:
+    """An address with nothing accepting on it is dead, and never an interception.
 
-    clean_proxy.close()
-    record = await check_proxy(
-        f"http://127.0.0.1:{clean_proxy.port}",
-        f"https://{HOSTNAME}:{origin.port}/",
-        timeout=2.0,
-        depth="tls",
-    )
+    The dead address is a socket this test binds and never listens on, held
+    open for the duration. Closing a proxy and reusing its port number -- what
+    this test did until 7.35.1 -- asks the operating system not to hand that
+    port to anything else, and it makes no such promise: on a parallel run it
+    was handed to another test's honest proxy, and a port that was supposed to
+    be dead answered, verified a certificate and passed.
+    """
+
+    dead = socket.socket()
+    dead.bind(("127.0.0.1", 0))
+    port = dead.getsockname()[1]
+    try:
+        record = await check_proxy(
+            f"http://127.0.0.1:{port}",
+            f"https://{HOSTNAME}:{origin.port}/",
+            timeout=2.0,
+            depth="tls",
+        )
+    finally:
+        dead.close()
 
     assert record.ok is False
     assert record.tls == TLS_UNKNOWN
@@ -673,3 +699,201 @@ async def test_the_tls_depth_verifies_with_the_library_s_own_default_context(
     assert sorted(cert["serialNumber"] for cert in context.get_ca_certs()) == sorted(
         cert["serialNumber"] for cert in theirs.get_ca_certs()
     )
+
+
+# ------------------------------------------------- 7.35.1: one socket per address
+
+
+def _count_dials(monkeypatch: pytest.MonkeyPatch, delay: float = 0.0) -> list[int]:
+    """Count every socket the checker opens, optionally slowing each one down."""
+
+    tally = [0]
+    real = asyncio.open_connection
+
+    async def counting(host=None, port=None, **kwargs):
+        tally[0] += 1
+        if delay:
+            await asyncio.sleep(delay)
+        return await real(host, port, **kwargs)
+
+    monkeypatch.setattr(asyncio, "open_connection", counting)
+    return tally
+
+
+async def test_the_tls_depth_opens_one_socket_per_address(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep reaches a stranger's machine once, not twice.
+
+    Until 7.35.1 this depth dialled the address to ask whether it answered and
+    then dialled it again to carry the tunnel. The second dial already answers
+    the first question. For a sweep of several hundred addresses that is half
+    the connections to strangers' machines, and half the entries in whatever
+    they log, for exactly the same verdict -- which is asserted here too, not
+    assumed.
+    """
+
+    tally = _count_dials(monkeypatch)
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=10.0,
+        depth="tls",
+    )
+
+    assert record.ok is True, record.detail
+    assert record.tls == TLS_STRICT
+    assert tally[0] == 1, f"the tls depth opened {tally[0]} sockets"
+
+
+async def test_the_request_depth_still_dials_before_it_builds_a_client(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing was taken away from the depth every button still uses.
+
+    ``httpx`` owns its own pool and cannot be handed a socket, so the request
+    depth reaches the address twice however this is written. The reachability
+    dial therefore stays exactly where it was for that depth, and this pins it:
+    the sibling test above would otherwise pass just as well if the dial had
+    been deleted for everybody.
+    """
+
+    calls: list[tuple[str, int]] = []
+    real = proxy_check._tcp_connect
+
+    async def recording(host: str, port: int, timeout: float) -> str:
+        calls.append((host, port))
+        return await real(host, port, timeout)
+
+    monkeypatch.setattr(proxy_check, "_tcp_connect", recording)
+
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=10.0,
+        depth="request",
+    )
+
+    assert record.ok is True, record.detail
+    assert calls == [("127.0.0.1", clean_proxy.port)]
+
+
+async def test_the_tls_depth_keeps_the_reachability_wording_and_carries_no_latency(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused connection reads exactly as it did when a separate dial found it.
+
+    The wording is the operator-facing half of the verdict, and folding the
+    dial into the handshake is only invisible if it survives. So is the empty
+    latency: an address that never answered has no handshake leg to time, and
+    the candidate list orders on that number.
+    """
+
+    async def refusing(host=None, port=None, **kwargs):
+        raise ConnectionRefusedError(61, "Connection refused")
+
+    monkeypatch.setattr(asyncio, "open_connection", refusing)
+
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=2.0,
+        depth="tls",
+    )
+
+    assert record.ok is False
+    assert record.tls == TLS_UNKNOWN
+    assert record.intercepted is False
+    assert record.depth == "tls"
+    assert record.detail == (
+        f"127.0.0.1:{clean_proxy.port} refused the connection: Connection refused"
+    )
+    assert record.latency_ms is None
+
+
+async def test_the_tls_depth_latency_is_the_handshake_and_never_the_dial(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Half a second of dialling must not show up as half a second of latency.
+
+    With two sockets the measurement started after the first dial and so never
+    included one. With one socket it would include the whole dial unless the
+    clock is restarted the instant the socket is up -- and since the candidate
+    list is ordered by this number, an address on a slow route would have been
+    pushed down the list by a change that was supposed to be invisible.
+
+    The comparison calibrates itself against this fixture rather than against a
+    fixed number: the same address is measured twice, and the five seconds of
+    dialling injected into the second one must not show up in the difference.
+    """
+
+    async def measure() -> int:
+        record = await check_proxy(
+            f"http://127.0.0.1:{clean_proxy.port}",
+            f"https://{HOSTNAME}:{origin.port}/",
+            timeout=30.0,
+            depth="tls",
+        )
+        assert record.ok is True, record.detail
+        assert record.latency_ms is not None
+        return record.latency_ms
+
+    fast = await measure()
+    _count_dials(monkeypatch, delay=5.0)
+    slow = await measure()
+
+    assert slow < fast + 2500, f"the dial leaked into the latency: {fast} -> {slow}"
+
+
+class _TlsFrontedProxy(_Server):
+    """An ``https://`` proxy: the client's very first bytes are a TLS handshake.
+
+    It never gets as far as speaking HTTP, because the certificate it presents
+    is the rogue one. That is the whole point of the fixture: for this class of
+    proxy the trust decision now happens inside the single dial rather than
+    after it, and the verdict must still be interception rather than death.
+    """
+
+    def __init__(self, certificate: Path) -> None:
+        self._context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self._context.load_cert_chain(certificate)
+        super().__init__()
+
+    def _serve(self, conn: socket.socket) -> None:
+        try:
+            with self._context.wrap_socket(conn, server_side=True):
+                pass
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+
+async def test_an_https_proxys_own_bad_certificate_is_interception_not_death(
+    origin: _Origin, pki: dict[str, Path]
+) -> None:
+    """The one verdict folding the dial in could have quietly changed.
+
+    An ``https://`` proxy is reached over TLS, so from 7.35.1 its certificate
+    is checked during the dial -- and ``ssl.SSLError`` is a subclass of
+    ``OSError``, which is the exception the dial turns into "this address is
+    dead". Swap those two clauses and a proxy that terminates its own TLS stops
+    being refused and starts being retried as an ordinary unreachable address,
+    with nothing to show it happened. This is the test that would notice.
+    """
+
+    proxy = _TlsFrontedProxy(pki["rogue"])
+    try:
+        record = await check_proxy(
+            f"https://{HOSTNAME}:{proxy.port}",
+            f"https://{HOSTNAME}:{origin.port}/",
+            timeout=10.0,
+            depth="tls",
+        )
+    finally:
+        proxy.close()
+
+    assert record.tls == TLS_INTERCEPTED, record.detail
+    assert record.ok is False
+    assert record.intercepted is True
+    assert "certificate validation" in record.detail

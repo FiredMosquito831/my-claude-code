@@ -1634,9 +1634,73 @@ def _payload(services: ApiServices) -> dict[str, Any]:
         "candidates": [
             _candidate_payload(proxy_id, store) for proxy_id in store.candidates
         ],
+        # The addresses a sweep refused, which until 7.35.1 the page could only
+        # count. A refusal is a durable fact about a stranger's machine -- it
+        # terminated TLS -- and the panel said "12 refused" with nothing to
+        # look at, so an operator could not tell which address it was talking
+        # about or when. These rows are read-only by construction: the payload
+        # carries no handle the Add gestures accept, which is the page's half
+        # of the server's refusal (see ``_refuse_if_intercepted``).
+        "refused_addresses": [
+            _refused_payload(proxy_id, store) for proxy_id in store.refused_ids()
+        ],
+        # How many addresses currently in a chain got there having passed a
+        # check. It is the fact that tells "everything that passed is already
+        # in a chain" apart from "you discarded them", which are the two ways
+        # a sweep can end with nothing left on offer and which the page used to
+        # report with the same sentence as "nothing passed".
+        "chained_passing": _chained_passing(store),
         "providers": [
             _provider_payload(entry, store) for entry in _configured_providers(settings)
         ],
+    }
+
+
+def _chained_passing(store: ProxyChains) -> int:
+    """Addresses in some chain whose last check passed, counted once each.
+
+    An address that passed a sweep and was then promoted is no longer a
+    candidate -- ``ProxyChains.with_candidates`` leaves in-chain ids out -- so
+    from the page's side a wholly successful sweep and a wholly failed one both
+    end with an empty offer list. This number is what separates them.
+    """
+
+    passing: set[str] = set()
+    for chain in store.chains.values():
+        for proxy_id in chain.proxy_ids():
+            endpoint = store.endpoint(proxy_id)
+            check = None if endpoint is None else endpoint.last_check
+            if check is not None and check.ok:
+                passing.add(proxy_id)
+    return len(passing)
+
+
+def _refused_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
+    """One address MCC will not route through, and why, and when.
+
+    Deliberately not a candidate row. It carries the masked label, the reason
+    the checker gave and the time it gave it -- enough to recognise an address
+    and to see that the verdict is recent -- and none of the fields the
+    candidate gestures read. There is nothing here for an Add button to act on,
+    which is the whole design: the server already refuses such an address
+    (``_refuse_if_intercepted``), and a UI that offered the gesture anyway
+    would be inviting a press that can only end in a 422.
+    """
+
+    endpoint = store.endpoint(proxy_id)
+    if endpoint is None:  # pragma: no cover - refusals are pruned with proxies
+        return {"proxy": proxy_id, "label": "", "reason": "", "at": ""}
+    last_check = endpoint.last_check
+    return {
+        "proxy": proxy_id,
+        "label": endpoint.label or mask_proxy_label(endpoint.url),
+        "scheme": _scheme(endpoint.url),
+        "reason": "" if last_check is None else last_check.detail,
+        "at": "" if last_check is None else last_check.at,
+        "checked_for": endpoint.checked_for,
+        "checked_for_name": (
+            _display_name(endpoint.checked_for) if endpoint.checked_for else ""
+        ),
     }
 
 
