@@ -26,6 +26,7 @@ catch that, and it is there precisely so this proof cannot be faked.
 Every socket and thread opened here is closed in a fixture's teardown.
 """
 
+import asyncio
 import datetime
 import socket
 import ssl
@@ -673,3 +674,147 @@ async def test_the_tls_depth_verifies_with_the_library_s_own_default_context(
     assert sorted(cert["serialNumber"] for cert in context.get_ca_certs()) == sorted(
         cert["serialNumber"] for cert in theirs.get_ca_certs()
     )
+
+
+# ------------------------------------------------- 7.35.1: one socket per address
+
+
+def _count_dials(monkeypatch: pytest.MonkeyPatch, delay: float = 0.0) -> list[int]:
+    """Count every socket the checker opens, optionally slowing each one down."""
+
+    tally = [0]
+    real = asyncio.open_connection
+
+    async def counting(host=None, port=None, **kwargs):
+        tally[0] += 1
+        if delay:
+            await asyncio.sleep(delay)
+        return await real(host, port, **kwargs)
+
+    monkeypatch.setattr(asyncio, "open_connection", counting)
+    return tally
+
+
+async def test_the_tls_depth_opens_one_socket_per_address(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep reaches a stranger's machine once, not twice.
+
+    Until 7.35.1 this depth dialled the address to ask whether it answered and
+    then dialled it again to carry the tunnel. The second dial already answers
+    the first question. For a sweep of several hundred addresses that is half
+    the connections to strangers' machines, and half the entries in whatever
+    they log, for exactly the same verdict -- which is asserted here too, not
+    assumed.
+    """
+
+    tally = _count_dials(monkeypatch)
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=10.0,
+        depth="tls",
+    )
+
+    assert record.ok is True, record.detail
+    assert record.tls == TLS_STRICT
+    assert tally[0] == 1, f"the tls depth opened {tally[0]} sockets"
+
+
+async def test_the_request_depth_still_dials_before_it_builds_a_client(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing was taken away from the depth every button still uses.
+
+    ``httpx`` owns its own pool and cannot be handed a socket, so the request
+    depth reaches the address twice however this is written. The reachability
+    dial therefore stays exactly where it was for that depth, and this pins it:
+    the sibling test above would otherwise pass just as well if the dial had
+    been deleted for everybody.
+    """
+
+    calls: list[tuple[str, int]] = []
+    real = proxy_check._tcp_connect
+
+    async def recording(host: str, port: int, timeout: float) -> str:
+        calls.append((host, port))
+        return await real(host, port, timeout)
+
+    monkeypatch.setattr(proxy_check, "_tcp_connect", recording)
+
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=10.0,
+        depth="request",
+    )
+
+    assert record.ok is True, record.detail
+    assert calls == [("127.0.0.1", clean_proxy.port)]
+
+
+async def test_the_tls_depth_keeps_the_reachability_wording_and_carries_no_latency(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused connection reads exactly as it did when a separate dial found it.
+
+    The wording is the operator-facing half of the verdict, and folding the
+    dial into the handshake is only invisible if it survives. So is the empty
+    latency: an address that never answered has no handshake leg to time, and
+    the candidate list orders on that number.
+    """
+
+    async def refusing(host=None, port=None, **kwargs):
+        raise ConnectionRefusedError(61, "Connection refused")
+
+    monkeypatch.setattr(asyncio, "open_connection", refusing)
+
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=2.0,
+        depth="tls",
+    )
+
+    assert record.ok is False
+    assert record.tls == TLS_UNKNOWN
+    assert record.intercepted is False
+    assert record.depth == "tls"
+    assert record.detail == (
+        f"127.0.0.1:{clean_proxy.port} refused the connection: Connection refused"
+    )
+    assert record.latency_ms is None
+
+
+async def test_the_tls_depth_latency_is_the_handshake_and_never_the_dial(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Half a second of dialling must not show up as half a second of latency.
+
+    With two sockets the measurement started after the first dial and so never
+    included one. With one socket it would include the whole dial unless the
+    clock is restarted the instant the socket is up -- and since the candidate
+    list is ordered by this number, an address on a slow route would have been
+    pushed down the list by a change that was supposed to be invisible.
+
+    The comparison calibrates itself against this fixture rather than against a
+    fixed number: the same address is measured twice, and the five seconds of
+    dialling injected into the second one must not show up in the difference.
+    """
+
+    async def measure() -> int:
+        record = await check_proxy(
+            f"http://127.0.0.1:{clean_proxy.port}",
+            f"https://{HOSTNAME}:{origin.port}/",
+            timeout=30.0,
+            depth="tls",
+        )
+        assert record.ok is True, record.detail
+        assert record.latency_ms is not None
+        return record.latency_ms
+
+    fast = await measure()
+    _count_dials(monkeypatch, delay=5.0)
+    slow = await measure()
+
+    assert slow < fast + 2500, f"the dial leaked into the latency: {fast} -> {slow}"

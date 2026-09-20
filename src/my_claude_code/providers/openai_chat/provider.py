@@ -170,6 +170,32 @@ def _async_openai_client_class() -> type[AsyncOpenAI]:
         return AsyncOpenAI
 
 
+def _proxied_http_client(
+    proxy: str, base_url: str, timeout: httpx.Timeout
+) -> httpx.AsyncClient:
+    """The client a proxied provider runs on: the SDK's own, through a proxy.
+
+    An un-proxied provider passes ``http_client=None`` and the OpenAI SDK
+    builds the client itself, with a pool sized for a gateway and redirects
+    followed. A proxied provider has to supply one -- there is no other way to
+    name a proxy -- and until 7.35.1 it supplied a bare ``httpx.AsyncClient``,
+    which quietly swapped both of those for ``httpx``'s much smaller library
+    defaults. The same provider, on the same host, therefore behaved
+    differently depending on whether a chain happened to be configured for it.
+
+    Building it from the SDK's own default class is what makes the two paths
+    one: the pool size and the redirect policy are not restated here, they are
+    the SDK's, whatever the SDK currently says they are.
+
+    Nothing is said about trust, deliberately -- that is what makes this client
+    verify exactly as the un-proxied one does.
+    """
+
+    from openai import DefaultAsyncHttpxClient
+
+    return DefaultAsyncHttpxClient(base_url=base_url, timeout=timeout, proxy=proxy)
+
+
 class OpenAIChatProvider(BaseProvider):
     """OpenAI-compatible ``/chat/completions`` provider configured by a profile."""
 
@@ -242,28 +268,28 @@ class OpenAIChatProvider(BaseProvider):
             )
         )
         self._rate_limiter = rate_limiter
-        http_client = None
-        if config.proxy:
-            http_client = httpx.AsyncClient(
-                proxy=config.proxy,
-                timeout=httpx.Timeout(
-                    config.http_read_timeout,
-                    connect=config.http_connect_timeout,
-                    read=config.http_read_timeout,
-                    write=config.http_write_timeout,
-                ),
-            )
+        request_timeout = httpx.Timeout(
+            config.http_read_timeout,
+            connect=config.http_connect_timeout,
+            read=config.http_read_timeout,
+            write=config.http_write_timeout,
+        )
+        # ``None`` is what an un-proxied provider has always passed, and it is
+        # the whole reason the proxied one needs a helper: the SDK builds its
+        # own client from ``None`` with a connection pool and a redirect policy
+        # of its choosing, and a hand-rolled ``httpx.AsyncClient`` silently got
+        # neither. See :func:`_proxied_http_client`.
+        http_client = (
+            _proxied_http_client(config.proxy, self._base_url, request_timeout)
+            if config.proxy
+            else None
+        )
         self._client = _async_openai_client_class()(
             api_key=api_key_provider or self._api_key,
             base_url=self._base_url,
             max_retries=0,
             default_headers=default_headers,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
+            timeout=request_timeout,
             http_client=http_client,
         )
 

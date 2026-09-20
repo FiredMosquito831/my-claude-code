@@ -42,7 +42,7 @@ import contextlib
 import ssl
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -515,18 +515,35 @@ async def _open_socks5_tunnel(
         raise httpx.ProxyError(f"the proxy would not connect: {code}")
 
 
+class _Unreachable(Exception):
+    """The proxy's own port never answered. Carries the reachability wording.
+
+    The ``tls`` depth reaches the proxy once, so the verdict that used to come
+    from a separate reachability dial has to travel back out of the one
+    connection attempt. This is that wire: it is raised only before the socket
+    is established, and the caller turns it into exactly the record the
+    separate dial produced -- no latency, no TLS opinion, the same sentence.
+    """
+
+
 async def _verified_handshake(
     url: str,
     destination: str,
     *,
     timeout: float,
     connect_timeout: float,
+    on_connect: Callable[[], None] | None = None,
 ) -> None:
     """Tunnel to the destination and finish a verified TLS handshake. No request.
 
     Three bounded steps and then the socket is thrown away:
 
-    1. a socket to the proxy's own port;
+    1. a socket to the proxy's own port -- **the only one this check opens.**
+       Until 7.35.1 the ``tls`` depth dialled the address twice: once to ask
+       whether it answered at all and again to carry the tunnel. The answer to
+       the first question is already in the second dial, so the reachability
+       verdict is taken from this connection and reported through
+       :class:`_Unreachable` in the wording the separate dial used;
     2. the tunnel -- ``CONNECT`` for an HTTP proxy, the SOCKS5 handshake for a
        SOCKS one, using the same ``socksio`` the request path uses;
     3. ``start_tls`` with :func:`default_ssl_context`, naming the destination
@@ -534,25 +551,26 @@ async def _verified_handshake(
        connection: the certificate chain is checked against the same trust
        store the request path checks against and the hostname must match.
 
+    ``on_connect`` is called the instant step 1 completes. That is what keeps
+    the reported latency meaning what it meant when there were two sockets --
+    the handshake leg, never the dial -- which matters because the candidate
+    list is ordered by it.
+
+    Everything that is not about *reaching* the address is decided after the
+    socket is up, in the order the two-socket version decided it: an address
+    that is not listening is dead even when the destination URL or the proxy's
+    scheme is also unusable.
+
     Returns nothing. Success is the absence of an exception; a certificate that
     does not verify raises ``ssl.SSLCertVerificationError`` from inside
     ``start_tls``, which is precisely what the caller turns into a refusal.
     """
 
     endpoint = _host_and_port(url)
-    target = _destination_endpoint(destination)
-    if endpoint is None or target is None:
+    if endpoint is None:
         raise httpx.ConnectError("not a usable address")
     scheme = (urlsplit(url.strip()).scheme or "http").lower()
-    credentials = _proxy_credentials(url)
     context = default_ssl_context()
-
-    if scheme in {"socks5", "socks5h"}:
-        opener = _open_socks5_tunnel
-    elif scheme in {"http", "https"}:
-        opener = _open_connect_tunnel
-    else:
-        raise httpx.ConnectError(f"MCC does not speak {scheme} to a proxy")
 
     if scheme == "https":
         # A proxy that is itself reached over TLS. Its own certificate is
@@ -563,8 +581,36 @@ async def _verified_handshake(
         )
     else:
         stream = asyncio.open_connection(endpoint[0], endpoint[1])
-    reader, writer = await asyncio.wait_for(stream, timeout=connect_timeout)
     try:
+        reader, writer = await asyncio.wait_for(stream, timeout=connect_timeout)
+    except TimeoutError:
+        raise _Unreachable(
+            f"no answer from {endpoint[0]}:{endpoint[1]} within {connect_timeout:.0f}s"
+        ) from None
+    except ssl.SSLError:
+        # An https proxy whose own certificate does not check out. That is a
+        # statement about trust, not about reachability, so it goes to the
+        # caller's certificate classifier -- and it has to be caught ahead of
+        # ``OSError``, which it inherits from.
+        raise
+    except OSError as exc:
+        raise _Unreachable(
+            f"{endpoint[0]}:{endpoint[1]} refused the connection: {exc.strerror or exc}"
+        ) from None
+
+    if on_connect is not None:
+        on_connect()
+    try:
+        target = _destination_endpoint(destination)
+        if target is None:
+            raise httpx.ConnectError("not a usable address")
+        if scheme in {"socks5", "socks5h"}:
+            opener = _open_socks5_tunnel
+        elif scheme in {"http", "https"}:
+            opener = _open_connect_tunnel
+        else:
+            raise httpx.ConnectError(f"MCC does not speak {scheme} to a proxy")
+        credentials = _proxy_credentials(url)
         await asyncio.wait_for(
             opener(writer, reader, target[0], target[1], credentials), timeout=timeout
         )
@@ -624,21 +670,39 @@ async def check_proxy(
         )
 
     dial = timeout if connect_timeout is None else max(0.1, float(connect_timeout))
-    reason = await _tcp_connect(endpoint[0], endpoint[1], dial)
-    if reason:
-        return ProxyCheckRecord(
-            at=_now(), ok=False, tls=TLS_UNKNOWN, detail=reason, depth=proven
-        )
+    if not tls_only:
+        # The request depth reaches the address twice however this is written:
+        # once here, and again inside ``httpx``, which owns its own pool and
+        # cannot be handed a socket. So the reachability dial stays exactly
+        # where it was for that depth -- byte for byte the check every caller
+        # made before the fetch sweep existed.
+        reason = await _tcp_connect(endpoint[0], endpoint[1], dial)
+        if reason:
+            return ProxyCheckRecord(
+                at=_now(), ok=False, tls=TLS_UNKNOWN, detail=reason, depth=proven
+            )
 
     started = time.monotonic()
+
+    def _connected() -> None:
+        # The measurement starts when the socket is up, not when the dial
+        # began: the number this produces is the handshake leg, which is what
+        # it has always been and what the candidate list is ordered by.
+        nonlocal started
+        started = time.monotonic()
+
     try:
         if tls_only:
-            # The tunnel, the handshake, and then the socket is dropped. The
-            # trust used is not "the same kind of" trust as the request path's
-            # -- it is the identical context object the library builds for a
-            # client that says nothing about it.
+            # One socket: the dial, the tunnel, the handshake, and then it is
+            # dropped. The trust used is not "the same kind of" trust as the
+            # request path's -- it is the identical context object the library
+            # builds for a client that says nothing about it.
             await _verified_handshake(
-                url, destination, timeout=timeout, connect_timeout=dial
+                url,
+                destination,
+                timeout=timeout,
+                connect_timeout=dial,
+                on_connect=_connected,
             )
         else:
             # Nothing is said about trust here, and that is the point: the
@@ -661,6 +725,13 @@ async def check_proxy(
                 # ``wait_closed``. The client is built with nothing said about
                 # trust either way; only the giving-up is bounded.
                 await _release_client(client)
+    except _Unreachable as exc:
+        # The address never answered. The same record the separate reachability
+        # dial returned, down to the sentence and to carrying no latency: there
+        # was no handshake leg to time.
+        return ProxyCheckRecord(
+            at=_now(), ok=False, tls=TLS_UNKNOWN, detail=str(exc), depth=proven
+        )
     except Exception as exc:
         elapsed = int((time.monotonic() - started) * 1000)
         if _is_certificate_failure(exc):

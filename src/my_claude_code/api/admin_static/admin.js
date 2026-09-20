@@ -578,6 +578,9 @@ const proxyState = {
     minSources: 1,
     sort: "sources",
     destination: "",
+    // Whether the addresses the sweep refused are shown. Off by default: they
+    // are not offers, and the common case is not wanting to look at them.
+    showRefused: false,
   },
   // The one-level undo point the server minted for the last bulk write.
   undo: null,
@@ -1504,6 +1507,14 @@ function proxyFetchSentence() {
       ? ` No usable answer from ${failed.map((item) => item.name).join(", ")}.`
       : "";
     const pace = proxyFetchPaceSentence();
+    /* "Every address on offer below verified ..." is a claim about rows, and
+       with no rows it is a claim about nothing -- which is how this line came
+       to read as a contradiction of the panel beneath it once the addresses
+       that passed had been promoted. With an empty offer list the line says
+       what it measured and stops; the panel says where they went. */
+    if (!proxyCandidates().length) {
+      return `${measured}. ` + (pace ? `${pace}` : "").trim() + extra;
+    }
     return (
       `${measured}. ` +
       (pace ? `${pace} ` : "") +
@@ -1537,6 +1548,24 @@ function proxyFetchSentence() {
 
 function proxyCandidates() {
   return (proxyState.data && proxyState.data.candidates) || [];
+}
+
+/* The addresses the checker found terminating TLS. Counted since 7.21.0 and
+   shown since 7.35.1: "12 refused" with nothing to look at could not tell an
+   operator which address it meant, or whether the verdict was from this
+   afternoon or from March. These are never offers -- the server refuses them
+   outright -- so nothing built from this list carries a gesture. */
+function proxyRefusedAddresses() {
+  return (proxyState.data && proxyState.data.refused_addresses) || [];
+}
+
+/* How many addresses in the operator's chains got there by passing a check.
+   Read with a test for a number rather than `|| 0`, because 0 is a meaningful
+   answer here and is the difference between "they are all in a chain" and
+   "you discarded them". */
+function proxyChainedPassing() {
+  const value = Number(proxyState.data && proxyState.data.chained_passing);
+  return Number.isFinite(value) ? value : 0;
 }
 
 /* The providers a candidate can actually be tested against. A chain entry is
@@ -1800,11 +1829,24 @@ function renderProxyCandidates() {
        exist and read as a page that failed to load. */
     const running = proxyState.fetch && proxyState.fetch.state === "running";
     const ran = proxyState.fetch && proxyState.fetch.state !== "idle";
+    /* Whether anything passed is NOT the same question as whether anything is
+       on offer, and until 7.35.1 this branch answered the second one with the
+       first one's sentence. An address that passed leaves the offer list the
+       moment it is in a chain -- which is the ordinary end of a successful
+       sweep, and which used to be reported as "none of them passed". */
+    const passed = Number((proxyState.fetch || {}).working) || 0;
     empty.textContent = running
       ? "Nothing has passed yet. Addresses appear here as they are tested, " +
         "and only the ones that answered with the provider's own certificate " +
         "intact are kept."
-      : ran
+      : ran && passed > 0
+        ? proxyChainedPassing() > 0
+          ? `${passed} passed -- all of them are already in a chain, so there ` +
+            "is nothing left here to choose from. Fetch again to look for more."
+          : `${passed} passed, and none of them is still on offer: an address ` +
+            "leaves this list when it goes into a chain or is discarded. " +
+            "Fetch again to look for more."
+        : ran
         ? "None of the addresses those lists offered passed the test, so " +
           "none is on offer. That is an ordinary result for public lists: " +
           "most of what they publish has stopped listening. Try another list."
@@ -1817,6 +1859,7 @@ function renderProxyCandidates() {
             "and only the ones that work come back -- as candidates you " +
             "choose from, not a chain.";
     panel.appendChild(empty);
+    appendProxyRefused(panel);
     return;
   }
   // The controls are built once per full render and then left alone: the
@@ -1833,6 +1876,88 @@ function renderProxyCandidates() {
   notes.className = "proxy-candidate-notes";
   panel.appendChild(notes);
   paintProxyCandidateList();
+  appendProxyRefused(panel);
+}
+
+/* ------------------------------------------------------- the refused list
+
+   A fetch reports "N refused" and, until 7.35.1, showed nothing: the operator
+   could see the count and not the addresses. These rows close that, and they
+   are read-only by construction rather than by discipline -- there is no
+   checkbox, no Add, no destination picker, and the payload they are built from
+   carries none of the fields those gestures read. That is deliberate. The
+   server refuses an intercepting address on every path that could add one, and
+   a button here would only be a press that ends in a 422.
+
+   The toggle is off by default and is remembered with the other filters. */
+function appendProxyRefused(panel) {
+  const refused = proxyRefusedAddresses();
+  if (!refused.length) return;
+
+  const box = document.createElement("div");
+  box.className = "proxy-refused-panel";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "secondary-button proxy-refused-toggle";
+  const shown = Boolean(proxyState.view.showRefused);
+  toggle.textContent = shown
+    ? `Hide the ${refused.length} refused`
+    : `Show the ${refused.length} refused`;
+  toggle.setAttribute("aria-expanded", shown ? "true" : "false");
+  toggle.title =
+    "Addresses that answered and then presented a certificate that was not " +
+    "the provider's. MCC will not route through one, and these rows are " +
+    "here to be read, not chosen.";
+  toggle.addEventListener("click", () => {
+    proxyState.view.showRefused = !proxyState.view.showRefused;
+    saveProxyCandidateView();
+    renderProxyCandidates();
+  });
+  box.appendChild(toggle);
+
+  if (shown) {
+    const note = document.createElement("p");
+    note.className = "proxy-refused-note";
+    note.textContent =
+      "These broke certificate validation when they were last tested. They " +
+      "cannot be added to a chain -- the server refuses them -- and a later " +
+      "test that succeeds is what clears one.";
+    box.appendChild(note);
+
+    const list = document.createElement("ol");
+    list.className = "proxy-refused";
+    refused.forEach((entry) => {
+      const row = document.createElement("li");
+      row.className = "proxy-refused-row";
+
+      const label = document.createElement("span");
+      label.className = "proxy-refused-label";
+      label.textContent = entry.scheme
+        ? `${entry.scheme}://${entry.label || entry.proxy}`
+        : String(entry.label || entry.proxy);
+      row.appendChild(label);
+
+      const reason = document.createElement("span");
+      reason.className = "proxy-refused-reason";
+      reason.textContent =
+        entry.reason ||
+        "this proxy breaks certificate validation -- MCC will not route " +
+          "through it";
+      row.appendChild(reason);
+
+      const when = document.createElement("span");
+      when.className = "proxy-refused-when";
+      const where = entry.checked_for_name ? ` against ${entry.checked_for_name}` : "";
+      const ago = proxyCheckedAgo(entry.at);
+      when.textContent = ago ? `Refused ${ago}${where}` : `Refused${where}`;
+      row.appendChild(when);
+
+      list.appendChild(row);
+    });
+    box.appendChild(list);
+  }
+  panel.appendChild(box);
 }
 
 /* The live progress of a fetch, and the Stop that ends it.
