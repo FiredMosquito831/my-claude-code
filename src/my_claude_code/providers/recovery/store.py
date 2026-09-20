@@ -48,6 +48,7 @@ from .facts import (
     FACT_REASONING_FIELD_REJECTED,
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
     FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
+    FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
     FACT_STREAM_USAGE_UNSUPPORTED,
     FACTS_KEY,
     MAX_FACT_ROWS,
@@ -512,6 +513,14 @@ class LearnedFactStore:
                 memory.responses_tool_choice_auto_only[fact.model_id] = (
                     fact.last_confirmed_at[:10]
                 )
+            elif fact.fact_kind == FACT_RESPONSES_TOOL_SCHEMA_KEYWORD and fact.detail:
+                # ``detail`` is ``"<keyword>:<construct>"`` and carries the
+                # whole subject of the fact; a row without one is from no
+                # version of this code and is skipped rather than guessed at,
+                # because guessing would sweep a keyword no host named.
+                memory.responses_tool_schema_keywords[fact.detail] = (
+                    fact.last_confirmed_at[:10]
+                )
 
     def _resync_memories(self) -> None:
         """Rebuild the handed-out memories after a forget.
@@ -528,6 +537,7 @@ class LearnedFactStore:
             memory.stream_usage_unsupported.clear()
             memory.responses_tool_name_max_length = None
             memory.responses_tool_choice_auto_only.clear()
+            memory.responses_tool_schema_keywords.clear()
             self._populate_memory(provider_id, memory)
 
 

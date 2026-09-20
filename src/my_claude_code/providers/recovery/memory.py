@@ -25,6 +25,7 @@ from .facts import (
     FACT_REASONING_FIELD_REJECTED,
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
     FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
+    FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
     FACT_STREAM_USAGE_UNSUPPORTED,
     PROVIDER_WIDE_MODEL_ID,
     FactSink,
@@ -68,6 +69,14 @@ class RecoveryMemory:
     #: the scope the refusal was measured at; the date is what the request
     #: log's marker and the Models page both show.
     responses_tool_choice_auto_only: dict[str, str] = field(default_factory=dict)
+
+    #: ``"<keyword>:<construct>"`` -> the ISO date this host was proven to
+    #: refuse that class of JSON-Schema keyword in a tool schema. Host-wide
+    #: rather than per model, for the same reason the tool-name ceiling is:
+    #: the request validator that states it sits in front of the deployment,
+    #: and a per-model row would re-pay the 400 once for every model in the
+    #: catalogue.
+    responses_tool_schema_keywords: dict[str, str] = field(default_factory=dict)
 
     #: Where a newly learned fact is written through to, or ``None`` for a
     #: memory that persists nothing.
@@ -207,6 +216,47 @@ class RecoveryMemory:
         self.responses_tool_choice_auto_only[model] = date.today().isoformat()
         if self.sink is not None:
             self.sink(FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY, model, True, "", evidence)
+        return not already_known
+
+    def responses_tool_schema_details(self) -> tuple[str, ...]:
+        """Every refused keyword class, in a stable order.
+
+        Sorted rather than insertion-ordered because the order decides the
+        order the sweeps run in, and therefore the bytes: two processes that
+        learned the same two facts in different orders must still send the
+        same catalogue, or the vendor's prompt-cache prefix would depend on
+        which 400 arrived first.
+        """
+
+        return tuple(sorted(self.responses_tool_schema_keywords))
+
+    def responses_tool_schema_learned_on(self, detail: str) -> str:
+        """The ISO date that refusal was proven, or ``""`` if it never was."""
+
+        return self.responses_tool_schema_keywords.get(detail, "")
+
+    def remember_responses_tool_schema_refusal(
+        self, detail: str, *, evidence: str = ""
+    ) -> bool:
+        """Record a proven schema-keyword refusal; ``False`` when already known.
+
+        Reached only once the swept catalogue was actually accepted, the rule
+        every inference in this file keeps: a 400 that merely named a keyword
+        is not proof that removing it is what fixed the request. The host
+        *stated* the keyword, which is why the row lives on the stated clock;
+        what it stated is confirmed by the retry before it is written down.
+        """
+
+        already_known = detail in self.responses_tool_schema_keywords
+        self.responses_tool_schema_keywords[detail] = date.today().isoformat()
+        if self.sink is not None:
+            self.sink(
+                FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
+                PROVIDER_WIDE_MODEL_ID,
+                True,
+                detail,
+                evidence,
+            )
         return not already_known
 
     def stream_usage_refused(self, model: str) -> bool:

@@ -105,6 +105,22 @@ FACT_RESPONSES_TOOL_NAME_MAX_LENGTH = "responses_tool_name_max_length"
 #: the reader already asks for the model and falls back to the provider row.
 FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY = "responses_tool_choice_auto_only"
 
+#: A JSON-Schema keyword this host's request validator refuses in a tool
+#: schema, and the regex construct that made it offend. ``detail`` is
+#: ``"<keyword>:<construct>"`` (``"pattern:lookaround"``), or
+#: ``"<keyword>:*"`` when the host named the keyword without naming what was
+#: wrong with the value. Value: ``True``.
+#:
+#: Provider-wide, and keyed on the **keyword class** rather than on the tool
+#: and JSON path the 400 happened to name. A request validator sits in front
+#: of the whole deployment and states a property of its regex engine -- the
+#: Rust ``regex`` crate has no lookaround, on every model behind it and for
+#: every catalogue. The tool that carried the offending pattern, by contrast,
+#: is gone by the next session. Keying it the other way round would re-pay the
+#: 400 once per catalogue forever and learn nothing that outlived a
+#: conversation.
+FACT_RESPONSES_TOOL_SCHEMA_KEYWORD = "responses_tool_schema_keyword"
+
 #: The allow-list. Whatever lands in this document is read back into live
 #: request-shaping state, so an unknown kind is dropped with one log line
 #: rather than carried -- the rule ``config/model_overrides.py`` already
@@ -124,6 +140,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_RESPONSE_SURFACE,
         FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
         FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
+        FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
     }
 )
 
@@ -161,6 +178,11 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # as an output cap, and a request validator's ceiling changes about as
     # often.
     FACT_RESPONSES_TOOL_NAME_MAX_LENGTH: STATED_FACT_TTL_SECONDS,
+    # The same evidence class, and for the same reason: the host named the
+    # keyword and the construct in its own sentence, and what it stated is a
+    # property of the regex engine behind its validator rather than an
+    # inference from a retry that happened to work.
+    FACT_RESPONSES_TOOL_SCHEMA_KEYWORD: STATED_FACT_TTL_SECONDS,
     # Stated in words but *proven* by the retry, which is the weaker of the
     # two and decides the clock: the host said "only auto", and what MCC
     # wrote down is "the request worked once the field was gone".
