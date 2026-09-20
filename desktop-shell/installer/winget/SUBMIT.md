@@ -7,9 +7,9 @@ That stopped being true on 2026-09-05.
 | | |
 | --- | --- |
 | Pull request | [`microsoft/winget-pkgs` #430045](https://github.com/microsoft/winget-pkgs/pull/430045), opened 2026-09-05, **open** |
-| Submitted version | `6.45.2` — superseded; this directory now renders **7.13.1** |
+| Submitted version | `6.45.2`, then `7.13.1` — both superseded; this directory now renders **7.35.2** |
 | CLA | **Signed** (the `Needs-CLA` label cleared on 2026-09-15) |
-| Remaining label | `Validation-Executable-Error` |
+| Remaining label | `Validation-Executable-Error` — from the 7.13.1 run; see §0 |
 
 ## 0. The two rejections, and what each one taught
 
@@ -92,7 +92,7 @@ the release plus `MyClaudeCode.iss`.
 | The installer must install **silently**. | `MyClaudeCode-Setup-windows-x86_64.exe /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART` — the literal switch set winget supplies for `InstallerType: inno` (`winget-cli`, `src/AppInstallerCommonCore/Manifest/ManifestCommon.cpp`, `GetDefaultKnownSwitches`) — exits `0` with no prompt and no elevation. |
 | **Uninstall must work**, silently. | winget runs `QuietUninstallString`, which this installer registers as `"…\unins000.exe" /SILENT`. Running exactly that exits `0` and removes the program directory, the Start Menu shortcut and the Apps & Features key. |
 | The **`ProductCode` must match the Apps & Features entry**. | With the app installed, `winget list --name "My Claude Code"` reports its id as `ARP\User\X64\{5FC8D5C3-33F7-4366-AD8D-C844D21BC089}_is1` — which is `Scope: user` + `Architecture: x64` + the manifest's `ProductCode`, character for character. |
-| `winget validate` passes. | `winget validate --manifest desktop-shell/installer/winget/7.13.1` → *Manifest validation succeeded.* **This is necessary and not sufficient** — see §0, rejection 1. |
+| `winget validate` passes. | Measured on `7.13.1`: `winget validate --manifest desktop-shell/installer/winget/7.13.1` → *Manifest validation succeeded.* The `7.35.2` manifests differ from those only in `PackageVersion`, `InstallerUrl`, `InstallerSha256`, `DisplayVersion` and `ReleaseDate` — same renderer, same schema — and have **not** been run through `winget validate`, because the machine that rendered them has no `winget`. **It is necessary and not sufficient anyway** — see §0, rejection 1. |
 | Uninstalling leaves nothing behind. | `HKCU\…\Uninstall`, `HKCU\…\Run`, both Start Menu Programs trees, `%LOCALAPPDATA%\Programs` and `~/.local/bin` were snapshotted before the install and diffed after the uninstall. All five diffs were empty. |
 
 One thing to say out loud in the pull request rather than let a moderator find:
@@ -102,11 +102,11 @@ installers; it does not accept ones that prompt.
 
 ## 2. Where the files go
 
-The three manifests in `7.13.1/` beside this file are the submission, unchanged.
+The three manifests in `7.35.2/` beside this file are the submission, unchanged.
 Copy them to:
 
 ```
-manifests/f/FiredMosquito831/MyClaudeCode/7.13.1/
+manifests/f/FiredMosquito831/MyClaudeCode/7.35.2/
     FiredMosquito831.MyClaudeCode.yaml
     FiredMosquito831.MyClaudeCode.installer.yaml
     FiredMosquito831.MyClaudeCode.locale.en-US.yaml
@@ -133,9 +133,15 @@ registry, and winget compares it against what it reads back.
 both rejections.** Update it rather than opening a second one — one package
 version per pull request is enforced, and a duplicate would be closed.
 
-1. On the existing branch, **delete** `manifests/f/FiredMosquito831/MyClaudeCode/6.45.2/`
-   and add the three files from `7.13.1/` at the path in §2.
-2. Retitle the pull request to `New package: FiredMosquito831.MyClaudeCode version 7.13.1`.
+1. On the existing branch, **delete** the previous version's directory under
+   `manifests/f/FiredMosquito831/MyClaudeCode/` and add the three files from
+   `7.35.2/` at the path in §2. The branch is
+   `FiredMosquito831.MyClaudeCode-6.45.2` on the submitter's fork — its name is
+   from the first submission and does not matter; the path inside it does. With
+   the repository too large to clone (even shallow), the update is six GitHub
+   **Contents API** calls: three `PUT` for the new files, three `DELETE` for the
+   old ones, all on that branch.
+2. Retitle the pull request to `New package: FiredMosquito831.MyClaudeCode version 7.35.2`.
 3. Push. The pipeline re-runs from scratch on the new head.
 4. Add a comment saying what changed and why — the `Validation-Executable-Error`
    label is cleared by a moderator or by a green run, not by the push itself.
@@ -143,23 +149,27 @@ version per pull request is enforced, and a duplicate would be closed.
 Suggested comment:
 
 ```markdown
-Superseding 6.45.2 with 7.13.1 and fixing the executable validation failure.
+Superseding 7.13.1 with 7.35.2. The previous update misdiagnosed the executable
+failure; this one fixes it in the build.
 
-The `-1073741515` (`0xC0000135`, `STATUS_DLL_NOT_FOUND`) on the validator VM was
-the Edge WebView2 runtime: this is a Tauri app, so its window is drawn by
-WebView2, and the executable cannot start without it. The installer carries a
-WebView2 bootstrapper but only invokes it when its EdgeUpdate registry probe
-reports the runtime missing, which does not hold inside the validation image.
+`0xC0000135` (`STATUS_DLL_NOT_FOUND`) is raised by the Windows loader while
+resolving the executable's imports, before any of the program's own code runs —
+so it could not have been the WebView2 runtime, which this app links statically
+as a loader and asks for at run time. The import table named the real cause:
 
-The installer manifest now declares the dependency:
+    VCRUNTIME140.dll
+    VCRUNTIME140_1.dll
 
-    Dependencies:
-      PackageDependencies:
-        - PackageIdentifier: Microsoft.EdgeWebView2Runtime
+— the Visual C++ 2015-2022 redistributable, which a clean image does not carry,
+exactly as the validation comment's own table suggested.
 
-so the runtime is installed before the package on any machine that lacks it.
-Nothing else about the package changed; the version moves to the current release
-because 6.45.2 is many releases old by now.
+From 7.35.2 the binary is built with a statically linked CRT and imports nothing
+Windows does not ship (verified on the release itself: 14 imported DLLs, all
+system). The installer additionally now *bundles* the WebView2 Evergreen
+bootstrapper instead of downloading it at install time, and checks the runtime's
+files rather than only its registry entry. The `Dependencies` block is kept: it
+was not the fix, but a user on a fresh Windows still needs the runtime for the
+window to open.
 ```
 
 ## 4. Two ways to submit a *new* version
@@ -169,7 +179,7 @@ because 6.45.2 is many releases old by now.
 ```powershell
 winget install Microsoft.WingetCreate
 wingetcreate submit --token <a GitHub PAT with public_repo> `
-    desktop-shell\installer\winget\7.13.1
+    desktop-shell\installer\winget\7.35.2
 ```
 
 `wingetcreate submit` forks `microsoft/winget-pkgs` into the token's account,
@@ -197,9 +207,9 @@ to; either is fine.
 1. Fork `microsoft/winget-pkgs` **to the submitter's own account** — never to
    this project's organisation, and never push to `microsoft/winget-pkgs`
    itself.
-2. `git checkout -b FiredMosquito831.MyClaudeCode-7.13.1`
+2. `git checkout -b FiredMosquito831.MyClaudeCode-7.35.2`
 3. Copy the three files into the path in §2.
-4. Commit: `New package: FiredMosquito831.MyClaudeCode version 7.13.1`
+4. Commit: `New package: FiredMosquito831.MyClaudeCode version 7.35.2`
 5. Push and open one pull request. **One package version per pull request** —
    that rule is enforced.
 
@@ -208,19 +218,19 @@ to; either is fine.
 **Title**
 
 ```
-New package: FiredMosquito831.MyClaudeCode version 7.13.1
+New package: FiredMosquito831.MyClaudeCode version 7.35.2
 ```
 
 **Body**
 
 ```markdown
 ### Package
-`FiredMosquito831.MyClaudeCode` 7.13.1 — the My Claude Code desktop app, a
+`FiredMosquito831.MyClaudeCode` 7.35.2 — the My Claude Code desktop app, a
 small native window (~3.5 MB installed) onto the dashboard the project's local
 server already serves on 127.0.0.1.
 
 Homepage: https://github.com/FiredMosquito831/my-claude-code
-Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/v7.13.1/MyClaudeCode-Setup-windows-x86_64.exe
+Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/v7.35.2/MyClaudeCode-Setup-windows-x86_64.exe
 
 ### Checklist
 - [x] Have you signed the [Contributor License Agreement](https://cla.opensource.microsoft.com/microsoft/winget-pkgs)?
@@ -278,7 +288,7 @@ Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/
   `InstallerSha256` is checked on every install; re-uploading an asset after
   submission breaks every install of that version, and the fix is a new
   manifest version, not an edit.
-- Do not hand-edit the files in `7.13.1/`. They are rendered; edit `render.py`
+- Do not hand-edit the files in `7.35.2/`. They are rendered; edit `render.py`
   and re-run it, or `tests/scripts/test_winget_manifest.py` fails.
 - Do not drop the `Dependencies` block when bumping a version by hand. It is
   pinned by a test for exactly that reason.

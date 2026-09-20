@@ -714,7 +714,8 @@ check is a hard failure rather than a warning.
 Only relevant once the manifest has been **accepted** into
 `microsoft/winget-pkgs`. The first submission **has** been made —
 [PR #430045](https://github.com/microsoft/winget-pkgs/pull/430045), opened
-2026-09-05, updated to 7.13.1 on 2026-09-15, still open — and
+2026-09-05, updated to 7.13.1 on 2026-09-15 and to 7.35.2 on 2026-09-20, still
+open — and
 `desktop-shell/installer/winget/SUBMIT.md` is both its history and the runbook.
 Read its §0 before touching the manifests: the submission has been rejected
 twice, once for declaring a schema version the repository does not accept, and

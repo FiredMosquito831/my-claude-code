@@ -2,7 +2,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 
 PackageIdentifier: FiredMosquito831.MyClaudeCode
-PackageVersion: 7.13.1
+PackageVersion: 7.35.2
 PackageLocale: en-US
 Publisher: FiredMosquito831
 PublisherUrl: https://github.com/FiredMosquito831
@@ -49,7 +49,7 @@ Tags:
   - opencode
   - openai-compatible
   - proxy
-ReleaseNotesUrl: https://github.com/FiredMosquito831/my-claude-code/releases/tag/v7.13.1
+ReleaseNotesUrl: https://github.com/FiredMosquito831/my-claude-code/releases/tag/v7.35.2
 Documentations:
   - DocumentLabel: Usage
     DocumentUrl: https://github.com/FiredMosquito831/my-claude-code/blob/main/docs/USAGE.md
