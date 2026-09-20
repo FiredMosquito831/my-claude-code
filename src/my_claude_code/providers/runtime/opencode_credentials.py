@@ -169,6 +169,34 @@ def probe_credential(provider_id: str, model_id: str, api_key: str) -> str:
     return api_key
 
 
+def credential_or_public(
+    provider_id: str, credential: str, settings: Settings | None = None
+) -> str:
+    """One credential, or the anonymous slot Zen alone has to fall back on.
+
+    Identity for every other provider and for a Zen install that has a key:
+    the only thing this adds is that "OpenCode Zen with no key" stops meaning
+    "no credential at all", because since 7.34.0 it has had one -- the literal
+    ``public`` the vendor's own unauthenticated client sends.
+
+    One rule, asked by everything that needs to know whether Zen can be
+    reached without a key: the card's Probe button, and the discovery sweep
+    that fills the Models page.
+
+    ``settings`` is the generation being asked about, for a caller that holds
+    one -- the sweep is planned against a particular configuration and must
+    read that configuration's opt-out, not the process-wide answer, which can
+    be a Save ahead of it. ``None`` keeps the process-wide answer, which is
+    right for a caller with no generation in hand.
+    """
+
+    if credential:
+        return credential
+    if provider_id == OPENCODE_PROVIDER_ID and public_credential_enabled(settings):
+        return OPENCODE_PUBLIC_CREDENTIAL
+    return credential
+
+
 def probe_fallback_credential(provider_id: str, credential: str) -> str:
     """The credential a Zen card may probe with when no key is configured.
 
@@ -180,11 +208,7 @@ def probe_fallback_credential(provider_id: str, credential: str) -> str:
     already produces.
     """
 
-    if credential:
-        return credential
-    if provider_id == OPENCODE_PROVIDER_ID and public_credential_enabled():
-        return OPENCODE_PUBLIC_CREDENTIAL
-    return credential
+    return credential_or_public(provider_id, credential)
 
 
 class OpenCodeCredentialSplitProvider(BaseProvider):
@@ -513,6 +537,7 @@ __all__ = [
     "OPENCODE_PUBLIC_KEY_LABEL",
     "OpenCodeCredentialSplitProvider",
     "build_opencode_provider",
+    "credential_or_public",
     "model_is_free_tier",
     "probe_credential",
     "probe_fallback_credential",

@@ -45,6 +45,12 @@ def _settings(
     wafer_api_key: str = "",
     opencode_api_key: str = "",
     zai_api_key: str = "",
+    # Since 7.35.0 Zen is discoverable with no key -- it has the shared
+    # anonymous credential its free models are fetched on. These tests are
+    # about the providers an operator *configured*, so they opt out of it and
+    # keep the world they were written against; the keyless sweep has tests of
+    # its own in ``tests/providers/test_opencode_keyless_discovery.py``.
+    opencode_free_tier_credential: str = "key",
 ) -> Settings:
     return Settings.model_construct(
         model=model,
@@ -58,6 +64,7 @@ def _settings(
         wafer_api_key=wafer_api_key,
         opencode_api_key=opencode_api_key,
         zai_api_key=zai_api_key,
+        opencode_free_tier_credential=opencode_free_tier_credential,
         log_api_error_tracebacks=False,
     )
 

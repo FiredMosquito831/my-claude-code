@@ -139,6 +139,31 @@ def registry_surface(
     return surface, npm
 
 
+def registry_silence(registry_provider: str) -> str:
+    """Why the registry had nothing to say, in the operator's words.
+
+    The two silences are not the same fact and a Models page that spelled them
+    the same way would be hiding the one that matters. "No entry for this
+    model" is the vendor having published a registry that simply does not
+    override this model, and is permanent until the roster moves. "No cached
+    copy yet" is *MCC* not having fetched one -- the state every fresh and
+    every keyless install is in on its first runs, and any install whose
+    models.dev fetch failed -- and it resolves itself on the next sweep.
+
+    Reads only what is already on disk, like every other caller on a request
+    path; a fetch here would turn a page render into a network wait.
+    """
+
+    if not registry_provider:
+        return ""
+    from my_claude_code.providers.runtime.models_dev import read_models_dev_cache
+
+    cache = read_models_dev_cache()
+    if cache is None or not isinstance(cache.index.get(registry_provider), Mapping):
+        return "no cached copy of the vendor's registry yet"
+    return "no registry entry for this model"
+
+
 def learned_surface(provider_id: str, model_id: str) -> ResponseSurface | None:
     """Return the surface a probe of *this deployment* actually proved."""
 
@@ -182,6 +207,7 @@ def resolve_response_surface(
     *,
     registry_provider: str = "",
     declared: tuple[ResponseSurface, ...] = (),
+    no_information: ResponseSurface | None = None,
 ) -> ResolvedResponseSurface:
     """Resolve one model's surface, and say where the answer came from.
 
@@ -191,6 +217,14 @@ def resolve_response_surface(
     quietly vanishing. An empty ``declared`` means the profile made no
     statement -- which is every profile but the two OpenCode ones -- and those
     keep the default with no unservable case at all, exactly as before.
+
+    ``no_information`` is the profile's own answer for the case nobody else
+    has one: no override, no learned fact, no registry entry. ``None`` -- every
+    profile but the two OpenCode ones -- keeps :data:`DEFAULT_SURFACE` and the
+    ``DEFAULT`` source, so a single-surface provider resolves byte for byte
+    what it always did. A profile that fronts several APIs gets its declared
+    door and the ``PROFILE`` source, because "the family's long-standing
+    surface" is not a true account of a choice made between three.
     """
 
     speakable = declared or (DEFAULT_SURFACE,)
@@ -210,7 +244,14 @@ def resolve_response_surface(
         surface, npm = published
         return _constrain(surface, ResponseSurfaceSource.REGISTRY, npm, speakable)
 
-    return ResolvedResponseSurface(DEFAULT_SURFACE, ResponseSurfaceSource.DEFAULT)
+    if no_information is None:
+        return ResolvedResponseSurface(DEFAULT_SURFACE, ResponseSurfaceSource.DEFAULT)
+    return _constrain(
+        no_information,
+        ResponseSurfaceSource.PROFILE,
+        registry_silence(registry_provider),
+        speakable,
+    )
 
 
 def _constrain(
@@ -256,6 +297,7 @@ def catalogue_surface(
         model_id,
         registry_provider=profile.surface_registry_provider,
         declared=profile.response_surfaces,
+        no_information=profile.no_information_surface,
     )
 
 

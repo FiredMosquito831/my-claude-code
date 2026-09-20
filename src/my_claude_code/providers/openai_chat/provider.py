@@ -809,6 +809,7 @@ class OpenAIChatProvider(BaseProvider):
             model_id,
             registry_provider=self._profile.surface_registry_provider,
             declared=self._profile.response_surfaces,
+            no_information=self._profile.no_information_surface,
         )
 
     async def _stream_across_surfaces(
