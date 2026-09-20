@@ -1,0 +1,41 @@
+# Windows: link the C runtime statically.
+#
+# WHY
+#   A Rust MSVC build links the *dynamic* CRT by default, which puts
+#   `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` in the executable's import
+#   table. Those two are not part of Windows: they ship in the Visual C++
+#   2015-2022 redistributable. On a machine that has never installed it -- a
+#   fresh image, a CI container, or the `microsoft/winget-pkgs` validation VM
+#   -- the Windows loader cannot resolve the imports and kills the process
+#   with `0xC0000135` (`STATUS_DLL_NOT_FOUND`) before `main` runs. There is no
+#   error message, no window and no log: the program never starts.
+#
+#   That is what winget-pkgs PR #430045 reported on 2026-09-11 --
+#   `Validation-Executable-Error`, exit `-1073741515` -- and it was read at
+#   the time as a missing WebView2 runtime. It was not. WebView2 is not in the
+#   import table at all (Tauri links `WebView2Loader` statically and asks for
+#   the runtime at run time, so a missing runtime is a failed window, not a
+#   dead process); `VCRUNTIME140*.dll` is, and it is the only import on the
+#   list that Windows does not provide.
+#
+#   `+crt-static` removes both imports. The alternatives were worse for this
+#   application: bundling `VC_redist.x64.exe` is ~25 MB *and* requires
+#   administrator rights, which a `PrivilegesRequired=lowest` per-user
+#   installer does not have; shipping the DLLs beside the exe means carrying
+#   and updating Microsoft binaries by hand for every CVE. This costs about
+#   200 KB of binary and nothing else.
+#
+# WHAT IT AFFECTS
+#   Every Windows build of the shell: the `.zip` that `config/desktop_shell.py`
+#   fetches (delivery path A) and the Inno installer (path B) carry the same
+#   executable. The three non-Windows targets are untouched -- this key is
+#   scoped to the MSVC target, and glibc/macOS have no equivalent problem.
+#
+# HOW IT IS KEPT HONEST
+#   `desktop-shell/smoke/windows.ps1` parses the built binary's PE import
+#   table on every release and fails if any redistributable runtime DLL
+#   (`vcruntime*`, `msvcp*`, `msvcr*`, `ucrtbase*`) is back. A RUSTFLAGS
+#   environment variable would override this file silently, so nothing in CI
+#   sets one.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

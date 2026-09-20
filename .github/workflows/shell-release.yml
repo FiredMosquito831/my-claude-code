@@ -255,6 +255,45 @@ jobs:
           if ($proc.ExitCode -ne 0) { Write-Error "Inno Setup install exited $($proc.ExitCode)" }
           "ISCC=$dir\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # The Edge WebView2 Evergreen bootstrapper, ~1.8 MB, embedded in the
+      # installer rather than downloaded on the user's machine at install time
+      # (7.35.2). The installer runs it only when the runtime is missing.
+      #
+      # This one CANNOT be pinned by digest the way Inno Setup above is:
+      # `LinkId=2124703` is the permanent fwlink Microsoft documents for this
+      # purpose and it serves a *rolling* file -- new bytes every time a runtime
+      # ships -- so a pinned SHA-256 would turn Microsoft's next release into a
+      # red build on a Friday. What is checkable is provenance, so that is what
+      # is checked: a valid Authenticode signature whose signer is Microsoft.
+      # The digest is printed, not asserted, so a release's own log records
+      # exactly which bytes went in.
+      - name: Fetch the WebView2 bootstrapper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WEBVIEW2_URL: "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = Join-Path $env:RUNNER_TEMP "MicrosoftEdgeWebview2Setup.exe"
+          Invoke-WebRequest -Uri $env:WEBVIEW2_URL -OutFile $exe -UseBasicParsing
+          $size = (Get-Item -LiteralPath $exe).Length
+          if ($size -lt 500000) {
+            Write-Error "the WebView2 bootstrapper is $size bytes; that is not the Evergreen bootstrapper"
+          }
+          $sig = Get-AuthenticodeSignature -FilePath $exe
+          if ($sig.Status -ne "Valid") {
+            Write-Error "the WebView2 bootstrapper's Authenticode signature is '$($sig.Status)', not 'Valid'"
+          }
+          $subject = $sig.SignerCertificate.Subject
+          if ($subject -notmatch "O=Microsoft Corporation") {
+            Write-Error "the WebView2 bootstrapper is signed by '$subject', not Microsoft"
+          }
+          $digest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "WebView2 bootstrapper: $size bytes, sha256 $digest"
+          Write-Host "signed by: $subject"
+          "WEBVIEW2_SETUP=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          exit 0
+
       - name: Compile the installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -273,7 +312,17 @@ jobs:
             $version = "0.0.0"
           }
           $exe = "$PWD\desktop-shell\src-tauri\target\$env:TARGET\release\MyClaudeCode.exe"
-          & $env:ISCC "/DAppVersion=$version" "/DSourceExe=$exe" "/O$PWD\dist" `
+          # Not optional, and not silently optional: the .iss embeds the
+          # bootstrapper only when this define names a file that exists, and
+          # falls back to downloading it when it does not. A release must never
+          # take that fallback, so the absence is an error here rather than a
+          # surprise on a user's offline machine.
+          if (-not $env:WEBVIEW2_SETUP -or
+              -not (Test-Path -LiteralPath $env:WEBVIEW2_SETUP -PathType Leaf)) {
+            Write-Error "no WebView2 bootstrapper at '$env:WEBVIEW2_SETUP'; the installer would ship without one"
+          }
+          & $env:ISCC "/DAppVersion=$version" "/DSourceExe=$exe" `
+            "/DWebView2Setup=$env:WEBVIEW2_SETUP" "/O$PWD\dist" `
             "desktop-shell\installer\windows\MyClaudeCode.iss"
           if ($LASTEXITCODE -ne 0) { Write-Error "iscc exited $LASTEXITCODE" }
           Get-ChildItem dist

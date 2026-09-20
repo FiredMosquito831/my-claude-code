@@ -479,31 +479,78 @@ be syntax-checked without inventing a release.
 | Does **not** write | The `HKCU\...\Run` autostart value. That value has exactly one writer — `_reconcile_start_at_login` in `cli/desktop.py`, from `desktop.json` — and a second one would make "remove the window" silently disable the server tray's autostart. A contract test asserts the `.iss` has no `[Registry]` section at all. |
 | Signing | None (decision Q9). See below. |
 
+### The Visual C++ runtime, and why the app used to be dead on arrival
+
+A Rust MSVC build links the *dynamic* C runtime by default, which puts
+`VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` in the executable's import table.
+Neither is part of Windows: they ship in the Visual C++ 2015-2022
+redistributable. On a machine that has never installed it, the Windows **loader**
+fails to resolve the imports and terminates the process with `0xC0000135`
+(`STATUS_DLL_NOT_FOUND`) before `main` runs — no window, no message, no log.
+
+That is what `microsoft/winget-pkgs`
+[PR #430045](https://github.com/microsoft/winget-pkgs/pull/430045) hit on its
+clean validator VM on 2026-09-11 (`Validation-Executable-Error`, exit
+`-1073741515`), and it was read at the time as a missing WebView2 runtime. It
+was not: WebView2 is not an import at all — Tauri links `WebView2Loader`
+statically and asks for the runtime at run time, so a missing runtime is a
+failed *window*, not a dead *process*. `objdump -p` on the shipped 7.13.1
+executable listed `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` and no WebView2
+anything.
+
+Since 7.35.2 the Windows build sets `-C target-feature=+crt-static`
+(`src-tauri/.cargo/config.toml`), so those imports do not exist and every
+remaining one is a DLL Windows itself provides. It costs about 200 KB. The
+alternatives were worse for a per-user installer: `VC_redist.x64.exe` is ~25 MB
+**and needs administrator rights**, which `PrivilegesRequired=lowest` does not
+have, and shipping the DLLs beside the exe means hand-updating Microsoft
+binaries for every CVE.
+
+`smoke/windows.ps1` parses the built binary's PE import table on every release
+and fails if anything matching `vcruntime*`, `msvcp*`, `msvcr*` or `ucrtbase*`
+is back, because one line of cargo configuration is one line somebody can
+delete.
+
 ### WebView2
 
 The shell is a webview, so it needs the Microsoft Edge WebView2 runtime. The
 script checks the registry key Microsoft documents for it — the `EdgeUpdate`
 client `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}` and its `pv` version string, in
 `HKLM` (32- and 64-bit views) and `HKCU`, treating absent, empty and `0.0.0.0`
-alike as "not installed". Windows 11 ships the runtime as part of the OS and
-Microsoft pushed it to Windows 10 from December 2022, so on nearly every machine
-this finds it and nothing is downloaded.
+alike as "not installed" — **and then checks that the version it found has its
+files**: `msedgewebview2.exe` under `%ProgramFiles(x86)%\Microsoft\EdgeWebView\
+Application\<pv>` or the per-user equivalent. A key whose directory is gone is a
+claim, not a runtime, and trusting it would skip the one step that machine
+needed. Windows 11 ships the runtime as part of the OS and Microsoft pushed it
+to Windows 10 from December 2022, so on nearly every machine this finds it and
+nothing else happens.
 
-When it really is missing, the ~2 MB **Evergreen Bootstrapper** is downloaded
-from `https://go.microsoft.com/fwlink/p/?LinkId=2124703` and run with
-`/silent /install`.
+When it really is missing, the 1.8 MB **Evergreen Bootstrapper** is run with
+`/silent /install`. Since 7.35.2 that bootstrapper is **carried inside the
+installer** — a `[Files]` entry with `dontcopy`, unpacked to `{tmp}` only if it
+is needed, never installed and so never in the uninstall log — instead of being
+downloaded from `https://go.microsoft.com/fwlink/p/?LinkId=2124703` in the
+middle of the install. An install-time download is a dependency on the network
+at the worst possible moment; 1.7 MB on the setup (3.4 MB → 5.1 MB) buys it
+away. The fwlink remains as the fallback for a build that did not embed one.
 
 **Its SHA-256 is deliberately not pinned, and cannot be.** The bootstrapper is a
-*rolling* download: its bytes change every time Microsoft ships a runtime, so a
-pinned digest would turn the next runtime release into a broken installer for
-everybody. What is pinnable is the **URL** — the permanent fwlink Microsoft
-documents for exactly this purpose, over HTTPS to a Microsoft host — and that is
-what the script pins. The alternative, the Fixed Version runtime, is 250+ MB and
-would have to be hand-updated for every CVE.
+*rolling* file: its bytes change every time Microsoft ships a runtime, so a
+pinned digest would turn the next runtime release into a red build. What CI
+verifies instead is **provenance** — the copy it fetches must carry a valid
+Authenticode signature whose signer is `O=Microsoft Corporation` — and the
+digest it got is printed into the release log. The alternative, the Fixed
+Version runtime, is 130+ MB per architecture, never auto-updates, and would have
+to be re-cut by hand for every Chromium CVE.
 
-A failed download is a warning, not an abort. A machine that is briefly offline
-should still end up with the app installed; the runtime may arrive later through
-Windows Update, and the window says what is wrong if it does not.
+The release smoke passes `/VERIFYWEBVIEW2`, a switch the installer implements
+for exactly this: it unpacks the bundled bootstrapper and logs its size, so a
+release proves the file is inside the setup even though the runner already has
+the runtime and the install path is never taken.
+
+A failed runtime install is a warning, not an abort. A machine that is briefly
+offline should still end up with the app installed; the runtime may arrive later
+through Windows Update, and the window says what is wrong if it does not.
 
 ### Uninstall, and the split that matters
 

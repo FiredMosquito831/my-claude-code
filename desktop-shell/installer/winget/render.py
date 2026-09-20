@@ -77,24 +77,26 @@ PACKAGE_IDENTIFIER = "FiredMosquito831.MyClaudeCode"
 INSTALLER_ASSET = "MyClaudeCode-Setup-windows-x86_64.exe"
 
 #: The shell is a Tauri app, so the window is drawn by the **Edge WebView2
-#: runtime** -- a system component, not something we bundle. Without it the
-#: executable does not start: it fails to resolve its imports and Windows kills
-#: it with ``0xC0000135`` (``STATUS_DLL_NOT_FOUND``) before any of our code runs.
+#: runtime** -- a system component. A machine without it can install this
+#: package and then have no window, so the dependency is declared: the client
+#: installs ``Microsoft.EdgeWebView2Runtime`` first where it supports doing so.
+#: No ``MinimumVersion`` -- any runtime the community repository ships is newer
+#: than the one Tauri requires, and pinning a floor we have not tested against
+#: would be an invented limit.
 #:
-#: **This line exists because that is exactly what happened to the first
-#: submission.** ``microsoft/winget-pkgs`` PR #430045 was labelled
-#: ``Validation-Executable-Error`` on 2026-09-11: the pipeline installed the
-#: package on a clean validator VM and ran the exe, which returned
-#: ``-1073741515``. The installer *does* carry a WebView2 bootstrapper, but it
-#: runs it only when its EdgeUpdate ``pv`` registry probe says the runtime is
-#: absent, and that probe does not answer usefully inside the validation image.
-#:
-#: Declaring the dependency is the winget-native fix rather than a second
-#: detection heuristic: the client installs ``Microsoft.EdgeWebView2Runtime``
-#: before this package, which is both what the validator needs and what a user
-#: on a fresh Windows install needs. No ``MinimumVersion`` -- any runtime the
-#: community repository ships is newer than the one Tauri requires, and pinning
-#: a floor we have not tested against would be an invented limit.
+#: **What this line is NOT.** It is not the fix for
+#: ``Validation-Executable-Error`` on ``microsoft/winget-pkgs`` PR #430045, and
+#: 7.13.1 proved that: the manifest went out on 2026-09-14 carrying exactly this
+#: block and the pipeline re-applied the label on 2026-09-15. The exit code on
+#: the validator VM -- ``-1073741515`` = ``0xC0000135``
+#: (``STATUS_DLL_NOT_FOUND``) -- is raised by the Windows *loader*, before
+#: ``main``, and WebView2 is not in the executable's import table at all (Tauri
+#: links ``WebView2Loader`` statically and asks for the runtime at run time). The
+#: two imports that were there and that Windows does not ship were
+#: ``VCRUNTIME140.dll`` and ``VCRUNTIME140_1.dll``, from the Visual C++
+#: redistributable. That is fixed in the *build* -- ``+crt-static``, see
+#: ``desktop-shell/src-tauri/.cargo/config.toml`` -- from 7.35.2, and the
+#: installer now bundles the WebView2 bootstrapper as well.
 WEBVIEW2_DEPENDENCY = "Microsoft.EdgeWebView2Runtime"
 
 DEFAULT_LOCALE = "en-US"

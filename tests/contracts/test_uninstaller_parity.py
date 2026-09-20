@@ -588,9 +588,11 @@ def _iss_text() -> str:
 def _iss_sections() -> dict[str, list[str]]:
     """Split the ``.iss`` into ``{section: [entry lines]}``.
 
-    Comments (``;`` in the script sections, ``//`` in ``[Code]``) and blank
-    lines are dropped; everything else is an entry. ``[Code]`` is kept whole
-    because it is Pascal, not entries.
+    Comments (``;`` in the script sections, ``//`` in ``[Code]``), blank lines
+    and preprocessor directives (``#ifdef``, ``#endif``: ISPP, not entries) are
+    dropped; everything else is an entry. ``[Code]`` is kept whole because it is
+    Pascal, not entries -- directives included, since which branch the
+    preprocessor takes is part of what the assertions below read.
     """
 
     sections: dict[str, list[str]] = {}
@@ -607,6 +609,8 @@ def _iss_sections() -> dict[str, list[str]]:
         if current != "Code" and line.startswith(";"):
             continue
         if current == "Code" and line.startswith("//"):
+            continue
+        if current != "Code" and line.startswith("#"):
             continue
         sections[current].append(line)
     return sections
@@ -660,7 +664,16 @@ def test_every_installed_file_and_icon_lands_somewhere_the_uninstall_reaches() -
 
     sections = _iss_sections()
 
-    stray_files = [line for line in sections["Files"] if 'DestDir: "{app}"' not in line]
+    # `dontcopy` is the one exemption, and it is not a loophole: such a file is
+    # never installed at all. It lives inside the setup, is unpacked to {tmp}
+    # only if [Code] asks for it, and {tmp} is deleted when setup exits -- so
+    # there is nothing on disk for the uninstaller to reach. That is how the
+    # bundled WebView2 bootstrapper travels.
+    stray_files = [
+        line
+        for line in sections["Files"]
+        if 'DestDir: "{app}"' not in line and "dontcopy" not in line.lower()
+    ]
     assert not stray_files, (
         f"these [Files] entries install outside {{app}}: {stray_files}. The "
         "desktop app installs one directory and nothing else."
@@ -799,7 +812,8 @@ def test_the_webview2_bootstrapper_url_is_the_documented_permanent_one() -> None
     The Evergreen Bootstrapper's bytes change every time Microsoft ships a
     runtime. Pinning its SHA-256 would make the next runtime release break
     every install; what is pinnable is the permanent fwlink Microsoft
-    documents for this exact purpose, over HTTPS to a Microsoft host.
+    documents for this exact purpose, over HTTPS to a Microsoft host. Since
+    7.35.2 that URL is the *fallback*: a release embeds the file instead.
     """
 
     text = _iss_text()
@@ -809,6 +823,130 @@ def test_the_webview2_bootstrapper_url_is_the_documented_permanent_one() -> None
         "without it the bootstrapper runs on every machine"
     )
     assert "/silent /install" in text
+
+
+def test_the_webview2_bootstrapper_is_carried_rather_than_downloaded() -> None:
+    """An install-time download is a dependency on the network, at the worst
+    moment.
+
+    Before 7.35.2 the only copy of the bootstrapper lived at Microsoft's
+    fwlink, so a machine that was offline (or a validation image with no
+    outbound HTTPS) got the "setup will continue" message box and an app whose
+    window could not open. The file is 1.8 MB; the installer carries it.
+
+    ``dontcopy`` is what makes that free: the file rides inside the setup and
+    is unpacked to ``{tmp}`` only when the runtime is missing, so nothing is
+    installed and nothing needs uninstalling.
+    """
+
+    sections = _iss_sections()
+    bundled = [line for line in sections["Files"] if "dontcopy" in line.lower()]
+    assert len(bundled) == 1, (
+        f"expected exactly one bundled (dontcopy) file, found {bundled}"
+    )
+    assert "{#WebView2Setup}" in bundled[0], (
+        "the bundled file must be the WebView2 bootstrapper named by the "
+        f"WebView2Setup define, not {bundled[0]!r}"
+    )
+
+    text = _iss_text()
+    assert "#define WebView2Setup" in text, (
+        "the .iss must define WebView2Setup so the release workflow can point "
+        "/DWebView2Setup at a freshly fetched, Microsoft-signed copy"
+    )
+    assert "#if FileExists(WebView2Setup)" in text, (
+        "embedding must be conditional on the file being there, so a bare "
+        "`iscc MyClaudeCode.iss` still compiles for a syntax check"
+    )
+    code = "\n".join(_iss_sections()["Code"])
+    assert "ExtractTemporaryFile(WebView2BootstrapperFile)" in code, (
+        "the bundled copy is unpacked with ExtractTemporaryFile; without that "
+        "call the embedded file is dead weight and the download still runs"
+    )
+
+
+def test_a_registered_webview2_runtime_has_to_have_its_files() -> None:
+    """``pv`` alone is a claim, not the runtime.
+
+    A registry key whose directory is gone -- a half-removed runtime, an image
+    built by deleting it -- would make the installer skip the one step that
+    machine needed, and the user would get a window that never opens. So the
+    version read out of ``pv`` has to name a directory that actually holds
+    ``msedgewebview2.exe``.
+    """
+
+    code = "\n".join(_iss_sections()["Code"])
+    assert "msedgewebview2.exe" in code, (
+        "the WebView2 probe trusts the registry and never looks at the disk; "
+        "a stale pv value then hides a missing runtime"
+    )
+    for constant in ("{commonpf32}", "{localappdata}"):
+        assert constant in code, (
+            f"the probe does not look in {constant}; the runtime installs "
+            "per-machine into Program Files (x86) and per-user into "
+            "LOCALAPPDATA, and either counts"
+        )
+
+
+def test_the_release_workflow_embeds_the_bootstrapper_and_checks_who_signed_it() -> (
+    None
+):
+    """The file comes from Microsoft, and the release proves it did.
+
+    The fwlink serves rolling bytes, so there is no digest to pin (the .iss
+    says why). Provenance is checkable even when the bytes are not: a valid
+    Authenticode signature, signer Microsoft. And the define must actually be
+    passed -- without it the .iss compiles happily and silently ships the old
+    download-at-install-time behaviour.
+    """
+
+    workflow = (REPO_ROOT / ".github" / "workflows" / "shell-release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "/DWebView2Setup=$env:WEBVIEW2_SETUP" in workflow, (
+        "the installer compile step does not pass /DWebView2Setup, so the "
+        "release would ship an installer with no bundled bootstrapper"
+    )
+    assert "Get-AuthenticodeSignature" in workflow
+    assert "O=Microsoft Corporation" in workflow, (
+        "the fetched bootstrapper's signer is not checked; an unpinnable "
+        "rolling download with no provenance check is just a download"
+    )
+
+
+def test_the_windows_binary_imports_nothing_from_a_redistributable() -> None:
+    """The bug that failed winget validation, pinned in two places.
+
+    ``0xC0000135`` on ``microsoft/winget-pkgs`` #430045 was not WebView2 (which
+    is not an import at all -- Tauri links its loader statically). It was
+    ``VCRUNTIME140.dll``, from the Visual C++ redistributable, resolved by the
+    loader before ``main``. The fix is a static CRT, which is one line of cargo
+    configuration and therefore one line somebody can delete; the smoke reads
+    the built binary's import table on every release so that deletion cannot
+    reach a user.
+    """
+
+    cargo_config = (
+        REPO_ROOT / "desktop-shell" / "src-tauri" / ".cargo" / "config.toml"
+    ).read_text(encoding="utf-8")
+    assert "[target.x86_64-pc-windows-msvc]" in cargo_config
+    assert "target-feature=+crt-static" in cargo_config, (
+        "the Windows shell build no longer links the CRT statically; the "
+        "binary will import VCRUNTIME140.dll and will not start on a machine "
+        "without the Visual C++ redistributable"
+    )
+    # Only the MSVC target: glibc and macOS have no equivalent problem, and a
+    # statically linked glibc breaks NSS.
+    assert "unknown-linux-gnu" not in cargo_config
+    assert "apple-darwin" not in cargo_config
+
+    smoke = (REPO_ROOT / "desktop-shell" / "smoke" / "windows.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert "vcruntime" in smoke, (
+        "the Windows binary smoke no longer checks the import table"
+    )
+    assert "Get-PEImportedDll" in smoke
 
 
 def test_the_installer_smoke_runs_the_winget_switches() -> None:
@@ -823,6 +961,18 @@ def test_the_installer_smoke_runs_the_winget_switches() -> None:
     )
     for switch in ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"):
         assert switch in smoke, f"the installer smoke does not pass {switch}"
+    assert "/VERIFYWEBVIEW2" in smoke, (
+        "the smoke no longer asks the installer to unpack its bundled WebView2 "
+        "bootstrapper, so nothing proves the file is inside the setup"
+    )
+    assert "bundled bootstrapper verified" in smoke, (
+        "the smoke does not assert the line the installer logs for "
+        "/VERIFYWEBVIEW2; the switch alone proves nothing"
+    )
+    assert "/VERIFYWEBVIEW2" in _iss_text(), (
+        "the smoke passes /VERIFYWEBVIEW2 but the installer does not implement "
+        "it, so the assertion above can never pass"
+    )
     assert "unins000.exe" in smoke, "the smoke never uninstalls"
     assert INNO_APP_ID in smoke, (
         "the smoke must look for this exact AppId's uninstall key"

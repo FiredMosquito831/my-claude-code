@@ -64,6 +64,79 @@ $Binary = (Resolve-Path -LiteralPath $Binary).Path
 $hash = (Get-FileHash -LiteralPath $Binary -Algorithm SHA256).Hash.ToLowerInvariant()
 Ok "binary present: $hash  $(Split-Path -Leaf $Binary)"
 
+# -- 1a. the import table names nothing Windows does not ship --------------
+# The one failure mode this smoke could not otherwise see, because the runner
+# has every redistributable installed: a DLL in the import table that a clean
+# Windows does not have. The loader resolves imports before `main`, so a
+# missing one is `0xC0000135` (STATUS_DLL_NOT_FOUND) with no message, no
+# window and no log -- which is exactly how `microsoft/winget-pkgs` #430045
+# failed validation on 2026-09-11, on `VCRUNTIME140.dll` from the Visual C++
+# redistributable. `src-tauri/.cargo/config.toml` links the CRT statically so
+# those imports do not exist; this reads the built file and proves it.
+#
+# The PE walk is by hand because `dumpbin` is a Visual Studio component and
+# this script must work anywhere: e_lfanew at 0x3C, the data directory's
+# second entry is the import table, and each 20-byte descriptor's name is at
+# offset 12, as an RVA that the section table turns into a file offset.
+function Get-PEImportedDll([string] $Path) {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 0x40) { throw "not a PE file: $Path" }
+    $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+    if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x00004550) { throw "no PE signature: $Path" }
+    $coff = $pe + 4
+    $sectionCount = [BitConverter]::ToUInt16($bytes, $coff + 2)
+    $optionalSize = [BitConverter]::ToUInt16($bytes, $coff + 16)
+    $optional = $coff + 20
+    $magic = [BitConverter]::ToUInt16($bytes, $optional)
+    # PE32+ has 16 more bytes of windows-specific fields than PE32.
+    $directories = if ($magic -eq 0x20B) { $optional + 112 } else { $optional + 96 }
+    $importRva = [BitConverter]::ToUInt32($bytes, $directories + 8)
+    if ($importRva -eq 0) { return @() }
+
+    $sections = @(for ($i = 0; $i -lt $sectionCount; $i++) {
+        $s = $optional + $optionalSize + ($i * 40)
+        [PSCustomObject]@{
+            Virtual = [BitConverter]::ToUInt32($bytes, $s + 12)
+            Size    = [BitConverter]::ToUInt32($bytes, $s + 16)
+            Raw     = [BitConverter]::ToUInt32($bytes, $s + 20)
+        }
+    })
+    $toOffset = {
+        param([uint32] $rva)
+        foreach ($s in $sections) {
+            if ($rva -ge $s.Virtual -and $rva -lt ($s.Virtual + $s.Size)) {
+                return [int]($rva - $s.Virtual + $s.Raw)
+            }
+        }
+        throw "RVA 0x$($rva.ToString('x')) is in no section"
+    }
+
+    $names = @()
+    $descriptor = & $toOffset $importRva
+    while ($true) {
+        $nameRva = [BitConverter]::ToUInt32($bytes, $descriptor + 12)
+        if ($nameRva -eq 0) { break }
+        $at = & $toOffset $nameRva
+        $end = $at
+        while ($bytes[$end] -ne 0) { $end++ }
+        $names += [System.Text.Encoding]::ASCII.GetString($bytes, $at, $end - $at)
+        $descriptor += 20
+    }
+    return $names
+}
+
+$imports = @(Get-PEImportedDll $Binary)
+if ($imports.Count -lt 3) { Fail "read only $($imports.Count) imports; the PE walk is wrong" }
+$redistributable = @($imports | Where-Object { $_ -match '^(vcruntime|msvcp|msvcr|ucrtbase|concrt)' })
+if ($redistributable.Count) {
+    Fail ("the binary imports $($redistributable -join ', '), which ship in the Visual C++ " +
+          "redistributable and not in Windows. A machine without it cannot start this " +
+          "executable at all (0xC0000135). Check src-tauri/.cargo/config.toml still sets " +
+          "-C target-feature=+crt-static for x86_64-pc-windows-msvc, and that nothing set " +
+          "RUSTFLAGS over it.")
+}
+Ok "import table: $($imports.Count) DLLs, none from a redistributable runtime"
+
 if (-not $Scratch) {
     $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
     if (-not $base -or $base.Contains(' ')) { $base = 'C:\tmp' }

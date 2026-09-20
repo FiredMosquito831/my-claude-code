@@ -19,6 +19,11 @@
       2. the payload landed -- `MyClaudeCode.exe`, its icon, a Start Menu
          shortcut, and an Apps & Features entry under **HKCU** (a per-user
          install, no admin);
+      2b. the WebView2 Evergreen bootstrapper is really embedded in the setup:
+         the install runs with `/VERIFYWEBVIEW2`, which makes the installer's
+         [Code] unpack the bundled copy and log its size, and this asserts the
+         line is there. Without it a release could quietly go back to
+         downloading the bootstrapper at install time;
       3. the entry names the desktop app, not "My Claude Code", so nobody
          uninstalls the server by mistake;
       4. `unins000.exe /VERYSILENT` removes every one of those again;
@@ -121,7 +126,8 @@ Ok "snapshotted $($before.Uninstall.Count) uninstall keys, $($before.Run.Count) 
 $log = Join-Path $Scratch 'install.log'
 New-Item -ItemType Directory -Force -Path $Scratch | Out-Null
 $proc = Start-Process -FilePath $Setup -Wait -PassThru -ArgumentList `
-    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$InstallDir", "/LOG=$log"
+    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/VERIFYWEBVIEW2', `
+    "/DIR=$InstallDir", "/LOG=$log"
 if ($proc.ExitCode -ne 0) {
     if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 40 | Write-Host }
     Fail "silent install exited $($proc.ExitCode)"
@@ -133,6 +139,29 @@ foreach ($relative in @('MyClaudeCode.exe', 'app-icon.ico', 'unins000.exe')) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing after install: $path" }
 }
 Ok 'the exe, the icon and the uninstaller are in place'
+
+# -- the WebView2 bootstrapper is really inside this setup ------------------
+# A runner has the runtime, so the installer's WebView2 branch never runs and
+# nothing would otherwise prove the bundled bootstrapper shipped. `/VERIFYWEBVIEW2`
+# (above) makes [Code] unpack it and log its size on this very install. If the
+# `/DWebView2Setup` define ever falls out of the release workflow, the setup
+# silently goes back to downloading the bootstrapper at install time -- which
+# is what it did before 7.35.2 -- and this is the line that catches it.
+$logText = if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' }
+$verified = [regex]::Match($logText, 'WebView2: bundled bootstrapper verified, (\d+) bytes')
+if (-not $verified.Success) {
+    $webview2Lines = ($logText -split "`r?`n" | Where-Object { $_ -match 'WebView2:' }) -join "`n"
+    Write-Host $webview2Lines
+    Fail 'the setup carries no bundled WebView2 bootstrapper (no "verified" line in the install log)'
+}
+$bootstrapperBytes = [int]$verified.Groups[1].Value
+if ($bootstrapperBytes -lt 500000) {
+    Fail "the bundled WebView2 bootstrapper is only $bootstrapperBytes bytes; that is not the Evergreen bootstrapper"
+}
+Ok "bundled WebView2 bootstrapper: $bootstrapperBytes bytes"
+foreach ($line in ($logText -split "`r?`n" | Where-Object { $_ -match 'WebView2: the runtime' })) {
+    Ok ($line -replace '^.*WebView2:', 'WebView2:')
+}
 
 $shortcut = Join-Path $StartMenu 'My Claude Code.lnk'
 if (-not (Test-Path -LiteralPath $shortcut -PathType Leaf)) {

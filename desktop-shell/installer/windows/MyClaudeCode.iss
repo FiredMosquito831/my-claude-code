@@ -40,11 +40,39 @@
 ;   None. Decision Q9. See `desktop-shell/README.md` for what SmartScreen
 ;   shows and why an EV certificate is not the answer.
 ;
+; WHAT THE SHELL NEEDS FROM THE MACHINE, AND WHO PROVIDES IT
+;   Two system components, and they fail in completely different ways.
+;
+;   1. The **Visual C++ runtime**. A Rust MSVC build imports VCRUNTIME140.dll
+;      and VCRUNTIME140_1.dll, which are NOT part of Windows -- they come from
+;      the Visual C++ redistributable. On a machine without it the *loader*
+;      kills the process with 0xC0000135 (STATUS_DLL_NOT_FOUND) before a line
+;      of our code, or of Tauri's, runs. That is exactly what
+;      microsoft/winget-pkgs PR #430045 hit on its clean validator VM. This
+;      installer does not bundle the redistributable (25 MB, and it needs
+;      administrator rights, which a `PrivilegesRequired=lowest` install does
+;      not have): the shell is built with `-C target-feature=+crt-static`
+;      (`../../src-tauri/.cargo/config.toml`), so those imports do not exist.
+;      `smoke/windows.ps1` reads the binary's import table and fails if one
+;      ever comes back.
+;
+;   2. The **Edge WebView2 runtime**, which draws the window. It is not an
+;      import -- Tauri links the loader statically and asks for the runtime at
+;      run time -- so a missing one is a failed window, not a dead process.
+;      The Evergreen *bootstrapper* is bundled in this installer (see the
+;      [Files] section) and run when the runtime is absent, rather than
+;      downloaded at install time as it was before 7.35.2.
+;
 ; BUILD
 ;   iscc /DAppVersion=6.45.0 ^
 ;        /DSourceExe=..\..\src-tauri\target\x86_64-pc-windows-msvc\release\MyClaudeCode.exe ^
+;        /DWebView2Setup=C:\somewhere\MicrosoftEdgeWebview2Setup.exe ^
 ;        MyClaudeCode.iss
 ;   Built with Inno Setup 6.7.3 (pinned in .github/workflows/shell-release.yml).
+;   `/DWebView2Setup` is optional for a syntax check and mandatory for a
+;   release: without it the bootstrapper is not bundled and the installer falls
+;   back to downloading it. The release workflow fetches the file, checks it is
+;   Authenticode-signed by Microsoft, and refuses to compile without it.
 
 #ifndef AppVersion
   ; A local `iscc MyClaudeCode.iss` with no /D still compiles, so the script
@@ -54,6 +82,18 @@
 
 #ifndef SourceExe
   #define SourceExe "..\..\src-tauri\target\release\MyClaudeCode.exe"
+#endif
+
+; The Evergreen WebView2 bootstrapper to embed. The release workflow passes an
+; absolute path to a freshly fetched copy; a bare `iscc MyClaudeCode.iss` with
+; no /D finds nothing, does not embed, and compiles anyway -- it just produces
+; an installer that downloads the bootstrapper instead of carrying it, which is
+; what every release before 7.35.2 did.
+#ifndef WebView2Setup
+  #define WebView2Setup "MicrosoftEdgeWebview2Setup.exe"
+#endif
+#if FileExists(WebView2Setup)
+  #define WebView2Bundled
 #endif
 
 #define AppName "My Claude Code"
@@ -134,6 +174,15 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; contract asserts that.
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#AppExeName}"; Flags: ignoreversion
 Source: "..\..\src-tauri\icons\icon.ico"; DestDir: "{app}"; DestName: "app-icon.ico"; Flags: ignoreversion
+#ifdef WebView2Bundled
+; The WebView2 Evergreen bootstrapper (~1.8 MB), carried inside this setup and
+; never installed: `dontcopy` means it has no DestDir, is not written into
+; {app}, and is not in the uninstall log -- [Code] extracts it to {tmp} only on
+; a machine whose runtime is missing, and {tmp} is removed when setup exits.
+; There is therefore nothing for the uninstaller to remove, which is why this
+; is the one [Files] entry with no "DestDir: {app}" on it.
+Source: "{#WebView2Setup}"; Flags: dontcopy noencryption
+#endif
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\app-icon.ico"; Comment: "The My Claude Code dashboard, in its own window."
@@ -174,45 +223,96 @@ Type: dirifempty; Name: "{app}"
 //
 // Windows 11 ships the runtime as part of the OS and Microsoft pushed it to
 // Windows 10 from December 2022, so on nearly every machine this function
-// returns True and nothing is downloaded.
+// returns True and nothing is installed.
+//
+// A `pv` value on its own is NOT taken as proof any more. A registry entry
+// whose files are gone -- a half-removed runtime, an image built by deleting
+// the directory, a reset that left the key behind -- would make this installer
+// skip the one step that machine needed. So the version read out of `pv` has
+// to name a directory that actually holds `msedgewebview2.exe`, in one of the
+// two places the runtime installs into: `%ProgramFiles(x86)%\Microsoft\
+// EdgeWebView\Application\<pv>` per machine, `%LOCALAPPDATA%\...` per user.
+// A false "absent" costs a bootstrapper run that exits immediately; a false
+// "present" costs a window that never opens.
 // ------------------------------------------------------------------
 
 const
   WebView2ClientKey =
     'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 
-  // The Evergreen *Bootstrapper*: ~2 MB, downloads and installs whatever the
-  // current runtime is. Its SHA-256 is deliberately NOT pinned, and cannot be:
-  // this is a rolling download whose bytes change every time Microsoft ships a
-  // runtime, so a pin would turn every runtime release into a broken
-  // installer. What is pinned instead is the *URL*, which is the permanent
-  // fwlink Microsoft documents for exactly this purpose, over HTTPS to a
-  // Microsoft host. The alternative -- the Fixed Version runtime -- is 250+ MB
-  // and would have to be updated by hand for every CVE.
+  // The Evergreen *Bootstrapper*: ~1.8 MB, installs whatever the current
+  // runtime is. Since 7.35.2 it is EMBEDDED in this setup ([Files], `dontcopy`)
+  // and only downloaded from this URL when a build did not embed one. Its
+  // SHA-256 is deliberately NOT pinned, and cannot be: this is a rolling file
+  // whose bytes change every time Microsoft ships a runtime, so a pin would
+  // turn every runtime release into a broken build. What CI verifies instead
+  // is that the copy it fetched carries a valid Microsoft Authenticode
+  // signature. The alternative -- the Fixed Version runtime -- is 130+ MB per
+  // architecture, never auto-updates, and would have to be re-cut by hand for
+  // every Chromium CVE.
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   WebView2BootstrapperFile = 'MicrosoftEdgeWebview2Setup.exe';
+  WebView2RuntimeSubdir = '\Microsoft\EdgeWebView\Application\';
 
 function VersionIsInstalled(const Value: string): Boolean;
 begin
   Result := (Trim(Value) <> '') and (Trim(Value) <> '0.0.0.0');
 end;
 
-function WebView2RuntimeInstalled(): Boolean;
-var
-  Version: string;
+function RuntimeFilesExist(const Version: string): Boolean;
+begin
+  Result :=
+    FileExists(ExpandConstant('{commonpf32}') + WebView2RuntimeSubdir + Version +
+               '\msedgewebview2.exe') or
+    FileExists(ExpandConstant('{localappdata}') + WebView2RuntimeSubdir + Version +
+               '\msedgewebview2.exe');
+end;
+
+function RuntimeRegisteredAt(const RootKey: Integer; var Version: string): Boolean;
+begin
+  Result := RegQueryStringValue(RootKey, WebView2ClientKey, 'pv', Version) and
+            VersionIsInstalled(Version) and
+            RuntimeFilesExist(Trim(Version));
+end;
+
+function WebView2RuntimeInstalled(var Version: string): Boolean;
 begin
   Result := True;
-  if RegQueryStringValue(HKEY_LOCAL_MACHINE_32, WebView2ClientKey, 'pv', Version) and
-     VersionIsInstalled(Version) then
+  if RuntimeRegisteredAt(HKEY_LOCAL_MACHINE_32, Version) then
     Exit;
-  if IsWin64 and
-     RegQueryStringValue(HKEY_LOCAL_MACHINE_64, WebView2ClientKey, 'pv', Version) and
-     VersionIsInstalled(Version) then
+  if IsWin64 and RuntimeRegisteredAt(HKEY_LOCAL_MACHINE_64, Version) then
     Exit;
-  if RegQueryStringValue(HKEY_CURRENT_USER, WebView2ClientKey, 'pv', Version) and
-     VersionIsInstalled(Version) then
+  if RuntimeRegisteredAt(HKEY_CURRENT_USER, Version) then
     Exit;
   Result := False;
+end;
+
+// Put the bootstrapper in {tmp}, from the copy inside this setup when there is
+// one and from Microsoft's permanent fwlink when there is not.
+function ObtainBootstrapper(var Target: string; var Problem: string): Boolean;
+begin
+  Result := False;
+  Target := ExpandConstant('{tmp}\' + WebView2BootstrapperFile);
+#ifdef WebView2Bundled
+  try
+    ExtractTemporaryFile(WebView2BootstrapperFile);
+  except
+    Problem := 'the bundled WebView2 runtime installer could not be unpacked (' +
+      GetExceptionMessage + ')';
+    Exit;
+  end;
+  Log('WebView2: using the bundled bootstrapper');
+#else
+  try
+    DownloadTemporaryFile(WebView2BootstrapperUrl, WebView2BootstrapperFile, '', nil);
+  except
+    Problem := 'the WebView2 runtime installer could not be downloaded (' +
+      GetExceptionMessage + ')';
+    Exit;
+  end;
+  Log('WebView2: downloaded the bootstrapper');
+#endif
+  Result := True;
 end;
 
 function InstallWebView2Runtime(var Problem: string): Boolean;
@@ -221,14 +321,8 @@ var
   ResultCode: Integer;
 begin
   Result := False;
-  Target := ExpandConstant('{tmp}\' + WebView2BootstrapperFile);
-  try
-    DownloadTemporaryFile(WebView2BootstrapperUrl, WebView2BootstrapperFile, '', nil);
-  except
-    Problem := 'the WebView2 runtime installer could not be downloaded (' +
-      GetExceptionMessage + ')';
+  if not ObtainBootstrapper(Target, Problem) then
     Exit;
-  end;
   // `/silent /install` is Microsoft's documented pair for the bootstrapper.
   // It elevates on its own when it needs to; a per-user runtime install does
   // not.
@@ -245,16 +339,71 @@ begin
   Result := True;
 end;
 
+// Setup ignores switches it does not know, so this is how a private one is
+// read back. Inno has no CmdLineParamExists.
+function SwitchGiven(const Name: string): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+    if CompareText(ParamStr(Index), Name) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+// `/VERIFYWEBVIEW2` -- a switch for the release smoke, not for users.
+//
+// On the runners (and on almost every real machine) the runtime is already
+// there, so the bundled bootstrapper is never unpacked and nothing proves it
+// is actually inside the setup. This unpacks it and writes its size to the
+// install log, so `smoke/windows-installer.ps1` can assert on every release
+// that the file shipped, on the same silent install it already runs. It never
+// installs anything and never fails setup.
+procedure VerifyBundledBootstrapper();
+var
+  Size: Integer;
+begin
+#ifdef WebView2Bundled
+  try
+    ExtractTemporaryFile(WebView2BootstrapperFile);
+  except
+    Log('WebView2: bundled bootstrapper FAILED to unpack: ' + GetExceptionMessage);
+    Exit;
+  end;
+  if FileSize(ExpandConstant('{tmp}\' + WebView2BootstrapperFile), Size) then
+    Log(Format('WebView2: bundled bootstrapper verified, %d bytes', [Size]))
+  else
+    Log('WebView2: bundled bootstrapper unpacked but could not be measured');
+#else
+  Log('WebView2: this setup carries no bundled bootstrapper');
+#endif
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Problem: string;
+  Version: string;
 begin
   Result := '';
-  if WebView2RuntimeInstalled() then
-    Exit;
+  if SwitchGiven('/VERIFYWEBVIEW2') then
+    VerifyBundledBootstrapper();
 
-  if InstallWebView2Runtime(Problem) then
+  if WebView2RuntimeInstalled(Version) then
+  begin
+    Log('WebView2: the runtime is present (pv ' + Trim(Version) + ')');
     Exit;
+  end;
+
+  Log('WebView2: the runtime is absent; installing it');
+  if InstallWebView2Runtime(Problem) then
+  begin
+    Log('WebView2: the runtime was installed');
+    Exit;
+  end;
+  Log('WebView2: ' + Problem);
 
   // Not fatal, on purpose. Aborting here would mean a machine that is briefly
   // offline cannot install the app at all, and the runtime may arrive later
