@@ -484,3 +484,111 @@ def test_every_static_guide_link_mount_point_exists() -> None:
     markup_ids = set(_MARKUP_ID.findall(_HTML_SOURCE))
     missing = sorted(name for name in selectors if name not in markup_ids)
     assert not missing, f"guide links mount on ids that do not exist: {missing}"
+
+
+# ------------------------------------------------------------------- I ---
+# One key rail, not three.
+#
+# 7.29.0 gave every key row a drag grip, a name box and two Move buttons, and
+# the dashboard's three credential pools -- env-key providers, custom
+# providers, web-search providers -- each built that row themselves against
+# their own copy of four CSS rules. Only the env-key copy carried
+# `flex-wrap: wrap`, so in a 240px provider-grid column the custom and
+# web-search rails hung ~280px of buttons off the right edge of their card.
+#
+# The three now go through one set of builders and one grouped rule set. These
+# guards are what stops a fourth pool, or a well-meant tweak, forking them
+# again: a jsdom test proves the rendered classes match, and this proves there
+# is only one place those classes are written.
+
+_RAIL_BUILDERS = ("keyRailList", "keyRailRow", "keyRailLabel", "keyRailAddForm")
+
+# The class names the rail's stylesheet addresses. A second `createElement`
+# site assigning one of these would be a second builder.
+_RAIL_CLASSES = (
+    "key-manager-list",
+    "key-manager-row",
+    "key-manager-key",
+    "key-manager-add",
+)
+
+
+def test_every_rail_builder_is_declared_exactly_once() -> None:
+    for name in _RAIL_BUILDERS:
+        declarations = re.findall(rf"^function {name}\(", _JS_SOURCE, re.MULTILINE)
+        assert len(declarations) == 1, (
+            f"{name} is declared {len(declarations)} times; the rail has one builder."
+        )
+
+
+def test_no_call_site_writes_a_rail_class_by_hand() -> None:
+    """`className = "key-manager-row"` outside the builder is a second rail.
+
+    The builders write these names from a template literal, so a literal
+    assignment anywhere else means a pool has started drawing its own row
+    again -- which is the 7.29.0 defect, exactly.
+    """
+
+    for css_class in _RAIL_CLASSES:
+        literal = re.findall(rf"""className\s*=\s*["']{css_class}["']""", _JS_SOURCE)
+        assert not literal, (
+            f'admin.js assigns className = "{css_class}" directly; '
+            f"build the element with the matching keyRail* helper instead."
+        )
+
+
+def _rule_selector_lists_naming(css_class: str) -> list[str]:
+    """Every rule's selector list that mentions `css_class`.
+
+    Parsed by splitting on the braces rather than with a CSS parser, which
+    this repo does not depend on: a stylesheet with no nesting and no
+    `@media` block containing the rail's rules makes the split exact.
+    """
+
+    source = _CSS_SOURCE.replace("\r\n", "\n")
+    found: list[str] = []
+    for block in source.split("}"):
+        head, sep, _ = block.partition("{")
+        if not sep:
+            continue
+        # The selector list is whatever follows the previous rule's close.
+        selectors = head.split("*/")[-1]
+        if re.search(rf"{re.escape(css_class)}\b", selectors):
+            found.append(selectors)
+    return found
+
+
+def test_the_legacy_pool_classes_carry_no_rules_of_their_own() -> None:
+    """`.cp-key-row` and friends are aliases; they must only be grouped.
+
+    They exist so selectors written before 7.34.1 still resolve. The moment
+    one of them opens a rule block of its own, the three pools can disagree
+    again -- so each must appear only as one selector of a group whose first
+    selector is the shared `.key-manager-*` name.
+    """
+
+    aliases = (
+        ".cp-key-list",
+        ".cp-key-row",
+        ".cp-key-label",
+        ".cp-key-add",
+        ".ws-key-list",
+        ".ws-key-row",
+        ".ws-key-label",
+    )
+    for alias in aliases:
+        for selectors in _rule_selector_lists_naming(alias):
+            # A descendant rule (`.ws-key-add .key-add-secret`) is the one
+            # legitimate case: box chrome a panel needs because it does not
+            # sit inside a `.field`. What is forbidden is styling the alias
+            # itself without the shared name beside it.
+            addresses_alias_itself = any(
+                part.strip() == alias for part in selectors.split(",")
+            )
+            if not addresses_alias_itself:
+                continue
+            assert ".key-manager-" in selectors, (
+                f"{alias} is styled by a rule that does not also name a "
+                f".key-manager-* selector: {selectors.strip()!r}. Style the "
+                f"rail once, for every pool, or the three diverge again."
+            )

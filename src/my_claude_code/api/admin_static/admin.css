@@ -494,6 +494,15 @@ textarea:focus-visible,
   transform: none;
 }
 
+/* The same rule, for every other card that shows a key rail: a custom
+   provider card, which renders its rail inline, and a web-search card while
+   its pool is open. A rail is six controls across; a `minmax(240px, 1fr)`
+   column is not. Before 7.34.1 only the built-in cards had this, which is
+   why only the built-in rail fitted. */
+.provider-card.has-key-rail {
+  grid-column: 1 / -1;
+}
+
 .pv-card .provider-meta {
   font-family: var(--font-mono);
   font-size: 11.5px;
@@ -684,10 +693,24 @@ textarea:focus-visible,
   border-radius: var(--radius-md);
 }
 
-.key-manager-list {
+/* ------------------------------------------------------------- the rail --
+   One rail, three pools. Every key pool on the dashboard -- env-key
+   providers, custom providers, web-search providers -- is built by the
+   `keyRail*` builders in admin.js and styled by the rules below and nothing
+   else. The `.cp-*` and `.ws-*` names are aliases the builders keep on the
+   elements so pre-7.34.1 selectors still resolve; they are named in these
+   selectors and carry no rules of their own, which is what stops the three
+   pools drifting apart again. */
+
+.key-manager-list,
+.cp-key-list,
+.ws-key-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* A flex item in a grid column refuses to shrink below its content unless
+     it is told it may. Without this the rail sets the card's width. */
+  min-width: 0;
 }
 
 .key-manager-empty,
@@ -696,20 +719,30 @@ textarea:focus-visible,
   font-size: 0.85rem;
 }
 
-.key-manager-row {
+.key-manager-row,
+.cp-key-row,
+.ws-key-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
   /* So the model-bench sub-line can take a line of its own under the key
-     rather than being squeezed in beside the Remove button. */
+     rather than being squeezed in beside the Remove button -- and so a rail
+     in a 240px grid column degrades to several lines instead of hanging
+     ~280px of Move/Remove buttons off the right edge of its card. */
   flex-wrap: wrap;
 }
 
-.key-manager-key {
+.key-manager-key,
+.cp-key-label,
+.ws-key-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.85rem;
   color: var(--text-strong);
+  /* A 60-character name is allowed, and without these it would set the
+     row's minimum width -- and therefore the card's. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -773,15 +806,11 @@ textarea:focus-visible,
   flex: 1 1 auto;
 }
 
-.key-manager-list.is-dragging .key-manager-row,
-.cp-key-list.is-dragging .cp-key-row,
-.ws-key-list.is-dragging .ws-key-row {
+.key-manager-list.is-dragging .key-manager-row {
   cursor: grabbing;
 }
 
-.key-manager-row.is-drop-target,
-.cp-key-row.is-drop-target,
-.ws-key-row.is-drop-target {
+.key-manager-row.is-drop-target {
   outline: 2px solid var(--accent-border);
   outline-offset: 2px;
 }
@@ -795,10 +824,24 @@ textarea:focus-visible,
 }
 
 /* Narrower than the name box on a rendered row: it sits beside the key field
-   in the add form, which already carries the wider control. */
+   in the add form, which already carries the wider control. It keeps a real
+   basis so that when the three do not fit the Add button wraps to a line of
+   its own rather than the name box collapsing to "Name (o". */
 .key-add-name {
-  flex: 0 1 160px;
-  max-width: 180px;
+  flex: 1 1 150px;
+  min-width: 140px;
+  max-width: 220px;
+}
+
+/* The secret box of the Add form. Sized here rather than by the surrounding
+   `.field input` rule, because two of the three pools sit outside `.field`. */
+.key-add-secret {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.key-add-submit {
+  flex: 0 0 auto;
 }
 
 .cp-key-remove {
@@ -815,14 +858,17 @@ textarea:focus-visible,
   color: var(--error, #f87171);
 }
 
-.key-manager-add {
+.key-manager-add,
+.cp-key-add,
+.ws-key-add {
   display: flex;
   gap: 8px;
-}
-
-.key-manager-add input {
-  flex: 1;
+  margin-top: 4px;
   min-width: 0;
+  /* The three controls are ~480px at their comfortable size and the card
+     they sit in can be 228px wide. Wrapping puts Add on its own line rather
+     than squeezing "Name (optional)" down to four characters. */
+  flex-wrap: wrap;
 }
 
 .key-manager-header {
@@ -1827,38 +1873,18 @@ textarea:focus-visible,
   gap: 10px;
 }
 
-.ws-key-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ws-key-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: space-between;
-}
-
-.ws-key-label {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--text-strong);
-}
+/* `.ws-key-list`, `.ws-key-row`, `.ws-key-label` and `.ws-key-add` are styled
+   with every other pool's, up beside `.key-manager-row`. What stays here is
+   the box chrome the two text inputs need because this panel -- unlike the
+   env-key one -- does not sit inside a `.field`. */
 
 .ws-key-empty {
   color: var(--muted);
   font-size: 13px;
 }
 
-.ws-key-add {
-  display: flex;
-  gap: 8px;
-}
-
-.ws-key-add input {
-  flex: 1;
-  min-width: 0;
+.ws-key-add .key-add-secret,
+.ws-key-add .key-add-name {
   padding: 8px 12px;
   background: var(--input);
   border: 1px solid var(--line-strong);
@@ -1866,7 +1892,8 @@ textarea:focus-visible,
   color: var(--text);
 }
 
-.ws-key-add input:focus {
+.ws-key-add .key-add-secret:focus,
+.ws-key-add .key-add-name:focus {
   outline: none;
   border-color: var(--accent-border);
   background: var(--input-focus);
@@ -3228,34 +3255,9 @@ details.turn-pane > summary:focus-visible {
   white-space: nowrap;
 }
 
-.cp-key-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.cp-key-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.cp-key-label {
-  font-size: 12px;
-  color: var(--text-strong);
-}
-
-.cp-key-add {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.cp-key-add input {
-  flex: 1;
-  min-width: 0;
-}
+/* `.cp-key-list`, `.cp-key-row`, `.cp-key-label` and `.cp-key-add` are styled
+   with every other pool's, up beside `.key-manager-row`. They had their own
+   copies of those four rules until 7.34.1, and the copies were the bug. */
 
 .cp-form {
   display: grid;
@@ -7506,11 +7508,14 @@ details.turn-pane > summary:focus-visible {
   flex: 0 0 auto;
 }
 
+/* No `margin-left: auto`: the badge now sits between the key and the Move
+   buttons, the way it does on an env-key row, and the key label is the
+   grower that takes the slack. */
 .cp-key-health {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .cp-toggle {

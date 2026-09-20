@@ -864,6 +864,30 @@ const ROUTES = {
       },
     ],
   },
+  /* The web-search pool's own listing, in the same shape and with the same
+     two named/unnamed cases, so the shared rail can be rendered for all
+     three pool types from one harness run. */
+  "/admin/api/websearch/credentials/TAVILY_API_KEY/keys": {
+    locked: false,
+    keys: ["tvly-o...1111", "tvly-t...2222"],
+    health: { keys: [] },
+    rows: [
+      {
+        index: 0,
+        id: "sha256:dddddddddddddddd",
+        masked: "tvly-o...1111",
+        key_label: "tvly…1111",
+        name: "",
+      },
+      {
+        index: 1,
+        id: "sha256:eeeeeeeeeeeeeeee",
+        masked: "tvly-t...2222",
+        key_label: "tvly…2222",
+        name: "tavily production europe west billing",
+      },
+    ],
+  },
   "/admin/api/config": {
     fields: FIELDS,
     sections: SECTIONS,
@@ -1380,6 +1404,27 @@ const ROUTES = {
         model_benches: [{ model: "m1", remaining: 42 }],
         index: 1,
         key_label: "sk-acm\u2026dddd",
+      },
+    ],
+    /* `rows` carries the id and the name, which is what turns a custom
+       card's key list into a rail. Without it the card renders the
+       pre-7.29.0 shape and the shared-rail guards below would pass
+       vacuously. The second name is a long one on purpose: 37 characters
+       is what set the row's minimum width before 7.34.1. */
+    rows: [
+      {
+        index: 0,
+        id: "sha256:1111111111111111",
+        masked: "sk-acm\u2026bbbb",
+        key_label: "sk-acm\u2026bbbb",
+        name: "",
+      },
+      {
+        index: 1,
+        id: "sha256:2222222222222222",
+        masked: "sk-acm\u2026dddd",
+        key_label: "sk-acm\u2026dddd",
+        name: "acme production europe west billing",
       },
     ],
   },
@@ -7499,6 +7544,125 @@ const advancedFields = (() => {
   return out;
 })();
 
+/* ------------------------------------------------------- the shared rail
+   7.29.0 gave every key row a grip, a name box and two Move buttons, but the
+   three pools each built their own row and add-form markup, and only the
+   env-key one had a stylesheet rule that wrapped. The result was ~280px of
+   controls hanging off the right of a 240px custom-provider card.
+
+   What is asserted here is that there is exactly one builder: the class the
+   stylesheet addresses is the same on all three pools, and the add form has
+   the same three controls in the same order everywhere. The pre-7.34.1
+   `.cp-*` / `.ws-*` classes ride along as aliases and are asserted too, so a
+   selector written against them cannot be broken silently. */
+const sharedRail = {};
+{
+  const describe = (root) => {
+    const list = root.querySelector(".key-manager-list");
+    const row = root.querySelector(".key-manager-row");
+    const form = root.querySelector(".key-manager-add");
+    const classesOf = (node) =>
+      node ? Array.from(node.classList).sort() : null;
+    return {
+      list: classesOf(list),
+      row: classesOf(row),
+      label: classesOf(row && row.querySelector(".key-manager-key")),
+      labelTag: row && row.querySelector(".key-manager-key")
+        ? row.querySelector(".key-manager-key").tagName
+        : null,
+      addClasses: classesOf(form),
+      // The add form's shape, in order: the secret, the optional name, the
+      // button. Read off the DOM rather than asserted per pool, because the
+      // point is that the three are the same list.
+      addShape: form
+        ? Array.from(form.children).map((node) =>
+            [
+              node.tagName,
+              node.getAttribute("type") || "",
+              node.className,
+            ].join("|"),
+          )
+        : null,
+      addNamePlaceholder: form
+        ? form.querySelector(".key-add-name")?.placeholder || ""
+        : null,
+      // A row must carry the reorder controls on every pool.
+      grip: Boolean(row && row.querySelector(".key-drag-grip")),
+      nameBox: Boolean(row && row.querySelector(".key-name-input")),
+      moves: row
+        ? Array.from(row.querySelectorAll(".key-manager-move")).map(
+            (button) => button.textContent,
+          )
+        : null,
+    };
+  };
+
+  const envPanel = doc.createElement("div");
+  doc.body.appendChild(envPanel);
+  await window.eval(`renderKeyManager`)(envPanel, { key: "NAMED_API_KEY" });
+  sharedRail.env = describe(envPanel);
+
+  const wsPanel = doc.createElement("div");
+  wsPanel.className = "ws-key-manager";
+  doc.body.appendChild(wsPanel);
+  await window.eval(`loadKeyManager`)({ id: "tavily", envKey: "TAVILY_API_KEY" }, wsPanel);
+  sharedRail.websearch = describe(wsPanel);
+
+  // The rail arrives on a custom card a moment after the card does: the card
+  // is drawn from the providers payload and the per-key listing enriches it,
+  // fire-and-forget. Blocks above this one leave renders in flight, and one
+  // landing mid-read would replace the enriched card with a bare one -- so
+  // the grid is redrawn here first, settled, and only then enriched.
+  await window.eval(`loadCustomProviders`)();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const customCard = doc.querySelector('[data-custom-provider="custom_acme"]');
+  sharedRail.custom = customCard ? describe(customCard) : null;
+  // The card says it is showing a rail, which is what widens it to the whole
+  // grid row -- the rule `.pv-card.pv-open` has always had.
+  sharedRail.customIsRailHost = customCard
+    ? customCard.classList.contains("has-key-rail")
+    : null;
+  // The health badge sits between the key and the Move buttons, the way it
+  // does on an env-key row. It used to land after Move down.
+  sharedRail.customRowOrder = customCard
+    ? Array.from(customCard.querySelector(".key-manager-row")?.children || []).map(
+        (node) => node.className.split(" ")[0],
+      )
+    : null;
+  sharedRail.envRowOrder = Array.from(
+    envPanel.querySelector(".key-manager-row")?.children || [],
+  ).map((node) => node.className.split(" ")[0]);
+}
+
+/* One `field.note`, once. It used to be appended twice -- once beside the
+   badge it explains and once again at the end of the cell -- so every row
+   carrying a note read its sentence out two times. */
+const capabilityRow = {};
+{
+  const row = window.eval(`buildCapabilityRow`)(
+    "Wire surface",
+    {
+      value: "responses",
+      source: "probe",
+      note: "the npm package selected this door",
+      approximate: true,
+      agreement: 0.5,
+      match_count: 2,
+      reporters: 3,
+      tier: 4,
+      tier_label: "id matched exactly",
+    },
+    { probe: "Probed" },
+    null,
+  );
+  capabilityRow.notes = Array.from(row.querySelectorAll(".models-approx-note")).map(
+    (node) => node.textContent,
+  );
+  capabilityRow.noteCount = capabilityRow.notes.filter(
+    (text) => text === "the npm package selected this door",
+  ).length;
+}
+
 console.log(
   JSON.stringify(
     {
@@ -7530,6 +7694,8 @@ console.log(
       requestDetail,
       keyManager,
       keyRail,
+      sharedRail,
+      capabilityRow,
       keyNames,
       dialectPanels,
       docs,
