@@ -15,6 +15,7 @@ import tempfile
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, Literal, cast
 
+from my_claude_code.core.cancelled_reasons import CANCELLED_SUB_LABEL_TEXT
 from my_claude_code.core.request_log import ATTEMPT_PARAMS_KEY, PROVIDER_KEY_SQL
 
 Format = Literal["json", "csv", "xlsx", "txt"]
@@ -341,6 +342,12 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
 # way to see that it is misattributed.
 _REQUEST_ALWAYS_DERIVED: tuple[str, ...] = (
     "ttft_lost_to_fallbacks_ms",
+    # Which of the four things "cancelled" means for this row. Always present
+    # rather than gated by a field group, for the same reason ``status`` is:
+    # it is a structural fact about the row, and an export of cancelled
+    # requests that could not say why they were cancelled is the gap this
+    # column closes. Empty on every row that was not cancelled.
+    "cancel_reason",
     # The human name the operator gave this credential, resolved from the
     # *current* pool at export time. ``key_label`` and ``key_index`` keep their
     # meanings exactly: a name is a display join, never a stored dimension, so
@@ -377,6 +384,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "key_label",
     "key_name",
     "status",
+    "cancel_reason",
     "error_kind",
     "error_message",
     "tokens_in",
@@ -431,6 +439,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "key_label": "Key",
     "key_name": "Key name",
     "status": "Status",
+    "cancel_reason": "Cancelled because",
     "error_kind": "Error kind",
     "error_message": "Error message",
     "tokens_in": "Input (uncached)",
@@ -568,9 +577,24 @@ def compute_request_detail_derived(
     selected = set(field_ids)
     if "ttft_lost_to_fallbacks_ms" not in row:
         row["ttft_lost_to_fallbacks_ms"] = _ttft_lost_to_fallbacks(row)
+    row["cancel_reason"] = _cancel_reason_text(row.get("cancel_reason"))
     row["key_name"] = resolve_key_name(row, key_names)
     if "cache_hit" in selected and "cache_hit_rate" not in row:
         row["cache_hit_rate"] = _cache_hit_ratio(row)
+
+
+def _cancel_reason_text(label: Any) -> Any:
+    """The sub-label the chip shows, not the machine value behind it.
+
+    Deliberately the same words the Requests list and the modal print, so
+    a download and the page it came from cannot disagree -- the rule ``ended_by``
+    already follows. ``None`` stays ``None``: a request that was not cancelled
+    was not cancelled for any reason.
+    """
+
+    if not label:
+        return None
+    return CANCELLED_SUB_LABEL_TEXT.get(str(label), str(label))
 
 
 def _ttft_lost_to_fallbacks(row: dict[str, Any]) -> Any:
@@ -1016,7 +1040,14 @@ _ATTEMPT_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
 #: Derived on every attempt export: the two or three words that say what ended
 #: this attempt, assembled the same way the request modal's timeline assembles
 #: them so a download and the page it came from cannot disagree.
-_ATTEMPT_ALWAYS_DERIVED: tuple[str, ...] = ("ended_by", "key_name")
+_ATTEMPT_ALWAYS_DERIVED: tuple[str, ...] = (
+    "ended_by",
+    "key_name",
+    # Rides beside ``request_status`` because that column is what raises
+    # the question: an attempt under a cancelled request says "cancelled"
+    # and nothing about which of the four cancellations it was.
+    "request_cancel_reason",
+)
 
 _ATTEMPT_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
     # Why the router refused to try this model. A skipped attempt has no
@@ -1041,6 +1072,7 @@ _ATTEMPT_COLUMN_ORDER: tuple[str, ...] = (
     "requested_model",
     "resolved_model",
     "request_status",
+    "request_cancel_reason",
     "attempt_provider",
     "attempt_model",
     "outcome",
@@ -1076,6 +1108,7 @@ _ATTEMPT_COLUMN_LABELS: dict[str, str] = {
     "requested_model": "Requested model",
     "resolved_model": "Resolved model",
     "request_status": "Request status",
+    "request_cancel_reason": "Request cancelled because",
     "attempt_provider": "Attempt provider",
     "attempt_model": "Attempt model",
     "outcome": "Outcome",
@@ -1173,6 +1206,7 @@ def compute_attempt_detail_derived(
     ladder = ladder if isinstance(ladder, dict) else None
 
     row["ended_by"] = _attempt_ended_by(row, bench, ladder)
+    row["request_cancel_reason"] = _cancel_reason_text(row.get("request_cancel_reason"))
     row["key_name"] = resolve_key_name(row, key_names)
     if "failure" in selected:
         row["bench_reason"] = _bench_reason(bench)

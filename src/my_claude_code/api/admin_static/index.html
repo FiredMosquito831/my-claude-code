@@ -1058,6 +1058,21 @@
                   <option value="success">success</option>
                   <option value="error">error</option>
                   <option value="cancelled">cancelled</option>
+                  <!-- Added beside the three originals, never instead of them:
+                       "cancelled" still selects all four, and a saved link that
+                       carries status=cancelled means exactly what it did. -->
+                  <option value="cancelled:client_gave_up_waiting">
+                    cancelled — client gave up waiting
+                  </option>
+                  <option value="cancelled:committed_then_silent">
+                    cancelled — committed, then silent
+                  </option>
+                  <option value="cancelled:stopped_mid_answer">
+                    cancelled — stopped mid-answer
+                  </option>
+                  <option value="cancelled:server_restart">
+                    cancelled — server restart
+                  </option>
                 </select>
               </label>
               <label
@@ -1173,6 +1188,16 @@
                   <div id="reqCostDay"></div>
                 </section>
               </div>
+            </section>
+            <section class="analytics-panel">
+              <h4>Why requests were cancelled</h4>
+              <p class="analytics-footnote">
+                "Cancelled" means the client stopped reading before the stream
+                finished, and it covers four different events. All four are
+                derived from what was already recorded, so rows logged long
+                before this panel existed are counted too.
+              </p>
+              <div id="reqCancelledBreakdown"></div>
             </section>
             <section class="analytics-panel">
               <h4>Model latency</h4>
@@ -3612,6 +3637,36 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   above it: a failed attempt has no request row to filter on. The
                   Models page carries the same median per model as a chip, and no
                   chip at all for a model nothing has measured.
+                </p>
+                <p>
+                  There is a third outcome beside <em>answered</em> and
+                  <em>failed</em>: <strong>client hung up</strong>. An attempt that
+                  was streaming when the client closed the connection is recorded
+                  as a failure of that route &mdash; the model did not answer
+                  &mdash; but what ended it was the client&rsquo;s own idle
+                  watchdog, typically after 300 s or 600 s of silence. Counting
+                  those 300&ndash;600 s waits as failures of the model made healthy
+                  models look broken, so they are their own group and are not in
+                  any model&rsquo;s <em>failed</em> p50 or p95.
+                </p>
+                <p>
+                  <strong>Analytics &rarr; Why requests were cancelled</strong>
+                  splits the Cancelled card into the four things that word covers.
+                  <em>Client gave up waiting</em>: nothing readable ever reached the
+                  client &mdash; no frame at all, or a first frame that arrived at
+                  the instant the client had already gone.
+                  <em>Committed, then silent</em>: a first frame arrived with time
+                  to spare and no content ever followed it.
+                  <em>Stopped mid-answer</em>: output or reasoning had already been
+                  delivered, normally the user stopping the stream.
+                  <em>Server restart</em>: the request ended within five seconds of
+                  a server session that another session followed, so MCC&rsquo;s own
+                  shutdown cut it; that one wins when two apply. The same label
+                  appears as a chip on every cancelled row, in <strong>View</strong>
+                  with a sentence explaining it, as a value of the
+                  <strong>Status</strong> filter, and as a column in every export.
+                  It is derived from columns the log already stored, so nothing was
+                  added to what is recorded and every historical row carries one.
                 </p>
                 <p class="guide-note">
                   <strong>Nothing before 7.4.0 is measured, and none of it can be.</strong>

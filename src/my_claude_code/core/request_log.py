@@ -22,6 +22,14 @@ from typing import Any, Literal
 
 from loguru import logger
 
+from my_claude_code.core.cancelled_reasons import (
+    CANCELLED_STATUS,
+    CANCELLED_SUB_LABELS,
+    classify_cancelled,
+    restart_boundaries,
+    split_status_filter,
+    sub_label_case_sql,
+)
 from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.request_images import CapturedImage
 from my_claude_code.core.upstream_ladder import format_status_census
@@ -426,6 +434,20 @@ _LIST_METADATA_COLUMNS = (
     # is where the "est." badge is decided.
     "cost_usd",
     "cost_source",
+)
+
+#: Everything :func:`classify_cancelled` reads off a request row.
+#:
+#: Named once so the three queries that have to carry them -- the list, the
+#: detail and the two exports -- cannot drift from the classifier, and so the
+#: export's SELECT can top itself up without the caller knowing.
+_CANCEL_REASON_SOURCE_COLUMNS: tuple[str, ...] = (
+    "status",
+    "ts_epoch",
+    "ttft_ms",
+    "duration_ms",
+    "output_chars",
+    "thinking_chars",
 )
 
 #: Columns :meth:`RequestLogStore._percentiles` may be asked for.
@@ -1716,6 +1738,38 @@ _LATENCY_OUTCOMES_SQL = "a.outcome IN ({})".format(
         f"'{outcome.value}'"
         for outcome in (RouteAttemptOutcome.SUCCEEDED, RouteAttemptOutcome.FAILED)
     )
+)
+
+#: The attempt ``error_kind`` that means "the client hung up", not "the model
+#: failed".
+#:
+#: Written by ``RouteLedger.interrupted()`` with the message "client cancelled
+#: before the stream finished". The attempt is stored as ``outcome='failed'``
+#: because from the route's point of view that model did not answer -- but it
+#: is the *client's* clock that ended it, usually its own 300 s or 600 s idle
+#: watchdog, so its 300-600 s latency describes the wait, not the model.
+INTERRUPTED_ERROR_KIND = "interrupted"
+
+#: The third ``latency_by_model`` group, beside ``succeeded`` and ``failed``.
+LATENCY_INTERRUPTED_OUTCOME = "interrupted"
+
+#: How ``latency_by_model`` derives the group a row belongs to.
+#:
+#: Deliberately a projection, not a filter. ``_LATENCY_OUTCOMES_SQL`` stays in
+#: the ``WHERE`` exactly as it was -- byte for byte -- because it is the
+#: documented seek on the leading ``outcome`` column of
+#: ``idx_request_attempts_ts_v1`` (1.772 s -> 0.871 s all time). Adding
+#: ``AND a.error_kind IS NOT 'interrupted'`` there would break that equality and
+#: put an unindexed predicate in the seek path. A ``CASE`` in the select list
+#: costs nothing at the index and moves the hang-ups into their own rows, so a
+#: model's ``failed`` percentiles stop carrying the client's watchdog.
+#:
+#: Used by **both** the aggregate and the percentile pull: they bucket on the
+#: same key, so if only one of them grouped this way the two would not line up
+#: and every interrupted row would come back without percentiles.
+_LATENCY_OUTCOME_GROUP_SQL = (
+    f"CASE WHEN a.error_kind = '{INTERRUPTED_ERROR_KIND}'"
+    f" THEN '{LATENCY_INTERRUPTED_OUTCOME}' ELSE a.outcome END"
 )
 
 
@@ -4474,8 +4528,17 @@ class RequestLogStore:
                 args.extend(models)
                 args.extend(models)
         if status:
+            # ``cancelled:<sub-label>`` narrows to one of the four things
+            # "cancelled" means. The status half is still the plain indexed
+            # equality it always was -- the sub-label is an extra predicate
+            # beside it, never instead of it -- so ``status=cancelled`` and
+            # every URL that carries it keep selecting all four.
+            status_value, sub_label = split_status_filter(status)
             clauses.append("status = ?")
-            args.append(status)
+            args.append(status_value)
+            if sub_label is not None:
+                clauses.append(f"{sub_label_case_sql()} = ?")
+                args.append(sub_label)
         if endpoint:
             clauses.append("endpoint = ?")
             args.append(endpoint)
@@ -4619,6 +4682,10 @@ class RequestLogStore:
             )
             body_args = [preview, preview]
         columns = ", ".join(_LIST_METADATA_COLUMNS)
+        # Read before the page's own connection is opened, not inside it: it is
+        # cached for five seconds and shared with every other derived answer, so
+        # a page normally pays nothing for it.
+        boundaries = self.restart_boundaries()
         # One more row than the page, so "is there a next page" is answered
         # without a count. It is discarded before anything is rendered.
         fetch = limit if include_total else limit + 1
@@ -4642,6 +4709,7 @@ class RequestLogStore:
                     row,
                     body_preview_chars=body_preview_chars,
                     bodies=bodies.get(str(row["id"])),
+                    boundaries=boundaries,
                 )
                 for row in raw_rows
             ]
@@ -4831,6 +4899,7 @@ class RequestLogStore:
         return result
 
     def get_request(self, request_id: str) -> dict[str, Any] | None:
+        boundaries = self.restart_boundaries()
         with self._connection() as conn:
             cursor = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,))
             row = cursor.fetchone()
@@ -4840,7 +4909,10 @@ class RequestLogStore:
             images = self._fetch_images(conn, request_id)
             attempts = self._fetch_attempts(conn, request_id)
         data = self._row_to_dict(
-            row, body_preview_chars=None, bodies=bodies.get(request_id)
+            row,
+            body_preview_chars=None,
+            bodies=bodies.get(request_id),
+            boundaries=boundaries,
         )
         data["input_images"] = images
         data["route_attempts"] = attempts
@@ -4877,7 +4949,17 @@ class RequestLogStore:
         part of the contract: a caller that stops early -- a bounded scan, an
         aborted download -- calls it to run the ``finally`` above now, instead
         of leaving the connection open until the garbage collector notices.
+
+        The sub-label is derived, so the SELECT carries the columns it is
+        derived from even when the caller did not name them. They go into the
+        SQL, never into the caller's ``columns``: the route projects each row
+        down to the columns it asked for, so an export gains exactly one field
+        and not five.
         """
+        sql_columns = list(columns) + [
+            column for column in _CANCEL_REASON_SOURCE_COLUMNS if column not in columns
+        ]
+        boundaries = self.restart_boundaries()
         where, args = self._where(
             provider=provider,
             model=model,
@@ -4902,7 +4984,7 @@ class RequestLogStore:
                     page_where += " (ts_epoch, id) < (?, ?)"
                     page_args.extend([last_ts, last_id])
                 page_sql = (
-                    f"SELECT {', '.join(columns)} FROM requests{page_where}"
+                    f"SELECT {', '.join(sql_columns)} FROM requests{page_where}"
                     " ORDER BY ts_epoch DESC, id DESC LIMIT ?"
                 )
                 rows = conn.execute(page_sql, [*page_args, page_size]).fetchall()
@@ -4919,6 +5001,7 @@ class RequestLogStore:
                         row,
                         body_preview_chars=None,
                         bodies=bodies.get(str(row["id"])),
+                        boundaries=boundaries,
                     )
                     if need_ladder:
                         data.update(_EMPTY_LADDER_ROLLUP)
@@ -4977,6 +5060,7 @@ class RequestLogStore:
             local=local,
             harness=harness,
         )
+        boundaries = self.restart_boundaries()
         conn = self._connect()
         try:
             cursor: Any = None
@@ -4990,7 +5074,12 @@ class RequestLogStore:
                     page_args.extend([last_ts, last_id])
                 page_sql = (
                     "SELECT id, ts_epoch, ts_iso, harness, endpoint,"
-                    " requested_model, resolved_model, status"
+                    " requested_model, resolved_model, status,"
+                    # Not exported as columns of their own: they are here only
+                    # so the parent's cancelled sub-label can ride on the
+                    # attempt beside ``request_status``, which is the column
+                    # that raised the question.
+                    " ttft_ms, duration_ms, output_chars, thinking_chars"
                     f" FROM requests{page_where}"
                     " ORDER BY ts_epoch DESC, id DESC LIMIT ?"
                 )
@@ -5008,6 +5097,15 @@ class RequestLogStore:
                     attempt["requested_model"] = parent["requested_model"]
                     attempt["resolved_model"] = parent["resolved_model"]
                     attempt["request_status"] = parent["status"]
+                    attempt["request_cancel_reason"] = classify_cancelled(
+                        status=parent["status"],
+                        ts_epoch=parent["ts_epoch"],
+                        ttft_ms=parent["ttft_ms"],
+                        duration_ms=parent["duration_ms"],
+                        output_chars=parent["output_chars"],
+                        thinking_chars=parent["thinking_chars"],
+                        boundaries=boundaries,
+                    )
                     yield attempt
                 cursor = (rows[-1]["ts_epoch"], rows[-1]["id"])
         finally:
@@ -5163,9 +5261,26 @@ class RequestLogStore:
         *,
         body_preview_chars: int | None,
         bodies: dict[str, Any] | None = None,
+        boundaries: Sequence[float] = (),
     ) -> dict[str, Any]:
         data = dict(row)
         data["stream"] = bool(data["stream"])
+        # Which of the four things "cancelled" means, derived here so that the
+        # list, the detail and the export all answer it the same way and no
+        # caller has to know the rule. NULL on every other status -- a
+        # successful request was not cancelled for any reason -- and absent
+        # entirely when the query did not project ``status``, because a label
+        # guessed from columns nobody selected would be a fabrication.
+        if "status" in data:
+            data["cancel_reason"] = classify_cancelled(
+                status=data.get("status"),
+                ts_epoch=data.get("ts_epoch"),
+                ttft_ms=data.get("ttft_ms"),
+                duration_ms=data.get("duration_ms"),
+                output_chars=data.get("output_chars"),
+                thinking_chars=data.get("thinking_chars"),
+                boundaries=boundaries,
+            )
         if bodies:
             # Only fill columns this query actually projected: list views carry
             # ``thinking_chars`` instead of ``thinking_text`` and must keep
@@ -5267,7 +5382,14 @@ class RequestLogStore:
                 # get around to it.
                 del self._stats_cache[cache_key]
         payload: dict[str, Any] | None = None
-        if not q:
+        # A cancelled sub-label is not a rollup dimension and deliberately never
+        # will be: the rollup tables are incremental counters keyed on
+        # ``requests.status``, so teaching them a fifth dimension would mean
+        # rebuilding every historical bucket for 0.4% of traffic. The sub-label
+        # is derived from the request row instead, which only the row scan can
+        # do -- exactly the way a free-text search already forces this path.
+        _, sub_label = split_status_filter(status)
+        if not q and sub_label is None:
             payload = self._stats_from_rollup(
                 provider=provider,
                 model=model,
@@ -6270,6 +6392,153 @@ class RequestLogStore:
                 self._stats_cache.popitem(last=False)
         return dict(payload)
 
+    def restart_boundaries(self) -> tuple[float, ...]:
+        """When a server session stopped being heard from and another started.
+
+        ``server_sessions`` is tiny -- a few hundred rows on a log with four
+        hundred thousand requests -- so this is a full read, cached behind
+        ``stats()``'s 5 s TTL like every other derived answer here. It is the
+        only input :func:`classify_cancelled` needs that is not on the request
+        row itself.
+
+        An unavailable table is not an error: it means "no restart is known",
+        and every cancelled row then falls through to one of the other three
+        labels rather than the page losing its breakdown.
+        """
+
+        cache_key = ("restart_boundaries",)
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return tuple(cached[1]["boundaries"])
+                del self._stats_cache[cache_key]
+        try:
+            with self._connection() as conn:
+                sessions = [
+                    (float(row["started_at"]), float(row["last_seen_at"]))
+                    for row in conn.execute(
+                        "SELECT started_at, last_seen_at FROM server_sessions"
+                    )
+                ]
+        except sqlite3.Error as exc:
+            logger.warning("Server session history unavailable: {}", exc)
+            return ()
+        boundaries = restart_boundaries(sessions)
+        with self._stats_lock:
+            self._stats_cache[cache_key] = (now, {"boundaries": boundaries})
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return boundaries
+
+    def cancelled_breakdown(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+    ) -> dict[str, Any]:
+        """The Cancelled card, split into the four things "cancelled" means.
+
+        A live query, deliberately, and never a rollup dimension. The rollup
+        tables are incremental counters keyed on ``requests.status``; adding a
+        fifth dimension to them would mean a rebuild of every historical bucket
+        for a population that is 0.6% of traffic. Cancelled rows are rare and
+        ``idx_requests_status`` seeks straight to them -- 935 rows in 0.07 s on
+        a 6.3 GB log -- so the honest shape is to count them when asked.
+
+        Every filter the caller can apply to ``stats()`` applies here too and is
+        part of the cache key: a breakdown that ignored the page's filters would
+        contradict the card it sits under. ``status`` is the one exception it
+        has to think about -- the breakdown is *about* cancelled rows, so a page
+        filtered to some other status has nothing to break down and says so.
+        """
+
+        cache_key = (
+            "cancelled_breakdown",
+            provider,
+            model,
+            status,
+            endpoint,
+            key,
+            since,
+            until,
+            q,
+            local,
+            harness,
+        )
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return dict(cached[1])
+                del self._stats_cache[cache_key]
+        counts = dict.fromkeys(CANCELLED_SUB_LABELS, 0)
+        asked_status, asked_sub_label = split_status_filter(status)
+        if asked_status is not None and asked_status != CANCELLED_STATUS:
+            payload: dict[str, Any] = {
+                "total": 0,
+                "counts": counts,
+                "selected": asked_sub_label,
+            }
+        else:
+            # The page's own status filter is *not* forwarded: a page narrowed
+            # to one sub-label still wants to see how that one compares with the
+            # other three, and a breakdown that answered "100% of the rows you
+            # asked for" would be a tautology. Every other filter is forwarded,
+            # so the breakdown and the card above it describe one population.
+            where, args = self._where(
+                provider=provider,
+                model=model,
+                status=CANCELLED_STATUS,
+                endpoint=endpoint,
+                key=key,
+                since=since,
+                until=until,
+                q=q,
+                local=local,
+                harness=harness,
+            )
+            try:
+                with self._connection() as conn:
+                    rows = conn.execute(
+                        f"SELECT {sub_label_case_sql()} AS reason,"
+                        f" COUNT(*) AS n FROM requests{where} GROUP BY reason",
+                        args,
+                    ).fetchall()
+            except sqlite3.Error as exc:
+                # A readout, not a control: an unreadable log means "no
+                # measurement", never an error banner over the page.
+                logger.warning("Cancelled breakdown unavailable: {}", exc)
+                return {"total": 0, "counts": counts, "selected": asked_sub_label}
+            for row in rows:
+                reason = str(row["reason"])
+                if reason in counts:
+                    counts[reason] = int(row["n"] or 0)
+            payload = {
+                "total": sum(counts.values()),
+                "counts": counts,
+                "selected": asked_sub_label,
+            }
+        with self._stats_lock:
+            self._stats_cache[cache_key] = (now, payload)
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return dict(payload)
+
     def latency_by_model(
         self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
     ) -> list[dict[str, Any]]:
@@ -6345,7 +6614,8 @@ class RequestLogStore:
                 )
                 args: list[Any] = [] if since is None else [since]
                 rows = conn.execute(
-                    "SELECT a.model_ref AS model_ref, a.outcome AS outcome,"
+                    "SELECT a.model_ref AS model_ref,"
+                    f" {_LATENCY_OUTCOME_GROUP_SQL} AS outcome,"
                     " COUNT(*) AS attempts,"
                     " SUM(CASE WHEN a.ttft_ms IS NOT NULL THEN 1 ELSE 0 END)"
                     " AS ttft_measured,"
@@ -6357,7 +6627,7 @@ class RequestLogStore:
                     f"{join}"
                     f" WHERE a.model_ref IS NOT NULL AND {_LATENCY_OUTCOMES_SQL}"
                     f"{since_clause}"
-                    " GROUP BY a.model_ref, a.outcome"
+                    f" GROUP BY a.model_ref, {_LATENCY_OUTCOME_GROUP_SQL}"
                     " ORDER BY attempts DESC"
                     " LIMIT ?",
                     [*args, limit],
@@ -6376,7 +6646,8 @@ class RequestLogStore:
                 measured = any(int(row["ttft_measured"] or 0) for row in rows)
                 samples = (
                     conn.execute(
-                        "SELECT a.model_ref AS model_ref, a.outcome AS outcome,"
+                        "SELECT a.model_ref AS model_ref,"
+                        f" {_LATENCY_OUTCOME_GROUP_SQL} AS outcome,"
                         " a.ttft_ms AS ttft_ms"
                         " FROM request_attempts a"
                         f"{join}"

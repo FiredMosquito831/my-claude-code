@@ -655,8 +655,13 @@ class TestLadderColumns:
         # from the credential name store rather than selected from SQL, and it
         # is present whatever the field selection, beside the ``key_label``
         # that is also always present.
+        # ``cancel_reason`` is always-derived for the third variant of the same
+        # reason: its inputs are columns the row always carries, and a
+        # cancelled request exported without the reason it was cancelled is
+        # the question this column was added to answer.
         assert export_engine.request_detail_derived_columns(["ladder"]) == [
             "ttft_lost_to_fallbacks_ms",
+            "cancel_reason",
             "key_name",
             "ladder_tries",
             "ladder_statuses",

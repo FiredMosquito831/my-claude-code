@@ -218,7 +218,14 @@ def latency_by_model_cache_key(store: RequestLogStore, *, since: float | None) -
     The window is part of the key because it is the question, and the log's
     data mark is the rest of it: a new attempt row changes the answer, and
     ``data_mark`` changes with it.
+
+    The shape token is the third part, and it is what makes a *code* change
+    invalidate the stored document. ``data_mark`` cannot: a log that has not
+    been written to since the upgrade has the same mark it had before, so an
+    installed dashboard would have gone on serving pre-split rows -- with
+    client hang-ups still folded into ``failed`` -- until the next request
+    arrived. Bump it whenever the shape of a latency row changes.
     """
 
     window = "" if since is None else str(int(since))
-    return "|".join([store.data_mark(), f"since={window}"])
+    return "|".join([store.data_mark(), f"since={window}", "shape=v2-interrupted"])

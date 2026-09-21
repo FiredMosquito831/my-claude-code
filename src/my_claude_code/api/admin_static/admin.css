@@ -2934,6 +2934,58 @@ details.turn-pane > summary:focus-visible {
   color: var(--info, var(--text-strong));
 }
 
+/* ---- Which of the four things "cancelled" means ----
+   One base chip with a [data-reason] variant, the way the turn chips above
+   work. The status word keeps the cell it always had and the chip sits beside
+   it, so the .req-status-* colour rules still describe the status and not the
+   sub-label. */
+
+.req-status-text {
+  display: block;
+}
+
+.cancel-reason-chip {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cancel-reason-chip[data-reason="client_gave_up_waiting"] {
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+.cancel-reason-chip[data-reason="committed_then_silent"] {
+  border-color: var(--error, #f87171);
+  color: var(--error, #f87171);
+}
+
+.cancel-reason-chip[data-reason="stopped_mid_answer"] {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.cancel-reason-chip[data-reason="server_restart"] {
+  border-color: var(--info-border, var(--line-strong));
+  color: var(--info, var(--text-strong));
+}
+
+.req-cancel-reason {
+  display: block;
+}
+
+.req-cancel-reason-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* ---- Which client sent the request ---- */
 
 .harness-chip {
@@ -5769,6 +5821,14 @@ details.turn-pane > summary:focus-visible {
 .is-failed .req-chain-outcome {
   background: var(--error-bg, rgba(248, 113, 113, 0.14));
   color: var(--error, #f87171);
+}
+
+/* The client hung up on this attempt. Deliberately not the failure colour:
+   the model was still streaming, and what ended it was the other end of the
+   connection. */
+.is-interrupted .req-chain-outcome {
+  background: var(--warn-bg, rgba(216, 162, 63, 0.14));
+  color: var(--warn, #d8a23f);
 }
 
 .req-chain-model {

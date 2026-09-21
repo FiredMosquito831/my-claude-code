@@ -18,6 +18,7 @@ from my_claude_code.api.admin_websearch_routes import get_websearch_log_store
 from my_claude_code.config.settings import Settings
 from my_claude_code.core import export as export_engine
 from my_claude_code.core import request_log
+from my_claude_code.core.cancelled_reasons import STATUS_FILTER_VALUES
 from my_claude_code.core.request_log import RequestLogStore, store_from_settings
 from my_claude_code.websearch.analytics import WebSearchLogStore
 
@@ -214,7 +215,10 @@ def _request_export(
     store = _request_store(settings)
     if store is None:
         return _disabled_response()
-    if status is not None and status not in {"success", "error", "cancelled"}:
+    # Same vocabulary as the dashboard's own filter, from the same constant: a
+    # sub-label the Requests page can select has to be one the export of that
+    # page accepts, or the download would silently be a different population.
+    if status is not None and status not in STATUS_FILTER_VALUES:
         raise HTTPException(status_code=422, detail="Invalid status filter")
     # The dashboard always sends ``local`` and sends ``harness`` whenever one
     # is picked, and until 6.54.0 FastAPI dropped both silently, so a download
@@ -329,7 +333,10 @@ def _attempt_export(
     store = _request_store(settings)
     if store is None:
         return _disabled_response()
-    if status is not None and status not in {"success", "error", "cancelled"}:
+    # Same vocabulary as the dashboard's own filter, from the same constant: a
+    # sub-label the Requests page can select has to be one the export of that
+    # page accepts, or the download would silently be a different population.
+    if status is not None and status not in STATUS_FILTER_VALUES:
         raise HTTPException(status_code=422, detail="Invalid status filter")
     if local is not None and local not in request_log.LOCAL_FILTER_VALUES:
         raise HTTPException(status_code=422, detail="Invalid local filter")

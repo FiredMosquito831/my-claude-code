@@ -15842,6 +15842,7 @@ async function loadRequestsView() {
     byId("reqProviderBreakdown").innerHTML = "";
     byId("reqHarnessBreakdown").innerHTML = "";
     byId("reqKeyBreakdown").innerHTML = "";
+    byId("reqCancelledBreakdown").innerHTML = "";
     byId("reqTopErrors").innerHTML = "";
     byId("reqFallbackRoutes").innerHTML = "";
     byId("reqDivertedRoutes").innerHTML = "";
@@ -16268,7 +16269,11 @@ function renderRequestStatsCards(stats) {
     // The picture became text and the route's own model answered. Not a
     // diversion: nothing moved.
     ["Image described", formatAnalyticsNumber(stats.vision_described || 0)],
-    ["Cancelled", stats.cancelled],
+    [
+      "Cancelled",
+      stats.cancelled,
+      cancelledBreakdownNote(stats.cancelled_breakdown),
+    ],
     ["Total input", formatAnalyticsNumber(totalInputTokens(stats))],
     ["Input (uncached)", formatAnalyticsNumber(uncachedInputTokens(stats))],
     ["Cached input", formatAnalyticsNumber(stats.cache_read_tokens || 0)],
@@ -16314,6 +16319,55 @@ function renderRequestStatsCards(stats) {
     return;
   }
   renderStatCards(byId("reqStatsCards"), cards);
+  renderRequestCancelledBreakdown(stats.cancelled_breakdown);
+}
+
+/* The one-line version, under the Cancelled card itself, so the number is
+ * never on the page without the shape of it. Absent when nothing was
+ * cancelled: four zeroes would be noise, not information. */
+function cancelledBreakdownNote(breakdown) {
+  if (!breakdown || !Number(breakdown.total)) return null;
+  const counts = breakdown.counts || {};
+  return CANCEL_REASON_ORDER.filter((reason) => Number(counts[reason]))
+    .map(
+      (reason) =>
+        `${CANCEL_REASON_LABELS[reason]} ` +
+        formatAnalyticsNumber(Number(counts[reason])),
+    )
+    .join(" · ");
+}
+
+/* The Cancelled card, split into the four things that word covers.
+ *
+ * Every row is shown, including the ones at zero: "none of these were server
+ * restarts" is an answer, and a row that disappears when it reaches zero makes
+ * the reader wonder whether it was ever measured. The share is of the
+ * cancelled population, not of all traffic, because that is the question the
+ * panel is under. */
+function renderRequestCancelledBreakdown(breakdown) {
+  const container = byId("reqCancelledBreakdown");
+  if (!container) return;
+  container.innerHTML = "";
+  const total = breakdown ? Number(breakdown.total || 0) : 0;
+  const counts = (breakdown && breakdown.counts) || {};
+  const rows = !breakdown
+    ? []
+    : CANCEL_REASON_ORDER.map((reason) => {
+        const count = Number(counts[reason] || 0);
+        return [
+          CANCEL_REASON_LABELS[reason],
+          formatAnalyticsNumber(count),
+          total ? `${((count / total) * 100).toFixed(1)}%` : "—",
+          CANCEL_REASON_EXPLANATIONS[reason],
+        ];
+      });
+  container.appendChild(
+    analyticsTable(
+      ["Why", "Requests", "Share", "What it means"],
+      rows,
+      "Nothing was cancelled in this range.",
+    ),
+  );
 }
 
 /** The text for one TTFT percentile card: a number, or why there is not one. */
@@ -17204,7 +17258,7 @@ function renderRequestsTable(rows) {
     // row can still be matched to a key by sight.
     addKeyReference(tr, row.key_label || "");
     tr.appendChild(buildModelCell(row));
-    addText(row.status);
+    tr.appendChild(buildStatusCell(row));
     tr.appendChild(buildTurnShapeCell(row));
     addText(`${row.tokens_in ?? "—"}/${row.tokens_out ?? "—"}`);
     tr.appendChild(buildCostCell(row));
@@ -17221,6 +17275,21 @@ function renderRequestsTable(rows) {
     tr.appendChild(actionCell);
     body.appendChild(tr);
   });
+}
+
+/* The status, and -- when it is `cancelled` -- which of the four things that
+ * word covers. The status text itself is unchanged and still the sixth cell,
+ * so the colour rules that key on it keep working; the chip is added beside
+ * it, never instead of it. */
+function buildStatusCell(row) {
+  const td = document.createElement("td");
+  const text = document.createElement("span");
+  text.className = "req-status-text";
+  text.textContent = row.status || "";
+  td.appendChild(text);
+  const chip = buildCancelReasonChip(row);
+  if (chip) td.appendChild(chip);
+  return td;
 }
 
 /**
@@ -17570,6 +17639,7 @@ async function openRequestDetail(requestId) {
     dd.textContent = value;
     meta.append(dt, dd);
   });
+  appendCancelReasonDetail(meta, row);
   appendRequestCostDetail(meta, row);
   renderRequestRouteTrace(row);
   renderRequestImages(row);
@@ -17578,6 +17648,30 @@ async function openRequestDetail(requestId) {
   renderTurnTranscript(row);
   byId("reqDetailModal").hidden = false;
   byId("reqDetailClose").focus();
+}
+
+/* Why this request is `cancelled`, in the words the list chip uses plus one
+ * sentence saying what they mean. Appended rather than added to `fields`
+ * because it is not plain text: the chip has to be the same element the list
+ * draws, or the two surfaces would drift. Absent entirely on every request
+ * that was not cancelled -- a successful request was not cancelled for any
+ * reason, and an empty row saying so is noise. */
+function appendCancelReasonDetail(meta, row) {
+  const chip = buildCancelReasonChip(row);
+  if (!chip) return;
+  const dt = document.createElement("dt");
+  dt.textContent = "Cancelled because";
+  const dd = document.createElement("dd");
+  dd.className = "req-cancel-reason";
+  dd.appendChild(chip);
+  const sentence = cancelReasonSentence(row);
+  if (sentence) {
+    const detail = document.createElement("p");
+    detail.className = "req-cancel-reason-note";
+    detail.textContent = sentence;
+    dd.appendChild(detail);
+  }
+  meta.append(dt, dd);
 }
 
 /* Appended after the plain fields because it is the one row that is not
@@ -18326,14 +18420,20 @@ function renderRequestChain(row) {
   list.className = "req-chain-list";
   attempts.forEach((attempt) => {
     const item = document.createElement("li");
-    item.className = `req-chain-item is-${attempt.outcome || "skipped"}`;
+    // The same third group the Model latency panel uses, read off the same
+    // column: the attempt is stored as `failed`, but `interrupted` means the
+    // client hung up on it and calling that a failure of the model is the
+    // misattribution this group exists to end. The stored `outcome` is not
+    // rewritten -- only what this badge says about it.
+    const shown = chainOutcomeGroup(attempt);
+    item.className = `req-chain-item is-${shown}`;
 
     const head = document.createElement("div");
     head.className = "req-chain-head";
 
     const badge = document.createElement("span");
     badge.className = "req-chain-outcome";
-    badge.textContent = CHAIN_OUTCOME_LABELS[attempt.outcome] || attempt.outcome || "—";
+    badge.textContent = CHAIN_OUTCOME_LABELS[shown] || shown || "—";
     head.appendChild(badge);
 
     const model = document.createElement("code");
@@ -18853,7 +18953,102 @@ const CHAIN_OUTCOME_LABELS = {
   succeeded: "answered",
   failed: "failed",
   skipped: "not tried",
+  // Not a failure of this model, and deliberately not counted as one: the
+  // attempt is stored as `failed` because the model did not answer, but what
+  // ended it was the client closing the connection -- usually its own 300 s or
+  // 600 s idle watchdog. Its 300-600 s latency measures the wait, not the
+  // model, so it gets a row of its own instead of moving that model's p50.
+  interrupted: "client hung up",
 };
+
+/* What each of the four kinds of cancellation is called, and what it means.
+ *
+ * Mirrors `core/cancelled_reasons.py` exactly, and
+ * `test_the_dashboard_and_the_store_agree_on_the_sub_labels` is what keeps the
+ * two spellings one. Every label is derived from columns the log already had,
+ * so a row written a year ago carries one too. */
+const CANCEL_REASON_LABELS = {
+  server_restart: "server restart",
+  stopped_mid_answer: "stopped mid-answer",
+  client_gave_up_waiting: "client gave up waiting",
+  committed_then_silent: "committed, then silent",
+};
+
+const CANCEL_REASON_EXPLANATIONS = {
+  server_restart:
+    "MCC stopped or restarted while this stream was still open, so the stream" +
+    " was cut at the shutdown drain deadline rather than by the client.",
+  stopped_mid_answer:
+    "Part of the answer had already been delivered when the connection" +
+    " closed - normally the user stopping the stream, or the client giving up" +
+    " during a long gap between chunks.",
+  client_gave_up_waiting:
+    "Nothing the client could read ever arrived: MCC was still working" +
+    " through the route when the client's own idle timer ended the request.",
+  committed_then_silent:
+    "MCC had sent the start of the message and then nothing more arrived from" +
+    " the model; the client's own idle timer ended it.",
+};
+
+/* Biggest first is deliberately not the order: these four are a story --
+ * nothing arrived, something arrived and then stopped, the answer was cut
+ * short, and MCC itself was what ended it -- and a table that reorders itself
+ * between polls is one nobody can read twice. */
+const CANCEL_REASON_ORDER = [
+  "client_gave_up_waiting",
+  "committed_then_silent",
+  "stopped_mid_answer",
+  "server_restart",
+];
+
+/** The chip words for a row's sub-label, or "" when the row is not cancelled. */
+function cancelReasonLabel(row) {
+  const reason = row && row.cancel_reason;
+  if (!reason) return "";
+  return CANCEL_REASON_LABELS[reason] || String(reason);
+}
+
+/* The sentence under the chip, with the silence measured where it can be.
+ *
+ * `duration_ms - ttft_ms` is how long MCC held the response open and sent
+ * nothing more, which is the whole point of the `committed, then silent`
+ * label. Either half missing means unmeasured and the sentence simply stops,
+ * rather than claiming a zero: "it went silent instantly" is a measurement
+ * nobody made. */
+function cancelReasonSentence(row) {
+  const reason = row && row.cancel_reason;
+  if (!reason) return "";
+  const base = CANCEL_REASON_EXPLANATIONS[reason] || "";
+  if (reason !== "committed_then_silent") return base;
+  const ttft = Number(row.ttft_ms);
+  const duration = Number(row.duration_ms);
+  if (!Number.isFinite(ttft) || !Number.isFinite(duration)) return base;
+  const silent = duration - ttft;
+  if (!(silent > 0)) return base;
+  return `${base} Nothing arrived for ${formatChainDuration(silent)} after` +
+    " that first frame.";
+}
+
+/* Which latency group an attempt belongs to, spelled the same way the store
+ * spells it in `_LATENCY_OUTCOME_GROUP_SQL`: `interrupted` wins over the
+ * stored `failed`, everything else is the stored outcome. */
+function chainOutcomeGroup(attempt) {
+  if (!attempt) return "skipped";
+  if (attempt.error_kind === "interrupted") return "interrupted";
+  return attempt.outcome || "skipped";
+}
+
+/** The chip itself, so the list and the modal cannot draw it differently. */
+function buildCancelReasonChip(row) {
+  const label = cancelReasonLabel(row);
+  if (!label) return null;
+  const chip = document.createElement("span");
+  chip.className = "cancel-reason-chip";
+  chip.dataset.reason = String(row.cancel_reason);
+  chip.textContent = label;
+  chip.title = cancelReasonSentence(row);
+  return chip;
+}
 
 /** Attempt durations span milliseconds to ten minutes, so the unit moves. */
 function formatChainDuration(ms) {

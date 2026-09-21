@@ -178,6 +178,7 @@ from my_claude_code.core.async_stacks import (
     DEFAULT_FRAME_LIMIT,
     DEFAULT_TASK_LIMIT,
 )
+from my_claude_code.core.cancelled_reasons import STATUS_FILTER_VALUES
 from my_claude_code.core.client_fingerprint import (
     NON_REGISTRY_HARNESS_LABELS,
 )
@@ -3479,7 +3480,15 @@ def _request_log_store_or_none(
 
 
 def _validate_request_log_status(status: str | None) -> None:
-    if status is not None and status not in {"success", "error", "cancelled"}:
+    """Reject an unknown status, including an unknown cancelled sub-label.
+
+    The three original values are unchanged and still mean exactly what they
+    meant; ``cancelled:<sub-label>`` is added beside them, so every saved
+    link and every scripted export keeps working and ``status=cancelled``
+    still selects all four.
+    """
+
+    if status is not None and status not in STATUS_FILTER_VALUES:
         raise HTTPException(status_code=422, detail="Invalid status filter")
 
 
@@ -3748,6 +3757,24 @@ async def request_log_stats(
     # as "no traffic" or "no server" instead of being ambiguous.
     result["coverage"] = await asyncio.to_thread(
         store.coverage, since=since, until=until
+    )
+    # Beside the Cancelled counter rather than inside it: ``stats()``'s own
+    # payload is answered by the rollup whenever it can be, and a cancelled
+    # sub-label is deliberately not a rollup dimension. Decorating the result
+    # here keeps every existing key of the stats answer exactly as it was
+    # and adds one.
+    result["cancelled_breakdown"] = await asyncio.to_thread(
+        store.cancelled_breakdown,
+        provider=provider,
+        model=model,
+        status=status,
+        endpoint=endpoint,
+        key=key,
+        since=since,
+        until=until,
+        q=q,
+        local=local,
+        harness=harness,
     )
     return result
 
