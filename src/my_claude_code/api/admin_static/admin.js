@@ -487,6 +487,9 @@ function setActiveView(viewId, { scroll = false } = {}) {
       // A readout is not a reason to interrupt somebody editing limits: the
       // card keeps whatever it last said, and says so.
     });
+    loadStuckRequests().catch(() => {
+      // Same rule. An older server has no /admin/api/tasks/stacks at all.
+    });
   }
 
   if (activeView.id === "web_search") {
@@ -6761,6 +6764,35 @@ function renderLoopHealth(fields) {
     "check -- while that gesture ran.";
   card.append(title, readout, caveat);
   wrap.appendChild(card);
+
+  /* The stuck-request watchdog's readout. Read-only and deliberately small:
+     the count of requests that have crossed the threshold right now, and a
+     link that hands the reader the whole frames-only document. There is no
+     new page, because the answer to "is anything stuck" is one number and the
+     answer to "what is it stuck on" is a file somebody pastes into a bug
+     report. */
+  const stuck = document.createElement("div");
+  stuck.className = "calc-card";
+  const stuckTitle = document.createElement("h4");
+  stuckTitle.textContent = "Requests that have stopped making progress";
+  const stuckReadout = document.createElement("div");
+  stuckReadout.id = "stuckRequestsReadout";
+  stuckReadout.setAttribute("aria-live", "polite");
+  const stuckLink = document.createElement("a");
+  stuckLink.id = "stuckStacksLink";
+  stuckLink.className = "calc-caveat";
+  stuckLink.href = "/admin/api/tasks/stacks";
+  stuckLink.target = "_blank";
+  stuckLink.rel = "noopener";
+  stuckLink.textContent = "Download stacks";
+  const stuckCaveat = document.createElement("p");
+  stuckCaveat.className = "calc-caveat";
+  stuckCaveat.textContent =
+    "Code locations only -- file, line and function -- never a prompt, a " +
+    "header, a key or any value. The watchdog observes and never intervenes: " +
+    "nothing here ends, cancels, retries or changes a request.";
+  stuck.append(stuckTitle, stuckReadout, stuckLink, stuckCaveat);
+  wrap.appendChild(stuck);
   return wrap;
 }
 
@@ -6819,6 +6851,47 @@ async function loadLoopLag() {
   table.appendChild(body);
   readout.textContent = "";
   readout.appendChild(table);
+}
+
+/** Paint the stuck-request count from /admin/api/tasks/stacks.
+ *
+ * One fetch, no database work on the server, and the endpoint is bounded on
+ * both axes. Tolerant of a server that does not have the route -- an older
+ * one, or a build with the watchdog compiled out of the operator's mind --
+ * because a missing readout must not blank the card above it.
+ *
+ * Note `Number(x) || 0` is wrong for a count that is meaningfully zero only if
+ * absence and zero must read differently; here they do not, and `stuck: 0` and
+ * no answer at all are painted with different sentences on purpose.
+ */
+async function loadStuckRequests() {
+  const readout = byId("stuckRequestsReadout");
+  if (!readout) return;
+  const report = await api("/admin/api/tasks/stacks");
+  const inFlight = Number(report.in_flight);
+  const stuck = Number(report.stuck);
+  const stall = Number(report.stall_seconds);
+  const line = document.createElement("p");
+  line.className = "calc-caveat";
+  line.id = "stuckRequestsLine";
+  if (report.watchdog_enabled === false) {
+    line.textContent =
+      "The watchdog is off. Nothing is being watched, so nothing can be " +
+      "reported the next time a request goes quiet.";
+  } else if (!Number.isFinite(stuck) || !Number.isFinite(inFlight)) {
+    line.textContent = "This server did not answer with a count.";
+  } else if (stuck === 0) {
+    line.textContent =
+      `${inFlight} request${inFlight === 1 ? "" : "s"} in flight, none still ` +
+      `for ${Number.isFinite(stall) ? stall : "?"} s or more.`;
+  } else {
+    line.textContent =
+      `${stuck} of ${inFlight} in-flight request${inFlight === 1 ? "" : "s"} ` +
+      `ha${stuck === 1 ? "s" : "ve"} made no progress for ` +
+      `${Number.isFinite(stall) ? stall : "?"} s or more.`;
+  }
+  readout.textContent = "";
+  readout.appendChild(line);
 }
 
 function prefersReducedMotion() {

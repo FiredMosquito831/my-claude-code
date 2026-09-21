@@ -86,6 +86,11 @@ KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
     # container is emptied on every render, so the id cannot be declared in
     # index.html; loadLoopLag() fills it when the Limits view is opened.
     "loopLagReadout",
+    # stuckRequestsReadout: the watchdog's count, created by the same
+    # renderLoopHealth() in the same rebuilt container and for the same
+    # reason; loadStuckRequests() fills it from /admin/api/tasks/stacks when
+    # the Limits view is opened.
+    "stuckRequestsReadout",
 }
 
 

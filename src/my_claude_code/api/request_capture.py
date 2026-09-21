@@ -26,6 +26,7 @@ from my_claude_code.application.routing import (
 from my_claude_code.application.vision_describe import describe_attempt_index
 from my_claude_code.config.model_refs import format_model_ref_list
 from my_claude_code.config.settings import Settings
+from my_claude_code.core import request_tasks
 from my_claude_code.core.anthropic import (
     ImageInput,
     MessagesRequest,
@@ -246,8 +247,17 @@ class RequestCapture:
         # Unconditionally, unlike every trace above it: what a first-token
         # deadline measures must not depend on whether the request log is on.
         # Providers credit the seconds they spend asleep here, and the
-        # executor's chunk wait re-arms for exactly those seconds.
-        install_waiting_clock()
+        # executor's chunk wait re-arms for exactly those seconds. The clock is
+        # kept rather than discarded so the stuck-request watchdog can tell a
+        # request that is asleep on a backoff from one that is wedged.
+        self._waiting = install_waiting_clock()
+        # The attempt in flight, tracked unconditionally beside the record's
+        # own copy of it. ``set_routing`` returns early when the request log is
+        # off, and a watchdog that could not name the provider it was stuck on
+        # whenever somebody had disabled logging would be worth very little.
+        self._attempt_index: int | None = None
+        self._attempt_provider: str | None = None
+        self._attempt_model_ref: str | None = None
         # Routing's own verdict, kept so a provider-level adaptation recorded
         # after the request left can be merged with it at commit time rather
         # than overwriting it.
@@ -268,10 +278,84 @@ class RequestCapture:
             headers=headers,
             harness=harness,
         )
+        # Last, and deliberately not gated on ``self.enabled``: the registry
+        # the stuck-request watchdog reads tracks *requests*, not log rows, and
+        # a request the operator chose not to log is exactly as capable of
+        # parking for 47 minutes as one they did. Unregistration is the first
+        # statement of ``_begin_finalize``, above its own early return, so the
+        # pair stays balanced either way.
+        request_tasks.register(
+            request_id=request_id,
+            endpoint=endpoint,
+            protocol=str(protocol),
+            stream=stream,
+            harness=harness,
+            requested_model=requested_model,
+            progress=self.watchdog_progress,
+        )
 
     @property
     def enabled(self) -> bool:
         return self._store is not None
+
+    def watchdog_progress(self) -> request_tasks.RequestProgress:
+        """What the stuck-request watchdog reads off this request.
+
+        Counters, labels and code-level identifiers only -- never a prompt, a
+        response, a header or a key. Cheap enough to run once per request per
+        watchdog tick: a handful of attribute reads and one sum over the
+        ladder, which holds one entry per upstream try and is empty for the
+        overwhelming majority of requests.
+
+        The phase named here is the structural one. The watchdog upgrades it to
+        ``between_attempts`` when it can see, from two consecutive polls, that
+        the waiting clock is still moving -- MCC asleep is not MCC wedged, and
+        only a second sample can tell them apart.
+        """
+
+        tries = 0
+        last_try_failed = False
+        ladder = self._ladder
+        if ladder is not None:
+            for slot in ladder.ladders.values():
+                tries += len(slot.tries)
+            current = ladder.ladders.get(ladder.current_attempt)
+            if current is not None and current.tries:
+                last = current.tries[-1]
+                last_try_failed = last.error_kind is not None or (
+                    last.status is not None and last.status >= 400
+                )
+        if self._ttft_ms is not None:
+            # Bytes reached the client and then stopped. The one phase that is
+            # nearly always a real fault rather than a slow model.
+            phase = request_tasks.PHASE_STREAMING_STOPPED
+        elif self._attempt_provider is None:
+            # No attempt has started: still routing, or waiting for one.
+            phase = request_tasks.PHASE_BETWEEN_ATTEMPTS
+        elif last_try_failed:
+            # The ladder records a try when it *ends*. The last one on the
+            # books ended in a failure and no byte has been delivered, so the
+            # upstream call is over and nothing has replaced it: MCC is
+            # between attempts. This is exactly the shape of the 09-16 park --
+            # ``tries: 1``, one 429, nine requests, 47 minutes -- and it is a
+            # different fact from waiting on a slow first token, which is why
+            # a try that ended with a 200 head is NOT counted here.
+            phase = request_tasks.PHASE_BETWEEN_ATTEMPTS
+        else:
+            phase = request_tasks.PHASE_AWAITING_FIRST_BYTE
+        return request_tasks.RequestProgress(
+            phase=phase,
+            attempt_index=self._attempt_index,
+            provider=self._attempt_provider,
+            model_ref=self._attempt_model_ref,
+            key_label=self._credential.label,
+            proxy_label=self._proxy.label,
+            ttft_ms=self._ttft_ms,
+            output_chars=self._output_chars,
+            thinking_chars=self._thinking_chars,
+            tries=tries,
+            waited_seconds=self._waiting.seconds,
+        )
 
     def record_describe_attempt(
         self,
@@ -536,6 +620,13 @@ class RequestCapture:
         actually answered. The first call also remembers the route's own model,
         which is the only way to tell afterwards what it fell back *from*.
         """
+        # Above the early return, and only these three: the stuck-request
+        # watchdog must be able to say which attempt and which model a park is
+        # on whether or not the request log is switched on. Nothing below this
+        # point changes, and neither does what any row records.
+        self._attempt_index = attempt
+        self._attempt_provider = routed.resolved.provider_id
+        self._attempt_model_ref = routed.resolved.provider_model_ref
         if not self.enabled:
             return
         # Attempt boundary for recovery attribution: everything a provider
@@ -1088,6 +1179,14 @@ class RequestCapture:
         self, status: Literal["success", "error", "cancelled"]
     ) -> RequestRecord | None:
         """Fill in what is already known; None when there is nothing to do."""
+        # First, above the early return below it, and above the ``_finalized``
+        # guard: this is the one choke point every terminal path reaches --
+        # ``finish_error``, ``finish_success``, ``finish_success_from_message``,
+        # ``_observe``'s ``finally``, its ``GeneratorExit`` branch and its
+        # ``CancelledError`` branch -- and a request whose log is off returns
+        # from the next line, which is exactly the leak the early return would
+        # otherwise set.
+        request_tasks.unregister(self._record.id)
         if self._finalized or self._store is None:
             self._finalized = True
             return None

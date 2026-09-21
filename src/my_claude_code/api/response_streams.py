@@ -23,6 +23,7 @@ from my_claude_code.core.anthropic.streaming import (
 from my_claude_code.core.async_iterators import try_close_async_iterator
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import find_execution_failure
+from my_claude_code.core.request_tasks import note_stream_chunk
 from my_claude_code.core.stop_deadline import stop_deadline
 from my_claude_code.core.trace import close_stream_input, trace_event
 
@@ -372,9 +373,10 @@ class _PrefetchedStream(AsyncIterator[str]):
         if self._first_chunk is not None:
             first_chunk = self._first_chunk
             self._first_chunk = None
+            note_stream_chunk()
             return first_chunk
         try:
-            return await anext(self._body)
+            chunk = await anext(self._body)
         except StopAsyncIteration:
             self._done = True
             raise
@@ -382,6 +384,16 @@ class _PrefetchedStream(AsyncIterator[str]):
             return self._terminal_chunk(find_execution_failure(exc) or exc)
         except Exception as exc:
             return self._terminal_chunk(exc)
+        # After the await, so it counts chunks that were actually produced, and
+        # here rather than in ``RequestCapture._observe`` because that observer
+        # is skipped entirely when the request log is off. This is also where
+        # the task that iterates a streaming body announces itself: it is a
+        # child of the handler's task, started by Starlette's
+        # ``StreamingResponse``, and it -- not the handler -- holds the awaits
+        # of a stream that has gone quiet. Two increments and a ``ContextVar``
+        # read, and a single module-level flag away when the watchdog is off.
+        note_stream_chunk()
+        return chunk
 
     async def aclose(self) -> None:
         if self._closed:

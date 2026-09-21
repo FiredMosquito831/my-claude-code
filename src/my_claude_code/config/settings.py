@@ -175,6 +175,10 @@ from .constants import (
     REQUEST_LOG_QUEUE_MAX_SIZE_DEFAULT,
     REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT,
     REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
+    REQUEST_WATCHDOG_ENABLED_DEFAULT,
+    REQUEST_WATCHDOG_INTERVAL_SECONDS_DEFAULT,
+    REQUEST_WATCHDOG_LOG_MAX_MB_DEFAULT,
+    REQUEST_WATCHDOG_STALL_SECONDS_DEFAULT,
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
     SERVER_PORT_TAKEOVER_CHOICES,
     SERVER_PORT_TAKEOVER_DEFAULT,
@@ -1968,6 +1972,26 @@ class Settings(BaseSettings):
     health_busy_lag_ms: int = Field(
         default=HEALTH_BUSY_LAG_MS_DEFAULT,
         validation_alias="HEALTH_BUSY_LAG_MS",
+    )
+    # The stuck-request watchdog: whether it runs, how still a request has to
+    # be before it is written down, how often the check happens, and how large
+    # the file it writes may grow. It never ends, cancels, retries or alters a
+    # request -- it only observes. See runtime/stall_watchdog.py.
+    request_watchdog_enabled: bool = Field(
+        default=REQUEST_WATCHDOG_ENABLED_DEFAULT,
+        validation_alias="REQUEST_WATCHDOG_ENABLED",
+    )
+    request_watchdog_stall_seconds: int = Field(
+        default=REQUEST_WATCHDOG_STALL_SECONDS_DEFAULT,
+        validation_alias="REQUEST_WATCHDOG_STALL_SECONDS",
+    )
+    request_watchdog_interval_seconds: int = Field(
+        default=REQUEST_WATCHDOG_INTERVAL_SECONDS_DEFAULT,
+        validation_alias="REQUEST_WATCHDOG_INTERVAL_SECONDS",
+    )
+    request_watchdog_log_max_mb: int = Field(
+        default=REQUEST_WATCHDOG_LOG_MAX_MB_DEFAULT,
+        validation_alias="REQUEST_WATCHDOG_LOG_MAX_MB",
     )
     # The desktop app's lifecycle tick: how often it probes the server and,
     # when the server is dead, how often it starts one. Decision Q4: ten

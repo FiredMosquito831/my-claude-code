@@ -1347,6 +1347,91 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "REQUEST_WATCHDOG_ENABLED",
+        "Watch for stuck requests",
+        "loop_health",
+        "boolean",
+        settings_attr="request_watchdog_enabled",
+        default="true",
+        restart_required=True,
+        affects_providers=False,
+        description=(
+            "Whether the server watches its own in-flight requests and writes "
+            "down where one is stuck. It only ever observes: no request is "
+            "ended, cancelled, retried or changed by it, whatever it finds. "
+            "When a request stops making progress it records that request's "
+            "code locations -- file, line and function, never a prompt, a "
+            "header, a key or any value -- to logs/stuck-requests.jsonl and "
+            "one WARNING line to server.log. Off costs nothing and tells you "
+            "nothing the next time the server goes quiet."
+        ),
+    ),
+    ConfigFieldSpec(
+        "REQUEST_WATCHDOG_STALL_SECONDS",
+        "Stall threshold",
+        "loop_health",
+        "number",
+        settings_attr="request_watchdog_stall_seconds",
+        default="300",
+        affects_providers=False,
+        minimum=0,
+        maximum=86400,
+        description=(
+            "How long a request may make no progress at all before it is "
+            "written down, in seconds. Progress means any of: a chunk reached "
+            "the client, the chain moved to another attempt, another upstream "
+            "try was recorded, or MCC credited itself another second asleep on "
+            "a backoff. Five minutes is above the slowest honest first token "
+            "measured here (190 s) and equal to the stream-idle deadline "
+            "Claude Code applies on its own, so a request this still has "
+            "already outlived its own client. Set 5 or 10 to reproduce a stall "
+            "on purpose. 0 stops the reporting; the live stacks endpoint and "
+            "the count on this page keep working."
+        ),
+    ),
+    ConfigFieldSpec(
+        "REQUEST_WATCHDOG_INTERVAL_SECONDS",
+        "Check interval",
+        "loop_health",
+        "number",
+        settings_attr="request_watchdog_interval_seconds",
+        default="30",
+        restart_required=True,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=3600,
+        description=(
+            "How often the watchdog looks, in seconds. One pass reads a "
+            "counter per in-flight request and builds a stack only for a "
+            "request that has already crossed the threshold above, so an idle "
+            "or healthy server pays a dictionary scan every half minute and "
+            "nothing else. It also sets how precisely the recorded age of a "
+            "stall is known: a stall is noticed within one interval of "
+            "crossing the threshold, never sooner."
+        ),
+    ),
+    ConfigFieldSpec(
+        "REQUEST_WATCHDOG_LOG_MAX_MB",
+        "Stuck-request log cap",
+        "loop_health",
+        "number",
+        settings_attr="request_watchdog_log_max_mb",
+        default="5",
+        advanced=True,
+        affects_providers=False,
+        minimum=0,
+        maximum=1024,
+        description=(
+            "How large logs/stuck-requests.jsonl may grow before it is rotated "
+            "aside, in megabytes. Rotated copies are pruned by "
+            "SERVER_LOG_RETAIN_FILES, the same cap that governs every other "
+            "file in that directory, so this and that number together bound "
+            "what the watchdog can ever occupy on disk. 0 writes no JSONL at "
+            "all and leaves only the WARNING line in server.log."
+        ),
+    ),
+    ConfigFieldSpec(
         "LOG_LEVEL",
         "Log level",
         "diagnostics",

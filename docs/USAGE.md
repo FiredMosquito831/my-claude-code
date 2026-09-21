@@ -1183,6 +1183,10 @@ Nineteen settings live under **Admin → Providers → Desktop**, beside the liv
 | `DESKTOP_BUSY_GRACE_SECONDS` | 15 | 0–3600 |
 | `HEALTH_HEARTBEAT_INTERVAL_MS` | 100 | 10–10000 |
 | `HEALTH_BUSY_LAG_MS` | 500 | 0–60000 |
+| `REQUEST_WATCHDOG_ENABLED` | true | true / false |
+| `REQUEST_WATCHDOG_STALL_SECONDS` | 300 | 0–86400 |
+| `REQUEST_WATCHDOG_INTERVAL_SECONDS` | 30 | 1–3600 |
+| `REQUEST_WATCHDOG_LOG_MAX_MB` | 5 | 0–1024 |
 | `DESKTOP_FOREIGN_GRACE_SECONDS` | 45 | 0–3600 |
 | `DESKTOP_STATUS_WALL_SECONDS` | 15 | 1–600 |
 | `DESKTOP_SHELL_AUTO_UPDATE` | true | true / false |
@@ -4371,6 +4375,30 @@ Open the request in **Analytics → Requests** and expand the attempt. The ladde
 ### Server responsiveness
 
 Two numbers, both about honesty rather than speed. MCC serves everything on one event loop, and a long admin gesture — a three-hundred-address proxy add, a provider refresh — can keep that loop to itself for seconds at a time. `HEALTH_HEARTBEAT_INTERVAL_MS` (100) is how often MCC measures that: one task asks to sleep for exactly that long and records how much later it actually woke. `HEALTH_BUSY_LAG_MS` (500) is how late that has to be before `GET /health` answers with `x-mcc-busy: 1` and says, in the body, since when and which gesture it was. It is still a `200` and still carries `{"status": "healthy"}` — the busy fields are additive — and the desktop app reads that as *alive, working* rather than starting a second server. Set `HEALTH_BUSY_LAG_MS` to `0` to stop marking answers; the measurement continues regardless, and turns up in the server log as `LOOP: the event loop was N ms late` at DEBUG. See [And now the server says so itself](#and-now-the-server-says-so-itself).
+
+### The stuck-request watchdog (7.37.0)
+
+On 2026-09-16 nine parallel requests on this project's own install parked for **47 minutes**, released only by the server process dying. Every mechanism that could be excluded from the request log was excluded, and the one artefact that would have named the `await` holding them — the server log for that hour — had rotated away before anyone looked. The event has not recurred. Rather than ship a fix for a mechanism nobody has proven, 7.37.0 ships the instrument that captures the evidence the next time.
+
+**It observes and never intervenes.** No request is ever ended, cancelled, retried or altered by it, whatever it finds. It holds no reference that keeps a request alive and takes no lock the request path takes. If your fallback deadlines are `0` — wait forever — they still mean exactly that.
+
+`REQUEST_WATCHDOG_ENABLED` (**true**) turns it on. Every `REQUEST_WATCHDOG_INTERVAL_SECONDS` (30) it reads one counter per in-flight request. If a request has made **no progress at all** for `REQUEST_WATCHDOG_STALL_SECONDS` (300) it writes one record to `logs/stuck-requests.jsonl` and one `WARNING` line to `server.log` naming the request id and the deepest `await`.
+
+**What "progress" means, exactly.** Any one of: a chunk reached the client; the chain moved to another attempt; another upstream try was recorded on the ladder; MCC credited itself another second asleep on a limiter or a backoff; the credential or proxy label changed. Chunk delivery is counted where the bytes leave, so it is observed whether or not the request log is switched on.
+
+**The three phases**, because "stuck" alone is not actionable and a slow model is not a fault:
+
+| phase | what it means |
+| --- | --- |
+| `awaiting_first_upstream_byte` | An attempt is in flight and no byte has reached the client. A slow model looks like this legitimately — first tokens up to 190 s were measured on this install. |
+| `streaming_stopped` | Bytes did reach the client and then stopped. Nearly always a real fault. |
+| `between_attempts` | MCC is not reading an upstream stream at all: still routing, asleep on a backoff, or switching rungs. **This is the shape of the 09-16 park** — one completed upstream try on the ladder and then nothing. |
+
+Why 300 seconds and not 60: this install routinely runs legitimate multi-minute requests, with streams over 300 s and first tokens to 190 s, and Claude Code applies its own 300 s stream-idle deadline. A request that has been *completely still* for five minutes has already outlived the patience its own client would have shown it. Drop `REQUEST_WATCHDOG_STALL_SECONDS` to `5` or `10` to reproduce a stall deliberately — it is read on every pass, so the change applies without a restart. `0` stops the reporting and leaves everything else working.
+
+**`GET /admin/api/tasks/stacks`** answers the same document on demand, loopback admin only, with no database work at all. It carries two halves. The first is the in-flight requests with their own stacks. The second is the one that settles a parallel stall in a single look: **every** task on the event loop counted by the frame it is suspended on — nine tasks under one `file:line function` is a lock, nine tasks under nine is nine sockets, and nothing else distinguishes them. Both are bounded (`?limit=`, `?tasks=`, `?frames=`) and the answer says when it truncated. The count, and a link to the document, are on **Limits & Resilience → Server responsiveness**.
+
+**Privacy.** A frame is `file:line function` and nothing else. No locals, no argument values, no request bodies, no headers, no keys. Paths are made package-relative before they are written — `my_claude_code/api/response_streams.py`, `site-packages/httpcore/_async/socks_proxy.py`, `stdlib/asyncio/locks.py` — so nothing in that file names your account or where you keep your files, and it can be pasted into a bug report as it is. `REQUEST_WATCHDOG_LOG_MAX_MB` (5) rotates the JSONL, and `SERVER_LOG_RETAIN_FILES` prunes the copies; `0` writes no file and leaves the `WARNING` line.
 
 **And underneath the two numbers, what they measured (7.31.0).** The card now lists the last twenty gestures that named themselves, newest first, with the worst event-loop lateness recorded while each one ran and how long it took. A gesture at or over `HEALTH_BUSY_LAG_MS` is the one a `/health` probe would have been told about, and is coloured to say so. The same list is on `GET /admin/api/loop-health`, and under `loop_health` on `GET /admin/api/status`, which is how the before/after tables in the performance specs are reproduced without a harness. Nothing is recorded until a gesture finishes, so a quiet server says exactly that.
 
