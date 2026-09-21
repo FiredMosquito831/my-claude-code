@@ -143,18 +143,22 @@ def test_the_answer_carries_no_secret_and_no_home_path() -> None:
 
 @pytest.mark.asyncio
 async def test_building_the_report_never_holds_the_loop() -> None:
-    """The measurement that chose the batch size.
+    """The measurement that chose the batch size, asserted without a clock.
 
     Building a stack is synchronous: 0.66 ms per request on the scratch rig,
-    so a hundred in-flight requests is ~130 ms of walking. Answered in one
-    slice that would hold this server's single event loop for longer than a
-    quarter of the busy threshold 7.27.0 publishes. This asserts the *slices*,
-    not the total: a 5 ms heartbeat running beside the build must never be
-    more than a few tens of milliseconds late.
+    so a hundred in-flight requests is ~130 ms of walking, and answering that
+    in one slice would hold this server's single event loop for a quarter of
+    the busy threshold 7.27.0 publishes. The build therefore yields every
+    ``YIELD_EVERY`` requests and every ``YIELD_EVERY`` tasks.
+
+    Asserted by counting turns rather than milliseconds: a task that does
+    nothing but ``await asyncio.sleep(0)`` gets exactly one turn per yield the
+    build makes, so the count IS the number of yields. A wall-clock bound here
+    would measure the CI runner instead, which is what the first version of
+    this test did and why it failed there and not locally.
     """
 
-    import time
-
+    from my_claude_code.core.async_stacks import YIELD_EVERY
     from my_claude_code.core.stuck_requests import stuck_report
 
     release = asyncio.Event()
@@ -183,31 +187,30 @@ async def test_building_the_report_never_holds_the_loop() -> None:
     for _ in range(12):
         await asyncio.sleep(0)
 
-    worst = 0.0
-    beats = 0
-    stop = False
+    turns = 0
+    spinning = True
 
-    async def heartbeat() -> None:
-        nonlocal worst, beats
-        while not stop:
-            before = time.perf_counter()
-            await asyncio.sleep(0.005)
-            beats += 1
-            worst = max(worst, (time.perf_counter() - before - 0.005) * 1000.0)
+    async def ticker() -> None:
+        nonlocal turns
+        while spinning:
+            await asyncio.sleep(0)
+            turns += 1
 
-    beat = asyncio.create_task(heartbeat())
+    beat = asyncio.create_task(ticker())
     try:
+        await asyncio.sleep(0)
+        before = turns
         report = await stuck_report(stall_seconds=0.0, request_limit=200)
-        stop = True
+        gained = turns - before
+        spinning = False
         await asyncio.gather(beat, return_exceptions=True)
         assert report["in_flight"] == 100
-        assert beats > 3, beats
-        # Measured here at well under 20 ms. The bound is generous so a loaded
-        # CI runner cannot fail it, and still an order of magnitude below the
-        # ~130 ms a single unyielding slice would have cost.
-        assert worst < 120.0, worst
+        # One hundred requests at ten per slice is ten yields on its own, and
+        # the all-task summary adds about as many again. Anything that stopped
+        # yielding would land at one or two.
+        assert gained >= 100 // YIELD_EVERY, gained
     finally:
-        stop = True
+        spinning = False
         beat.cancel()
         release.set()
         for task in tasks:
