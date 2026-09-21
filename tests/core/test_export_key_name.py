@@ -104,7 +104,13 @@ def test_the_existing_request_columns_are_unchanged_apart_from_the_insert() -> N
     ) + export_engine.request_detail_derived_columns(
         export_engine.DEFAULT_REQUEST_FIELDS
     )
-    without = [column for column in columns if column != "key_name"]
+    # ``cancel_reason`` joins ``key_name`` as an always-derived column, and
+    # like it, it is appended rather than inserted: every column that existed
+    # keeps its exact position, so an export that ignores the new one is the
+    # file it was before.
+    without = [
+        column for column in columns if column not in {"key_name", "cancel_reason"}
+    ]
 
     assert without == [
         "ts_epoch",
@@ -136,3 +142,5 @@ def test_the_existing_request_columns_are_unchanged_apart_from_the_insert() -> N
         "ttft_lost_to_fallbacks_ms",
         "cache_hit_rate",
     ]
+    # And the two additions are exactly where "appended" says they are.
+    assert columns[-3:] == ["cancel_reason", "key_name", "cache_hit_rate"]

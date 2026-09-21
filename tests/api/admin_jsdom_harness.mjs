@@ -2377,6 +2377,71 @@ const ROUTES = {
   /* The fallback request the whole feature is about: two models that did not
      answer, one that did in 300 ms, and a fourth that was benched out before
      the request began. The request waited 4,712 ms; the winner took 300. */
+  /* The worked example from the investigation, as a fixture: a first frame at
+     16.7 s, then 296.7 s of nothing, then the client's 300 s idle watchdog.
+     `output_chars` is 0 -- MCC had committed a response and gone quiet, which
+     is neither "the user pressed Esc" nor "nothing ever arrived". */
+  "/admin/api/requests/req-cancelled": {
+    id: "req-cancelled",
+    harness: "claude",
+    headers: {},
+    ts_iso: "2026-09-20T05:22:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "custom_agnes",
+    key_label: "AGNES_API_KEY",
+    requested_model: "claude-fable-5.1",
+    resolved_model: "custom_agnes/agnes-3.0-flash",
+    status: "cancelled",
+    cancel_reason: "committed_then_silent",
+    tokens_in: 120,
+    tokens_out: null,
+    ttft_ms: 16700,
+    ttft_winner_ms: 16700,
+    duration_ms: 313400,
+    output_chars: 0,
+    thinking_chars: 0,
+    route_attempt: 1,
+    route_attempts: [
+      {
+        attempt: 0,
+        provider: "custom_agnes",
+        model_ref: "custom_agnes/agnes-3.0-pro",
+        outcome: "failed",
+        duration_ms: 3000,
+        ttft_ms: null,
+        first_reasoning_ms: null,
+        tokens_out: null,
+        error_kind: "upstream_status",
+        error_message: "503 from the host",
+        params: null,
+        wire_body: null,
+        reasoning_emitted: null,
+        key_index: 0,
+        key_label: "AGNES_API_KEY",
+      },
+      {
+        attempt: 1,
+        provider: "custom_agnes",
+        model_ref: "custom_agnes/agnes-3.0-flash",
+        // Stored as `failed`, because from the route's point of view this
+        // model did not answer -- but `interrupted` is what actually ended it.
+        outcome: "failed",
+        duration_ms: 310000,
+        ttft_ms: 16700,
+        first_reasoning_ms: null,
+        tokens_out: null,
+        error_kind: "interrupted",
+        error_message: "client cancelled before the stream finished",
+        params: null,
+        wire_body: null,
+        reasoning_emitted: null,
+        key_index: 0,
+        key_label: "AGNES_API_KEY",
+      },
+    ],
+    input_images: [],
+  },
   "/admin/api/requests/req-fallback": {
     id: "req-fallback",
     harness: "claude",
@@ -7547,6 +7612,224 @@ const latencyViews = {};
   ).length;
 }
 
+/* ------------------------------------------------ cancelled sub-labels
+   "Cancelled" covered four unrelated events and said none of them. Each
+   surface is driven through the real renderer: the chip on a list row, the
+   modal's sentence, the Analytics breakdown, and the Model latency panel's
+   third group -- which exists so a client hang-up stops being counted as a
+   failure of whichever model happened to be streaming. */
+const cancelledViews = {};
+{
+  const body = doc.getElementById("reqTableBody");
+  const baseRow = {
+    ts_iso: "2026-09-20T05:22:00Z",
+    endpoint: "/v1/messages",
+    provider: "custom_agnes",
+    key_label: "AGNES_API_KEY",
+    resolved_model: "custom_agnes/agnes-3.0-flash",
+    tokens_in: 120,
+    tokens_out: null,
+  };
+  window.eval(
+    `renderRequestsTable(${JSON.stringify([
+      {
+        ...baseRow,
+        id: "r-gave-up",
+        status: "cancelled",
+        cancel_reason: "client_gave_up_waiting",
+        ttft_ms: null,
+        duration_ms: 600000,
+      },
+      {
+        ...baseRow,
+        id: "r-silent",
+        status: "cancelled",
+        cancel_reason: "committed_then_silent",
+        ttft_ms: 16700,
+        duration_ms: 313400,
+      },
+      {
+        ...baseRow,
+        id: "r-mid",
+        status: "cancelled",
+        cancel_reason: "stopped_mid_answer",
+        ttft_ms: 200,
+        duration_ms: 9000,
+        output_chars: 140,
+      },
+      {
+        ...baseRow,
+        id: "r-restart",
+        status: "cancelled",
+        cancel_reason: "server_restart",
+        ttft_ms: 200,
+        duration_ms: 310000,
+      },
+      // Not cancelled: it must carry no chip at all, not an empty one.
+      { ...baseRow, id: "r-fine", status: "success", ttft_ms: 200, duration_ms: 900 },
+    ])})`,
+  );
+  cancelledViews.rows = Array.from(body.querySelectorAll("tr")).map((tr) => {
+    const chip = tr.querySelector(".cancel-reason-chip");
+    return {
+      status: (tr.querySelector(".req-status-text") || {}).textContent,
+      chip: chip ? chip.textContent : null,
+      reason: chip ? chip.dataset.reason : null,
+      title: chip ? chip.title : null,
+    };
+  });
+
+  // --- the modal, through the real loader
+  await window.eval('openRequestDetail("req-cancelled")');
+  await settle();
+  const meta = Array.from(doc.getElementById("reqDetailMeta").children);
+  cancelledViews.detailPairs = meta
+    .map((el, index) =>
+      el.tagName === "DT" ? [el.textContent, (meta[index + 1] || {}).textContent] : null,
+    )
+    .filter(Boolean);
+  cancelledViews.modalChip = (
+    doc.querySelector("#reqDetailMeta .cancel-reason-chip") || {}
+  ).textContent;
+  cancelledViews.modalSentence = (
+    doc.querySelector("#reqDetailMeta .req-cancel-reason-note") || {}
+  ).textContent;
+  // The interrupted attempt in the chain is badged as the client hanging up,
+  // not as a failure of the model that was streaming.
+  cancelledViews.chainOutcomes = Array.from(
+    doc.querySelectorAll("#reqDetailChain .req-chain-outcome"),
+  ).map((el) => el.textContent);
+  cancelledViews.chainClasses = Array.from(
+    doc.querySelectorAll("#reqDetailChain .req-chain-item"),
+  ).map((el) => el.className);
+  window.eval("closeRequestDetail()");
+
+  // --- the Analytics breakdown
+  const readBreakdown = () => ({
+    headers: Array.from(
+      doc.querySelectorAll("#reqCancelledBreakdown thead th"),
+    ).map((th) => th.textContent),
+    rows: Array.from(doc.querySelectorAll("#reqCancelledBreakdown tbody tr")).map(
+      (tr) => Array.from(tr.children).map((td) => td.textContent),
+    ),
+  });
+  window.eval(
+    `renderRequestCancelledBreakdown(${JSON.stringify({
+      total: 935,
+      selected: null,
+      counts: {
+        client_gave_up_waiting: 189,
+        committed_then_silent: 78,
+        stopped_mid_answer: 608,
+        server_restart: 60,
+      },
+    })})`,
+  );
+  cancelledViews.breakdown = readBreakdown();
+  window.eval(
+    `renderRequestCancelledBreakdown(${JSON.stringify({
+      total: 0,
+      selected: null,
+      counts: {
+        client_gave_up_waiting: 0,
+        committed_then_silent: 0,
+        stopped_mid_answer: 0,
+        server_restart: 0,
+      },
+    })})`,
+  );
+  cancelledViews.emptyBreakdown = readBreakdown();
+  window.eval("renderRequestCancelledBreakdown(null)");
+  cancelledViews.disabledBreakdown = readBreakdown();
+
+  // --- the third latency group, beside the other two on the same model
+  window.eval(
+    `renderRequestModelLatency(${JSON.stringify({
+      enabled: true,
+      models: 1,
+      attempts: 15,
+      ttft_measured: 15,
+      p50_source: "exact",
+      stale: false,
+      rows: [
+        {
+          model_ref: "custom_agnes/agnes-3.0-flash",
+          outcome: "succeeded",
+          attempts: 10,
+          ttft_measured: 10,
+          avg_ttft_ms: 340.0,
+          avg_first_reasoning_ms: null,
+          avg_generating_ms: 1600.0,
+          tokens_out: 4080,
+          p50_ttft_ms: 312.0,
+          p95_ttft_ms: 1400.0,
+          p50_source: "exact",
+        },
+        {
+          model_ref: "custom_agnes/agnes-3.0-flash",
+          outcome: "failed",
+          attempts: 3,
+          ttft_measured: 3,
+          avg_ttft_ms: 9100.0,
+          avg_first_reasoning_ms: null,
+          avg_generating_ms: null,
+          tokens_out: null,
+          p50_ttft_ms: 9000.0,
+          p95_ttft_ms: 12000.0,
+          p50_source: "exact",
+        },
+        {
+          model_ref: "custom_agnes/agnes-3.0-flash",
+          outcome: "interrupted",
+          attempts: 2,
+          ttft_measured: 2,
+          avg_ttft_ms: 600000.0,
+          avg_first_reasoning_ms: null,
+          avg_generating_ms: null,
+          tokens_out: null,
+          p50_ttft_ms: 600000.0,
+          p95_ttft_ms: 604000.0,
+          p50_source: "exact",
+        },
+      ],
+    })})`,
+  );
+  cancelledViews.latencyPanel = Array.from(
+    doc.querySelectorAll("#reqModelLatency tbody tr"),
+  ).map((tr) => Array.from(tr.children).map((td) => td.textContent));
+
+  // --- the one-line note under the Cancelled card
+  window.eval(
+    `renderRequestStatsCards(${JSON.stringify({
+      enabled: true,
+      total: 100,
+      success: 90,
+      error: 1,
+      cancelled: 9,
+      error_rate: 0.01,
+      cancelled_breakdown: {
+        total: 9,
+        selected: null,
+        counts: {
+          client_gave_up_waiting: 4,
+          committed_then_silent: 1,
+          stopped_mid_answer: 3,
+          server_restart: 1,
+        },
+      },
+    })})`,
+  );
+  cancelledViews.cancelledCard = Array.from(
+    doc.querySelectorAll("#reqStatsCards .requests-card"),
+  )
+    .map((card) => ({
+      label: (card.querySelector("span") || {}).textContent,
+      value: (card.querySelector("strong") || {}).textContent,
+      note: (card.querySelector("small") || {}).textContent,
+    }))
+    .find((card) => card.label === "Cancelled");
+}
+
 /* --------------------------------------------------- advanced fields
    7.29.1: nothing is hidden by default. `advanced` orders a field after the
    common ones in its card and tags it; a collapse control stays for readers
@@ -7823,6 +8106,7 @@ console.log(
       harnessWallMs: Date.now() - startedAt,
       advancedFields,
       latencyViews,
+      cancelledViews,
       catalogueReadout,
       desktopAppBanner,
       guideLinks,

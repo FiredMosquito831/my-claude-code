@@ -5294,3 +5294,143 @@ def test_the_opencode_credential_toggle_explains_the_shared_bucket(rendered) -> 
     assert "shared anonymous credential" in help_text
     assert "your own key's free allowance is not spent" in help_text
     assert "Paid Zen models always use your key" in help_text
+
+
+# ------------------------------------------------- cancelled sub-labels
+#
+# "Cancelled" means the client stopped reading before the stream finished, and
+# that one word covered four unrelated events. Every surface below is driven
+# through the real renderer, so a change to the words in one place and not the
+# other fails here.
+
+
+def test_jsdom_a_cancelled_row_says_which_kind_of_cancelled(rendered) -> None:
+    rows = rendered["cancelledViews"]["rows"]
+
+    assert [row["chip"] for row in rows] == [
+        "client gave up waiting",
+        "committed, then silent",
+        "stopped mid-answer",
+        "server restart",
+        # A successful request carries no chip at all, not an empty one.
+        None,
+    ]
+    # The status word itself is unchanged and still in its own cell, so the
+    # colour rules that key on it keep describing the status.
+    assert [row["status"] for row in rows] == [
+        "cancelled",
+        "cancelled",
+        "cancelled",
+        "cancelled",
+        "success",
+    ]
+    assert [row["reason"] for row in rows[:4]] == [
+        "client_gave_up_waiting",
+        "committed_then_silent",
+        "stopped_mid_answer",
+        "server_restart",
+    ]
+
+
+def test_jsdom_the_chip_carries_its_explanation_in_the_tooltip(rendered) -> None:
+    rows = rendered["cancelledViews"]["rows"]
+
+    assert "Nothing the client could read ever arrived" in rows[0]["title"]
+    assert "MCC had sent the start of the message" in rows[1]["title"]
+    assert "Part of the answer had already been delivered" in rows[2]["title"]
+    assert "MCC stopped or restarted" in rows[3]["title"]
+
+
+def test_jsdom_the_modal_says_it_in_a_sentence_with_the_silence_measured(
+    rendered,
+) -> None:
+    """The one number the label is about: how long nothing arrived."""
+
+    views = rendered["cancelledViews"]
+
+    assert views["modalChip"] == "committed, then silent"
+    assert "MCC had sent the start of the message" in views["modalSentence"]
+    # 313.4 s - 16.7 s = 296.7 s of silence after the first frame.
+    assert (
+        "Nothing arrived for 4m 57s after that first frame." in (views["modalSentence"])
+    )
+    assert ["Cancelled because", None] not in views["detailPairs"]
+    assert any(label == "Cancelled because" for label, _ in views["detailPairs"])
+
+
+def test_jsdom_an_interrupted_attempt_is_badged_as_the_client_hanging_up(
+    rendered,
+) -> None:
+    """Stored as `failed`; what ended it was the other end of the connection."""
+
+    views = rendered["cancelledViews"]
+
+    assert views["chainOutcomes"] == ["failed", "client hung up"]
+    assert "is-failed" in views["chainClasses"][0]
+    assert "is-interrupted" in views["chainClasses"][1]
+
+
+def test_jsdom_the_cancelled_card_breaks_down_into_four(rendered) -> None:
+    breakdown = rendered["cancelledViews"]["breakdown"]
+
+    assert breakdown["headers"] == ["Why", "Requests", "Share", "What it means"]
+    assert [row[0] for row in breakdown["rows"]] == [
+        "client gave up waiting",
+        "committed, then silent",
+        "stopped mid-answer",
+        "server restart",
+    ]
+    assert [row[1] for row in breakdown["rows"]] == ["189", "78", "608", "60"]
+    assert [row[2] for row in breakdown["rows"]] == [
+        "20.2%",
+        "8.3%",
+        "65.0%",
+        "6.4%",
+    ]
+    # Every row carries the sentence, so the panel explains itself.
+    assert all(len(row[3]) > 40 for row in breakdown["rows"])
+
+
+def test_jsdom_a_zero_row_stays_rather_than_vanishing(rendered) -> None:
+    """ "None of these were restarts" is an answer; a missing row is not."""
+
+    empty = rendered["cancelledViews"]["emptyBreakdown"]
+
+    assert len(empty["rows"]) == 4
+    assert [row[1] for row in empty["rows"]] == ["0", "0", "0", "0"]
+    # No denominator, so no share is claimed.
+    assert [row[2] for row in empty["rows"]] == ["—"] * 4
+    # The log being off is a different answer from nothing being cancelled.
+    assert rendered["cancelledViews"]["disabledBreakdown"]["rows"] == [
+        ["Nothing was cancelled in this range."]
+    ]
+
+
+def test_jsdom_the_cancelled_card_carries_the_one_line_version(rendered) -> None:
+    card = rendered["cancelledViews"]["cancelledCard"]
+
+    assert card["value"] == "9"
+    assert card["note"] == (
+        "client gave up waiting 4 · committed, then silent 1"
+        " · stopped mid-answer 3 · server restart 1"
+    )
+
+
+def test_jsdom_the_latency_panel_keeps_hang_ups_out_of_the_failed_row(
+    rendered,
+) -> None:
+    """The third group, beside the other two on the same model."""
+
+    rows = rendered["cancelledViews"]["latencyPanel"]
+
+    assert [row[1] for row in rows] == ["answered", "failed", "client hung up"]
+    # The failed row is the three genuine failures, not the five attempts that
+    # were `outcome='failed'` in the table.
+    failed = rows[1]
+    hung_up = rows[2]
+    assert failed[2] == "3"
+    assert failed[5] == "9.0s"
+    assert hung_up[2] == "2"
+    assert hung_up[5] == "10m 0s"
+    # Shares are of the model's own attempts, and the new group takes its own.
+    assert [row[3] for row in rows] == ["66.7%", "20.0%", "13.3%"]
