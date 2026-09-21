@@ -50,6 +50,7 @@ from my_claude_code.config.proxy_chains import (
 )
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings, parse_lockout_tiers
+from my_claude_code.core import request_tasks
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
 from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.proxy_rotation import configure_proxy_rotation
@@ -101,6 +102,7 @@ from .loop_heartbeat import LoopHeartbeat
 from .provider_manager import ProviderRuntimeManager
 from .proxy_check_timer import ProxyCheckTimer, ProxyHealthTimer
 from .proxy_feed_timer import ProxyFeedTimer
+from .stall_watchdog import StallWatchdog
 
 RestartCallback = Callable[[], Awaitable[None] | None]
 
@@ -258,6 +260,11 @@ class ApplicationRuntime:
         # second, and the only thing in this process that can tell a server
         # that is busy from a server that is gone.
         self._loop_heartbeat: LoopHeartbeat | None = None
+        # The stuck-request watchdog. One sleep and a tuple comparison per
+        # in-flight request, and the only thing in this process that can say
+        # which await a request that has gone quiet is parked on. It observes
+        # and never intervenes -- see runtime/stall_watchdog.py.
+        self._stall_watchdog: StallWatchdog | None = None
         self._provider_manager_closed = False
         self._close_lock = asyncio.Lock()
         # The durable store of what every host has taught this proxy about
@@ -331,6 +338,10 @@ class ApplicationRuntime:
             # sleep and one subtraction; it cannot fail and it waits for
             # nothing.
             self._start_loop_heartbeat()
+            # Beside the beat, and for the same reason: an instrument that is
+            # started late cannot describe what happened before it. It watches
+            # requests, and a request can arrive the instant the listener is up.
+            self._start_stall_watchdog()
             warn_if_process_auth_token(self.settings)
             # Before the first sweep and before the first request: a provider
             # built during the sweep asks the store for its memory, and a
@@ -1179,11 +1190,45 @@ class ApplicationRuntime:
         heartbeat.start()
         self._loop_heartbeat = heartbeat
 
+    def _start_stall_watchdog(self) -> None:
+        """Adopt the operator's four numbers and start watching.
+
+        The registry in ``core`` is told whether to track requests at all from
+        here, for the same reason the loop-health record is: ``core`` may not
+        import ``config``, and a request path may not resolve configuration.
+        Switching the watchdog off therefore also empties the registry, so a
+        server the operator told not to watch holds nothing.
+        """
+
+        settings = self.settings
+        request_tasks.configure(enabled=bool(settings.request_watchdog_enabled))
+        if not settings.request_watchdog_enabled:
+            return
+        watchdog = StallWatchdog(
+            stall_seconds=lambda: float(self.settings.request_watchdog_stall_seconds),
+            interval_seconds=settings.request_watchdog_interval_seconds,
+            log_max_bytes=lambda: (
+                int(self.settings.request_watchdog_log_max_mb) * 1024 * 1024
+            ),
+            retain_files=lambda: int(self.settings.server_log_retain_files),
+        )
+        watchdog.start()
+        self._stall_watchdog = watchdog
+
     async def _close_owned_resources(self) -> bool:
         heartbeat = self._loop_heartbeat
         self._loop_heartbeat = None
         if heartbeat is not None:
             await heartbeat.close()
+        # Before anything that could take time: it is one cancel and one await
+        # of a task that is asleep, so it always settles well inside the stop
+        # deadline, and a watchdog still sweeping a registry being torn down
+        # would report a shutdown as a stall.
+        watchdog = self._stall_watchdog
+        self._stall_watchdog = None
+        if watchdog is not None:
+            await watchdog.close()
+        request_tasks.reset()
         # Cancelled before the provider manager closes, so a probe in flight is
         # abandoned rather than racing the shutdown that asked for it. Same
         # reason as the discovery timer below, and for the same task shape.

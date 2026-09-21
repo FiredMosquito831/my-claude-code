@@ -22,7 +22,7 @@ from fastapi import (
     Query,
     Request,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from my_claude_code.api.credential_display import credential_name_index
@@ -174,6 +174,10 @@ from my_claude_code.config.websearch_catalog import (
     WEBSEARCH_CATALOG,
     WebSearchDescriptor,
 )
+from my_claude_code.core.async_stacks import (
+    DEFAULT_FRAME_LIMIT,
+    DEFAULT_TASK_LIMIT,
+)
 from my_claude_code.core.client_fingerprint import (
     NON_REGISTRY_HARNESS_LABELS,
 )
@@ -187,6 +191,10 @@ from my_claude_code.core.request_log import (
     LOCAL_FILTER_VALUES,
     RequestLogStore,
     store_from_settings,
+)
+from my_claude_code.core.stuck_requests import (
+    DEFAULT_REQUEST_LIMIT,
+    stuck_report,
 )
 from my_claude_code.core.tier_refs import tier_alias_by_route_env_var
 from my_claude_code.providers.anthropic_oauth.constants import (
@@ -697,6 +705,63 @@ async def admin_loop_health(
 
     require_loopback_admin(request)
     return services.admin.loop_health_status()
+
+
+@router.get("/admin/api/tasks/stacks")
+async def admin_task_stacks(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Where every in-flight request, and every task, is suspended right now.
+
+    The on-demand half of the stuck-request watchdog: the same frames-only
+    document it writes to ``logs/stuck-requests.jsonl`` when nobody is looking,
+    answered while somebody is. Frames are ``file:line function`` with
+    package-relative paths and nothing else -- never a local, never an
+    argument, never a body, never a header.
+
+    The second half of the answer is the one that settles a parallel stall in a
+    single look: every task on the loop counted by the frame it is suspended
+    on. Nine tasks under one ``file:line function`` is a lock; nine tasks under
+    nine is nine sockets, and no other view distinguishes them.
+
+    Bounded on both axes -- ``limit`` requests described in full, ``tasks``
+    examined for the summary -- and it says so when it cut something. No
+    database work, no provider work, no network.
+    """
+
+    require_loopback_admin(request)
+    limit = _bounded_query(request, "limit", DEFAULT_REQUEST_LIMIT, 1, 500)
+    tasks = _bounded_query(request, "tasks", DEFAULT_TASK_LIMIT, 1, 5_000)
+    frames = _bounded_query(request, "frames", DEFAULT_FRAME_LIMIT, 1, 200)
+    report = await stuck_report(
+        stall_seconds=float(settings.request_watchdog_stall_seconds),
+        frame_limit=frames,
+        task_limit=tasks,
+        request_limit=limit,
+    )
+    report["watchdog_enabled"] = bool(settings.request_watchdog_enabled)
+    # A plain ``JSONResponse`` rather than returning the dict: FastAPI would
+    # otherwise run ``jsonable_encoder`` over it, which measured 75 ms on a
+    # hundred-request answer that is already nothing but str, int, float, bool,
+    # None, list and dict. Serialising it twice is the single most expensive
+    # thing this route could do.
+    return JSONResponse(report)
+
+
+def _bounded_query(
+    request: Request, name: str, default: int, low: int, high: int
+) -> int:
+    """Read one integer query parameter, clamped. A bad value is the default."""
+
+    raw = request.query_params.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except TypeError, ValueError:
+        return default
+    return max(low, min(high, value))
 
 
 @router.get("/admin/api/providers/local-status")

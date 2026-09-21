@@ -317,6 +317,23 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "health_busy_lag_ms": LimitRange(
         0.0, 60_000.0, "0 never marks an answer busy, however late the loop is"
     ),
+    # How still a request has to be before the watchdog writes its stack down.
+    # The floor is 0 -- which stops the reporting, not the registry -- and the
+    # ceiling is a day, because a request that has been silent for longer than
+    # that is a fact about a process, not about a request.
+    "request_watchdog_stall_seconds": LimitRange(
+        0.0, 86_400.0, "0 reports nothing; /admin/api/tasks/stacks still answers"
+    ),
+    # How often it looks. The floor is one second because a watchdog that runs
+    # more often than that is measuring itself, and the ceiling is an hour
+    # because a check slower than that cannot see a stall the operator can.
+    "request_watchdog_interval_seconds": LimitRange(1.0, 3_600.0),
+    # How large logs/stuck-requests.jsonl may grow before it rotates, in MB.
+    # 0 writes no file at all; the ceiling is a gigabyte, which is far more
+    # than any stall record set can honestly need.
+    "request_watchdog_log_max_mb": LimitRange(
+        0.0, 1_024.0, "0 writes no JSONL; the WARNING line in server.log stays"
+    ),
 }
 
 

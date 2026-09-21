@@ -74,6 +74,25 @@ def _reset_stop_deadline():
 
 
 @pytest.fixture(autouse=True)
+def _reset_request_task_registry():
+    """No test may inherit another test's in-flight requests.
+
+    The registry the stuck-request watchdog reads is process-wide for the same
+    reason the stop deadline is: one dictionary is read by a background task,
+    by an admin route and by whichever task is serving a request, and none of
+    them has a runtime in hand. A capture built and never finalized -- which a
+    great many unit tests do deliberately -- would otherwise be counted as
+    in-flight by every later test in the same worker.
+    """
+
+    from my_claude_code.core import request_tasks
+
+    request_tasks.reset()
+    yield
+    request_tasks.reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_opencode_client_version():
     """No test may inherit another test's reading of the machine.
 

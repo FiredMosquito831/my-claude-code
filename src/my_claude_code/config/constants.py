@@ -798,6 +798,32 @@ HEALTH_HEARTBEAT_INTERVAL_MS_DEFAULT = 100
 # loop really was held. 0 turns the marker off entirely without touching the
 # beat, which is the measurement.
 HEALTH_BUSY_LAG_MS_DEFAULT = 500
+# The stuck-request watchdog. On by default, because the whole point of it is
+# to be already running the next time a request goes quiet: the 2026-09-16 park
+# is unexplained precisely because nothing was watching and the log that would
+# have said rotated away.
+REQUEST_WATCHDOG_ENABLED_DEFAULT = True
+# How long a request may make no progress at all before its stack is written
+# down. Chosen from this operator's own log rather than from taste: legitimate
+# first-token waits reach 190 s and streams run past 300 s, and the client's
+# own stream-idle watchdog is 300 s -- so a request that has been *completely
+# still* for five minutes has already outlived the deadline its own client
+# would have applied. Lower it to 5 or 10 when reproducing a stall on purpose;
+# 0 stops the watchdog reporting without stopping the registry, so
+# ``/admin/api/tasks/stacks`` still answers.
+REQUEST_WATCHDOG_STALL_SECONDS_DEFAULT = 300
+# How often the watchdog looks. One pass is a dict snapshot plus one cheap
+# progress read per in-flight request, and it builds a stack only for a request
+# that has already crossed the threshold; thirty seconds is a tenth of the
+# default threshold, which is fine granularity for a five-minute fact.
+REQUEST_WATCHDOG_INTERVAL_SECONDS_DEFAULT = 30
+# How large ``logs/stuck-requests.jsonl`` may grow before it is rotated, in
+# megabytes. Bounded for the same reason the start log was bounded in 7.10.1:
+# a diagnostic file that nobody prunes is a diagnostic file that eventually
+# fills a disk. Rotated copies are kept under ``SERVER_LOG_RETAIN_FILES``, the
+# cap that already governs every other file in that directory. 0 keeps the
+# WARNING line in ``server.log`` and writes no JSONL at all.
+REQUEST_WATCHDOG_LOG_MAX_MB_DEFAULT = 5
 
 DESKTOP_TICK_SECONDS_DEFAULT = 10.0
 # The shortest gap between two starts. Equal to the tick on purpose: Q4 asks

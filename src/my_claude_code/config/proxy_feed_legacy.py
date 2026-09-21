@@ -20,11 +20,12 @@ picker. A fresh install passes through this module without it producing
 anything, because a fresh install has no built-in ids to convert.
 
 **When this can be deleted.** After two or three releases, once no store in
-circulation can still hold a built-in id -- **7.37.0** is the earliest sensible
+circulation can still hold a built-in id -- **7.38.0** is the earliest sensible
 point. It used to say 7.21.0, then 7.22.0, then 7.23.0, then 7.24.0, then
 7.25.0, then 7.26.0, then 7.27.0, then 7.28.0, then 7.29.0, then 7.30.0, then
-7.31.0, then 7.32.0, then 7.33.0, then 7.34.0, then 7.35.0, then 7.36.0; all
-sixteen
+7.31.0, then 7.32.0, then 7.33.0, then 7.34.0, then 7.35.0, then 7.36.0, then
+7.37.0; all
+seventeen
 releases went to
 something else (the
 proxy fetch pass, the 429 cooldown controls, the Responses surface learning what
@@ -40,7 +41,9 @@ Responses or Messages, then free OpenCode Zen models moving onto OpenCode's
 own shared credential so the operator's key stops paying for them, then a
 multi-surface gateway declaring which of its doors to knock on when nothing
 has been published about a model, then a Responses host's refusal of one
-JSON-Schema keyword being answered once and remembered), and
+JSON-Schema keyword being answered once and remembered, then the
+stuck-request watchdog that writes down where a request that has gone quiet
+is actually parked), and
 deleting this in any of them would
 have bundled an unrelated removal onto it. One concern per release,
 so the note moves rather than the deletion happening quietly beside something
