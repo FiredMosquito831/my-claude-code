@@ -2299,6 +2299,42 @@ const ROUTES = {
       path: "/home/user/.mcc/logs/requests.db",
     },
   },
+  // 7.43.0: requests by folder and by session. Fake paths and ids; one
+  // session with two folders so the "+1" form renders, one with none.
+  "/admin/api/requests/origin": {
+    enabled: true,
+    by_folder: [
+      {
+        key: "C:\\Users\\devuser\\Projects\\demo",
+        short: "Projects\\demo \u00b7 #76b11b",
+        requests: 9, errors: 1, tokens_in: 900, tokens_out: 90,
+        sessions: 2, last_ts: 1790000000,
+      },
+      {
+        key: "D:\\work\\games\\Phone games",
+        short: "games\\Phone games \u00b7 #8fa073",
+        requests: 3, errors: 0, tokens_in: 30, tokens_out: 3,
+        sessions: 1, last_ts: 1789990000,
+      },
+    ],
+    by_folder_truncated: false,
+    by_session: [
+      {
+        key: "0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b", short: "0f3c2a1b",
+        requests: 9, errors: 1, tokens_out: 90, subagent_requests: 5,
+        subagents: 2, folders: 2,
+        folder: "C:\\Users\\devuser\\Projects\\demo",
+        folder_short: "Projects\\demo \u00b7 #76b11b", last_ts: 1790000000,
+      },
+      {
+        key: "c4d5e6f7-0819-4a2b-9c3d-4e5f60718293", short: "c4d5e6f7",
+        requests: 3, errors: 0, tokens_out: 3, subagent_requests: 0,
+        subagents: 0, folders: 0, folder: null, folder_short: null,
+        last_ts: 1789990000,
+      },
+    ],
+    by_session_truncated: true,
+  },
   "/admin/api/requests/cost": {
     enabled: true,
     cost_estimation_enabled: true,
@@ -8407,6 +8443,139 @@ const requestOrigin = {};
   };
 }
 
+// ------------------------------------------------- origin filters (7.43.0)
+/* Session and Folder: the two boxes through every wiring site (debounce,
+   offset 0, persistence, restore, Clear), the breakdown route riding along
+   with the page's filters, and a breakdown row that filters the page. */
+const originFilters = {};
+{
+  const since = (prefix) => fetchUrls.filter((url) => url.startsWith(prefix));
+  const listCalls = () => since("/admin/api/requests?");
+  const statsCalls = () => since("/admin/api/requests/stats");
+  const originCalls = () => since("/admin/api/requests/origin?");
+  const persisted = () =>
+    JSON.parse(window.localStorage.getItem("mcc-dashboard-state") || "{}").reqFilters ||
+    {};
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const click = (el) => el.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+
+  click(doc.getElementById("reqClearFilters"));
+  await wait(700);
+  originFilters.folderRows = Array.from(
+    doc.querySelectorAll("#reqFolderBreakdown tbody tr"),
+  ).map((tr) => Array.from(tr.children).map((td) => td.textContent));
+  originFilters.folderHeaders = Array.from(
+    doc.querySelectorAll("#reqFolderBreakdown thead th"),
+  ).map((th) => th.textContent);
+  originFilters.sessionRows = Array.from(
+    doc.querySelectorAll("#reqSessionBreakdown tbody tr"),
+  ).map((tr) => Array.from(tr.children).map((td) => td.textContent));
+  originFilters.sessionHeaders = Array.from(
+    doc.querySelectorAll("#reqSessionBreakdown thead th"),
+  ).map((th) => th.textContent);
+  originFilters.sessionNote = doc.getElementById("reqSessionBreakdownNote").textContent;
+  originFilters.folderNote = doc.getElementById("reqFolderBreakdownNote").textContent;
+  originFilters.folderButtons = doc.querySelectorAll(
+    "#reqFolderBreakdown button.origin-filter-button",
+  ).length;
+  originFilters.folderTitle =
+    doc.querySelector("#reqFolderBreakdown .origin-filter-button")?.title || "";
+  originFilters.folderOptions = Array.from(
+    doc.getElementById("reqFolderOptions").querySelectorAll("option"),
+  ).map((option) => [option.value, option.getAttribute("label")]);
+  originFilters.sessionOptions = Array.from(
+    doc.getElementById("reqSessionOptions").querySelectorAll("option"),
+  ).map((option) => [option.value, option.getAttribute("label")]);
+  originFilters.unfilteredOriginUrl = originCalls()[originCalls().length - 1] || "";
+
+  for (const [name, id, typed] of [
+    ["session", "reqFilterSession", ["0f", "0f3c", "0f3c2a1b"]],
+    ["folder", "reqFilterFolder", ["ga", "games", "Phone games"]],
+  ]) {
+    click(doc.getElementById("reqNextPage"));
+    await wait(250);
+    const paged = listCalls()[listCalls().length - 1] || "";
+    fetchUrls.length = 0;
+    const input = doc.getElementById(id);
+    for (const text of typed) {
+      input.value = text;
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+      await wait(60);
+    }
+    const whileTyping = statsCalls().length;
+    await wait(700);
+    originFilters[name] = {
+      pagedUrl: paged,
+      loadsWhileTyping: whileTyping,
+      loadsAfterPause: statsCalls().length,
+      listUrl: listCalls()[listCalls().length - 1] || "",
+      statsUrl: statsCalls()[statsCalls().length - 1] || "",
+      originUrl: originCalls()[originCalls().length - 1] || "",
+      costUrl: since("/admin/api/requests/cost")[0] || "",
+      ttftUrl: since("/admin/api/requests/ttft")[0] || "",
+      persisted: persisted()[name] || null,
+    };
+    input.value = "";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(700);
+  }
+
+  // A breakdown row filters the page: the full path goes into the box.
+  click(doc.getElementById("reqNextPage"));
+  await wait(250);
+  fetchUrls.length = 0;
+  const button = doc.querySelector("#reqFolderBreakdown .origin-filter-button");
+  if (button) click(button);
+  await wait(300);
+  originFilters.clickedFolderValue = doc.getElementById("reqFilterFolder").value;
+  originFilters.clickListUrl = listCalls()[listCalls().length - 1] || "";
+  originFilters.clickPersisted = persisted().folder || null;
+  const sessionButton = doc.querySelector("#reqSessionBreakdown .origin-filter-button");
+  if (sessionButton) click(sessionButton);
+  await wait(300);
+  originFilters.clickedSessionValue = doc.getElementById("reqFilterSession").value;
+
+  // A reload restores both boxes from the persisted state.
+  const saved = persisted();
+  doc.getElementById("reqFilterSession").value = "";
+  doc.getElementById("reqFilterFolder").value = "";
+  window.eval("restoreReqFilters(" + JSON.stringify(saved) + ")");
+  originFilters.restored = {
+    session: doc.getElementById("reqFilterSession").value,
+    folder: doc.getElementById("reqFilterFolder").value,
+  };
+
+  // The export carries them too.
+  fetchUrls.length = 0;
+  window.eval('openExportModal("requests")');
+  try {
+    // Only the URL is the claim; the stub has no blob for the download.
+    await window.eval("runExport()");
+  } catch {
+    /* expected under the stub */
+  }
+  window.eval("closeExportModal()");
+  await wait(100);
+  originFilters.exportUrl = since("/admin/api/export")[0] || "";
+
+  // Clear empties both, forgets both, and the next query carries neither.
+  fetchUrls.length = 0;
+  click(doc.getElementById("reqClearFilters"));
+  await wait(700);
+  originFilters.cleared = [
+    doc.getElementById("reqFilterSession").value,
+    doc.getElementById("reqFilterFolder").value,
+  ];
+  originFilters.clearedListUrl = listCalls()[listCalls().length - 1] || "";
+  originFilters.clearedPersisted = persisted();
+
+  // A failed breakdown says so in its own panel and nowhere else.
+  window.eval('renderRequestOriginBreakdowns({ error: "boom" })');
+  originFilters.errorNote = doc.getElementById("reqFolderBreakdownNote").textContent;
+  window.eval("renderRequestOriginBreakdowns(null)");
+  originFilters.disabledRows = doc.querySelectorAll("#reqFolderBreakdown tr").length;
+}
+
 console.log(
   JSON.stringify(
     {
@@ -8419,6 +8588,7 @@ console.log(
       latencyViews,
       toolCatalogue,
       requestOrigin,
+      originFilters,
       cancelledViews,
       catalogueReadout,
       desktopAppBanner,

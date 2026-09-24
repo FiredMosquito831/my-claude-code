@@ -380,22 +380,7 @@ async function loadDashboardState() {
     if (periodSelect) periodSelect.value = savedState.webSearchStatsPeriod;
   }
   // Restore the analytics filters and page so a refresh continues the same query.
-  if (savedState?.reqFilters) {
-    const f = savedState.reqFilters;
-    if (byId("reqFilterProvider")) byId("reqFilterProvider").value = f.provider || "";
-    if (byId("reqFilterModel")) byId("reqFilterModel").value = f.model || "";
-    if (byId("reqFilterKey")) byId("reqFilterKey").value = f.key || "";
-    if (byId("reqFilterHarness")) byId("reqFilterHarness").value = f.harness || "";
-    if (byId("reqFilterSearch")) byId("reqFilterSearch").value = f.search || "";
-    if (f.status && byId("reqFilterStatus")) byId("reqFilterStatus").value = f.status;
-    if (byId("reqFilterEndpoint")) byId("reqFilterEndpoint").value = f.endpoint || "";
-    if (f.local && byId("reqFilterLocal")) byId("reqFilterLocal").value = f.local;
-    if (f.window && byId("reqFilterWindow")) byId("reqFilterWindow").value = f.window;
-    if (f.pageSize && byId("reqPageSize")) {
-      byId("reqPageSize").value = f.pageSize;
-      reqState.limit = Number(f.pageSize) || reqState.limit;
-    }
-  }
+  if (savedState?.reqFilters) restoreReqFilters(savedState.reqFilters);
   if (savedState?.reqOffset) {
     reqState.offset = Number(savedState.reqOffset) || 0;
   }
@@ -15864,6 +15849,8 @@ function reqFilters() {
   const model = byId("reqFilterModel").value.trim();
   const key = byId("reqFilterKey").value.trim();
   const harness = byId("reqFilterHarness").value.trim();
+  const session = byId("reqFilterSession").value.trim();
+  const folder = byId("reqFilterFolder").value.trim();
   const status = byId("reqFilterStatus").value;
   const search = byId("reqFilterSearch").value.trim();
   const endpoint = byId("reqFilterEndpoint").value.trim();
@@ -15873,6 +15860,10 @@ function reqFilters() {
   if (model) params.set("model", model);
   if (key) params.set("key", key);
   if (harness) params.set("harness", harness);
+  // Sent only when set, like every text filter: an unset one leaves the URL,
+  // and so every cache key and the pulse signature, exactly as before 7.43.0.
+  if (session) params.set("session", session);
+  if (folder) params.set("folder", folder);
   if (status) params.set("status", status);
   if (search) params.set("q", search);
   if (endpoint) params.set("endpoint", endpoint);
@@ -15909,6 +15900,10 @@ async function loadRequestsView() {
   // `requests.ttft_ms`, measured at 0.69-0.99 s over 331,086 rows on a 4.5 GB
   // log against the tenth of a second the rollup-served stats cost.
   loadRequestTtftPanel(loadId, params);
+  // Off the paint path for the same reason again: neither session nor folder
+  // is a rollup dimension, so these two tables are a row query, and the
+  // rollup-served stats the cards are drawn from stay exactly as they were.
+  loadRequestOriginPanel(loadId, params);
   // A free-text search is the one filter whose *counting* queries cannot use
   // an index: the predicate is substring matching over stored bodies, so the
   // count and the filtered stats both decompress a body per row. Measured on a
@@ -15944,6 +15939,7 @@ async function loadRequestsView() {
     byId("reqTableBody").innerHTML = "";
     byId("reqProviderBreakdown").innerHTML = "";
     byId("reqHarnessBreakdown").innerHTML = "";
+    renderRequestOriginBreakdowns(null);
     byId("reqKeyBreakdown").innerHTML = "";
     byId("reqCancelledBreakdown").innerHTML = "";
     byId("reqTopErrors").innerHTML = "";
@@ -17047,6 +17043,177 @@ function renderRequestHarnessBreakdown(rows) {
   );
 }
 
+/* Requests by folder and by session (7.43.0). Loaded beside the cost, latency
+   and TTFT panels rather than inside stats: neither value is a rollup
+   dimension, so this is a row query and must not hold up the cards. A stale
+   answer -- the reader changed a filter while it was in flight -- is dropped,
+   the same rule the rest of this view follows. */
+async function loadRequestOriginPanel(loadId, params) {
+  byId("reqFolderBreakdownNote").textContent = "Counting folders...";
+  byId("reqSessionBreakdownNote").textContent = "Counting sessions...";
+  let origin;
+  try {
+    origin = await api(`/admin/api/requests/origin?${params}`);
+  } catch (error) {
+    if (loadId !== reqState.loadId) return;
+    // Not rethrown: off the paint path, and a failed breakdown is not a
+    // failed page.
+    renderRequestOriginBreakdowns({ error: error.message });
+    return;
+  }
+  if (loadId !== reqState.loadId) return;
+  renderRequestOriginBreakdowns(origin);
+}
+
+/* A breakdown key as a button that filters the page to it. The full value
+   goes into the filter box, so a folder click is an exact match (see the
+   Folder filter's tooltip) and a session click selects that one id. */
+function originFilterButton(label, fullValue, inputId, what) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "origin-filter-button";
+  button.textContent = label;
+  button.title = `${fullValue}\nShow only this ${what}`;
+  button.setAttribute("aria-label", `Show only ${what} ${label}`);
+  button.addEventListener("click", () => {
+    byId(inputId).value = fullValue;
+    if (reqFilterTypingTimer) {
+      window.clearTimeout(reqFilterTypingTimer);
+      reqFilterTypingTimer = null;
+    }
+    applyReqFilters();
+  });
+  return button;
+}
+
+function formatOriginLastSeen(ts) {
+  if (ts == null || Number.isNaN(Number(ts))) return "—";
+  return new Date(Number(ts) * 1000).toLocaleString();
+}
+
+function originErrorRate(row) {
+  const requests = Number(row.requests || 0);
+  const errors = Number(row.errors || 0);
+  return requests ? `${((errors / requests) * 100).toFixed(1)}%` : "0%";
+}
+
+function populateOriginFilterOptions(origin) {
+  const fill = (id, entries) => {
+    const datalist = byId(id);
+    if (!datalist) return;
+    datalist.replaceChildren(
+      ...entries.map(([value, label]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        if (label && label !== value) option.label = label;
+        return option;
+      }),
+    );
+  };
+  fill(
+    "reqFolderOptions",
+    (origin.by_folder || []).map((row) => [row.key, row.short || row.key]),
+  );
+  fill(
+    "reqSessionOptions",
+    (origin.by_session || []).map((row) => [
+      row.key,
+      [row.short, row.folder_short].filter(Boolean).join(" · "),
+    ]),
+  );
+}
+
+function renderRequestOriginBreakdowns(origin) {
+  const folderBox = byId("reqFolderBreakdown");
+  const sessionBox = byId("reqSessionBreakdown");
+  const folderNote = byId("reqFolderBreakdownNote");
+  const sessionNote = byId("reqSessionBreakdownNote");
+  folderBox.innerHTML = "";
+  sessionBox.innerHTML = "";
+  if (!origin || origin.enabled === false) {
+    folderNote.textContent = "";
+    sessionNote.textContent = "";
+    return;
+  }
+  if (origin.error) {
+    folderNote.textContent = `Could not count folders: ${origin.error}`;
+    sessionNote.textContent = `Could not count sessions: ${origin.error}`;
+    return;
+  }
+  populateOriginFilterOptions(origin);
+  const folders = origin.by_folder || [];
+  const sessions = origin.by_session || [];
+  folderNote.textContent =
+    "Only requests whose agent named its working folder are counted here." +
+    (origin.by_folder_truncated
+      ? " Showing the 50 busiest folders; narrow the filters to see the rest."
+      : "") +
+    " Select a folder to filter the page to it.";
+  // Said plainly, because the table would otherwise look like it grouped
+  // subagents under the conversation that started them, and it does not.
+  sessionNote.textContent =
+    "Listed flat, one row per session id. Subagents are not grouped under a" +
+    " parent session: that a subagent reports its parent's session id has not" +
+    " yet been confirmed on real traffic, so each row counts the requests a" +
+    " subagent sent under that id and nothing more." +
+    (origin.by_session_truncated
+      ? " Showing the 50 busiest sessions; narrow the filters to see the rest."
+      : "");
+  folderBox.appendChild(
+    analyticsTable(
+      ["Folder", "Requests", "Sessions", "Error rate", "Tokens in", "Tokens out", "Last seen"],
+      folders.map((row) => [
+        originFilterButton(row.short || row.key, row.key, "reqFilterFolder", "folder"),
+        formatAnalyticsNumber(Number(row.requests || 0)),
+        formatAnalyticsNumber(Number(row.sessions || 0)),
+        originErrorRate(row),
+        formatAnalyticsNumber(Number(row.tokens_in || 0)),
+        formatAnalyticsNumber(Number(row.tokens_out || 0)),
+        formatOriginLastSeen(row.last_ts),
+      ]),
+      "No request in this range named its folder.",
+    ),
+  );
+  sessionBox.appendChild(
+    analyticsTable(
+      [
+        "Session",
+        "Folder",
+        "Requests",
+        "By subagents",
+        "Subagents",
+        "Error rate",
+        "Tokens out",
+        "Last seen",
+      ],
+      sessions.map((row) => {
+        const folderCell = document.createElement("span");
+        folderCell.className = "req-folder";
+        if (row.folder) {
+          folderCell.textContent =
+            Number(row.folders || 0) > 1
+              ? `${row.folder_short || row.folder} +${Number(row.folders) - 1}`
+              : row.folder_short || row.folder;
+          folderCell.title = row.folder;
+        } else {
+          folderCell.textContent = "—";
+        }
+        return [
+          originFilterButton(row.short || row.key, row.key, "reqFilterSession", "session"),
+          folderCell,
+          formatAnalyticsNumber(Number(row.requests || 0)),
+          formatAnalyticsNumber(Number(row.subagent_requests || 0)),
+          formatAnalyticsNumber(Number(row.subagents || 0)),
+          originErrorRate(row),
+          formatAnalyticsNumber(Number(row.tokens_out || 0)),
+          formatOriginLastSeen(row.last_ts),
+        ];
+      }),
+      "No request in this range stated a session.",
+    ),
+  );
+}
+
 /* The aggregates below are SQL COALESCE(...,0) sums, so their zeros are
    measured zeros and Number(x || 0) is honest here. avg_duration_ms is the
    one genuinely NULL-able column and uses the dash convention. */
@@ -17615,6 +17782,8 @@ function persistDashboardState() {
         model: byId("reqFilterModel")?.value?.trim() || undefined,
         key: byId("reqFilterKey")?.value?.trim() || undefined,
         harness: byId("reqFilterHarness")?.value?.trim() || undefined,
+        session: byId("reqFilterSession")?.value?.trim() || undefined,
+        folder: byId("reqFilterFolder")?.value?.trim() || undefined,
         search: byId("reqFilterSearch")?.value?.trim() || undefined,
         status: byId("reqFilterStatus")?.value || undefined,
         endpoint: byId("reqFilterEndpoint")?.value?.trim() || undefined,
@@ -17627,6 +17796,26 @@ function persistDashboardState() {
     localStorage.setItem(DASH_STATE_KEY, JSON.stringify(stateToSave));
   } catch (_) {
     /* storage unavailable or full; persistence is best-effort */
+  }
+}
+
+/* Put a persisted analytics query back into the toolbar. Its own function so
+   the restore is the same code whether it runs at start-up or under test. */
+function restoreReqFilters(f) {
+  if (byId("reqFilterProvider")) byId("reqFilterProvider").value = f.provider || "";
+  if (byId("reqFilterModel")) byId("reqFilterModel").value = f.model || "";
+  if (byId("reqFilterKey")) byId("reqFilterKey").value = f.key || "";
+  if (byId("reqFilterHarness")) byId("reqFilterHarness").value = f.harness || "";
+  if (byId("reqFilterSession")) byId("reqFilterSession").value = f.session || "";
+  if (byId("reqFilterFolder")) byId("reqFilterFolder").value = f.folder || "";
+  if (byId("reqFilterSearch")) byId("reqFilterSearch").value = f.search || "";
+  if (f.status && byId("reqFilterStatus")) byId("reqFilterStatus").value = f.status;
+  if (byId("reqFilterEndpoint")) byId("reqFilterEndpoint").value = f.endpoint || "";
+  if (f.local && byId("reqFilterLocal")) byId("reqFilterLocal").value = f.local;
+  if (f.window && byId("reqFilterWindow")) byId("reqFilterWindow").value = f.window;
+  if (f.pageSize && byId("reqPageSize")) {
+    byId("reqPageSize").value = f.pageSize;
+    reqState.limit = Number(f.pageSize) || reqState.limit;
   }
 }
 
@@ -20206,6 +20395,8 @@ let reqFilterTypingTimer = null;
   "reqFilterModel",
   "reqFilterKey",
   "reqFilterHarness",
+  "reqFilterSession",
+  "reqFilterFolder",
   "reqFilterSearch",
   "reqFilterEndpoint",
 ].forEach(
@@ -20226,6 +20417,8 @@ byId("reqClearFilters").addEventListener("click", () => {
   byId("reqFilterModel").value = "";
   byId("reqFilterKey").value = "";
   byId("reqFilterHarness").value = "";
+  byId("reqFilterSession").value = "";
+  byId("reqFilterFolder").value = "";
   byId("reqFilterSearch").value = "";
   byId("reqFilterStatus").value = "";
   byId("reqFilterEndpoint").value = "";

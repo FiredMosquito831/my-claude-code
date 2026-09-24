@@ -2,6 +2,7 @@
 
 import base64
 import contextlib
+import copy
 import hashlib
 import json
 import math
@@ -36,10 +37,12 @@ from my_claude_code.core.request_origin import (
     BACKFILL_SIGNAL,
     PROMPT_HARNESSES,
     PROMPT_SCAN_MAX_CHARS,
+    folder_filter,
     merge_origin_source,
     origin_provenance,
     project_dir_from_prompt,
     project_short,
+    session_filter,
     session_short,
 )
 from my_claude_code.core.tool_catalogue import (
@@ -171,6 +174,21 @@ _STATS_CACHE_MAX_ENTRIES = 64
 # Caps each breakdown (by provider/model/key) so a gateway with hundreds of
 # distinct models does not return hundreds of rows on every poll.
 _BREAKDOWN_LIMIT = 50
+
+# The escape character of the Folder filter's LIKE. Not a backslash: every
+# Windows path is full of them, and each would have to be doubled.
+_LIKE_ESCAPE = "!"
+
+
+def _like_contains(text: str) -> str:
+    """``text`` as a LIKE pattern that matches it anywhere, wildcards disarmed."""
+    escaped = (
+        text.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", f"{_LIKE_ESCAPE}%")
+        .replace("_", f"{_LIKE_ESCAPE}_")
+    )
+    return f"%{escaped}%"
+
 
 # Newest measured attempts pulled per ``latency_by_model`` call so its p50/p95
 # can be taken in Python. SQLite has no percentile function here and the
@@ -1702,10 +1720,28 @@ _PARTIAL_INDEXES = (
     " ts_epoch, provider, status, cache_read_tokens, tokens_in,"
     " est_tokens_in, est_image_tokens, input_image_count)"
     " WHERE est_image_tokens IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_requests_origin_v1 ON requests("
+    " ts_epoch, project_dir, session_id)"
+    " WHERE project_dir IS NOT NULL OR session_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_requests_optimization_v1 ON requests("
     " optimization, ts_epoch, optimization_tokens_saved)"
     " WHERE optimization IS NOT NULL",
 )
+# ``idx_requests_origin_v1`` (7.43.0) serves the Session and Folder filters and
+# the two breakdowns beside them. Every row written before 7.42.0 has neither
+# value and is not in it. Measured on a synthetic 440,000-row log sized like
+# the real one (1.6 KB a row, 43,000 rows a week, origin on the newest week),
+# best of three:
+#
+# - folders, all time: 0.978 s -> 0.009 s (COVERING INDEX); 7 days
+#   0.172 s -> 0.011 s.
+# - the per-session breakdown, all time: 1.068 s -> 0.173 s.
+# - a folder filter beside ``local=hide``: 1.185 s -> 0.096 s, through the
+#   ``rowid IN`` form ``_where`` uses.
+# - 1.28 s to build, one pass over ``requests``, on the writer thread.
+#
+# ``ts_epoch`` leads so a window is a range seek; the two origin columns follow
+# so the filter subqueries never touch a row.
 
 
 def pack_fields(values: dict[str, Any], fields: tuple[tuple[str, str], ...]) -> bytes:
@@ -2616,9 +2652,9 @@ class RequestLogStore:
 
     @staticmethod
     def _ensure_partial_indexes(conn: sqlite3.Connection) -> None:
-        """Index only the rows two dashboard panels ever look at.
+        """Index only the rows a dashboard panel ever looks at.
 
-        Both of these panels filter on a column that is NULL on the
+        The first two of these panels filter on a column that is NULL on the
         overwhelming majority of the log -- ``est_image_tokens`` on 2.7% of
         rows, ``optimization`` on 2.2% -- and SQLite, which has no statistics
         here, answered them by walking an equality index over
@@ -2644,6 +2680,13 @@ class RequestLogStore:
         was measured and **left out**: the query it would serve already answers
         in 0.000-0.016 s from the covering ``idx_requests_status``, so it would
         have been an index with no measurement behind it.
+
+        ``idx_requests_origin_v1`` (7.43.0) is the third, and the one that is
+        *not* small for long: nearly every request since 7.42.0 carries a
+        session id, so it grows with new traffic. What it leaves out is the
+        history before the columns existed, which is exactly what made the
+        Session and Folder queries scan the whole log. Its measurements sit
+        beside ``_PARTIAL_INDEXES``.
 
         Versioned names, per the index rule: changing a column list means
         ``_v2`` and an explicit drop of ``_v1`` in the same migration.
@@ -4902,6 +4945,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         args: list[Any] = []
@@ -5020,6 +5065,54 @@ class RequestLogStore:
                 " bi.payload, bi.dict_id, ?)))"
             )
             args.append(q)
+        # Where the request came from (7.43.0). Last, so a query that sets
+        # neither is the same SQL, argument for argument, as before it.
+        #
+        # Written as ``rowid IN (...)`` over ``idx_requests_origin_v1`` rather
+        # than as a plain predicate, because the plain predicate lost the plan:
+        # the dashboard always sends ``local``, and SQLite, which has no
+        # statistics here, prefers the ``is_local = ?`` equality on the
+        # covering stats index and then reads every row to test the folder.
+        # Measured on a synthetic 440,000-row log sized like the real one:
+        # folder + ``local=hide`` count 1.185 s -> 0.096 s, session +
+        # ``harness`` count 0.535 s -> 0.019 s. The outer query keeps its own
+        # covering index and checks each row against a bloom filter of the
+        # subquery's rowids.
+        #
+        # The window is repeated inside the subquery so it is a range seek on
+        # the index's leading ``ts_epoch`` rather than a walk of every row
+        # that has ever carried an origin -- which, once capture has been on
+        # for a while, is most of the log.
+        window_sql = ""
+        window_args: list[Any] = []
+        if since is not None:
+            window_sql += " AND o.ts_epoch >= ?"
+            window_args.append(since)
+        if until is not None:
+            window_sql += " AND o.ts_epoch <= ?"
+            window_args.append(until)
+        session_value = session_filter(session)
+        if session_value is not None:
+            clauses.append(
+                "rowid IN (SELECT o.rowid FROM requests AS o"
+                " WHERE o.session_id IS NOT NULL"
+                f" AND substr(o.session_id, 1, ?) = ?{window_sql})"
+            )
+            args.extend([len(session_value), session_value, *window_args])
+        folder_match = folder_filter(folder)
+        if folder_match is not None:
+            match_kind, folder_value = folder_match
+            if match_kind == "exact":
+                predicate = "o.project_dir = ?"
+                args_for_folder: list[Any] = [folder_value]
+            else:
+                predicate = f"o.project_dir LIKE ? ESCAPE '{_LIKE_ESCAPE}'"
+                args_for_folder = [_like_contains(folder_value)]
+            clauses.append(
+                "rowid IN (SELECT o.rowid FROM requests AS o"
+                f" WHERE o.project_dir IS NOT NULL AND {predicate}{window_sql})"
+            )
+            args.extend([*args_for_folder, *window_args])
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, args
 
@@ -5038,6 +5131,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return (rows, total) newest-first, with bodies truncated for list views.
@@ -5060,6 +5155,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
             body_preview_chars=body_preview_chars,
             include_total=True,
         )
@@ -5080,6 +5177,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
         include_total: bool = True,
     ) -> tuple[list[dict[str, Any]], int | None, bool]:
@@ -5113,6 +5212,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
@@ -5177,6 +5278,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> int:
         """How many rows match, and nothing else.
 
@@ -5197,6 +5300,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         with self._connection() as conn:
             return int(
@@ -5219,6 +5324,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         """What the filtered traffic cost, split by provenance, per dimension.
 
@@ -5242,8 +5349,8 @@ class RequestLogStore:
         priced.
         """
         limit = max(1, min(limit, 200))
-        # Twelve elements, and the first is a literal string. ``stats()`` keys
-        # on a ten-element tuple of filters, and the two live in the same dict:
+        # Fourteen elements, and the first is a literal string. ``stats()`` keys
+        # on a twelve-element tuple of filters, and the two live in the same dict:
         # a different arity is what makes a collision impossible, which matters
         # here because a user really can filter on ``provider=cost_breakdown``.
         # The same shape ``reasoning_by_model`` and ``image_estimate_by_provider``
@@ -5261,6 +5368,8 @@ class RequestLogStore:
             q,
             local,
             harness,
+            session,
+            folder,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -5281,6 +5390,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         measures = (
             "SUM(CASE WHEN cost_source = 'provider' THEN cost_usd END)"
@@ -5492,6 +5603,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
         page_size: int = 1_000,
     ) -> Generator[dict[str, Any]]:
         """Yield every matching row for an export, bypassing the 500-row page cap.
@@ -5529,6 +5642,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         conn = self._connect()
         try:
@@ -5582,6 +5697,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
         page_size: int = 1_000,
     ) -> Generator[dict[str, Any]]:
         """Yield one row per *attempt*, carrying its request's dimensions.
@@ -5617,6 +5734,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         boundaries = self.restart_boundaries()
         conn = self._connect()
@@ -5740,6 +5859,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield the aggregated (grouped) records for an export.
 
@@ -5758,6 +5879,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         group_sql = ", ".join(group_by)
         order_sql = ", ".join(group_by)
@@ -5919,15 +6042,19 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         """Aggregate analytics, served from the rollup where it can be.
 
         The payload carries ``served_from``: ``"rollup"`` when the whole answer
         came from the pre-aggregated tables, ``"rows"`` when it was computed by
-        scanning ``requests``. Free-text search is the only filter that forces
-        the scan today -- it is a correlated EXISTS over compressed bodies and
-        is not a rollup dimension -- along with the window before the one-time
-        backfill has finished.
+        scanning ``requests``. Free-text search forces the scan -- it is a
+        correlated EXISTS over compressed bodies and is not a rollup dimension
+        -- and so do ``session`` and ``folder``, which are deliberately not
+        rollup dimensions either (a session id is unbounded and would multiply
+        the hour buckets by the number of conversations in each). So does the
+        window before the one-time backfill has finished.
         """
         # ``local`` belongs in the key: without it a "hide" call inside the TTL
         # would be served the "all" numbers it just cached, and the cards would
@@ -5943,6 +6070,8 @@ class RequestLogStore:
             q,
             local,
             harness,
+            session,
+            folder,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -5962,7 +6091,10 @@ class RequestLogStore:
         # is derived from the request row instead, which only the row scan can
         # do -- exactly the way a free-text search already forces this path.
         _, sub_label = split_status_filter(status)
-        if not q and sub_label is None:
+        origin_filtered = (
+            session_filter(session) is not None or folder_filter(folder) is not None
+        )
+        if not q and sub_label is None and not origin_filtered:
             payload = self._stats_from_rollup(
                 provider=provider,
                 model=model,
@@ -5986,6 +6118,8 @@ class RequestLogStore:
                 q=q,
                 local=local,
                 harness=harness,
+                session=session,
+                folder=folder,
             )
         with self._stats_lock:
             self._stats_cache[cache_key] = (now, payload)
@@ -6007,6 +6141,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         """Compute the whole payload by scanning ``requests``.
 
@@ -6027,6 +6163,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         with self._connection() as conn:
             totals = conn.execute(
@@ -6874,6 +7012,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         """Overall p50/p95 time-to-first-token, over the same filters as stats.
 
@@ -6919,6 +7059,8 @@ class RequestLogStore:
             q,
             local,
             harness,
+            session,
+            folder,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -6940,6 +7082,8 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         with self._connection() as conn:
             percentiles = self._percentiles(
@@ -7020,6 +7164,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         """The Cancelled card, split into the four things "cancelled" means.
 
@@ -7049,6 +7195,8 @@ class RequestLogStore:
             q,
             local,
             harness,
+            session,
+            folder,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -7083,6 +7231,8 @@ class RequestLogStore:
                 q=q,
                 local=local,
                 harness=harness,
+                session=session,
+                folder=folder,
             )
             try:
                 with self._connection() as conn:
@@ -7384,6 +7534,8 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
         harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         """Return a cheap heartbeat: row count and latest timestamp for these filters.
 
@@ -7402,12 +7554,159 @@ class RequestLogStore:
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
         with self._connection() as conn:
             total, last_ts = conn.execute(
                 f"SELECT COUNT(*), MAX(ts_epoch) FROM requests{where}", args
             ).fetchone()
         return {"total": total or 0, "last_ts": last_ts}
+
+    def origin_breakdown(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
+    ) -> dict[str, Any]:
+        """Requests by folder and by session, over the same filters as ``stats``.
+
+        Its own call, beside the cost, latency and TTFT panels, and never a
+        part of ``stats()``: a session id is unbounded, so neither is a rollup
+        dimension, and folding a row scan into the rollup-served payload would
+        slow the page for every reader who never looks at these two tables.
+
+        Each breakdown counts only the rows that carry its value. A row with
+        no folder is "not stated", not a folder called ``(unknown)``, and
+        counting those would mean reading every row the log has ever written
+        -- which is what ``idx_requests_origin_v1`` exists to avoid. The
+        restriction is the same ``rowid IN`` shape ``_where`` uses, and for the
+        same measured reason.
+
+        **Sessions are listed flat.** Grouping subagents under a parent would
+        rest on a subagent stating its *parent's* session id rather than one
+        of its own, and that had not been seen on a real log when this
+        shipped: no row of the operator's log carried the columns yet. So a
+        session row counts the requests a subagent sent under it
+        (``subagent_requests``) and how many distinct subagents that was
+        (``subagents``) -- facts about the rows -- and claims nothing about
+        which conversation started which.
+        """
+
+        cache_key = (
+            "origin_breakdown",
+            provider,
+            model,
+            status,
+            endpoint,
+            key,
+            since,
+            until,
+            q,
+            local,
+            harness,
+            session,
+            folder,
+        )
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return copy.deepcopy(cached[1])
+                del self._stats_cache[cache_key]
+        where, args = self._where(
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+            session=session,
+            folder=folder,
+        )
+        window_sql = ""
+        window_args: list[Any] = []
+        if since is not None:
+            window_sql += " AND o.ts_epoch >= ?"
+            window_args.append(since)
+        if until is not None:
+            window_sql += " AND o.ts_epoch <= ?"
+            window_args.append(until)
+
+        def carrying(column: str) -> tuple[str, list[Any]]:
+            clause = (
+                "rowid IN (SELECT o.rowid FROM requests AS o"
+                f" WHERE o.{column} IS NOT NULL{window_sql})"
+            )
+            return (
+                f"{where}{' AND' if where else ' WHERE'} {clause}",
+                [*args, *window_args],
+            )
+
+        with self._connection() as conn:
+            folder_where, folder_args = carrying("project_dir")
+            by_folder, by_folder_truncated = self._breakdown(
+                conn,
+                "project_dir",
+                folder_where,
+                folder_args,
+                key_sql="project_dir",
+                extra=(
+                    ("sessions", "COUNT(DISTINCT session_id)"),
+                    ("last_ts", "MAX(ts_epoch)"),
+                ),
+            )
+            session_where, session_args = carrying("session_id")
+            by_session, by_session_truncated = self._breakdown(
+                conn,
+                "session_id",
+                session_where,
+                session_args,
+                key_sql="session_id",
+                extra=(
+                    (
+                        "subagent_requests",
+                        "SUM(CASE WHEN agent_id IS NOT NULL THEN 1 ELSE 0 END)",
+                    ),
+                    ("subagents", "COUNT(DISTINCT agent_id)"),
+                    ("folders", "COUNT(DISTINCT project_dir)"),
+                    ("folder", "MAX(project_dir)"),
+                    ("last_ts", "MAX(ts_epoch)"),
+                ),
+            )
+        for row in by_folder:
+            row["short"] = project_short(row["key"])
+        for row in by_session:
+            row["short"] = session_short(row["key"])
+            row["folder_short"] = project_short(row["folder"])
+        payload: dict[str, Any] = {
+            "by_folder": by_folder,
+            "by_folder_truncated": by_folder_truncated,
+            "by_session": by_session,
+            "by_session_truncated": by_session_truncated,
+        }
+        with self._stats_lock:
+            self._stats_cache[cache_key] = (now, copy.deepcopy(payload))
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return payload
 
     def harness_usage(self, *, since: float) -> dict[str, int]:
         """Requests per harness since ``since``, newest-heaviest first.
@@ -7435,6 +7734,7 @@ class RequestLogStore:
         args: list[Any],
         *,
         key_sql: str | None = None,
+        extra: tuple[tuple[str, str], ...] = (),
     ) -> tuple[list[dict[str, Any]], bool]:
         """Return (rows, truncated) for a GROUP BY breakdown, capped at ``_BREAKDOWN_LIMIT``.
 
@@ -7443,8 +7743,13 @@ class RequestLogStore:
 
         ``key_sql`` overrides the grouping expression for a column whose NULLs
         are not all the same fact -- provider being the case that needs it.
+
+        ``extra`` is ``(alias, aggregate)`` pairs appended after the standard
+        measures and returned under their alias. Empty for every breakdown
+        that existed before the origin ones, so their SQL is unchanged.
         """
         key_expression = key_sql or f"COALESCE({column}, '{UNKNOWN_PROVIDER_KEY}')"
+        extra_sql = "".join(f", {aggregate} AS {alias}" for alias, aggregate in extra)
         cursor = conn.execute(
             f"SELECT {key_expression} AS key, COUNT(*) AS requests,"
             " COALESCE(SUM(tokens_in),0) AS tokens_in,"
@@ -7454,7 +7759,7 @@ class RequestLogStore:
             " SUM(CASE WHEN cache_read_tokens IS NOT NULL THEN 1 ELSE 0 END)"
             " AS cache_reported,"
             " SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS errors,"
-            " AVG(duration_ms) AS avg_duration_ms"
+            f" AVG(duration_ms) AS avg_duration_ms{extra_sql}"
             f" FROM requests{where} GROUP BY key ORDER BY requests DESC LIMIT ?",
             [*args, _BREAKDOWN_LIMIT + 1],
         )
@@ -7472,6 +7777,7 @@ class RequestLogStore:
                 "cache_reported": row["cache_reported"],
                 "errors": row["errors"],
                 "avg_duration_ms": _rounded(row["avg_duration_ms"]),
+                **{alias: row[alias] for alias, _aggregate in extra},
             }
             for row in rows
         ], truncated

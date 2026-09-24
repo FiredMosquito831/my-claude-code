@@ -114,6 +114,10 @@ class TestTheColumns:
         old.close()
         connection = sqlite3.connect(path)
         try:
+            # A file from before 7.42.0 had neither the columns nor the 7.43.0
+            # index over two of them, and SQLite refuses to drop a column an
+            # index still names.
+            connection.execute("DROP INDEX IF EXISTS idx_requests_origin_v1")
             for column in ORIGIN_COLUMNS:
                 connection.execute(f"ALTER TABLE requests DROP COLUMN {column}")
             connection.commit()

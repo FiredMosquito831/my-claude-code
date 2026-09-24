@@ -5673,3 +5673,134 @@ def test_the_export_window_offers_the_origin_group_opt_in() -> None:
     assert '{ id: "origin", label: "Request origin" }' in requests_fields
     defaults = source.split("const EXPORT_DEFAULT_FIELDS = {", 1)[1].split("]),", 1)[0]
     assert "origin" not in defaults
+
+
+# ------------------------------------------------- origin filters (7.43.0)
+
+DEMO_PATH = "C:\\Users\\devuser\\Projects\\demo"
+DEMO_QUERY = "folder=C%3A%5CUsers%5Cdevuser%5CProjects%5Cdemo"
+SESSION_ID = "0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b"
+
+
+def test_origin_filters_autoapply_from_offset_zero(rendered) -> None:
+    """Session and Folder follow every other text box: debounced, one load
+    after the pause, from page 1, and every panel asks the same question."""
+
+    origin = rendered["originFilters"]
+    for name, value in (
+        ("session", "session=0f3c2a1b"),
+        ("folder", "folder=Phone+games"),
+    ):
+        typed = origin[name]
+        assert "offset=25" in typed["pagedUrl"]
+        assert typed["loadsWhileTyping"] == 0
+        assert typed["loadsAfterPause"] == 1
+        assert "offset=0" in typed["listUrl"]
+        for url in ("listUrl", "statsUrl", "originUrl", "costUrl", "ttftUrl"):
+            assert value in typed[url], (name, url, typed[url])
+
+
+def test_origin_filters_persist_across_reload(rendered) -> None:
+    origin = rendered["originFilters"]
+
+    assert origin["session"]["persisted"] == "0f3c2a1b"
+    assert origin["folder"]["persisted"] == "Phone games"
+    assert origin["restored"] == {"session": SESSION_ID, "folder": DEMO_PATH}
+
+
+def test_a_breakdown_row_filters_the_page_to_it(rendered) -> None:
+    """The full value goes into the box -- an exact folder, one session id --
+    and the page reloads from page 1."""
+
+    origin = rendered["originFilters"]
+
+    assert origin["clickedFolderValue"] == DEMO_PATH
+    assert DEMO_QUERY in origin["clickListUrl"]
+    assert "offset=0" in origin["clickListUrl"]
+    assert origin["clickPersisted"] == DEMO_PATH
+    assert origin["clickedSessionValue"] == SESSION_ID
+
+
+def test_the_export_carries_the_origin_filters(rendered) -> None:
+    url = rendered["originFilters"]["exportUrl"]
+
+    assert f"session={SESSION_ID}" in url
+    assert DEMO_QUERY in url
+
+
+def test_clear_filters_empties_and_forgets_both_origin_boxes(rendered) -> None:
+    origin = rendered["originFilters"]
+
+    assert origin["cleared"] == ["", ""]
+    assert "session=" not in origin["clearedListUrl"]
+    assert "folder=" not in origin["clearedListUrl"]
+    assert "session" not in origin["clearedPersisted"]
+    assert "folder" not in origin["clearedPersisted"]
+
+
+def test_an_unset_origin_filter_leaves_the_query_string_alone(rendered) -> None:
+    """Unset means absent, so every URL -- and so every cache key and the
+    pulse signature -- is the one 7.42.0 sent."""
+
+    url = rendered["originFilters"]["unfilteredOriginUrl"]
+
+    assert url.startswith("/admin/api/requests/origin?")
+    assert "session=" not in url
+    assert "folder=" not in url
+
+
+def test_requests_by_folder_and_by_session_render_the_payload(rendered) -> None:
+    origin = rendered["originFilters"]
+
+    assert origin["folderHeaders"] == [
+        "Folder",
+        "Requests",
+        "Sessions",
+        "Error rate",
+        "Tokens in",
+        "Tokens out",
+        "Last seen",
+    ]
+    assert [row[:4] for row in origin["folderRows"]] == [
+        ["Projects\\demo \u00b7 #76b11b", "9", "2", "11.1%"],
+        ["games\\Phone games \u00b7 #8fa073", "3", "1", "0.0%"],
+    ]
+    assert origin["folderButtons"] == 2
+    assert origin["folderTitle"] == f"{DEMO_PATH}\nShow only this folder"
+    assert origin["sessionHeaders"][:5] == [
+        "Session",
+        "Folder",
+        "Requests",
+        "By subagents",
+        "Subagents",
+    ]
+    assert [row[:5] for row in origin["sessionRows"]] == [
+        ["0f3c2a1b", "Projects\\demo \u00b7 #76b11b +1", "9", "5", "2"],
+        ["c4d5e6f7", "\u2014", "3", "0", "0"],
+    ]
+    assert origin["folderOptions"][0] == [DEMO_PATH, "Projects\\demo \u00b7 #76b11b"]
+    assert origin["sessionOptions"][0] == [
+        SESSION_ID,
+        "0f3c2a1b \u00b7 Projects\\demo \u00b7 #76b11b",
+    ]
+
+
+def test_sessions_say_they_are_flat_and_why(rendered) -> None:
+    """The parent/child signal was not confirmed on real traffic, so the
+    panel must not look like it grouped subagents under a parent."""
+
+    origin = rendered["originFilters"]
+
+    assert origin["sessionNote"].startswith("Listed flat, one row per session id.")
+    assert "not grouped under a parent session" in origin["sessionNote"]
+    assert "Showing the 50 busiest sessions" in origin["sessionNote"]
+    assert (
+        "Only requests whose agent named its working folder" in (origin["folderNote"])
+    )
+
+
+def test_a_failed_origin_breakdown_stays_in_its_panel(rendered) -> None:
+    origin = rendered["originFilters"]
+
+    assert origin["errorNote"] == "Could not count folders: boom"
+    assert origin["disabledRows"] == 0

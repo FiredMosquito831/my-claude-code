@@ -2531,6 +2531,40 @@ textarea:focus-visible,
   overflow-x: auto;
 }
 
+/* Every breakdown table scrolls inside its own panel, not just the three
+   above. At 420 px the Model latency table was 806 px wide and, with no
+   scrolling ancestor, widened the whole page -- every other panel then sat in
+   a viewport the reader had to scroll sideways to read. Keyed on what the
+   container holds rather than on a list of ids, so a panel added later is
+   covered the day it ships. */
+.analytics-panel > div:has(> .analytics-table) {
+  overflow-x: auto;
+}
+
+/* A breakdown key that filters the page to itself. */
+.origin-filter-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* An 8-character id broken over two lines reads as two ids. The table
+     scrolls inside its panel instead. */
+  white-space: nowrap;
+}
+
+.origin-filter-button:hover {
+  text-decoration: underline;
+}
+
+.origin-filter-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .requests-table {
   width: 100%;
   min-width: 920px;
@@ -2672,6 +2706,21 @@ textarea:focus-visible,
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+}
+
+/* The request modal's title is the request id, one unbreakable 36-character
+   token. As a flex item with the default `min-width: auto` it refused to
+   shrink, so at 420 px it pushed Close past the card's edge and made the
+   whole card scroll sideways. Let it shrink and break instead; Close keeps
+   its size. */
+.requests-modal-header h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.requests-modal-header > button {
+  flex: none;
 }
 
 /* Export window */

@@ -4038,6 +4038,24 @@ for older requests** on the same card reads each older Claude Code row's stored 
 the column. It runs only when you press it, in the background between requests, and it can be
 pressed again to continue if the server restarted part-way.
 
+**Session and Folder filters** (7.43.0) sit beside Harness in the Analytics toolbar and apply as
+you type, like the other boxes; every card, chart, breakdown, the cost panel and **Export** follow
+them, and they are remembered across a reload. **Session** matches the start of the conversation
+id, so the eight characters the table shows are enough. **Folder** reads what you type two ways: a
+full path (`C:\Users\you\Projects\app`) selects exactly that folder and not `app-old` beside it;
+anything else (`phone games`) matches every folder whose path contains it, ignoring case.
+
+Two tables below the harness breakdown answer "who is doing what": **Requests by folder** and
+**Requests by session**. Click a folder or a session there to filter the page to it. Only requests
+that stated a value are counted — an Agent SDK request has a session and no folder, so it appears
+under sessions only. **Sessions are listed flat**, one row per session id: *By subagents* counts
+the requests a Claude Code subagent sent under that id and *Subagents* how many different ones it
+was. They are not folded under a parent conversation, because whether a subagent reports its
+parent's session id has not yet been confirmed on real traffic.
+
+Neither filter is part of the hourly statistics MCC keeps, so a filtered page is counted from the
+stored requests; a dedicated index keeps that to a fraction of a second on a large log.
+
 
 **A model that never appears in Analytics never reached the proxy.** The request log records what
 MCC was asked to serve; if a model you tried is missing entirely — no rows, not even failed ones —
