@@ -65,6 +65,7 @@ REQUEST_FIELD_IDS: tuple[str, ...] = (
     "turns_with_tools",
     "cost",
     "ladder",
+    "tool_catalogue",
 )
 REQUEST_FIELD_LABELS: dict[str, str] = {
     "input": "Input",
@@ -82,6 +83,7 @@ REQUEST_FIELD_LABELS: dict[str, str] = {
     "turns_with_tools": "Turns with tools",
     "cost": "Cost",
     "ladder": "Upstream retry ladder",
+    "tool_catalogue": "Tool catalogue",
 }
 
 # Selectable fields for the web-search scope.
@@ -330,6 +332,11 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     # exists so the three names are reachable at all -- five names already sit
     # in the display order unreachable because they belong to no field group.
     "ladder": (),
+    # The hash of the tools array the request carried (7.40.0), as hex. Opt-in
+    # and absent from the defaults, so every export that does not ask for it
+    # is byte-identical to before. Empty on rows older than the column and on
+    # requests that carried no tools; ``params.tools_count`` tells them apart.
+    "tool_catalogue": ("tool_catalogue_sha",),
 }
 
 # Derived detail columns present on every request export, gated by no field.
@@ -418,6 +425,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "harness",
     "input_sha256",
     "output_sha256",
+    "tool_catalogue_sha",
     "cache_hit_rate",
     "cost_usd",
     "cost_source",
@@ -473,6 +481,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "harness": "Harness",
     "input_sha256": "Input SHA-256",
     "output_sha256": "Output SHA-256",
+    "tool_catalogue_sha": "Tool catalogue SHA-256",
     "cache_hit_rate": "Cache hit rate",
     "cost_usd": "Cost (USD)",
     "cost_source": "Cost source",

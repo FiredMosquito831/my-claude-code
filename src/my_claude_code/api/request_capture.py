@@ -277,6 +277,12 @@ class RequestCapture:
             params=params,
             headers=headers,
             harness=harness,
+            # The client's tools array, by reference: a tuple of the objects
+            # the request already holds, so nothing is copied or hashed here.
+            # The request log's writer thread fingerprints it, off every
+            # request path; see ``RequestLogStore._flush``.
+            tools=tuple(request.tools or ()) if request is not None else (),
+            keep_tool_definitions=capture_bodies,
         )
         # Last, and deliberately not gated on ``self.enabled``: the registry
         # the stuck-request watchdog reads tracks *requests*, not log rows, and

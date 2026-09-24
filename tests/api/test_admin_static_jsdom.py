@@ -5434,3 +5434,77 @@ def test_jsdom_the_latency_panel_keeps_hang_ups_out_of_the_failed_row(
     assert hung_up[5] == "10m 0s"
     # Shares are of the model's own attempts, and the new group takes its own.
     assert [row[3] for row in rows] == ["66.7%", "20.0%", "13.3%"]
+
+
+# --------------------------------------------------------- tool catalogue (7.40.0)
+
+
+def test_the_modal_shows_the_tool_catalogue_hash_count_and_names(rendered) -> None:
+    """The hash (short, full on hover), the count, and the names behind an
+    expander that starts closed -- a Claude Code session carries 200+ tools."""
+
+    tools = rendered["toolCatalogue"]
+    assert tools["present"] is True
+    assert tools["sha"] == "ab12" * 4
+    assert tools["shaTitle"].endswith("ab12" * 16)
+    assert tools["count"] == "3 tools"
+    assert tools["collapsedByDefault"] is True
+    assert tools["summary"] == "Show 3 tool names"
+    assert tools["names"] == [
+        "Bash",
+        "mcp__appium-mcp__appium_screen_recording",
+        "Artifact",
+    ]
+    assert tools["nameTitles"][1] == "Definition SHA-256: " + "0b" * 32
+    assert tools["notes"][0].startswith("This exact array was sent with 216 requests")
+
+
+def test_choosing_a_tool_name_lists_the_requests_that_carried_it(rendered) -> None:
+    tools = rendered["toolCatalogue"]
+    assert tools["carriersHiddenBeforeClick"] is True
+    assert tools["carrierUrls"] == [
+        "/admin/api/tool-catalogues/requests"
+        "?name=mcp__appium-mcp__appium_screen_recording&limit=25"
+    ]
+    assert tools["carriersHidden"] is False
+    assert tools["carriersHeading"] == (
+        "Requests that carried mcp__appium-mcp__appium_screen_recording"
+    )
+    assert [row["title"] for row in tools["carrierRows"]] == ["req-tools", "req-older"]
+    assert tools["carrierRows"][0]["text"].endswith("gpt-5.6-sol · success")
+    # No resolved model: the requested one is named rather than a blank.
+    assert tools["carrierRows"][1]["text"].endswith("claude-opus-4 · error")
+    assert tools["carrierNotes"][0].startswith(
+        "216 requests · 2 tools arrays · 1 definition · "
+    )
+    assert tools["carrierNotes"][1] == "Showing the newest 2."
+    # A listed request opens its own detail.
+    assert tools["carrierOpens"] == ["/admin/api/requests/req-tools"]
+
+
+def test_a_request_older_than_the_recording_says_so(rendered) -> None:
+    """Carried tools, no hash: "not recorded", never an empty row that would
+    read as "no tools"."""
+
+    tools = rendered["toolCatalogue"]
+    assert tools["legacyText"] == (
+        "212 tools, not recorded"
+        "Which tools a request carried is recorded from 7.40.0 on;"
+        " this request is older."
+    )
+    assert tools["legacyHasNames"] == 0
+
+
+def test_a_request_without_tools_has_no_catalogue_row(rendered) -> None:
+    assert rendered["toolCatalogue"]["noToolsRow"] is False
+
+
+def test_the_export_window_offers_the_catalogue_column_opt_in() -> None:
+    """Offered, and not among the defaults: an export that does not ask for it
+    is byte-identical to one made before 7.40.0."""
+
+    source = (STATIC_DIR / "admin.js").read_text(encoding="utf-8")
+    requests_fields = source.split("const EXPORT_FIELDS = {", 1)[1].split("],", 1)[0]
+    assert '{ id: "tool_catalogue", label: "Tool catalogue" }' in requests_fields
+    defaults = source.split("const EXPORT_DEFAULT_FIELDS = {", 1)[1].split("]),", 1)[0]
+    assert "tool_catalogue" not in defaults

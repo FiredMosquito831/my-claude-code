@@ -8096,6 +8096,160 @@ const capabilityRow = {};
   ).length;
 }
 
+/* The tools array a request carried (7.40.0): the modal shows the catalogue
+   hash, the count, and the names behind an expander; choosing a name lists the
+   requests that carried it; a request that predates the recording says so; and
+   no tool definition ever reaches the page. Driven through the real
+   openRequestDetail() loader. */
+const toolCatalogue = {};
+{
+  const shaOf = (seed) => seed.repeat(64 / seed.length).slice(0, 64);
+  const base = {
+    ts_iso: "2026-09-20T13:02:02Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "chatgpt_oauth",
+    requested_model: "claude-opus-4",
+    resolved_model: "gpt-5.6-sol",
+    status: "success",
+    tokens_in: 120,
+    tokens_out: 340,
+    duration_ms: 2100,
+  };
+  ROUTES["/admin/api/requests/req-tools"] = {
+    ...base,
+    id: "req-tools",
+    params: { tools_count: 3 },
+    tool_catalogue_sha: shaOf("ab12"),
+    tool_catalogue: {
+      sha: shaOf("ab12"),
+      tool_count: 3,
+      tools: [
+        { name: "Bash", sha: shaOf("0a") },
+        { name: "mcp__appium-mcp__appium_screen_recording", sha: shaOf("0b") },
+        { name: "Artifact", sha: shaOf("0c") },
+      ],
+      first_seen: 1789909322,
+      last_seen: 1789925035,
+      seen: 216,
+    },
+  };
+  ROUTES["/admin/api/requests/req-tools-legacy"] = {
+    ...base,
+    id: "req-tools-legacy",
+    params: { tools_count: 212 },
+    tool_catalogue_sha: null,
+    tool_catalogue: null,
+  };
+  ROUTES["/admin/api/requests/req-no-tools"] = {
+    ...base,
+    id: "req-no-tools",
+    params: { tools_count: 0 },
+    tool_catalogue_sha: null,
+    tool_catalogue: null,
+  };
+  ROUTES["/admin/api/tool-catalogues/requests"] = {
+    enabled: true,
+    name: "mcp__appium-mcp__appium_screen_recording",
+    definitions: 1,
+    catalogues: 2,
+    seen: 216,
+    first_seen: 1789909322,
+    last_seen: 1789925035,
+    rows: [
+      { id: "req-tools", ts_iso: "2026-09-20T17:23:55Z", requested_model: "claude-opus-4",
+        resolved_model: "gpt-5.6-sol", provider: "chatgpt_oauth", status: "success",
+        tool_catalogue_sha: shaOf("ab12") },
+      { id: "req-older", ts_iso: "2026-09-20T13:02:02Z", requested_model: "claude-opus-4",
+        resolved_model: null, provider: "chatgpt_oauth", status: "error",
+        tool_catalogue_sha: shaOf("cd34") },
+    ],
+    has_more: true,
+  };
+  const pairs = () => {
+    const nodes = Array.from(doc.getElementById("reqDetailMeta").children);
+    return nodes
+      .map((el, index) =>
+        el.tagName === "DT" ? [el.textContent, (nodes[index + 1] || {}).textContent] : null,
+      )
+      .filter(Boolean);
+  };
+  const catalogueCell = () => {
+    const nodes = Array.from(doc.getElementById("reqDetailMeta").children);
+    const index = nodes.findIndex(
+      (el) => el.tagName === "DT" && el.textContent === "Tool catalogue",
+    );
+    return index === -1 ? null : nodes[index + 1];
+  };
+
+  await window.eval('openRequestDetail("req-tools")');
+  await settle();
+  const cell = catalogueCell();
+  toolCatalogue.present = Boolean(cell);
+  toolCatalogue.sha = cell ? textOf(cell, ".req-tool-catalogue-sha") : null;
+  toolCatalogue.shaTitle = cell
+    ? cell.querySelector(".req-tool-catalogue-sha").getAttribute("title")
+    : null;
+  toolCatalogue.count = cell ? textOf(cell, ".req-tool-catalogue-count") : null;
+  const details = cell ? cell.querySelector("details.req-tool-catalogue-tools") : null;
+  toolCatalogue.collapsedByDefault = details ? !details.open : null;
+  toolCatalogue.summary = details ? details.querySelector("summary").textContent : null;
+  toolCatalogue.names = cell
+    ? Array.from(cell.querySelectorAll(".req-tool-name")).map((el) => el.textContent)
+    : [];
+  toolCatalogue.nameTitles = cell
+    ? Array.from(cell.querySelectorAll(".req-tool-name")).map((el) => el.title)
+    : [];
+  toolCatalogue.notes = cell
+    ? Array.from(cell.querySelectorAll(".req-tool-catalogue-note")).map((el) => el.textContent)
+    : [];
+  toolCatalogue.carriersHiddenBeforeClick = cell
+    ? cell.querySelector(".req-tool-carriers").hidden
+    : null;
+  const before = fetchUrls.length;
+  cell
+    .querySelectorAll(".req-tool-name")[1]
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  toolCatalogue.carrierUrls = fetchUrls
+    .slice(before)
+    .filter((url) => url.startsWith("/admin/api/tool-catalogues/requests"));
+  const carriers = cell.querySelector(".req-tool-carriers");
+  toolCatalogue.carriersHidden = carriers.hidden;
+  toolCatalogue.carriersHeading = textOf(carriers, ".req-tool-carriers-heading");
+  toolCatalogue.carrierRows = Array.from(carriers.querySelectorAll(".req-tool-carrier")).map(
+    (el) => ({ text: el.textContent, title: el.title }),
+  );
+  toolCatalogue.carrierNotes = Array.from(
+    carriers.querySelectorAll(".req-tool-catalogue-note"),
+  ).map((el) => el.textContent);
+  // Choosing a listed request opens that request's own detail.
+  const opened = fetchUrls.length;
+  carriers
+    .querySelectorAll(".req-tool-carrier")[0]
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  toolCatalogue.carrierOpens = fetchUrls.slice(opened);
+  toolCatalogue.modalText = (doc.getElementById("reqDetailModal").textContent || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  window.eval("closeRequestDetail()");
+
+  await window.eval('openRequestDetail("req-tools-legacy")');
+  await settle();
+  const legacy = catalogueCell();
+  toolCatalogue.legacyText = legacy ? legacy.textContent : null;
+  toolCatalogue.legacyHasNames = legacy
+    ? legacy.querySelectorAll(".req-tool-name").length
+    : null;
+  window.eval("closeRequestDetail()");
+
+  await window.eval('openRequestDetail("req-no-tools")');
+  await settle();
+  toolCatalogue.noToolsRow = pairs().some(([label]) => label === "Tool catalogue");
+  window.eval("closeRequestDetail()");
+}
+
 console.log(
   JSON.stringify(
     {
@@ -8106,6 +8260,7 @@ console.log(
       harnessWallMs: Date.now() - startedAt,
       advancedFields,
       latencyViews,
+      toolCatalogue,
       cancelledViews,
       catalogueReadout,
       desktopAppBanner,
