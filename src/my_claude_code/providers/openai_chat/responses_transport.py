@@ -50,7 +50,9 @@ from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
 from my_claude_code.providers.openai_responses import (
+    RESPONSES_TOOL_SCHEMA_DIALECT,
     ResponsesStreamConverter,
+    ToolSchemaDialect,
     alias_responses_body_tool_names,
     build_responses_request_body,
     iter_responses_sse_events,
@@ -67,6 +69,7 @@ from my_claude_code.providers.recovery import (
     clone_body_without_tool_choice,
     complaint_evidence_snippet,
     is_tool_choice_auto_only,
+    merge_tool_schema_markers,
     refusal_from_detail,
     rejected_tool_name_max_length,
     tool_schema_recovery,
@@ -211,9 +214,15 @@ class ResponsesTransport:
         tool_name_max_length: int | None = None,
         tool_catalogue_for: Callable[[str], Mapping[str, str]] | None = None,
         memory: RecoveryMemory | None = None,
+        tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
     ) -> None:
         self._config = config
         self._declared_tool_name_max_length = tool_name_max_length
+        # What this host's validator refuses in a tool schema. The Responses
+        # default unless the profile declared another vocabulary -- never
+        # absent, because the seam it feeds is not optional: a Responses host
+        # that could be built without it is how the lookaround 400 comes back.
+        self._tool_schema_dialect = tool_schema_dialect
         # Which tool spellings this host wants for one model, or ``None`` for
         # a host with no catalogue of its own -- which is every host but
         # OpenCode's free tier, and is why a transport built without it sends
@@ -340,12 +349,17 @@ class ResponsesTransport:
         reasoning: ReasoningPolicy,
         max_output_tokens: int | None,
         extra_body: Mapping[str, Any] | None = None,
+        wire_notes: dict[str, str] | None = None,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """Build one Responses body and the headers that will carry it.
 
         Returned together because they are not independent: the cache key in
         the body is the session id in the headers, and computing them apart is
         how they would drift.
+
+        ``wire_notes`` receives what this host's declared schema dialect took
+        out of the tools; hand the same mapping to :meth:`stream` so it is
+        recorded beside the body it describes.
 
         Both learned refusals are applied here rather than paid for again: a
         stated tool-name ceiling aliases from the first try, and a model proven
@@ -365,6 +379,8 @@ class ResponsesTransport:
             tool_name_max_length=self.tool_name_max_length,
             tool_catalogue=self.tool_catalogue(request),
             include_tool_choice=not self._tool_choice_refused(request),
+            tool_schema_dialect=self._tool_schema_dialect,
+            wire_notes=wire_notes,
         )
         headers = self._headers(body)
         cache_key = self._prompt_cache_key(headers)
@@ -493,6 +509,7 @@ class ResponsesTransport:
         headers: Mapping[str, str],
         surface_label: str,
         request_id: str | None,
+        wire_notes: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         """Send one body, answering the two refusals this surface can recover.
 
@@ -534,9 +551,12 @@ class ResponsesTransport:
         # vendor's implicit tools prefix cached from request two onward.
         # Identity when there is nothing to apply, so a host that has never
         # refused a schema sends exactly the bytes it always did.
-        swept, schema_marker = apply_learned_tool_schema_refusals(
+        swept, learned_marker = apply_learned_tool_schema_refusals(
             body, self._learned_schema_refusals()
         )
+        # Declared first, learned second: the order the two sweeps ran in.
+        base_marker = merge_tool_schema_markers(wire_notes or {}, learned_marker)
+        schema_marker = base_marker
         current = dict(swept)
         while True:
             identity = self.identity_headers(current)
@@ -594,7 +614,9 @@ class ResponsesTransport:
                     # Carried onto the retry row, so the modal names what the
                     # second body lost rather than leaving the operator to
                     # infer it from a rung name.
-                    schema_marker = learning.value.marker
+                    schema_marker = merge_tool_schema_markers(
+                        base_marker, learning.value.marker
+                    )
                 pending.append(learning)
                 # Carried on the *retry* row, so the ladder in the modal reads
                 # "400 ... / 200 (responses_tool_choice)" and the operator can
@@ -651,13 +673,14 @@ class ResponsesTransport:
         headers: Mapping[str, str],
         surface_label: str,
         request_id: str | None = None,
+        wire_notes: Mapping[str, str] | None = None,
     ) -> AsyncIterator[str]:
         """Run one Responses request and yield Anthropic SSE.
 
         The body and headers are built by the caller (:meth:`build_body`) so
         that the surface rung can hand the *same* request to a second endpoint
         after the first refused it, rather than rebuilding one and hoping the
-        two match.
+        two match. ``wire_notes`` is what that build recorded about the body.
         """
 
         async def _run() -> AsyncIterator[str]:
@@ -674,6 +697,7 @@ class ResponsesTransport:
                     headers=headers,
                     surface_label=surface_label,
                     request_id=request_id,
+                    wire_notes=wire_notes,
                 )
                 # Built from the ceiling the accepted body was aliased under,
                 # not from the one the first try used: decoding has to undo

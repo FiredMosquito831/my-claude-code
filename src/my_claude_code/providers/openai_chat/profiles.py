@@ -19,6 +19,10 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
 )
 from my_claude_code.providers.model_listing import RequiredPathValues
+from my_claude_code.providers.openai_responses import (
+    RESPONSES_TOOL_SCHEMA_DIALECT,
+    ToolSchemaDialect,
+)
 
 from .base_url import openai_v1_base_url
 from .client_identity import ClientIdentity
@@ -206,6 +210,13 @@ class OpenAIChatProfile:
     # Chat Completions is not governed by this field: that funnel has always
     # aliased through the same codec, so one tool has one alias on both doors.
     responses_tool_name_max_length: int | None = None
+    # What this host's *Responses* validator refuses in a tool schema. ``None``
+    # -- every profile today -- inherits the Responses default (``pattern``
+    # carrying lookaround), and the sweep runs either way: what a host declares
+    # is the vocabulary, never whether the seam runs. Declared beside the
+    # tool-name ceiling because it is the same kind of statement about the same
+    # tools array. Chat Completions is not governed by this field.
+    responses_tool_schema_dialect: ToolSchemaDialect | None = None
     # This host classifies the request's *tool catalogue* on one tier, and
     # these are the spellings it wants. ``None`` -- every profile but the two
     # OpenCode ones -- means the tool names the client wrote go on the wire as
@@ -223,6 +234,14 @@ class OpenAIChatProfile:
     @property
     def provider_name(self) -> str:
         return self.request_policy.provider_name
+
+    @property
+    def tool_schema_dialect(self) -> ToolSchemaDialect:
+        """The dialect this host's Responses tools are swept with. Never absent."""
+
+        if self.responses_tool_schema_dialect is not None:
+            return self.responses_tool_schema_dialect
+        return RESPONSES_TOOL_SCHEMA_DIALECT
 
     def base_url(self, configured: str) -> str:
         return openai_v1_base_url(configured) if self.normalize_base_url else configured

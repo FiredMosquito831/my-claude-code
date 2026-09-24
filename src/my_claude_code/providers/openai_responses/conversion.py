@@ -29,6 +29,13 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
 )
 
+from .tool_schema_dialect import (
+    RESPONSES_TOOL_SCHEMA_DIALECT,
+    DialectSweep,
+    ToolSchemaDialect,
+    sweep_tool_catalogue,
+)
+
 RESPONSES_DEFAULT_REASONING_EFFORT = "medium"
 RESPONSES_DEFAULT_REASONING_SUMMARY = "auto"
 
@@ -321,12 +328,21 @@ def _openai_messages_to_responses_input(
 def _convert_tools(
     tools: list[Any] | None,
     tool_names: OpenAIToolNameCodec | None = None,
-) -> list[dict[str, Any]] | None:
+    tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
+) -> DialectSweep | None:
     """Convert Anthropic tools to ChatGPT Responses API tool definitions.
 
     The ChatGPT/Codex backend historically exposes only a small set of built-in
     tools, but we forward tools in the standard function shape so the backend
     can reject or accept them with its own error message.
+
+    Then, **unconditionally**, the host's declared schema dialect: this is the
+    one place a Responses tool definition is built, so it is the one place no
+    Responses host can be built around. The sweep runs after the name codec,
+    so a removal is recorded under the name that went on the wire -- the same
+    name the reactive rung records -- and it returns the list it was handed,
+    by identity, when nothing offends. See
+    :mod:`~my_claude_code.providers.openai_responses.tool_schema_dialect`.
     """
     if not tools:
         return None
@@ -347,7 +363,7 @@ def _convert_tools(
                 "parameters": schema,
             }
         )
-    return result
+    return sweep_tool_catalogue(result, tool_schema_dialect)
 
 
 def _convert_tool_choice(
@@ -448,6 +464,8 @@ def build_responses_request_body(
     tool_name_max_length: int | None = None,
     tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
     include_tool_choice: bool = True,
+    tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
+    wire_notes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -491,6 +509,22 @@ def build_responses_request_body(
         sends the same instruction rather than a different one. ``True``, the
         default, is what every host that has never refused one gets, and it
         leaves their body byte-identical.
+    ``tool_schema_dialect``
+        what this host's validator refuses in a tool schema. Never optional:
+        a host that declares nothing gets the Responses default, and one whose
+        validator refuses nothing says so with an empty dialect. Swept after
+        the name codec; identity when nothing offends.
+    ``wire_notes``
+        a caller's mapping to receive what this build took out of the
+        client's request -- ``tool_schema_pruned``, names and paths only --
+        so the sender records it beside the body it describes. Left untouched
+        when nothing was removed.
+
+    Order of operations, fixed: the free-tier catalogue (if any) has already
+    replaced ``request.tools`` one layer up; the name codec is chosen here and
+    encodes the names; the dialect sweeps the encoded tools; the sender then
+    applies anything this host has *learned* to refuse, and the reactive rung
+    answers whatever is left.
 
     Key order is fixed and deliberate: the body is recorded verbatim in the
     request log and compared byte for byte against a captured reference, so
@@ -526,7 +560,10 @@ def build_responses_request_body(
     if instructions:
         body["instructions"] = instructions
 
-    tools = _convert_tools(request.tools, tool_names)
+    converted = _convert_tools(request.tools, tool_names, tool_schema_dialect)
+    tools = converted.tools if converted is not None else None
+    if converted is not None and wire_notes is not None:
+        wire_notes.update(converted.wire_marker(tool_schema_dialect))
     if tools:
         body["tools"] = tools
         if include_tool_choice:

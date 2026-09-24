@@ -18,6 +18,10 @@ from typing import Any
 from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.providers.openai_responses import (
+    RESPONSES_TOOL_SCHEMA_DIALECT,
+    ToolSchemaDialect,
+)
 from my_claude_code.providers.openai_responses.conversion import (
     RESPONSES_DEFAULT_REASONING_EFFORT as CHATGPT_DEFAULT_REASONING_EFFORT,
 )
@@ -34,9 +38,17 @@ from my_claude_code.providers.openai_responses.conversion import (
 __all__ = [
     "CHATGPT_DEFAULT_REASONING_EFFORT",
     "CHATGPT_DEFAULT_REASONING_SUMMARY",
+    "CHATGPT_OAUTH_TOOL_SCHEMA_DIALECT",
     "build_chatgpt_oauth_request_body",
     "chatgpt_tool_call_to_anthropic",
 ]
+
+
+#: What this backend's validator refuses in a tool schema. Declared here, where
+#: this backend's other body decisions are, and declared as the Responses
+#: default on purpose: it is the host that refused ``pattern`` lookaround 216
+#: times on 2026-09-20, and it is the validator that default was measured on.
+CHATGPT_OAUTH_TOOL_SCHEMA_DIALECT = RESPONSES_TOOL_SCHEMA_DIALECT
 
 
 def build_chatgpt_oauth_request_body(
@@ -44,8 +56,14 @@ def build_chatgpt_oauth_request_body(
     *,
     reasoning: ReasoningPolicy,
     default_max_tokens: int | None = None,
+    tool_schema_dialect: ToolSchemaDialect = CHATGPT_OAUTH_TOOL_SCHEMA_DIALECT,
+    wire_notes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build a ChatGPT Responses API request body from an Anthropic request."""
+    """Build a ChatGPT Responses API request body from an Anthropic request.
+
+    ``wire_notes`` receives what the declared schema dialect took out of the
+    client's tools, for the sender to record beside the body.
+    """
     if request.extra_body:
         raise InvalidRequestError(
             "ChatGPT OAuth provider does not support caller extra_body on requests."
@@ -64,4 +82,6 @@ def build_chatgpt_oauth_request_body(
         max_output_tokens=None,
         prompt_cache_key=None,
         include_encrypted_reasoning=True,
+        tool_schema_dialect=tool_schema_dialect,
+        wire_notes=wire_notes,
     )

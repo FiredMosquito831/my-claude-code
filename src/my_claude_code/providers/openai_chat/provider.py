@@ -366,6 +366,7 @@ class OpenAIChatProvider(BaseProvider):
                 # Responses refusal survives a config apply exactly as an
                 # output cap does and shows up on the same Models page row.
                 memory=self._recovery_memory,
+                tool_schema_dialect=self._profile.tool_schema_dialect,
             )
             self._responses_transport = transport
         return transport
@@ -934,11 +935,13 @@ class OpenAIChatProvider(BaseProvider):
                 request_id=request_id,
             )
         if surface is ResponseSurface.RESPONSES:
+            wire_notes: dict[str, str] = {}
             body, headers = self._responses.build_body(
                 request,
                 reasoning=reasoning,
                 max_output_tokens=request.max_tokens,
                 extra_body=self._responses_extra_body(request),
+                wire_notes=wire_notes,
             )
             return self._responses.stream(
                 request,
@@ -948,6 +951,7 @@ class OpenAIChatProvider(BaseProvider):
                 headers=headers,
                 surface_label=label,
                 request_id=request_id,
+                wire_notes=wire_notes,
             )
         runner = _OpenAIChatStreamRunner(
             self,

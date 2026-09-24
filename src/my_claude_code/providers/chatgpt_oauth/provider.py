@@ -48,6 +48,7 @@ from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
 from my_claude_code.providers.oauth_names import account_name
+from my_claude_code.providers.openai_responses import ToolSchemaDialect
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     RUNG_TOOL_SCHEMA,
@@ -57,6 +58,7 @@ from my_claude_code.providers.recovery import (
     ToolSchemaRefusalRecovery,
     apply_learned_tool_schema_refusals,
     learned_fact_store,
+    merge_tool_schema_markers,
     refusal_from_detail,
     tool_schema_recovery,
 )
@@ -68,7 +70,10 @@ from .codex_catalogue import (
     listing_vetoes,
     load_codex_catalogue,
 )
-from .conversion import build_chatgpt_oauth_request_body
+from .conversion import (
+    CHATGPT_OAUTH_TOOL_SCHEMA_DIALECT,
+    build_chatgpt_oauth_request_body,
+)
 from .credentials import (
     CODEX_OAUTH_ORIGINATOR,
     ChatGPTOAuthError,
@@ -517,6 +522,12 @@ class ChatGPTOAuthProvider(BaseProvider):
                 ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
             )
         )
+        # What this backend's validator refuses in a tool schema, swept at
+        # conversion before the first send so the constructs already known
+        # never cost a 400 at all. Held per instance rather than read off the
+        # module so the declaration is one value this provider carries, the
+        # way a profile carries it for every other Responses host.
+        self._tool_schema_dialect: ToolSchemaDialect = CHATGPT_OAUTH_TOOL_SCHEMA_DIALECT
         self._client = bound_socks_handshake(
             httpx.AsyncClient(
                 proxy=config.proxy if config.proxy else None,
@@ -678,7 +689,16 @@ class ChatGPTOAuthProvider(BaseProvider):
             logger.error("{}_ERROR:{} {}", tag, req_tag, exc)
             raise ApplicationUnavailableError(str(exc)) from exc
 
-        body = build_chatgpt_oauth_request_body(request, reasoning=reasoning)
+        # What the declared dialect took out at conversion, recorded on every
+        # row this request writes -- the swept body is what every attempt
+        # sends, so every attempt says so.
+        declared_marker: dict[str, str] = {}
+        body = build_chatgpt_oauth_request_body(
+            request,
+            reasoning=reasoning,
+            tool_schema_dialect=self._tool_schema_dialect,
+            wire_notes=declared_marker,
+        )
         url = f"{self._base_url}/codex/responses"
         headers = _build_headers(credentials, self._session_id)
 
@@ -736,9 +756,15 @@ class ChatGPTOAuthProvider(BaseProvider):
                     # tools prefix stays cached. Content-identical to ``body``
                     # -- same ``tools`` list, same schema dicts -- when there
                     # is nothing to apply.
-                    attempt_body, schema_marker = apply_learned_tool_schema_refusals(
+                    attempt_body, learned_marker = apply_learned_tool_schema_refusals(
                         body, self._learned_schema_refusals()
                     )
+                    # Declared first, learned second: the order the two sweeps
+                    # ran in, so the row reads in the order the body was made.
+                    base_marker = merge_tool_schema_markers(
+                        declared_marker, learned_marker
+                    )
+                    schema_marker = base_marker
                     # What the sweep took out, written down only once the
                     # swept catalogue has actually been accepted.
                     pending_schema: SchemaKeywordRefusal | None = None
@@ -812,7 +838,9 @@ class ChatGPTOAuthProvider(BaseProvider):
                                 if schema is not None:
                                     pending_schema = schema.refusal
                                     schema_evidence = schema.evidence
-                                    schema_marker = schema.marker
+                                    schema_marker = merge_tool_schema_markers(
+                                        base_marker, schema.marker
+                                    )
                             # Carried on the *retry* row, so the ladder in the
                             # modal reads "400 ... / 200 (responses_tool_schema)"
                             # and the operator can see which rewrite the second
