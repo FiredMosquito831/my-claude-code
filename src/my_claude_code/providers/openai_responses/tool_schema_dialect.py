@@ -91,6 +91,17 @@ class ToolSchemaDialect:
     name: str
     refused: tuple[SchemaKeywordRefusal, ...] = ()
     translate_unicode_properties: bool = False
+    #: The most tools this family of validators accepts in one request, or
+    #: ``None`` when nobody knows -- which means **no cap**, and is what every
+    #: declared dialect says today. OpenAI's platform API documents 128, but
+    #: no MCC host is that API: the ChatGPT/Codex backend has served 137, and
+    #: OpenCode's Responses door has never been measured. A host that is shown
+    #: to cap states the number in its 400, and the rung learns it; a dialect
+    #: declares one only once the number is known for that whole family.
+    #: Applied by the sender before the first send (the smaller of this and a
+    #: learned number wins), never inside ``_convert_tools``: the cut must see
+    #: the history and ``tool_choice``, which the converter does not.
+    tools_max_count: int | None = None
 
 
 def _construct(name: str) -> RegexConstruct:

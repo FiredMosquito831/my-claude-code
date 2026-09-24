@@ -141,6 +141,8 @@ FACT_KIND_LABELS: dict[str, str] = {
     # every value-level reasoning refusal drew its own raw identifier in the
     # Learned column until 7.23.0 noticed.
     "responses_tool_schema_keyword": "tool-schema keyword refused",
+    # Labelled in the commit that introduces it, by the same rule.
+    "responses_tools_max_count": "tools-count limit",
 }
 
 # Where a resolved wire surface came from, in the operator's words. A separate
@@ -523,6 +525,9 @@ ROW_WIDE_FACT_KINDS: frozenset[str] = frozenset(
         # next body carries for every model behind this host's validator, so
         # it belongs on every model's row rather than on none of them.
         "responses_tool_schema_keyword",
+        # A tools-count ceiling decides how many tools the next body offers
+        # every model behind this host, so it is on every model's row too.
+        "responses_tools_max_count",
     }
 )
 

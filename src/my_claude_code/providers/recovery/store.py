@@ -49,6 +49,7 @@ from .facts import (
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
     FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
+    FACT_RESPONSES_TOOLS_MAX_COUNT,
     FACT_STREAM_USAGE_UNSUPPORTED,
     FACTS_KEY,
     MAX_FACT_ROWS,
@@ -509,6 +510,14 @@ class LearnedFactStore:
                 memory.responses_tool_name_max_length = (
                     fact.value if known is None else min(known, fact.value)
                 )
+            elif fact.fact_kind == FACT_RESPONSES_TOOLS_MAX_COUNT and isinstance(
+                fact.value, int
+            ):
+                # Narrowest wins, for the tool-name ceiling's reason above.
+                known = memory.responses_tools_max_count
+                memory.responses_tools_max_count = (
+                    fact.value if known is None else min(known, fact.value)
+                )
             elif fact.fact_kind == FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY:
                 memory.responses_tool_choice_auto_only[fact.model_id] = (
                     fact.last_confirmed_at[:10]
@@ -536,6 +545,7 @@ class LearnedFactStore:
             memory.rejected_effort_values.clear()
             memory.stream_usage_unsupported.clear()
             memory.responses_tool_name_max_length = None
+            memory.responses_tools_max_count = None
             memory.responses_tool_choice_auto_only.clear()
             memory.responses_tool_schema_keywords.clear()
             self._populate_memory(provider_id, memory)
