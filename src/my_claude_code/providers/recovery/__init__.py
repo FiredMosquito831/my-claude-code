@@ -91,10 +91,12 @@ from .store import (
 )
 from .surface import surface_shaped_failure
 from .tool_schema_refusal import (
+    DROP_KEYWORD,
     DROPPABLE_KEYWORDS,
     REGEX_CONSTRUCTS,
     RUNG_TOOL_SCHEMA,
     TOOL_SCHEMA_PRUNED,
+    TOOL_SCHEMA_TRANSLATED,
     RegexConstruct,
     SchemaKeywordRefusal,
     SchemaRemoval,
@@ -106,6 +108,7 @@ from .tool_schema_refusal import (
     prune_tool_catalogue,
     refusal_from_detail,
     rejected_tool_schema_keyword,
+    rewrite_schema_keyword,
     tool_schema_recovery,
 )
 
@@ -114,6 +117,7 @@ __all__ = [
     "ALLOWED_FACT_SOURCES",
     "ANTHROPIC_OUTPUT_FIELDS",
     "DROPPABLE_KEYWORDS",
+    "DROP_KEYWORD",
     "FACT_CLIENT_IDENTITY_REQUIRED",
     "FACT_EFFORT_ENUM",
     "FACT_EFFORT_VALUE_REJECTED",
@@ -142,6 +146,7 @@ __all__ = [
     "SOURCE_REJECTION",
     "STATED_FACT_TTL_SECONDS",
     "TOOL_SCHEMA_PRUNED",
+    "TOOL_SCHEMA_TRANSLATED",
     "WITHHELD_FACT_TTL_SECONDS",
     "FactSink",
     "LearnedFact",
@@ -178,6 +183,7 @@ __all__ = [
     "rejected_tool_name_max_length",
     "rejected_tool_schema_keyword",
     "reset_learned_fact_store",
+    "rewrite_schema_keyword",
     "sampling_parameter_evidence",
     "set_learned_fact_store",
     "surface_shaped_failure",
