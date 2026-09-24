@@ -1749,6 +1749,17 @@ class Settings(BaseSettings):
     request_log_capture_bodies: bool = Field(
         default=True, validation_alias="REQUEST_LOG_CAPTURE_BODIES"
     )
+    # Store the working directory the agent reported (read from Claude Code's
+    # environment block, or a launcher header). Local log only.
+    request_log_capture_folder: bool = Field(
+        default=True, validation_alias="REQUEST_LOG_CAPTURE_FOLDER"
+    )
+    # Store the conversation and subagent ids the client sent
+    # (``x-claude-code-session-id`` / ``x-claude-code-agent-id``). Local log
+    # only: nothing new is sent upstream.
+    request_log_capture_session: bool = Field(
+        default=True, validation_alias="REQUEST_LOG_CAPTURE_SESSION"
+    )
     # Retention cap; oldest rows are pruned periodically past this many rows.
     request_log_max_rows: int = Field(
         default=REQUEST_LOG_MAX_ROWS_DEFAULT,

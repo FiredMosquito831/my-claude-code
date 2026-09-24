@@ -39,8 +39,17 @@ MAX_MIRRORED_CHARS = 1_024
 
 # Exactly the four headers this proxy reproduces upstream. The
 # ``x-claude-code-*`` correlation ids a real client also sends are deliberately
-# NOT here: MCC is not the session they identify, and mirroring them would put
-# a client-side correlation id into a durable store for no diagnostic gain.
+# NOT here, and that has not changed: MCC is not the session they identify, so
+# it has no business re-sending them to a provider.
+#
+# What did change (7.42.0) is *storage*. This comment used to add that keeping
+# them would put a client-side id into a durable store "for no diagnostic
+# gain". There is a gain -- "which conversation, which subagent, which folder
+# sent this" is unanswerable without them when twenty agents run at once -- so
+# ``core/request_origin.py`` now writes ``x-claude-code-session-id`` and
+# ``x-claude-code-agent-id`` to the LOCAL request log, behind their own
+# setting (``REQUEST_LOG_CAPTURE_SESSION``, on by default). Only the local log
+# changed. Nothing new leaves the machine, and this tuple is the proof.
 _MIRRORED = (
     "user-agent",
     "x-app",
@@ -56,11 +65,12 @@ _MIRRORED = (
 # and the Agent SDK send one of the four that follow -- the same four
 # ``core/trace.py`` already reads for the log context.
 #
-# The value is read and immediately reduced to an opaque derived id; it is
-# deliberately NOT added to ``core/request_headers.ALLOWED_HEADERS``, so it
-# never reaches durable storage. That is the same privacy objection this
-# module already records against mirroring ``x-claude-code-session-id``:
-# MCC is not the session it identifies.
+# Here the value is read and immediately reduced to an opaque derived id for
+# a provider that needs a conversation identity; it is not mirrored verbatim.
+# It is also NOT added to ``core/request_headers.ALLOWED_HEADERS`` -- that
+# allow-list governs the ``headers`` column and is unchanged. The request log's
+# own ``session_id`` column is filled by ``core/request_origin.py`` from its
+# declared table, which is where a reader should look for what is stored.
 _SESSION_HEADERS = (
     "x-session-affinity",
     "x-session-id",
@@ -80,8 +90,9 @@ class ClientFingerprint:
     anthropic_version: str | None = None
     anthropic_beta: str | None = None
     #: What the client called this conversation, when it named one. Never
-    #: mirrored upstream verbatim and never stored -- a provider that needs
-    #: a conversation identity derives an opaque one from it.
+    #: mirrored upstream verbatim -- a provider that needs a conversation
+    #: identity derives an opaque one from it. This record is not stored; the
+    #: request log's own origin columns come from ``core/request_origin.py``.
     session_id: str | None = None
 
     @property

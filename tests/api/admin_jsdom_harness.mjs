@@ -8250,6 +8250,163 @@ const toolCatalogue = {};
   window.eval("closeRequestDetail()");
 }
 
+/* Where a request came from (7.42.0): the Session, Folder, Origin chip and
+   Requested model cells, the modal's provenance lines, and the folder backfill
+   card on the Request log storage section. Driven through the real
+   renderRequestsTable(), openRequestDetail() and startOriginBackfill(). Every
+   path is fake. */
+const requestOrigin = {};
+{
+  const originRow = {
+    id: "req-origin",
+    harness: "claude",
+    ts_iso: "2026-09-24T10:00:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "nous_portal",
+    key_label: "NOUS_API_KEY",
+    requested_model: "claude-opus-4",
+    resolved_model: "hermes-4-405b",
+    status: "error",
+    tokens_in: 120,
+    tokens_out: 340,
+    ttft_ms: 410,
+    duration_ms: 2100,
+    session_id: "0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b",
+    session_short: "0f3c2a1b",
+    agent_id: "a7b8c9d0-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+    parent_session_id: "0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b",
+    project_dir: "C:\\Users\\devuser\\Projects\\demo",
+    project_short: "Projects\\demo · #3f9a21",
+    origin_source:
+      "session_id=header.x-claude-code-session-id;agent_id=header.x-claude-code-agent-id;" +
+      "parent_session_id=header.x-claude-code-agent-id;project_dir=prompt.env-block",
+    origin_provenance: {
+      session_id: { source: "header", signal: "x-claude-code-session-id",
+        sentence: "stated by the x-claude-code-session-id header" },
+      agent_id: { source: "header", signal: "x-claude-code-agent-id",
+        sentence: "stated by the x-claude-code-agent-id header" },
+      parent_session_id: { source: "header", signal: "x-claude-code-agent-id",
+        sentence: "stated by the x-claude-code-agent-id header" },
+      project_dir: { source: "prompt", signal: "env-block",
+        sentence: "read from the prompt's environment block" },
+    },
+  };
+  const bareRow = {
+    ...originRow,
+    id: "req-bare",
+    status: "success",
+    session_id: null,
+    session_short: null,
+    agent_id: null,
+    parent_session_id: null,
+    project_dir: null,
+    project_short: null,
+    origin_source: null,
+    origin_provenance: {},
+    requested_model: null,
+  };
+  ROUTES["/admin/api/requests/req-origin"] = originRow;
+  ROUTES["/admin/api/requests/req-bare"] = bareRow;
+
+  window.eval(`renderRequestsTable(${JSON.stringify([originRow, bareRow])})`);
+  const body = doc.getElementById("reqTableBody");
+  const rowsNow = Array.from(body.querySelectorAll("tr"));
+  const headers = Array.from(doc.querySelectorAll(".requests-table thead th"));
+  requestOrigin.headerClasses = headers.map((th) => [th.textContent.trim(), th.className]);
+  requestOrigin.cellCounts = rowsNow.map((tr) => tr.children.length);
+  const cellAt = (tr, cls) => tr.querySelector(`td.${cls}`);
+  const describe = (tr) => ({
+    session: cellAt(tr, "req-col-session").textContent,
+    sessionTitle: (cellAt(tr, "req-col-session").querySelector("code") || {}).title || null,
+    subagentBadge: Boolean(cellAt(tr, "req-col-session").querySelector(".req-subagent-badge")),
+    folder: cellAt(tr, "req-col-folder").textContent,
+    folderTitle: (cellAt(tr, "req-col-folder").querySelector(".req-folder") || {}).title || null,
+    chip: cellAt(tr, "req-col-origin").textContent,
+    chipTitle: (cellAt(tr, "req-col-origin").querySelector(".origin-chip") || {}).title || null,
+    requested: cellAt(tr, "req-col-requested-model").textContent,
+    statusClass: Boolean(cellAt(tr, "req-col-status")),
+    statusText: cellAt(tr, "req-col-status").querySelector(".req-status-text").textContent,
+    // Same order as the header, so a cell cannot drift under another label.
+    cellClassesByHeader: Array.from(tr.children).map((td, index) => [
+      headers[index] ? headers[index].textContent.trim() : null,
+      td.className,
+    ]),
+  });
+  requestOrigin.withOrigin = describe(rowsNow[0]);
+  requestOrigin.bare = describe(rowsNow[1]);
+
+  const pairs = () => {
+    const nodes = Array.from(doc.getElementById("reqDetailMeta").children);
+    return nodes
+      .map((el, index) =>
+        el.tagName === "DT" ? [el.textContent, (nodes[index + 1] || {}).textContent] : null,
+      )
+      .filter(Boolean);
+  };
+  await window.eval('openRequestDetail("req-origin")');
+  await settle();
+  requestOrigin.detail = pairs().filter(([label]) =>
+    ["Harness", "Session", "Subagent", "Parent session", "Folder", "Protocol"].includes(label),
+  );
+  window.eval("closeRequestDetail()");
+  await window.eval('openRequestDetail("req-bare")');
+  await settle();
+  requestOrigin.bareDetailLabels = pairs().map(([label]) => label);
+  window.eval("closeRequestDetail()");
+
+  // The backfill card: rendered inside the Request log storage section.
+  const card = doc.getElementById("originBackfillCard");
+  requestOrigin.cardPresent = Boolean(card);
+  requestOrigin.cardInRequestLogSection = Boolean(
+    card && card.closest("#section-request_log"),
+  );
+  requestOrigin.buttonText = card
+    ? doc.getElementById("originBackfillButton").textContent
+    : null;
+  ROUTES["/admin/api/requests/origin-backfill"] = {
+    enabled: true, running: true, scanned: 1500, filled: 1421,
+    started_at: 1790000000, finished_at: null, error: null,
+    completed_at: null, through_rowid: 1500, harnesses: ["claude"],
+  };
+  const before = fetchBodies.length;
+  if (card) {
+    doc.getElementById("originBackfillButton").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
+    await settle();
+  }
+  requestOrigin.posted = fetchBodies
+    .slice(before)
+    .filter((entry) => entry.path === "/admin/api/requests/origin-backfill")
+    .map((entry) => entry.method);
+  requestOrigin.runningText = card
+    ? doc.getElementById("originBackfillStatus").textContent
+    : null;
+  requestOrigin.buttonDisabledWhileRunning = card
+    ? doc.getElementById("originBackfillButton").disabled
+    : null;
+  window.eval(
+    'paintOriginBackfill({ enabled: true, running: false, scanned: 1500, filled: 1421, finished_at: 1790000100, error: null })',
+  );
+  requestOrigin.doneText = card
+    ? doc.getElementById("originBackfillStatus").textContent
+    : null;
+  window.eval(
+    'paintOriginBackfill({ enabled: false, reason: "Folder capture is off (REQUEST_LOG_CAPTURE_FOLDER=false), so older rows are not given one either." })',
+  );
+  requestOrigin.offText = card
+    ? doc.getElementById("originBackfillStatus").textContent
+    : null;
+  requestOrigin.buttonDisabledWhenOff = card
+    ? doc.getElementById("originBackfillButton").disabled
+    : null;
+  // Let the page's own poll find the walk finished, so no timer outlives the run.
+  ROUTES["/admin/api/requests/origin-backfill"] = {
+    enabled: true, running: false, scanned: 1500, filled: 1421, error: null,
+  };
+}
+
 console.log(
   JSON.stringify(
     {
@@ -8261,6 +8418,7 @@ console.log(
       advancedFields,
       latencyViews,
       toolCatalogue,
+      requestOrigin,
       cancelledViews,
       catalogueReadout,
       desktopAppBanner,

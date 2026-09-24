@@ -510,6 +510,9 @@ function setActiveView(viewId, { scroll = false } = {}) {
 
   if (activeView.id === "requests") {
     loadRequestsView().catch((error) => showMessage(error.message, "error"));
+    loadOriginBackfillStatus().catch(() => {
+      // An older server has no backfill route; the card keeps its button.
+    });
   }
 
   if (activeView.id === "optimizer") {
@@ -6547,6 +6550,7 @@ const SECTION_RENDERERS = {
   benching: renderBenching,
   credential_health: renderCredentialHealth,
   loop_health: renderLoopHealth,
+  request_log: renderRequestLogSection,
 };
 
 /* ------------------------------------------------------------------ *
@@ -6794,6 +6798,105 @@ function renderLoopHealth(fields) {
   stuck.append(stuckTitle, stuckReadout, stuckLink, stuckCaveat);
   wrap.appendChild(stuck);
   return wrap;
+}
+
+/** The Request log storage card: its settings, and the folder backfill.
+ *
+ * The backfill is the one action on this card. It never runs by itself: it
+ * reads older rows' stored prompts, which is minutes of work on a large log,
+ * so it starts only when this button is pressed and says what it did. The
+ * session id has no such button because its value was never stored.
+ */
+function renderRequestLogSection(fields) {
+  const wrap = document.createElement("div");
+  const grid = document.createElement("div");
+  grid.className = "field-grid";
+  fields.forEach((field) => grid.appendChild(renderField(field)));
+  wrap.appendChild(grid);
+
+  const card = document.createElement("div");
+  card.className = "calc-card";
+  card.id = "originBackfillCard";
+  const title = document.createElement("h4");
+  title.textContent = "Folders for older requests";
+  const caveat = document.createElement("p");
+  caveat.className = "calc-caveat";
+  caveat.textContent =
+    "Requests logged before 7.42.0 have no Folder. For Claude Code rows it can " +
+    "usually be read back from the stored prompt. This runs only when you press " +
+    "the button, in the background between requests, and pressing it again " +
+    "continues where it stopped. The session id cannot be filled in: it was never stored.";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "originBackfillButton";
+  button.className = "secondary-button";
+  button.textContent = "Fill in folders for older requests";
+  button.addEventListener("click", () => {
+    startOriginBackfill().catch((error) => showMessage(error.message, "error"));
+  });
+  const status = document.createElement("p");
+  status.id = "originBackfillStatus";
+  status.className = "calc-caveat";
+  status.setAttribute("aria-live", "polite");
+  card.append(title, caveat, button, status);
+  wrap.appendChild(card);
+  return wrap;
+}
+
+let originBackfillTimer = null;
+
+function paintOriginBackfill(status) {
+  const line = byId("originBackfillStatus");
+  const button = byId("originBackfillButton");
+  if (!line || !button) return;
+  if (!status || status.enabled === false) {
+    line.textContent = status && status.reason ? status.reason : "";
+    button.disabled = Boolean(status && status.enabled === false);
+    return;
+  }
+  const scanned = Number(status.scanned) || 0;
+  const filled = Number(status.filled) || 0;
+  button.disabled = Boolean(status.running);
+  if (status.running) {
+    line.textContent =
+      `Filling in folders… ${formatAnalyticsNumber(scanned)} older rows read, ` +
+      `${formatAnalyticsNumber(filled)} folders found so far.`;
+  } else if (status.error) {
+    line.textContent = `Stopped: ${status.error}. Press the button to continue.`;
+  } else if (status.finished_at) {
+    line.textContent =
+      `Done: ${formatAnalyticsNumber(scanned)} older rows read, ` +
+      `${formatAnalyticsNumber(filled)} folders filled in.`;
+  } else if (status.completed_at) {
+    line.textContent = "Older rows have been read once already. Pressing it again reads only rows added since.";
+  } else if (status.through_rowid) {
+    line.textContent = "A previous run stopped part-way. Press the button to continue it.";
+  } else {
+    line.textContent = "";
+  }
+}
+
+async function loadOriginBackfillStatus() {
+  if (!byId("originBackfillStatus")) return null;
+  const status = await api("/admin/api/requests/origin-backfill");
+  paintOriginBackfill(status);
+  if (status && status.running) scheduleOriginBackfillPoll();
+  return status;
+}
+
+function scheduleOriginBackfillPoll() {
+  if (originBackfillTimer) return;
+  originBackfillTimer = setTimeout(() => {
+    originBackfillTimer = null;
+    loadOriginBackfillStatus().catch(() => {});
+  }, 2000);
+}
+
+async function startOriginBackfill() {
+  const status = await api("/admin/api/requests/origin-backfill", { method: "POST", body: "{}" });
+  paintOriginBackfill(status);
+  if (status && status.running) scheduleOriginBackfillPoll();
+  return status;
 }
 
 /** Paint the per-gesture loop-lag table from /admin/api/loop-health.
@@ -17088,6 +17191,107 @@ function buildHarnessCell(row) {
   return td;
 }
 
+/* Where the request came from (7.42.0): which conversation, which folder.
+ *
+ * Both are stated by the client -- the session id on a header, the folder in
+ * Claude Code's environment block -- and both are NULL on any row older than
+ * the columns or from a client that says nothing, which is drawn as a dash,
+ * never as "none". The short forms come from the server so the list, the
+ * modal and any later breakdown agree; the full value is always the tooltip.
+ *
+ * Three cells for two facts on purpose: Session and Folder at full width, and
+ * one Origin chip carrying both below 1200 px, so the narrow table grows by one
+ * column instead of two. CSS decides which of the three is shown. */
+function originTooltip(row) {
+  const lines = [];
+  if (row.session_id) lines.push(`Session: ${row.session_id}`);
+  if (row.agent_id) lines.push(`Subagent: ${row.agent_id}`);
+  if (row.project_dir) lines.push(`Folder: ${row.project_dir}`);
+  return lines.join("\n");
+}
+
+function buildSessionCell(row) {
+  const td = document.createElement("td");
+  td.className = "req-col-session";
+  if (!row.session_id) {
+    td.textContent = "—";
+    return td;
+  }
+  const code = document.createElement("code");
+  code.className = "req-session-id";
+  code.textContent = row.session_short || String(row.session_id).slice(0, 8);
+  code.title = originTooltip(row);
+  td.appendChild(code);
+  if (row.agent_id) {
+    const badge = document.createElement("span");
+    badge.className = "req-subagent-badge";
+    badge.textContent = "subagent";
+    badge.title = `Subagent ${row.agent_id}`;
+    td.appendChild(badge);
+  }
+  return td;
+}
+
+function buildFolderCell(row) {
+  const td = document.createElement("td");
+  td.className = "req-col-folder";
+  if (!row.project_dir) {
+    td.textContent = "—";
+    return td;
+  }
+  const name = document.createElement("span");
+  name.className = "req-folder";
+  name.textContent = row.project_short || row.project_dir;
+  name.title = row.project_dir;
+  td.appendChild(name);
+  return td;
+}
+
+/* The narrow-width form: `Projects\demo · a1b2c3d4`, folder first because it
+   is the one a reader recognises; either half alone when only one is known. */
+function buildOriginChipCell(row) {
+  const td = document.createElement("td");
+  td.className = "req-col-origin";
+  const folder = row.project_short ? String(row.project_short).split(" · #")[0] : "";
+  const session = row.session_short || (row.session_id ? String(row.session_id).slice(0, 8) : "");
+  const parts = [folder, session].filter(Boolean);
+  if (!parts.length) {
+    td.textContent = "—";
+    return td;
+  }
+  const chip = document.createElement("span");
+  chip.className = "origin-chip";
+  chip.textContent = parts.join(" · ");
+  chip.title = originTooltip(row);
+  td.appendChild(chip);
+  return td;
+}
+
+/* What the client asked for, beside the Model cell that says what answered. */
+function buildRequestedModelCell(row) {
+  const td = document.createElement("td");
+  td.className = "req-col-requested-model";
+  if (!row.requested_model) {
+    td.textContent = "—";
+    return td;
+  }
+  const name = document.createElement("span");
+  name.className = "req-requested-model";
+  name.textContent = row.requested_model;
+  name.title = row.requested_model;
+  td.appendChild(name);
+  return td;
+}
+
+/* One origin value in the detail modal, with how it is known. The full value,
+   never the short form: the modal is where the tooltip's promise is kept. */
+function formatOriginDetail(row, field) {
+  const value = row[field];
+  if (!value) return null;
+  const provenance = (row.origin_provenance || {})[field];
+  return provenance && provenance.sentence ? `${value} (${provenance.sentence})` : String(value);
+}
+
 // The empty-state row has to span the header, and the header is markup this
 // file cannot see. Counting it keeps the two from drifting apart the way a
 // hardcoded 11 did when the Harness column was added.
@@ -17253,10 +17457,16 @@ function renderRequestsTable(rows) {
     // Beside Endpoint: both answer "what came in", before the columns that
     // say what MCC did with it.
     tr.appendChild(buildHarnessCell(row));
+    // Who sent it, continued: the conversation and the folder (7.42.0).
+    tr.appendChild(buildSessionCell(row));
+    tr.appendChild(buildFolderCell(row));
+    tr.appendChild(buildOriginChipCell(row));
     addText(providerDisplayLabel(row.provider, row.optimization));
     // A named key reads as its name; the mask stays in the tooltip so the
     // row can still be matched to a key by sight.
     addKeyReference(tr, row.key_label || "");
+    // What was asked for, then what answered.
+    tr.appendChild(buildRequestedModelCell(row));
     tr.appendChild(buildModelCell(row));
     tr.appendChild(buildStatusCell(row));
     tr.appendChild(buildTurnShapeCell(row));
@@ -17278,11 +17488,12 @@ function renderRequestsTable(rows) {
 }
 
 /* The status, and -- when it is `cancelled` -- which of the four things that
- * word covers. The status text itself is unchanged and still the sixth cell,
- * so the colour rules that key on it keep working; the chip is added beside
- * it, never instead of it. */
+ * word covers. The colour rules key on the cell's class rather than on its
+ * position: a position-keyed rule silently re-targets whichever column lands
+ * there when one is added. The chip is added beside it, never instead of it. */
 function buildStatusCell(row) {
   const td = document.createElement("td");
+  td.className = "req-col-status";
   const text = document.createElement("span");
   text.className = "req-status-text";
   text.textContent = row.status || "";
@@ -17594,6 +17805,11 @@ async function openRequestDetail(requestId) {
     ["Time", row.ts_iso],
     ["Endpoint", row.endpoint],
     ["Harness", formatHarnessDetail(row)],
+    // Where it came from, each with how it is known (7.42.0).
+    ["Session", formatOriginDetail(row, "session_id")],
+    ["Subagent", formatOriginDetail(row, "agent_id")],
+    ["Parent session", formatOriginDetail(row, "parent_session_id")],
+    ["Folder", formatOriginDetail(row, "project_dir")],
     ["Protocol", row.protocol],
     ["Requested model", row.requested_model],
     ["Provider", providerDisplayLabel(row.provider, row.optimization) || null],
@@ -19617,6 +19833,7 @@ const EXPORT_FIELDS = {
     { id: "turns_with_tools", label: "Turns with tools" },
     { id: "ladder", label: "Upstream retry ladder" },
     { id: "tool_catalogue", label: "Tool catalogue" },
+    { id: "origin", label: "Request origin" },
   ],
   /* One row per attempt rather than per request. Structural columns -- the
      request's id, time, harness, endpoint, models and status, and the

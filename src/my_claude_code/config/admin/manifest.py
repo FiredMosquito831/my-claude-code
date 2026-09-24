@@ -3146,6 +3146,38 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "REQUEST_LOG_CAPTURE_FOLDER",
+        "Store each request's folder",
+        "request_log",
+        "boolean",
+        settings_attr="request_log_capture_folder",
+        default="true",
+        restart_required=True,
+        description=(
+            "Stores the working directory your agent reported, e.g. "
+            "C:\\Users\\you\\Projects\\app. It is written to your local "
+            "request log only, and it can contain your user name. Turning "
+            "this off leaves the column empty for new requests; existing rows "
+            "are not deleted."
+        ),
+    ),
+    ConfigFieldSpec(
+        "REQUEST_LOG_CAPTURE_SESSION",
+        "Store each request's session id",
+        "request_log",
+        "boolean",
+        settings_attr="request_log_capture_session",
+        default="true",
+        restart_required=True,
+        description=(
+            "Stores the conversation id your agent sends with every request, "
+            "and the subagent id when a subagent is speaking, so requests can "
+            "be told apart by session. Written to your local request log only; "
+            "nothing new is sent to any provider. Turning this off leaves the "
+            "column empty for new requests; existing rows are not deleted."
+        ),
+    ),
+    ConfigFieldSpec(
         "REQUEST_LOG_WIRE_BODY_MAX_CHARS",
         "Outbound body detail to store",
         "request_log",

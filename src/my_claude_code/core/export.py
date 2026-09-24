@@ -66,6 +66,7 @@ REQUEST_FIELD_IDS: tuple[str, ...] = (
     "cost",
     "ladder",
     "tool_catalogue",
+    "origin",
 )
 REQUEST_FIELD_LABELS: dict[str, str] = {
     "input": "Input",
@@ -84,6 +85,7 @@ REQUEST_FIELD_LABELS: dict[str, str] = {
     "cost": "Cost",
     "ladder": "Upstream retry ladder",
     "tool_catalogue": "Tool catalogue",
+    "origin": "Request origin",
 }
 
 # Selectable fields for the web-search scope.
@@ -337,6 +339,17 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     # is byte-identical to before. Empty on rows older than the column and on
     # requests that carried no tools; ``params.tools_count`` tells them apart.
     "tool_catalogue": ("tool_catalogue_sha",),
+    # Where the request came from (7.42.0): the raw stored values, not the
+    # dashboard's short forms, plus how each was known. Opt-in and absent from
+    # the defaults, so every export that does not ask for it is byte-identical
+    # to before. Empty on rows older than the columns.
+    "origin": (
+        "session_id",
+        "agent_id",
+        "parent_session_id",
+        "project_dir",
+        "origin_source",
+    ),
 }
 
 # Derived detail columns present on every request export, gated by no field.
@@ -426,6 +439,11 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "input_sha256",
     "output_sha256",
     "tool_catalogue_sha",
+    "session_id",
+    "agent_id",
+    "parent_session_id",
+    "project_dir",
+    "origin_source",
     "cache_hit_rate",
     "cost_usd",
     "cost_source",
@@ -482,6 +500,11 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "input_sha256": "Input SHA-256",
     "output_sha256": "Output SHA-256",
     "tool_catalogue_sha": "Tool catalogue SHA-256",
+    "session_id": "Session",
+    "agent_id": "Subagent",
+    "parent_session_id": "Parent session",
+    "project_dir": "Folder",
+    "origin_source": "Origin source",
     "cache_hit_rate": "Cache hit rate",
     "cost_usd": "Cost (USD)",
     "cost_source": "Cost source",

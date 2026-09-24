@@ -4209,6 +4209,58 @@ async def request_log_tool_carriers(
     return {"enabled": True, **result}
 
 
+#: Why the folder backfill cannot run, in the words the Request log card shows.
+_ORIGIN_BACKFILL_LOG_OFF = "The request log is off, so there are no rows to fill in."
+_ORIGIN_BACKFILL_FOLDER_OFF = (
+    "Folder capture is off (REQUEST_LOG_CAPTURE_FOLDER=false), so older rows "
+    "are not given one either."
+)
+
+
+@router.get("/admin/api/requests/origin-backfill")
+async def origin_backfill_status(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """What the explicit folder backfill has done. No database walk.
+
+    Declared before ``/admin/api/requests/{request_id}``, which would otherwise
+    read ``origin-backfill`` as a request id.
+    """
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False, "reason": _ORIGIN_BACKFILL_LOG_OFF}
+    if not settings.request_log_capture_folder:
+        return {"enabled": False, "reason": _ORIGIN_BACKFILL_FOLDER_OFF}
+    status = await asyncio.to_thread(store.origin_backfill_status)
+    return {"enabled": True, **status}
+
+
+@router.post("/admin/api/requests/origin-backfill")
+async def start_origin_backfill(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Fill ``project_dir`` for older rows from their stored prompts, once asked.
+
+    Never automatic. It only fills a NULL folder on a row of a harness whose
+    prompt names one, on the request log's writer thread between requests, and
+    a second press continues an interrupted walk. It deletes nothing and
+    overwrites nothing that was already recorded, and it refuses when the
+    operator has turned folder capture off: a setting that keeps new rows empty
+    must keep old rows empty too.
+    """
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_LOG_OFF)
+    if not settings.request_log_capture_folder:
+        raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_FOLDER_OFF)
+    status = await asyncio.to_thread(store.request_origin_backfill)
+    return {"enabled": True, **status}
+
+
 @router.get("/admin/api/requests/{request_id}")
 async def get_request_log_entry(
     request_id: str,

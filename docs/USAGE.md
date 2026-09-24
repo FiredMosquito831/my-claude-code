@@ -3913,6 +3913,8 @@ REQUEST_LOG_ENABLED=true
 REQUEST_LOG_MAX_ROWS=700000        # oldest rows pruned beyond this
 REQUEST_LOG_COMPRESS_BODIES=true   # false stores text inline, as before
 REQUEST_LOG_CAPTURE_BODIES=true    # false drops text entirely, ~77x more rows/GB
+REQUEST_LOG_CAPTURE_FOLDER=true    # the working directory the agent reported
+REQUEST_LOG_CAPTURE_SESSION=true   # the conversation and subagent ids it sent
 REQUEST_LOG_TEXT_MAX_CHARS=10000000 # longer text is truncated before storage
 REQUEST_LOG_WIRE_BODY_MAX_CHARS=8000  # bounds stored message/tool structure only
 REQUEST_LOG_COMPRESSION_LEVEL=9    # 1-22; 19 measured 4.9% smaller at 9x the time
@@ -3998,6 +4000,44 @@ Two caveats worth knowing before you read the numbers:
   explicit header separates them from 6.37.0 onward. `Claude Agent SDK` is broken out separately
   from `Claude Code` on purpose — it is a different program, and on the reference log it is the
   busiest client on the box.
+
+**Session, Folder and Requested model** say where a request came from and what it asked for.
+Since 7.42.0 the table carries all three beside the thirteen columns it already had, and none of
+those moved out. **Session** is the conversation id the client sent, shortened to its first eight
+characters; **Folder** is the working directory the agent reported, shown as its last two folders
+and a short hash (`Projects\demo · #3f9a21`) so two folders with the same name in different places
+stay apart. The full value is in the tooltip and in the detail dialog. **Requested model** is the
+model the client asked for, beside the **Model** that answered. Below 1200 px wide, Session and
+Folder share one **Origin** chip so the table does not grow two columns wider.
+
+The detail dialog says how each value is known:
+
+| Detail dialog says | How MCC knows |
+| --- | --- |
+| `stated by the x-claude-code-session-id header` | Claude Code and the Claude Agent SDK send it on every request |
+| `stated by the x-claude-code-agent-id header` | a Claude Code subagent is speaking; the row also records which session it said it belongs to |
+| `read from the prompt's environment block` | Claude Code's system prompt names its working directory |
+| `read later from the stored prompt's environment block (backfill)` | filled in for an older row by the backfill below |
+
+What to expect per client, measured on a real log:
+
+- **Claude Code** — session on essentially every request, folder on about 95 % of them.
+- **Claude Agent SDK** — session on every request, **no folder**. Its prompt carries no
+  environment block, so the column stays empty rather than guessing.
+- **Everything else** — empty for now. An empty cell means "not stated", never "none".
+
+Both are stored in your local request log only; nothing new is sent to any provider. Two
+settings on the **Request log storage** card turn them off: `REQUEST_LOG_CAPTURE_FOLDER` (the path
+can contain your user name) and `REQUEST_LOG_CAPTURE_SESSION`. Off leaves the columns empty for
+new requests and deletes nothing. Exports gain an opt-in **Request origin** field with the raw
+values.
+
+Requests logged before 7.42.0 have no session and no folder. The session cannot be recovered —
+its value was never stored — but the folder usually can, from the stored prompt: **Fill in folders
+for older requests** on the same card reads each older Claude Code row's stored prompt and fills
+the column. It runs only when you press it, in the background between requests, and it can be
+pressed again to continue if the server restarted part-way.
+
 
 **A model that never appears in Analytics never reached the proxy.** The request log records what
 MCC was asked to serve; if a model you tried is missing entirely — no rows, not even failed ones —
