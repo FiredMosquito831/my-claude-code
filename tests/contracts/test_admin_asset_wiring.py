@@ -91,6 +91,12 @@ KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
     # reason; loadStuckRequests() fills it from /admin/api/tasks/stacks when
     # the Limits view is opened.
     "stuckRequestsReadout",
+    # originBackfillButton / originBackfillStatus: the folder backfill's button
+    # and its progress line, created by renderRequestLogSection() inside the
+    # Request log storage card (rebuilt into #requestsSections on every
+    # render); loadOriginBackfillStatus() fills the line when Analytics opens.
+    "originBackfillButton",
+    "originBackfillStatus",
 }
 
 

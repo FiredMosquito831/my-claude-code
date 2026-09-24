@@ -62,6 +62,13 @@ from my_claude_code.core.request_log import (
     install_recovery_trace,
     store_from_settings,
 )
+from my_claude_code.core.request_origin import (
+    PROMPT_HARNESSES,
+    OriginInputs,
+    RequestOrigin,
+    origin_inputs,
+    resolve_origin,
+)
 from my_claude_code.core.upstream_ladder import (
     DEFAULT_LADDER_BODY_MAX_CHARS,
     install_ladder_trace,
@@ -146,8 +153,18 @@ class RequestCapture:
         cost_enabled: bool = True,
         cost_mode: str = MODE_AUTO,
         cost_litellm_enabled: bool = False,
+        origin: OriginInputs | None = None,
+        capture_session: bool = True,
+        capture_folder: bool = True,
     ) -> None:
         self._store = store
+        # What the request offered about where it came from, and whether the
+        # operator lets each half of it be stored. The header and metadata
+        # answers are resolved below, now, because they cost a dict read; the
+        # prompt's answer waits for finalize, off the loop.
+        self._origin_inputs = origin
+        self._capture_session = capture_session
+        self._capture_folder = capture_folder
         self._capture_bodies = capture_bodies
         self._cost_enabled = cost_enabled
         self._cost_mode = cost_mode
@@ -284,6 +301,14 @@ class RequestCapture:
             tools=tuple(request.tools or ()) if request is not None else (),
             keep_tool_definitions=capture_bodies,
         )
+        if origin is not None and self.enabled:
+            self._apply_origin(
+                resolve_origin(
+                    origin,
+                    capture_session=capture_session,
+                    capture_folder=capture_folder,
+                )
+            )
         # Last, and deliberately not gated on ``self.enabled``: the registry
         # the stuck-request watchdog reads tracks *requests*, not log rows, and
         # a request the operator chose not to log is exactly as capable of
@@ -1256,6 +1281,44 @@ class RequestCapture:
                 logger.debug("Request image capture skipped: {}", exc)
         self._apply_estimate(record)
         self._apply_cost(record)
+        self._apply_prompt_origin()
+
+    def _apply_origin(self, origin: RequestOrigin) -> None:
+        """Copy a resolved origin onto the row."""
+        record = self._record
+        record.session_id = origin.session_id
+        record.agent_id = origin.agent_id
+        record.parent_session_id = origin.parent_session_id
+        record.project_dir = origin.project_dir
+        record.origin_source = origin.origin_source
+
+    def _apply_prompt_origin(self) -> None:
+        """Resolve the origin again, this time letting the prompt answer.
+
+        Only for a harness with a declared prompt extractor and only when the
+        folder may be stored -- every other request's capture-time answer is
+        already final. Here rather than on the request path because the folder
+        is needed to *log* the request, not to serve it, and this method runs
+        after the client has its answer (off the loop on the streaming path).
+        Never fatal, by the rule every step in this method follows.
+        """
+        inputs = self._origin_inputs
+        if inputs is None or not self._capture_folder:
+            return
+        if (inputs.harness or "") not in PROMPT_HARNESSES:
+            return
+        request = self._request
+        try:
+            self._apply_origin(
+                resolve_origin(
+                    inputs,
+                    capture_session=self._capture_session,
+                    capture_folder=True,
+                    system=None if request is None else request.system,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Request origin from the prompt skipped: {}", exc)
 
     def _commit_finalize(self, record: RequestRecord) -> None:
         """Attach what only the loop knows, and hand the row to the store."""
@@ -1343,6 +1406,7 @@ def build_capture(
     # a provider that has to mirror the client's user-agent upstream must not
     # start lying the moment request logging is turned off.
     install_fingerprint(headers)
+    harness = harness_from_headers(headers).harness
     return RequestCapture(
         store,
         request_id=request_id,
@@ -1376,12 +1440,18 @@ def build_capture(
         # than nothing when it recognises nothing, so ``.harness`` is always a
         # string and a row written from here is never NULL -- which is what
         # lets NULL keep meaning "predates the column" for the backfill.
-        harness=harness_from_headers(headers).harness,
+        harness=harness,
         cost_enabled=bool(getattr(settings, "cost_estimation_enabled", True)),
         cost_mode=str(getattr(settings, "cost_estimation_mode", MODE_AUTO)),
         cost_litellm_enabled=bool(
             getattr(settings, "cost_source_litellm_enabled", False)
         ),
+        # The declared origin signals only: a copy of at most a few header
+        # values and a reference to the request's own metadata. Local log only;
+        # nothing here reaches a provider.
+        origin=origin_inputs(headers, harness=harness, metadata=request.metadata),
+        capture_session=bool(getattr(settings, "request_log_capture_session", True)),
+        capture_folder=bool(getattr(settings, "request_log_capture_folder", True)),
     )
 
 

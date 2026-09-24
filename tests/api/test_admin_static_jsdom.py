@@ -1545,8 +1545,14 @@ def test_the_request_table_names_the_client_that_sent_each_row(rendered) -> None
         "Time",
         "Endpoint",
         "Harness",
+        # 7.42.0: where it came from. Origin is the narrow-width chip that
+        # stands in for Session and Folder; CSS shows one form or the other.
+        "Session",
+        "Folder",
+        "Origin",
         "Provider",
         "Key",
+        "Requested model",
         "Model",
         "Status",
         "Turn",
@@ -5508,3 +5514,162 @@ def test_the_export_window_offers_the_catalogue_column_opt_in() -> None:
     assert '{ id: "tool_catalogue", label: "Tool catalogue" }' in requests_fields
     defaults = source.split("const EXPORT_DEFAULT_FIELDS = {", 1)[1].split("]),", 1)[0]
     assert "tool_catalogue" not in defaults
+
+
+# ---------------------------------------------------------------------------
+# Request origin (7.42.0): Session, Folder, Requested model, and the backfill
+# ---------------------------------------------------------------------------
+
+# The thirteen columns the Requests table had before 7.42.0. Additions never
+# remove one, and never reorder them.
+EXISTING_REQUEST_COLUMNS = [
+    "Time",
+    "Endpoint",
+    "Harness",
+    "Provider",
+    "Key",
+    "Model",
+    "Status",
+    "Turn",
+    "Tokens",
+    "Cost",
+    "TTFT",
+    "Duration",
+    "Details",
+]
+
+
+def test_requests_table_keeps_all_existing_columns(rendered) -> None:
+    """All thirteen, still in their order, with nothing between them removed."""
+
+    headers = rendered["harnessAttr"]["headers"]
+    positions = [headers.index(name) for name in EXISTING_REQUEST_COLUMNS]
+    assert positions == sorted(positions)
+    assert len(headers) == len(EXISTING_REQUEST_COLUMNS) + 4
+
+
+def test_requests_table_adds_three_columns(rendered) -> None:
+    """Session, Folder, Requested model -- plus the Origin chip that stands in
+    for the first two below 1200 px (CSS decides which is shown)."""
+
+    classes = dict(rendered["requestOrigin"]["headerClasses"])
+    added = [name for name in classes if name not in EXISTING_REQUEST_COLUMNS]
+    assert added == ["Session", "Folder", "Origin", "Requested model"]
+    assert classes["Session"] == "req-col-session"
+    assert classes["Folder"] == "req-col-folder"
+    assert classes["Origin"] == "req-col-origin"
+    assert classes["Requested model"] == "req-col-requested-model"
+
+
+def test_every_row_has_one_cell_per_header_in_header_order(rendered) -> None:
+    origin = rendered["requestOrigin"]
+    width = len(origin["headerClasses"])
+
+    assert origin["cellCounts"] == [width, width]
+    by_header = dict(origin["withOrigin"]["cellClassesByHeader"])
+    assert by_header["Session"] == "req-col-session"
+    assert by_header["Folder"] == "req-col-folder"
+    assert by_header["Origin"] == "req-col-origin"
+    assert by_header["Requested model"] == "req-col-requested-model"
+    assert by_header["Status"] == "req-col-status"
+
+
+def test_the_origin_cells_show_short_forms_with_the_full_value_in_the_tooltip(
+    rendered,
+) -> None:
+    row = rendered["requestOrigin"]["withOrigin"]
+
+    assert row["session"] == "0f3c2a1bsubagent"
+    assert row["subagentBadge"] is True
+    assert "Session: 0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b" in row["sessionTitle"]
+    assert row["folder"] == "Projects\\demo · #3f9a21"
+    assert row["folderTitle"] == "C:\\Users\\devuser\\Projects\\demo"
+    assert row["chip"] == "Projects\\demo · 0f3c2a1b"
+    assert "Folder: C:\\Users\\devuser\\Projects\\demo" in row["chipTitle"]
+    assert row["requested"] == "claude-opus-4"
+
+
+def test_a_row_with_no_origin_draws_dashes_not_none(rendered) -> None:
+    row = rendered["requestOrigin"]["bare"]
+
+    assert (row["session"], row["folder"], row["chip"], row["requested"]) == (
+        "—",
+        "—",
+        "—",
+        "—",
+    )
+    assert row["subagentBadge"] is False
+
+
+def test_the_status_colour_follows_the_status_cell_not_a_position(rendered) -> None:
+    """``td:nth-child(6)`` had silently pointed at Model since the Harness
+    column was added; the rule now keys on the Status cell's own class."""
+
+    row = rendered["requestOrigin"]["withOrigin"]
+    assert row["statusClass"] is True
+    assert row["statusText"] == "error"
+    css = (STATIC_DIR / "admin.css").read_text(encoding="utf-8")
+    assert ".req-status-error td.req-col-status" in css
+    assert ".req-status-cancelled td.req-col-status" in css
+    assert "td:nth-child(6)" not in css
+
+
+def test_the_chip_replaces_session_and_folder_below_1200px() -> None:
+    css = (STATIC_DIR / "admin.css").read_text(encoding="utf-8")
+    narrow = css.split("@media (max-width: 1199px) {", 1)[1].split("\n}\n", 1)[0]
+
+    assert ".requests-table .req-col-session" in narrow
+    assert ".requests-table .req-col-folder" in narrow
+    assert "display: none;" in narrow
+    assert ".requests-table .req-col-origin {\n    display: table-cell;" in narrow
+    assert ".requests-table .req-col-origin {\n  display: none;\n}" in css
+
+
+def test_the_modal_shows_origin_with_its_source(rendered) -> None:
+    detail = dict(rendered["requestOrigin"]["detail"])
+
+    assert detail["Session"] == (
+        "0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b"
+        " (stated by the x-claude-code-session-id header)"
+    )
+    assert detail["Subagent"] == (
+        "a7b8c9d0-1e2f-4a3b-8c4d-5e6f7a8b9c0d"
+        " (stated by the x-claude-code-agent-id header)"
+    )
+    assert detail["Folder"] == (
+        "C:\\Users\\devuser\\Projects\\demo (read from the prompt's environment block)"
+    )
+    labels = [label for label, _ in rendered["requestOrigin"]["detail"]]
+    assert labels.index("Harness") < labels.index("Session") < labels.index("Protocol")
+
+
+def test_the_modal_omits_origin_lines_it_has_no_value_for(rendered) -> None:
+    labels = rendered["requestOrigin"]["bareDetailLabels"]
+
+    for label in ("Session", "Subagent", "Parent session", "Folder"):
+        assert label not in labels
+    assert "Harness" in labels
+
+
+def test_the_backfill_is_a_button_on_the_request_log_card(rendered) -> None:
+    origin = rendered["requestOrigin"]
+
+    assert origin["cardPresent"] is True
+    assert origin["cardInRequestLogSection"] is True
+    assert origin["buttonText"] == "Fill in folders for older requests"
+    assert origin["posted"] == ["POST"]
+    assert origin["runningText"] == (
+        "Filling in folders… 1,500 older rows read, 1,421 folders found so far."
+    )
+    assert origin["buttonDisabledWhileRunning"] is True
+    assert origin["doneText"] == "Done: 1,500 older rows read, 1,421 folders filled in."
+    assert "REQUEST_LOG_CAPTURE_FOLDER=false" in origin["offText"]
+    assert origin["buttonDisabledWhenOff"] is True
+
+
+def test_the_export_window_offers_the_origin_group_opt_in() -> None:
+    source = (STATIC_DIR / "admin.js").read_text(encoding="utf-8")
+    requests_fields = source.split("const EXPORT_FIELDS = {", 1)[1].split("],", 1)[0]
+    assert '{ id: "origin", label: "Request origin" }' in requests_fields
+    defaults = source.split("const EXPORT_DEFAULT_FIELDS = {", 1)[1].split("]),", 1)[0]
+    assert "origin" not in defaults

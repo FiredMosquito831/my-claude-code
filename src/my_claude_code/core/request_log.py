@@ -32,6 +32,16 @@ from my_claude_code.core.cancelled_reasons import (
 )
 from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.request_images import CapturedImage
+from my_claude_code.core.request_origin import (
+    BACKFILL_SIGNAL,
+    PROMPT_HARNESSES,
+    PROMPT_SCAN_MAX_CHARS,
+    merge_origin_source,
+    origin_provenance,
+    project_dir_from_prompt,
+    project_short,
+    session_short,
+)
 from my_claude_code.core.tool_catalogue import (
     TOOL_SHA_BYTES,
     ToolCatalogue,
@@ -248,6 +258,19 @@ _ATTEMPTS_TS_BACKFILL_THROUGH_KEY = "attempts_ts_backfilled_through_v1"
 # Rows per committed chunk. Measured on the real table: 571,665 attempts in
 # 54.0 s at this size.
 _ATTEMPTS_TS_CHUNK_ROWS = 5_000
+# The explicit folder backfill (7.42.0). Never automatic: it runs only after
+# the operator presses the button, because it decompresses stored prompts and
+# that is minutes of work on a large log. The cursor makes a second press
+# continue where an interrupted walk stopped; the ``at`` key says it finished.
+_ORIGIN_BACKFILL_KEY = "origin_backfilled_at_v1"
+_ORIGIN_BACKFILL_THROUGH_KEY = "origin_backfilled_through_v1"
+# Rows examined per committed chunk. Each one may mean a decompression, so
+# this is smaller than the arithmetic-only backfills' 5,000: one chunk is
+# what a request queued behind the walk can wait for.
+_ORIGIN_BACKFILL_CHUNK_ROWS = 500
+# How much of a stored prompt the backfill reads: the same 64 KiB the live
+# extractor scans. The stored prompt starts with the system blocks.
+_PROMPT_HEAD_CHARS = PROMPT_SCAN_MAX_CHARS
 #: Stored on a row the backfill tried and could not price. The same string as
 #: ``application.cost.SOURCE_UNPRICED``, which owns the vocabulary; ``core``
 #: may not import it, so ``tests/contracts`` pins the two together. It is
@@ -447,6 +470,14 @@ _LIST_METADATA_COLUMNS = (
     # is where the "est." badge is decided.
     "cost_usd",
     "cost_source",
+    # Where the request came from (7.42.0): which conversation, which
+    # subagent, which folder, and how each is known. Projected so the list can
+    # show Session and Folder without opening the row. NULL on older rows.
+    "session_id",
+    "agent_id",
+    "parent_session_id",
+    "project_dir",
+    "origin_source",
 )
 
 #: Everything :func:`classify_cancelled` reads off a request row.
@@ -1398,6 +1429,28 @@ _ADDED_COLUMNS = (
         "tool_catalogue_sha",
         "ALTER TABLE requests ADD COLUMN tool_catalogue_sha BLOB",
     ),
+    # 7.42.0: where the request came from, as the client stated it. See
+    # ``core/request_origin.py`` for every signal read and in what order.
+    # NULL is "not measured": a row older than the columns, a client that
+    # states nothing, or a setting that turned capture off. Never "none".
+    #
+    # The conversation id the client sent (``x-claude-code-session-id``),
+    # verbatim and capped. It identifies a conversation, not a person, and it
+    # is stored locally only -- nothing new is sent upstream.
+    ("session_id", "ALTER TABLE requests ADD COLUMN session_id TEXT"),
+    # The subagent id (``x-claude-code-agent-id``) when a subagent is speaking.
+    ("agent_id", "ALTER TABLE requests ADD COLUMN agent_id TEXT"),
+    # Set only when a child signal exists: the session a subagent said it
+    # belongs to. Whether that is the parent's own id is checked on real rows
+    # before anything groups by it.
+    ("parent_session_id", "ALTER TABLE requests ADD COLUMN parent_session_id TEXT"),
+    # The working directory the agent reported, verbatim (backslashes kept,
+    # trailing separator stripped, capped). The short display form is derived
+    # at read time and never stored.
+    ("project_dir", "ALTER TABLE requests ADD COLUMN project_dir TEXT"),
+    # ``field=source.signal`` per captured field, so the detail pane can say
+    # how each value is known.
+    ("origin_source", "ALTER TABLE requests ADD COLUMN origin_source TEXT"),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1537,6 +1590,11 @@ _REQUEST_INSERT_COLUMNS = (
     "ttft_winner_ms",
     "reasoning_tokens",
     "tool_catalogue_sha",
+    "session_id",
+    "agent_id",
+    "parent_session_id",
+    "project_dir",
+    "origin_source",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -2128,6 +2186,13 @@ class RequestRecord:
     keep_tool_definitions: bool = True
     # Filled by the writer from ``tools``; None when there were no tools.
     tool_catalogue: ToolCatalogue | None = None
+    # Where the request came from (7.42.0); see ``core/request_origin.py``.
+    # All five None unless the client stated them and capture is on.
+    session_id: str | None = None
+    agent_id: str | None = None
+    parent_session_id: str | None = None
+    project_dir: str | None = None
+    origin_source: str | None = None
 
     @property
     def ts_iso(self) -> str:
@@ -2167,6 +2232,19 @@ class RequestLogStore:
         self._cost_backfill_done = False
         # The same "stop asking" flag for the attempt-timestamp walk beside it.
         self._attempts_ts_backfill_done = False
+        # The folder backfill runs only when asked. Set by
+        # ``request_origin_backfill`` from any thread, read and cleared by the
+        # writer thread; the counters are what the status endpoint reports.
+        self._origin_backfill_requested = threading.Event()
+        self._origin_backfill_lock = threading.Lock()
+        self._origin_backfill_progress: dict[str, Any] = {
+            "running": False,
+            "scanned": 0,
+            "filled": 0,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
         # Monotonic time of the last tool-catalogue sweep; see ``prune``.
         self._last_tool_sweep: float | None = None
         # Used by the writer thread only: it remembers the tools it last
@@ -2953,6 +3031,163 @@ class RequestLogStore:
                 time.monotonic() - started,
             )
 
+    # ------------------------------------------------ origin folder backfill
+
+    def request_origin_backfill(self) -> dict[str, Any]:
+        """Ask the writer thread to fill ``project_dir`` for older rows.
+
+        Only rows of a harness with a declared prompt extractor, only rows whose
+        folder is still NULL, only from the stored prompt, and only on the
+        writer thread's idle branch -- one committed chunk at a time, yielding
+        to any request queued behind it. The session id cannot be backfilled:
+        its value was never stored.
+        """
+        with self._origin_backfill_lock:
+            progress = self._origin_backfill_progress
+            if not progress["running"]:
+                progress.update(
+                    running=True,
+                    scanned=0,
+                    filled=0,
+                    started_at=time.time(),
+                    finished_at=None,
+                    error=None,
+                )
+        self._origin_backfill_requested.set()
+        return self.origin_backfill_status()
+
+    def origin_backfill_status(self) -> dict[str, Any]:
+        """What the folder backfill has done, for the Request log card."""
+        with self._origin_backfill_lock:
+            status = dict(self._origin_backfill_progress)
+        try:
+            with self._connection() as conn:
+                finished = self._meta_get(conn, _ORIGIN_BACKFILL_KEY)
+                through = self._meta_get(conn, _ORIGIN_BACKFILL_THROUGH_KEY)
+        except sqlite3.Error:
+            finished = through = None
+        status["completed_at"] = float(finished) if finished else None
+        status["through_rowid"] = (
+            int(through) if through and through.isdigit() else None
+        )
+        status["harnesses"] = sorted(PROMPT_HARNESSES)
+        return status
+
+    def _run_origin_backfill(self, conn: sqlite3.Connection) -> None:
+        """Walk older rows by rowid, filling ``project_dir`` from the stored prompt.
+
+        Resumable through ``origin_backfilled_through_v1``; a finished walk
+        stamps ``origin_backfilled_at_v1``. A second request after that re-walks
+        only rows newer than the cursor, so pressing the button again is cheap.
+        """
+        harnesses = sorted(PROMPT_HARNESSES)
+        if not harnesses:
+            self._finish_origin_backfill(error=None)
+            return
+        marks = ", ".join("?" * len(harnesses))
+        try:
+            resumed = self._meta_get(conn, _ORIGIN_BACKFILL_THROUGH_KEY)
+            cursor = int(resumed) if resumed and resumed.isdigit() else 0
+            while True:
+                rows = conn.execute(
+                    "SELECT rowid, id, substr(input_text, 1, ?) AS head,"
+                    " origin_source FROM requests"
+                    f" WHERE rowid > ? AND harness IN ({marks})"
+                    " AND project_dir IS NULL ORDER BY rowid LIMIT ?",
+                    (
+                        _PROMPT_HEAD_CHARS,
+                        cursor,
+                        *harnesses,
+                        _ORIGIN_BACKFILL_CHUNK_ROWS,
+                    ),
+                ).fetchall()
+                if not rows:
+                    break
+                heads = self._stored_prompt_heads(
+                    conn, [str(row["id"]) for row in rows if not row["head"]]
+                )
+                updates: list[tuple[str, str | None, int]] = []
+                for row in rows:
+                    head = row["head"] or heads.get(str(row["id"]))
+                    folder = project_dir_from_prompt(head)
+                    if folder is None:
+                        continue
+                    updates.append(
+                        (
+                            folder,
+                            merge_origin_source(
+                                row["origin_source"],
+                                "project_dir",
+                                "prompt",
+                                BACKFILL_SIGNAL,
+                            ),
+                            int(row["rowid"]),
+                        )
+                    )
+                with conn:
+                    conn.executemany(
+                        "UPDATE requests SET project_dir = ?, origin_source = ?"
+                        " WHERE rowid = ? AND project_dir IS NULL",
+                        updates,
+                    )
+                    cursor = int(rows[-1]["rowid"])
+                    self._meta_set(conn, _ORIGIN_BACKFILL_THROUGH_KEY, str(cursor))
+                with self._origin_backfill_lock:
+                    self._origin_backfill_progress["scanned"] += len(rows)
+                    self._origin_backfill_progress["filled"] += len(updates)
+                if not self._queue.empty():
+                    # A request is waiting. Hand the thread back; the flag is
+                    # still set, so the next idle tick continues from here.
+                    return
+            with conn:
+                self._meta_set(conn, _ORIGIN_BACKFILL_KEY, str(time.time()))
+        except sqlite3.Error as exc:
+            logger.warning("Request log folder backfill stopped: {}", exc)
+            self._finish_origin_backfill(error=str(exc))
+            return
+        self._finish_origin_backfill(error=None)
+
+    def _finish_origin_backfill(self, *, error: str | None) -> None:
+        self._origin_backfill_requested.clear()
+        with self._origin_backfill_lock:
+            progress = self._origin_backfill_progress
+            progress.update(running=False, finished_at=time.time(), error=error)
+            scanned, filled = progress["scanned"], progress["filled"]
+        logger.info(
+            "Request log folder backfill: {} rows examined, {} folders filled",
+            scanned,
+            filled,
+        )
+
+    def _stored_prompt_heads(
+        self, conn: sqlite3.Connection, ids: list[str]
+    ) -> dict[str, str]:
+        """The head of each row's stored prompt, decompressing only the prompt blob.
+
+        A row written before the prompt/rest split keeps its prompt inside the
+        one blob it has, so that blob is decoded instead.
+        """
+        if not ids:
+            return {}
+        placeholders = ", ".join("?" * len(ids))
+        found = conn.execute(
+            "SELECT r.request_id,"
+            " COALESCE(bi.payload, br.payload) AS payload,"
+            " CASE WHEN bi.payload IS NOT NULL THEN bi.dict_id ELSE br.dict_id END"
+            " AS dict_id"
+            " FROM request_bodies r"
+            " LEFT JOIN body_blobs bi ON bi.sha = r.input_sha"
+            " LEFT JOIN body_blobs br ON br.sha = r.sha"
+            f" WHERE r.request_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        heads: dict[str, str] = {}
+        for row in found:
+            text = self._decode_bodies(row["payload"], row["dict_id"]).get("input_text")
+            if isinstance(text, str) and text:
+                heads[str(row["request_id"])] = text[:_PROMPT_HEAD_CHARS]
+        return heads
+
     def _backfill_cost_day(
         self,
         conn: sqlite3.Connection,
@@ -3703,6 +3938,10 @@ class RequestLogStore:
                     # bounded by one chunk rather than by the walk.
                     self._ensure_cost_backfill(conn)
                     self._ensure_attempts_ts_backfill(conn)
+                    # Only after the operator asked; see
+                    # ``request_origin_backfill``.
+                    if self._origin_backfill_requested.is_set():
+                        self._run_origin_backfill(conn)
                     continue
                 if item is _STOP:
                     stopping = True
@@ -4602,6 +4841,11 @@ class RequestLogStore:
             record.ttft_winner_ms,
             record.reasoning_tokens,
             record.tool_catalogue.sha if record.tool_catalogue is not None else None,
+            record.session_id,
+            record.agent_id,
+            record.parent_session_id,
+            record.project_dir,
+            record.origin_source,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -5584,6 +5828,16 @@ class RequestLogStore:
         catalogue_sha = data.get("tool_catalogue_sha")
         if isinstance(catalogue_sha, bytes):
             data["tool_catalogue_sha"] = catalogue_sha.hex()
+        # Display forms of the origin, derived here so the list and the detail
+        # say the same thing, and never stored: a presentation decision frozen
+        # into history could not be changed. Only when the query projected the
+        # column, for the same reason ``cancel_reason`` below is.
+        if "session_id" in data:
+            data["session_short"] = session_short(data.get("session_id"))
+        if "project_dir" in data:
+            data["project_short"] = project_short(data.get("project_dir"))
+        if "origin_source" in data:
+            data["origin_provenance"] = origin_provenance(data.get("origin_source"))
         # Which of the four things "cancelled" means, derived here so that the
         # list, the detail and the export all answer it the same way and no
         # caller has to know the rule. NULL on every other status -- a
