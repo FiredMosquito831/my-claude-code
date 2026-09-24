@@ -4113,6 +4113,50 @@ An attempt with a single try shows no ladder: nothing was hidden, so nothing is 
 
 > **One gotcha worth knowing.** `output_widened_from` is deliberately a plain per-attempt parameter and *not* a reasoning adaptation kind, so widening never badges and never appears in the adaptation severity table. Relatedly, the request-level adaptation line can still name one model while a fallback actually answered — read the per-attempt panes when the chain has more than one entry.
 
+### Requests in flight
+
+A request reaches the Requests table only when it **finishes**: its row is written once, at the end, so
+a request still waiting on a model, asleep on a backoff or halfway through a long answer is not in
+the log yet. **`GET /admin/api/requests/in-flight`** (7.44.0) answers the other half — every
+request this server is serving right now, oldest first, read from memory:
+
+```json
+{ "enabled": true, "total": 3, "shown": 3, "truncated": false, "reaped": 0, "now_mono": 91823.4,
+  "rows": [ { "id": "req_…", "elapsed_ms": 41200.0, "harness": "claude", "requested_model": "mcc/best",
+              "tier": "best", "attempt_index": 1, "provider": "opencode", "model_ref": "opencode/…",
+              "phase": "attempt", "phase_since": 91801.9, "phase_elapsed_ms": 21500.0,
+              "waited_s": 12.0, "attempt_tries": 2, "last_try_status": 429,
+              "ttft_ms": null, "output_chars": null, "chunks_to_client": 0,
+              "key_label": "sk-8…Kofx", "session_short": "0f3c2a1b", "project_dir_pending": true, … } ] }
+```
+
+- **Phases**, each stamped at the moment MCC itself made the transition, never from a poll:
+  `received` → `describe` (a picture is being described first) → `routing` → `attempt` (attempt N
+  has started and not one byte has reached your client) → `awaiting_content` (the first byte is out
+  — usually MCC's own `message_start`, sent the moment the upstream accepts — and the model has
+  produced no text, reasoning or tool call yet) → `streaming` (it has).
+- **`attempt` does not say *why* nothing has arrived.** Waiting on the model and MCC asleep on a
+  backoff look the same in one read. `waited_s` tells them apart across two reads: it grows only
+  while MCC sleeps.
+- **Empty means "not measured", never zero.** With the request log switched off, the characters
+  streamed and the retry ladder are not counted, so they read `null` and the row says
+  `"observed": false`; `chunks_to_client` and the phase still work, except that without the
+  observer the model's first words cannot be told from the opening frame, so `streaming` starts at
+  the first byte.
+- **Session and folder** are the ones the request log stores, under the same two settings. Claude
+  Code's folder is read from the prompt only when the request is logged, after it is answered, so
+  an in-flight row says `project_dir_pending` instead of guessing.
+- **Nothing a client wrote** is in the answer: no prompt, no reply, no header, no key. The key and
+  proxy labels are the masked ones the log already shows.
+- **Cheap and bounded.** No database and no stack walk; `?limit=` (default 200) bounds the rows,
+  `total` always counts them all. `in_flight` on `/admin/api/requests/pulse` is the same count.
+- **Nothing expires on a timer.** A request that is alive for 47 minutes is listed for 47 minutes.
+  An entry leaves when its request finishes, or when every task that served it has ended (counted
+  in `reaped`).
+
+`REQUEST_INFLIGHT_ENABLED=false` (on the **Request log storage** card; restart to apply) turns the list off; the endpoint then
+answers `{"enabled": false}`. It is independent of `REQUEST_LOG_ENABLED`.
+
 ### The Token Optimizer page
 
 **Admin UI → Token Optimizer** answers one question from your own request log: what never reached a provider at all? Nothing on this page is switched on for you.

@@ -3178,6 +3178,24 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "REQUEST_INFLIGHT_ENABLED",
+        "Show requests in flight",
+        "request_log",
+        "boolean",
+        settings_attr="request_inflight_enabled",
+        default="true",
+        restart_required=True,
+        affects_providers=False,
+        description=(
+            "Keeps an in-memory list of the requests this server is serving "
+            "right now -- age, attempt, phase, characters streamed, session "
+            "and folder -- so they can be seen before they finish and reach "
+            "the log. Counts and labels only, never a prompt or a key, and no "
+            "database work. Independent of the request log: it works with the "
+            "log switched off. Nothing is ever written to disk by it."
+        ),
+    ),
+    ConfigFieldSpec(
         "REQUEST_LOG_WIRE_BODY_MAX_CHARS",
         "Outbound body detail to store",
         "request_log",

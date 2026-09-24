@@ -5,13 +5,25 @@ It exists for one reason: the stuck-request watchdog cannot dump the stack of
 "the task serving ``req_ab12``" unless something wrote down which task that is,
 and nothing did.
 
-**Deliberately not the in-flight registry.** The live "In flight" panel
-(PR-F1) needs a much wider entry -- session, folder, tier, phase history, the
-whole Analytics row before it exists. That is a different release. What is here
-is the subset that a watchdog needs and that F1 can grow into: the same
-register/unregister choke points, the same weakref reaping rule, the same
-``threading.Lock``. F1 adds fields to :class:`RequestTaskEntry` and readers to
-:func:`snapshot`; it does not have to move the seam.
+**Also the in-flight registry.** The live "In flight" view reads the same
+entries through :func:`inflight_report`: the same register/unregister choke
+points, the same weakref reaping rule, the same ``threading.Lock``. What the
+watchdog needed was grown rather than replaced -- the fields a request knows
+when it arrives (origin, counts) sit on :class:`RequestTaskEntry`, and the ones
+that move (attempt, phase stamps, characters streamed) are read through the
+same :class:`RequestProgress` reader the watchdog polls. The registry is on
+when either reader is: ``REQUEST_WATCHDOG_ENABLED`` or
+``REQUEST_INFLIGHT_ENABLED``.
+
+**Phases, and why each has an exact stamp.** The in-flight view names one of
+:data:`INFLIGHT_PHASES` and the monotonic moment it began, and every one of
+those moments is a statement MCC itself executed -- the capture being built,
+a describe hop finishing, the plan being set, an attempt being started, the
+first byte reaching the client. Nothing is stamped from a poll. What a single
+read *cannot* say -- whether a request sitting in ``attempt`` is waiting on a
+model or asleep on a backoff -- is left to the reader, who gets ``waited_s``
+and can compare two reads; MCC asleep moves that number and a silent model
+does not.
 
 **Why more than one task per request.** A streaming answer is held by two
 different tasks over its life. The handler's own task awaits the *first* chunk
@@ -43,7 +55,10 @@ promise and three are a design:
 
 Nothing in this module ever stores a prompt, a response, a header or a key. The
 credential and proxy labels it reads are the already-masked ones those slots
-carry, exactly as ``core/credential_attribution.py`` states for itself.
+carry, exactly as ``core/credential_attribution.py`` states for itself. The
+origin it holds is what the request log itself stores -- the session id and
+folder the client stated -- and only when the operator's two capture settings
+allow it; lengths and counts stand in for everything else.
 """
 
 import asyncio
@@ -54,6 +69,8 @@ from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
+
+from my_claude_code.core.request_origin import project_short, session_short
 
 #: Phase names. Exactly three, because a record that cannot say which of these
 #: a stall is in is a record nobody can act on.
@@ -70,6 +87,46 @@ from typing import Any
 PHASE_AWAITING_FIRST_BYTE = "awaiting_first_upstream_byte"
 PHASE_STREAMING_STOPPED = "streaming_stopped"
 PHASE_BETWEEN_ATTEMPTS = "between_attempts"
+
+#: In-flight phase names, in the order a request moves through them.
+#:
+#: * ``received`` -- the capture exists and nothing has been routed yet.
+#: * ``describe`` -- not routed yet, and at least one vision describe hop has
+#:   already finished. A describe run starts the moment the request arrives, so
+#:   its ``phase_since`` is the arrival; the phase can only be *seen* once the
+#:   first hop reports, because hops report when they end.
+#: * ``routing`` -- the plan is set and no attempt has started.
+#: * ``attempt`` -- attempt N has started and not one byte has reached the
+#:   client. Waiting on the model and asleep on a backoff both look like this;
+#:   ``waited_s`` moving between two reads is what tells them apart.
+#: * ``awaiting_content`` -- the first byte has reached the client and the
+#:   model has not yet produced text, reasoning or a tool call. Most streams
+#:   open with MCC's own ``message_start`` the moment the upstream accepts
+#:   (measured: 17 ms after arrival on the scratch rig, against a model that
+#:   then said nothing for minutes), so "a byte went out" is not "the model
+#:   is talking", and the view must not say it is.
+#: * ``streaming`` -- the model's own content has reached the client. Seeing
+#:   content needs the request log's observer; with the log off it cannot be
+#:   told apart from the opening frame, so ``streaming`` then starts at the
+#:   first byte and the row says ``observed: false``.
+PHASE_RECEIVED = "received"
+PHASE_DESCRIBE = "describe"
+PHASE_ROUTING = "routing"
+PHASE_ATTEMPT = "attempt"
+PHASE_AWAITING_CONTENT = "awaiting_content"
+PHASE_STREAMING = "streaming"
+INFLIGHT_PHASES = (
+    PHASE_RECEIVED,
+    PHASE_DESCRIBE,
+    PHASE_ROUTING,
+    PHASE_ATTEMPT,
+    PHASE_AWAITING_CONTENT,
+    PHASE_STREAMING,
+)
+
+#: How many rows :func:`inflight_report` describes when the caller names no
+#: limit. Everything past it is counted in ``total``, never silently dropped.
+DEFAULT_INFLIGHT_LIMIT = 200
 
 #: How many distinct tasks one request may collect. Two is the shipped shape
 #: (handler, then the streaming child); four leaves room for a surface that
@@ -96,6 +153,28 @@ class RequestProgress:
     thinking_chars: int = 0
     tries: int = 0
     waited_seconds: float = 0.0
+    # --- read by the in-flight view only; never part of ``signature`` -------
+    #: Whether the request log is observing this request. When it is not, the
+    #: character counters above were never counted and are reported as NULL
+    #: rather than as a confident zero.
+    observed: bool = True
+    tier: str | None = None
+    tier_source: str | None = None
+    #: Describe hops finished so far. Counted whether or not the log is on.
+    describe_hops: int = 0
+    #: Monotonic stamps of the transitions the capture itself executed.
+    plan_mono: float | None = None
+    attempt_mono: float | None = None
+    first_byte_mono: float | None = None
+    #: When the model's own text, reasoning or tool call first reached the
+    #: client. Only an observed (logged) stream can see it.
+    first_content_mono: float | None = None
+    #: Upstream tries the ladder has recorded for the *current* attempt, and
+    #: the last one's census code. ``None`` when the ladder is not installed
+    #: (log off): not measured, not zero.
+    attempt_tries: int | None = None
+    last_try_status: int | None = None
+    last_try_error_kind: str | None = None
 
     def signature(self) -> tuple[object, ...]:
         """The tuple whose *change* between two polls means "progress".
@@ -143,11 +222,26 @@ class RequestTaskEntry:
     stream: bool
     harness: str | None = None
     requested_model: str | None = None
+    # --- known on arrival; read by the in-flight view ----------------------
+    #: Where the request came from, exactly as the request log would store it
+    #: and only when the capture settings allow it. A folder that only the
+    #: prompt can supply is resolved at finalize, off the loop, so an in-flight
+    #: request says ``project_dir_pending`` instead of guessing.
+    session_id: str | None = None
+    agent_id: str | None = None
+    parent_session_id: str | None = None
+    project_dir: str | None = None
+    origin_source: str | None = None
+    project_dir_pending: bool = False
+    tools_count: int | None = None
+    input_chars: int | None = None
+    image_count: int = 0
     #: Chunks handed to the client by ``_PrefetchedStream``. Counted there and
     #: not in ``RequestCapture`` because the capture's observer is skipped
     #: entirely when the request log is off, and "is it still streaming" must
     #: not depend on a logging setting.
     chunks: int = 0
+    first_chunk_mono: float | None = None
     last_chunk_mono: float | None = None
     progress: ProgressReader | None = None
     _tasks: list[weakref.ref[asyncio.Task[Any]]] = field(default_factory=list)
@@ -205,27 +299,43 @@ _CURRENT: ContextVar[RequestTaskEntry | None] = ContextVar(
     "mcc_request_task_entry", default=None
 )
 _ENABLED = True
+_INFLIGHT = True
 _reaped_total = 0
 
 
-def configure(*, enabled: bool) -> None:
-    """Adopt ``REQUEST_WATCHDOG_ENABLED``. Called once, from the lifespan.
+def configure(*, enabled: bool, inflight: bool = False) -> None:
+    """Adopt the operator's two switches. Called once, from the lifespan.
 
-    ``core`` may not import ``config``, so the operator's answer is pushed in
-    from ``runtime`` rather than read here. Turning it off empties the registry
-    as well as stopping it filling: a process that switched the watchdog off
-    should not go on holding weakrefs nobody will ever read.
+    ``enabled`` is ``REQUEST_WATCHDOG_ENABLED`` and ``inflight`` is
+    ``REQUEST_INFLIGHT_ENABLED``; the registry tracks requests when either
+    reader wants them. ``core`` may not import ``config``, so the answers are
+    pushed in from ``runtime`` rather than read here. Turning both off empties
+    the registry as well as stopping it filling: a process that switched both
+    readers off should not go on holding weakrefs nobody will ever read.
     """
 
-    global _ENABLED
+    global _ENABLED, _INFLIGHT
     with _LOCK:
-        _ENABLED = bool(enabled)
+        _INFLIGHT = bool(inflight)
+        _ENABLED = bool(enabled) or _INFLIGHT
         if not _ENABLED:
             _ENTRIES.clear()
 
 
 def enabled() -> bool:
     return _ENABLED
+
+
+def inflight_enabled() -> bool:
+    """Whether the in-flight view is switched on in this process.
+
+    Read from what the lifespan adopted, not from the settings object: the
+    switch is restart-required, and a view that answered "on" from an edited
+    setting over a registry that was never filled would be showing an empty
+    list as a measurement.
+    """
+
+    return _ENABLED and _INFLIGHT
 
 
 def register(
@@ -237,21 +347,46 @@ def register(
     harness: str | None,
     requested_model: str | None,
     progress: ProgressReader | None,
+    started_at_mono: float | None = None,
+    session_id: str | None = None,
+    agent_id: str | None = None,
+    parent_session_id: str | None = None,
+    project_dir: str | None = None,
+    origin_source: str | None = None,
+    project_dir_pending: bool = False,
+    tools_count: int | None = None,
+    input_chars: int | None = None,
+    image_count: int = 0,
 ) -> RequestTaskEntry | None:
-    """Start tracking one request. O(1); the last statement of a capture."""
+    """Start tracking one request. O(1); the last statement of a capture.
+
+    ``started_at_mono`` is the capture's own arrival stamp, so the age the
+    in-flight view reports and the phase stamps the capture takes afterwards
+    are measured on one clock from one origin.
+    """
 
     if not _ENABLED:
         return None
     now = time.monotonic()
+    started = now if started_at_mono is None else started_at_mono
     entry = RequestTaskEntry(
         request_id=request_id,
-        started_at_mono=now,
-        started_at_wall=time.time(),
+        started_at_mono=started,
+        started_at_wall=time.time() - (now - started),
         endpoint=endpoint,
         protocol=protocol,
         stream=stream,
         harness=harness,
         requested_model=requested_model,
+        session_id=session_id,
+        agent_id=agent_id,
+        parent_session_id=parent_session_id,
+        project_dir=project_dir,
+        origin_source=origin_source,
+        project_dir_pending=project_dir_pending,
+        tools_count=tools_count,
+        input_chars=input_chars,
+        image_count=image_count,
         progress=progress,
         last_progress_mono=now,
     )
@@ -286,8 +421,11 @@ def note_stream_chunk() -> None:
     entry = _CURRENT.get()
     if entry is None:
         return
+    moment = time.monotonic()
+    if entry.chunks == 0:
+        entry.first_chunk_mono = moment
     entry.chunks += 1
-    entry.last_chunk_mono = time.monotonic()
+    entry.last_chunk_mono = moment
     task = _current_task()
     if task is not None:
         entry.note_task(task)
@@ -339,16 +477,165 @@ def reaped_total() -> int:
 def reset() -> None:
     """Empty the registry. For the test fixture, and for a restart."""
 
-    global _ENABLED, _reaped_total
+    global _ENABLED, _INFLIGHT, _reaped_total
     with _LOCK:
         _ENTRIES.clear()
         _ENABLED = True
+        _INFLIGHT = True
         _reaped_total = 0
     _CURRENT.set(None)
 
 
 def iter_entries() -> Iterator[RequestTaskEntry]:
     yield from snapshot()
+
+
+def inflight_count() -> int | None:
+    """How many requests are in flight, or ``None`` when nobody is counting.
+
+    Reaps first, like every other reader. A streamed answer with the request
+    log off never finalizes -- its capture has no observer -- and leaves only
+    when its tasks are done, so a bare ``len`` would go on counting it until
+    some other reader happened by. Measured on the scratch rig: all eleven
+    log-off requests of a run left through the reaper.
+    """
+
+    if not inflight_enabled():
+        return None
+    return len(snapshot())
+
+
+def inflight_phase(
+    entry: RequestTaskEntry, progress: RequestProgress | None
+) -> tuple[str, float]:
+    """The phase this request is in, and the monotonic moment it began.
+
+    Latest transition wins, and each one is a stamp the capture or the stream
+    took when the transition happened. The first byte is whichever of the two
+    witnesses saw it first: the capture's observer (log on) or the chunk
+    counter where bytes leave (always).
+    """
+
+    candidates = [entry.first_chunk_mono]
+    if progress is not None:
+        candidates.append(progress.first_byte_mono)
+    stamps = [stamp for stamp in candidates if stamp is not None]
+    first_byte = min(stamps) if stamps else None
+    if first_byte is not None:
+        if progress is not None and progress.first_content_mono is not None:
+            return PHASE_STREAMING, progress.first_content_mono
+        if progress is not None and progress.observed:
+            return PHASE_AWAITING_CONTENT, first_byte
+        return PHASE_STREAMING, first_byte
+    if progress is None:
+        return PHASE_RECEIVED, entry.started_at_mono
+    if progress.attempt_mono is not None:
+        return PHASE_ATTEMPT, progress.attempt_mono
+    if progress.plan_mono is not None:
+        return PHASE_ROUTING, progress.plan_mono
+    if progress.describe_hops > 0:
+        return PHASE_DESCRIBE, entry.started_at_mono
+    return PHASE_RECEIVED, entry.started_at_mono
+
+
+def inflight_row(entry: RequestTaskEntry, *, now: float) -> dict[str, Any]:
+    """One in-flight request as the view shows it: counts and labels only.
+
+    Every value is a string, a number, a bool or ``None``, so the endpoint can
+    hand the list to ``JSONResponse`` without an encoder pass. ``None`` means
+    "not measured" (the house rule), never zero: characters streamed are only
+    counted while the request log observes the stream, and the ladder's tries
+    only while it is installed.
+    """
+
+    progress = entry.read_progress()
+    phase, phase_since = inflight_phase(entry, progress)
+    ttft_ms: float | None = None
+    if progress is not None and progress.ttft_ms is not None:
+        ttft_ms = progress.ttft_ms
+    elif entry.first_chunk_mono is not None:
+        ttft_ms = (entry.first_chunk_mono - entry.started_at_mono) * 1000
+    last_chunk_age = (
+        None if entry.last_chunk_mono is None else now - entry.last_chunk_mono
+    )
+    observed = progress is not None and progress.observed
+    content_ms: float | None = None
+    if progress is not None and progress.first_content_mono is not None:
+        content_ms = (progress.first_content_mono - entry.started_at_mono) * 1000
+    row: dict[str, Any] = {
+        "id": entry.request_id,
+        "started_at": entry.started_at_wall,
+        "started_at_mono": round(entry.started_at_mono, 3),
+        "elapsed_ms": round((now - entry.started_at_mono) * 1000, 1),
+        "endpoint": entry.endpoint,
+        "protocol": entry.protocol,
+        "stream": entry.stream,
+        "harness": entry.harness,
+        "requested_model": entry.requested_model,
+        "tier": None if progress is None else progress.tier,
+        "tier_source": None if progress is None else progress.tier_source,
+        "attempt_index": None if progress is None else progress.attempt_index,
+        "provider": None if progress is None else progress.provider,
+        "model_ref": None if progress is None else progress.model_ref,
+        "phase": phase,
+        "phase_since": round(phase_since, 3),
+        "phase_elapsed_ms": round(max(0.0, now - phase_since) * 1000, 1),
+        "describe_hops": 0 if progress is None else progress.describe_hops,
+        "observed": observed,
+        "ttft_ms": None if ttft_ms is None else round(ttft_ms, 1),
+        "first_content_ms": None if content_ms is None else round(content_ms, 1),
+        "output_chars": progress.output_chars if observed and progress else None,
+        "thinking_chars": (progress.thinking_chars if observed and progress else None),
+        "chunks_to_client": entry.chunks,
+        "last_chunk_age_s": (
+            None if last_chunk_age is None else round(last_chunk_age, 3)
+        ),
+        "waited_s": (0.0 if progress is None else round(progress.waited_seconds, 3)),
+        "attempt_tries": None if progress is None else progress.attempt_tries,
+        "last_try_status": None if progress is None else progress.last_try_status,
+        "last_try_error_kind": (
+            None if progress is None else progress.last_try_error_kind
+        ),
+        "key_label": None if progress is None else progress.key_label,
+        "proxy_label": None if progress is None else progress.proxy_label,
+        "tools_count": entry.tools_count,
+        "input_chars": entry.input_chars,
+        "image_count": entry.image_count,
+        "session_id": entry.session_id,
+        "session_short": session_short(entry.session_id),
+        "agent_id": entry.agent_id,
+        "parent_session_id": entry.parent_session_id,
+        "project_dir": entry.project_dir,
+        "project_short": project_short(entry.project_dir),
+        "project_dir_pending": entry.project_dir_pending,
+        "origin_source": entry.origin_source,
+    }
+    return row
+
+
+def inflight_report(*, limit: int = DEFAULT_INFLIGHT_LIMIT) -> dict[str, Any]:
+    """Everything ``GET /admin/api/requests/in-flight`` answers with.
+
+    One lock, one reap, and one short loop over at most ``limit`` entries --
+    no database, no provider, no stack walk. Oldest first, and the cut is made
+    *after* sorting, so the rows shown are the ones worth looking at and
+    ``total`` says how many there are in all.
+    """
+
+    if not inflight_enabled():
+        return {"enabled": False}
+    now = time.monotonic()
+    entries = snapshot()
+    shown = entries[: max(0, limit)]
+    return {
+        "enabled": True,
+        "total": len(entries),
+        "shown": len(shown),
+        "truncated": len(shown) < len(entries),
+        "reaped": reaped_total(),
+        "now_mono": round(now, 3),
+        "rows": [inflight_row(entry, now=now) for entry in shown],
+    }
 
 
 def _current_task() -> asyncio.Task[Any] | None:
@@ -359,9 +646,17 @@ def _current_task() -> asyncio.Task[Any] | None:
 
 
 __all__ = [
+    "DEFAULT_INFLIGHT_LIMIT",
+    "INFLIGHT_PHASES",
     "MAX_TASKS_PER_REQUEST",
+    "PHASE_ATTEMPT",
+    "PHASE_AWAITING_CONTENT",
     "PHASE_AWAITING_FIRST_BYTE",
     "PHASE_BETWEEN_ATTEMPTS",
+    "PHASE_DESCRIBE",
+    "PHASE_RECEIVED",
+    "PHASE_ROUTING",
+    "PHASE_STREAMING",
     "PHASE_STREAMING_STOPPED",
     "RequestProgress",
     "RequestTaskEntry",
@@ -369,6 +664,11 @@ __all__ = [
     "count",
     "current_entry",
     "enabled",
+    "inflight_count",
+    "inflight_enabled",
+    "inflight_phase",
+    "inflight_report",
+    "inflight_row",
     "iter_entries",
     "note_serving_task",
     "note_stream_chunk",

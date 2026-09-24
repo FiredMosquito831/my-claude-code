@@ -1196,12 +1196,16 @@ class ApplicationRuntime:
         The registry in ``core`` is told whether to track requests at all from
         here, for the same reason the loop-health record is: ``core`` may not
         import ``config``, and a request path may not resolve configuration.
-        Switching the watchdog off therefore also empties the registry, so a
-        server the operator told not to watch holds nothing.
+        The registry has two readers -- this watchdog and the in-flight view --
+        and it tracks requests while either is switched on. Switching both off
+        empties it, so a server the operator told not to watch holds nothing.
         """
 
         settings = self.settings
-        request_tasks.configure(enabled=bool(settings.request_watchdog_enabled))
+        request_tasks.configure(
+            enabled=bool(settings.request_watchdog_enabled),
+            inflight=bool(getattr(settings, "request_inflight_enabled", True)),
+        )
         if not settings.request_watchdog_enabled:
             return
         watchdog = StallWatchdog(

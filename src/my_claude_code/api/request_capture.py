@@ -63,6 +63,7 @@ from my_claude_code.core.request_log import (
     store_from_settings,
 )
 from my_claude_code.core.request_origin import (
+    EMPTY_ORIGIN,
     PROMPT_HARNESSES,
     OriginInputs,
     RequestOrigin,
@@ -203,7 +204,20 @@ class RequestCapture:
         # from the one above it, or none at all.
         self._preference_sources: dict[int, dict[str, str]] = {}
         self._start = time.perf_counter()
+        # The same instant on the monotonic clock the in-flight registry uses,
+        # so the request's age and every phase stamp below share one origin.
+        self._start_mono = time.monotonic()
         self._ttft_ms: float | None = None
+        # When the first byte came through ``_observe``. Only a logged request
+        # has an observer; the chunk counter in ``request_tasks`` is the
+        # witness that runs either way.
+        self._first_byte_mono: float | None = None
+        # When the model's own content -- text, reasoning or a tool call --
+        # first went past the observer. Distinct from the first byte: most
+        # streams open with MCC's ``message_start`` as soon as the upstream
+        # accepts, long before the model has said anything, and the in-flight
+        # view must not call that silence "streaming".
+        self._first_content_mono: float | None = None
         self._output_parts: list[str] = []
         self._output_chars = 0
         self._stored_chars = 0
@@ -275,6 +289,14 @@ class RequestCapture:
         self._attempt_index: int | None = None
         self._attempt_provider: str | None = None
         self._attempt_model_ref: str | None = None
+        # The in-flight view's transitions, stamped where they happen and,
+        # like the three fields above, whether or not the request log is on.
+        # A tier is a label of the plan, so it is kept beside it.
+        self._plan_mono: float | None = None
+        self._attempt_mono: float | None = None
+        self._describe_hops = 0
+        self._tier: str | None = None
+        self._tier_source: str | None = None
         # Routing's own verdict, kept so a provider-level adaptation recorded
         # after the request left can be merged with it at commit time rather
         # than overwriting it.
@@ -301,14 +323,30 @@ class RequestCapture:
             tools=tuple(request.tools or ()) if request is not None else (),
             keep_tool_definitions=capture_bodies,
         )
-        if origin is not None and self.enabled:
-            self._apply_origin(
-                resolve_origin(
-                    origin,
-                    capture_session=capture_session,
-                    capture_folder=capture_folder,
-                )
+        # Resolved whether or not the log is on -- two dict reads -- because
+        # the in-flight view shows it too; the row only takes it when logged.
+        # The capture settings govern both: an operator who turned the folder
+        # off does not see it reappear in memory either.
+        arrived = (
+            EMPTY_ORIGIN
+            if origin is None
+            else resolve_origin(
+                origin,
+                capture_session=capture_session,
+                capture_folder=capture_folder,
             )
+        )
+        if origin is not None and self.enabled:
+            self._apply_origin(arrived)
+        # Only a logged request ever reads the prompt for its folder (at
+        # finalize, off the loop), so only a logged request may promise one.
+        folder_pending = (
+            self.enabled
+            and capture_folder
+            and origin is not None
+            and arrived.project_dir is None
+            and (origin.harness or "") in PROMPT_HARNESSES
+        )
         # Last, and deliberately not gated on ``self.enabled``: the registry
         # the stuck-request watchdog reads tracks *requests*, not log rows, and
         # a request the operator chose not to log is exactly as capable of
@@ -323,6 +361,16 @@ class RequestCapture:
             harness=harness,
             requested_model=requested_model,
             progress=self.watchdog_progress,
+            started_at_mono=self._start_mono,
+            session_id=arrived.session_id,
+            agent_id=arrived.agent_id,
+            parent_session_id=arrived.parent_session_id,
+            project_dir=arrived.project_dir,
+            origin_source=arrived.origin_source,
+            project_dir_pending=folder_pending,
+            tools_count=(len(request.tools or ()) if request is not None else None),
+            input_chars=input_chars,
+            image_count=len(images),
         )
 
     @property
@@ -346,13 +394,19 @@ class RequestCapture:
 
         tries = 0
         last_try_failed = False
+        attempt_tries: int | None = None
+        last_status: int | None = None
+        last_error_kind: str | None = None
         ladder = self._ladder
         if ladder is not None:
             for slot in ladder.ladders.values():
                 tries += len(slot.tries)
             current = ladder.ladders.get(ladder.current_attempt)
+            attempt_tries = 0 if current is None else len(current.tries)
             if current is not None and current.tries:
                 last = current.tries[-1]
+                last_status = last.status
+                last_error_kind = last.error_kind
                 last_try_failed = last.error_kind is not None or (
                     last.status is not None and last.status >= 400
                 )
@@ -386,6 +440,17 @@ class RequestCapture:
             thinking_chars=self._thinking_chars,
             tries=tries,
             waited_seconds=self._waiting.seconds,
+            observed=self.enabled,
+            tier=self._tier,
+            tier_source=self._tier_source,
+            describe_hops=self._describe_hops,
+            plan_mono=self._plan_mono,
+            attempt_mono=self._attempt_mono,
+            first_byte_mono=self._first_byte_mono,
+            first_content_mono=self._first_content_mono,
+            attempt_tries=attempt_tries,
+            last_try_status=last_status,
+            last_try_error_kind=last_error_kind,
         )
 
     def record_describe_attempt(
@@ -417,6 +482,9 @@ class RequestCapture:
         ``None`` is not measured -- a failed attempt, or a host that reports no
         usage -- and stays NULL rather than becoming a confident zero.
         """
+        # Counted above the early return: the in-flight view says "describe"
+        # for a logged request and an unlogged one alike.
+        self._describe_hops += 1
         if not self.enabled:
             return
         self._attempts.append(
@@ -623,6 +691,12 @@ class RequestCapture:
         it a diverted request is indistinguishable from a route that points at
         the adapter model directly.
         """
+        # Above the early return, for the in-flight view: when the plan was
+        # set, and which tier it resolved, whether or not the row is kept.
+        self._plan_mono = time.monotonic()
+        if plan.tier_route is not None:
+            self._tier = plan.tier_route.tier.value
+            self._tier_source = plan.tier_route.source
         if not self.enabled:
             return
         self._record.route_chain = format_model_ref_list(plan.model_refs())
@@ -655,6 +729,10 @@ class RequestCapture:
         # watchdog must be able to say which attempt and which model a park is
         # on whether or not the request log is switched on. Nothing below this
         # point changes, and neither does what any row records.
+        # An attempt starts when its index changes; the handler and the
+        # executor both announce attempt 0, and the second is not a new one.
+        if self._attempt_mono is None or self._attempt_index != attempt:
+            self._attempt_mono = time.monotonic()
         self._attempt_index = attempt
         self._attempt_provider = routed.resolved.provider_id
         self._attempt_model_ref = routed.resolved.provider_model_ref
@@ -791,8 +869,13 @@ class RequestCapture:
             async for chunk in body:
                 if self._ttft_ms is None:
                     self._ttft_ms = (time.perf_counter() - self._start) * 1000
+                    self._first_byte_mono = time.monotonic()
                 saw_chunk = True
                 buffer = self._consume_buffer(buffer + chunk)
+                if self._first_content_mono is None and (
+                    self._output_chars or self._thinking_chars or self._tool_blocks
+                ):
+                    self._first_content_mono = time.monotonic()
                 yield chunk
             if self._error is not None:
                 status = "error"

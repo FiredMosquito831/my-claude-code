@@ -1760,6 +1760,12 @@ class Settings(BaseSettings):
     request_log_capture_session: bool = Field(
         default=True, validation_alias="REQUEST_LOG_CAPTURE_SESSION"
     )
+    # The live in-flight view (``GET /admin/api/requests/in-flight``): which
+    # requests this server is serving right now, from memory, before any row
+    # exists. Independent of the request log: no database work at all.
+    request_inflight_enabled: bool = Field(
+        default=True, validation_alias="REQUEST_INFLIGHT_ENABLED"
+    )
     # Retention cap; oldest rows are pruned periodically past this many rows.
     request_log_max_rows: int = Field(
         default=REQUEST_LOG_MAX_ROWS_DEFAULT,
