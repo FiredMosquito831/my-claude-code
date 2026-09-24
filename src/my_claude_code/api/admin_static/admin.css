@@ -2986,6 +2986,98 @@ details.turn-pane > summary:focus-visible {
   line-height: 1.45;
 }
 
+/* ---- Which tools array the request carried (7.40.0) ---- */
+
+.req-tool-catalogue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.req-tool-catalogue-sha {
+  font-size: 12px;
+}
+
+.req-tool-catalogue-count {
+  color: var(--text-strong);
+}
+
+.req-tool-catalogue-note {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.req-tool-catalogue-missing {
+  color: var(--muted);
+}
+
+.req-tool-catalogue-tools {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+.req-tool-catalogue-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.req-tool-name {
+  padding: 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.req-tool-name:hover,
+.req-tool-name:focus-visible {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.req-tool-carriers {
+  margin-top: 8px;
+}
+
+.req-tool-carriers-heading {
+  margin: 0;
+  font-size: 12px;
+}
+
+.req-tool-carriers-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.req-tool-carrier {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
 /* ---- Which client sent the request ---- */
 
 .harness-chip {

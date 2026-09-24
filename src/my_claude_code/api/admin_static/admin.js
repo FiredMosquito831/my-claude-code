@@ -17641,6 +17641,7 @@ async function openRequestDetail(requestId) {
   });
   appendCancelReasonDetail(meta, row);
   appendRequestCostDetail(meta, row);
+  appendToolCatalogueDetail(meta, row);
   renderRequestRouteTrace(row);
   renderRequestImages(row);
   renderRequestChain(row);
@@ -17648,6 +17649,170 @@ async function openRequestDetail(requestId) {
   renderTurnTranscript(row);
   byId("reqDetailModal").hidden = false;
   byId("reqDetailClose").focus();
+}
+
+/* Which tools array this request carried (7.40.0). The log keeps one hash per
+   request and each distinct array once, so this shows the hash, the count and
+   -- behind an expander, because a Claude Code session can carry 200+ tools --
+   the names in the order the client sent them. Choosing a name lists the
+   requests that carried a tool of that name. Names and hashes only: a tool's
+   definition is never shown here.
+
+   A request that carried tools but has no hash predates the recording; it says
+   so rather than showing nothing, which would read as "no tools". */
+function appendToolCatalogueDetail(meta, row) {
+  const catalogue = row.tool_catalogue;
+  const sha = row.tool_catalogue_sha;
+  const declared = Number((row.params && row.params.tools_count) || 0);
+  if (!sha && !declared) return;
+  const dt = document.createElement("dt");
+  dt.textContent = "Tool catalogue";
+  const dd = document.createElement("dd");
+  dd.className = "req-tool-catalogue";
+  if (!sha) {
+    dd.classList.add("req-tool-catalogue-missing");
+    dd.textContent = `${formatAnalyticsNumber(declared)} tools, not recorded`;
+    const why = document.createElement("span");
+    why.className = "req-tool-catalogue-note";
+    why.textContent =
+      "Which tools a request carried is recorded from 7.40.0 on; this request is older.";
+    dd.appendChild(why);
+    meta.append(dt, dd);
+    return;
+  }
+  const code = document.createElement("code");
+  code.className = "req-tool-catalogue-sha";
+  code.textContent = sha.slice(0, 16);
+  code.title = `SHA-256 of the tools array: ${sha}`;
+  dd.appendChild(code);
+  const count = document.createElement("span");
+  count.className = "req-tool-catalogue-count";
+  const total = catalogue ? catalogue.tool_count : declared;
+  count.textContent = `${formatAnalyticsNumber(total)} tool${total === 1 ? "" : "s"}`;
+  dd.appendChild(count);
+  if (!catalogue) {
+    const gone = document.createElement("span");
+    gone.className = "req-tool-catalogue-note";
+    gone.textContent = "The catalogue behind this hash is no longer stored.";
+    dd.appendChild(gone);
+    meta.append(dt, dd);
+    return;
+  }
+  if (catalogue.seen) {
+    const seen = document.createElement("span");
+    seen.className = "req-tool-catalogue-note";
+    const first = catalogue.first_seen != null
+      ? new Date(Number(catalogue.first_seen) * 1000).toLocaleString()
+      : null;
+    seen.textContent =
+      `This exact array was sent with ${formatAnalyticsNumber(catalogue.seen)} ` +
+      `request${catalogue.seen === 1 ? "" : "s"}` +
+      (first ? `, first on ${first}.` : ".");
+    dd.appendChild(seen);
+  }
+  const tools = Array.isArray(catalogue.tools) ? catalogue.tools : [];
+  if (tools.length) {
+    const details = document.createElement("details");
+    details.className = "req-tool-catalogue-tools";
+    const summary = document.createElement("summary");
+    summary.textContent = `Show ${tools.length} tool name${tools.length === 1 ? "" : "s"}`;
+    details.appendChild(summary);
+    const hint = document.createElement("p");
+    hint.className = "req-tool-catalogue-note";
+    hint.textContent = "Choose a name to list the requests that carried it.";
+    details.appendChild(hint);
+    const list = document.createElement("ol");
+    list.className = "req-tool-catalogue-list";
+    const carriers = document.createElement("div");
+    carriers.className = "req-tool-carriers";
+    carriers.hidden = true;
+    carriers.setAttribute("aria-live", "polite");
+    tools.forEach((tool) => {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "req-tool-name";
+      button.textContent = tool.name || "(unnamed)";
+      button.title = `Definition SHA-256: ${tool.sha}`;
+      if (tool.name) {
+        button.addEventListener("click", () => {
+          loadToolCarriers(tool.name, carriers).catch((error) => {
+            carriers.hidden = false;
+            carriers.textContent = error.message;
+          });
+        });
+      } else {
+        button.disabled = true;
+      }
+      item.appendChild(button);
+      list.appendChild(item);
+    });
+    details.append(list, carriers);
+    dd.appendChild(details);
+  }
+  meta.append(dt, dd);
+}
+
+/* The answer to "which requests carried this tool", drawn under the name list.
+   Each row opens that request's own detail. */
+async function loadToolCarriers(name, container) {
+  container.hidden = false;
+  container.textContent = `Finding requests that carried ${name}…`;
+  const result = await api(
+    `/admin/api/tool-catalogues/requests?name=${encodeURIComponent(name)}&limit=25`,
+  );
+  container.replaceChildren();
+  const heading = document.createElement("p");
+  heading.className = "req-tool-carriers-heading";
+  const label = document.createElement("strong");
+  label.textContent = name;
+  heading.append("Requests that carried ", label);
+  container.appendChild(heading);
+  const rows = Array.isArray(result.rows) ? result.rows : [];
+  const summary = document.createElement("p");
+  summary.className = "req-tool-catalogue-note";
+  if (!result.catalogues) {
+    summary.textContent = "No recorded request carried a tool of this name.";
+    container.appendChild(summary);
+    return;
+  }
+  const parts = [
+    `${formatAnalyticsNumber(result.seen)} request${result.seen === 1 ? "" : "s"}`,
+    `${formatAnalyticsNumber(result.catalogues)} tools array${result.catalogues === 1 ? "" : "s"}`,
+    `${formatAnalyticsNumber(result.definitions)} definition${result.definitions === 1 ? "" : "s"}`,
+  ];
+  if (result.first_seen != null && result.last_seen != null) {
+    parts.push(
+      `${new Date(Number(result.first_seen) * 1000).toLocaleString()} – ` +
+        new Date(Number(result.last_seen) * 1000).toLocaleString(),
+    );
+  }
+  summary.textContent = parts.join(" · ");
+  container.appendChild(summary);
+  const list = document.createElement("ol");
+  list.className = "req-tool-carriers-list";
+  rows.forEach((entry) => {
+    const item = document.createElement("li");
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "req-tool-carrier";
+    const model = entry.resolved_model || entry.requested_model || "—";
+    open.textContent =
+      `${formatRequestTime(entry)} · ${model} · ${entry.status || "—"}`;
+    open.title = entry.id;
+    open.addEventListener("click", () => {
+      openRequestDetail(entry.id).catch((error) => showMessage(error.message, "error"));
+    });
+    item.appendChild(open);
+    list.appendChild(item);
+  });
+  container.appendChild(list);
+  if (result.has_more) {
+    const more = document.createElement("p");
+    more.className = "req-tool-catalogue-note";
+    more.textContent = `Showing the newest ${rows.length}.`;
+    container.appendChild(more);
+  }
 }
 
 /* Why this request is `cancelled`, in the words the list chip uses plus one
@@ -19451,6 +19616,7 @@ const EXPORT_FIELDS = {
     { id: "tokens_out", label: "Tokens out" },
     { id: "turns_with_tools", label: "Turns with tools" },
     { id: "ladder", label: "Upstream retry ladder" },
+    { id: "tool_catalogue", label: "Tool catalogue" },
   ],
   /* One row per attempt rather than per request. Structural columns -- the
      request's id, time, harness, endpoint, models and status, and the

@@ -4188,6 +4188,27 @@ async def request_log_harness_usage(
     }
 
 
+@router.get("/admin/api/tool-catalogues/requests")
+async def request_log_tool_carriers(
+    request: Request,
+    name: str,
+    limit: int = 25,
+    settings: Settings = Depends(get_settings),
+):
+    """Which logged requests carried a tool of this name, newest first.
+
+    Answered from the tool-catalogue tables the writer fills since 7.40.0, so
+    a request logged before then is never listed: its tools were not recorded.
+    Names and hashes only -- a tool's definition is never part of the answer.
+    """
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False, "name": name, "rows": []}
+    result = await asyncio.to_thread(store.requests_carrying_tool, name, limit=limit)
+    return {"enabled": True, **result}
+
+
 @router.get("/admin/api/requests/{request_id}")
 async def get_request_log_entry(
     request_id: str,

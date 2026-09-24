@@ -32,6 +32,12 @@ from my_claude_code.core.cancelled_reasons import (
 )
 from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.request_images import CapturedImage
+from my_claude_code.core.tool_catalogue import (
+    TOOL_SHA_BYTES,
+    ToolCatalogue,
+    ToolFingerprinter,
+    split_member_shas,
+)
 from my_claude_code.core.upstream_ladder import format_status_census
 
 # ``core`` must not import ``config`` (import-boundary contract), so the
@@ -113,6 +119,13 @@ MAX_TEXT_CHARS = 50_000
 MAX_ERROR_CHARS = 2_000
 LIST_BODY_PREVIEW_CHARS = 4_096
 _PRUNE_EVERY_INSERTS = 100
+# How often, at most, ``prune`` sweeps tool catalogues no retained request
+# carries any more. The sweep reads one column of every ``requests`` row, and
+# on a capped log ``prune`` runs every hundred inserts; the tables it cleans are
+# a few megabytes over a lifetime, so an hour of lag costs nothing.
+_TOOL_SWEEP_INTERVAL_SECONDS = 3600.0
+# ``IN (...)`` lists are chunked well below SQLite's variable limit.
+_SHA_LOOKUP_CHUNK = 500
 _WRITER_BATCH_SIZE = 50
 _WRITER_POLL_SECONDS = 0.25
 _QUEUE_MAX_SIZE = 10_000
@@ -999,6 +1012,37 @@ CREATE TABLE IF NOT EXISTS request_attempts (
     tokens_out INTEGER,
     PRIMARY KEY (request_id, attempt)
 );
+-- The tools a request carried, content-addressed twice over. Before 7.40.0 the
+-- log kept only ``params.tools_count``, and when one tool pattern in a 212-tool
+-- catalogue broke every ChatGPT-OAuth request on 2026-09-20, finding the tool
+-- took hours because the array had never been kept anywhere.
+--
+-- ``tool_schemas`` holds each distinct tool definition once, keyed on the
+-- SHA-256 of its canonical JSON (``core.tool_catalogue``). ``definition`` is
+-- that JSON as plain text, NULL when the operator has turned body capture off
+-- -- the hash and the name are kept either way. Plain rather than compressed
+-- like a body blob: a lifetime of distinct definitions is a few MB, and plain
+-- text lets the 2026-09-20 question be one query --
+-- ``SELECT name FROM tool_schemas WHERE definition LIKE '%videoScale%'``.
+-- ``tool_catalogues`` holds each distinct tools array once: its hash is the
+-- SHA-256 of ``member_shas``, the members' 32-byte hashes concatenated in the
+-- order the client sent them. The request itself carries one 32-byte hash,
+-- ``requests.tool_catalogue_sha``. ``first_seen``/``last_seen``/``seen`` are
+-- counted by the writer, like ``request_totals``, and outlive retention.
+CREATE TABLE IF NOT EXISTS tool_schemas (
+    sha BLOB PRIMARY KEY,
+    name TEXT NOT NULL,
+    definition TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tool_schemas_name ON tool_schemas(name);
+CREATE TABLE IF NOT EXISTS tool_catalogues (
+    sha BLOB PRIMARY KEY,
+    tool_count INTEGER NOT NULL,
+    member_shas BLOB NOT NULL,
+    first_seen REAL,
+    last_seen REAL,
+    seen INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # Keys inside the packed payload. Short because they repeat in every blob.
@@ -1345,6 +1389,15 @@ _ADDED_COLUMNS = (
         "reasoning_tokens",
         "ALTER TABLE requests ADD COLUMN reasoning_tokens INTEGER",
     ),
+    # 7.40.0: the 32-byte hash of the tools array this request carried, or
+    # NULL when it carried none. The array itself lives once, in
+    # ``tool_catalogues`` and ``tool_schemas``; see ``_BODIES_SCHEMA``. NULL
+    # on every row written before the column existed, which is "not
+    # recorded", not "no tools" -- ``params.tools_count`` says which.
+    (
+        "tool_catalogue_sha",
+        "ALTER TABLE requests ADD COLUMN tool_catalogue_sha BLOB",
+    ),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1483,6 +1536,7 @@ _REQUEST_INSERT_COLUMNS = (
     "cost_source",
     "ttft_winner_ms",
     "reasoning_tokens",
+    "tool_catalogue_sha",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -2063,6 +2117,17 @@ class RequestRecord:
     # headers -- the API boundary always fills it, because that classifier
     # answers ``unknown`` rather than nothing when it recognises nothing.
     harness: str | None = None
+    # The tools array the client sent, held by reference until the writer
+    # thread fingerprints it. Never a column: the writer turns it into
+    # ``tool_catalogue`` below and the request row keeps only its hash, so the
+    # hashing costs the request path nothing.
+    tools: tuple[Any, ...] = ()
+    # Whether the tool definitions themselves may be stored. Follows
+    # ``request_log_capture_bodies``, because a definition is request content;
+    # the hashes and names are kept either way.
+    keep_tool_definitions: bool = True
+    # Filled by the writer from ``tools``; None when there were no tools.
+    tool_catalogue: ToolCatalogue | None = None
 
     @property
     def ts_iso(self) -> str:
@@ -2102,6 +2167,11 @@ class RequestLogStore:
         self._cost_backfill_done = False
         # The same "stop asking" flag for the attempt-timestamp walk beside it.
         self._attempts_ts_backfill_done = False
+        # Monotonic time of the last tool-catalogue sweep; see ``prune``.
+        self._last_tool_sweep: float | None = None
+        # Used by the writer thread only: it remembers the tools it last
+        # hashed, so an unchanged array is recognised rather than re-serialised.
+        self._tool_fingerprinter = ToolFingerprinter()
         self._closed = threading.Event()
         self._stats_lock = threading.Lock()
         # OrderedDict as an LRU: ``move_to_end`` on every hit/insert keeps the
@@ -4296,7 +4366,138 @@ class RequestLogStore:
             mapping,
         )
 
+    @staticmethod
+    def _existing_shas(
+        conn: sqlite3.Connection, table: str, shas: Sequence[bytes]
+    ) -> dict[bytes, bool]:
+        """Map each of ``shas`` already in ``table`` to whether it is complete.
+
+        ``table`` is one of this module's own two tool tables, never input. A
+        ``tool_schemas`` row is complete once it holds its definition;
+        ``tool_catalogues`` rows always are.
+        """
+
+        has_payload = "definition IS NOT NULL" if table == "tool_schemas" else "1"
+        found: dict[bytes, bool] = {}
+        for start in range(0, len(shas), _SHA_LOOKUP_CHUNK):
+            chunk = list(shas[start : start + _SHA_LOOKUP_CHUNK])
+            placeholders = ", ".join("?" * len(chunk))
+            found.update(
+                (bytes(row[0]), bool(row[1]))
+                for row in conn.execute(
+                    f"SELECT sha, {has_payload} FROM {table}"
+                    f" WHERE sha IN ({placeholders})",
+                    chunk,
+                )
+            )
+        return found
+
+    def _store_tool_catalogues(
+        self,
+        conn: sqlite3.Connection,
+        batch: list[RequestRecord],
+        fresh: list[RequestRecord],
+    ) -> None:
+        """Store each unseen tools array and tool definition once; count the rest.
+
+        A catalogue already stored costs one indexed lookup per batch and an
+        UPDATE of its counters -- Claude Code sends the same array on every
+        turn of a session, so that is the overwhelmingly common case. Only an
+        unseen catalogue touches ``tool_schemas``.
+
+        ``fresh`` is the subset of ``batch`` not already in the table, the
+        same list the totals and the rollup fold in, so a record written twice
+        is counted once.
+        """
+
+        catalogues: dict[bytes, ToolCatalogue] = {}
+        keep: set[bytes] = set()
+        for record in batch:
+            catalogue = record.tool_catalogue
+            if catalogue is None:
+                continue
+            catalogues.setdefault(catalogue.sha, catalogue)
+            if record.keep_tool_definitions:
+                keep.update(member.sha for member in catalogue.members)
+        if not catalogues:
+            return
+        known = self._existing_shas(conn, "tool_catalogues", list(catalogues))
+        unseen = [
+            catalogue for sha, catalogue in catalogues.items() if sha not in known
+        ]
+        if unseen:
+            members = {
+                member.sha: member
+                for catalogue in unseen
+                for member in catalogue.members
+            }
+            stored = self._existing_shas(conn, "tool_schemas", list(members))
+            conn.executemany(
+                "INSERT OR IGNORE INTO tool_schemas (sha, name, definition)"
+                " VALUES (?, ?, ?)",
+                [
+                    (sha, member.name, member.definition if sha in keep else None)
+                    for sha, member in members.items()
+                    if sha not in stored
+                ],
+            )
+            # A definition first seen while body capture was off is stored
+            # without its text; the first unseen catalogue that brings it back
+            # with capture on fills it in.
+            conn.executemany(
+                "UPDATE tool_schemas SET definition = ?"
+                " WHERE sha = ? AND definition IS NULL",
+                [
+                    (members[sha].definition, sha)
+                    for sha, complete in stored.items()
+                    if not complete and sha in keep
+                ],
+            )
+            conn.executemany(
+                "INSERT OR IGNORE INTO tool_catalogues"
+                " (sha, tool_count, member_shas) VALUES (?, ?, ?)",
+                [
+                    (catalogue.sha, len(catalogue.members), catalogue.member_shas)
+                    for catalogue in unseen
+                ],
+            )
+        counts: dict[bytes, tuple[int, float, float]] = {}
+        for record in fresh:
+            catalogue = record.tool_catalogue
+            if catalogue is None:
+                continue
+            seen, first, last = counts.get(
+                catalogue.sha, (0, record.ts_epoch, record.ts_epoch)
+            )
+            counts[catalogue.sha] = (
+                seen + 1,
+                min(first, record.ts_epoch),
+                max(last, record.ts_epoch),
+            )
+        if counts:
+            conn.executemany(
+                "UPDATE tool_catalogues SET seen = seen + ?,"
+                " first_seen = min(coalesce(first_seen, ?), ?),"
+                " last_seen = max(coalesce(last_seen, ?), ?)"
+                " WHERE sha = ?",
+                [
+                    (seen, first, first, last, last, sha)
+                    for sha, (seen, first, last) in counts.items()
+                ],
+            )
+
     def _flush(self, batch: list[RequestRecord], conn: sqlite3.Connection) -> None:
+        # Fingerprinted here, on the writer thread, and nowhere else: a
+        # 212-tool catalogue is milliseconds of hashing that no request should
+        # wait for. Before the rows, because the row carries the hash.
+        for record in batch:
+            if record.tool_catalogue is None and record.tools:
+                try:
+                    record.tool_catalogue = self._tool_fingerprinter.fingerprint(
+                        record.tools
+                    )
+                except Exception as exc:
+                    logger.debug("Tool catalogue fingerprint skipped: {}", exc)
         rows = [self._record_to_row(record) for record in batch]
         packed: dict[str, tuple[bytes | None, bytes | None]] = {}
         if self._compress_bodies:
@@ -4316,6 +4517,7 @@ class RequestLogStore:
                 # One list, computed once and shared, so the two aggregates
                 # provably fold in the same set of records.
                 fresh = [record for record in batch if record.id not in already_stored]
+                self._store_tool_catalogues(conn, batch, fresh)
                 self._accumulate_totals(conn, fresh)
                 # Inside the same ``with conn:`` as the rows themselves, so a
                 # failed batch rolls the rollup back with it and the aggregate
@@ -4399,6 +4601,7 @@ class RequestLogStore:
             record.cost_source,
             record.ttft_winner_ms,
             record.reasoning_tokens,
+            record.tool_catalogue.sha if record.tool_catalogue is not None else None,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -4908,6 +5111,13 @@ class RequestLogStore:
             bodies = self._fetch_bodies(conn, [request_id])
             images = self._fetch_images(conn, request_id)
             attempts = self._fetch_attempts(conn, request_id)
+            # The guarded ALTER in ``_init_db`` guarantees the column.
+            catalogue_sha = row["tool_catalogue_sha"]
+            tool_catalogue = (
+                self._fetch_tool_catalogue(conn, bytes(catalogue_sha))
+                if catalogue_sha
+                else None
+            )
         data = self._row_to_dict(
             row,
             body_preview_chars=None,
@@ -4916,7 +5126,111 @@ class RequestLogStore:
         )
         data["input_images"] = images
         data["route_attempts"] = attempts
+        data["tool_catalogue"] = tool_catalogue
         return data
+
+    @staticmethod
+    def _fetch_tool_catalogue(
+        conn: sqlite3.Connection, sha: bytes
+    ) -> dict[str, Any] | None:
+        """One catalogue as the request modal shows it: names and hashes, no bodies."""
+
+        row = conn.execute(
+            "SELECT tool_count, member_shas, first_seen, last_seen, seen"
+            " FROM tool_catalogues WHERE sha = ?",
+            (sha,),
+        ).fetchone()
+        if row is None:
+            return None
+        member_shas = split_member_shas(bytes(row["member_shas"]))
+        names: dict[bytes, str] = {}
+        distinct = list(dict.fromkeys(member_shas))
+        for start in range(0, len(distinct), _SHA_LOOKUP_CHUNK):
+            chunk = distinct[start : start + _SHA_LOOKUP_CHUNK]
+            names.update(
+                (bytes(found[0]), str(found[1]))
+                for found in conn.execute(
+                    "SELECT sha, name FROM tool_schemas"
+                    f" WHERE sha IN ({', '.join('?' * len(chunk))})",
+                    chunk,
+                )
+            )
+        return {
+            "sha": sha.hex(),
+            "tool_count": int(row["tool_count"]),
+            "tools": [
+                {"name": names.get(member), "sha": member.hex()}
+                for member in member_shas
+            ],
+            "first_seen": row["first_seen"],
+            "last_seen": row["last_seen"],
+            "seen": int(row["seen"]),
+        }
+
+    def requests_carrying_tool(self, name: str, *, limit: int = 25) -> dict[str, Any]:
+        """Which requests carried a tool of this name, newest first.
+
+        A tool is found by name through every definition it has had, and
+        through every catalogue that carried one of them. The request query
+        is bounded by those catalogues' first and last sightings, so it walks
+        the timestamp index over that window rather than the whole log: a tool
+        seen in one afternoon's session costs that afternoon.
+
+        ``seen`` is the catalogues' own counter -- every request that carried
+        one since it was first stored -- so it is not reduced by retention the
+        way the listed rows are.
+        """
+
+        limit = max(1, min(limit, 500))
+        carriers = (
+            "SELECT c.sha FROM tool_catalogues c WHERE EXISTS ("
+            " SELECT 1 FROM tool_schemas t WHERE t.name = ?"
+            # instr() on blobs is byte-wise; a member starts on a 32-byte
+            # boundary, so only a match at 1, 33, 65, ... is a member.
+            f" AND instr(c.member_shas, t.sha) % {TOOL_SHA_BYTES} = 1)"
+        )
+        with self._connection() as conn:
+            definitions = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM tool_schemas WHERE name = ?", (name,)
+                ).fetchone()[0]
+            )
+            summary = conn.execute(
+                "SELECT COUNT(*), SUM(seen), MIN(first_seen), MAX(last_seen)"
+                f" FROM tool_catalogues WHERE sha IN ({carriers})",
+                (name,),
+            ).fetchone()
+            catalogues = int(summary[0] or 0)
+            rows: list[dict[str, Any]] = []
+            has_more = False
+            if catalogues:
+                window = ""
+                args: list[Any] = [name]
+                if summary[2] is not None and summary[3] is not None:
+                    window = " AND ts_epoch BETWEEN ? AND ?"
+                    args.extend([summary[2], summary[3]])
+                found = conn.execute(
+                    "SELECT id, ts_epoch, ts_iso, requested_model, resolved_model,"
+                    " provider, status, tool_catalogue_sha FROM requests"
+                    f" WHERE tool_catalogue_sha IN ({carriers}){window}"
+                    " ORDER BY ts_epoch DESC LIMIT ?",
+                    [*args, limit + 1],
+                ).fetchall()
+                has_more = len(found) > limit
+                for record in found[:limit]:
+                    item = dict(record)
+                    item["tool_catalogue_sha"] = bytes(item["tool_catalogue_sha"]).hex()
+                    rows.append(item)
+        return {
+            "name": name,
+            "definitions": definitions,
+            "catalogues": catalogues,
+            "seen": int(summary[1] or 0),
+            "first_seen": summary[2],
+            "last_seen": summary[3],
+            "rows": rows,
+            "has_more": has_more,
+        }
 
     def iter_export_rows(
         self,
@@ -5265,6 +5579,11 @@ class RequestLogStore:
     ) -> dict[str, Any]:
         data = dict(row)
         data["stream"] = bool(data["stream"])
+        # Stored as the raw 32 bytes, half the size of hex on every row; read
+        # back as hex so JSON, CSV and the modal all carry the same string.
+        catalogue_sha = data.get("tool_catalogue_sha")
+        if isinstance(catalogue_sha, bytes):
+            data["tool_catalogue_sha"] = catalogue_sha.hex()
         # Which of the four things "cancelled" means, derived here so that the
         # list, the detail and the export all answer it the same way and no
         # caller has to know the rule. NULL on every other status -- a
@@ -7057,6 +7376,13 @@ class RequestLogStore:
                     " SELECT 1 FROM request_images WHERE request_images.sha ="
                     " image_blobs.sha)"
                 )
+                now = time.monotonic()
+                if removed and (
+                    self._last_tool_sweep is None
+                    or now - self._last_tool_sweep >= _TOOL_SWEEP_INTERVAL_SECONDS
+                ):
+                    self._last_tool_sweep = now
+                    self._sweep_tool_catalogues(conn)
             if removed:
                 # Return the freed pages to the filesystem instead of leaving
                 # them on the freelist, where they would grow the file forever.
@@ -7068,6 +7394,33 @@ class RequestLogStore:
             return 0
         finally:
             conn.close()
+
+    @staticmethod
+    def _sweep_tool_catalogues(conn: sqlite3.Connection) -> None:
+        """Drop catalogues no retained request carries, then orphaned definitions.
+
+        Catalogues first, in one pass over ``requests`` (the ``NOT IN``
+        subquery is materialised once, not re-run per catalogue). Then the
+        definitions, against the members of every surviving catalogue --
+        collected in Python, because matching each definition against every
+        ``member_shas`` blob in SQL is a cross product.
+        """
+
+        conn.execute(
+            "DELETE FROM tool_catalogues WHERE sha NOT IN ("
+            " SELECT tool_catalogue_sha FROM requests"
+            " WHERE tool_catalogue_sha IS NOT NULL)"
+        )
+        live: set[bytes] = set()
+        for (member_shas,) in conn.execute("SELECT member_shas FROM tool_catalogues"):
+            live.update(split_member_shas(bytes(member_shas)))
+        dead = [
+            (row[0],)
+            for row in conn.execute("SELECT sha FROM tool_schemas")
+            if bytes(row[0]) not in live
+        ]
+        if dead:
+            conn.executemany("DELETE FROM tool_schemas WHERE sha = ?", dead)
 
     def clear(self) -> int:
         """Erase the stored history, including the permanent counters.
@@ -7091,6 +7444,8 @@ class RequestLogStore:
             conn.execute("DELETE FROM request_images")
             conn.execute("DELETE FROM image_blobs")
             conn.execute("DELETE FROM request_attempts")
+            conn.execute("DELETE FROM tool_catalogues")
+            conn.execute("DELETE FROM tool_schemas")
             return cursor.rowcount
 
     # ------------------------------------------------- image descriptions ---
