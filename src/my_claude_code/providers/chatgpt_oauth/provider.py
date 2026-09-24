@@ -52,15 +52,21 @@ from my_claude_code.providers.openai_responses import ToolSchemaDialect
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     RUNG_TOOL_SCHEMA,
+    RUNG_TOOLS_COUNT,
     ReasoningStripRecovery,
     RecoveryLadder,
     SchemaKeywordRefusal,
     ToolSchemaRefusalRecovery,
+    ToolsCountRefusalRecovery,
     apply_learned_tool_schema_refusals,
+    apply_tools_max_count,
+    effective_tools_max_count,
     learned_fact_store,
     merge_tool_schema_markers,
+    merge_tools_trimmed_markers,
     refusal_from_detail,
     tool_schema_recovery,
+    tools_count_recovery,
 )
 from my_claude_code.providers.runtime.served_models import resolve_served_models
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
@@ -509,16 +515,20 @@ class ChatGPTOAuthProvider(BaseProvider):
         self._recovery_memory = learned_fact_store().memory_for(
             CHATGPT_OAUTH_PROVIDER_ID
         )
-        # Two rungs, schema first. This backend does not go through
+        # Three rungs, schema first. This backend does not go through
         # ``ResponsesTransport._send_with_recovery`` -- it has its own client
         # and this ladder -- so the recovery has to be registered here as well
         # as there, and one more entry in this tuple is the whole of it. The
         # order is the ladder's own rule: the schema refusal carries a
         # machine-readable ``code`` and rewrites nothing the model can see,
         # while a reasoning strip removes an instruction the request meant.
+        # The tools-count cut sits between them: its ``code`` is as
+        # machine-readable and its number is stated, but it does take tools
+        # the model could have called off the table, so it never goes first.
         self._recovery_ladder = RecoveryLadder(
             (
                 ToolSchemaRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+                ToolsCountRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
                 ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
             )
         )
@@ -765,17 +775,32 @@ class ChatGPTOAuthProvider(BaseProvider):
                         declared_marker, learned_marker
                     )
                     schema_marker = base_marker
+                    # A tools-count ceiling already known -- declared, or
+                    # stated by this backend before -- cut to before the first
+                    # send; the same list object when there is none.
+                    cap, cap_source = self._tools_max_count()
+                    attempt_body, count_base = apply_tools_max_count(
+                        attempt_body, cap, cap_source
+                    )
+                    count_marker = count_base
                     # What the sweep took out, written down only once the
                     # swept catalogue has actually been accepted.
                     pending_schema: SchemaKeywordRefusal | None = None
                     schema_evidence = ""
+                    # The count this backend stated, likewise written down
+                    # only once the cut catalogue was accepted.
+                    pending_count: int | None = None
+                    count_evidence = ""
                     while True:
                         # Commit boundary: the body is final once it is handed
                         # to the sender, and the surface it was sent on is
                         # recorded beside it. Headers are not recorded -- they
                         # carry the bearer token.
                         record_wire_request(
-                            attempt_body, surface=WIRE_SURFACE, **schema_marker
+                            attempt_body,
+                            surface=WIRE_SURFACE,
+                            **schema_marker,
+                            **count_marker,
                         )
                         try:
                             response = await self._rate_limiter.execute_with_retry(
@@ -841,6 +866,15 @@ class ChatGPTOAuthProvider(BaseProvider):
                                     schema_marker = merge_tool_schema_markers(
                                         base_marker, schema.marker
                                     )
+                            if recovered.kind == RUNG_TOOLS_COUNT:
+                                # Recomputed for the same reason as above.
+                                count = tools_count_recovery(error, attempt_body)
+                                if count is not None:
+                                    pending_count = count.max_count
+                                    count_evidence = count.evidence
+                                    count_marker = merge_tools_trimmed_markers(
+                                        count_base, count.marker
+                                    )
                             # Carried on the *retry* row, so the ladder in the
                             # modal reads "400 ... / 200 (responses_tool_schema)"
                             # and the operator can see which rewrite the second
@@ -857,6 +891,8 @@ class ChatGPTOAuthProvider(BaseProvider):
                         self._remember_tool_schema_refusal(
                             pending_schema, schema_evidence
                         )
+                    if pending_count is not None:
+                        self._remember_tools_max_count(pending_count, count_evidence)
                     if stripped_reasoning is not None:
                         self._remember_reasoning_rejection(
                             attempt_body,
@@ -943,6 +979,36 @@ class ChatGPTOAuthProvider(BaseProvider):
             refusal
             for detail in self._recovery_memory.responses_tool_schema_details()
             if (refusal := refusal_from_detail(detail)) is not None
+        )
+
+    def _tools_max_count(self) -> tuple[int | None, str]:
+        """The most tools one body may carry here, and where that came from.
+
+        The smaller of the declared dialect's number and the one this backend
+        stated; ``(None, "")`` -- today -- means no cap. Read off the memory
+        per request so a *Forget* reaches the very next one.
+        """
+
+        cap, source = effective_tools_max_count(
+            self._tool_schema_dialect.tools_max_count,
+            self._recovery_memory.responses_tools_max_count,
+        )
+        if source == "declared":
+            return cap, f"declared {self._tool_schema_dialect.name} dialect"
+        if source == "learned":
+            return cap, "learned from this host"
+        return cap, ""
+
+    def _remember_tools_max_count(self, limit: int, evidence: str) -> None:
+        """Write down a tools-count ceiling the cut catalogue has just proven."""
+
+        learned = self._recovery_memory.learn_responses_tools_max_count(
+            limit, evidence=evidence
+        )
+        logger.warning(
+            "CHATGPT_OAUTH_STREAM: this host accepts at most {} tools -- later "
+            "requests are cut before the first send",
+            learned,
         )
 
     def _remember_tool_schema_refusal(

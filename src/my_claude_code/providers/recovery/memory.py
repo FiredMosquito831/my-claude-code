@@ -26,6 +26,7 @@ from .facts import (
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
     FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
+    FACT_RESPONSES_TOOLS_MAX_COUNT,
     FACT_STREAM_USAGE_UNSUPPORTED,
     PROVIDER_WIDE_MODEL_ID,
     FactSink,
@@ -77,6 +78,11 @@ class RecoveryMemory:
     #: and a per-model row would re-pay the 400 once for every model in the
     #: catalogue.
     responses_tool_schema_keywords: dict[str, str] = field(default_factory=dict)
+
+    #: The most tools this host's Responses surface accepts in one request,
+    #: or ``None`` when it has never said. Host-wide, like the tool-name
+    #: ceiling: the validator that states it sits in front of the deployment.
+    responses_tools_max_count: int | None = None
 
     #: Where a newly learned fact is written through to, or ``None`` for a
     #: memory that persists nothing.
@@ -184,6 +190,29 @@ class RecoveryMemory:
         if self.sink is not None:
             self.sink(
                 FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
+                PROVIDER_WIDE_MODEL_ID,
+                limit,
+                "",
+                evidence,
+            )
+        return limit
+
+    def learn_responses_tools_max_count(self, limit: int, *, evidence: str = "") -> int:
+        """Record a stated tools-count ceiling, keeping the smallest, and return it.
+
+        Monotonically narrowing for the reason :meth:`learn_cap` is: a host
+        that later states a lower maximum has revised its own answer downward,
+        and a higher one does not contradict the count already accepted.
+        Written through even when the number did not move, so a re-statement
+        keeps the row fresh.
+        """
+
+        previous = self.responses_tools_max_count
+        limit = limit if previous is None else min(previous, limit)
+        self.responses_tools_max_count = limit
+        if self.sink is not None:
+            self.sink(
+                FACT_RESPONSES_TOOLS_MAX_COUNT,
                 PROVIDER_WIDE_MODEL_ID,
                 limit,
                 "",

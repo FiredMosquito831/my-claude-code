@@ -121,6 +121,15 @@ FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY = "responses_tool_choice_auto_only"
 #: conversation.
 FACT_RESPONSES_TOOL_SCHEMA_KEYWORD = "responses_tool_schema_keyword"
 
+#: The most tools this host's Responses validator accepts in one request,
+#: stated by the host in its own 400 (``Invalid 'tools': array too long.
+#: Expected an array with maximum length 128``, code
+#: ``array_above_max_length``). Provider-wide, for the reason the tool-name
+#: ceiling is: the validator that states it sits in front of the whole
+#: deployment, and a per-model row would re-pay the 400 once per model.
+#: Value: ``int``.
+FACT_RESPONSES_TOOLS_MAX_COUNT = "responses_tools_max_count"
+
 #: The allow-list. Whatever lands in this document is read back into live
 #: request-shaping state, so an unknown kind is dropped with one log line
 #: rather than carried -- the rule ``config/model_overrides.py`` already
@@ -141,6 +150,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
         FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
         FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
+        FACT_RESPONSES_TOOLS_MAX_COUNT,
     }
 )
 
@@ -183,6 +193,8 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # property of the regex engine behind its validator rather than an
     # inference from a retry that happened to work.
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD: STATED_FACT_TTL_SECONDS,
+    # A number the host stated, like the tool-name ceiling beside it.
+    FACT_RESPONSES_TOOLS_MAX_COUNT: STATED_FACT_TTL_SECONDS,
     # Stated in words but *proven* by the retry, which is the weaker of the
     # two and decides the clock: the host said "only auto", and what MCC
     # wrote down is "the request worked once the field was gone".

@@ -20,12 +20,12 @@ picker. A fresh install passes through this module without it producing
 anything, because a fresh install has no built-in ids to convert.
 
 **When this can be deleted.** After two or three releases, once no store in
-circulation can still hold a built-in id -- **7.41.0** is the earliest sensible
+circulation can still hold a built-in id -- **7.42.0** is the earliest sensible
 point. It used to say 7.21.0, then 7.22.0, then 7.23.0, then 7.24.0, then
 7.25.0, then 7.26.0, then 7.27.0, then 7.28.0, then 7.29.0, then 7.30.0, then
 7.31.0, then 7.32.0, then 7.33.0, then 7.34.0, then 7.35.0, then 7.36.0, then
-7.37.0, then 7.38.0, then 7.39.0, then 7.40.0; all
-twenty
+7.37.0, then 7.38.0, then 7.39.0, then 7.40.0, then 7.41.0; all
+twenty-one
 releases went to
 something else (the
 proxy fetch pass, the 429 cooldown controls, the Responses surface learning what
@@ -46,7 +46,9 @@ stuck-request watchdog that writes down where a request that has gone quiet
 is actually parked, then every Responses host sweeping the schema construct
 its validator is known to refuse before the first send, then the Responses
 surface repairing a pattern's Unicode property escapes instead of losing it,
-then the request log recording which tools array each request carried),
+then the request log recording which tools array each request carried,
+then a Responses host's cap on how many tools one request may carry being
+answered once and remembered),
 and
 deleting this in any of them would
 have bundled an unrelated removal onto it. One concern per release,

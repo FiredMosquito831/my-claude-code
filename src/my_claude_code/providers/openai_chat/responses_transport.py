@@ -62,17 +62,23 @@ from my_claude_code.providers.openai_responses import (
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     RUNG_TOOL_SCHEMA,
+    RUNG_TOOLS_COUNT,
     RecoveryMemory,
     SchemaKeywordRefusal,
     ToolSchemaRecovery,
+    ToolsCountRecovery,
     apply_learned_tool_schema_refusals,
+    apply_tools_max_count,
     clone_body_without_tool_choice,
     complaint_evidence_snippet,
+    effective_tools_max_count,
     is_tool_choice_auto_only,
     merge_tool_schema_markers,
+    merge_tools_trimmed_markers,
     refusal_from_detail,
     rejected_tool_name_max_length,
     tool_schema_recovery,
+    tools_count_recovery,
     upstream_complaint,
 )
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
@@ -97,6 +103,7 @@ _RUNG_TOOL_CHOICE = "responses_tool_choice"
 #: Shared with ``chatgpt_oauth``, which registers the same recovery on its own
 #: ladder: one word for one event, whichever of the two senders paid for it.
 _RUNG_TOOL_SCHEMA = RUNG_TOOL_SCHEMA
+_RUNG_TOOLS_COUNT = RUNG_TOOLS_COUNT
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +166,22 @@ def _next_responses_recovery(
                 value=schema,
                 evidence=schema.evidence,
                 log_line=schema.log_line,
+            )
+    if _RUNG_TOOLS_COUNT not in used:
+        # Second: a count the host *stated*, with its own machine-readable
+        # code (``array_above_max_length``), and one neither neighbour can
+        # read -- the schema matcher refuses it outright and the name-length
+        # matcher needs the word ``name``. Before the name-length rung all the
+        # same, so a cut catalogue is what any later aliasing sees.
+        count = tools_count_recovery(error, body)
+        if count is not None:
+            used.add(_RUNG_TOOLS_COUNT)
+            return _ResponsesLearning(
+                kind=_RUNG_TOOLS_COUNT,
+                body=count.body,
+                value=count,
+                evidence=count.evidence,
+                log_line=count.log_line,
             )
     if _RUNG_TOOL_NAME_LENGTH not in used:
         stated = rejected_tool_name_max_length(error)
@@ -274,6 +297,25 @@ class ResponsesTransport:
         if self._declared_tool_name_max_length is not None:
             return self._declared_tool_name_max_length
         return self._memory.responses_tool_name_max_length
+
+    def tools_max_count(self) -> tuple[int | None, str]:
+        """The most tools one body may carry here, and where that came from.
+
+        The smaller of the declared dialect's number and the one this host
+        stated in a 400 and MCC wrote down; ``(None, "")`` -- every host
+        until one says otherwise -- means no cap. Read off the memory on every
+        send, so a *Forget* on the Models page reaches the very next request.
+        """
+
+        cap, source = effective_tools_max_count(
+            self._tool_schema_dialect.tools_max_count,
+            self._memory.responses_tools_max_count,
+        )
+        if source == "declared":
+            return cap, f"declared {self._tool_schema_dialect.name} dialect"
+        if source == "learned":
+            return cap, "learned from this host"
+        return cap, ""
 
     def tool_catalogue(self, request: MessagesRequest) -> Mapping[str, str]:
         """This host's own tool spellings for one request's model.
@@ -557,6 +599,15 @@ class ResponsesTransport:
         # Declared first, learned second: the order the two sweeps ran in.
         base_marker = merge_tool_schema_markers(wire_notes or {}, learned_marker)
         schema_marker = base_marker
+        # A tools-count ceiling already known -- declared, or stated by this
+        # host before -- is honoured before the first send, for the reason the
+        # learned schema sweep is: the 400 is paid once per provider, and the
+        # cut is deterministic, so the implicit tools prefix stays cached.
+        # A shallow clone sharing the very same ``tools`` list when there is
+        # no cap or the catalogue fits.
+        cap, cap_source = self.tools_max_count()
+        swept, count_base = apply_tools_max_count(swept, cap, cap_source)
+        count_marker = count_base
         current = dict(swept)
         while True:
             identity = self.identity_headers(current)
@@ -578,6 +629,7 @@ class ResponsesTransport:
                 ),
                 **marker,
                 **schema_marker,
+                **count_marker,
             )
             try:
                 response = await self._rate_limiter.execute_with_retry(
@@ -617,6 +669,11 @@ class ResponsesTransport:
                     schema_marker = merge_tool_schema_markers(
                         base_marker, learning.value.marker
                     )
+                if isinstance(learning.value, ToolsCountRecovery):
+                    # Every name the retry no longer offers, on the retry row.
+                    count_marker = merge_tools_trimmed_markers(
+                        count_base, learning.value.marker
+                    )
                 pending.append(learning)
                 # Carried on the *retry* row, so the ladder in the modal reads
                 # "400 ... / 200 (responses_tool_choice)" and the operator can
@@ -640,6 +697,17 @@ class ResponsesTransport:
                 "requests are swept before the first send",
                 self._provider_name,
                 recovery.refusal.words,
+            )
+            return
+        if isinstance(learning.value, ToolsCountRecovery):
+            limit = self._memory.learn_responses_tools_max_count(
+                learning.value.max_count, evidence=learning.evidence
+            )
+            logger.warning(
+                "{}_RESPONSES: this host accepts at most {} tools -- later "
+                "requests are cut before the first send",
+                self._provider_name,
+                limit,
             )
             return
         if learning.kind == _RUNG_TOOL_NAME_LENGTH:
