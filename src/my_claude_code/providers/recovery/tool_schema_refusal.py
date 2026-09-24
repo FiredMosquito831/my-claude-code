@@ -61,7 +61,7 @@ does not.
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -442,6 +442,85 @@ _SCHEMA_MAP_KEYS = frozenset(
 )
 
 
+#: What a keyword rewrite returns to take the keyword out altogether.
+DROP_KEYWORD: Any = object()
+
+
+def rewrite_schema_keyword(
+    node: Any,
+    keyword: str,
+    rewrite: Callable[[Any], Any],
+    path: str = "$",
+    visit: Callable[[str, Any], None] | None = None,
+) -> Any:
+    """Return ``node`` with every ``keyword`` value rewritten, or ``node`` itself.
+
+    The one schema walker the rung, the learned sweep and the declared dialect
+    share -- whether a keyword is *dropped* (``rewrite`` returns
+    :data:`DROP_KEYWORD`) or *repaired* (it returns a new value). The walk
+    descends by key, never by shape, through exactly the vocabulary above, so
+    a property *called* ``pattern`` is a property and instance data
+    (``default``, ``const``, ``enum``, ``examples``) is never read as schema.
+
+    ``visit(path, replacement)`` is told about every keyword that changed,
+    with :data:`DROP_KEYWORD` for a removal.
+
+    Copy-on-write, and identity on the way out whenever nothing changed, all
+    the way up: a catalogue with no offence is the very same list of the very
+    same dicts the converter produced, so the serialised bytes cannot have
+    moved.
+    """
+
+    if isinstance(node, list):
+        rewritten = [
+            rewrite_schema_keyword(item, keyword, rewrite, f"{path}[{index}]", visit)
+            for index, item in enumerate(node)
+        ]
+        if all(new is old for new, old in zip(rewritten, node, strict=True)):
+            return node
+        return rewritten
+    if not isinstance(node, Mapping):
+        return node
+
+    changed: dict[str, Any] = {}
+    touched = False
+    for key, value in node.items():
+        if key == keyword:
+            replacement = rewrite(value)
+            if replacement is DROP_KEYWORD:
+                if visit is not None:
+                    visit(f"{path}.{key}", DROP_KEYWORD)
+                touched = True
+                continue
+            if replacement is not value:
+                if visit is not None:
+                    visit(f"{path}.{key}", replacement)
+                changed[str(key)] = replacement
+                touched = True
+                continue
+        if key in _SCHEMA_VALUE_KEYS or key in _SCHEMA_LIST_KEYS:
+            walked = rewrite_schema_keyword(
+                value, keyword, rewrite, f"{path}.{key}", visit
+            )
+        elif key in _SCHEMA_MAP_KEYS and isinstance(value, Mapping):
+            inner: dict[str, Any] = {}
+            inner_changed = False
+            for name, schema in value.items():
+                walked_schema = rewrite_schema_keyword(
+                    schema, keyword, rewrite, f"{path}.{key}.{name}", visit
+                )
+                inner_changed = inner_changed or walked_schema is not schema
+                inner[str(name)] = walked_schema
+            walked = inner if inner_changed else value
+        else:
+            changed[str(key)] = value
+            continue
+        changed[str(key)] = walked
+        touched = touched or walked is not value
+
+    return changed if touched else node
+
+
 def _prune(
     node: Any,
     refusal: SchemaKeywordRefusal,
@@ -449,52 +528,15 @@ def _prune(
     path: str,
     removals: list[SchemaRemoval],
 ) -> Any:
-    """Return ``node`` without the refused keyword, or ``node`` itself.
+    """Return ``node`` without the refused keyword, or ``node`` itself."""
 
-    Identity on the way out whenever nothing was removed, all the way up: a
-    catalogue with no offence is the very same list of the very same dicts the
-    converter produced, so the serialised bytes cannot have moved.
-    """
+    def _drop(value: Any) -> Any:
+        return DROP_KEYWORD if _offends(value, refusal) else value
 
-    if isinstance(node, list):
-        pruned = [
-            _prune(item, refusal, tool, f"{path}[{index}]", removals)
-            for index, item in enumerate(node)
-        ]
-        if all(new is old for new, old in zip(pruned, node, strict=True)):
-            return node
-        return pruned
-    if not isinstance(node, Mapping):
-        return node
+    def _record(where: str, _replacement: Any) -> None:
+        removals.append(SchemaRemoval(tool=tool, path=where, keyword=refusal.keyword))
 
-    changed: dict[str, Any] = {}
-    dropped = False
-    for key, value in node.items():
-        if key == refusal.keyword and _offends(value, refusal):
-            removals.append(
-                SchemaRemoval(tool=tool, path=f"{path}.{key}", keyword=refusal.keyword)
-            )
-            dropped = True
-            continue
-        if key in _SCHEMA_VALUE_KEYS or key in _SCHEMA_LIST_KEYS:
-            pruned = _prune(value, refusal, tool, f"{path}.{key}", removals)
-        elif key in _SCHEMA_MAP_KEYS and isinstance(value, Mapping):
-            inner: dict[str, Any] = {}
-            inner_changed = False
-            for name, schema in value.items():
-                pruned_schema = _prune(
-                    schema, refusal, tool, f"{path}.{key}.{name}", removals
-                )
-                inner_changed = inner_changed or pruned_schema is not schema
-                inner[str(name)] = pruned_schema
-            pruned = inner if inner_changed else value
-        else:
-            changed[str(key)] = value
-            continue
-        changed[str(key)] = pruned
-        dropped = dropped or pruned is not value
-
-    return changed if dropped else node
+    return rewrite_schema_keyword(node, refusal.keyword, _drop, path, _record)
 
 
 def prune_tool_catalogue(
@@ -569,23 +611,29 @@ def describe_removals(
 
 #: The ``params.wire`` key every schema removal is recorded under.
 TOOL_SCHEMA_PRUNED = "tool_schema_pruned"
+#: The ``params.wire`` key a *repaired* (rather than removed) keyword is
+#: recorded under -- the declared dialect's Unicode-property translation.
+TOOL_SCHEMA_TRANSLATED = "tool_schema_translated"
+#: Every key a schema sweep writes, in the order a record lists them.
+_TOOL_SCHEMA_MARKER_KEYS = (TOOL_SCHEMA_TRANSLATED, TOOL_SCHEMA_PRUNED)
 
 
 def merge_tool_schema_markers(*markers: Mapping[str, str]) -> dict[str, str]:
-    """One ``tool_schema_pruned`` record out of several sweeps' records.
+    """One schema record out of several sweeps' records.
 
     The declared dialect, the learned facts and the rung can each take a
     keyword out of the same body, and they all write the same key -- so a
     plain ``{**a, **b}`` would let the last one erase what the others did.
-    Joined in the order given, which is the order the sweeps ran in.
+    Joined per key in the order given, which is the order the sweeps ran in.
+    A key no sweep wrote is absent, so a body nothing touched records nothing.
     """
 
-    lines = [
-        marker[TOOL_SCHEMA_PRUNED]
-        for marker in markers
-        if marker.get(TOOL_SCHEMA_PRUNED)
-    ]
-    return {TOOL_SCHEMA_PRUNED: "; ".join(lines)} if lines else {}
+    merged: dict[str, str] = {}
+    for key in _TOOL_SCHEMA_MARKER_KEYS:
+        lines = [marker[key] for marker in markers if marker.get(key)]
+        if lines:
+            merged[key] = "; ".join(lines)
+    return merged
 
 
 @dataclass(frozen=True, slots=True)

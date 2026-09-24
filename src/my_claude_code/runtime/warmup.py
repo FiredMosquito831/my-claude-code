@@ -1,10 +1,11 @@
 """Work the first request should not have to pay for.
 
-Two things on the request path are expensive exactly once per process and are
-pure setup: importing the OpenAI SDK, and turning the 4.9 MB models.dev cache
-into the indexes the routing ladder reads. Before 6.62.0 both were paid by
-whichever request happened to arrive first, on the event loop, so that request
-and every request concurrent with it stalled -- the in-process heartbeat
+Three things on the request path are expensive exactly once per process and
+are pure setup: importing the OpenAI SDK, turning the 4.9 MB models.dev cache
+into the indexes the routing ladder reads, and (7.39.0) the Unicode-property
+tables the Responses tool-schema dialect translates ``\\p{...}`` with. Before
+6.62.0 the first two were paid by whichever request happened to arrive first,
+on the event loop, so that request and every request concurrent with it stalled -- the in-process heartbeat
 measured a single 2,170 ms gap for the SDK import alone.
 
 Neither is moved earlier in the sense of blocking anything: the socket still
@@ -87,9 +88,37 @@ def _warm_models_dev_indexes(cache_path: Path | None) -> None:
     )
 
 
+def _warm_unicode_property_ranges() -> None:
+    """Build the Unicode-property tables the Responses dialect translates with.
+
+    ``core/tool_schema_patterns`` expands ``\\p{Cc}``/``\\p{Cf}``/``\\p{Zl}``/
+    ``\\p{Zp}`` from this interpreter's Unicode database by walking every code
+    point once -- about 300 ms, measured. Without this, the first request whose
+    tool catalogue carries such a pattern would pay that on the event loop.
+    The tables are built under a lock, so a request that arrives mid-walk waits
+    for this one rather than starting a second.
+    """
+
+    started = time.perf_counter()
+    try:
+        from my_claude_code.core.tool_schema_patterns import (
+            warm_unicode_property_ranges,
+        )
+
+        warm_unicode_property_ranges()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("The Unicode-property tables could not be pre-built: {}", exc)
+        return
+    logger.debug(
+        "WARMUP: Unicode-property tables built in {:.0f}ms",
+        (time.perf_counter() - started) * 1000.0,
+    )
+
+
 def _warm(cache_path: Path | None) -> None:
     _warm_openai_sdk()
     _warm_models_dev_indexes(cache_path)
+    _warm_unicode_property_ranges()
 
 
 def _spawn(cache_path: Path | None) -> None:
