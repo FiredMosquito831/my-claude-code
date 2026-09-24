@@ -193,6 +193,11 @@ from my_claude_code.core.request_log import (
     RequestLogStore,
     store_from_settings,
 )
+from my_claude_code.core.request_tasks import (
+    DEFAULT_INFLIGHT_LIMIT,
+    inflight_count,
+    inflight_report,
+)
 from my_claude_code.core.stuck_requests import (
     DEFAULT_REQUEST_LIMIT,
     stuck_report,
@@ -4124,7 +4129,35 @@ async def request_log_pulse(
         folder=folder,
     )
     result["enabled"] = True
+    # How many requests are being served right now: one ``len`` under the
+    # registry's lock, no query. ``None`` when the in-flight view is off. The
+    # page's change detection compares ``total`` and ``last_ts`` only, so a
+    # moving count never triggers a table refresh on its own.
+    result["in_flight"] = inflight_count()
     return result
+
+
+@router.get("/admin/api/requests/in-flight")
+async def request_log_in_flight(request: Request):
+    """The requests this server is serving right now, oldest first.
+
+    Read from the in-memory registry the capture fills on arrival and empties
+    at finalize -- no database, no provider, no stack walk, so it is cheap
+    enough to poll every few seconds and keeps working with the request log
+    switched off. Counts, labels and phase stamps only: never a prompt, a
+    reply, a header or a key (the key and proxy labels are the masked ones
+    the attribution slots carry). ``limit`` bounds the rows described;
+    ``total`` always counts them all. ``{"enabled": false}`` when
+    ``REQUEST_INFLIGHT_ENABLED`` is off, the same shape ``pulse`` uses for a
+    disabled log.
+    """
+
+    require_loopback_admin(request)
+    limit = _bounded_query(request, "limit", DEFAULT_INFLIGHT_LIMIT, 1, 1_000)
+    # ``JSONResponse`` directly, as ``/admin/api/tasks/stacks`` does: the
+    # report is already nothing but JSON-native values, and FastAPI's encoder
+    # pass would be the most expensive thing this route did.
+    return JSONResponse(inflight_report(limit=limit))
 
 
 def _latency_window(days: int, since: float | None) -> tuple[float | None, str | None]:
