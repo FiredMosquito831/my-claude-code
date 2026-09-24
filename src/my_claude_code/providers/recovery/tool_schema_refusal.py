@@ -542,6 +542,19 @@ def wire_marker(
     query rather than an investigation.
     """
 
+    return describe_removals((refusal.words,), removals)
+
+
+def describe_removals(
+    words: Sequence[str], removals: Sequence[SchemaRemoval], provenance: str = ""
+) -> str:
+    """The one sentence every ``tool_schema_pruned`` marker is written in.
+
+    Shared by the rung, the learned sweep and the declared dialect so an
+    operator reads the same shape whichever of the three took a keyword out;
+    ``provenance`` is the only part that says which one it was.
+    """
+
     tools = sorted({removal.tool for removal in removals})
     where = ", ".join(
         f"{removal.tool} {removal.path}" for removal in removals[:MAX_RECORDED_REMOVALS]
@@ -549,7 +562,30 @@ def wire_marker(
     if len(removals) > MAX_RECORDED_REMOVALS:
         where += f", +{len(removals) - MAX_RECORDED_REMOVALS} more"
     noun = "tool" if len(tools) == 1 else "tools"
-    return f"dropped {refusal.words} from {len(tools)} {noun}: {where}"
+    return (
+        f"dropped {' and '.join(words)} from {len(tools)} {noun}{provenance}: {where}"
+    )
+
+
+#: The ``params.wire`` key every schema removal is recorded under.
+TOOL_SCHEMA_PRUNED = "tool_schema_pruned"
+
+
+def merge_tool_schema_markers(*markers: Mapping[str, str]) -> dict[str, str]:
+    """One ``tool_schema_pruned`` record out of several sweeps' records.
+
+    The declared dialect, the learned facts and the rung can each take a
+    keyword out of the same body, and they all write the same key -- so a
+    plain ``{**a, **b}`` would let the last one erase what the others did.
+    Joined in the order given, which is the order the sweeps ran in.
+    """
+
+    lines = [
+        marker[TOOL_SCHEMA_PRUNED]
+        for marker in markers
+        if marker.get(TOOL_SCHEMA_PRUNED)
+    ]
+    return {TOOL_SCHEMA_PRUNED: "; ".join(lines)} if lines else {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -565,7 +601,7 @@ class ToolSchemaRecovery:
     def marker(self) -> dict[str, str]:
         """The ``params.wire`` record, shaped to merge into the wire capture."""
 
-        return {"tool_schema_pruned": wire_marker(self.refusal, self.removals)}
+        return {TOOL_SCHEMA_PRUNED: wire_marker(self.refusal, self.removals)}
 
     @property
     def log_line(self) -> str:
@@ -698,16 +734,8 @@ def apply_learned_tool_schema_refusals(
         # contract that decides the bytes. The shallow clone is only so the
         # caller always owns its own top level.
         return dict(body), {}
-    tools = sorted({removal.tool for removal in applied})
-    where = ", ".join(
-        f"{removal.tool} {removal.path}" for removal in applied[:MAX_RECORDED_REMOVALS]
-    )
-    if len(applied) > MAX_RECORDED_REMOVALS:
-        where += f", +{len(applied) - MAX_RECORDED_REMOVALS} more"
-    noun = "tool" if len(tools) == 1 else "tools"
     return dict(current), {
-        "tool_schema_pruned": (
-            f"dropped {' and '.join(words)} from {len(tools)} {noun} "
-            f"(learned from this host): {where}"
+        TOOL_SCHEMA_PRUNED: describe_removals(
+            words, applied, " (learned from this host)"
         )
     }

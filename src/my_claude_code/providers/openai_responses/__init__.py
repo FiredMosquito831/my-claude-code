@@ -22,11 +22,19 @@ from .streaming import (
     iter_responses_sse_events,
     note_responses_event_shape,
 )
+from .tool_schema_dialect import (
+    PERMISSIVE_TOOL_SCHEMA_DIALECT,
+    RESPONSES_TOOL_SCHEMA_DIALECT,
+    ToolSchemaDialect,
+)
 
 __all__ = [
+    "PERMISSIVE_TOOL_SCHEMA_DIALECT",
     "RESPONSES_DEFAULT_REASONING_EFFORT",
     "RESPONSES_DEFAULT_REASONING_SUMMARY",
+    "RESPONSES_TOOL_SCHEMA_DIALECT",
     "ResponsesStreamConverter",
+    "ToolSchemaDialect",
     "alias_responses_body_tool_names",
     "build_responses_request_body",
     "iter_responses_sse_events",

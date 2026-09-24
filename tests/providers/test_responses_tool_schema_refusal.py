@@ -55,6 +55,7 @@ from my_claude_code.providers.chatgpt_oauth.conversion import (
 )
 from my_claude_code.providers.chatgpt_oauth.provider import CHATGPT_OAUTH_DEFAULT_BASE
 from my_claude_code.providers.openai_chat.responses_transport import ResponsesTransport
+from my_claude_code.providers.openai_responses import PERMISSIVE_TOOL_SCHEMA_DIALECT
 from my_claude_code.providers.recovery import (
     DROPPABLE_KEYWORDS,
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
@@ -596,6 +597,10 @@ def _messages_request(*, long_name: bool = False) -> MessagesRequest:
 
 
 def _transport(store: LearnedFactStore, *, limiter: Any = None) -> ResponsesTransport:
+    # A host that declares its validator refuses nothing: since 7.38.0 the
+    # Responses default sweeps lookaround before the first send, so the only
+    # way a lookaround still reaches the wire -- which is what the rung exists
+    # to answer -- is a host whose declared dialect does not cover it.
     return ResponsesTransport(
         ProviderConfig(api_key="sk-test", base_url="https://example.invalid/v1"),
         base_url="https://example.invalid/v1",
@@ -607,6 +612,7 @@ def _transport(store: LearnedFactStore, *, limiter: Any = None) -> ResponsesTran
         rate_limiter=limiter or passthrough_rate_limiter(),
         tool_name_max_length=None,
         memory=store.memory_for(PROVIDER),
+        tool_schema_dialect=PERMISSIVE_TOOL_SCHEMA_DIALECT,
     )
 
 
@@ -857,7 +863,7 @@ async def test_a_host_that_never_refuses_sends_the_bytes_it_always_did() -> None
 
 
 def _chatgpt_provider(*, limiter: Any = None) -> ChatGPTOAuthProvider:
-    return ChatGPTOAuthProvider(
+    provider = ChatGPTOAuthProvider(
         ProviderConfig(
             api_key="test_token",
             base_url=CHATGPT_OAUTH_DEFAULT_BASE,
@@ -867,6 +873,10 @@ def _chatgpt_provider(*, limiter: Any = None) -> ChatGPTOAuthProvider:
         ),
         rate_limiter=limiter or passthrough_rate_limiter(),
     )
+    # See ``_transport``: the rung is exercised on a host whose declared
+    # dialect lets the lookaround through.
+    provider._tool_schema_dialect = PERMISSIVE_TOOL_SCHEMA_DIALECT
+    return provider
 
 
 def _success() -> MagicMock:
@@ -999,7 +1009,9 @@ async def test_a_chatgpt_oauth_body_with_nothing_to_sweep_is_byte_identical() ->
 
     request = _messages_request()
     baseline = build_chatgpt_oauth_request_body(
-        request, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+        request,
+        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+        tool_schema_dialect=PERMISSIVE_TOOL_SCHEMA_DIALECT,
     )
 
     provider = _chatgpt_provider()
