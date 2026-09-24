@@ -691,7 +691,7 @@ def test_stats_cache_evicts_least_recently_used(tmp_path) -> None:
             # The key is the whole filter tuple, so its arity is pinned here on
             # purpose: a filter added to `stats()` and forgotten in the key
             # would serve one question's numbers as another's.
-            empty = (None,) * 9
+            empty = (None,) * 11
             assert ("provider-0", *empty) not in store._stats_cache
             assert (f"provider-{max_entries}", *empty) in store._stats_cache
     finally:
@@ -3619,7 +3619,7 @@ def test_the_harness_breakdown_is_served_by_its_own_index(
 def test_the_stats_cache_key_carries_every_filter_including_harness(
     store: RequestLogStore,
 ) -> None:
-    """Ten filters, ten slots.
+    """Twelve filters, twelve slots (``session`` and ``folder`` joined in 7.43.0).
 
     Two calls that differ only in ``harness`` must not share a cache entry, or
     one harness's numbers are served as another's for the TTL.
@@ -3631,7 +3631,7 @@ def test_the_stats_cache_key_carries_every_filter_including_harness(
     assert store.stats(harness="codex")["total"] == 1
     with store._stats_lock:
         keys = list(store._stats_cache)
-    assert all(len(key) == 10 for key in keys)
+    assert all(len(key) == 12 for key in keys)
     assert {key[9] for key in keys} == {"claude", "codex"}
 
 

@@ -129,6 +129,8 @@ async def export_analytics(
         None, description="all | hide | only -- locally answered requests"
     ),
     harness: str | None = Query(None, description="comma-separated harness names"),
+    session: str | None = Query(None, description="conversation id or its prefix"),
+    folder: str | None = Query(None, description="a full folder path, or part of one"),
     settings: Settings = Depends(get_settings),
     websearch_store: WebSearchLogStore = Depends(get_websearch_log_store),
 ):
@@ -163,6 +165,8 @@ async def export_analytics(
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
             settings=settings,
         )
     if scp == export_engine.REQUEST_SCOPE:
@@ -180,6 +184,8 @@ async def export_analytics(
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
             settings=settings,
         )
     return _websearch_export(
@@ -210,6 +216,8 @@ def _request_export(
     q: str | None,
     local: str | None,
     harness: str | None,
+    session: str | None,
+    folder: str | None,
     settings: Settings,
 ) -> StreamingResponse:
     store = _request_store(settings)
@@ -262,6 +270,8 @@ def _request_export(
             q=q,
             local=local,
             harness=harness,
+            session=session,
+            folder=folder,
         )
 
         def agg_rows() -> Iterator[dict[str, Any]]:
@@ -293,6 +303,8 @@ def _request_export(
         q=q,
         local=local,
         harness=harness,
+        session=session,
+        folder=folder,
     )
 
     key_names = credential_name_index()
@@ -320,6 +332,8 @@ def _attempt_export(
     q: str | None,
     local: str | None,
     harness: str | None,
+    session: str | None,
+    folder: str | None,
     settings: Settings,
 ) -> StreamingResponse:
     """Stream one row per route attempt, joined to its request's dimensions.
@@ -368,6 +382,8 @@ def _attempt_export(
         q=q,
         local=local,
         harness=harness,
+        session=session,
+        folder=folder,
     )
 
     key_names = credential_name_index()

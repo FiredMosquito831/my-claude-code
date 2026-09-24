@@ -1032,6 +1032,32 @@
                 />
                 <datalist id="reqHarnessOptions"></datalist>
               </label>
+              <label
+                title="The conversation id the client sent, or its first characters. The table shows the first eight."
+              >
+                Session
+                <input
+                  id="reqFilterSession"
+                  type="text"
+                  list="reqSessionOptions"
+                  placeholder="any"
+                  autocomplete="off"
+                />
+                <datalist id="reqSessionOptions"></datalist>
+              </label>
+              <label
+                title="A full folder path selects exactly that folder; anything else matches every folder whose path contains it."
+              >
+                Folder
+                <input
+                  id="reqFilterFolder"
+                  type="text"
+                  list="reqFolderOptions"
+                  placeholder="any"
+                  autocomplete="off"
+                />
+                <datalist id="reqFolderOptions"></datalist>
+              </label>
               <label>
                 Key
                 <input
@@ -1212,6 +1238,16 @@
               <section class="analytics-panel">
                 <h4>Requests by harness</h4>
                 <div id="reqHarnessBreakdown"></div>
+              </section>
+              <section class="analytics-panel" aria-labelledby="reqFolderBreakdownHeading">
+                <h4 id="reqFolderBreakdownHeading">Requests by folder</h4>
+                <p id="reqFolderBreakdownNote" class="analytics-footnote"></p>
+                <div id="reqFolderBreakdown"></div>
+              </section>
+              <section class="analytics-panel" aria-labelledby="reqSessionBreakdownHeading">
+                <h4 id="reqSessionBreakdownHeading">Requests by session</h4>
+                <p id="reqSessionBreakdownNote" class="analytics-footnote"></p>
+                <div id="reqSessionBreakdown"></div>
               </section>
               <section class="analytics-panel">
                 <h4>Key performance</h4>

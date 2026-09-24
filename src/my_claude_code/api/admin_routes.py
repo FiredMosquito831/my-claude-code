@@ -3534,6 +3534,8 @@ async def list_request_log(
     q: str | None = None,
     local: str | None = None,
     harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Page through the persisted request log (newest first).
@@ -3583,6 +3585,8 @@ async def list_request_log(
         q=q,
         local=local,
         harness=harness,
+        session=session,
+        folder=folder,
         include_total=include_total,
     )
     return {
@@ -3613,6 +3617,8 @@ async def count_request_log(
     q: str | None = None,
     local: str | None = None,
     harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """How many rows match these filters. The half the page no longer waits for.
@@ -3640,6 +3646,8 @@ async def count_request_log(
         q=q,
         local=local,
         harness=harness,
+        session=session,
+        folder=folder,
     )
     return {"enabled": True, "total": total}
 
@@ -3657,6 +3665,8 @@ async def request_log_ttft(
     q: str | None = None,
     local: str | None = None,
     harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Overall p50/p95 time-to-first-token for the same filters as ``stats``.
@@ -3690,6 +3700,60 @@ async def request_log_ttft(
         q=q,
         local=local,
         harness=harness,
+        session=session,
+        folder=folder,
+    )
+    return {"enabled": True, **result}
+
+
+@router.get("/admin/api/requests/origin")
+async def request_log_origin(
+    request: Request,
+    provider: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+    endpoint: str | None = None,
+    key: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    q: str | None = None,
+    local: str | None = None,
+    harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """Requests by folder and by session, for the same filters as ``stats``.
+
+    Its own route, off the paint path like the cost, latency and TTFT panels:
+    neither value is a rollup dimension, so this is a row query, and the
+    rollup-served ``stats`` stays exactly the payload it was.
+
+    Sessions are listed flat -- see ``RequestLogStore.origin_breakdown`` for
+    why subagents are counted under a session rather than grouped under a
+    parent.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False}
+    _validate_request_log_status(status)
+    _validate_request_log_local(local)
+    result = await asyncio.to_thread(
+        store.origin_breakdown,
+        provider=provider,
+        model=model,
+        status=status,
+        endpoint=endpoint,
+        key=key,
+        since=since,
+        until=until,
+        q=q,
+        local=local,
+        harness=harness,
+        session=session,
+        folder=folder,
     )
     return {"enabled": True, **result}
 
@@ -3707,6 +3771,8 @@ async def request_log_stats(
     q: str | None = None,
     local: str | None = None,
     harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Aggregate request analytics over an optional epoch-second window.
@@ -3736,6 +3802,8 @@ async def request_log_stats(
         q=q,
         local=local,
         harness=harness,
+        session=session,
+        folder=folder,
     )
     result["enabled"] = True
     result["capture_bodies"] = bool(settings.request_log_capture_bodies)
@@ -3775,6 +3843,8 @@ async def request_log_stats(
         q=q,
         local=local,
         harness=harness,
+        session=session,
+        folder=folder,
     )
     return result
 
@@ -3792,6 +3862,8 @@ async def request_log_cost(
     q: str | None = None,
     local: str | None = None,
     harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """What the filtered traffic cost, per provider, model, harness and day.
@@ -3823,6 +3895,8 @@ async def request_log_cost(
         "q": q,
         "local": local,
         "harness": harness,
+        "session": session,
+        "folder": folder,
     }
 
     def compute() -> dict[str, Any]:
@@ -4018,6 +4092,8 @@ async def request_log_pulse(
     q: str | None = None,
     local: str | None = None,
     harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Cheap heartbeat for auto-refresh: row count and latest timestamp only.
@@ -4044,6 +4120,8 @@ async def request_log_pulse(
         q=q,
         local=local,
         harness=harness,
+        session=session,
+        folder=folder,
     )
     result["enabled"] = True
     return result

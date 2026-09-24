@@ -507,6 +507,52 @@ def session_short(session_id: Any) -> str | None:
     return session_id[:8]
 
 
+#: A value that starts like an absolute path -- ``C:\``, ``\\server``, ``/`` --
+#: names one folder; anything else is part of a name.
+_ABSOLUTE_FOLDER = re.compile(r"^(?:[A-Za-z]:[\\/]|[\\/])")
+
+FolderMatch = Literal["exact", "contains"]
+
+
+def folder_filter(value: Any) -> tuple[FolderMatch, str] | None:
+    """How the Analytics **Folder** filter reads what was typed or clicked.
+
+    Two readings, told apart by shape, because the filter is fed two ways:
+
+    - **A full path** -- what clicking a row of *Requests by folder* puts in
+      the box -- selects exactly that folder, normalised the way a stored
+      value was (trailing separator stripped). A substring match there would
+      quietly add ``demo-old`` to a click on ``demo``.
+    - **Anything else** is part of a folder's path, matched anywhere in it and
+      without regard to ASCII case: ``phone games`` finds
+      ``D:\\work\\games\\Phone games``.
+
+    ``None`` for an empty value, which is "no filter".
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if _ABSOLUTE_FOLDER.match(text):
+        cleaned = _clean("project_dir", text)
+        return ("exact", cleaned) if cleaned is not None else None
+    return ("contains", text)
+
+
+def session_filter(value: Any) -> str | None:
+    """The **Session** filter: a prefix of the stored conversation id.
+
+    The table shows the first eight characters, so eight is what a reader
+    copies; a full id from a clicked breakdown row is the same rule with a
+    longer prefix, and a uuid's length makes it exact.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text[:MAX_ID_CHARS] if text else None
+
+
 def _metadata_value(
     metadata: Mapping[str, Any] | None, extractor: OriginExtractor
 ) -> str | None:
@@ -582,9 +628,11 @@ __all__ = [
     "PROMPT_HARNESSES",
     "PROMPT_SCAN_MAX_CHARS",
     "SOURCE_ORDER",
+    "FolderMatch",
     "OriginExtractor",
     "OriginInputs",
     "RequestOrigin",
+    "folder_filter",
     "format_origin_source",
     "merge_origin_source",
     "origin_inputs",
@@ -595,6 +643,7 @@ __all__ = [
     "project_short",
     "provenance_sentence",
     "resolve_origin",
+    "session_filter",
     "session_short",
     "system_prompt_text",
 ]
