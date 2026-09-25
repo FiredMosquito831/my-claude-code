@@ -39,6 +39,8 @@ import pytest_asyncio
 
 import my_claude_code.api.request_capture as request_capture_module
 import my_claude_code.config.logging_config as logging_config
+import my_claude_code.config.settings as settings_module
+import my_claude_code.runtime.application as application_module
 from my_claude_code.api.handlers.messages import MessagesHandler
 from my_claude_code.api.request_capture import build_capture
 from my_claude_code.application.execution import route_execution_policy
@@ -53,7 +55,6 @@ from my_claude_code.config.settings import (
     configured_opencode_client_runtime,
     configured_opencode_client_version,
     configured_opencode_free_tier_models,
-    get_settings,
 )
 from my_claude_code.core import request_tasks
 from my_claude_code.core.anthropic import Message, MessagesRequest
@@ -304,12 +305,24 @@ def managed_env(monkeypatch) -> Any:
     # Production's own value: resolved at every read, so ``Settings()`` reads
     # the file the apply wrote even if the config directory is resolved again
     # in between (a fixed tuple here made the proof order-dependent on CI).
+    #
+    # ``tests/config/test_env_aliases.py`` reloads ``config.settings``, which
+    # redefines ``Settings`` and ``get_settings`` in the module while
+    # ``runtime.application`` keeps the function it imported. In production
+    # they are one function, so the apply's ``cache_clear`` is the one the
+    # per-request readers consult; the runtime is pointed back at the module's
+    # current function here so a worker that ran that test first proves the
+    # same thing.
+    for cls in {Settings, settings_module.Settings}:
+        monkeypatch.setattr(
+            cls, "model_config", {**cls.model_config, "env_file": LazyEnvFiles()}
+        )
     monkeypatch.setattr(
-        Settings, "model_config", {**Settings.model_config, "env_file": LazyEnvFiles()}
+        application_module, "get_settings", settings_module.get_settings
     )
-    get_settings.cache_clear()
+    settings_module.get_settings.cache_clear()
     yield path
-    get_settings.cache_clear()
+    settings_module.get_settings.cache_clear()
 
 
 class HotApp:
