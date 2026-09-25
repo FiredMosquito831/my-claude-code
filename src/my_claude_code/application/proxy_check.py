@@ -39,10 +39,11 @@ sweep of a long catalogue cannot sit in front of ``/v1/messages``.
 import asyncio
 import base64
 import contextlib
+import errno
 import ssl
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -60,6 +61,11 @@ from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.proxy_chains import (
+    FAILURE_CONNECT_TIMEOUT,
+    FAILURE_OTHER,
+    FAILURE_REFUSED,
+    FAILURE_TLS_TIMEOUT,
+    FAILURE_TUNNEL,
     TLS_INTERCEPTED,
     TLS_STRICT,
     TLS_UNKNOWN,
@@ -373,6 +379,52 @@ def check_budget(
     return legs + 3.0 * PROXY_CLOSE_TIMEOUT_SECONDS + CHECK_BUDGET_MARGIN_SECONDS
 
 
+#: The ``errno`` values a real refusal arrives as: POSIX ``ECONNREFUSED`` and
+#: Winsock's ``WSAECONNREFUSED``. ``ConnectionRefusedError`` covers both where
+#: the platform maps them, and this catches a transport that raised a bare
+#: ``OSError`` carrying the number instead.
+_REFUSED_ERRNOS = frozenset({errno.ECONNREFUSED, 10061})
+
+
+def _is_connection_refused(exc: BaseException) -> bool:
+    """Whether a dial failed because the port answered with a reset."""
+
+    if isinstance(exc, ConnectionRefusedError):
+        return True
+    return isinstance(exc, OSError) and exc.errno in _REFUSED_ERRNOS
+
+
+class _DialReason(str):
+    """A dial's reason, carrying which kind of failure it was.
+
+    A ``str`` so every caller that compares or prints the reason -- and every
+    test that stands in for :func:`_tcp_connect` with a plain string -- keeps
+    working; :func:`check_proxy` reads :attr:`failure` off it when it is there.
+    """
+
+    failure: str = ""
+
+    def __new__(cls, text: str, failure: str) -> _DialReason:
+        made = super().__new__(cls, text)
+        made.failure = failure
+        return made
+
+
+def _unreachable_reason(host: str, port: int, exc: OSError) -> tuple[str, str]:
+    """The operator's sentence and the failure class for a dial that failed.
+
+    "Refused the connection" is said only of a real refusal (7.53.0). Every
+    other ``OSError`` used to read that way too -- a network that could not be
+    reached, a reset, an address in use -- and the fetch now re-tests
+    everything except a true refusal, so the sentence has to be honest.
+    """
+
+    reason = exc.strerror or str(exc)
+    if _is_connection_refused(exc):
+        return f"{host}:{port} refused the connection: {reason}", FAILURE_REFUSED
+    return f"{host}:{port} could not be reached: {reason}", FAILURE_OTHER
+
+
 async def _tcp_connect(host: str, port: int, timeout: float) -> str:
     """Empty string when the address answered; a reason when it did not."""
 
@@ -384,9 +436,12 @@ async def _tcp_connect(host: str, port: int, timeout: float) -> str:
         del reader
         return ""
     except TimeoutError:
-        return f"no answer from {host}:{port} within {timeout:.0f}s"
+        return _DialReason(
+            f"no answer from {host}:{port} within {timeout:.0f}s",
+            FAILURE_CONNECT_TIMEOUT,
+        )
     except OSError as exc:
-        return f"{host}:{port} refused the connection: {exc.strerror or exc}"
+        return _DialReason(*_unreachable_reason(host, port, exc))
     finally:
         if writer is not None:
             # Closing a socket the peer already dropped raises, and a socket
@@ -524,7 +579,33 @@ class _Unreachable(Exception):
     connection attempt. This is that wire: it is raised only before the socket
     is established, and the caller turns it into exactly the record the
     separate dial produced -- no latency, no TLS opinion, the same sentence.
+    ``failure`` says which kind of unreachable it was.
     """
+
+    def __init__(self, reason: str, failure: str) -> None:
+        super().__init__(reason)
+        self.failure = failure
+
+
+@dataclass(slots=True)
+class _Phases:
+    """What one check timed, phase by phase, and the phase it reached.
+
+    Filled in as the check goes, so a failure knows where it happened -- the
+    tunnel, or the handshake through it -- and a pass carries the numbers a
+    slow address is told apart by. A stopwatch and nothing else: the calls it
+    brackets are unchanged.
+    """
+
+    connect_ms: int | None = None
+    tunnel_ms: int | None = None
+    tls_ms: int | None = None
+    first_byte_ms: int | None = None
+    step: str = "connect"
+
+
+def _ms_since(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
 
 
 async def _verified_handshake(
@@ -534,6 +615,7 @@ async def _verified_handshake(
     timeout: float,
     connect_timeout: float,
     on_connect: Callable[[], None] | None = None,
+    phases: _Phases | None = None,
 ) -> None:
     """Tunnel to the destination and finish a verified TLS handshake. No request.
 
@@ -565,8 +647,14 @@ async def _verified_handshake(
     Returns nothing. Success is the absence of an exception; a certificate that
     does not verify raises ``ssl.SSLCertVerificationError`` from inside
     ``start_tls``, which is precisely what the caller turns into a refusal.
+
+    ``phases``, when given, is filled in with each step's time and the step
+    the check reached (7.53.0). It brackets the three awaits with a stopwatch
+    and changes nothing about them -- the same context object, the same
+    server name, the same timeouts.
     """
 
+    timing = phases if phases is not None else _Phases()
     endpoint = _host_and_port(url)
     if endpoint is None:
         raise httpx.ConnectError("not a usable address")
@@ -582,11 +670,13 @@ async def _verified_handshake(
         )
     else:
         stream = asyncio.open_connection(endpoint[0], endpoint[1])
+    dialled = time.monotonic()
     try:
         reader, writer = await asyncio.wait_for(stream, timeout=connect_timeout)
     except TimeoutError:
         raise _Unreachable(
-            f"no answer from {endpoint[0]}:{endpoint[1]} within {connect_timeout:.0f}s"
+            f"no answer from {endpoint[0]}:{endpoint[1]} within {connect_timeout:.0f}s",
+            FAILURE_CONNECT_TIMEOUT,
         ) from None
     except ssl.SSLError:
         # An https proxy whose own certificate does not check out. That is a
@@ -599,9 +689,10 @@ async def _verified_handshake(
         raise
     except OSError as exc:
         raise _Unreachable(
-            f"{endpoint[0]}:{endpoint[1]} refused the connection: {exc.strerror or exc}"
+            *_unreachable_reason(endpoint[0], endpoint[1], exc)
         ) from None
 
+    timing.connect_ms = _ms_since(dialled)
     if on_connect is not None:
         on_connect()
     try:
@@ -615,12 +706,19 @@ async def _verified_handshake(
         else:
             raise httpx.ConnectError(f"MCC does not speak {scheme} to a proxy")
         credentials = _proxy_credentials(url)
+        timing.step = "tunnel"
+        opened = time.monotonic()
         await asyncio.wait_for(
             opener(writer, reader, target[0], target[1], credentials), timeout=timeout
         )
+        timing.tunnel_ms = _ms_since(opened)
+        timing.step = "tls"
+        handshake = time.monotonic()
         await asyncio.wait_for(
             writer.start_tls(context, server_hostname=target[0]), timeout=timeout
         )
+        timing.tls_ms = _ms_since(handshake)
+        timing.step = "done"
     finally:
         await _release_writer(writer)
 
@@ -671,8 +769,10 @@ async def check_proxy(
             tls=TLS_UNKNOWN,
             detail="not a usable proxy address",
             depth=proven,
+            failure=FAILURE_OTHER,
         )
 
+    phases = _Phases()
     dial = timeout if connect_timeout is None else max(0.1, float(connect_timeout))
     if not tls_only:
         # The request depth reaches the address twice however this is written:
@@ -680,11 +780,19 @@ async def check_proxy(
         # cannot be handed a socket. So the reachability dial stays exactly
         # where it was for that depth -- byte for byte the check every caller
         # made before the fetch sweep existed.
+        dialled = time.monotonic()
         reason = await _tcp_connect(endpoint[0], endpoint[1], dial)
         if reason:
             return ProxyCheckRecord(
-                at=_now(), ok=False, tls=TLS_UNKNOWN, detail=reason, depth=proven
+                at=_now(),
+                ok=False,
+                tls=TLS_UNKNOWN,
+                detail=str(reason),
+                depth=proven,
+                failure=getattr(reason, "failure", "") or FAILURE_OTHER,
             )
+        phases.connect_ms = _ms_since(dialled)
+        phases.step = "request"
 
     started = time.monotonic()
 
@@ -707,6 +815,7 @@ async def check_proxy(
                 timeout=timeout,
                 connect_timeout=dial,
                 on_connect=_connected,
+                phases=phases,
             )
         else:
             # Nothing is said about trust here, and that is the point: the
@@ -719,7 +828,9 @@ async def check_proxy(
                 httpx.AsyncClient(proxy=url, timeout=timeout, follow_redirects=False)
             )
             try:
+                asked = time.monotonic()
                 response = await client.head(destination)
+                phases.first_byte_ms = _ms_since(asked)
                 del response
             finally:
                 # A bounded ``async with``. Shutting the pool down waits on
@@ -734,7 +845,12 @@ async def check_proxy(
         # dial returned, down to the sentence and to carrying no latency: there
         # was no handshake leg to time.
         return ProxyCheckRecord(
-            at=_now(), ok=False, tls=TLS_UNKNOWN, detail=str(exc), depth=proven
+            at=_now(),
+            ok=False,
+            tls=TLS_UNKNOWN,
+            detail=str(exc),
+            depth=proven,
+            failure=exc.failure,
         )
     except Exception as exc:
         elapsed = int((time.monotonic() - started) * 1000)
@@ -756,6 +872,8 @@ async def check_proxy(
                     "route through it"
                 ),
                 depth=proven,
+                connect_ms=phases.connect_ms,
+                tunnel_ms=phases.tunnel_ms,
             )
         return ProxyCheckRecord(
             at=_now(),
@@ -764,6 +882,9 @@ async def check_proxy(
             tls=TLS_UNKNOWN,
             detail=_transport_reason(exc),
             depth=proven,
+            connect_ms=phases.connect_ms,
+            tunnel_ms=phases.tunnel_ms,
+            failure=_failure_class(exc, phases.step),
         )
 
     # Any status at all is a pass. The question was whether the tunnel carries
@@ -784,7 +905,27 @@ async def check_proxy(
         detail="",
         exit_ip=exit_ip,
         depth=proven,
+        connect_ms=phases.connect_ms,
+        tunnel_ms=phases.tunnel_ms,
+        tls_ms=phases.tls_ms,
+        first_byte_ms=phases.first_byte_ms,
     )
+
+
+def _failure_class(exc: BaseException, step: str) -> str:
+    """Which failure class a check that got past the dial belongs to.
+
+    Read off the step it had reached, because the same ``TimeoutError`` means
+    a slow tunnel in one place and a slow handshake in the other.
+    """
+
+    if step == "tunnel":
+        return FAILURE_TUNNEL
+    if step == "tls":
+        return FAILURE_TLS_TIMEOUT if isinstance(exc, TimeoutError) else FAILURE_OTHER
+    if isinstance(exc, httpx.ProxyError):
+        return FAILURE_TUNNEL
+    return FAILURE_OTHER
 
 
 def _transport_reason(exc: BaseException) -> str:
@@ -1094,6 +1235,10 @@ async def check_endpoints(
     max_concurrency: int = PROXY_CHECK_MAX_CONCURRENCY,
     budget: float | None = None,
     off_loop: bool = False,
+    attempts: int = 1,
+    spacing: float = 0.0,
+    charge_failures: bool = True,
+    sleep: Callable[[float], Awaitable[object]] | None = None,
 ) -> dict[str, ProxyCheckOutcome]:
     """Check several stored addresses, persist the verdicts, arm the ledgers.
 
@@ -1132,6 +1277,24 @@ async def check_endpoints(
     holding the server's loop for two thirds of a second at a time. See
     :class:`_CheckLoop` for the measurement and for what deliberately does not
     move.
+
+    ``attempts`` and ``spacing`` make one call a **round** (7.53.0): each
+    address gets up to ``attempts`` tries, ``spacing`` seconds apart, and the
+    first pass ends its round and is its record. Only when every try failed
+    is the failure applied -- once, so the reachability ladder moves one rung
+    per round rather than one per try. A single unlucky try used to push an
+    address that works about half the time towards the hour-long rung. ``1``
+    and ``0.0`` are the defaults and are exactly the call every caller made
+    before; the single-row Test keeps them on purpose. A record from a round
+    of more than one try says how many it took in ``tries``. The wait between
+    tries is spent outside the concurrency limit, so a round does not hold a
+    slot while it sleeps.
+
+    ``charge_failures=False`` is the early confirm after a live failure: a
+    pass is applied and written exactly as always, and a failure changes
+    nothing at all -- no ladder rung, no stored record. An interception is
+    still applied, because that is the security control and is never skipped.
+    ``sleep`` replaces ``asyncio.sleep`` for the spacing, for tests.
     """
 
     table = load_proxy_chains()
@@ -1141,6 +1304,8 @@ async def check_endpoints(
         if table.endpoint(proxy_id) is not None and destinations.get(proxy_id, "")
     ]
     outcomes: dict[str, ProxyCheckOutcome] = {}
+    # Failures an early confirm measured and deliberately did not apply.
+    skipped: dict[str, ProxyCheckOutcome] = {}
     ceiling = max(1, int(max_concurrency))
     limit = asyncio.Semaphore(max(1, min(int(concurrency), ceiling)))
 
@@ -1155,40 +1320,62 @@ async def check_endpoints(
             return await coroutine
         return await worker.run(coroutine)
 
+    tries_allowed = max(1, int(attempts))
+    gap = max(0.0, float(spacing))
+    pause = sleep if sleep is not None else asyncio.sleep
+
+    async def one_try(url: str, destination: str, label: str) -> ProxyCheckRecord:
+        async with limit:
+            checking = check_proxy(
+                url,
+                destination,
+                timeout=timeout,
+                exit_ip_url=exit_ip_url,
+            )
+            if budget is None:
+                return await run_one(checking)
+            try:
+                return await run_one(asyncio.wait_for(checking, budget))
+            except TimeoutError:
+                logger.warning(
+                    "PROXY CHECK: {} did not finish within {:.0f}s -- abandoning it",
+                    label,
+                    budget,
+                )
+                return ProxyCheckRecord(
+                    at=_now(),
+                    ok=False,
+                    tls=TLS_UNKNOWN,
+                    detail=f"did not finish within {budget:.0f}s",
+                    depth=CHECK_DEPTH_REQUEST,
+                    failure=FAILURE_OTHER,
+                )
+
     async def measure(proxy_id: str) -> None:
         endpoint = table.endpoint(proxy_id)
         if endpoint is None:  # pragma: no cover - filtered above
             return
         label = endpoint.label or mask_proxy_label(endpoint.url)
-        async with limit:
-            checking = check_proxy(
-                endpoint.url,
-                destinations[proxy_id],
-                timeout=timeout,
-                exit_ip_url=exit_ip_url,
+        tried = 0
+        while True:
+            tried += 1
+            # The refusal hold sees every try, so a pass on a refused address
+            # still needs its second pass in a row before anything is lifted.
+            record = hold_refusal(
+                label, await one_try(endpoint.url, destinations[proxy_id], label)
             )
-            if budget is None:
-                record = await run_one(checking)
-            else:
-                try:
-                    record = await run_one(asyncio.wait_for(checking, budget))
-                except TimeoutError:
-                    logger.warning(
-                        "PROXY CHECK: {} did not finish within {:.0f}s -- "
-                        "abandoning it",
-                        label,
-                        budget,
-                    )
-                    record = ProxyCheckRecord(
-                        at=_now(),
-                        ok=False,
-                        tls=TLS_UNKNOWN,
-                        detail=f"did not finish within {budget:.0f}s",
-                        depth=CHECK_DEPTH_REQUEST,
-                    )
-        record = hold_refusal(label, record)
-        apply_outcome(label, record)
-        outcomes[proxy_id] = ProxyCheckOutcome(label=label, record=record)
+            if record.ok or record.intercepted or tried >= tries_allowed:
+                break
+            if gap > 0:
+                await pause(gap)
+        if tries_allowed > 1:
+            record = replace(record, tries=tried)
+        if record.ok or record.intercepted or charge_failures:
+            # One application per round: a failure here is every try failing.
+            apply_outcome(label, record)
+            outcomes[proxy_id] = ProxyCheckOutcome(label=label, record=record)
+        else:
+            skipped[proxy_id] = ProxyCheckOutcome(label=label, record=record)
         # One yield per address. A sweep of a full catalogue is a dozen network
         # calls and this is what keeps them from sitting in front of a request.
         await asyncio.sleep(0)
@@ -1211,6 +1398,11 @@ async def check_endpoints(
         for proxy_id, outcome in outcomes.items():
             fresh = fresh.with_check(proxy_id, outcome.record)
         save_proxy_chains(fresh)
+    if skipped:
+        # Reported to the caller, never written: see ``charge_failures``.
+        outcomes = outcomes | {
+            proxy_id: skipped[proxy_id] for proxy_id in wanted if proxy_id in skipped
+        }
     return outcomes
 
 

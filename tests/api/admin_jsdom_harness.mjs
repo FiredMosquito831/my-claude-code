@@ -3812,6 +3812,200 @@ if (withChain) {
     proxying.candidateMeasured = measured;
   }
 
+  /* 7.53.0: a fetch confirms before it calls an address dead, and slow is not
+     dead. Each status shape the server now sends is handed to the page through
+     its own status read -- `readProxyFetchStatus()`, the poll's path -- with
+     only that one route answered differently, and the sentence is then read
+     off the page's own `proxyFetchSentence()`. `proxyState` is a lexical
+     binding of the evaluated script and not reachable from here, which is why
+     the state goes in by the route rather than by assignment. The real route
+     is read once more at the end, so the blocks below find the page as the
+     sweep above left it. Running shapes go first: the page announces a
+     running-to-finished change, and ending on finished-to-finished keeps the
+     live region as the sweep above left it too. */
+  {
+    const statusRoute = "/admin/api/proxy-chains/ingest/status";
+    const realFetch = window.fetch;
+    const sentence = async (fetch) => {
+      window.fetch = async (url, options) => {
+        if (String(url).split("?")[0] !== statusRoute) return realFetch(url, options);
+        const body = { ...proxyFetchStatePayload(false), fetch };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => JSON.parse(JSON.stringify(body)),
+          text: async () => "",
+        };
+      };
+      try {
+        await window.eval("readProxyFetchStatus")();
+      } finally {
+        window.fetch = realFetch;
+      }
+      return String(window.eval("proxyFetchSentence()")).replace(/\s+/g, " ").trim();
+    };
+    const base = {
+      job: "fetch_confirm",
+      provider: "nvidia_nim",
+      provider_name: "NVIDIA NIM",
+      feeds_total: 2,
+      feeds_read: 2,
+      feeds: [],
+    };
+    const confirmShapes = {
+      done: {
+        ...base,
+        state: "done",
+        tested: 1000,
+        total: 1000,
+        working: 328,
+        slow: 190,
+        flaky: 12,
+        dead: 607,
+        confirmed_dead: 540,
+        refused: 65,
+        confirm_attempts: 3,
+      },
+      // No flaky passes and no dial refusals: neither part is printed.
+      doneQuiet: {
+        ...base,
+        state: "done",
+        tested: 10,
+        total: 10,
+        working: 5,
+        slow: 1,
+        flaky: 0,
+        dead: 5,
+        confirmed_dead: 5,
+        refused: 0,
+        confirm_attempts: 3,
+      },
+      // A status written by an older server: no confirm stage, old words.
+      legacy: {
+        ...base,
+        state: "done",
+        tested: 20,
+        total: 20,
+        working: 4,
+        dead: 15,
+        refused: 1,
+      },
+      running: {
+        ...base,
+        state: "running",
+        tested: 1000,
+        total: 1000,
+        working: 300,
+        slow: 150,
+        flaky: 0,
+        dead: 20,
+        confirmed_dead: 0,
+        refused: 60,
+        persisted: 300,
+        confirming: 612,
+        confirm_attempt: 2,
+        confirm_attempts: 3,
+      },
+      paused: {
+        ...base,
+        state: "running",
+        tested: 400,
+        total: 1000,
+        working: 90,
+        slow: 10,
+        flaky: 0,
+        dead: 0,
+        confirmed_dead: 0,
+        refused: 3,
+        persisted: 90,
+        confirming: 0,
+        confirm_attempts: 3,
+        paused: true,
+        pause_detail: "your own connection to opencode.ai is failing -- paused",
+      },
+    };
+    proxying.fetchConfirm = {};
+    for (const key of ["running", "paused", "done", "doneQuiet", "legacy"]) {
+      proxying.fetchConfirm[key] = await sentence(confirmShapes[key]);
+    }
+    // Back to what the fake server holds: the sweep above, finished.
+    await window.eval("readProxyFetchStatus")();
+
+    // The candidate row, built by the page's own builder.
+    const chipOf = (candidate) => {
+      const row = window.eval("proxyCandidateRow")(candidate);
+      const chip = row.querySelector(".proxy-state-chip");
+      return chip
+        ? { text: chip.textContent.trim(), className: chip.className, title: chip.title }
+        : null;
+    };
+    const candidate = (proxy, extra) => ({
+      proxy,
+      label: proxy.replace(/^http:\/\//, ""),
+      scheme: "http",
+      working: true,
+      sources: [{ name: "feed-a" }],
+      checked_for_name: "NVIDIA NIM",
+      ...extra,
+    });
+    proxying.candidateStateChips = {
+      working: chipOf(candidate("http://10.0.0.1:8080", { state: "working" })),
+      slow: chipOf(
+        candidate("http://10.0.0.2:8080", {
+          state: "slow",
+          last_check: {
+            ok: true,
+            depth: "tls",
+            connect_ms: 1200,
+            tunnel_ms: 900,
+            tls_ms: 1400,
+            state: "slow",
+          },
+        }),
+      ),
+      flaky: chipOf(
+        candidate("http://10.0.0.3:8080", {
+          state: "flaky",
+          last_check: { ok: true, depth: "tls", tries: 4, state: "flaky" },
+        }),
+      ),
+      none: chipOf(candidate("http://10.0.0.4:8080", { state: "" })),
+      absent: chipOf(candidate("http://10.0.0.5:8080", {})),
+    };
+
+    // The chain entry's health word, from the page's own function.
+    const health = (entry) => window.eval("proxyEntryHealth")(entry);
+    const at = "2026-09-25T14:05:00Z";
+    const stamp = new Date(Date.parse(at));
+    const unhealthy = {
+      state: "unreachable",
+      cooldown_remaining: 3540,
+      due_for_recheck: false,
+      reason: "no answer",
+    };
+    proxying.unhealthyRound = {
+      expectedClock: `${String(stamp.getHours()).padStart(2, "0")}:${String(
+        stamp.getMinutes(),
+      ).padStart(2, "0")}`,
+      withTries: health({
+        health: unhealthy,
+        last_check: { ok: false, tls: "unknown", tries: 3, at },
+      }).text,
+      dueWithTries: health({
+        health: { ...unhealthy, due_for_recheck: true, cooldown_remaining: 0 },
+        last_check: { ok: false, tls: "unknown", tries: 3, at },
+      }).text,
+      withoutTries: health({
+        health: unhealthy,
+        last_check: { ok: false, tls: "unknown", at },
+      }).text,
+      intercepted: health({
+        health: unhealthy,
+        last_check: { ok: false, tls: "intercepted", tries: 3, at },
+      }).text,
+    };
+  }
+
   /* The Add form, which is the whole of what a FRESH install sees: MCC ships
      no lists, so without this block the release's main surface would be
      untested by construction -- the same hole the missing `feeds` array was.

@@ -9459,6 +9459,35 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+/* How a candidate passed (7.53.0): working, slow or flaky. All three are kept
+   and usable, so none is drawn as a fault -- the colour says how much to
+   expect from it, the title says what was measured. */
+.proxy-state-chip {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.proxy-state-working {
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.proxy-state-slow {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.proxy-state-flaky {
+  border-color: var(--neutral-border);
+  background: var(--neutral-bg);
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------ the fetch progress
    Rendered whether or not anything is on offer yet: the commonest moment to
    look at this panel is while the sweep is still running. */

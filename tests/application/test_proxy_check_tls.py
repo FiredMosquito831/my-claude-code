@@ -51,6 +51,7 @@ from my_claude_code.config.proxy_chains import (
     TLS_INTERCEPTED,
     TLS_STRICT,
     TLS_UNKNOWN,
+    ProxyCheckRecord,
 )
 from my_claude_code.core.proxy_rotation import (
     PROXY_INTERCEPTION,
@@ -897,3 +898,106 @@ async def test_an_https_proxys_own_bad_certificate_is_interception_not_death(
     assert record.ok is False
     assert record.intercepted is True
     assert "certificate validation" in record.detail
+
+
+# ---------------------------------------------------- 7.53.0: phase timings
+
+
+async def test_phase_timings_recorded(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pass carries connect, tunnel and TLS times -- and the trust is unchanged.
+
+    The stopwatch brackets the three awaits and nothing else: ``start_tls`` is
+    still handed the very object ``default_ssl_context()`` returns, which is
+    the library's own default trust. The record survives a round trip through
+    the store document, and an older document without the new keys still loads.
+    """
+
+    seen: list[object] = []
+    real_start_tls = asyncio.StreamWriter.start_tls
+
+    async def recording(self, sslcontext, *, server_hostname=None, **kwargs):
+        seen.append(sslcontext)
+        return await real_start_tls(
+            self, sslcontext, server_hostname=server_hostname, **kwargs
+        )
+
+    monkeypatch.setattr(asyncio.StreamWriter, "start_tls", recording)
+
+    record = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=10.0,
+        depth="tls",
+    )
+
+    assert record.ok is True, record.detail
+    assert seen and all(
+        context is proxy_check.default_ssl_context() for context in seen
+    )
+    assert record.connect_ms is not None and record.connect_ms >= 0
+    assert record.tunnel_ms is not None and record.tunnel_ms >= 0
+    assert record.tls_ms is not None and record.tls_ms >= 0
+    assert record.failure == ""
+    assert record.setup_ms == record.connect_ms + record.tunnel_ms + record.tls_ms
+
+    document = record.as_document()
+    assert {"connect_ms", "tunnel_ms", "tls_ms"} <= set(document)
+    assert ProxyCheckRecord.from_document(document) == record
+    older = {key: document[key] for key in ("at", "ok", "latency_ms", "tls", "detail")}
+    loaded = ProxyCheckRecord.from_document(older)
+    assert loaded is not None
+    assert (loaded.connect_ms, loaded.tunnel_ms, loaded.tls_ms, loaded.tries) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert "connect_ms" not in loaded.as_document()
+
+
+async def test_only_a_real_refusal_is_called_refused(
+    origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ECONNREFUSED is ``refused``; any other dial error is not, nor worded so."""
+
+    async def refusing(host=None, port=None, **kwargs):
+        raise ConnectionRefusedError(61, "Connection refused")
+
+    monkeypatch.setattr(asyncio, "open_connection", refusing)
+    refused = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=2.0,
+        depth="tls",
+    )
+    assert refused.failure == "refused"
+    assert "refused the connection" in refused.detail
+
+    async def unreachable(host=None, port=None, **kwargs):
+        raise OSError(10065, "A socket operation was attempted to an unreachable host")
+
+    monkeypatch.setattr(asyncio, "open_connection", unreachable)
+    other = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=2.0,
+        depth="tls",
+    )
+    assert other.failure == "other"
+    assert "refused" not in other.detail
+    assert "could not be reached" in other.detail
+
+    async def silent(host=None, port=None, **kwargs):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(asyncio, "open_connection", silent)
+    timed_out = await check_proxy(
+        f"http://127.0.0.1:{clean_proxy.port}",
+        f"https://{HOSTNAME}:{origin.port}/",
+        timeout=2.0,
+        connect_timeout=0.2,
+        depth="tls",
+    )
+    assert timed_out.failure == "connect_timeout"

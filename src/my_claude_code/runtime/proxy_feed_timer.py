@@ -227,6 +227,11 @@ class ProxyFeedTimer(RearmableTimer):
                 persist_interval=float(settings.proxy_fetch_persist_interval_seconds),
                 limit=int(settings.proxy_candidates_max),
                 exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+                confirm_attempts=int(settings.proxy_check_confirm_attempts),
+                confirm_spacing=float(settings.proxy_check_confirm_spacing_seconds),
+                confirm_connect_timeout=float(settings.proxy_connect_timeout_seconds),
+                slow_ms=int(settings.proxy_check_slow_ms),
+                link_guard=bool(settings.proxy_check_link_guard),
             )
         except FetchAlreadyRunning as exc:
             # An operator is watching one on the page. Skipped, never queued --

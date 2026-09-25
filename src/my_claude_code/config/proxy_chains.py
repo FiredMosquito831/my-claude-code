@@ -210,6 +210,39 @@ TLS_UNKNOWN = "unknown"
 #: whole check exists to catch, and MCC will not carry a credential through it.
 TLS_INTERCEPTED = "intercepted"
 
+#: Why a check failed, one word each (7.53.0). ``refused``: the proxy's own
+#: port answered with a reset (a true ``ECONNREFUSED``), which a fetch does not
+#: re-test. ``connect_timeout``: the proxy's port never answered in time.
+#: ``tunnel``: the port answered but ``CONNECT`` or the SOCKS5 handshake failed
+#: or timed out. ``tls_timeout``: the tunnel opened and the TLS handshake
+#: through it did not finish in time. ``other``: anything else -- a reset
+#: mid-handshake, an unreachable network, an address that is not usable.
+FAILURE_REFUSED = "refused"
+FAILURE_CONNECT_TIMEOUT = "connect_timeout"
+FAILURE_TUNNEL = "tunnel"
+FAILURE_TLS_TIMEOUT = "tls_timeout"
+FAILURE_OTHER = "other"
+CHECK_FAILURES: tuple[str, ...] = (
+    FAILURE_REFUSED,
+    FAILURE_CONNECT_TIMEOUT,
+    FAILURE_TUNNEL,
+    FAILURE_TLS_TIMEOUT,
+    FAILURE_OTHER,
+)
+
+#: What a fetch concluded about an address that passed (7.53.0). ``working``:
+#: setup within ``PROXY_CHECK_SLOW_MS``. ``slow``: setup above it. ``flaky``:
+#: it passed on fewer than half of its tries in this fetch, over at least
+#: three. All three are kept and selectable; they are labels, not verdicts.
+CHECK_STATE_WORKING = "working"
+CHECK_STATE_SLOW = "slow"
+CHECK_STATE_FLAKY = "flaky"
+CHECK_STATES: tuple[str, ...] = (
+    CHECK_STATE_WORKING,
+    CHECK_STATE_SLOW,
+    CHECK_STATE_FLAKY,
+)
+
 #: Providers whose credential is a person's *subscription* rather than a
 #: revocable per-project key. Changing source address between requests is more
 #: likely to be read as account sharing here than on a pay-as-you-go key, so
@@ -319,13 +352,64 @@ class ProxyCheckRecord:
     #: check those releases had. It says how an address was proven; it is not a
     #: second security verdict -- ``tls`` above is that, in both depths.
     depth: str = ""
+    #: How long each phase of the check took, in milliseconds (7.53.0). The
+    #: TCP connect to the proxy's own port, the ``CONNECT`` or SOCKS5 tunnel,
+    #: and the TLS handshake to the destination through it; ``first_byte_ms``
+    #: is the ``request`` depth's ``HEAD``, which runs its own tunnel and
+    #: handshake inside the HTTP client and so cannot be split. ``None`` for a
+    #: phase that did not run, and for every record written before 7.53.0 --
+    #: which is why they are all optional and left out of the document when
+    #: absent. ``latency_ms`` above keeps its old meaning (tunnel plus TLS).
+    connect_ms: int | None = None
+    tunnel_ms: int | None = None
+    tls_ms: int | None = None
+    first_byte_ms: int | None = None
+    #: Why a failed check failed, as one machine-readable word: one of
+    #: :data:`CHECK_FAILURES`, or ``""`` for a pass and for an older record.
+    #: ``refused`` is only a real refusal -- the proxy's own port answered
+    #: with a reset -- because that is the one failure a fetch does not
+    #: re-test: it was the reason least often wrong (13 %) when measured.
+    failure: str = ""
+    #: How many tries this verdict summarises, when it is the result of a
+    #: round of several (7.53.0). ``None`` is one try, which is every record
+    #: the single-row Test writes and every record written before. A failed
+    #: record with ``tries`` 3 failed all three; a pass with ``tries`` 3 passed
+    #: on the third.
+    tries: int | None = None
+    #: What a fetch concluded about a passing address: one of
+    #: :data:`CHECK_STATES`, or ``""`` when nothing said. ``slow`` and
+    #: ``flaky`` are labels, never verdicts -- a slow or flaky address is kept
+    #: and can be added to a chain.
+    state: str = ""
 
     @property
     def intercepted(self) -> bool:
         return self.tls == TLS_INTERCEPTED
 
+    @property
+    def setup_ms(self) -> int | None:
+        """Total setup time: connect + tunnel + TLS, or the request's own.
+
+        ``None`` when the check measured none of it -- an older record, or one
+        that never reached the proxy. A ``request``-depth record with a
+        ``first_byte_ms`` uses it alone: the ``HEAD`` dialled, tunnelled and
+        handshook for itself, so adding the separate dial would count the
+        connect twice.
+        """
+
+        if self.first_byte_ms is not None:
+            return self.first_byte_ms
+        phases = [
+            value
+            for value in (self.connect_ms, self.tunnel_ms, self.tls_ms)
+            if value is not None
+        ]
+        if not phases:
+            return None
+        return sum(phases)
+
     def as_document(self) -> dict[str, Any]:
-        return {
+        document: dict[str, Any] = {
             "at": self.at,
             "ok": self.ok,
             "latency_ms": self.latency_ms,
@@ -334,6 +418,24 @@ class ProxyCheckRecord:
             "exit_ip": self.exit_ip,
             "depth": self.depth,
         }
+        document.update(
+            {
+                key: value
+                for key, value in (
+                    ("connect_ms", self.connect_ms),
+                    ("tunnel_ms", self.tunnel_ms),
+                    ("tls_ms", self.tls_ms),
+                    ("first_byte_ms", self.first_byte_ms),
+                    ("tries", self.tries),
+                )
+                if value is not None
+            }
+        )
+        if self.failure:
+            document["failure"] = self.failure
+        if self.state:
+            document["state"] = self.state
+        return document
 
     @classmethod
     def from_document(cls, raw: object) -> Self | None:
@@ -357,6 +459,13 @@ class ProxyCheckRecord:
             detail=str(raw.get("detail") or "").strip(),
             exit_ip=str(raw.get("exit_ip") or "").strip(),
             depth=str(raw.get("depth") or "").strip().lower(),
+            connect_ms=_optional_int(raw.get("connect_ms")),
+            tunnel_ms=_optional_int(raw.get("tunnel_ms")),
+            tls_ms=_optional_int(raw.get("tls_ms")),
+            first_byte_ms=_optional_int(raw.get("first_byte_ms")),
+            failure=_known(raw.get("failure"), CHECK_FAILURES),
+            tries=_optional_int(raw.get("tries")),
+            state=_known(raw.get("state"), CHECK_STATES),
         )
 
 
@@ -417,6 +526,13 @@ def _optional_int(value: object) -> int | None:
         return int(float(value))
     except ValueError:
         return None
+
+
+def _known(value: object, names: tuple[str, ...]) -> str:
+    """``value`` as one of ``names``, or ``""`` for anything else."""
+
+    text = str(value or "").strip().lower()
+    return text if text in names else ""
 
 
 def _optional_float(value: object) -> float | None:
@@ -1244,6 +1360,11 @@ def current_proxy_chains(path: Path | None = None) -> ProxyChains:
 __all__ = [
     "CANDIDATES_KEY",
     "CHAINS_KEY",
+    "CHECK_FAILURES",
+    "CHECK_STATES",
+    "CHECK_STATE_FLAKY",
+    "CHECK_STATE_SLOW",
+    "CHECK_STATE_WORKING",
     "DEFAULT_POLICY",
     "DEFAULT_SCOPE",
     "DEFAULT_TRIGGER_KINDS",
@@ -1252,6 +1373,11 @@ __all__ = [
     "DOCUMENT_VERSION",
     "EMPTY_CHAIN",
     "EMPTY_PROXY_CHAINS",
+    "FAILURE_CONNECT_TIMEOUT",
+    "FAILURE_OTHER",
+    "FAILURE_REFUSED",
+    "FAILURE_TLS_TIMEOUT",
+    "FAILURE_TUNNEL",
     "FEEDS_KEY",
     "MAX_REFUSED_ENDPOINTS",
     "MAX_SWITCHES_DEFAULT",

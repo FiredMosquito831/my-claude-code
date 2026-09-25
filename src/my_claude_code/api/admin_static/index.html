@@ -393,6 +393,20 @@
                   has already passed.
                 </p>
                 <p>
+                  <strong>Slow is not dead.</strong> An address that fails is
+                  tested again before it is called dead &mdash; three more
+                  times by default, 30 seconds apart, with the same connect
+                  limit live traffic uses &mdash; and only one that failed every
+                  time is counted as confirmed dead. A proxy that refused the
+                  connection outright had nothing listening and is not tested
+                  again. Every address that passed is kept and labelled
+                  <em>working</em>, <em>slow</em> (its connection took longer
+                  than the slow limit to set up) or <em>flaky</em> (it passed
+                  on fewer than half of its tries). While your own connection
+                  to the provider is failing, the fetch pauses and marks
+                  nothing dead until it answers again.
+                </p>
+                <p>
                   MCC does not vouch for any list you point it at, and a test
                   says what an address was doing a minute ago rather than what
                   it will do. <em>How many feeds agree</em> on an address is the

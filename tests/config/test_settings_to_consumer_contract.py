@@ -816,3 +816,47 @@ def test_describe_concurrency_reaches_the_adapter() -> None:
     assert "concurrency" in parameters
     body = inspect.getsource(VisionDescribeAdapter.__init__)
     assert "self._concurrency = max(1, concurrency)" in body
+
+
+def test_the_confirm_settings_reach_every_checker() -> None:
+    """7.53.0's four settings arrive at the fetch, the routes and the re-prober."""
+
+    import inspect
+
+    from my_claude_code.api import admin_proxy_routes
+    from my_claude_code.application.proxy_check import check_endpoints
+    from my_claude_code.application.proxy_fetch import run_fetch_pass, start_fetch
+    from my_claude_code.runtime import proxy_check_timer, proxy_feed_timer
+
+    settings = Settings.model_validate({})
+    assert settings.proxy_check_confirm_attempts == 3
+    assert settings.proxy_check_confirm_spacing_seconds == 30.0
+    assert settings.proxy_check_slow_ms == 3000
+    assert settings.proxy_check_link_guard is True
+
+    for func in (run_fetch_pass, start_fetch):
+        params = inspect.signature(func).parameters
+        for name in (
+            "confirm_attempts",
+            "confirm_spacing",
+            "confirm_connect_timeout",
+            "slow_ms",
+            "link_guard",
+        ):
+            assert name in params, f"{func.__name__} cannot be told {name}"
+    params = inspect.signature(check_endpoints).parameters
+    assert "attempts" in params and "spacing" in params
+
+    for module in (admin_proxy_routes, proxy_feed_timer):
+        source = inspect.getsource(module)
+        for attr in (
+            "proxy_check_confirm_attempts",
+            "proxy_check_confirm_spacing_seconds",
+            "proxy_check_slow_ms",
+            "proxy_check_link_guard",
+            "proxy_connect_timeout_seconds",
+        ):
+            assert f"settings.{attr}" in source, f"{module.__name__} never reads {attr}"
+    timer = inspect.getsource(proxy_check_timer)
+    assert '"proxy_check_confirm_attempts"' in timer
+    assert '"proxy_check_confirm_spacing_seconds"' in timer

@@ -37,8 +37,15 @@ def store(tmp_path, monkeypatch):
 
 
 def _settings() -> Settings:
+    # Since 7.53.0 a re-probe is a round of PROXY_CHECK_CONFIRM_ATTEMPTS tries
+    # spaced PROXY_CHECK_CONFIRM_SPACING_SECONDS apart. The spacing is zeroed
+    # here so a failing round does not sleep a real minute in the suite.
     return Settings.model_validate(
-        {"model": "nvidia_nim/primary", "nvidia_nim_api_key": "k"}
+        {
+            "model": "nvidia_nim/primary",
+            "nvidia_nim_api_key": "k",
+            "PROXY_CHECK_CONFIRM_SPACING_SECONDS": 0,
+        }
     )
 
 
@@ -251,3 +258,134 @@ async def test_reprobe_concurrency_can_exceed_four(store, monkeypatch) -> None:
 
     assert await timer.tick() == 8
     assert peak == 8
+
+
+# --------------------- 7.53.0: a re-probe is a round; early confirm after a fail
+
+
+def _scripted(monkeypatch, answers: list[bool]) -> list[str]:
+    """Replace the checker with one that answers ``answers`` in order."""
+
+    calls: list[str] = []
+
+    async def _check(url, destination, **kwargs):
+        calls.append(url)
+        ok = answers[min(len(calls), len(answers)) - 1]
+        return ProxyCheckRecord(
+            at="2026-09-25T14:02:00Z",
+            ok=ok,
+            tls="strict" if ok else "unknown",
+            detail="" if ok else "no answer",
+        )
+
+    monkeypatch.setattr(check_module, "check_proxy", _check)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_reprobe_notes_failure_once_per_round(store, monkeypatch) -> None:
+    """Three failed tries are ONE rung down, not three -- and the row says so."""
+
+    proxy_id, label = _seed(enabled=True)
+    PROXY_REACHABILITY.note_failure(label, "ConnectError")
+    PROXY_REACHABILITY.restore(label, 1, 0.0, "ConnectError")
+    calls = _scripted(monkeypatch, [False, False, False])
+    timer = ProxyHealthTimer(
+        lambda: _settings_with(
+            PROXY_CHECK_CONFIRM_ATTEMPTS=3, PROXY_CHECK_CONFIRM_SPACING_SECONDS=0
+        ),
+        lambda: True,
+    )
+
+    assert await timer.tick() == 1
+
+    assert len(calls) == 3
+    assert PROXY_REACHABILITY.failures(label) == 2
+    stored = load_proxy_chains().proxies[proxy_id].last_check
+    assert stored is not None and stored.ok is False
+    assert stored.tries == 3
+
+
+@pytest.mark.asyncio
+async def test_any_pass_in_round_clears_bench(store, monkeypatch) -> None:
+    """Fail, fail, pass: the pass is the record and the address is back."""
+
+    proxy_id, label = _seed(enabled=True)
+    PROXY_REACHABILITY.note_failure(label, "ConnectError")
+    PROXY_REACHABILITY.restore(label, 1, 0.0, "ConnectError")
+    calls = _scripted(monkeypatch, [False, False, True])
+    waits: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _no_real_wait(fake_sleep))
+    timer = ProxyHealthTimer(
+        lambda: _settings_with(
+            PROXY_CHECK_CONFIRM_ATTEMPTS=3, PROXY_CHECK_CONFIRM_SPACING_SECONDS=30
+        ),
+        lambda: True,
+    )
+
+    assert await timer.tick() == 1
+
+    assert len(calls) == 3
+    # Two spacings between three tries, at the operator's number.
+    assert waits.count(30.0) == 2
+    assert PROXY_REACHABILITY.is_unhealthy(label) is False
+    stored = load_proxy_chains().proxies[proxy_id].last_check
+    assert stored is not None and stored.ok is True and stored.tries == 3
+
+
+def _no_real_wait(recorder):
+    """``asyncio.sleep`` that records positive waits and yields for zero ones."""
+
+    real = asyncio.sleep
+
+    async def sleep(seconds, result=None):
+        if seconds and seconds > 0:
+            await recorder(float(seconds))
+            return result
+        return await real(0, result)
+
+    return sleep
+
+
+@pytest.mark.asyncio
+async def test_early_confirm_never_escalates_ladder(store, monkeypatch) -> None:
+    """A fresh live failure is re-tested once at the next tick; a fail changes nothing."""
+
+    from my_claude_code.application.proxy_health_store import (
+        install_listener,
+        remove_listener,
+    )
+
+    proxy_id, label = _seed(enabled=True)
+    install_listener()
+    try:
+        # A live request's failure: 0 -> 1, sixty seconds to the next check.
+        PROXY_REACHABILITY.note_failure(label, "ConnectTimeout")
+        before = PROXY_REACHABILITY.state(label)
+        calls = _scripted(monkeypatch, [False])
+
+        assert await _timer().tick() == 1
+
+        assert len(calls) == 1
+        # Nothing moved: same rung, same reason, deadline not pushed out.
+        after = PROXY_REACHABILITY.state(label)
+        assert after[0] == 1 == before[0]
+        assert after[2] == before[2]
+        assert after[1] <= before[1]
+        assert load_proxy_chains().proxies[proxy_id].last_check is None
+        # And it is not re-tested again on the next tick: once per failure.
+        assert await _timer().tick() == 0
+        assert len(calls) == 1
+
+        # A pass on the early confirm puts the address straight back.
+        PROXY_REACHABILITY.note_success(label)
+        PROXY_REACHABILITY.note_failure(label, "ConnectTimeout")
+        calls = _scripted(monkeypatch, [True])
+        assert await _timer().tick() == 1
+        assert PROXY_REACHABILITY.is_unhealthy(label) is False
+    finally:
+        remove_listener()

@@ -107,14 +107,24 @@ from .constants import (
     PROXY_CANDIDATES_MAX_MAX,
     PROXY_CANDIDATES_MAX_MIN,
     PROXY_CHAIN_MAX_ENTRIES_DEFAULT,
+    PROXY_CHECK_CONFIRM_ATTEMPTS_DEFAULT,
+    PROXY_CHECK_CONFIRM_ATTEMPTS_MAX,
+    PROXY_CHECK_CONFIRM_ATTEMPTS_MIN,
+    PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
+    PROXY_CHECK_CONFIRM_SPACING_SECONDS_MAX,
+    PROXY_CHECK_CONFIRM_SPACING_SECONDS_MIN,
     PROXY_CHECK_ENABLED_DEFAULT,
     PROXY_CHECK_EXIT_IP_URL_DEFAULT,
     PROXY_CHECK_INTERVAL_MINUTES_DEFAULT,
     PROXY_CHECK_INTERVAL_MINUTES_MAX,
     PROXY_CHECK_INTERVAL_MINUTES_MIN,
+    PROXY_CHECK_LINK_GUARD_DEFAULT,
     PROXY_CHECK_MAX_CONCURRENCY_DEFAULT,
     PROXY_CHECK_MAX_CONCURRENCY_MAX,
     PROXY_CHECK_MAX_CONCURRENCY_MIN,
+    PROXY_CHECK_SLOW_MS_DEFAULT,
+    PROXY_CHECK_SLOW_MS_MAX,
+    PROXY_CHECK_SLOW_MS_MIN,
     PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT,
     PROXY_CHECK_TIMEOUT_SECONDS_MAX,
     PROXY_CHECK_TIMEOUT_SECONDS_MIN,
@@ -1262,6 +1272,37 @@ class Settings(BaseSettings):
         validation_alias="PROXY_CHECK_TIMEOUT_SECONDS",
         ge=PROXY_CHECK_TIMEOUT_SECONDS_MIN,
         le=PROXY_CHECK_TIMEOUT_SECONDS_MAX,
+    )
+    # How hard a check tries before it calls an address dead: the fetch's
+    # confirm rounds after its screen, and the total tries the re-prober,
+    # "Test all" and "Add all working" give an address (1 there = pre-7.53.0).
+    # The single-row Test is always one try.
+    proxy_check_confirm_attempts: int = Field(
+        default=PROXY_CHECK_CONFIRM_ATTEMPTS_DEFAULT,
+        validation_alias="PROXY_CHECK_CONFIRM_ATTEMPTS",
+        ge=PROXY_CHECK_CONFIRM_ATTEMPTS_MIN,
+        le=PROXY_CHECK_CONFIRM_ATTEMPTS_MAX,
+    )
+    # Seconds between those tries.
+    proxy_check_confirm_spacing_seconds: float = Field(
+        default=PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
+        validation_alias="PROXY_CHECK_CONFIRM_SPACING_SECONDS",
+        ge=PROXY_CHECK_CONFIRM_SPACING_SECONDS_MIN,
+        le=PROXY_CHECK_CONFIRM_SPACING_SECONDS_MAX,
+    )
+    # Setup time above which a working address is labelled "slow". A label,
+    # never a verdict: a slow address is kept and selectable.
+    proxy_check_slow_ms: int = Field(
+        default=PROXY_CHECK_SLOW_MS_DEFAULT,
+        validation_alias="PROXY_CHECK_SLOW_MS",
+        ge=PROXY_CHECK_SLOW_MS_MIN,
+        le=PROXY_CHECK_SLOW_MS_MAX,
+    )
+    # Whether a fetch pauses, marking nothing dead, while this machine's own
+    # connection to the destination host is failing.
+    proxy_check_link_guard: bool = Field(
+        default=PROXY_CHECK_LINK_GUARD_DEFAULT,
+        validation_alias="PROXY_CHECK_LINK_GUARD",
     )
     # How many addresses a check sweep has in flight. Not the fetch sweep --
     # this paces the background health re-probe and the operator's own Add.

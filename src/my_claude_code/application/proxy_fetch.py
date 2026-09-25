@@ -70,9 +70,11 @@ import json
 import threading
 import time
 import uuid
-from collections.abc import Callable, Coroutine
+from collections import deque
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from loguru import logger
 
@@ -84,6 +86,7 @@ from my_claude_code.application.proxy_check import (
     apply_fetch_outcome,
     check_budget,
     check_proxy,
+    default_ssl_context,
     hold_refusal,
 )
 from my_claude_code.application.proxy_ingest import (
@@ -97,6 +100,9 @@ from my_claude_code.application.proxy_ingest import (
 )
 from my_claude_code.config.atomic_json import write_json_document_atomically
 from my_claude_code.config.constants import (
+    PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
+    PROXY_CHECK_SLOW_MS_DEFAULT,
+    PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
     PROXY_FETCH_PERSIST_INTERVAL_SECONDS_DEFAULT,
     PROXY_FETCH_TEST_CONCURRENCY_MAX,
     PROXY_FETCH_TEST_CONCURRENCY_MIN,
@@ -104,6 +110,11 @@ from my_claude_code.config.constants import (
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.paths import proxy_fetch_status_path
 from my_claude_code.config.proxy_chains import (
+    CHECK_STATE_FLAKY,
+    CHECK_STATE_SLOW,
+    CHECK_STATE_WORKING,
+    FAILURE_OTHER,
+    FAILURE_REFUSED,
     TLS_UNKNOWN,
     ProxyChains,
     ProxyCheckRecord,
@@ -337,6 +348,24 @@ class FetchProgress:
     #: it is the difference between a sweep that talks to the provider and one
     #: that does not.
     check_depth: str = ""
+    #: The confirm stage (7.53.0). ``working`` above still counts every
+    #: address that passed, as it always has; ``slow`` and ``flaky`` are the
+    #: part of it that carries that label. ``dead`` still counts every address
+    #: that was not kept; ``confirmed_dead`` is the part of it that failed
+    #: every confirm round, and the rest were refused at the dial (never
+    #: re-tested) or left unconfirmed by a Stop. ``confirming`` is how many
+    #: addresses the round in progress re-tests, ``confirm_attempt`` which try
+    #: that round is, and ``confirm_attempts`` the tries each address gets.
+    slow: int = 0
+    flaky: int = 0
+    confirmed_dead: int = 0
+    confirming: int = 0
+    confirm_attempt: int = 0
+    confirm_attempts: int = 0
+    #: True while the link guard has paused the sweep, and the sentence that
+    #: says why. Nothing is marked dead while it is true.
+    paused: bool = False
+    pause_detail: str = ""
     results: tuple[FeedResult, ...] = ()
 
     def note_concurrency(self, resolved: ResolvedConcurrency) -> None:
@@ -364,6 +393,14 @@ class FetchProgress:
             "concurrency_summary": self.concurrency_summary,
             "concurrency_note": self.concurrency_note,
             "check_depth": self.check_depth,
+            "slow": self.slow,
+            "flaky": self.flaky,
+            "confirmed_dead": self.confirmed_dead,
+            "confirming": self.confirming,
+            "confirm_attempt": self.confirm_attempt,
+            "confirm_attempts": self.confirm_attempts,
+            "paused": self.paused,
+            "pause_detail": self.pause_detail,
             "feeds": [
                 {
                     "id": result.feed_id,
@@ -392,6 +429,10 @@ class FetchRun:
     dead: int = 0
     refused: int = 0
     stopped: bool = False
+    slow: int = 0
+    flaky: int = 0
+    confirmed_dead: int = 0
+    confirm_attempts: int = 0
 
     @property
     def reached(self) -> int:
@@ -417,6 +458,10 @@ class FetchRun:
                 "dead": self.dead,
                 "refused": self.refused,
                 "stopped": self.stopped,
+                "slow": self.slow,
+                "flaky": self.flaky,
+                "confirmed_dead": self.confirmed_dead,
+                "confirm_attempts": self.confirm_attempts,
             }
         )
         return document
@@ -441,6 +486,187 @@ def in_use_labels(store: ProxyChains) -> set[str]:
     return used
 
 
+#: How often the link guard re-checks this machine's own connection while a
+#: sweep runs, and how long its one direct handshake may take before the link
+#: counts as failing. A TLS handshake to a provider's own host takes 0.03-0.34 s
+#: on a healthy link (spec §2); five seconds is a link that is not healthy.
+LINK_GUARD_INTERVAL_SECONDS = 15.0
+LINK_GUARD_TIMEOUT_SECONDS = 5.0
+
+#: ``probe(host, port, timeout) -> bool``: whether this machine completed a
+#: direct TLS handshake to ``host`` within ``timeout``. Injectable for tests.
+LinkProbe = Callable[[str, int, float], Awaitable[bool]]
+
+
+async def probe_link(host: str, port: int, timeout: float) -> bool:
+    """One direct TLS handshake to ``host``: no proxy, and no request.
+
+    Verified with :func:`~my_claude_code.application.proxy_check.default_ssl_context`
+    -- the library's own default trust, the same object every check uses --
+    naming ``host``, and closed as soon as it completes. It asks one question:
+    can this machine reach the destination at all right now.
+    """
+
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(
+                host, port, ssl=default_ssl_context(), server_hostname=host
+            ),
+            timeout,
+        )
+    except TimeoutError, OSError:
+        return False
+    del reader
+    with contextlib.suppress(Exception):
+        writer.close()
+    try:
+        await asyncio.wait_for(writer.wait_closed(), 1.0)
+    except TimeoutError, OSError:
+        with contextlib.suppress(Exception):
+            writer.transport.abort()
+    return True
+
+
+class LinkGuard:
+    """Pause a sweep while this machine's own connection is failing (7.53.0).
+
+    A broken home link makes every proxy look dead, and a fetch that ran
+    through one would throw away every address it tested. So before the sweep
+    and every :data:`LINK_GUARD_INTERVAL_SECONDS` during it, one direct TLS
+    handshake (:func:`probe_link`) goes to the destination host. If it fails or
+    takes longer than :data:`LINK_GUARD_TIMEOUT_SECONDS`:
+
+    * the sweep **pauses** -- workers stop taking new addresses;
+    * the status says "your own connection to <host> is failing -- paused";
+    * **nothing is marked dead** for a check that failed while the link was
+      down or that was in flight when the pause began (:meth:`disturbed`):
+      the caller puts it back in the queue.
+
+    The next handshake that succeeds resumes it. Not adaptive concurrency: the
+    measurement found no self-congestion at 100 at once, so there was nothing
+    for a back-off to correct (user decision 12).
+    """
+
+    def __init__(
+        self,
+        destination: str,
+        *,
+        probe: LinkProbe | None = None,
+        counters: FetchProgress | None = None,
+        interval: float = LINK_GUARD_INTERVAL_SECONDS,
+        timeout: float = LINK_GUARD_TIMEOUT_SECONDS,
+    ) -> None:
+        parsed = urlsplit(destination.strip())
+        self.host = parsed.hostname or ""
+        self.port = parsed.port or 443
+        self._probe = probe if probe is not None else probe_link
+        self._counters = counters
+        self._interval = max(0.01, float(interval))
+        self._timeout = max(0.01, float(timeout))
+        self._ok = asyncio.Event()
+        self._ok.set()
+        self.paused = False
+        #: Bumped at the start of every pause. A check that began under one
+        #: epoch and finished under another straddled a pause.
+        self.epoch = 0
+
+    async def check(self) -> bool:
+        """One handshake; pause or resume on the answer. Returns it."""
+
+        if not self.host:
+            return True
+        try:
+            healthy = bool(
+                await asyncio.wait_for(
+                    self._probe(self.host, self.port, self._timeout),
+                    self._timeout + 1.0,
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            healthy = False
+        if healthy and self.paused:
+            self.paused = False
+            self._ok.set()
+            logger.info(
+                "PROXY FEEDS: the link to {} answers again; resuming", self.host
+            )
+        elif not healthy and not self.paused:
+            self.paused = True
+            self.epoch += 1
+            self._ok.clear()
+            logger.warning(
+                "PROXY FEEDS: this machine's own connection to {} is failing; "
+                "the fetch is paused and marks nothing dead until it answers",
+                self.host,
+            )
+        if self._counters is not None:
+            self._counters.paused = self.paused
+            self._counters.pause_detail = (
+                f"your own connection to {self.host} is failing -- paused"
+                if self.paused
+                else ""
+            )
+        return healthy
+
+    async def watch(self, halt: asyncio.Event) -> None:
+        """Re-check every interval until the sweep ends or is stopped."""
+
+        while not halt.is_set():
+            if await _halted_within(halt, self._interval):
+                return
+            await self.check()
+
+    def disturbed(self, epoch: int) -> bool:
+        """Whether a check that started under ``epoch`` overlapped a pause."""
+
+        return self.paused or self.epoch != epoch
+
+    async def wait_ok(self) -> None:
+        await self._ok.wait()
+
+    def release(self) -> None:
+        """Clear the pause for good: the sweep this guarded has ended."""
+
+        self.paused = False
+        self._ok.set()
+        if self._counters is not None:
+            self._counters.paused = False
+            self._counters.pause_detail = ""
+
+
+async def _halted_within(halt: asyncio.Event, seconds: float) -> bool:
+    """Wait ``seconds``, or less if Stop is pressed. True when it was."""
+
+    if halt.is_set():
+        return True
+    if seconds <= 0:
+        return False
+    try:
+        await asyncio.wait_for(halt.wait(), seconds)
+    except TimeoutError:
+        return False
+    return True
+
+
+def pass_state(record: ProxyCheckRecord, *, tried: int, slow_ms: int) -> str:
+    """The label a passing address earns in one fetch (7.53.0).
+
+    ``flaky`` when it passed on fewer than half of at least three tries -- a
+    pass always ends an address's tries, so that is one pass after two or more
+    failures. Otherwise ``slow`` when its setup (connect + tunnel + TLS) took
+    more than ``slow_ms``, and ``working`` when it did not or was not timed.
+    """
+
+    if tried >= 3 and 1 / tried < 0.5:
+        return CHECK_STATE_FLAKY
+    setup = record.setup_ms
+    if setup is not None and setup > slow_ms:
+        return CHECK_STATE_SLOW
+    return CHECK_STATE_WORKING
+
+
 async def run_fetch_pass(
     *,
     provider_id: str,
@@ -458,6 +684,12 @@ async def run_fetch_pass(
     stop: asyncio.Event | None = None,
     persist: bool = True,
     on_persist: Callable[[], None] | None = None,
+    confirm_attempts: int = 0,
+    confirm_spacing: float = PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
+    confirm_connect_timeout: float = PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
+    slow_ms: int = PROXY_CHECK_SLOW_MS_DEFAULT,
+    link_guard: bool = False,
+    link_probe: LinkProbe | None = None,
 ) -> FetchRun:
     """Read every enabled feed, test everything they offered, keep the passes.
 
@@ -495,6 +727,31 @@ async def run_fetch_pass(
     that verdict is reached during the handshake either way -- and the
     provider's server no longer receives a request per address from an address
     it has never seen. ``request`` restores 7.22.1 exactly.
+
+    **Screen, then confirm (7.53.0).** The sweep above is the *screen*, and it
+    is unchanged. With ``confirm_attempts`` above 0, every address the screen
+    called dead -- except a real refusal at the dial, which was the verdict
+    least often wrong when measured -- is tried again in up to
+    ``confirm_attempts`` confirm rounds, the first ``confirm_spacing`` seconds
+    after the screen and each later one that long after the last, until it
+    passes. So the fetch's number counts re-tests AFTER the screen (user
+    decision 1: three), unlike ``check_endpoints``' ``attempts``, which counts
+    the first try too. Those tries use
+    ``confirm_connect_timeout`` for the dial, which is the live request path's
+    own connect limit: an address the confirm stage admits is one live traffic
+    would also wait for. A pass in any round is stored like a screen pass; an
+    address that failed every round is *confirmed dead* -- not stored, counted,
+    and charged to the reachability ladder once if a chain uses it. Measured
+    on 1,000 feed addresses, re-tests 30 s apart found 82, then 33, then 47 of
+    the 775 a shipped fetch called dead. ``0``, this function's default and
+    never a setting value, is exactly the pre-7.53.0 pass.
+
+    Every pass is labelled (:func:`pass_state`): ``working``, ``slow`` when its
+    setup took more than ``slow_ms``, or ``flaky`` when it passed on fewer than
+    half of three or more tries. Labels only; all three are kept.
+
+    ``link_guard`` watches this machine's own connection while the sweep runs
+    -- see :class:`LinkGuard`. ``link_probe`` replaces its handshake, for tests.
     """
 
     counters = progress if progress is not None else FetchProgress()
@@ -536,8 +793,6 @@ async def run_fetch_pass(
 
     passing: list[tuple[str, ProxyEndpoint]] = []
     refused: list[tuple[str, ProxyEndpoint]] = []
-    cursor = 0
-    cursor_lock = asyncio.Lock()
 
     # Rank order, computed once: the workers finish in whatever order the
     # network allows, the page reads the list top to bottom, and now every
@@ -608,7 +863,22 @@ async def run_fetch_pass(
         connect_timeout=connect_timeout, timeout=timeout, exit_ip_url=exit_ip_url
     )
 
-    async def measure(url: str) -> ProxyCheckRecord:
+    # The confirm stage's own bound: the same legs, with the live connect limit.
+    confirm_dial = max(0.1, float(confirm_connect_timeout))
+    confirm_bound = check_budget(
+        connect_timeout=confirm_dial, timeout=timeout, exit_ip_url=exit_ip_url
+    )
+    # ``confirm_attempts`` is the number of confirm ROUNDS after the screen:
+    # user decision 1 is three re-tests after the screen, which is what the
+    # +162 was measured with. 0 -- the default here, never a setting value --
+    # is the pre-7.53.0 pass with no confirm stage; ``rounds`` is the most
+    # tries any one address gets, the screen included.
+    confirm_rounds = max(0, int(confirm_attempts))
+    rounds = 1 + confirm_rounds
+    slow_limit = max(1, int(slow_ms))
+    counters.confirm_attempts = confirm_rounds
+
+    async def measure(url: str, dial: float, bound: float) -> ProxyCheckRecord:
         try:
             return await asyncio.wait_for(
                 check_proxy(
@@ -616,68 +886,170 @@ async def run_fetch_pass(
                     destination,
                     timeout=timeout,
                     exit_ip_url=exit_ip_url,
-                    connect_timeout=connect_timeout,
+                    connect_timeout=dial,
                     depth=depth,
                 ),
-                budget,
+                bound,
             )
         except TimeoutError:
             logger.warning(
                 "PROXY CHECK: {} did not finish within {:.0f}s -- abandoning it",
                 mask_proxy_label(url),
-                budget,
+                bound,
             )
             return ProxyCheckRecord(
                 at=_now(),
                 ok=False,
                 tls=TLS_UNKNOWN,
-                detail=f"did not finish within {budget:.0f}s",
+                detail=f"did not finish within {bound:.0f}s",
                 depth=depth,
+                failure=FAILURE_OTHER,
             )
 
-    async def worker() -> None:
-        nonlocal cursor, unwritten
-        while True:
-            if halt.is_set():
-                return
-            async with cursor_lock:
-                if cursor >= len(ranked):
-                    return
-                index = cursor
-                cursor += 1
-            item = ranked[index]
-            url = item.endpoint.url
-            label = mask_proxy_label(url)
-            record = hold_refusal(label, await measure(url))
-            apply_fetch_outcome(label, record, in_use=label in used)
-            endpoint = replace(
-                as_candidate_endpoint(item, at),
-                last_check=record,
-                checked_for=provider_id,
+    # Every address's tries in this pass, and the screen failures still owed a
+    # confirm round, by rank index. The last failing record is kept so the one
+    # ledger charge a confirmed-dead address earns is made with its own reason.
+    tries: dict[int, int] = {}
+    confirming: dict[int, ProxyCheckRecord] = {}
+    guard = (
+        LinkGuard(
+            destination,
+            probe=link_probe,
+            counters=counters,
+            interval=LINK_GUARD_INTERVAL_SECONDS,
+            timeout=LINK_GUARD_TIMEOUT_SECONDS,
+        )
+        if link_guard
+        else None
+    )
+
+    def keep(index: int, record: ProxyCheckRecord) -> None:
+        """File one address's verdict: a pass or a refusal is stored."""
+
+        nonlocal unwritten
+        item = ranked[index]
+        tried = tries.get(index, 1)
+        if record.ok:
+            record = replace(
+                record,
+                state=pass_state(record, tried=tried, slow_ms=slow_limit),
+                tries=tried if tried > 1 else record.tries,
             )
+        endpoint = replace(
+            as_candidate_endpoint(item, at),
+            last_check=record,
+            checked_for=provider_id,
+        )
+        if record.intercepted:
+            counters.refused += 1
+            refused.append((candidate_id(item.endpoint.address), endpoint))
+        else:
+            counters.working += 1
+            if record.state == CHECK_STATE_SLOW:
+                counters.slow += 1
+            elif record.state == CHECK_STATE_FLAKY:
+                counters.flaky += 1
+            passing.append((candidate_id(item.endpoint.address), endpoint))
+        unwritten += 1
+
+    async def check_one(index: int, attempt: int, pending: deque[int]) -> None:
+        """One try of one address, in the screen (attempt 1) or a confirm round."""
+
+        item = ranked[index]
+        url = item.endpoint.url
+        label = mask_proxy_label(url)
+        epoch = guard.epoch if guard is not None else 0
+        dial, bound = (
+            (connect_timeout, budget) if attempt == 1 else (confirm_dial, confirm_bound)
+        )
+        raw = await measure(url, dial, bound)
+        if (
+            not raw.ok
+            and not raw.intercepted
+            and guard is not None
+            and guard.disturbed(epoch)
+        ):
+            # This machine's own link was failing while this check ran, so its
+            # failure is no evidence about the proxy. It goes back in the queue
+            # and is tried again once the link answers; nothing is marked dead.
+            pending.append(index)
+            return
+        record = hold_refusal(label, raw)
+        tries[index] = tries.get(index, 0) + 1
+        if attempt == 1:
             counters.tested += 1
-            if record.intercepted:
-                counters.refused += 1
-                refused.append((candidate_id(item.endpoint.address), endpoint))
-                unwritten += 1
-            elif record.ok:
-                counters.working += 1
-                passing.append((candidate_id(item.endpoint.address), endpoint))
-                unwritten += 1
-            else:
-                counters.dead += 1
-            # Durable as it goes. A verdict worth keeping is on disk within a
-            # batch or five seconds of being measured, so a stop, a crash or a
-            # restart keeps it.
-            await flush()
-            # One yield per address, every address. This is the whole of "a
-            # sweep of eight hundred strangers cannot sit in front of
-            # /v1/messages": the workers hand the loop back between checks.
-            await asyncio.sleep(0)
+        if record.ok or record.intercepted:
+            confirming.pop(index, None)
+            apply_fetch_outcome(label, record, in_use=label in used)
+            keep(index, record)
+            return
+        owed = attempt < rounds and (attempt > 1 or record.failure != FAILURE_REFUSED)
+        if owed:
+            # Not dead yet: re-tested in the next confirm round. The ladder is
+            # not charged for a failure that has not been confirmed.
+            confirming[index] = record
+            return
+        confirming.pop(index, None)
+        apply_fetch_outcome(label, record, in_use=label in used)
+        counters.dead += 1
+        if attempt > 1:
+            counters.confirmed_dead += 1
 
-    workers = max(1, min(resolved.value, len(ranked))) if ranked else 0
-    if workers:
-        await _sweep(worker, workers, halt)
+    async def run_stage(attempt: int, indexes: list[int]) -> None:
+        pending: deque[int] = deque(indexes)
+
+        async def worker() -> None:
+            while True:
+                if halt.is_set():
+                    return
+                if guard is not None:
+                    await guard.wait_ok()
+                if not pending:
+                    return
+                await check_one(pending.popleft(), attempt, pending)
+                # Durable as it goes. A verdict worth keeping is on disk within
+                # a batch or five seconds of being measured, so a stop, a crash
+                # or a restart keeps it.
+                await flush()
+                # One yield per address, every address. This is the whole of "a
+                # sweep of eight hundred strangers cannot sit in front of
+                # /v1/messages": the workers hand the loop back between checks.
+                await asyncio.sleep(0)
+
+        workers = max(1, min(resolved.value, len(indexes))) if indexes else 0
+        if workers:
+            await _sweep(worker, workers, halt)
+
+    watcher: asyncio.Task[None] | None = None
+    if guard is not None and ranked:
+        await guard.check()
+        watcher = asyncio.create_task(guard.watch(halt))
+    try:
+        await run_stage(1, list(range(len(ranked))))
+        # The confirm stage (7.53.0). Every screen failure except a real
+        # refusal is tried again, in up to ``confirm_rounds`` rounds one spacing
+        # apart, with the live connect limit. The first round starts one
+        # spacing after the screen ends.
+        for attempt in range(2, rounds + 1):
+            if halt.is_set() or not confirming:
+                break
+            counters.confirm_attempt = attempt - 1
+            counters.confirming = len(confirming)
+            if await _halted_within(halt, confirm_spacing):
+                break
+            await run_stage(attempt, sorted(confirming))
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+        if guard is not None:
+            guard.release()
+    # Whatever is still owed a round was stopped before it was confirmed:
+    # counted dead, never charged to the ladder, never called confirmed.
+    counters.dead += len(confirming)
+    confirming.clear()
+    counters.confirming = 0
 
     # Back into rank order, and the last of it onto disk. The workers finish in
     # whatever order the network allows, and the page reads this list top to
@@ -697,18 +1069,27 @@ async def run_fetch_pass(
         dead=counters.dead,
         refused=counters.refused,
         stopped=halt.is_set(),
+        slow=counters.slow,
+        flaky=counters.flaky,
+        confirmed_dead=counters.confirmed_dead,
+        confirm_attempts=confirm_rounds,
     )
     logger.info(
         "PROXY FEEDS: {} of {} feed(s) answered; {} address(es) offered, {} "
-        "tested at {} depth, {} at a time; {} working, {} dead, {} refused{}",
+        "tested at {} depth, {} at a time, up to {} tries each; {} working "
+        "({} slow, {} flaky), {} dead ({} confirmed), {} refused{}",
         run.reached,
         feed_count,
         run.offered,
         run.tested,
         depth,
         resolved.value,
+        rounds,
         run.working,
+        run.slow,
+        run.flaky,
         run.dead,
+        run.confirmed_dead,
         run.refused,
         " (stopped early)" if run.stopped else "",
     )
@@ -879,6 +1260,13 @@ def _settle(counters: FetchProgress, run: FetchRun) -> None:
     counters.working = run.working
     counters.dead = run.dead
     counters.refused = run.refused
+    counters.slow = run.slow
+    counters.flaky = run.flaky
+    counters.confirmed_dead = run.confirmed_dead
+    counters.confirm_attempts = run.confirm_attempts
+    counters.confirming = 0
+    counters.paused = False
+    counters.pause_detail = ""
 
 
 _JOB_LOCK = threading.Lock()
@@ -1034,6 +1422,12 @@ async def start_fetch(
     persist_interval: float = FETCH_PERSIST_INTERVAL_SECONDS,
     limit: int = 0,
     exit_ip_url: str = "",
+    confirm_attempts: int = 0,
+    confirm_spacing: float = PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
+    confirm_connect_timeout: float = PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
+    slow_ms: int = PROXY_CHECK_SLOW_MS_DEFAULT,
+    link_guard: bool = False,
+    link_probe: LinkProbe | None = None,
 ) -> FetchJob:
     """Start a fetch and return at once. One at a time, process-wide."""
 
@@ -1073,6 +1467,12 @@ async def start_fetch(
                 progress=job.progress,
                 stop=job.stop,
                 on_persist=lambda: _write_job_status(job.as_document()),
+                confirm_attempts=confirm_attempts,
+                confirm_spacing=confirm_spacing,
+                confirm_connect_timeout=confirm_connect_timeout,
+                slow_ms=slow_ms,
+                link_guard=link_guard,
+                link_probe=link_probe,
             )
             job.state = "stopped" if job.run.stopped else "done"
             # The finished run is the authoritative answer; the live counters
@@ -1149,13 +1549,19 @@ __all__ = [
     "FETCH_PERSIST_INTERVAL_SECONDS",
     "FETCH_STATES",
     "IDLE_STATUS",
+    "LINK_GUARD_INTERVAL_SECONDS",
+    "LINK_GUARD_TIMEOUT_SECONDS",
     "FetchAlreadyRunning",
     "FetchJob",
     "FetchProgress",
     "FetchRun",
+    "LinkGuard",
+    "LinkProbe",
     "ResolvedConcurrency",
     "fetch_status",
     "in_use_labels",
+    "pass_state",
+    "probe_link",
     "recover_fetch_job",
     "reset_fetch_job",
     "resolve_fetch_concurrency",
