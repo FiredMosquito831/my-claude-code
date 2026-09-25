@@ -33,15 +33,44 @@ What it deliberately does not do
 How
 ---
 
-The base loop's every decision hangs off the exception the callable raised. So
-the callable is wrapped, and the *second* invocation after a connect-class
-failure raises a sentinel derived from ``BaseException`` -- which the base's
-``except Exception`` cannot catch, so it leaves the loop untouched, without a
-second dial and without a second recorded try. This class catches it outside
-the loop and re-raises the original error object, so everything above sees the
-identical exception it would have seen.
+The base loop's every decision hangs off the exception the callable raised, so
+the callable is wrapped. When it fails with a connect-class error the wrapper
+asks for its own task to be cancelled, then re-raises the error unchanged. The
+base loop sees exactly the exception it always saw: it classifies it, records
+its one try, and -- for a retryable transport error -- goes to sleep before a
+second dial. That backoff sleep is the loop's first suspension point after the
+try, so the pending cancellation is delivered *there*, as a ``CancelledError``
+the base's ``except Exception`` cannot catch. The loop is left without the
+sleep, without a second dial, without a second recorded try, and without the
+wait being written onto the try it just recorded. This class catches that
+``CancelledError`` outside the loop, withdraws its own cancellation request,
+and re-raises the original error object, so everything above sees the
+identical exception it would have seen -- one backoff sooner.
+
+Before 7.52.1 the wrapper stopped the *second* invocation instead, which is
+after the sleep: every dead address still cost the chain ~2.3 s of backoff
+before the pool was told (measured on 571 of 590 live connect failures). That
+sentinel is kept as a backstop and still ends the loop if a second invocation
+ever happens.
+
+The cancellation is only ever this leg's own, and is always withdrawn:
+
+* when the loop ends without sleeping (a non-retryable proxy error, the last
+  attempt, a routed-around 429) the request is withdrawn on the way out, so no
+  later ``await`` in the caller ever sees it;
+* when somebody else cancelled the task too -- a client that hung up, a
+  deadline -- withdrawing ours leaves theirs outstanding and their
+  ``CancelledError`` propagates exactly as it would have.
+
+Why a cancellation and not the loop's ``provider_failure_override``: that hook
+must return an ``ExecutionFailure``, and the loop records the try from it -- a
+failure *kind* in the row's ``error_kind`` and its ``status_code`` as the row's
+status. The row a connect failure writes today (``kind="ConnectTimeout"``, no
+status, ``error_kind="ConnectTimeout"``) could not survive that route byte for
+byte.
 """
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -71,9 +100,13 @@ class ProxiedLegRateLimiter(ProviderRateLimiter):
     async def execute_with_retry(
         self, fn: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> Any:
+        task = asyncio.current_task()
         stopped: list[BaseException] = []
+        # True while a cancellation *this leg* asked for is outstanding.
+        requested = False
 
         async def guarded(*call_args: Any, **call_kwargs: Any) -> Any:
+            nonlocal requested
             if stopped:
                 raise _ProxyConnectStop(stopped[0])
             try:
@@ -84,6 +117,11 @@ class ProxiedLegRateLimiter(ProviderRateLimiter):
                 # the *address* failing?
                 if proxy_reachability_failure(error, proxied=True) is not None:
                     stopped.append(error)
+                    if task is not None and not requested:
+                        # Delivered at the loop's backoff sleep, the first
+                        # suspension point after it records this try.
+                        task.cancel()
+                        requested = True
                 raise
 
         carried: BaseException | None = None
@@ -91,6 +129,22 @@ class ProxiedLegRateLimiter(ProviderRateLimiter):
             return await super().execute_with_retry(guarded, *args, **kwargs)
         except _ProxyConnectStop as stop:
             carried = stop.error
+        except asyncio.CancelledError:
+            if not requested or task is None:
+                raise
+            requested = False
+            if task.uncancel() > 0:
+                # Somebody else cancelled this task as well. Ours is
+                # withdrawn; theirs is not ours to swallow.
+                raise
+            carried = stopped[0]
+        finally:
+            if requested and task is not None:
+                # The loop ended without sleeping, so the request was never
+                # delivered. Withdrawn here, before any ``await`` above this
+                # frame could receive it.
+                requested = False
+                task.uncancel()
         # Raised outside the ``except`` block so the original exception keeps
         # the ``__cause__`` and ``__context__`` it was born with -- the pool
         # classifies by walking exactly that chain.

@@ -363,3 +363,50 @@ def test_a_hand_built_ladder_renders_without_the_holder() -> None:
             "reason": "429",
         }
     ]
+
+
+# ----------------------------- 7.52.1: a dead address costs no backoff sleep
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_row_has_no_waited_ms() -> None:
+    """The dial fails, the row says so, and no sleep is written onto it.
+
+    Before 7.52.1 the retry loop slept its backoff before the proxied leg
+    stopped the second dial, and back-filled that sleep onto the try as
+    ``waited_ms`` (median 2,284 ms on the live log). The dial row and the try
+    row are otherwise exactly what they were.
+    """
+
+    import httpx
+
+    from my_claude_code.providers.runtime.proxy_leg import ProxiedLegRateLimiter
+
+    ladder = _tracked()
+    record_proxy("10.0.0.2:3128")
+
+    async def dial():
+        raise httpx.ConnectTimeout("timed out")
+
+    limiter = ProxiedLegRateLimiter(
+        rate_limit=0,
+        rate_window=60,
+        max_retries=2,
+        backoff_base_seconds=2.0,
+        backoff_max_seconds=2.0,
+        backoff_jitter_seconds=0.0,
+    )
+    started = time.monotonic()
+    with pytest.raises(httpx.ConnectTimeout):
+        await limiter.execute_with_retry(dial)
+    assert time.monotonic() - started < 0.5
+
+    payload = ladder_payload(ladder.ladders[0], now=time.monotonic())
+    (row,) = payload["tries"]
+    assert row["kind"] == "ConnectTimeout"
+    assert "status" not in row
+    assert "waited_ms" not in row
+    assert row["proxy"] == "10.0.0.2:3128"
+    (dial_row,) = payload["dials"]
+    assert dial_row["proxy"] == "10.0.0.2:3128"
+    assert dial_row["reason"] == "ConnectTimeout"
