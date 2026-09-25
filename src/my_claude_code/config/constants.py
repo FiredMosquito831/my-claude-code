@@ -571,6 +571,35 @@ PROXY_FETCH_CONNECT_TIMEOUT_SECONDS_MAX = 60.0
 PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT = 10.0
 PROXY_CHECK_TIMEOUT_SECONDS_MIN = 1.0
 PROXY_CHECK_TIMEOUT_SECONDS_MAX = 120.0
+# How hard a check tries before it calls an address dead (7.53.0). A FETCH
+# re-tests its screen failures in this many confirm rounds AFTER the screen
+# (user decision 1: three). Measured on 1,000 feed addresses
+# (specs/PR-PROXY-CHECK-VERDICTS-AND-SPEED-SPEC.md §4.2): of the 775 a shipped
+# fetch called dead, three re-tests 30 s apart at the fetch's own pace found
+# 82, then 33, then 47 working. The health re-prober, "Test all" and "Add all
+# working" give an address this many tries IN TOTAL, the first included -- so
+# 1 there is every release before 7.53.0. The single-row Test stays one try,
+# because the operator pressed it and wants an answer now.
+PROXY_CHECK_CONFIRM_ATTEMPTS_DEFAULT = 3
+PROXY_CHECK_CONFIRM_ATTEMPTS_MIN = 1
+PROXY_CHECK_CONFIRM_ATTEMPTS_MAX = 10
+# Seconds between those tries. Thirty is the spacing the measurement above
+# used; zero re-tests at once.
+PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT = 30.0
+PROXY_CHECK_CONFIRM_SPACING_SECONDS_MIN = 0.0
+PROXY_CHECK_CONFIRM_SPACING_SECONDS_MAX = 600.0
+# Setup time (connect + tunnel + TLS) above which a working address is called
+# "slow" rather than "working". A label, never a verdict: a slow address is
+# stored and selectable. 3,000 ms marked the slowest ~35 % of shipped-fetch
+# passes and ~58 % of the passes the re-tests recovered.
+PROXY_CHECK_SLOW_MS_DEFAULT = 3000
+PROXY_CHECK_SLOW_MS_MIN = 100
+PROXY_CHECK_SLOW_MS_MAX = 60000
+# Whether a fetch watches this machine's own connection while it sweeps: one
+# direct TLS handshake (no proxy, no request) to the destination host before
+# the sweep and every 15 s during it. A failure or a handshake over 5 s pauses
+# the sweep and marks nothing dead until the link answers again.
+PROXY_CHECK_LINK_GUARD_DEFAULT = True
 # How many addresses the background health re-prober has in flight. This is NOT
 # the fetch sweep, and not the operator's Add either -- both of those are paced
 # by PROXY_FETCH_TEST_CONCURRENCY. This one number belongs to the loop that

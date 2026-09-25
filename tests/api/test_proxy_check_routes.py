@@ -357,3 +357,70 @@ def test_the_page_is_told_whether_anything_is_checking() -> None:
     assert checker["enabled"] is False
     assert checker["exit_ip_configured"] is False
     assert checker["interval_minutes"] == 30
+
+
+# --------------------------------------- 7.53.0: Test all is a round per address
+
+
+def _failing_checker(monkeypatch) -> list[str]:
+    """The real ``check_endpoints`` over a checker that never answers."""
+
+    from my_claude_code.application import proxy_check as check_module
+
+    calls: list[str] = []
+
+    async def never(url, destination, **kwargs):
+        calls.append(url)
+        return ProxyCheckRecord(
+            at="2026-09-25T14:02:00Z",
+            ok=False,
+            tls="unknown",
+            detail="no answer",
+            failure="connect_timeout",
+        )
+
+    monkeypatch.setattr(check_module, "check_proxy", never)
+    return calls
+
+
+def test_test_all_uses_confirm_rounds(monkeypatch) -> None:
+    """Every address gets PROXY_CHECK_CONFIRM_ATTEMPTS tries and one ladder rung."""
+
+    from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY
+
+    calls = _failing_checker(monkeypatch)
+    settings = _settings(
+        PROXY_CHECK_CONFIRM_ATTEMPTS=3, PROXY_CHECK_CONFIRM_SPACING_SECONDS=0
+    )
+    with _client(settings) as client:
+        _seed(client, "http://198.51.100.21:8080", "http://198.51.100.22:8080")
+        response = client.post(
+            "/admin/api/proxy-chains/check", json={"provider": "nvidia_nim"}
+        )
+    assert response.status_code == 200, response.text
+    assert len(calls) == 6
+    checked = response.json()["checked"]
+    assert sorted(record["tries"] for record in checked.values()) == [3, 3]
+    for record in checked.values():
+        # Three tries failed, and the ladder moved once for the round.
+        assert PROXY_REACHABILITY.failures(record["label"]) == 1
+
+
+def test_single_row_test_is_one_try(monkeypatch) -> None:
+    """The row's own Test button is one try: the operator wants an answer now."""
+
+    calls = _failing_checker(monkeypatch)
+    settings = _settings(
+        PROXY_CHECK_CONFIRM_ATTEMPTS=3, PROXY_CHECK_CONFIRM_SPACING_SECONDS=0
+    )
+    with _client(settings) as client:
+        payload = _seed(client, "http://198.51.100.23:8080")
+        proxy_id = _entries(payload)[0]["proxy"]
+        response = client.post(
+            "/admin/api/proxy-chains/check",
+            json={"provider": "nvidia_nim", "proxy": proxy_id},
+        )
+    assert response.status_code == 200, response.text
+    assert len(calls) == 1
+    record = response.json()["checked"][proxy_id]
+    assert "tries" not in record

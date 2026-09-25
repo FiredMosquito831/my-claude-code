@@ -48,14 +48,33 @@ _DIRTY: set[str] = set()
 _DIRTY_LOCK = threading.Lock()
 _WRITE_LOCK = threading.Lock()
 
+#: Addresses that have just failed for the first time -- a fresh 0 -> 1 on the
+#: ladder -- and are owed an early confirm (7.53.0). The re-prober takes them
+#: on its next tick, within 30 s, and tests each once: a pass puts the address
+#: back straight away, a failure changes nothing. Filled only by reading the
+#: ledger (``failures()``), never by editing it.
+_EARLY: set[str] = set()
+
 
 def note_changed(label: str) -> None:
     """The ledger's listener. Cheap, non-blocking, and never raises."""
 
     if not label:
         return
+    fresh = PROXY_REACHABILITY.failures(label) == 1
     with _DIRTY_LOCK:
         _DIRTY.add(label)
+        if fresh:
+            _EARLY.add(label)
+
+
+def take_early_confirms() -> set[str]:
+    """The addresses owed an early confirm since the last call, and forget them."""
+
+    with _DIRTY_LOCK:
+        taken = set(_EARLY)
+        _EARLY.clear()
+    return taken
 
 
 def install_listener() -> None:
@@ -70,6 +89,7 @@ def remove_listener() -> None:
     PROXY_REACHABILITY.set_listener(None)
     with _DIRTY_LOCK:
         _DIRTY.clear()
+        _EARLY.clear()
 
 
 def _take_dirty() -> set[str]:
@@ -192,4 +212,5 @@ __all__ = [
     "install_listener",
     "note_changed",
     "remove_listener",
+    "take_early_confirms",
 ]

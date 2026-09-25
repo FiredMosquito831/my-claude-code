@@ -1475,17 +1475,83 @@ async function stopProxyFetch() {
    on. The numbers are the server's own: the page keeps no count of its own,
    which is how "Tested 212 of 834" cannot drift from what was actually
    measured. */
+/* A count off the fetch status, as a whole number that is never negative. A
+   status written by an older server lacks the newer keys entirely, and 0 is a
+   real answer here rather than a missing one, so this reads the number instead
+   of trusting `x || 0` to mean the same thing. */
+function proxyFetchCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+}
+
+/* The measured half of the fetch line.
+
+   Since 7.53.0 a failure is re-tested before it is called dead, and a pass is
+   labelled by how it passed, so a status that carries `confirm_attempts` is
+   read in those words: `working` still counts every pass, of which `slow` and
+   `flaky` are the labelled parts, and `dead` every address not kept, of which
+   `confirmed_dead` failed every re-test. The rest of `dead` refused the
+   connection outright and was never re-tested -- nothing was listening. A
+   status without the key (an older server, or a confirm stage switched off)
+   keeps the old sentence, because its `dead` means what it always meant. */
+function proxyFetchMeasured(fetch) {
+  const head =
+    `Tested ${proxyFetchCount(fetch.tested)} of ${proxyFetchCount(fetch.total)}`;
+  if (!proxyFetchCount(fetch.confirm_attempts)) {
+    return (
+      `${head} · ${proxyFetchCount(fetch.working)} working · ` +
+      `${proxyFetchCount(fetch.dead)} dead · ${proxyFetchCount(fetch.refused)} refused`
+    );
+  }
+  const slow = proxyFetchCount(fetch.slow);
+  const flaky = proxyFetchCount(fetch.flaky);
+  const working = Math.max(0, proxyFetchCount(fetch.working) - slow - flaky);
+  const confirmed = proxyFetchCount(fetch.confirmed_dead);
+  const unheard = Math.max(0, proxyFetchCount(fetch.dead) - confirmed);
+  const parts = [head, `${working} working`, `${slow} slow`];
+  if (flaky > 0) parts.push(`${flaky} flaky`);
+  parts.push(`${confirmed} confirmed dead`, `${proxyFetchCount(fetch.refused)} refused`);
+  if (unheard > 0) parts.push(`${unheard} not listening`);
+  return parts.join(" · ");
+}
+
+/* What the confirm stage is doing, while it is doing it, or what the link
+   guard stopped it doing. Empty when neither applies. A paused sweep leads the
+   line, because it is the one thing on it the operator can act on: the fault
+   is their own connection, not the addresses. */
+function proxyFetchConfirmSentence(fetch) {
+  if (fetch.paused) {
+    const said = String(fetch.pause_detail || "").trim() ||
+      "your own connection to the provider is failing -- paused";
+    return (
+      `${said.charAt(0).toUpperCase()}${said.slice(1)}. Nothing is marked dead ` +
+      "while it is paused; the sweep carries on once that connection answers."
+    );
+  }
+  const confirming = proxyFetchCount(fetch.confirming);
+  if (!confirming) return "";
+  const attempt = proxyFetchCount(fetch.confirm_attempt);
+  const attempts = proxyFetchCount(fetch.confirm_attempts);
+  const round = attempts
+    ? ` (attempt ${Math.max(1, attempt)} of ${attempts})`
+    : "";
+  return (
+    `Now confirming ${confirming} ${confirming === 1 ? "address" : "addresses"}` +
+    `${round}: nothing is called dead until every re-test has failed.`
+  );
+}
+
 function proxyFetchSentence() {
   const fetch = proxyState.fetch || {};
   const where = fetch.provider_name || fetch.provider || "the chosen provider";
-  const measured =
-    `Tested ${fetch.tested || 0} of ${fetch.total || 0} · ` +
-    `${fetch.working || 0} working · ${fetch.dead || 0} dead · ` +
-    `${fetch.refused || 0} refused`;
+  const measured = proxyFetchMeasured(fetch);
   if (fetch.state === "running") {
+    const confirm = proxyFetchConfirmSentence(fetch);
+    const lead = fetch.paused && confirm ? `${confirm} ` : "";
     const read = `${fetch.feeds_read || 0} of ${fetch.feeds_total || 0} list(s) read`;
     if (!fetch.total) {
       return (
+        lead +
         `Reading the lists: ${read}. Nothing is tested until they have all ` +
         "answered, and only addresses that pass are kept."
       );
@@ -1493,7 +1559,9 @@ function proxyFetchSentence() {
     const saved = `${fetch.persisted || 0} already saved`;
     const pace = proxyFetchPaceSentence();
     return (
+      lead +
       `${measured} · ${saved}. ` +
+      (confirm && !fetch.paused ? `${confirm} ` : "") +
       (pace ? `${pace} ` : "") +
       proxyFetchDepthSentence(where) +
       " Passing addresses are written as they are found -- stopping, or a " +
@@ -2731,8 +2799,63 @@ function proxyCandidateRow(candidate) {
   );
   actions.appendChild(discard);
 
-  row.append(label, scheme, measured, facts, sources, actions);
+  const chip = proxyCandidateStateChip(candidate);
+  if (chip) row.append(label, scheme, measured, chip, facts, sources, actions);
+  else row.append(label, scheme, measured, facts, sources, actions);
   return row;
+}
+
+/* How a candidate passed, as a word on the row (7.53.0). Every pass is kept
+   and usable; the label is what the fetch saw on the way there. "slow" is the
+   setup -- connect, tunnel and TLS -- taking longer than the slow limit, and
+   "flaky" is a pass that came only after most of its tries had failed. A row
+   without a label (untested, or stored by an older release) gets no chip
+   rather than a guessed one. */
+function proxyCandidateSetupMs(check) {
+  if (!check) return null;
+  let total = 0;
+  let timed = false;
+  for (const key of ["connect_ms", "tunnel_ms", "tls_ms"]) {
+    const value = check[key];
+    if (value === null || value === undefined || value === "") continue;
+    const number = Number(value);
+    if (!Number.isFinite(number)) continue;
+    total += number;
+    timed = true;
+  }
+  return timed ? Math.round(total) : null;
+}
+
+function proxyCandidateStateChip(candidate) {
+  const state = String(candidate.state || "");
+  if (state !== "working" && state !== "slow" && state !== "flaky") return null;
+  const check = candidate.last_check || null;
+  const chip = document.createElement("span");
+  chip.textContent = state;
+  if (state === "slow") {
+    chip.className = "proxy-state-chip proxy-state-slow";
+    const setup = proxyCandidateSetupMs(check);
+    chip.title =
+      "Passed, but setting up the connection -- connect + tunnel + TLS -- " +
+      (setup === null ? "took" : `took ${setup} ms,`) +
+      " longer than the slow limit (PROXY_CHECK_SLOW_MS). It works; expect " +
+      "every new connection through it to start that much later.";
+  } else if (state === "flaky") {
+    chip.className = "proxy-state-chip proxy-state-flaky";
+    const tries = proxyFetchCount(check && check.tries);
+    const rounds = proxyFetchCount((proxyState.fetch || {}).confirm_attempts);
+    const of = rounds ? Math.max(tries, rounds + 1) : tries;
+    chip.title =
+      "Passed on fewer than half of its tries in this fetch" +
+      (tries ? ` -- it passed on try ${tries} of ${of}` : "") +
+      ". It is kept and usable, but it failed more often than it answered.";
+  } else {
+    chip.className = "proxy-state-chip proxy-state-working";
+    chip.title =
+      "Passed, with a connection setup inside the slow limit " +
+      "(PROXY_CHECK_SLOW_MS) and without most of its tries failing first.";
+  }
+  return chip;
 }
 
 /* --------------------------------------------------------- the write path
@@ -3290,6 +3413,23 @@ function proxyEntryHealth(entry) {
     // operator watching a countdown reach zero would expect traffic to start
     // flowing through it again.
     const detail = health.reason ? ` (${health.reason})` : "";
+    // Since 7.53.0 a check round tries an address more than once before it
+    // calls it unhealthy, and the stored record says how many tries it took.
+    // When it does, the row names that round -- "failed 3 of 3 tries at 14:05"
+    // -- so a bench reads as the result of a round rather than of one blip.
+    const round = proxyEntryFailedRound(entry.last_check);
+    if (round) {
+      return {
+        state: "unreachable",
+        text: health.due_for_recheck
+          ? `unhealthy -- ${round}; due for a new round${detail}`
+          : `unhealthy -- ${round}; next round in ${wait}${detail}`,
+        title:
+          (health.reason || "This address would not carry a request.") +
+          ` The last check round ${round}. It stays out of the rotation until ` +
+          "a round passes. Press Check now to run one.",
+      };
+    }
     return {
       state: "unreachable",
       text: health.due_for_recheck
@@ -3327,6 +3467,25 @@ function proxyEntryHealth(entry) {
     text: "not checked yet",
     title: "No request has gone through this address yet.",
   };
+}
+
+/* "failed 3 of 3 tries at 14:05" for a stored check that failed after a
+   counted round, or "" when the record is absent, passed, was an interception
+   (which is its own state, never a count of tries), or predates `tries`. The
+   time is local and two-digit; a record whose time cannot be read still names
+   the count rather than inventing a clock. */
+function proxyEntryFailedRound(check) {
+  if (!check || check.ok || check.tls === "intercepted") return "";
+  if (typeof check.tries !== "number" && typeof check.tries !== "string") return "";
+  const tries = Number(check.tries);
+  if (!Number.isFinite(tries) || tries < 1) return "";
+  const count = Math.round(tries);
+  const when = Date.parse(String(check.at || ""));
+  if (!Number.isFinite(when)) return `failed ${count} of ${count} tries`;
+  const stamp = new Date(when);
+  const hh = String(stamp.getHours()).padStart(2, "0");
+  const mm = String(stamp.getMinutes()).padStart(2, "0");
+  return `failed ${count} of ${count} tries at ${hh}:${mm}`;
 }
 
 /* How long ago the checker last looked at this address, in words.

@@ -39,7 +39,14 @@ from my_claude_code.application.proxy_check import (
     check_endpoints,
     check_targets,
 )
-from my_claude_code.application.proxy_health_store import flush_health
+from my_claude_code.application.proxy_health_store import (
+    flush_health,
+    take_early_confirms,
+)
+from my_claude_code.config.constants import (
+    PROXY_CHECK_CONFIRM_ATTEMPTS_DEFAULT,
+    PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
+)
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import load_proxy_chains
 from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY
@@ -189,6 +196,18 @@ class ProxyCheckTimer(RearmableTimer):
             await outcome
 
 
+def _reprobe_concurrency(settings: object) -> int:
+    return int(
+        getattr(settings, "proxy_check_max_concurrency", PROXY_CHECK_MAX_CONCURRENCY)
+    )
+
+
+def _check_timeout(settings: object) -> float:
+    return float(
+        getattr(settings, "proxy_check_timeout_seconds", PROXY_CHECK_TIMEOUT_SECONDS)
+    )
+
+
 #: Seconds between passes of the health re-prober. Fixed rather than a setting:
 #: the cadence an address is actually re-tested on is its own reachability tier
 #: (60s, 5m, 1h), and this is only how often the loop looks for one whose tier
@@ -239,7 +258,11 @@ class ProxyHealthTimer:
         self._sleep = sleep
         self._tick_seconds = max(1.0, float(tick_seconds))
         self._task: asyncio.Task[None] | None = None
+        self._round: asyncio.Task[int] | None = None
         self._sweeping = False
+        #: The labels the round in progress is re-testing, so an early confirm
+        #: never tests the same address beside it.
+        self._in_round: set[str] = set()
 
     @property
     def running(self) -> bool:
@@ -261,6 +284,11 @@ class ProxyHealthTimer:
     async def close(self) -> None:
         task = self._task
         self._task = None
+        pending_round = self._round
+        self._round = None
+        if pending_round is not None and not pending_round.done():
+            pending_round.cancel()
+            await asyncio.gather(pending_round, return_exceptions=True)
         if task is None or task.done():
             return
         task.cancel()
@@ -272,13 +300,33 @@ class ProxyHealthTimer:
     async def run(self) -> None:
         while True:
             await self._wait(self._tick_seconds)
-            await self.tick()
+            # A round of several tries takes minutes; it runs beside the loop
+            # so the flush and the early confirms keep their 30-second beat.
+            await self.tick(background=True)
 
-    async def tick(self) -> int:
-        """One pass. Returns how many addresses were re-probed."""
+    async def tick(self, *, background: bool = False) -> int:
+        """One pass. Returns how many addresses were checked by it.
+
+        Two kinds of check, both only for addresses in an **enabled** chain:
+
+        * **Early confirm** (7.53.0): an address whose first failure arrived
+          since the last tick -- a fresh 0 -> 1 on the ladder, read through the
+          health store's listener -- and that is not yet due is tested once.
+          A pass puts it back in rotation now, instead of after the 60-second
+          rung; a failure changes nothing, so a quick re-test can never push
+          an address down the ladder faster.
+        * **The round** for every address whose rung has run out: up to
+          ``PROXY_CHECK_CONFIRM_ATTEMPTS`` tries, spaced
+          ``PROXY_CHECK_CONFIRM_SPACING_SECONDS`` apart. Any pass puts it back;
+          only when every try failed does it move one rung down -- once.
+
+        ``background`` runs the round as its own task (the loop does this);
+        a caller that wants the answer, like a test, awaits it here.
+        """
 
         await asyncio.to_thread(flush_health)
-        if self._sweeping or not self._enabled():
+        early_labels = take_early_confirms()
+        if not self._enabled():
             return 0
         settings = self._settings()
         try:
@@ -291,41 +339,109 @@ class ProxyHealthTimer:
             return 0
         targets = check_targets(settings, store, enabled_only=True)
         due: list[str] = []
+        early: list[str] = []
         for proxy_id in targets:
             endpoint = store.proxies.get(proxy_id)
             if endpoint is None:  # pragma: no cover - targets come from the store
                 continue
             label = endpoint.label or mask_proxy_label(endpoint.url)
             if PROXY_REACHABILITY.due_for_reprobe(label):
-                due.append(proxy_id)
-        if not due:
+                if label not in self._in_round:
+                    due.append(proxy_id)
+            elif (
+                label in early_labels
+                and label not in self._in_round
+                and PROXY_REACHABILITY.failures(label) == 1
+            ):
+                early.append(proxy_id)
+        checked = 0
+        if early:
+            checked += await self._early_confirm(early, targets, settings)
+        if not due or self._sweeping:
+            return checked
+        if background:
+            self._round = asyncio.create_task(self._reprobe(due, targets, settings))
+            return checked
+        return checked + await self._reprobe(due, targets, settings)
+
+    async def _early_confirm(
+        self, early: list[str], targets: dict[str, str], settings: object
+    ) -> int:
+        """One try each; a pass is applied, a failure is not (7.53.0)."""
+
+        concurrency = _reprobe_concurrency(settings)
+        try:
+            outcomes = await check_endpoints(
+                early,
+                targets,
+                timeout=_check_timeout(settings),
+                exit_ip_url="",
+                concurrency=concurrency,
+                max_concurrency=concurrency,
+                charge_failures=False,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Proxy health early confirm failed: exc_type={}", type(exc).__name__
+            )
             return 0
+        back = [outcome.label for outcome in outcomes.values() if outcome.record.ok]
+        if back:
+            logger.info(
+                "Proxy health: {} passed an early re-check after a live failure "
+                "and are back in rotation",
+                ", ".join(sorted(back)),
+            )
+            await asyncio.to_thread(flush_health)
+        return len(outcomes)
+
+    async def _reprobe(
+        self, due: list[str], targets: dict[str, str], settings: object
+    ) -> int:
+        """One round for every due address. Returns how many were checked."""
+
+        store = await asyncio.to_thread(load_proxy_chains)
+        self._in_round = {
+            endpoint.label or mask_proxy_label(endpoint.url)
+            for proxy_id in due
+            if (endpoint := store.proxies.get(proxy_id)) is not None
+        }
         # Both of the operator's check settings reach the re-probe (7.52.2).
         # Before, the timeout was the module constant -- ten seconds whatever
         # ``PROXY_CHECK_TIMEOUT_SECONDS`` said -- and the concurrency was
         # clamped to ``check_endpoints``' default ceiling of four, so raising
         # ``PROXY_CHECK_MAX_CONCURRENCY`` above four changed nothing. The
         # setting *is* the ceiling here, so it is passed as both.
-        concurrency = int(
-            getattr(
-                settings, "proxy_check_max_concurrency", PROXY_CHECK_MAX_CONCURRENCY
-            )
-        )
+        #
+        # Since 7.53.0 each due address gets a round rather than one try: the
+        # measured population passes about half its tries, so one unlucky try
+        # used to push a working address a whole rung towards the hour.
+        concurrency = _reprobe_concurrency(settings)
         self._sweeping = True
         try:
             outcomes = await check_endpoints(
                 due,
                 targets,
-                timeout=float(
-                    getattr(
-                        settings,
-                        "proxy_check_timeout_seconds",
-                        PROXY_CHECK_TIMEOUT_SECONDS,
-                    )
-                ),
+                timeout=_check_timeout(settings),
                 exit_ip_url="",
                 concurrency=concurrency,
                 max_concurrency=concurrency,
+                attempts=int(
+                    getattr(
+                        settings,
+                        "proxy_check_confirm_attempts",
+                        PROXY_CHECK_CONFIRM_ATTEMPTS_DEFAULT,
+                    )
+                ),
+                spacing=float(
+                    getattr(
+                        settings,
+                        "proxy_check_confirm_spacing_seconds",
+                        PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
+                    )
+                ),
             )
         except asyncio.CancelledError:
             raise
@@ -336,6 +452,7 @@ class ProxyHealthTimer:
             return 0
         finally:
             self._sweeping = False
+            self._in_round = set()
         back = [outcome.label for outcome in outcomes.values() if outcome.record.ok]
         if back:
             logger.info(

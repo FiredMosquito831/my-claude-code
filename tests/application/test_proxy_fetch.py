@@ -1052,3 +1052,222 @@ async def test_a_sweep_told_request_sends_the_request_and_says_so(monkeypatch):
 
     assert seen == ["request"]
     assert counters.check_depth == "request"
+
+
+# ------------------------------------------ 7.53.0: screen, then confirm
+
+
+def _scripted_checker(monkeypatch, script):
+    """``script[address] -> list of records``, one per try, the last repeating.
+
+    Returns the per-address list of the kwargs each try was called with.
+    """
+
+    calls: dict[str, list[dict]] = {}
+
+    async def check(url, destination, **kwargs):
+        assert destination == DESTINATION
+        address = url.split("://", 1)[1]
+        seen = calls.setdefault(address, [])
+        seen.append(kwargs)
+        await asyncio.sleep(0)
+        answers = script[address]
+        return answers[min(len(seen), len(answers)) - 1]
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+    return calls
+
+
+def _refused():
+    return ProxyCheckRecord(
+        at="now",
+        ok=False,
+        tls=TLS_UNKNOWN,
+        detail="refused the connection",
+        failure="refused",
+    )
+
+
+def _timeout():
+    return ProxyCheckRecord(
+        at="now",
+        ok=False,
+        tls=TLS_UNKNOWN,
+        detail="no answer within 5s",
+        failure="connect_timeout",
+    )
+
+
+@pytest.mark.asyncio
+async def test_screen_failures_are_confirmed_before_dead(monkeypatch):
+    """Only an address that failed every confirm round is dead; the rest are kept.
+
+    The first passes the screen; the second passes it with a setup over the
+    slow limit; the third misses the screen and passes the first re-test; the
+    fourth passes only on the third re-test (one pass in four tries: flaky);
+    the fifth fails the screen and all three re-tests.
+    """
+
+    addresses = [
+        "198.51.100.1:80",
+        "198.51.100.2:80",
+        "198.51.100.3:80",
+        "198.51.100.4:80",
+        "198.51.100.5:80",
+    ]
+    _offer(monkeypatch, addresses)
+    slow_pass = ProxyCheckRecord(
+        at="now", ok=True, tls=TLS_STRICT, connect_ms=900, tunnel_ms=1500, tls_ms=900
+    )
+    calls = _scripted_checker(
+        monkeypatch,
+        {
+            addresses[0]: [_ok()],
+            addresses[1]: [slow_pass],
+            addresses[2]: [_timeout(), _ok()],
+            addresses[3]: [_timeout(), _timeout(), _timeout(), _ok()],
+            addresses[4]: [_timeout()],
+        },
+    )
+
+    run = await _run(confirm_attempts=3, confirm_spacing=0.0, slow_ms=3000)
+
+    store = load_proxy_chains()
+    assert _labels(store) == addresses[:4]
+    states: dict[str, ProxyCheckRecord] = {}
+    for proxy_id in store.candidates:
+        endpoint = store.endpoint(proxy_id)
+        assert endpoint is not None and endpoint.last_check is not None
+        states[endpoint.label] = endpoint.last_check
+    assert states[addresses[0]].state == "working"
+    assert states[addresses[1]].state == "slow"
+    assert states[addresses[2]].state == "working"
+    assert states[addresses[2]].tries == 2
+    assert states[addresses[3]].state == "flaky"
+    assert states[addresses[3]].tries == 4
+    # The screen tried each once; the dead one got every confirm round.
+    assert len(calls[addresses[0]]) == 1
+    assert len(calls[addresses[4]]) == 4
+    assert (run.tested, run.working, run.slow, run.flaky) == (5, 4, 1, 1)
+    assert (run.dead, run.confirmed_dead, run.confirm_attempts) == (1, 1, 3)
+    assert run.as_document()["confirmed_dead"] == 1
+
+
+@pytest.mark.asyncio
+async def test_connection_refused_is_not_confirmed(monkeypatch):
+    """A real refusal at the dial is dead after the screen: it is never re-tested."""
+
+    _offer(monkeypatch, ["198.51.100.9:80"])
+    calls = _scripted_checker(monkeypatch, {"198.51.100.9:80": [_refused()]})
+
+    run = await _run(confirm_attempts=3, confirm_spacing=0.0)
+
+    assert len(calls["198.51.100.9:80"]) == 1
+    assert (run.dead, run.confirmed_dead) == (1, 0)
+    assert load_proxy_chains().candidates == ()
+
+
+@pytest.mark.asyncio
+async def test_confirm_uses_live_connect_timeout(monkeypatch):
+    """The screen dials with the fetch's 5 s; every confirm try with the live limit."""
+
+    _offer(monkeypatch, ["198.51.100.7:80"])
+    calls = _scripted_checker(monkeypatch, {"198.51.100.7:80": [_timeout()]})
+
+    await _run(
+        confirm_attempts=2,
+        confirm_spacing=0.0,
+        connect_timeout=5.0,
+        confirm_connect_timeout=10.0,
+        timeout=7.0,
+    )
+
+    dials = [kwargs["connect_timeout"] for kwargs in calls["198.51.100.7:80"]]
+    legs = [kwargs["timeout"] for kwargs in calls["198.51.100.7:80"]]
+    assert dials == [5.0, 10.0, 10.0]
+    assert legs == [7.0, 7.0, 7.0]
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_confirm_stage(monkeypatch):
+    """Stop during the spacing wait ends the fetch at once, confirming nothing."""
+
+    _offer(monkeypatch, ["198.51.100.1:80", "198.51.100.2:80"])
+    calls = _scripted_checker(
+        monkeypatch,
+        {"198.51.100.1:80": [_ok()], "198.51.100.2:80": [_timeout()]},
+    )
+    progress = FetchProgress()
+    halt = asyncio.Event()
+    task = asyncio.create_task(
+        _run(
+            confirm_attempts=3,
+            confirm_spacing=600.0,
+            progress=progress,
+            stop=halt,
+        )
+    )
+    for _ in range(200):
+        if progress.confirming:
+            break
+        await asyncio.sleep(0.01)
+    assert progress.confirming == 1
+    assert progress.confirm_attempt == 1
+    assert progress.confirm_attempts == 3
+
+    began = time.monotonic()
+    halt.set()
+    run = await asyncio.wait_for(task, 5.0)
+
+    assert time.monotonic() - began < 2.0
+    assert run.stopped is True
+    assert len(calls["198.51.100.2:80"]) == 1
+    assert (run.working, run.dead, run.confirmed_dead) == (1, 1, 0)
+    assert _labels(load_proxy_chains()) == ["198.51.100.1:80"]
+
+
+@pytest.mark.asyncio
+async def test_link_guard_pauses_and_marks_nothing_dead(monkeypatch):
+    """A check that failed while this machine's own link was down is re-queued."""
+
+    monkeypatch.setattr(proxy_fetch, "LINK_GUARD_INTERVAL_SECONDS", 0.02)
+    link = {"up": True}
+    probes: list[str] = []
+    seen_pause: list[str] = []
+    progress = FetchProgress()
+
+    async def probe(host, port, timeout):
+        probes.append(host)
+        return link["up"]
+
+    _offer(monkeypatch, ["198.51.100.3:80"])
+    tries: list[int] = []
+
+    async def check(url, destination, **kwargs):
+        tries.append(1)
+        if len(tries) == 1:
+            # The link drops while this check is in flight, and the check
+            # fails because of it.
+            link["up"] = False
+            for _ in range(100):
+                if progress.paused:
+                    break
+                await asyncio.sleep(0.01)
+            seen_pause.append(progress.pause_detail)
+            asyncio.get_running_loop().call_later(0.1, link.update, {"up": True})
+            return _timeout()
+        return _ok()
+
+    monkeypatch.setattr(proxy_fetch, "check_proxy", check)
+
+    run = await _run(link_guard=True, link_probe=probe, progress=progress)
+
+    assert probes and probes[0] == "api.example.invalid"
+    assert seen_pause == [
+        "your own connection to api.example.invalid is failing -- paused"
+    ]
+    # Tried again once the link answered, and it passed: nothing marked dead.
+    assert len(tries) == 2
+    assert (run.tested, run.working, run.dead) == (1, 1, 0)
+    assert progress.paused is False
+    assert _labels(load_proxy_chains()) == ["198.51.100.3:80"]

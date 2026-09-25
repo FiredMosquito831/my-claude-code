@@ -2919,6 +2919,91 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_CHECK_CONFIRM_ATTEMPTS",
+        "Re-tests before a proxy check calls an address dead",
+        "credential_health",
+        "number",
+        settings_attr="proxy_check_confirm_attempts",
+        default="3",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=1,
+        maximum=10,
+        description=(
+            "How hard MCC tries before it calls an address dead. A FETCH "
+            "re-tests everything its first sweep called dead (except a proxy "
+            "that refused the connection outright) this many more times, with "
+            "the live connect limit: measured on 1,000 feed addresses, a "
+            "fetch called 775 dead and three re-tests 30 seconds apart found "
+            "82, then 33, then 47 of them working. The health re-prober, Test "
+            "all and Add all working give each address this many tries in "
+            "total and move it down the re-check ladder only when every try "
+            "failed -- there, 1 is how MCC worked before 7.53.0. The "
+            "single-row Test is always one try."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_CHECK_CONFIRM_SPACING_SECONDS",
+        "Seconds between those tries",
+        "credential_health",
+        "number",
+        settings_attr="proxy_check_confirm_spacing_seconds",
+        default="30",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=0,
+        maximum=600,
+        description=(
+            "How long MCC waits between one try of an address and the next. "
+            "Thirty seconds is the spacing the measurement behind the "
+            "setting above used: a free proxy that missed one try is often "
+            "back half a minute later. 0 re-tests at once. With 3 tries a "
+            "fetch takes about two spacings longer than one try did."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_CHECK_SLOW_MS",
+        "Setup time (ms) above which a working proxy is 'slow'",
+        "credential_health",
+        "number",
+        settings_attr="proxy_check_slow_ms",
+        default="3000",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=100,
+        maximum=60000,
+        description=(
+            "A working address whose connect, tunnel and TLS handshake took "
+            "longer than this in total is labelled slow instead of working. "
+            "It is a label, never a verdict: a slow address is kept and can "
+            "be added to a chain. 3,000 ms marked the slowest 35% of the "
+            "addresses a fetch passed on this machine, and 58% of the ones "
+            "the re-tests recovered."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_CHECK_LINK_GUARD",
+        "Pause a fetch while your own connection is failing",
+        "credential_health",
+        "boolean",
+        settings_attr="proxy_check_link_guard",
+        default="true",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Before a fetch and every 15 seconds while it runs, MCC makes one "
+            "direct TLS handshake -- no proxy, no request -- to the provider "
+            "host the fetch tests against. If that fails or takes longer than "
+            "5 seconds, the fetch pauses, says your own connection is "
+            "failing, and marks nothing dead until the handshake works "
+            "again: a broken home link makes every proxy look dead."
+        ),
+    ),
+    ConfigFieldSpec(
         "PROXY_CHECK_MAX_CONCURRENCY",
         "Addresses checked at once outside a fetch",
         "credential_health",

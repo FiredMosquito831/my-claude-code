@@ -4254,6 +4254,91 @@ def test_jsdom_a_candidate_row_says_how_it_was_proven(rendered) -> None:
     assert any("HTTPS request answered" in text for text in texts), texts
 
 
+def test_jsdom_the_fetch_summary_shows_working_slow_confirmed_dead_refused(
+    rendered,
+) -> None:
+    """Slow is not dead, and dead is only what failed every re-test.
+
+    `working` counts every pass, of which `slow` and `flaky` are labelled
+    parts, so the plain-working number is what is left; `dead` counts every
+    address not kept, of which `confirmed_dead` failed every confirm round and
+    the rest refused the connection at the dial. A status without a confirm
+    stage (an older server) keeps the old sentence.
+    """
+
+    confirm = rendered["proxying"]["fetchConfirm"]
+    done = confirm["done"]
+
+    assert "Tested 1000 of 1000" in done, done
+    for part in (
+        "126 working",
+        "190 slow",
+        "12 flaky",
+        "540 confirmed dead",
+        "65 refused",
+        "67 not listening",
+    ):
+        assert part in done, (part, done)
+    assert "607 dead" not in done, done
+
+    quiet = confirm["doneQuiet"]
+    assert "4 working · 1 slow · 5 confirmed dead · 0 refused" in quiet, quiet
+    assert "flaky" not in quiet, quiet
+    assert "not listening" not in quiet, quiet
+
+    legacy = confirm["legacy"]
+    assert "Tested 20 of 20 · 4 working · 15 dead · 1 refused" in legacy, legacy
+    assert "confirmed dead" not in legacy and "slow" not in legacy, legacy
+
+    running = confirm["running"]
+    assert "confirming 612 addresses (attempt 2 of 3)" in running, running
+    assert "nothing is called dead until every re-test has failed" in running, running
+
+    paused = confirm["paused"]
+    assert paused.startswith(
+        "Your own connection to opencode.ai is failing -- paused."
+    ), paused
+    assert "Nothing is marked dead while it is paused" in paused, paused
+
+
+def test_jsdom_candidate_rows_carry_a_state_chip(rendered) -> None:
+    """Every pass is kept; the chip says how it passed, and nothing is guessed."""
+
+    chips = rendered["proxying"]["candidateStateChips"]
+
+    for state in ("working", "slow", "flaky"):
+        chip = chips[state]
+        assert chip is not None, state
+        assert chip["text"] == state, chip
+        assert "proxy-state-chip" in chip["className"].split(), chip
+        assert f"proxy-state-{state}" in chip["className"].split(), chip
+    assert "3500 ms" in chips["slow"]["title"], chips["slow"]
+    assert "PROXY_CHECK_SLOW_MS" in chips["slow"]["title"], chips["slow"]
+    assert "passed on try 4 of 4" in chips["flaky"]["title"], chips["flaky"]
+    assert chips["none"] is None
+    assert chips["absent"] is None
+
+
+def test_jsdom_the_unhealthy_wording_names_the_round(rendered) -> None:
+    """A bench is the result of a round of tries, and the row says which."""
+
+    round_ = rendered["proxying"]["unhealthyRound"]
+    clock = round_["expectedClock"]
+
+    with_tries = round_["withTries"]
+    assert f"failed 3 of 3 tries at {clock}" in with_tries, with_tries
+    assert "next round in 59m" in with_tries, with_tries
+    assert with_tries.endswith("(no answer)"), with_tries
+
+    due = round_["dueWithTries"]
+    assert f"failed 3 of 3 tries at {clock}; due for a new round" in due, due
+
+    # Without a tries count, today's wording, exactly.
+    assert round_["withoutTries"] == "unhealthy -- next check in 59m (no answer)"
+    # An interception is never a count of tries.
+    assert "tries" not in round_["intercepted"], round_["intercepted"]
+
+
 def test_jsdom_the_two_fetch_selects_are_on_limits_and_resilience(rendered) -> None:
     """Every tunable is reachable from the dashboard, on the page it belongs to."""
 

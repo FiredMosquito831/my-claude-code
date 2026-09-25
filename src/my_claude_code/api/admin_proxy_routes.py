@@ -361,11 +361,20 @@ async def check_proxy_chain(
         f"{len(wanted)} proxy address(es) are being tested for "
         f"{providers[provider_id]['display_name']}"
     ):
+        # "Test all" is a round per address (7.53.0): up to
+        # PROXY_CHECK_CONFIRM_ATTEMPTS tries, and the ladder moves only when
+        # every one failed. The single-row Test stays one try -- the operator
+        # pressed it on one address and wants that answer now.
+        single = bool(payload.proxy.strip())
         outcomes = await check_endpoints(
             wanted,
             dict.fromkeys(wanted, destination),
             timeout=float(settings.proxy_check_timeout_seconds),
             exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+            attempts=1 if single else int(settings.proxy_check_confirm_attempts),
+            spacing=(
+                0.0 if single else float(settings.proxy_check_confirm_spacing_seconds)
+            ),
             # One address, one operator waiting, and up to three legs of
             # handshake through a stranger's machine: the same reason the bulk
             # add moved in 7.27.0, at a smaller scale. Nothing else about the
@@ -944,6 +953,13 @@ async def ingest_proxy_feeds(
             persist_interval=float(settings.proxy_fetch_persist_interval_seconds),
             limit=int(settings.proxy_candidates_max),
             exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+            # The confirm stage (7.53.0): screen failures are re-tested with
+            # the live request path's own connect limit before they are dead.
+            confirm_attempts=int(settings.proxy_check_confirm_attempts),
+            confirm_spacing=float(settings.proxy_check_confirm_spacing_seconds),
+            confirm_connect_timeout=float(settings.proxy_connect_timeout_seconds),
+            slow_ms=int(settings.proxy_check_slow_ms),
+            link_guard=bool(settings.proxy_check_link_guard),
         )
     except FetchAlreadyRunning as exc:
         raise HTTPException(
@@ -1256,6 +1272,10 @@ async def bulk_proxy_candidates(
                 exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
                 concurrency=pace.value,
                 max_concurrency=PROXY_FETCH_TEST_CONCURRENCY_MAX,
+                # A round per address, as "Test all" (7.53.0): an address that
+                # misses one try is not added benched for it.
+                attempts=int(settings.proxy_check_confirm_attempts),
+                spacing=float(settings.proxy_check_confirm_spacing_seconds),
                 budget=check_budget(
                     connect_timeout=float(settings.proxy_check_timeout_seconds),
                     timeout=float(settings.proxy_check_timeout_seconds),
@@ -1737,6 +1757,9 @@ def _candidate_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
         "uptime_pct": facts.uptime_pct if facts is not None else None,
         "last_check": None if last_check is None else last_check.as_document(),
         "refused": bool(endpoint.refused),
+        # What the fetch concluded about a pass (7.53.0): working, slow or
+        # flaky. A label for the row's chip; all three are kept and addable.
+        "state": "" if last_check is None or not last_check.ok else last_check.state,
         # Since 7.21.0 a fetch tests everything it offers and keeps only the
         # addresses that passed, so on a freshly fetched list this is true of
         # every row -- and the three fields below are what let the page say so
