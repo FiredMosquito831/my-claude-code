@@ -77,11 +77,10 @@ class StallWatchdog:
         retain_files: Callable[[], int],
         frame_limit: int = DEFAULT_FRAME_LIMIT,
     ) -> None:
-        # The threshold and the file cap are read per pass, so the two fields
-        # the dashboard does not mark "restart required" really are hot: an
-        # operator reproducing a stall can drop the threshold to 5 s and see
-        # the next pass use it. The interval is the sleep itself and is fixed
-        # for the life of the task, which is what the field says.
+        # The threshold and the file cap are read per pass: an operator
+        # reproducing a stall can drop the threshold to 5 s and see the next
+        # pass use it. The interval is the sleep itself; a saved value reaches
+        # it through ``set_interval`` and applies from the next pass.
         self._stall_seconds = stall_seconds
         self._log_max_bytes = log_max_bytes
         self._retain_files = retain_files
@@ -95,6 +94,21 @@ class StallWatchdog:
     @property
     def task(self) -> asyncio.Task[None] | None:
         return self._task
+
+    @property
+    def interval_seconds(self) -> float:
+        return self._interval
+
+    def set_interval(self, interval_seconds: float) -> None:
+        """Sweep at a new interval from the next pass on.
+
+        ``_run`` reads ``_interval`` for every sleep, so a saved
+        ``REQUEST_WATCHDOG_INTERVAL_SECONDS`` needs no new task: the pass
+        already asleep wakes on the old interval and every later one uses the
+        new value. Nothing is cancelled and ``records_written`` is kept.
+        """
+
+        self._interval = max(1.0, float(interval_seconds))
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():

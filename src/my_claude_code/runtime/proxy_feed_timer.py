@@ -50,6 +50,7 @@ from my_claude_code.application.proxy_fetch import (
 from my_claude_code.config.constants import PROXY_FEED_MINIMUM_MINUTES
 from my_claude_code.config.proxy_chains import current_proxy_chains
 from my_claude_code.config.settings import Settings
+from my_claude_code.runtime.timer_rearm import RearmableTimer
 
 # ``PROXY_FEED_MINIMUM_MINUTES`` is the floor under the configured interval and
 # is re-exported here, where the loop that applies it lives. It is defined in
@@ -70,7 +71,7 @@ def resolve_feed_interval(enabled: bool, minutes: float) -> float:
     return max(float(minutes), float(PROXY_FEED_MINIMUM_MINUTES)) * 60.0
 
 
-class ProxyFeedTimer:
+class ProxyFeedTimer(RearmableTimer):
     """One loop, one pass at a time, cancelled with the runtime that owns it."""
 
     def __init__(
@@ -132,7 +133,7 @@ class ProxyFeedTimer:
                 return
             self._next_tick_at = time.time() + interval
             await self._wait(interval)
-            await self.tick()
+            await self._loop_tick()
 
     async def tick(self) -> int:
         """One pass. Returns how many addresses are **working** afterwards.

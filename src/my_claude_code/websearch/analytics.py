@@ -234,6 +234,20 @@ class WebSearchLogStore:
         )
         self._writer.start()
 
+    def retune(
+        self, *, max_rows: int, capture_content: bool, max_content_chars: int
+    ) -> None:
+        """Adopt a saved configuration without reopening the database.
+
+        Three plain values the writer reads per row and per prune, so a single
+        assignment each is the whole change; the writer, its connection and
+        every queued record carry on.
+        """
+
+        self._max_rows = max(0, int(max_rows))
+        self._capture_content = bool(capture_content)
+        self._max_content_chars = max(512, int(max_content_chars))
+
     def __enter__(self) -> WebSearchLogStore:
         return self
 
@@ -697,6 +711,29 @@ def get_shared_store() -> WebSearchLogStore:
             )
             _shared_store = store
         return store
+
+
+def retune_shared_store(settings: Settings) -> None:
+    """Move the process-wide store and switch onto a saved configuration.
+
+    Called by the runtime after an admin apply. Both were read once, at first
+    use, and kept: the store's three numbers and ``WEBSEARCH_LOG_ENABLED``. A
+    store that is not open yet is left alone -- it is built from the current
+    settings on first use -- and nothing is closed.
+    """
+
+    global _log_enabled_cache
+    with _shared_lock:
+        store = _shared_store
+        if _log_enabled_cache is not None:
+            _log_enabled_cache = bool(settings.websearch_log_enabled)
+    if store is None or store.closed:
+        return
+    store.retune(
+        max_rows=settings.websearch_log_max_rows,
+        capture_content=settings.websearch_log_capture_content,
+        max_content_chars=settings.websearch_log_content_max_chars,
+    )
 
 
 def record_search(outcome: SearchOutcome) -> None:

@@ -40,6 +40,7 @@ from loguru import logger
 
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.config.constants import MODEL_DISCOVERY_REFRESH_MINIMUM_SECONDS
+from my_claude_code.runtime.timer_rearm import RearmableTimer
 
 #: How many consecutive ticks an auth-failing provider is skipped for, walked
 #: by consecutive failures and clamped at the last entry. The same shape as the
@@ -114,7 +115,7 @@ class ProviderBackoff:
         return ticks
 
 
-class ProviderDiscoveryTimer:
+class ProviderDiscoveryTimer(RearmableTimer):
     """One loop, one sweep at a time, cancelled with the runtime that owns it."""
 
     def __init__(
@@ -182,7 +183,7 @@ class ProviderDiscoveryTimer:
                 return
             self._next_tick_at = time.time() + interval
             await self._wait(interval)
-            await self.tick()
+            await self._loop_tick()
 
     async def tick(self) -> ProviderModelRefreshResult:
         """Run one sweep, honouring the backoff and updating it."""

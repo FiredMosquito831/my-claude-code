@@ -198,8 +198,17 @@ def changed_pending_fields(
     updates: Mapping[str, Any],
     *,
     settings: Settings,
+    messaging_running: bool = True,
 ) -> list[str]:
-    """Return changed fields that require manual runtime action."""
+    """Return changed fields that require manual runtime action.
+
+    ``messaging_running`` says whether a Telegram or Discord bot is running in
+    this process. A field whose ``restart_scope`` is ``messaging`` is read only
+    by that bot, once, when it starts; with no bot running nothing holds the
+    old value, so the save applies without a restart. It defaults to ``True``
+    -- the answer that never under-reports -- for a caller with no runtime to
+    ask, such as a validation preview.
+    """
 
     state = load_value_state()
     pending: list[str] = []
@@ -209,7 +218,10 @@ def changed_pending_fields(
             continue
         if field.secret and value == MASKED_SECRET:
             continue
-        requires_restart = field.restart_required or field.session_sensitive
+        requires_restart = field.session_sensitive or (
+            field.restart_required
+            and (field.restart_scope != "messaging" or messaging_running)
+        )
         if not requires_restart:
             requires_restart = _active_voice_credential(settings) == key
         if not requires_restart:
@@ -228,14 +240,22 @@ def _active_voice_credential(settings: Settings) -> str | None:
     return "HUGGINGFACE_API_KEY"
 
 
-def prepare_admin_update(updates: Mapping[str, Any]) -> PreparedAdminUpdate:
+def prepare_admin_update(
+    updates: Mapping[str, Any],
+    *,
+    messaging_running: bool = True,
+) -> PreparedAdminUpdate:
     """Validate an update and construct its prospective Settings snapshot."""
 
     target_values, warnings = target_values_with_updates(updates)
     effective_values = effective_values_for_validation(target_values)
     settings, errors = settings_from_values(effective_values)
     pending_fields = (
-        tuple(changed_pending_fields(updates, settings=settings))
+        tuple(
+            changed_pending_fields(
+                updates, settings=settings, messaging_running=messaging_running
+            )
+        )
         if settings is not None
         else ()
     )

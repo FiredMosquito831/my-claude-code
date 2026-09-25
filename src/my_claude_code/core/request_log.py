@@ -2266,6 +2266,10 @@ class RequestLogStore:
         self._compression_level = compression_level
         self._queue_max_size = max(1, queue_max_size)
         self._compress_bodies = compress_bodies
+        # A saved REQUEST_LOG_COMPRESS_BODIES, handed to the writer thread to
+        # adopt between two batches; see ``retune``.
+        self._tuning_lock = threading.Lock()
+        self._pending_compress_bodies: bool | None = None
         # Dictionaries are immutable once written, so caching them by id is
         # safe for the lifetime of the process.
         self._dict_cache: dict[int, Any] = {}
@@ -2317,6 +2321,54 @@ class RequestLogStore:
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    def retune(
+        self,
+        *,
+        max_rows: int,
+        text_max_chars: int,
+        compression_level: int,
+        queue_max_size: int,
+        compress_bodies: bool,
+    ) -> None:
+        """Adopt a saved tuning without reopening the database.
+
+        The store is shared for the life of the process, so the numbers it was
+        built with used to be the numbers until a restart. Each one is a plain
+        value the writer reads where it uses it, so each can move while the
+        store runs -- with the one care each needs:
+
+        * the queue bound is changed under the queue's own mutex, and waiters
+          are woken when it grows, so ``queue.Queue`` never sees a half-made
+          change; records already queued above a smaller bound stay queued;
+        * ``compress_bodies`` decides two things about the same batch -- whether
+          the text goes inline and whether it is packed -- so the writer thread
+          adopts it between batches rather than this thread flipping it under
+          a batch in flight;
+        * the three integers are single assignments the writer reads per use.
+        """
+
+        bound = max(1, int(queue_max_size))
+        with self._queue.mutex:
+            grew = bound > self._queue.maxsize
+            self._queue.maxsize = bound
+            self._queue_max_size = bound
+            if grew:
+                self._queue.not_full.notify_all()
+        self._max_rows = max(0, int(max_rows))
+        self._text_max_chars = max(0, int(text_max_chars))
+        self._compression_level = int(compression_level)
+        with self._tuning_lock:
+            self._pending_compress_bodies = bool(compress_bodies)
+
+    def _adopt_pending_tuning(self) -> None:
+        """Writer thread only: take a saved ``compress_bodies`` between batches."""
+
+        with self._tuning_lock:
+            pending = self._pending_compress_bodies
+            self._pending_compress_bodies = None
+        if pending is not None:
+            self._compress_bodies = pending
 
     def _mmap_size(self) -> int:
         """Bytes of this database to memory-map on a connection.
@@ -3972,6 +4024,9 @@ class RequestLogStore:
             session_id = self._open_session(conn)
             last_heartbeat = time.monotonic()
             while not stopping:
+                # Between batches, never inside one: see ``retune``.
+                if not pending:
+                    self._adopt_pending_tuning()
                 now = time.monotonic()
                 if now - last_heartbeat >= _SESSION_HEARTBEAT_SECONDS:
                     last_heartbeat = now
@@ -8643,6 +8698,42 @@ def observed_served_models(
         for row in rows
         if str(row[0]).strip()
     )
+
+
+def retune_request_log_store(settings: Any) -> RequestLogStore | None:
+    """Hand a saved configuration to the shared store already open, if any.
+
+    ``get_request_log_store`` builds the store once per path and ignores the
+    numbers on every later call, which is what made these fields need a
+    restart. This is the other half: called by the runtime after an admin
+    apply, it moves the open store onto the new numbers. It opens nothing -- a
+    store that does not exist yet is built from the new settings on first use
+    anyway -- and it never closes one, so the writer and every queued record
+    carry on.
+    """
+
+    path = default_request_log_path()
+    with _store_lock:
+        store = _stores.get(path)
+    if store is None or store._closed.is_set():
+        return None
+    store.retune(
+        max_rows=int(getattr(settings, "request_log_max_rows", 50_000) or 50_000),
+        text_max_chars=int(
+            getattr(settings, "request_log_text_max_chars", MAX_TEXT_CHARS)
+            or MAX_TEXT_CHARS
+        ),
+        compression_level=int(
+            getattr(settings, "request_log_compression_level", _BODY_COMPRESSION_LEVEL)
+            or _BODY_COMPRESSION_LEVEL
+        ),
+        queue_max_size=int(
+            getattr(settings, "request_log_queue_max_size", _QUEUE_MAX_SIZE)
+            or _QUEUE_MAX_SIZE
+        ),
+        compress_bodies=bool(getattr(settings, "request_log_compress_bodies", True)),
+    )
+    return store
 
 
 def store_from_settings(settings: Any) -> RequestLogStore | None:

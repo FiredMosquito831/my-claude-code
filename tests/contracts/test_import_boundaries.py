@@ -27,6 +27,9 @@ ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
         "core",
         "messaging",
         "providers",
+        # The composition root re-arms the web-search log store after an admin
+        # apply, as it does the request log; ``api`` already depends on it.
+        "websearch",
     },
 }
 

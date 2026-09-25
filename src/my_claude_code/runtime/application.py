@@ -41,6 +41,7 @@ from my_claude_code.config.env_files import (
     ANTHROPIC_AUTH_TOKEN_ENV,
     process_env_key_is_effective,
 )
+from my_claude_code.config.logging_config import set_third_party_verbosity
 from my_claude_code.config.model_refs import parse_provider_type
 from my_claude_code.config.paths import messaging_state_dir_path
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -56,6 +57,7 @@ from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.proxy_rotation import configure_proxy_rotation
 from my_claude_code.core.request_log import (
     reset_request_log_stores,
+    retune_request_log_store,
     set_cost_backfill_pricer,
 )
 from my_claude_code.core.startup_state import startup_state
@@ -96,6 +98,7 @@ from my_claude_code.providers.runtime.reasoning_probe import (
     ReasoningProbeOutcome,
     probe_reasoning_dialect,
 )
+from my_claude_code.websearch.analytics import retune_shared_store
 
 from .discovery_timer import ProviderDiscoveryTimer, resolve_refresh_interval
 from .loop_heartbeat import LoopHeartbeat
@@ -517,7 +520,9 @@ class ApplicationRuntime:
         self,
         updates: Mapping[str, Any],
     ) -> dict[str, Any]:
-        prepared = prepare_admin_update(updates)
+        prepared = prepare_admin_update(
+            updates, messaging_running=self._messaging_workflow is not None
+        )
         if not prepared.valid:
             return prepared.applied_response()
         assert prepared.settings is not None
@@ -535,6 +540,7 @@ class ApplicationRuntime:
             return result
 
         result: dict[str, Any] = {}
+        previous = self.settings
 
         def commit() -> None:
             result.update(self._commit_admin_update(prepared))
@@ -550,9 +556,100 @@ class ApplicationRuntime:
             reason="admin_apply",
             background_refresh=update_affects_providers(updates),
         )
+        await self._apply_live_settings(previous, prepared.settings)
         self._pending_fields = []
         result["restart"] = self._restart_metadata((), prepared.settings)
         return result
+
+    async def _apply_live_settings(self, previous: Settings, current: Settings) -> None:
+        """Move what this runtime built at start onto a saved configuration.
+
+        The generation swap above is what makes most fields hot: a provider,
+        its pool and its limiter are built from the new settings, and every
+        request handler is built per request from its lease. What it cannot
+        reach is what ``start`` built once and kept -- the loop-lag monitor,
+        the stall watchdog, the three settings-driven loops, the proxy
+        engine's ladder and the two shared log stores. Each is moved here, in
+        place, and only when a value it reads actually changed.
+
+        Nothing here interrupts a request. The monitors and loops are
+        observers; a loop asleep is re-armed, a loop mid-pass is left to finish
+        it; the stores keep their writer and every queued record; and a proxy
+        bench already running keeps its record, re-armed by the engine's own
+        ladder rule rather than cleared.
+        """
+
+        def changed(*attrs: str) -> bool:
+            return any(getattr(previous, a) != getattr(current, a) for a in attrs)
+
+        retune_request_log_store(current)
+        retune_shared_store(current)
+        set_third_party_verbosity(bool(current.log_raw_api_payloads))
+        if changed(
+            "proxy_cooldown_seconds",
+            "proxy_cooldown_max_seconds",
+            "proxy_reachability_tiers",
+        ):
+            # The engine's own entry point, called again: the ladder re-arms
+            # benches already on the books by its own rule (``set_tiers``) and
+            # the cooldown pair is updated in place, which is the object every
+            # engine already reads. ``core/proxy_rotation.py`` is unchanged.
+            configure_proxy_rotation(
+                cooldown_seconds=current.proxy_cooldown_seconds,
+                cooldown_max_seconds=current.proxy_cooldown_max_seconds,
+                reachability_tiers=parse_lockout_tiers(
+                    current.proxy_reachability_tiers
+                ),
+            )
+        if not self._started:
+            # ``start`` reads every one of these itself.
+            return
+        if changed("health_heartbeat_interval_ms", "health_busy_lag_ms"):
+            interval = self._configure_loop_health(current)
+            if self._loop_heartbeat is not None:
+                self._loop_heartbeat.set_interval(interval)
+        if changed(
+            "request_watchdog_enabled",
+            "request_watchdog_interval_seconds",
+            "request_inflight_enabled",
+        ):
+            await self._rearm_stall_watchdog(current)
+        if changed("model_discovery_refresh_seconds"):
+            self._discovery_timer.rearm()
+        if changed("proxy_check_enabled", "proxy_check_interval_minutes"):
+            self._proxy_check_timer.rearm()
+        if changed("proxy_feed_refresh_enabled", "proxy_feed_refresh_minutes"):
+            self._proxy_feed_timer.rearm()
+
+    @staticmethod
+    def _configure_loop_health(settings: Settings) -> float:
+        """Push the two loop-health numbers into the record; return the beat."""
+
+        interval = max(10, int(settings.health_heartbeat_interval_ms)) / 1000.0
+        loop_health().configure(
+            interval_seconds=interval,
+            busy_lag_seconds=max(0, int(settings.health_busy_lag_ms)) / 1000.0,
+        )
+        return interval
+
+    async def _rearm_stall_watchdog(self, settings: Settings) -> None:
+        """Start, stop or re-time the watchdog to match a saved configuration."""
+
+        watchdog = self._stall_watchdog
+        if settings.request_watchdog_enabled and watchdog is None:
+            self._start_stall_watchdog()
+            return
+        request_tasks.configure(
+            enabled=bool(settings.request_watchdog_enabled),
+            inflight=bool(getattr(settings, "request_inflight_enabled", True)),
+        )
+        if watchdog is None:
+            return
+        if not settings.request_watchdog_enabled:
+            self._stall_watchdog = None
+            await watchdog.close()
+            return
+        watchdog.set_interval(settings.request_watchdog_interval_seconds)
 
     def cached_model_ids(self) -> dict[str, frozenset[str]]:
         """Return cached discovered model ids per provider for admin display."""
@@ -1180,12 +1277,7 @@ class ApplicationRuntime:
         configuration.
         """
 
-        settings = self.settings
-        interval = max(10, int(settings.health_heartbeat_interval_ms)) / 1000.0
-        loop_health().configure(
-            interval_seconds=interval,
-            busy_lag_seconds=max(0, int(settings.health_busy_lag_ms)) / 1000.0,
-        )
+        interval = self._configure_loop_health(self.settings)
         heartbeat = LoopHeartbeat(interval_seconds=interval)
         heartbeat.start()
         self._loop_heartbeat = heartbeat
