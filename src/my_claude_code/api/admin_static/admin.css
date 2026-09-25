@@ -4181,6 +4181,19 @@ details.turn-pane > summary:focus-visible {
   max-width: 62ch;
 }
 
+/* The Stream keepalive card's "which clock fires first" note. Same frame as
+   the calculator; the list names the deadlines that outlast the client. */
+.watchdog-card .calc-warning {
+  margin-top: 0;
+}
+
+.watchdog-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  color: var(--text-strong);
+}
+
 .rotation-summary-heading {
   color: var(--text-strong);
   font-size: 12.5px;

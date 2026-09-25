@@ -150,7 +150,9 @@ def test_the_settings_views_still_render_their_sections(rendered) -> None:
     # section itself, which now has the two OpenCode Zen fields that hold the
     # free-tier credential toggle. `runtime` still has no fields here.
     assert views["providers"]["sections"] == 6
-    assert views["limits"]["sections"] == 7
+    # 8 since 7.46.0: the Stream keepalive card sits between Deadlines and
+    # Chain benching.
+    assert views["limits"]["sections"] == 8
     assert views["limits"]["fieldInputs"] >= 1
     assert views["requests"]["sections"] == 1
     assert views["optimizer"]["sections"] >= 1
@@ -359,7 +361,7 @@ def test_registering_the_docs_view_did_not_break_the_other_views(rendered) -> No
         "requests": 1,
         "optimizer": 6,
         "web_search": 1,
-        "limits": 7,
+        "limits": 8,
         "guide": 0,
         "docs": 0,
     }
@@ -434,6 +436,7 @@ def test_a_fresh_install_still_renders_the_docs_page(fresh_install) -> None:
 LIMITS_CARDS = [
     "section-budgets",
     "section-deadlines",
+    "section-stream_keepalive",
     "section-benching",
     "section-provider_retries",
     "section-credential_health",
@@ -6158,3 +6161,67 @@ def test_an_attempt_with_no_chain_draws_no_dial_rows(rendered) -> None:
         detail = rendered["requestDetail"][name]
         assert detail["dials"] == []
         assert detail["dialTitles"] == []
+
+
+# ---------------------------------------------------------------------------
+# Stream keepalive (7.46.0): the card's "which clock fires first" warning. It
+# appears when a watched deadline is 0 (no limit) or longer than Claude Code's
+# 300 s idle floor, hides otherwise, and never proposes a value.
+
+
+def test_the_watchdog_card_lives_in_the_keepalive_section(rendered) -> None:
+    watchdog = rendered["limits"]["watchdog"]["loaded"]
+    assert watchdog["present"] is True
+    assert watchdog["inKeepaliveSection"] is True
+
+
+def test_the_watchdog_card_is_hidden_while_every_deadline_fits(rendered) -> None:
+    """120 / 120 / 300: nothing outlasts a 300 s client floor."""
+    assert rendered["limits"]["watchdog"]["loaded"]["hidden"] is True
+
+
+def test_the_watchdog_card_appears_when_a_deadline_is_no_limit(rendered) -> None:
+    shown = rendered["limits"]["watchdog"]["stallZero"]
+    assert shown["hidden"] is False
+    assert shown["lead"].startswith("Warning:")
+    assert "300 s" in shown["lead"]
+    assert shown["items"] == ["FALLBACK_STALL_TIMEOUT: 0 (no limit)"]
+
+
+def test_the_watchdog_card_hides_again_at_120(rendered) -> None:
+    assert rendered["limits"]["watchdog"]["stallBackTo120"]["hidden"] is True
+
+
+def test_the_watchdog_card_says_plainly_what_keepalive_does_for_claude_code(
+    rendered,
+) -> None:
+    on = rendered["limits"]["watchdog"]["stallZero"]["keepalive"]
+    assert "drops ping" in on
+    assert "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1" in on
+    assert "after 30 s" in on and "300 s" in on
+    off = rendered["limits"]["watchdog"]["keepaliveOff"]["keepalive"]
+    assert off.startswith("Stream keepalive is off.")
+
+
+def test_the_watchdog_card_never_proposes_a_value(rendered) -> None:
+    """The deadlines are the operator's choice: the card states, it never asks."""
+    shown = rendered["limits"]["watchdog"]["stallZero"]
+    text = " ".join([shown["lead"], *shown["items"], shown["keepalive"]]).lower()
+    for phrase in (
+        "set ",
+        "raise",
+        "lower",
+        "should",
+        "recommend",
+        "change it",
+        "try ",
+    ):
+        assert phrase not in text, phrase
+    assert "changes nothing" in text
+    assert rendered["limits"]["watchdog"]["pendingAfter"] == []
+
+
+def test_the_watchdog_card_builds_no_markup_from_a_label(rendered) -> None:
+    """Labels come from the manifest; they are written with textContent."""
+    html = rendered["limits"]["watchdog"]["stallZero"]["html"]
+    assert "<li>FALLBACK_STALL_TIMEOUT: 0 (no limit)</li>" in html

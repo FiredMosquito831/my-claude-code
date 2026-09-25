@@ -36,6 +36,9 @@ _VIEW_ENTRY = re.compile(
 LIMITS_SECTIONS = (
     "budgets",
     "deadlines",
+    # 7.46.0: what MCC writes to a streaming client while nothing comes from
+    # the model, and which clock -- MCC's or the client's -- fires first.
+    "stream_keepalive",
     "benching",
     "provider_retries",
     "credential_health",

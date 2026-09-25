@@ -276,6 +276,9 @@ const FIELDS = [
     ["HTTP_WRITE_TIMEOUT", "deadlines", "60", "1 to 3600"],
     ["HTTP_CONNECT_TIMEOUT", "deadlines", "60", "1 to 600"],
     ["SERVER_GRACEFUL_SHUTDOWN_SECONDS", "deadlines", "20", "1 to 600"],
+    ["STREAM_KEEPALIVE_IDLE_SECONDS", "stream_keepalive", "30", "0 to 3600"],
+    ["STREAM_KEEPALIVE_INTERVAL_SECONDS", "stream_keepalive", "20", "1 to 3600"],
+    ["STREAM_KEEPALIVE_MAX_SECONDS", "stream_keepalive", "300", "0 to 86400"],
     ["FALLBACK_EJECT_WINDOW", "benching", "10", "1 to 1000"],
     ["FALLBACK_EJECT_FAILURE_RATE", "benching", "0.5", "0 to 1"],
     ["FALLBACK_EJECT_MIN_SAMPLES", "benching", "8", "1 to 1000"],
@@ -483,6 +486,11 @@ const SECTIONS = [
   { id: "optimizer", label: "Tool-result trimming", description: "" },
   { id: "budgets", label: "Output & thinking budgets", description: "How big an answer." },
   { id: "deadlines", label: "Deadlines", description: "How long a model may hold it." },
+  {
+    id: "stream_keepalive",
+    label: "Stream keepalive",
+    description: "What a silent stream is sent.",
+  },
   { id: "benching", label: "Chain benching", description: "When to stop trying a model." },
   {
     id: "provider_retries",
@@ -4737,6 +4745,60 @@ if (firstInput && totalInput && floorInput) {
     control.value = control.dataset.original;
     control.dispatchEvent(new window.Event("input", { bubbles: true }));
   });
+}
+
+/* (h) The Stream keepalive card's "which clock fires first" warning. The
+   loaded payload has every watched deadline at or under the client's 300 s
+   floor (120 / 120 / 300), so it starts hidden; a stall deadline of 0 -- no
+   limit -- outlasts the client and shows it; 120 hides it again. Keepalive
+   off changes the line under it. Nothing here may touch any setting. */
+{
+  const watchdogNow = () => {
+    const card = doc.getElementById("watchdogCard");
+    return {
+      present: Boolean(card),
+      hidden: card ? card.hidden : null,
+      inKeepaliveSection: Boolean(
+        card && card.closest("#section-stream_keepalive"),
+      ),
+      lead: textOf(limitsView, "#watchdogLead"),
+      items: card
+        ? Array.from(card.querySelectorAll("#watchdogList li")).map((li) =>
+            li.textContent.trim(),
+          )
+        : [],
+      keepalive: textOf(limitsView, "#watchdogKeepalive"),
+      html: card ? card.innerHTML : "",
+    };
+  };
+  const stallInput = controlIn("FALLBACK_STALL_TIMEOUT");
+  const idleInput = controlIn("STREAM_KEEPALIVE_IDLE_SECONDS");
+  const drive = (control, value) => {
+    control.value = value;
+    control.dispatchEvent(new window.Event("input", { bubbles: true }));
+  };
+  limits.watchdog = { loaded: watchdogNow() };
+  if (stallInput && idleInput) {
+    drive(stallInput, "0");
+    limits.watchdog.stallZero = watchdogNow();
+    drive(idleInput, "0");
+    limits.watchdog.keepaliveOff = watchdogNow();
+    drive(idleInput, idleInput.dataset.original);
+    drive(stallInput, "120");
+    limits.watchdog.stallBackTo120 = watchdogNow();
+    drive(stallInput, stallInput.dataset.original);
+    // The card only reads: with both controls back where they were loaded,
+    // nothing it could have written is pending.
+    limits.watchdog.pendingAfter = Object.keys(window.eval("changedValues()")).filter(
+      (key) =>
+        key.startsWith("STREAM_KEEPALIVE_") ||
+        [
+          "FALLBACK_FIRST_TOKEN_TIMEOUT",
+          "FALLBACK_STALL_TIMEOUT",
+          "FALLBACK_REASONING_ANSWER_TIMEOUT",
+        ].includes(key),
+    );
+  }
 }
 
 /* The loop-lag readout on Limits & Resilience. Rendered by the
