@@ -319,7 +319,11 @@ async def test_an_unproxied_client_is_the_object_it_was_before():
 
 
 async def test_an_http_proxied_client_is_the_object_it_was_before():
-    """Same, one rung type over: only SOCKS pools are wrapped."""
+    """Same, one rung type over: only SOCKS pools get the deadline.
+
+    Since 7.45.1 an HTTP proxy pool carries the dial stopwatch, which is
+    pinned in ``tests/providers/test_proxy_dial_rows.py``.
+    """
 
     client = httpx.AsyncClient(proxy="http://127.0.0.1:9", timeout=_timeout())
     try:

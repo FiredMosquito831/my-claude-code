@@ -412,6 +412,15 @@ Every saved entry has a **Test** button, and each card has **Test all**. One pre
 
 Two places, both in the request log. Every rung of the ladder in an attempt's modal names the address that try went out through, and each attempt row carries a `proxy_label` column you can group by. The value is `host:port` with any `user:pass` stripped — never the URL — and the literal `direct` is a rung you chose, distinct from an empty cell, which means "not measured".
 
+`proxy_label` is the address the attempt *ended* on. Every address it dialled is listed under the attempt, in order, as **proxy dials** (since 7.45.1): the address, the TCP connect to the proxy and the tunnel handshake after it (the SOCKS5 negotiation or the HTTP `CONNECT`) when a new connection was opened, what the address answered and how long that took, and what the chain did next:
+
+- **switched in N ms**: another address followed. The row names the answer that made the chain move on (`429`, `ConnectTimeout`, …) and the time MCC took to move.
+- **answered**: the address's last try was answered.
+- **then N without a switch**: the address failed and the chain never moved on while the attempt lasted.
+- **never completed**: the dial began and no try on it ever finished. It is written when the dial *starts*, so a dial that hangs is still on the record.
+
+A term that was not measured is left out rather than shown as zero: a dial that reused an open connection has no connect time. The same rows are stored as `params.ladder.dials` on the attempt. The try count and `proxy_label` do not change.
+
 #### Two more things worth knowing
 
 **Direct is a legal entry.** "Try my addresses, then fall back to my own IP" has to be expressible, and it is the recommended last rung.

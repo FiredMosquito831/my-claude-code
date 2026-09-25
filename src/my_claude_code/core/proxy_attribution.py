@@ -16,8 +16,22 @@ this module -- a proxy password in the request log would be a worse leak than
 the thing a proxy chain is trying to avoid. The literal :data:`DIRECT_PROXY_LABEL`
 means "this machine's own address, deliberately"; ``None`` means "not measured",
 and the two must never be conflated.
+
+Every dial, not only the last
+-----------------------------
+
+``label`` is last-write-wins, so on its own it can only ever say where a
+request *ended up*. The 09-16 park was diagnosed from exactly that: nine
+requests carried their first rung's label and seven their second, which proved
+the nine never reached the second dial -- and nothing recorded more than that.
+The slot therefore also carries an optional ``on_dial`` observer, installed by
+the API layer beside the request's upstream ladder, and :func:`record_proxy`
+tells it about every dial as it happens. This module does not know what the
+observer is: ``core/upstream_ladder`` already reads this module, so the
+dependency points one way and the API layer, which owns both, joins them.
 """
 
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 
@@ -32,6 +46,10 @@ class ProxyAttribution:
     """Mutable slot holding the egress address chosen for one request."""
 
     label: str | None = None
+    #: Told about every dial, after ``label`` is written. ``None`` -- the
+    #: default, and every request whose log is off -- records nothing more
+    #: than the label always did.
+    on_dial: Callable[[str | None], None] | None = None
 
 
 _CURRENT: ContextVar[ProxyAttribution | None] = ContextVar(
@@ -39,10 +57,17 @@ _CURRENT: ContextVar[ProxyAttribution | None] = ContextVar(
 )
 
 
-def install_proxy_attribution() -> ProxyAttribution:
-    """Start recording egress choices for the current request."""
+def install_proxy_attribution(
+    on_dial: Callable[[str | None], None] | None = None,
+) -> ProxyAttribution:
+    """Start recording egress choices for the current request.
 
-    slot = ProxyAttribution()
+    ``on_dial`` is called with the label of every dial the proxy pool makes
+    for this request, in order -- the per-dial record the single label cannot
+    keep.
+    """
+
+    slot = ProxyAttribution(on_dial=on_dial)
     _CURRENT.set(slot)
     return slot
 
@@ -54,11 +79,17 @@ def record_proxy(label: str | None) -> None:
     tests, token counting, model discovery -- need no special handling. Later
     calls overwrite earlier ones, so after a switch the address actually last
     tried is the one attributed.
+
+    Called by the pool immediately *before* it dials, so the observer hears
+    of a dial even when the dial never completes -- which is the one case the
+    last-write-wins label could not describe.
     """
 
     slot = _CURRENT.get()
     if slot is not None:
         slot.label = label
+        if slot.on_dial is not None:
+            slot.on_dial(label)
 
 
 def current_proxy() -> str | None:

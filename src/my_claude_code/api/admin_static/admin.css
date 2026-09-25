@@ -7734,6 +7734,35 @@ details.turn-pane > summary:focus-visible {
   border-radius: 4px;
 }
 
+/* One row per proxy dial. Same mono line as a try, because each is read
+   against the tries above it; a dial that never finished is the row the
+   reader came for, so it is the one that is not muted. */
+.req-chain-dials-title {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.req-chain-dials {
+  margin: 3px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.req-chain-dial {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.req-chain-dial.is-dialing,
+.req-chain-dial.is-failed {
+  color: var(--error);
+}
+
 .req-chain-decisions {
   margin: 6px 0 0;
   padding-left: 18px;

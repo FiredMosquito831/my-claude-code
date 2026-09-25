@@ -76,6 +76,7 @@ from my_claude_code.core.upstream_ladder import (
     ladder_payload,
     ladder_proxy_label,
     ladder_root_cause,
+    record_proxy_dial,
 )
 from my_claude_code.core.waiting_clock import install_waiting_clock
 from my_claude_code.core.wire_capture import (
@@ -247,7 +248,14 @@ class RequestCapture:
         # slot, for the same reason and through the same mechanism. Installed
         # unconditionally beside the credential slot so a request that reaches
         # a chain is attributed whether or not the log is enabled.
-        self._proxy = install_proxy_attribution()
+        #
+        # A logged request also hears of every dial, not only the last: each
+        # one becomes a row on the attempt's ladder (installed below), so a
+        # switch -- and a dial that never completed -- is on the record rather
+        # than inferred from which label happened to survive.
+        self._proxy = install_proxy_attribution(
+            on_dial=record_proxy_dial if self.enabled else None
+        )
         # Stream-recovery counters arrive the same way: a provider's runner
         # increments this collector from inside its holdback and retry
         # machinery, however many context copies the streaming response runs
@@ -559,7 +567,11 @@ class RequestCapture:
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
                 key_index=key_index,
                 key_label=key_label,
-                ladder_tries=None if ladder is None else len(ladder["tries"]),
+                # None, not 0, for a ladder holding only proxy dials: no try
+                # was measured, which is what None has always said here.
+                ladder_tries=None
+                if not ladder or not ladder["tries"]
+                else len(ladder["tries"]),
                 # Denormalised out of the ladder exactly as ``ladder_tries``
                 # is, and for the same reason: so the analytics breakdown can
                 # group by egress address without scanning JSON. None is "not
@@ -578,7 +590,9 @@ class RequestCapture:
         if self._ladder is None:
             return None
         ladder = self._ladder.ladders.get(attempt.attempt)
-        if ladder is None or not ladder.tries:
+        # A ladder with dials and no try is the one worth keeping most: a dial
+        # that never completed, which is exactly what a try cannot record.
+        if ladder is None or not (ladder.tries or ladder.dials):
             return None
         payload = ladder_payload(ladder)
         payload["root_cause"] = ladder_root_cause(
@@ -746,7 +760,7 @@ class RequestCapture:
         if self._wire is not None:
             self._wire.current_attempt = attempt
         if self._ladder is not None:
-            self._ladder.current_attempt = attempt
+            self._ladder.enter_attempt(attempt)
         if attempt == 0:
             self._primary_model_ref = routed.resolved.provider_model_ref
         self._record.route_attempt = attempt

@@ -28,9 +28,28 @@ provider-wide reactive block is *set* with the same number that is then slept
 ``asyncio.sleep`` with the same delay), so recording both would double-count
 the same seconds and make ``time_sleeping_ms`` a lie. Time is recorded where it
 is actually spent -- the backoff sleep and the limiter's own wait.
+
+Proxy dials
+-----------
+
+A request on a provider with a proxy chain may dial several addresses inside
+one attempt. ``request_attempts.proxy_label`` keeps only the last of them, so
+the 09-16 park -- nine requests that hung after one 429 on their first rung --
+could only be diagnosed by noticing *which* label survived. Each dial is now
+kept on its attempt's ladder as a :class:`ProxyDial`: which address, where in
+the tries it happened, how long the TCP connect and the tunnel handshake took
+when a new connection was opened, and what the address answered. A dial that
+is followed by another one is a *switch*, and it carries the answer that caused
+it and the time MCC took to move on.
+
+Dials are kept beside the tries, never among them. ``tries``, the try count,
+``ladder_tries`` and everything that reads them -- the census, the root-cause
+sentence, the stuck-request watchdog, the in-flight registry -- are exactly
+what they were without a chain.
 """
 
 import json
+import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -52,6 +71,11 @@ DEFAULT_LADDER_BODY_MAX_CHARS = 800
 # Hard stop on the array. Past it, tries are dropped and counted, so the
 # headline count stays truthful instead of silently flattening.
 MAX_TRIES_PER_ATTEMPT = 60
+
+# The same bound for dials. A chain's own switch limit keeps a real attempt far
+# below it; the cap exists so a three-hundred-rung chain cannot grow a row
+# without limit.
+MAX_DIALS_PER_ATTEMPT = 60
 
 # Spelled as a named escape so the linter's confusable-character check can stay
 # on for the rest of the file. This really is the multiplication sign: the
@@ -164,6 +188,37 @@ class CredentialDecision:
 
 
 @dataclass(slots=True)
+class ProxyDial:
+    """One address of a proxy chain, dialled for this attempt.
+
+    Written at dial time, before anything is known about the dial, and filled
+    in as the dial proceeds -- so a dial that never completes is still a row,
+    which is the whole point: a try is only recorded when it *ends*.
+    """
+
+    #: The address, masked exactly as the try rows carry it.
+    proxy: str | None
+    #: How many rows of ``tries`` were already recorded when this dial began,
+    #: which is where it sits in the ladder's order.
+    at_try: int
+    #: ``time.monotonic()`` at the dial. Never rendered; durations are.
+    started: float
+    #: The TCP connect to the proxy, when this dial opened a new connection.
+    #: ``None`` when it reused one, or when nothing measured it.
+    connect_ms: float | None = None
+    #: The SOCKS5 negotiation or the HTTP ``CONNECT`` exchange that followed
+    #: the connect, up to the moment the tunnel was ready.
+    handshake_ms: float | None = None
+    #: What the last upstream try on this address met: its census key -- the
+    #: status, else the exception's name -- or ``None`` when it answered.
+    verdict: str | None = None
+    #: True when the last upstream try on this address was answered.
+    answered: bool = False
+    #: ``time.monotonic()`` when that last try was recorded.
+    verdict_at: float | None = None
+
+
+@dataclass(slots=True)
 class AttemptLadder:
     """Every upstream try behind one route attempt."""
 
@@ -171,6 +226,11 @@ class AttemptLadder:
     decisions: list[CredentialDecision] = field(default_factory=list)
     time_limiter_ms: float = 0.0
     tries_dropped: int = 0
+    dials: list[ProxyDial] = field(default_factory=list)
+    dials_dropped: int = 0
+    #: ``time.monotonic()`` when the request moved on to its next attempt.
+    #: ``None`` while this is the attempt in flight.
+    closed_at: float | None = None
 
 
 @dataclass(slots=True)
@@ -189,8 +249,68 @@ class LadderTrace:
             self.ladders[self.current_attempt] = ladder
         return ladder
 
+    def enter_attempt(self, attempt: int) -> None:
+        """Move to chain index *attempt*, closing the one before it.
+
+        The close time is what a dial left open at the end of an attempt is
+        measured against. Announcing the attempt already in flight -- the
+        handler and the executor both announce attempt 0 -- closes nothing.
+        """
+        if attempt != self.current_attempt:
+            previous = self.ladders.get(self.current_attempt)
+            if previous is not None and previous.closed_at is None:
+                previous.closed_at = time.monotonic()
+        self.current_attempt = attempt
+
+    def record_dial(self, label: str | None) -> None:
+        """Open a row for one proxy dial, before anything is known about it."""
+        ladder = self.slot()
+        if ladder.dials_dropped or len(ladder.dials) >= MAX_DIALS_PER_ATTEMPT:
+            ladder.dials_dropped += 1
+            return
+        ladder.dials.append(
+            ProxyDial(proxy=label, at_try=len(ladder.tries), started=time.monotonic())
+        )
+
+    def _open_dial(self) -> ProxyDial | None:
+        """The dial the tries now being recorded belong to, if there is one.
+
+        None once dials have been dropped: past the cap the last stored dial
+        is no longer the one in flight, and attributing to it would be wrong.
+        """
+        ladder = self.ladders.get(self.current_attempt)
+        if ladder is None or not ladder.dials or ladder.dials_dropped:
+            return None
+        return ladder.dials[-1]
+
+    def record_dial_connect(self, milliseconds: float) -> None:
+        """The open dial's TCP connect to its proxy completed."""
+        dial = self._open_dial()
+        if dial is None:
+            return
+        dial.connect_ms = milliseconds
+        # A new connection starts a new handshake; an earlier connection's
+        # figure would describe a tunnel this one does not use.
+        dial.handshake_ms = None
+
+    def record_dial_handshake(self, milliseconds: float) -> None:
+        """The open dial's tunnel through its proxy is ready."""
+        dial = self._open_dial()
+        if dial is None:
+            return
+        dial.handshake_ms = milliseconds
+
     def record_try(self, entry: LadderTry) -> None:
         ladder = self.slot()
+        if entry.source == "upstream":
+            dial = self._open_dial()
+            if dial is not None:
+                code = _census_key(entry)
+                dial.answered = code is None or (
+                    entry.status is not None and entry.status < 400
+                )
+                dial.verdict = None if dial.answered else code
+                dial.verdict_at = time.monotonic()
         if len(ladder.tries) >= MAX_TRIES_PER_ATTEMPT:
             ladder.tries_dropped += 1
             return
@@ -405,6 +525,36 @@ def record_upstream_try(
     )
 
 
+def record_proxy_dial(label: str | None) -> None:
+    """Record that the proxy pool is about to dial *label*, if tracked.
+
+    Installed as :func:`~my_claude_code.core.proxy_attribution.record_proxy`'s
+    observer by the API layer, so it runs on the one call the pool already
+    makes immediately before every dial. A no-op outside a tracked request and
+    inside a paused one -- a diagnostic probe's dials are not this request's.
+    """
+    slot = _LADDER.get()
+    if slot is None:
+        return
+    slot.record_dial(label)
+
+
+def record_proxy_connect(seconds: float) -> None:
+    """Record the TCP connect to the proxy the open dial is using, if tracked."""
+    slot = _LADDER.get()
+    if slot is None:
+        return
+    slot.record_dial_connect(seconds * 1000.0)
+
+
+def record_proxy_handshake(seconds: float) -> None:
+    """Record the tunnel handshake of the open dial's connection, if tracked."""
+    slot = _LADDER.get()
+    if slot is None:
+        return
+    slot.record_dial_handshake(seconds * 1000.0)
+
+
 def record_upstream_wait(seconds: float, *, source: TrySource = "backoff") -> None:
     """Record a sleep MCC took between two tries, if tracked."""
     slot = _LADDER.get()
@@ -479,8 +629,78 @@ def _sum_optional(values: list[float | None]) -> float:
     return sum(value for value in values if value is not None)
 
 
-def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
-    """Render one attempt's ladder into the JSON stored under ``params``."""
+def _elapsed_ms(start: float, end: float) -> float:
+    return round(max(0.0, end - start) * 1000.0, 1)
+
+
+def dial_rows(
+    ladder: AttemptLadder, *, now: float | None = None
+) -> list[dict[str, Any]]:
+    """Render one attempt's proxy dials, in the order they were made.
+
+    ``outcome`` is one of:
+
+    * ``switched`` -- another dial followed this one. ``reason`` is what this
+      address's last try met, when a try was recorded; ``switch_ms`` is the
+      time from that answer (or from the dial, when there was none) to the
+      next dial.
+    * ``answered`` -- the last dial, and its last try was answered.
+    * ``failed`` -- the last dial, its last try failed, and no switch
+      followed. ``idle_ms`` is how long the attempt then went on without
+      another dial.
+    * ``dialing`` -- the last dial, and no try on it ever ended. ``elapsed_ms``
+      is how long it was open when the attempt ended.
+
+    Absent terms are "not measured", never zero: a reused connection has no
+    connect time.
+    """
+    end = ladder.closed_at
+    if end is None:
+        end = time.monotonic() if now is None else now
+    rows: list[dict[str, Any]] = []
+    for position, dial in enumerate(ladder.dials):
+        following = (
+            ladder.dials[position + 1] if position + 1 < len(ladder.dials) else None
+        )
+        row: dict[str, Any] = {"at_try": dial.at_try}
+        if dial.proxy is not None:
+            row["proxy"] = dial.proxy
+        if dial.connect_ms is not None:
+            row["connect_ms"] = _rounded(dial.connect_ms)
+        if dial.handshake_ms is not None:
+            row["handshake_ms"] = _rounded(dial.handshake_ms)
+        if dial.verdict_at is not None:
+            row["verdict_ms"] = _elapsed_ms(dial.started, dial.verdict_at)
+        settled = dial.started if dial.verdict_at is None else dial.verdict_at
+        if following is not None:
+            row["outcome"] = "switched"
+            row["switch_ms"] = _elapsed_ms(settled, following.started)
+        elif ladder.dials_dropped:
+            # More dials followed this one than were kept. It was switched
+            # away from; when, and to what, went with the dropped rows.
+            row["outcome"] = "switched"
+        elif dial.verdict_at is None:
+            row["outcome"] = "dialing"
+            row["elapsed_ms"] = _elapsed_ms(dial.started, end)
+        elif dial.answered:
+            row["outcome"] = "answered"
+        else:
+            row["outcome"] = "failed"
+            row["idle_ms"] = _elapsed_ms(settled, end)
+        if dial.verdict is not None:
+            row["reason"] = dial.verdict
+        rows.append(row)
+    return rows
+
+
+def ladder_payload(
+    ladder: AttemptLadder, *, now: float | None = None
+) -> dict[str, Any]:
+    """Render one attempt's ladder into the JSON stored under ``params``.
+
+    ``dials`` is present only when the attempt dialled through a proxy chain,
+    so the payload of every other attempt is exactly what it always was.
+    """
     upstream = [entry for entry in ladder.tries if entry.source == "upstream"]
     labels: dict[int, str] = {}
     for entry in upstream:
@@ -548,7 +768,7 @@ def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
     # count is published beside it and the dashboard's "nothing was hidden"
     # gate reads both.
     probes = sum(1 for entry in ladder.tries if entry.source == "probe")
-    return {
+    payload: dict[str, Any] = {
         "tries": tries,
         "summary": {
             # Upstream tries only. A backoff sleep and a limiter wait get their
@@ -574,6 +794,11 @@ def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
         },
         "credentials": credentials,
     }
+    if ladder.dials:
+        payload["dials"] = dial_rows(ladder, now=now)
+    if ladder.dials_dropped:
+        payload["dials_dropped"] = ladder.dials_dropped
+    return payload
 
 
 def ladder_proxy_label(payload: Mapping[str, Any]) -> str | None:

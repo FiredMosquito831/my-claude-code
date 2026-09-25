@@ -18789,6 +18789,99 @@ function appendLadder(item, ladder) {
   }
 }
 
+/** The proxy dials stored on one attempt's ladder, oldest first. */
+function ladderDials(ladder) {
+  return ladder && Array.isArray(ladder.dials) ? ladder.dials : [];
+}
+
+function hasDials(attempt) {
+  return ladderDials(ladderOf(attempt)).length > 0;
+}
+
+/** "Direct" is a rung the operator chose; say it the way the Proxying page does. */
+function dialAddressText(dial) {
+  if (dial.proxy === "direct") return "Direct (no proxy)";
+  return dial.proxy || NOT_MEASURED;
+}
+
+/**
+ * One line per proxy dial: which address, what it cost to reach, what it
+ * answered, and what the chain did next.
+ *
+ * Each term is present only when it was measured. A dial that reused an open
+ * connection has no connect time, and saying "0 ms" would be a claim about a
+ * socket that was never opened.
+ */
+function dialText(dial, position) {
+  const parts = [`#${position}`, dialAddressText(dial)];
+  if (dial.connect_ms != null) parts.push(`connect ${formatChainDuration(dial.connect_ms)}`);
+  if (dial.handshake_ms != null) {
+    parts.push(`handshake ${formatChainDuration(dial.handshake_ms)}`);
+  }
+  const took = dial.verdict_ms != null ? formatChainDuration(dial.verdict_ms) : "";
+  const after = took ? ` after ${took}` : "";
+  if (dial.outcome === "answered") {
+    parts.push(took ? `answered in ${took}` : "answered");
+  } else if (dial.outcome === "switched") {
+    /* No reason with a verdict: the address answered and the first chunk
+       then failed. No verdict at all: nothing on this address ever finished. */
+    if (dial.reason) parts.push(`${dial.reason}${after}`);
+    else parts.push(took ? `answered${after}` : "no try finished");
+    parts.push(
+      dial.switch_ms != null ? `switched in ${formatChainDuration(dial.switch_ms)}` : "switched",
+    );
+  } else if (dial.outcome === "failed") {
+    parts.push(`${dial.reason || "failed"}${after}`);
+    /* The 09-16 shape: the address answered, and then the chain never moved.
+       Under a second it is simply the end of the chain and not worth a word. */
+    if (Number(dial.idle_ms) >= 1000) {
+      parts.push(`then ${formatChainDuration(dial.idle_ms)} without a switch`);
+    } else {
+      parts.push("not switched");
+    }
+  } else if (dial.outcome === "dialing") {
+    parts.push(
+      dial.elapsed_ms != null
+        ? `never completed — open ${formatChainDuration(dial.elapsed_ms)}`
+        : "never completed",
+    );
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * Draw one attempt's proxy dials under its ladder.
+ *
+ * Shown whenever the attempt went through a proxy chain, even for one dial
+ * that answered: which address carried the request, and what reaching it
+ * cost, is not said anywhere else. Not folded away, unlike the tries, because
+ * a chain dials a handful of addresses at most.
+ */
+function appendDials(item, ladder) {
+  const dials = ladderDials(ladder);
+  if (!dials.length) return;
+  const switches = dials.filter((dial) => dial.outcome === "switched").length;
+  const title = document.createElement("p");
+  title.className = "req-chain-dials-title";
+  const words = [`${dials.length} proxy ${dials.length === 1 ? "dial" : "dials"}`];
+  if (switches) words.push(`${switches} ${switches === 1 ? "switch" : "switches"}`);
+  if (Number(ladder.dials_dropped || 0) > 0) {
+    words.push(`${ladder.dials_dropped} more not stored`);
+  }
+  title.textContent = words.join(" · ");
+  item.appendChild(title);
+
+  const list = document.createElement("ol");
+  list.className = "req-chain-dials";
+  dials.forEach((dial, index) => {
+    const row = document.createElement("li");
+    row.className = `req-chain-dial is-${dial.outcome || "unknown"}`;
+    row.textContent = dialText(dial, index + 1);
+    list.appendChild(row);
+  });
+  item.appendChild(list);
+}
+
 /** The registry's account of a bench, when this attempt was skipped by one. */
 function benchOf(attempt) {
   const params = attempt && attempt.params;
@@ -18984,6 +19077,7 @@ function renderRequestChain(row) {
     routeAttempts.length < 2 &&
     attempts.length === routeAttempts.length &&
     !attempts.some(hasLadder) &&
+    !attempts.some(hasDials) &&
     !attempts.some((attempt) => truncationOf(attempt)) &&
     !attempts.some((attempt) => continuationOf(attempt))
   ) {
@@ -19137,6 +19231,7 @@ function renderRequestChain(row) {
 
     appendBenchReason(item, benchOf(attempt));
     appendLadder(item, ladderOf(attempt));
+    appendDials(item, ladderOf(attempt));
     list.appendChild(item);
   });
   container.appendChild(list);
