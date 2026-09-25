@@ -2071,7 +2071,8 @@
                   A provider holds a <strong>pool</strong> of keys rather than one value.
                   Paste several separated by commas to add them together, give each its own
                   <em>Remove</em>, and pick a <em>Rotation</em> policy when you have more
-                  than one (that one does need <em>Apply</em>, and restarts the server).
+                  than one (that one does need <em>Apply</em>, and takes effect on the next
+                  request without a restart).
                   Then press <em>Refresh models</em>: it makes a real API call, so a model
                   count means the key works <strong>and</strong> My Claude Code can read that
                   provider's catalog. Choose the model itself on
@@ -4451,7 +4452,8 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   <strong>Deadlines</strong>) is the one field on this page that does not
                   bound a request &mdash; it bounds a <em>stop</em>, end to end, and
                   since 6.41.0 it is the only number that does. Ctrl+C, the reload that
-                  follows <em>Apply</em>, the tray's <em>Restart Server</em>, and the
+                  follows an <em>Apply</em> of one of the few fields that still need a
+                  restart, the tray's <em>Restart Server</em>, and the
                   restart that finishes an update are all the same operation underneath
                   and all obey it. <strong>It ships at 20 seconds.</strong> At the
                   instant a stop begins the server stops taking new work: a request

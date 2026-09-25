@@ -143,6 +143,27 @@ def _set_third_party_levels(verbose: bool) -> None:
         logging.getLogger(name).setLevel(level)
 
 
+def set_third_party_verbosity(verbose: bool) -> bool:
+    """Apply a saved ``LOG_RAW_API_PAYLOADS`` to the third-party loggers.
+
+    The one part of that switch that ``configure_logging`` owns is the level
+    of the noisy HTTP and Telegram loggers -- not the file sink -- and
+    ``configure_logging`` already changes it alone when only the verbosity
+    moved. This is that branch, callable after an admin apply without knowing
+    the sink's path or level. Does nothing before logging is configured (the
+    first ``configure_logging`` sets it then) and returns whether it applied.
+    """
+
+    global _current_verbose
+    if not _configured:
+        return False
+    verbose = bool(verbose)
+    if verbose != _current_verbose:
+        _set_third_party_levels(verbose)
+        _current_verbose = verbose
+    return True
+
+
 def _add_file_sink(log_file: str | Path, level: str, retain_files: int) -> int:
     log_path = Path(log_file)
     # ``retain_files`` is the number of rotated ``server.*.log`` files to keep.

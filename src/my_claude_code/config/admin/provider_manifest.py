@@ -216,10 +216,8 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     "OPENAI_PROXY": {
         "label": "OpenAI / ChatGPT Proxy",
         "description": (
-            "Optional proxy used for OpenAI sign-in and ChatGPT Codex requests. "
-            "Changing it restarts FCC."
+            "Optional proxy used for OpenAI sign-in and ChatGPT Codex requests."
         ),
-        "restart_required": True,
     },
     "MINIMAX_API_KEY": {
         "label": "MiniMax API Key",
@@ -469,7 +467,6 @@ def _opencode_identity_field_specs() -> tuple[dict[str, Any], ...]:
                 ),
                 ConfigOptionSpec("mcc", "Identify as My Claude Code"),
             ),
-            "restart_required": True,
             "description": (
                 "What MCC puts in the identity headers OpenCode Zen and Go read off every request. "
                 "Both are sent either way -- without the conversation header the Zen free tier answers "
@@ -487,7 +484,6 @@ def _opencode_identity_field_specs() -> tuple[dict[str, Any], ...]:
             "settings_attr": "opencode_client_version",
             "default": OPENCODE_CLIENT_VERSION_DEFAULT,
             "advanced": True,
-            "restart_required": True,
             "description": (
                 "Which OpenCode release the user-agent names. Empty -- the default -- reads it from the "
                 "opencode-ai package installed on this machine, and falls back to the release this "
@@ -502,7 +498,6 @@ def _opencode_identity_field_specs() -> tuple[dict[str, Any], ...]:
             "settings_attr": "opencode_client_ai_sdk_version",
             "default": OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
             "advanced": True,
-            "restart_required": True,
             "description": (
                 "The middle segment of the user-agent the real OpenCode client sends: "
                 "opencode/<release> ai-sdk/provider-utils/<this> runtime/<below>. Its own "
@@ -519,7 +514,6 @@ def _opencode_identity_field_specs() -> tuple[dict[str, Any], ...]:
             "settings_attr": "opencode_client_runtime",
             "default": OPENCODE_CLIENT_RUNTIME_DEFAULT,
             "advanced": True,
-            "restart_required": True,
             "description": (
                 "The last user-agent segment, written as <runtime>/<version> and sent as "
                 "runtime/<that> -- bun/1.3.14 on the client captured for this release. "
@@ -534,7 +528,6 @@ def _opencode_identity_field_specs() -> tuple[dict[str, Any], ...]:
             "provider": "opencode",
             "settings_attr": "opencode_free_tier_models",
             "default": OPENCODE_FREE_TIER_MODELS_DEFAULT,
-            "restart_required": True,
             "description": (
                 "Comma-separated Zen and Go model ids that are on the free tier without "
                 "saying so in their name. Since 2026-09-18 that tier answers 403 to any "
@@ -672,7 +665,6 @@ def _rotation_field_specs() -> tuple[dict[str, Any], ...]:
                 "default": "single",
                 "options": ("single", "round_robin", "least_used", "failover"),
                 "advanced": True,
-                "restart_required": True,
                 "description": (
                     "Rotation policy across the keys you have added for "
                     f"{descriptor.credential_env}. single = use the first key only; "
@@ -686,7 +678,8 @@ def _rotation_field_specs() -> tuple[dict[str, Any], ...]:
                     "says in words that the account is out of credits. "
                     "Timeouts, 5xx and every other 4xx leave every key "
                     "untouched and move the fallback chain to the next model. "
-                    "Requires restart."
+                    "Applies on Save: the pool is rebuilt with the new policy "
+                    "for the next request."
                 ),
             }
         )
@@ -851,7 +844,6 @@ def _anthropic_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
             "field_type": "boolean",
             "settings_attr": "anthropic_oauth_require_claude_code",
             "default": "true",
-            "restart_required": True,
             "description": (
                 "On (the default), any request that did not come from "
                 "Anthropic's own clients -- the Claude Code CLI or the Claude "

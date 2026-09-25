@@ -42,6 +42,7 @@ from my_claude_code.application.proxy_health_store import flush_health
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import load_proxy_chains
 from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY
+from my_claude_code.runtime.timer_rearm import RearmableTimer
 
 #: Floor under the configured interval. One sweep is one HEAD request per
 #: address to a provider's own host; a mistyped ``1`` against a twelve-entry
@@ -62,7 +63,7 @@ def resolve_check_interval(enabled: bool, minutes: float) -> float:
     return max(float(minutes), float(PROXY_CHECK_MINIMUM_MINUTES)) * 60.0
 
 
-class ProxyCheckTimer:
+class ProxyCheckTimer(RearmableTimer):
     """One loop, one sweep at a time, cancelled with the runtime that owns it."""
 
     def __init__(
@@ -126,7 +127,7 @@ class ProxyCheckTimer:
                 return
             self._next_tick_at = time.time() + interval
             await self._wait(interval)
-            await self.tick()
+            await self._loop_tick()
 
     async def tick(self) -> int:
         """One sweep. Returns how many addresses were measured."""

@@ -600,7 +600,8 @@ def test_admin_manifest_exposes_rotation_select_for_nvidia_nim():
     assert field is not None
     assert field.field_type == "select"
     assert set(field.options) == {"single", "round_robin", "least_used", "failover"}
-    assert field.restart_required is True
+    # 7.48.0: the pool is rebuilt with the new policy on Save.
+    assert field.restart_required is False
 
 
 def _classified(status: int) -> ExecutionFailure:

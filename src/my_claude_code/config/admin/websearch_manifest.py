@@ -60,7 +60,6 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "field_type": "boolean",
             "settings_attr": "websearch_log_capture_content",
             "default": "true",
-            "restart_required": True,
             "description": (
                 "Store complete normalized provider input/output for drill-down. "
                 "Disable to retain only lengths and SHA-256 hashes."
@@ -75,7 +74,6 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "minimum": 512,
             "maximum": 1000000000,
             "default": "2000000",
-            "restart_required": True,
             "description": (
                 "Maximum stored characters for each input/output JSON payload "
                 "(minimum 512); the default (~2 MB) retains real provider output "
@@ -91,7 +89,6 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "minimum": 0,
             "maximum": 100000000,
             "default": "500000",
-            "restart_required": True,
             "description": "Maximum retained provider-attempt and route rows.",
         },
         {

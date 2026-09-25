@@ -9181,7 +9181,14 @@ async function apply() {
   }
   const restart = result.restart || {};
   if (restart.required && restart.automatic) {
-    showMessage("Applied. Restarting server...", "ok");
+    // Name the fields that caused it: since 7.48.0 almost every field applies
+    // on Save, so a restart is the exception and the reader should see which
+    // of their changes asked for it.
+    const because = (restart.fields || []).join(", ");
+    showMessage(
+      because ? `Applied. Restarting server for: ${because}...` : "Applied. Restarting server...",
+      "ok",
+    );
     byId("applyButton").disabled = true;
     setTimeout(() => {
       window.location.href = restart.admin_url || "/admin";

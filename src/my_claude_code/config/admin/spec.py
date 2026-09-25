@@ -53,6 +53,12 @@ class ConfigFieldSpec:
     secret: bool = False
     advanced: bool = False
     restart_required: bool = False
+    # What a ``restart_required`` field needs restarting. ``process``: the
+    # server itself (the bind, the auth token, the log file sink, and what the
+    # supervisor reads once at start). ``messaging``: only the Telegram or
+    # Discord bot, which is built once with the value -- so while no bot is
+    # running there is nothing holding the old value and the save is hot.
+    restart_scope: Literal["process", "messaging"] = "process"
     session_sensitive: bool = False
     description: str = ""
     # Inclusive bounds for a numeric field, published so the browser can refuse

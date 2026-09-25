@@ -115,6 +115,22 @@ class LoopHeartbeat:
     def task(self) -> asyncio.Task[None] | None:
         return self._task
 
+    @property
+    def interval_seconds(self) -> float:
+        return self._interval
+
+    def set_interval(self, interval_seconds: float) -> None:
+        """Beat at a new interval from the next beat on.
+
+        The loop reads ``_interval`` afresh for every sleep, so a saved
+        ``HEALTH_HEARTBEAT_INTERVAL_MS`` needs no new task: the beat already
+        asleep finishes on the old interval and the one after it uses the new
+        one. Nothing is cancelled, so the loop-health record is never left
+        without a monitor in between.
+        """
+
+        self._interval = max(0.001, float(interval_seconds))
+
     def start(self) -> None:
         if self._task is not None and not self._task.done():
             return
