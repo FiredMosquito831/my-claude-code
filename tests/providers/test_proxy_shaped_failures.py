@@ -10,6 +10,7 @@ attempt classifies exactly as it did, a success streams exactly the bytes it
 did, and a failure after the first chunk never moves address.
 """
 
+import asyncio
 import gzip
 
 import httpx
@@ -18,6 +19,7 @@ import pytest
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL, record_proxy
 from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY, reset_proxy_health
 from my_claude_code.core.upstream_ladder import (
+    _LADDER,
     install_ladder_trace,
     ladder_payload,
     note_response_head,
@@ -41,10 +43,12 @@ def _clean_ledgers():
     reset_proxy_health()
     record_proxy(None)
     note_response_head(None)
+    _LADDER.set(None)
     yield
     reset_proxy_health()
     record_proxy(None)
     note_response_head(None)
+    _LADDER.set(None)
 
 
 class _MalformedSocksReply(Exception):
@@ -468,6 +472,186 @@ async def test_the_original_connect_error_is_what_reaches_the_pool() -> None:
         await limiter.execute_with_retry(dial)
     assert raised.value is original
     assert raised.value.__cause__ is cause
+
+
+# ------------------- 3b. F1 (7.52.1): no backoff sleep before the pool switches
+
+
+def _backoff_limiter(
+    limiter_class: type[ProviderRateLimiter] = ProxiedLegRateLimiter,
+    *,
+    max_retries: int = 2,
+    backoff_seconds: float = 2.0,
+) -> ProviderRateLimiter:
+    """A limiter whose backoff is long enough that sleeping it is obvious."""
+
+    return limiter_class(
+        rate_limit=0,
+        rate_window=60,
+        max_retries=max_retries,
+        backoff_base_seconds=backoff_seconds,
+        backoff_max_seconds=backoff_seconds,
+        backoff_jitter_seconds=0.0,
+    )
+
+
+def _upstream_tries(ladder) -> list[dict]:
+    return [
+        row
+        for row in ladder_payload(ladder.ladders[0])["tries"]
+        if row["source"] == "upstream"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_on_proxied_leg_switches_without_sleeping() -> None:
+    """One recorded try, the identical error, and not a second of backoff.
+
+    The base loop still records the try and still decides to retry -- the
+    frozen ``providers/rate_limit.py`` is not reached around -- but its sleep
+    is where the leg's own cancellation lands, so the 2 s backoff configured
+    here is never spent.
+    """
+
+    ladder = install_ladder_trace()
+    original = httpx.ConnectTimeout("timed out")
+    dials = 0
+
+    async def dial():
+        nonlocal dials
+        dials += 1
+        raise original
+
+    limiter = _backoff_limiter()
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(httpx.ConnectTimeout) as raised:
+        await limiter.execute_with_retry(dial)
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert raised.value is original
+    assert dials == 1
+    assert elapsed < 0.5, f"slept {elapsed:.2f}s before switching"
+    tries = _upstream_tries(ladder)
+    assert len(tries) == 1
+    assert tries[0]["kind"] == "ConnectTimeout"
+    assert tries[0]["error_kind"] == "ConnectTimeout"
+    assert "status" not in tries[0]
+    assert "waited_ms" not in tries[0]
+    # Nothing of the leg's own cancellation is left for the caller's next await.
+    task = asyncio.current_task()
+    assert task is not None
+    assert task.cancelling() == 0
+    await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_status_retry_on_proxied_leg_still_sleeps_and_retries() -> None:
+    """A 502 through a proxy is the origin answering: sleep and knock again."""
+
+    ladder = install_ladder_trace()
+    calls = 0
+
+    async def dial():
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise httpx.HTTPStatusError(
+                "boom",
+                request=httpx.Request("POST", "http://x"),
+                response=httpx.Response(502, request=httpx.Request("POST", "http://x")),
+            )
+        return "ok"
+
+    limiter = _backoff_limiter(backoff_seconds=0.1)
+    started = asyncio.get_running_loop().time()
+    assert await limiter.execute_with_retry(dial) == "ok"
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert calls == 3
+    assert elapsed >= 0.2
+    tries = _upstream_tries(ladder)
+    assert [row.get("status") for row in tries] == [502, 502, None]
+    assert all(row["waited_ms"] >= 100 for row in tries[:2])
+
+
+@pytest.mark.asyncio
+async def test_a_connect_failure_writes_the_row_an_unretried_one_always_wrote() -> None:
+    """Byte for byte, bar the stopwatch, what the same error writes unproxied
+    on its last attempt -- where the base loop never sleeps either."""
+
+    async def dial():
+        raise httpx.ConnectTimeout("timed out")
+
+    proxied = install_ladder_trace()
+    with pytest.raises(httpx.ConnectTimeout):
+        await _backoff_limiter().execute_with_retry(dial)
+    proxied_row = _upstream_tries(proxied)
+
+    unretried = install_ladder_trace()
+    with pytest.raises(httpx.ConnectTimeout):
+        await _backoff_limiter(ProviderRateLimiter, max_retries=0).execute_with_retry(
+            dial
+        )
+    baseline_row = _upstream_tries(unretried)
+
+    def _without_clock(rows):
+        return [{k: v for k, v in row.items() if k != "upstream_ms"} for row in rows]
+
+    assert _without_clock(proxied_row) == _without_clock(baseline_row)
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_error_that_is_never_retried_leaves_no_cancellation() -> None:
+    """The loop raises a ``ProxyError`` at once, without a sleep to land on.
+
+    The leg's request must be withdrawn on the way out, or the caller's next
+    ``await`` would be cancelled out of nowhere.
+    """
+
+    original = httpx.ProxyError("407 Proxy Authentication Required")
+
+    async def dial():
+        raise original
+
+    with pytest.raises(httpx.ProxyError) as raised:
+        await _backoff_limiter().execute_with_retry(dial)
+    assert raised.value is original
+    task = asyncio.current_task()
+    assert task is not None
+    assert task.cancelling() == 0
+    await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_connect_failure_on_the_last_attempt_leaves_no_cancellation() -> None:
+    async def dial():
+        raise httpx.ConnectError("no route to host")
+
+    with pytest.raises(httpx.ConnectError):
+        await _backoff_limiter(max_retries=0).execute_with_retry(dial)
+    task = asyncio.current_task()
+    assert task is not None
+    assert task.cancelling() == 0
+    await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_somebody_elses_cancellation_still_propagates() -> None:
+    """A client that hangs up during the dial is not swallowed by the leg."""
+
+    async def dial():
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()  # the hang-up, landing while the dial fails
+        raise httpx.ConnectError("no route to host")
+
+    async def run():
+        await _backoff_limiter().execute_with_retry(dial)
+
+    runner = asyncio.create_task(run())
+    with pytest.raises(asyncio.CancelledError):
+        await runner
+    assert runner.cancelled()
 
 
 # ----------------------------------- 4. D2: the connect timeout, proxied only
