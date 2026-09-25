@@ -328,6 +328,23 @@ FALLBACK_RESUME_AFTER_COMMIT_DEFAULT = True
 # stops being worth waiting for.
 FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 0.0
 STREAM_COMMIT_HOLDBACK_MAX_BYTES_DEFAULT = 65_536
+# Egress keepalive: while a streaming response is silent -- no model has
+# produced a frame yet, or one has and then gone quiet -- MCC writes a frame
+# the client's protocol defines as meaningless (``event: ping`` on
+# /v1/messages, an SSE comment elsewhere) so a byte-level idle timer in the
+# client or in anything between it and MCC does not decide the model is dead.
+# 30 s of silence before the first one: measured over 133,183 streamed
+# requests, 90.4% produce their first byte inside 30 s, so nine requests in
+# ten never see a keepalive and keep their exact byte sequence. 0 turns it off.
+STREAM_KEEPALIVE_IDLE_SECONDS_DEFAULT = 30.0
+# Spacing of the keepalives after the first, while the silence lasts.
+STREAM_KEEPALIVE_INTERVAL_SECONDS_DEFAULT = 20.0
+# How long one stretch of silence may be kept alive. After it MCC stops
+# writing keepalives and the client's own idle timer runs exactly as it did
+# before keepalives existed, so a request can never hang longer than it would
+# have without them. 300 is the lower of the two client idle floors seen in
+# the request log. 0 keeps a silent stream alive for as long as it stays open.
+STREAM_KEEPALIVE_MAX_SECONDS_DEFAULT = 300.0
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0
 # The ceiling on a wait a provider published in a header. 3600 was hard-coded

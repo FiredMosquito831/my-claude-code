@@ -13,6 +13,7 @@ from my_claude_code.api.request_errors import (
 )
 from my_claude_code.api.request_ids import new_request_id
 from my_claude_code.api.response_streams import (
+    StreamKeepalive,
     openai_sse_streaming_response,
     terminal_execution_error_response,
     trace_terminal_execution_error,
@@ -166,6 +167,7 @@ class GeminiHandler:
                 pre_start_error_response=lambda exc: self._pre_start_error_response(
                     exc, request_id=request_id
                 ),
+                keepalive=StreamKeepalive.from_settings(self._settings),
             )
         except GeminiApiAdapter.ConversionError as exc:
             raise InvalidRequestError(str(exc)) from exc

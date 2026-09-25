@@ -76,6 +76,11 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
         # "how long do we wait" number and this is the card that owns those.
         "CATALOGUE_FETCH_TIMEOUT_SECONDS",
     ),
+    "stream_keepalive": (
+        "STREAM_KEEPALIVE_IDLE_SECONDS",
+        "STREAM_KEEPALIVE_INTERVAL_SECONDS",
+        "STREAM_KEEPALIVE_MAX_SECONDS",
+    ),
     "benching": (
         "FALLBACK_BENCH_ENABLED",
         "FALLBACK_BEHAVIOR",

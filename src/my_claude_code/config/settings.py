@@ -189,6 +189,9 @@ from .constants import (
     STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
+    STREAM_KEEPALIVE_IDLE_SECONDS_DEFAULT,
+    STREAM_KEEPALIVE_INTERVAL_SECONDS_DEFAULT,
+    STREAM_KEEPALIVE_MAX_SECONDS_DEFAULT,
     STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT,
     TOOL_RESULT_IMAGE_DELIVERY_DEFAULT,
     TOOL_RESULT_IMAGE_DELIVERY_NAMES,
@@ -1037,6 +1040,27 @@ class Settings(BaseSettings):
         description=(
             "Visible characters that must arrive before output commits, on "
             "top of the holdback seconds. 0 uses the clock alone."
+        ),
+    )
+    stream_keepalive_idle_seconds: float = Field(
+        default=STREAM_KEEPALIVE_IDLE_SECONDS_DEFAULT,
+        validation_alias="STREAM_KEEPALIVE_IDLE_SECONDS",
+        description=(
+            "Seconds a streaming response may be silent before MCC writes a "
+            "keepalive frame to the client. 0 never writes one."
+        ),
+    )
+    stream_keepalive_interval_seconds: float = Field(
+        default=STREAM_KEEPALIVE_INTERVAL_SECONDS_DEFAULT,
+        validation_alias="STREAM_KEEPALIVE_INTERVAL_SECONDS",
+        description="Seconds between keepalive frames while the silence lasts.",
+    )
+    stream_keepalive_max_seconds: float = Field(
+        default=STREAM_KEEPALIVE_MAX_SECONDS_DEFAULT,
+        validation_alias="STREAM_KEEPALIVE_MAX_SECONDS",
+        description=(
+            "Longest stretch of silence MCC keeps alive; after it the client's "
+            "own idle timer runs as if keepalives did not exist. 0 = no cap."
         ),
     )
     # How often every usable provider's /models is re-read in the background.

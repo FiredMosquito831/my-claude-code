@@ -25,6 +25,7 @@ from my_claude_code.api.request_errors import (
 from my_claude_code.api.request_ids import new_request_id
 from my_claude_code.api.response_streams import (
     EmptyStreamError,
+    StreamKeepalive,
     anthropic_sse_streaming_response,
     terminal_execution_error_response,
     trace_terminal_execution_error,
@@ -367,6 +368,7 @@ class MessagesHandler:
                 exc, request_id=request_id
             ),
             request_id=request_id,
+            keepalive=StreamKeepalive.from_settings(self._settings),
         )
 
     def _pre_start_error_response(

@@ -259,6 +259,7 @@ const VIEW_GROUPS = [
     sections: [
       "budgets",
       "deadlines",
+      "stream_keepalive",
       "benching",
       "provider_retries",
       "credential_health",
@@ -6153,6 +6154,123 @@ function updateDeadlineCalculator(root) {
   warning.hidden = !text;
 }
 
+/* ------------------------------------------------------- stream keepalive
+   The keepalive fields, and the one fact the Deadlines card cannot state on
+   its own: which clock fires first. Claude Code abandons a stream that has
+   sent no event for CLAUDE_STREAM_IDLE_TIMEOUT_MS, and never sooner than
+   300 s. A deadline here that is 0 (no limit) or longer than that means a
+   silent model is ended by the client, not by MCC's own fallback. The card
+   states that and nothing else: the deadlines are the operator's choice, and
+   it changes no setting and asks for none. */
+
+const CLIENT_IDLE_FLOOR_SECONDS = 300;
+const WATCHDOG_DEADLINE_KEYS = [
+  "FALLBACK_FIRST_TOKEN_TIMEOUT",
+  "FALLBACK_STALL_TIMEOUT",
+  "FALLBACK_REASONING_ANSWER_TIMEOUT",
+];
+const KEEPALIVE_KEYS = [
+  "STREAM_KEEPALIVE_IDLE_SECONDS",
+  "STREAM_KEEPALIVE_INTERVAL_SECONDS",
+  "STREAM_KEEPALIVE_MAX_SECONDS",
+];
+let watchdogListenerBound = false;
+
+function renderStreamKeepalive(fields) {
+  const wrap = document.createElement("div");
+  const grid = document.createElement("div");
+  grid.className = "field-grid";
+  fields.forEach((field) => grid.appendChild(renderField(field)));
+  wrap.appendChild(grid);
+
+  const card = document.createElement("div");
+  card.className = "calc-card watchdog-card";
+  card.id = "watchdogCard";
+  const title = document.createElement("h4");
+  title.textContent = "Which clock fires first";
+  const lead = document.createElement("p");
+  lead.className = "calc-warning";
+  lead.id = "watchdogLead";
+  const list = document.createElement("ul");
+  list.className = "watchdog-list";
+  list.id = "watchdogList";
+  const keepalive = document.createElement("p");
+  keepalive.className = "calc-caveat";
+  keepalive.id = "watchdogKeepalive";
+  card.append(title, lead, list, keepalive);
+  wrap.appendChild(card);
+
+  // Delegated and registered once, for the same reason as the calculator's:
+  // the deadlines live on another card and a second render must not stack
+  // listeners.
+  if (!watchdogListenerBound) {
+    watchdogListenerBound = true;
+    const watched = new Set([...WATCHDOG_DEADLINE_KEYS, ...KEEPALIVE_KEYS]);
+    const recompute = (event) => {
+      const key = event.target && event.target.dataset ? event.target.dataset.key : null;
+      if (key && watched.has(key)) updateWatchdogCard();
+    };
+    document.addEventListener("input", recompute);
+    document.addEventListener("change", recompute);
+  }
+  updateWatchdogCard(card);
+  return wrap;
+}
+
+function updateWatchdogCard(root) {
+  const card = root || document.querySelector("#watchdogCard");
+  if (!card) return;
+  const lead = card.querySelector("#watchdogLead");
+  const list = card.querySelector("#watchdogList");
+  const keepalive = card.querySelector("#watchdogKeepalive");
+
+  const outlasting = WATCHDOG_DEADLINE_KEYS.map((key) => ({
+    label: (state.fields.get(key) || {}).label || key,
+    seconds: calcNumber(key),
+  })).filter((entry) => entry.seconds === 0 || entry.seconds > CLIENT_IDLE_FLOOR_SECONDS);
+
+  list.replaceChildren();
+  if (outlasting.length === 0) {
+    card.hidden = true;
+    lead.textContent = "";
+    keepalive.textContent = "";
+    return;
+  }
+  card.hidden = false;
+  const those = outlasting.length === 1 ? "This wait" : "These waits";
+  lead.textContent =
+    "Warning: Claude Code abandons a stream that has sent it no event for " +
+    `${CLIENT_IDLE_FLOOR_SECONDS} s -- never sooner; CLAUDE_STREAM_IDLE_TIMEOUT_MS ` +
+    `in its own settings can only lengthen that. ${those} on the Deadlines card ` +
+    "can outlast it, so a model that stays silent is ended by the client " +
+    "hanging up -- the request shows as Cancelled -- before MCC's own " +
+    "fallback gets its turn:";
+  // Labels come from the manifest; built with textContent all the same.
+  outlasting.forEach((entry) => {
+    const item = document.createElement("li");
+    item.textContent =
+      entry.seconds === 0
+        ? `${entry.label}: 0 (no limit)`
+        : `${entry.label}: ${entry.seconds} s`;
+    list.appendChild(item);
+  });
+
+  const idle = calcNumber("STREAM_KEEPALIVE_IDLE_SECONDS");
+  const cap = calcNumber("STREAM_KEEPALIVE_MAX_SECONDS");
+  const keepaliveLine =
+    idle === 0
+      ? "Stream keepalive is off."
+      : `Stream keepalive starts after ${idle} s of silence and ` +
+        (cap === 0 ? "has no cap. " : `stops after ${cap} s of it. `) +
+        "It does not move Claude Code's timer: the official Anthropic SDK " +
+        "drops ping events, unless Claude Code runs with " +
+        "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1. OpenAI and Gemini " +
+        "clients, and proxies in between, do count it.";
+  keepalive.textContent =
+    `${keepaliveLine} This card only says which clock fires first; it ` +
+    "changes nothing.";
+}
+
 const BENCH_RATE_KEYS = [
   "FALLBACK_EJECT_WINDOW",
   "FALLBACK_EJECT_FAILURE_RATE",
@@ -6554,6 +6672,7 @@ const SECTION_RENDERERS = {
   optimizer: renderOptimizerSettings,
   providers: renderProviderGroups,
   deadlines: renderDeadlines,
+  stream_keepalive: renderStreamKeepalive,
   benching: renderBenching,
   credential_health: renderCredentialHealth,
   loop_health: renderLoopHealth,

@@ -148,6 +148,17 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "computes what each model on your own routes actually gets.",
     ),
     ConfigSectionSpec(
+        "stream_keepalive",
+        "Stream keepalive",
+        "What MCC writes to a streaming client while nothing is coming from "
+        "the model -- before the first frame, or after a model that has "
+        "started goes quiet. It writes a frame the client's protocol defines "
+        "as meaningless, so an idle timer that counts bytes does not decide "
+        "the model is dead. It changes no deadline and ends nothing: how long "
+        "MCC waits for a model is still the Deadlines card above. Every other "
+        "byte of the answer is identical with it on or off.",
+    ),
+    ConfigSectionSpec(
         "benching",
         "Chain benching",
         "Whether a model that keeps failing is skipped for a while, and on "
@@ -1921,6 +1932,65 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "visible-word, whether or not anything goes wrong. 0 asks only the "
             "clock. The buffer's own 65,536-byte ceiling still releases output "
             "whatever is set here."
+        ),
+    ),
+    ConfigFieldSpec(
+        "STREAM_KEEPALIVE_IDLE_SECONDS",
+        "Keepalive after",
+        "stream_keepalive",
+        "number",
+        settings_attr="stream_keepalive_idle_seconds",
+        default="30",
+        affects_providers=False,
+        description=(
+            "Seconds a streaming response may be silent before MCC writes the "
+            'first keepalive: an "event: ping" frame on /v1/messages, an SSE comment '
+            '(": keepalive") on /v1/chat/completions, /v1/responses and '
+            "Gemini streamGenerateContent. Most requests produce their first "
+            "byte well inside 30 s and never see one. Read this before relying "
+            "on it: the official Anthropic SDK -- which is what Claude Code "
+            "uses -- throws ping events away before its idle timer sees "
+            "them, so for Claude Code this does nothing unless "
+            "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1 is set in its "
+            "environment, which turns on the byte-level timer that does count "
+            "them. It does help OpenAI and Gemini SDK clients, whose timeouts "
+            "count bytes, and any proxy or load balancer between the client "
+            "and MCC that closes idle connections. One trade: if the first "
+            "keepalive goes out before any model has answered, the HTTP status "
+            "is already 200, so a failure after it reaches the client as an "
+            "error inside the stream instead of an HTTP error status. 0 never "
+            "writes a keepalive."
+        ),
+    ),
+    ConfigFieldSpec(
+        "STREAM_KEEPALIVE_INTERVAL_SECONDS",
+        "Keepalive interval",
+        "stream_keepalive",
+        "number",
+        settings_attr="stream_keepalive_interval_seconds",
+        default="20",
+        affects_providers=False,
+        description=(
+            "Seconds between keepalives after the first, for as long as the "
+            "silence lasts. A real frame from the model resets the clock, and "
+            "the next keepalive waits the full delay above again."
+        ),
+    ),
+    ConfigFieldSpec(
+        "STREAM_KEEPALIVE_MAX_SECONDS",
+        "Keepalive cap",
+        "stream_keepalive",
+        "number",
+        settings_attr="stream_keepalive_max_seconds",
+        default="300",
+        affects_providers=False,
+        description=(
+            "Longest single stretch of silence MCC keeps alive. Past it MCC "
+            "stops writing keepalives, and the client's own idle timer runs "
+            "exactly as it would with keepalives off -- so a model that never "
+            "answers cannot hold a client on a spinner for longer than this "
+            "plus that timer. 0 keeps a silent stream alive for as long as it "
+            "stays open, which with every deadline at 0 can be indefinitely."
         ),
     ),
     ConfigFieldSpec(

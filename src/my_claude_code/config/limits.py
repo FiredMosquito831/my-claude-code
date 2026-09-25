@@ -110,6 +110,16 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "stream_commit_holdback_chars": LimitRange(
         0, 8_192, "0 uses the holdback clock alone"
     ),
+    # An hour of silence before the first keepalive is already longer than any
+    # client idle timer this was built for; above it the setting is "off" by
+    # another name.
+    "stream_keepalive_idle_seconds": LimitRange(0.0, HOUR, "0 never sends one"),
+    # A floor, not a preference: at 0 the keepalive would be written in a
+    # tight loop for as long as the stream stayed silent.
+    "stream_keepalive_interval_seconds": LimitRange(1.0, HOUR),
+    "stream_keepalive_max_seconds": LimitRange(
+        0.0, DAY, "0 keeps a silent stream alive for as long as it is open"
+    ),
     "rate_limit_cooldown_seconds": LimitRange(0.0, DAY, "0 does not pause"),
     # The ceiling on a wait a provider published in a header. A day, because
     # that is already the bound on the only other host-stated number MCC
