@@ -2733,6 +2733,25 @@ window.Element.prototype.scrollIntoView = function scrollIntoViewStub() {
   scrolledTo.push(this.id || this.className || this.tagName);
 };
 const fetchCalls = [];
+/* The in-flight registry, emulated: `INFLIGHT.rows` is the server's list,
+   oldest first, and the answer honours `limit` the way the route does --
+   `total` counts every row, `rows` carries at most `limit`. */
+const INFLIGHT = { enabled: true, rows: [] };
+const inflightUrls = [];
+function inflightAnswer(url) {
+  if (!INFLIGHT.enabled) return { enabled: false };
+  const limit = Number(new URL(url, "http://127.0.0.1").searchParams.get("limit")) || 200;
+  const rows = INFLIGHT.rows.slice(0, limit);
+  return {
+    enabled: true,
+    total: INFLIGHT.rows.length,
+    shown: rows.length,
+    truncated: rows.length < INFLIGHT.rows.length,
+    reaped: 0,
+    now_mono: 5000,
+    rows,
+  };
+}
 // The pause write is emulated in the fetch stub below, so the seven lists have
 // to live somewhere the stub can read and update between calls.
 const PAUSE_KEY_BY_MODEL = {
@@ -2841,6 +2860,19 @@ let customCreateResult = {
 // not delay the paint, and a stub that resolves instantly cannot show that.
 const slowRoutes = new Map();
 window.fetch = async (url, options = {}) => {
+  // 7.45.0: the in-flight panel polls on its own timer for the whole run.
+  // Its calls are recorded apart, so no other capture's "which calls did this
+  // gesture make" window can catch a poll that merely happened to land in it.
+  if (String(url).startsWith("/admin/api/requests/in-flight")) {
+    inflightUrls.push(String(url));
+    const answer = inflightAnswer(String(url));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(JSON.stringify(answer)),
+      text: async () => JSON.stringify(answer),
+    };
+  }
   fetchCalls.push(String(url).split("?")[0]);
   const gate = slowRoutes.get(String(url).split("?")[0]);
   if (gate) await gate;
@@ -8576,6 +8608,373 @@ const originFilters = {};
   originFilters.disabledRows = doc.querySelectorAll("#reqFolderBreakdown tr").length;
 }
 
+// ------------------------------------------------------- in flight (7.45.0)
+/* The panel through every state it can be in: empty, five rows, the
+   two-snapshot labels, stuck, a row finishing, 120 rows paged, the live
+   detail and its keyboard path, off, collapsed -- and the Requests table
+   untouched throughout. Polls are driven by the panel's own Refresh button
+   with the interval Off, so no timer decides what a capture sees. */
+const inflight = {};
+{
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const click = (el) => el.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  const $ = (id) => doc.getElementById(id);
+  const poll = async () => {
+    click($("reqInflightRefresh"));
+    await wait(80);
+  };
+  const rowsShown = () =>
+    Array.from($("reqInflightRows").querySelectorAll("tr.inflight-row"));
+  const chips = () =>
+    Object.fromEntries(
+      rowsShown().map((tr) => [
+        tr.dataset.inflightId,
+        tr.querySelector(".inflight-chip").textContent,
+      ]),
+    );
+  const row = (n, extra = {}) => ({
+    id: `req_${String(n).padStart(4, "0")}`,
+    started_at: 1790000000 + n,
+    started_at_mono: 1000 + n,
+    elapsed_ms: (4000 - n) * 1000,
+    endpoint: "/v1/messages",
+    protocol: "anthropic",
+    stream: true,
+    harness: "claude",
+    requested_model: "claude-sonnet-4-5",
+    tier: "sonnet",
+    tier_source: "model",
+    attempt_index: 0,
+    provider: "opencode",
+    model_ref: "opencode/qwen3-coder",
+    phase: "awaiting_content",
+    phase_since: 1000 + n,
+    phase_elapsed_ms: 12000,
+    describe_hops: 0,
+    observed: true,
+    ttft_ms: 17.2,
+    first_content_ms: null,
+    output_chars: 0,
+    thinking_chars: 0,
+    chunks_to_client: 1,
+    last_chunk_age_s: 11.9,
+    waited_s: 0,
+    attempt_tries: 0,
+    last_try_status: null,
+    last_try_error_kind: null,
+    key_label: "sk-8\u2026Kofx",
+    proxy_label: null,
+    tools_count: 12,
+    input_chars: 48000,
+    image_count: 0,
+    session_id: "0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b",
+    session_short: "0f3c2a1b",
+    agent_id: null,
+    parent_session_id: null,
+    project_dir: "C:\\Users\\devuser\\Projects\\demo",
+    project_short: "Projects\\demo \u00b7 #76b11b",
+    project_dir_pending: false,
+    origin_source: "header",
+    ...extra,
+  });
+  const requestsBody = () => $("reqTableBody").innerHTML;
+  const requestsHeaders = () =>
+    Array.from(doc.querySelectorAll(".requests-table thead th")).map((th) => th.textContent);
+
+  doc.querySelector('.nav-link[data-view="requests"]').click();
+  await wait(300);
+  inflight.defaultInterval = $("reqInflightInterval").value;
+  inflight.intervalOptions = Array.from($("reqInflightInterval").options).map((o) => o.value);
+  $("reqInflightInterval").value = "0";
+  $("reqInflightInterval").dispatchEvent(new window.Event("change", { bubbles: true }));
+  await wait(80);
+  inflight.persistedInterval = JSON.parse(
+    window.localStorage.getItem("mcc-dashboard-state") || "{}",
+  ).inflightInterval;
+  const tableBefore = requestsBody();
+  inflight.requestsHeadersBefore = requestsHeaders();
+
+  // Empty.
+  INFLIGHT.rows = [];
+  await poll();
+  inflight.empty = {
+    emptyHidden: $("reqInflightEmpty").hidden,
+    emptyText: $("reqInflightEmpty").textContent.replace(/\s+/g, " ").trim(),
+    tableHidden: $("reqInflightTableWrap").hidden,
+    status: $("reqInflightStatus").textContent,
+    badgeHidden: $("navInflightBadge").hidden,
+    navLabel: doc.querySelector('.nav-link[data-view="requests"]').textContent,
+  };
+
+  // Five, served newest first to prove the panel orders by age itself.
+  const five = [
+    row(1, {
+      phase: "attempt",
+      phase_elapsed_ms: 301000,
+      attempt_index: 1,
+      attempt_tries: 2,
+      last_try_status: 429,
+      last_try_error_kind: "rate_limit",
+      waited_s: 2,
+      first_content_ms: null,
+      ttft_ms: null,
+    }),
+    row(2, {
+      phase: "attempt",
+      phase_elapsed_ms: 299000,
+      waited_s: 0,
+      proxy_label: "proxy-3\u2026a1",
+      ttft_ms: null,
+    }),
+    row(3, {
+      phase: "streaming",
+      output_chars: 1234,
+      thinking_chars: 56,
+      first_content_ms: 900,
+    }),
+    row(4, {
+      phase: "routing",
+      attempt_index: null,
+      provider: null,
+      model_ref: null,
+      project_dir: null,
+      project_short: null,
+      project_dir_pending: true,
+      agent_id: "agent-7",
+    }),
+    row(5, {
+      elapsed_ms: 5000,
+      // Streaming for 400 s with a chunk 2 s ago: still delivering, not stuck.
+      phase_elapsed_ms: 400000,
+      last_chunk_age_s: 2,
+      phase: "streaming",
+      observed: false,
+      output_chars: null,
+      thinking_chars: null,
+      session_id: null,
+      session_short: null,
+      project_dir: null,
+      project_short: null,
+    }),
+  ];
+  INFLIGHT.rows = [...five].reverse();
+  const statusMutations = [];
+  new window.MutationObserver((records) => statusMutations.push(records.length)).observe(
+    $("reqInflightStatus"),
+    { childList: true, characterData: true, subtree: true },
+  );
+  await poll();
+  inflight.five = {
+    order: rowsShown().map((tr) => tr.dataset.inflightId),
+    status: $("reqInflightStatus").textContent,
+    oldest: $("reqInflightOldest").textContent,
+    emptyHidden: $("reqInflightEmpty").hidden,
+    headers: Array.from(doc.querySelectorAll(".inflight-table thead th")).map(
+      (th) => th.textContent,
+    ),
+    firstSnapshotChips: chips(),
+    cells: rowsShown().map((tr) => Array.from(tr.children).map((td) => td.textContent)),
+    stuck: rowsShown().map((tr) => tr.classList.contains("inflight-stuck")),
+    stuckBadgeVisible: rowsShown().map(
+      (tr) => !tr.querySelector(".inflight-stuck-badge")?.hidden,
+    ),
+    stuckTitle: doc.querySelector(".inflight-stuck-badge")?.title || "",
+    badge: $("navInflightBadge").textContent,
+    badgeHidden: $("navInflightBadge").hidden,
+    navLabel: doc.querySelector('.nav-link[data-view="requests"]').textContent,
+  };
+  // Timers tick between refreshes while the panel polls, and stop with it.
+  const setInterval_ = async (value) => {
+    $("reqInflightInterval").value = value;
+    $("reqInflightInterval").dispatchEvent(new window.Event("change", { bubbles: true }));
+    await wait(80);
+  };
+  await setInterval_("30000");
+  const ageBefore = rowsShown()[4].querySelector(".inflight-age").textContent;
+  await wait(1150);
+  inflight.five.ageBefore = ageBefore;
+  inflight.five.ageAfter = rowsShown()[4].querySelector(".inflight-age").textContent;
+  await setInterval_("0");
+  const frozen = rowsShown()[4].querySelector(".inflight-age").textContent;
+  await wait(1150);
+  inflight.five.ageFrozenWhenOff =
+    frozen === rowsShown()[4].querySelector(".inflight-age").textContent;
+
+  // Second snapshot: row 1 slept (waited_s 2 -> 6.5), row 2 did not.
+  const mutationsBefore = statusMutations.length;
+  INFLIGHT.rows = INFLIGHT.rows.map((r) =>
+    r.id === "req_0001" ? { ...r, waited_s: 6.5 } : r,
+  );
+  await poll();
+  inflight.five.secondSnapshotChips = chips();
+  inflight.five.backingOffTitle = rowsShown()[0].querySelector(".inflight-chip").title;
+  inflight.five.statusMutationsOnSameCount = statusMutations.length - mutationsBefore;
+  inflight.liveRegions = {
+    inPanel: $("reqInflightPanel").querySelectorAll('[role="status"], [aria-live]').length,
+    inRows: $("reqInflightRows").querySelectorAll('[role="status"], [aria-live]').length,
+    statusRole: $("reqInflightStatus").getAttribute("role"),
+    statusLive: $("reqInflightStatus").getAttribute("aria-live"),
+    caption: doc.querySelector(".inflight-table caption")?.textContent.trim() || "",
+  };
+
+  // Live detail: open from the Live button, see it follow the next refresh.
+  const liveButton = rowsShown()[1].querySelector("button[data-inflight-id]");
+  liveButton.focus();
+  click(liveButton);
+  await wait(50);
+  const modalText = () => $("reqInflightModal").textContent.replace(/\s+/g, " ").trim();
+  inflight.detail = {
+    open: !$("reqInflightModal").hidden,
+    title: $("reqInflightDetailTitle").textContent,
+    focusOnClose: doc.activeElement === $("reqInflightDetailClose"),
+    text: modalText(),
+    attempts: Array.from($("reqInflightDetailAttempts").children).map((li) => li.textContent),
+  };
+  INFLIGHT.rows = INFLIGHT.rows.map((r) =>
+    r.id === "req_0002"
+      ? { ...r, phase: "awaiting_content", phase_since: 3999, phase_elapsed_ms: 400 }
+      : r,
+  );
+  await poll();
+  inflight.detail.afterRefresh = modalText();
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await wait(30);
+  inflight.detail.closedByEscape = $("reqInflightModal").hidden;
+  inflight.detail.focusReturned =
+    doc.activeElement && doc.activeElement.dataset
+      ? doc.activeElement.dataset.inflightId || ""
+      : "";
+  // A click anywhere on the row opens it too.
+  click(rowsShown()[2].children[2]);
+  await wait(30);
+  inflight.detail.rowClickOpens = $("reqInflightDetailTitle").textContent;
+
+  // Finishing: row 3 leaves. It stays one refresh as Finished, then goes; the
+  // open detail says so and offers the finished record.
+  INFLIGHT.rows = INFLIGHT.rows.filter((r) => r.id !== "req_0003");
+  await poll();
+  inflight.finishing = {
+    ids: rowsShown().map((tr) => tr.dataset.inflightId),
+    finishingIds: rowsShown()
+      .filter((tr) => tr.classList.contains("inflight-finishing"))
+      .map((tr) => tr.dataset.inflightId),
+    chip: chips().req_0003,
+    status: $("reqInflightStatus").textContent,
+    detailState: $("reqInflightDetailState").textContent,
+    openFinishedVisible: !$("reqInflightDetailOpenFinished").hidden,
+  };
+  await poll();
+  inflight.finishing.idsAfterOneMoreTick = rowsShown().map((tr) => tr.dataset.inflightId);
+  click($("reqInflightDetailClose"));
+  await wait(30);
+
+  // Every row leaves: the finishing rows keep the table one tick, then empty.
+  INFLIGHT.rows = [];
+  await poll();
+  inflight.drain = {
+    finishingRows: rowsShown().length,
+    emptyHidden: $("reqInflightEmpty").hidden,
+  };
+  await poll();
+  inflight.drain.rowsAfter = rowsShown().length;
+  inflight.drain.emptyHiddenAfter = $("reqInflightEmpty").hidden;
+  inflight.drain.badgeHidden = $("navInflightBadge").hidden;
+
+  // 120: fifty at a time, oldest first, the rest counted.
+  INFLIGHT.rows = Array.from({ length: 120 }, (_, i) => row(i + 1));
+  INFLIGHT.rows[0] = { ...INFLIGHT.rows[0], phase_elapsed_ms: 420000 };
+  // Streaming, but nothing for 310 s: the client's idle deadline has passed.
+  INFLIGHT.rows[1] = {
+    ...INFLIGHT.rows[1],
+    phase: "streaming",
+    phase_elapsed_ms: 320000,
+    last_chunk_age_s: 310,
+  };
+  inflightUrls.length = 0;
+  await poll();
+  const pageState = () => ({
+    rows: rowsShown().length,
+    first: rowsShown()[0]?.dataset.inflightId,
+    last: rowsShown()[rowsShown().length - 1]?.dataset.inflightId,
+    info: $("reqInflightPageInfo").textContent,
+    note: $("reqInflightNote").textContent,
+    pagerHidden: $("reqInflightPager").hidden,
+    prevDisabled: $("reqInflightPrev").disabled,
+    nextDisabled: $("reqInflightNext").disabled,
+    url: inflightUrls[inflightUrls.length - 1] || "",
+  });
+  inflight.many = { page1: pageState() };
+  inflight.many.status = $("reqInflightStatus").textContent;
+  inflight.many.stuckOnPage1 = rowsShown()
+    .filter((tr) => tr.classList.contains("inflight-stuck"))
+    .map((tr) => [tr.dataset.inflightId, tr.querySelector(".inflight-stuck-badge").title]);
+  click($("reqInflightNext"));
+  await wait(80);
+  inflight.many.page2 = pageState();
+  click($("reqInflightNext"));
+  await wait(80);
+  inflight.many.page3 = pageState();
+  click($("reqInflightPrev"));
+  await wait(80);
+  click($("reqInflightPrev"));
+  await wait(80);
+  inflight.many.backToPage1 = pageState();
+
+  // Collapsed: one line, one row asked for.
+  inflightUrls.length = 0;
+  click($("reqInflightToggle"));
+  await wait(80);
+  inflight.collapsed = {
+    bodyHidden: $("reqInflightBody").hidden,
+    expanded: $("reqInflightToggle").getAttribute("aria-expanded"),
+    url: inflightUrls[inflightUrls.length - 1] || "",
+    status: $("reqInflightStatus").textContent,
+    oldest: $("reqInflightOldest").textContent,
+    persisted: JSON.parse(window.localStorage.getItem("mcc-dashboard-state") || "{}")
+      .inflightCollapsed,
+  };
+  click($("reqInflightToggle"));
+  await wait(80);
+  inflight.collapsed.reopenedUrl = inflightUrls[inflightUrls.length - 1] || "";
+
+  // Off.
+  INFLIGHT.enabled = false;
+  await poll();
+  inflight.off = {
+    status: $("reqInflightStatus").textContent,
+    note: $("reqInflightNote").textContent,
+    tableHidden: $("reqInflightTableWrap").hidden,
+    emptyHidden: $("reqInflightEmpty").hidden,
+    badgeHidden: $("navInflightBadge").hidden,
+  };
+
+  // Another page: the badge still counts, with one row asked for.
+  INFLIGHT.enabled = true;
+  INFLIGHT.rows = five;
+  doc.querySelector('.nav-link[data-view="limits"]').click();
+  await wait(150);
+  inflightUrls.length = 0;
+  await window.eval("pollInflight()");
+  await wait(50);
+  inflight.otherPage = {
+    url: inflightUrls[inflightUrls.length - 1] || "",
+    badge: $("navInflightBadge").textContent,
+    badgeTitle: $("navInflightBadge").title,
+  };
+  doc.querySelector('.nav-link[data-view="requests"]').click();
+  await wait(300);
+
+  // The request log's table and headers were never touched.
+  inflight.requestsTableUnchanged = requestsBody() === tableBefore;
+  inflight.requestsHeadersAfter = requestsHeaders();
+
+  // Leave the page as found: nothing in flight, badge empty, timers stopped.
+  INFLIGHT.rows = [];
+  await poll();
+  await poll();
+  await setInterval_("0");
+}
+
 console.log(
   JSON.stringify(
     {
@@ -8589,6 +8988,7 @@ console.log(
       toolCatalogue,
       requestOrigin,
       originFilters,
+      inflight,
       cancelledViews,
       catalogueReadout,
       desktopAppBanner,

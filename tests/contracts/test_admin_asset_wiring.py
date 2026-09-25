@@ -58,6 +58,10 @@ _MARKUP_ID = re.compile(r"""\bid=["']([^"']+)["']""")
 # unless you can point at the `createElement` + `id = "..."` (or
 # `.id = ...`) call.
 KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
+    # Created by renderNav() in admin.js -- the in-flight count beside
+    # Analytics (7.45.0). The sidebar's links are built by renderNav, so the
+    # badge is created with them rather than declared in index.html.
+    "navInflightBadge",
     # Created by renderOptimizerSettings() in admin.js -- the heading note for
     # the per-tool trimming rules, whose text depends on the master switch.
     # It lives inside the section the settings renderer builds, so it cannot

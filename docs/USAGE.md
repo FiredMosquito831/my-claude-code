@@ -4157,6 +4157,44 @@ request this server is serving right now, oldest first, read from memory:
 `REQUEST_INFLIGHT_ENABLED=false` (on the **Request log storage** card; restart to apply) turns the list off; the endpoint then
 answers `{"enabled": false}`. It is independent of `REQUEST_LOG_ENABLED`.
 
+**On the dashboard (7.45.0): Analytics → In flight**, directly above the Requests table.
+
+- **Its own refresh control**, default **3 s** (Off, 1, 3, 5, 10 or 30 s), separate from the table's
+  15 s auto-refresh and running whether that is on or off. The endpoint does no database work, so the
+  fast default costs one cheap request per tick. **Off** freezes the panel on its last reading; the
+  panel's **Refresh** button takes a new one. A hidden tab does not poll.
+- **One row per request, oldest first**: age, phase, harness, session and folder (the same short forms
+  as the Requests table, full values in the tooltip; below 1200 px they share one Origin chip),
+  requested model, provider / model, attempt (*Primary* or *Fallback N*, with the retry ladder's
+  finished tries and the last status), characters streamed, and the masked key and proxy. The age and
+  the time in the current phase count up every second between readings, from the server's own
+  measurement.
+- **Phase chips say only what is known.** *Received*, *Describing images*, *Routing*, *Attempt
+  started*, *Awaiting content* and *Streaming* are the server's own phases. During an attempt the panel
+  can say more after **two** readings: *Waiting for upstream* when time asleep (`waited_s`) did not
+  move between them, *Backing off* when it grew — MCC was asleep on a backoff or a rate limiter, not
+  waiting on the model. One reading never gets either label.
+- **Stuck** — a red bar and the word *stuck* — marks a request that has been in one phase for more
+  than **300 s**, or, while streaming, has sent no new chunk for more than 300 s (a long answer that is
+  still arriving is not stuck). That is the client's own watchdog floor (Claude Code gives up on a
+  stream idle that long), not a guess at what counts as slow. Nothing is cancelled; the panel has no
+  cancel button.
+- **Live detail**: click a row, or its **Live** button, for everything the server reports about that
+  request, refreshed with the panel, and its attempts so far. Attempt verdicts do not exist until the
+  request ends, so the current attempt is listed as *in progress*. When the request finishes, the
+  detail says so and offers **Open the finished request**.
+- **Handover**: a request that finishes stays one more reading, greyed and marked *Finished*, then
+  leaves; its row appears in the Requests table on the table's own refresh (the panel nudges that
+  refresh when auto-refresh is on, and never writes into the table itself).
+- **Many at once**: 50 rows at a time, the oldest first, with *…and 70 more — showing the 50 oldest*
+  and Prev / Next to page through the rest (the server describes at most 1,000).
+- **Accessibility**: the count line (*3 requests in flight*) is the page's one polite status region
+  and changes only when the count does; the rows are a plain table with a caption.
+- **Sidebar**: the count also shows beside **Analytics** on every page. Off Analytics it is read with
+  `?limit=1`.
+- **Hide** collapses the panel to its one-line summary. The panel's interval and collapsed state are
+  remembered in the browser.
+
 ### The Token Optimizer page
 
 **Admin UI → Token Optimizer** answers one question from your own request log: what never reached a provider at all? Nothing on this page is switched on for you.

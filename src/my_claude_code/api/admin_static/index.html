@@ -1270,6 +1270,117 @@
                 <div id="reqDivertedRoutes"></div>
               </section>
             </div>
+            <section
+              id="reqInflightPanel"
+              class="inflight-panel"
+              aria-labelledby="reqInflightHeading"
+            >
+              <div class="inflight-head">
+                <h4 id="reqInflightHeading">In flight</h4>
+                <p class="inflight-summary">
+                  <span id="reqInflightStatus" role="status" aria-live="polite">Not loaded</span>
+                  <span id="reqInflightOldest" class="inflight-oldest"></span>
+                </p>
+                <div class="inflight-controls">
+                  <label class="inflight-interval-label">
+                    Refresh
+                    <select id="reqInflightInterval" aria-label="In-flight refresh interval">
+                      <option value="0">Off</option>
+                      <option value="1000">1s</option>
+                      <option value="3000" selected>3s</option>
+                      <option value="5000">5s</option>
+                      <option value="10000">10s</option>
+                      <option value="30000">30s</option>
+                    </select>
+                  </label>
+                  <button id="reqInflightRefresh" class="secondary-button" type="button">
+                    Refresh
+                  </button>
+                  <button
+                    id="reqInflightToggle"
+                    class="secondary-button"
+                    type="button"
+                    aria-expanded="true"
+                    aria-controls="reqInflightBody"
+                  >
+                    Hide
+                  </button>
+                </div>
+              </div>
+              <div id="reqInflightBody" class="inflight-body">
+                <p id="reqInflightEmpty" class="inflight-empty" hidden>
+                  Nothing in flight. Requests appear here the moment they arrive and move to
+                  the table below when they finish.
+                </p>
+                <p id="reqInflightNote" class="analytics-footnote" hidden></p>
+                <div id="reqInflightTableWrap" class="table-scroll" hidden>
+                  <table class="inflight-table">
+                    <caption class="sr-only">
+                      Requests this server is serving right now, oldest first
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th>Age</th>
+                        <th>Phase</th>
+                        <th>Harness</th>
+                        <th class="req-col-session">Session</th>
+                        <th class="req-col-folder">Folder</th>
+                        <th class="req-col-origin">Origin</th>
+                        <th class="req-col-requested-model">Requested model</th>
+                        <th>Provider / model</th>
+                        <th>Attempt</th>
+                        <th>Streamed</th>
+                        <th>Key / proxy</th>
+                        <th>Details</th>
+                      </tr>
+                    </thead>
+                    <tbody id="reqInflightRows"></tbody>
+                  </table>
+                </div>
+                <div id="reqInflightPager" class="requests-pager" hidden>
+                  <button id="reqInflightPrev" class="secondary-button" type="button">
+                    Prev
+                  </button>
+                  <span id="reqInflightPageInfo"></span>
+                  <button id="reqInflightNext" class="secondary-button" type="button">
+                    Next
+                  </button>
+                </div>
+              </div>
+            </section>
+            <div
+              id="reqInflightModal"
+              class="requests-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="reqInflightDetailTitle"
+              hidden
+            >
+              <div class="requests-modal-card inflight-modal-card">
+                <div class="requests-modal-header">
+                  <h3 id="reqInflightDetailTitle">In flight</h3>
+                  <button id="reqInflightDetailClose" class="secondary-button" type="button">
+                    Close
+                  </button>
+                </div>
+                <p id="reqInflightDetailState" class="inflight-detail-state"></p>
+                <dl id="reqInflightDetailMeta" class="requests-detail-meta"></dl>
+                <h4 class="inflight-detail-subhead">Attempts</h4>
+                <ol id="reqInflightDetailAttempts" class="inflight-attempts"></ol>
+                <p class="analytics-footnote">
+                  Attempt verdicts are recorded when the request ends, so the live view lists
+                  the attempts so far and what the current one is doing.
+                </p>
+                <button
+                  id="reqInflightDetailOpenFinished"
+                  class="secondary-button"
+                  type="button"
+                  hidden
+                >
+                  Open the finished request
+                </button>
+              </div>
+            </div>
             <div class="table-scroll">
               <table class="requests-table" aria-label="Request log">
                 <thead>
