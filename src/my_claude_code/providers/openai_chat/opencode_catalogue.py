@@ -208,6 +208,77 @@ OPENCODE_TOOL_FAMILIES: tuple[ToolFamily, ...] = (
             {name: name for name in ("bash", "read", "edit", "glob", "grep")}
         ),
     ),
+    ToolFamily(
+        name="codex",
+        provenance="captured",
+        cited=(
+            "@openai/codex 0.155.1 (codex_exec), its request captured on a local "
+            "recorder 2026-09-25 under a scratch CODEX_HOME and MCC's own catalogue "
+            "entry: exec_command (function, cmd), apply_patch (custom, lark), "
+            "write_stdin, request_user_input, view_image, get_goal, create_goal, "
+            "update_goal. No read, glob or grep tool: Codex reads and searches "
+            "through the shell, so those roles have no row"
+        ),
+        spellings=MappingProxyType({"exec_command": "bash", "apply_patch": "edit"}),
+    ),
+    ToolFamily(
+        name="gemini_cli",
+        provenance="captured",
+        cited=(
+            "@google/gemini-cli 0.58.0, its request captured 2026-09-25 through a "
+            "scratch MCC onto a local recorder (headless: read_file, grep_search, "
+            "glob; --yolo adds replace, run_shell_command); the same constants in "
+            "its installed bundle/chunk-FQCNOBUR.js:279968-279990"
+        ),
+        spellings=MappingProxyType(
+            {
+                "run_shell_command": "bash",
+                "read_file": "read",
+                "replace": "edit",
+                "glob": "glob",
+                "grep_search": "grep",
+            }
+        ),
+    ),
+    ToolFamily(
+        name="qwen_code",
+        provenance="captured",
+        cited=(
+            "@qwen-code/qwen-code 0.15.11, its request captured 2026-09-25 through "
+            "a scratch MCC onto a local recorder (headless: read_file, grep_search, "
+            "glob; --yolo adds edit, run_shell_command); the same ToolNames in its "
+            "installed cli.js:75434-75444"
+        ),
+        spellings=MappingProxyType(
+            {
+                "run_shell_command": "bash",
+                "read_file": "read",
+                "edit": "edit",
+                "glob": "glob",
+                "grep_search": "grep",
+            }
+        ),
+    ),
+    ToolFamily(
+        name="commandcode",
+        provenance="captured",
+        cited=(
+            "Command Code's request as MCC's request log stored it "
+            "(request_attempts.wire_body._names, harness commandcode_cli: read_file, "
+            "write_file, edit_file, read_directory, glob, grep, shell_command, "
+            "powershell, ...); the same names in command-code 1.65.0 "
+            "dist/bundled/command-code-knowledge/reference/tools.md:26,109,127,140,164"
+        ),
+        spellings=MappingProxyType(
+            {
+                "shell_command": "bash",
+                "read_file": "read",
+                "edit_file": "edit",
+                "glob": "glob",
+                "grep": "grep",
+            }
+        ),
+    ),
 )
 
 
