@@ -180,6 +180,17 @@ class OpenAIToolNameCodec:
         )
 
 
+def request_tool_names(request: MessagesRequest) -> frozenset[str]:
+    """Every tool name one request carries: the set its codec is built from.
+
+    Public so that a caller choosing a catalogue *for* a request reads exactly
+    the names :meth:`OpenAIToolNameCodec.from_request` will read -- a catalogue
+    chosen from a narrower set could rename a tool the codec then aliases.
+    """
+
+    return frozenset(name for name in _request_tool_names(request) if name)
+
+
 def _request_tool_names(request: MessagesRequest) -> Iterable[str]:
     for tool in request.tools or ():
         yield tool.name

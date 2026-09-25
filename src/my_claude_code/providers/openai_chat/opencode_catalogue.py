@@ -70,11 +70,25 @@ and never a model name in a branch.
 plainly that it is policy. Everything here is written to be re-measured: the
 spellings are one mapping, the scope is one predicate plus one operator
 setting, and ``OPENCODE_CLIENT_IDENTITY=mcc`` turns the whole thing off.
+
+**Every client, not only Claude Code (7.49.1).** Claude Code is one of many
+coding agents that reach Zen through MCC, and the five spellings above are
+only *its* spellings. OpenCode itself, Pi and the other clients that already
+say ``bash``/``read``/``edit`` had the opposite problem: the collision rule
+that keeps a stray ``bash`` from shadowing Claude Code's ``Bash`` treated their
+own, correct spelling as the stray and hashed it (``bash_37d2b12d5d9abc2a``),
+so OpenCode's own catalogue reached OpenCode's free tier with none of its
+names. :class:`ToolFamily` declares each client's spellings as data, with
+where they were read from, and one family is chosen per request by the tool
+names that request carries -- never by a header saying which client sent it,
+because the names are what the gate reads and they are there whoever
+launched the client (``specs/PR-ZEN-FREE-TIER-ALL-HARNESSES-SPEC.md``).
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
+from typing import Literal
 
 from my_claude_code.config.settings import configured_opencode_free_tier_models
 
@@ -108,6 +122,113 @@ OPENCODE_BUILTIN_TOOL_NAMES: tuple[str, ...] = (
     "lsp",
     "skill",
 )
+
+#: Where one family's spellings were read from. ``captured``: the client's own
+#: request, recorded on the wire (a local recorder or MCC's request log).
+#: ``source``: the client's published source or installed bundle at a pinned
+#: version, read, never run against a real home. A row that is neither is not
+#: shipped -- a guessed spelling fails silently, as a 403 nobody can trace.
+ToolFamilyProvenance = Literal["captured", "source"]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolFamily:
+    """One client's spellings for the tools OpenCode's free tier looks for.
+
+    ``spellings`` is ``{client spelling: OpenCode spelling}`` and lists only
+    tools that do the same job on both sides -- the rule the five above were
+    chosen by. A client with no tool for a role simply has no row for it;
+    nothing is invented to fill the gap.
+    """
+
+    #: A label for docs, tests and logs; never compared with a harness id.
+    name: str
+    provenance: ToolFamilyProvenance
+    #: The exact place the spellings were read, version included.
+    cited: str
+    spellings: Mapping[str, str]
+
+    def covers(self, names: frozenset[str]) -> int:
+        """How many distinct OpenCode roles this family finds in ``names``."""
+
+        return len({host for client, host in self.spellings.items() if client in names})
+
+    def catalogue(self, names: frozenset[str]) -> Mapping[str, str]:
+        """This family's rows that ``names`` carries, one client per role.
+
+        A client may declare two tools for one role (Codex has spelled its
+        shell three ways across releases); the first row in declaration order
+        claims the OpenCode spelling and the others keep their own names,
+        because one host name cannot decode back to two client names.
+        """
+
+        chosen: dict[str, str] = {}
+        taken: set[str] = set()
+        for client, host in self.spellings.items():
+            if client in names and host not in taken:
+                chosen[client] = host
+                taken.add(host)
+        return MappingProxyType(chosen)
+
+
+#: The family whose mapping was the whole of this module from 7.28.0 to 7.49.0.
+#: Choosing it returns :attr:`FreeTierToolCatalogue.names` whole -- all five
+#: keys, present or not -- because that is the mapping every Claude Code and
+#: Agent SDK request has been encoded with, and a body that moved would move
+#: the prompt-cache prefix with it.
+CLAUDE_CODE_FAMILY = "claude_code"
+
+#: Every client whose spellings MCC translates, in tie-break order: when two
+#: families find the same number of roles in one request, the earlier wins.
+#: Claude Code is first so that a request carrying both ``Bash`` and ``bash``
+#: is encoded exactly as 7.49.0 encoded it.
+OPENCODE_TOOL_FAMILIES: tuple[ToolFamily, ...] = (
+    ToolFamily(
+        name=CLAUDE_CODE_FAMILY,
+        provenance="captured",
+        cited=(
+            "Claude Code and the Claude Agent SDK, request log "
+            "(tool_catalogues, harness claude / claude_agent_sdk, 2026-09-19..25); "
+            "OpenCode's side from opencode-ai@1.18.31 bin/opencode.exe"
+        ),
+        spellings=OPENCODE_TOOL_CATALOGUE,
+    ),
+    ToolFamily(
+        name="opencode_native",
+        provenance="captured",
+        cited=(
+            "opencode-ai 1.18.32 `opencode run` wire capture 2026-09-19 (scratch "
+            "HOME, local recorder: bash, edit, glob, grep, read, skill, task, "
+            "todowrite, webfetch, websearch, write); request log wire_body._names "
+            "for harness opencode. Pi sends the same spellings "
+            "(@earendil-works/pi-coding-agent 0.82.1 dist/core/sdk.js:132, "
+            "defaults read, bash, edit, write; dist/core/tools/index.js:17 all)"
+        ),
+        spellings=MappingProxyType(
+            {name: name for name in ("bash", "read", "edit", "glob", "grep")}
+        ),
+    ),
+)
+
+
+def select_tool_family(
+    names: frozenset[str], families: tuple[ToolFamily, ...]
+) -> ToolFamily | None:
+    """The family that finds the most OpenCode roles in one request's names.
+
+    ``None`` when no family finds any. Ties go to declaration order. A pure
+    function of the name *set*: a client's catalogue is stable within a
+    session, so every turn chooses the same family and encodes identically.
+    """
+
+    best: ToolFamily | None = None
+    best_roles = 0
+    for family in families:
+        roles = family.covers(names)
+        if roles > best_roles:
+            best, best_roles = family, roles
+    return best
+
 
 #: How a Zen or Go model id says out loud that it is on the free tier. Zen
 #: spells it with a dash (``muse-spark-1.3-contributor-free``); the colon form
@@ -173,6 +294,9 @@ class FreeTierToolCatalogue:
     extra_models: Callable[[], tuple[str, ...]] = field(
         default=configured_opencode_free_tier_models
     )
+    #: Every client's spellings, chosen between per request by
+    #: :meth:`catalogue_for_request`.
+    families: tuple[ToolFamily, ...] = field(default=OPENCODE_TOOL_FAMILIES)
 
     def applies_to(self, model_id: str, *, zero_cost: bool = False) -> bool:
         """Whether one model on this host is inside the free-tier scope.
@@ -212,6 +336,33 @@ class FreeTierToolCatalogue:
             return MappingProxyType({})
         return self.names
 
+    def catalogue_for_request(
+        self, model_id: str, names: Iterable[str], *, zero_cost: bool = False
+    ) -> Mapping[str, str]:
+        """The mapping one request should encode with, chosen by its tool names.
+
+        The scope and the opt-out are :meth:`catalogue_for`'s, unchanged: a
+        request that one answers "none" for is answered "none" here too, so a
+        paid model, a Go model with credit and ``OPENCODE_CLIENT_IDENTITY=mcc``
+        send what they always sent. Inside the scope, the family that finds the
+        most roles in ``names`` supplies the mapping. Claude Code's family, or
+        no family at all, returns exactly what :meth:`catalogue_for` returns;
+        any other returns only its rows this request carries.
+
+        ``names`` is every tool name the request carries -- its tools, a forced
+        ``tool_choice`` and the ``tool_use`` blocks it replays -- the same set
+        the codec is built from, so encode and decode choose alike.
+        """
+
+        static = self.catalogue_for(model_id, zero_cost=zero_cost)
+        if not static:
+            return static
+        present = frozenset(names)
+        family = select_tool_family(present, self.families)
+        if family is None or family.name == CLAUDE_CODE_FAMILY:
+            return static
+        return family.catalogue(present)
+
 
 #: The one instance both OpenCode profiles carry, so Zen and Go cannot drift
 #: apart -- the same argument :data:`OPENCODE_CLIENT_IDENTITY` is written for.
@@ -245,11 +396,16 @@ def model_is_zero_cost(provider_id: str, model_id: str) -> bool:
 
 
 __all__ = [
+    "CLAUDE_CODE_FAMILY",
     "OPENCODE_BUILTIN_TOOL_NAMES",
     "OPENCODE_FREE_TIER_CATALOGUE",
     "OPENCODE_FREE_TIER_TAGS",
     "OPENCODE_TOOL_CATALOGUE",
+    "OPENCODE_TOOL_FAMILIES",
     "FreeTierToolCatalogue",
+    "ToolFamily",
+    "ToolFamilyProvenance",
     "carries_free_tag",
     "model_is_zero_cost",
+    "select_tool_family",
 ]

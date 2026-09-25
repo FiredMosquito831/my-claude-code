@@ -267,7 +267,9 @@ class MessagesTransport:
         api_key: str | None,
         rate_limiter: ProviderRateLimiter,
         api_key_provider: Any | None = None,
-        tool_catalogue_for: Callable[[str], Mapping[str, str]] | None = None,
+        tool_catalogue_for_request: (
+            Callable[[MessagesRequest], Mapping[str, str]] | None
+        ) = None,
         memory: RecoveryMemory | None = None,
     ) -> None:
         self._identity = identity
@@ -282,7 +284,7 @@ class MessagesTransport:
         # inside a host's free-tier scope is inside it whichever surface it
         # resolves to. ``None`` -- every profile that declares no catalogue --
         # sends this protocol exactly as it has always been sent.
-        self._tool_catalogue_for = tool_catalogue_for
+        self._tool_catalogue_for_request = tool_catalogue_for_request
         self._provider_name = provider_name
         self._base_url = base_url.rstrip("/")
         # ``replace`` rather than a fresh ``ProviderConfig``: every timeout,
@@ -534,8 +536,8 @@ class MessagesTransport:
         """
 
         catalogue = (
-            self._tool_catalogue_for(request.model)
-            if self._tool_catalogue_for is not None
+            self._tool_catalogue_for_request(request)
+            if self._tool_catalogue_for_request is not None
             else EMPTY_TOOL_CATALOGUE
         )
         if not catalogue and max_length is None:
