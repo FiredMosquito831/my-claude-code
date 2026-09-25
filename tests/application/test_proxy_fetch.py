@@ -22,6 +22,7 @@ import time
 import pytest
 
 from my_claude_code.application import proxy_fetch
+from my_claude_code.application.proxy_check import reset_refusal_lifts
 from my_claude_code.application.proxy_fetch import (
     FetchAlreadyRunning,
     FetchProgress,
@@ -58,11 +59,13 @@ def _isolate(monkeypatch, tmp_path):
     chains_config.reset_proxy_chains_cache()
     PROXY_INTERCEPTION.clear()
     PROXY_REACHABILITY.clear()
+    reset_refusal_lifts()
     reset_fetch_job()
     yield path
     chains_config.reset_proxy_chains_cache()
     PROXY_INTERCEPTION.clear()
     PROXY_REACHABILITY.clear()
+    reset_refusal_lifts()
     reset_fetch_job()
 
 
@@ -253,8 +256,16 @@ async def test_a_refusal_is_lifted_only_by_a_later_success(monkeypatch):
     assert PROXY_INTERCEPTION.is_refused("10.0.0.9:8080") is True
     assert load_proxy_chains().candidates == ()
 
-    # Working on the one after: the verdict is retired and it is offered again.
+    # Working on the one after: one pass is not enough since 7.52.4. The
+    # address stays refused, is filed as refused, and is not offered.
     _checker(monkeypatch, lambda url: _ok())
+    run = await _run()
+    assert PROXY_INTERCEPTION.is_refused("10.0.0.9:8080") is True
+    assert run.working == 0
+    assert run.refused == 1
+    assert load_proxy_chains().candidates == ()
+
+    # Working again, in a row: the verdict is retired and it is offered again.
     await _run()
     assert PROXY_INTERCEPTION.is_refused("10.0.0.9:8080") is False
     store = load_proxy_chains()

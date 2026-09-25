@@ -84,6 +84,7 @@ from my_claude_code.application.proxy_check import (
     apply_fetch_outcome,
     check_budget,
     check_proxy,
+    hold_refusal,
 )
 from my_claude_code.application.proxy_ingest import (
     FEED_TIMEOUT_SECONDS,
@@ -647,7 +648,7 @@ async def run_fetch_pass(
             item = ranked[index]
             url = item.endpoint.url
             label = mask_proxy_label(url)
-            record = await measure(url)
+            record = hold_refusal(label, await measure(url))
             apply_fetch_outcome(label, record, in_use=label in used)
             endpoint = replace(
                 as_candidate_endpoint(item, at),
