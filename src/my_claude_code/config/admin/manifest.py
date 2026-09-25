@@ -550,7 +550,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="describe_concurrency",
         default="3",
-        restart_required=True,
         advanced=True,
         minimum=1,
         maximum=64,
@@ -881,7 +880,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="model_discovery_refresh_seconds",
         default="3600",
-        restart_required=True,
         description=(
             "How often every usable provider's model list is re-read in the "
             "background, so a model a gateway added today appears without a "
@@ -900,7 +898,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="model_probe_new_models",
         default="false",
-        restart_required=True,
         advanced=True,
         description=(
             "Off by default and deliberately so. A sweep that found 40 new "
@@ -1013,7 +1010,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="",
         secret=True,
         restart_required=True,
-        description="Bearer token protecting Claude/API access. It is not admin-page login.",
+        description=(
+            "Bearer token protecting Claude/API access. It is not admin-page login. "
+            "Requires a restart: the coding agents' generated configs and the messaging"
+            " bot are handed this token when the server starts, and a restart gives "
+            "every one of them the new token at once rather than leaving some sending "
+            "the old one."
+        ),
     ),
     ConfigFieldSpec(
         "HOST",
@@ -1025,8 +1028,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Network interface the proxy binds to. 127.0.0.1 answers only this machine; "
             "0.0.0.0 exposes MCC to the whole network, where anyone who can reach the "
-            "port can spend your keys unless ANTHROPIC_AUTH_TOKEN is set. Requires "
-            "restart."
+            "port can spend your keys unless ANTHROPIC_AUTH_TOKEN is set. "
+            "Requires a restart: the server binds its listening socket once, "
+            "when it starts."
         ),
     ),
     ConfigFieldSpec(
@@ -1042,7 +1046,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "TCP port the proxy listens on. Every client's base URL must name the same "
             "port, so changing it means changing them too, and a port already in use "
-            "stops the server from starting at all. Requires restart."
+            "stops the server from starting at all. Requires a restart: the server "
+            "binds its listening socket once, when it starts."
         ),
     ),
     ConfigFieldSpec(
@@ -1052,7 +1057,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="open_admin_browser",
         default="true",
-        description="Open the Admin UI after the next mcc-server launch becomes healthy.",
+        description=(
+            "Open the Admin UI after the next mcc-server launch becomes healthy."
+        ),
     ),
     ConfigFieldSpec(
         "MESSAGING_PLATFORM",
@@ -1322,7 +1329,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="health_heartbeat_interval_ms",
         default="100",
-        restart_required=True,
         advanced=True,
         affects_providers=False,
         minimum=10,
@@ -1343,7 +1349,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="health_busy_lag_ms",
         default="500",
-        restart_required=True,
         affects_providers=False,
         minimum=0,
         maximum=60000,
@@ -1364,7 +1369,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="request_watchdog_enabled",
         default="true",
-        restart_required=True,
         affects_providers=False,
         description=(
             "Whether the server watches its own in-flight requests and writes "
@@ -1407,7 +1411,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="request_watchdog_interval_seconds",
         default="30",
-        restart_required=True,
         advanced=True,
         affects_providers=False,
         minimum=1,
@@ -1454,7 +1457,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "How much the server writes to its log file. DEBUG includes every "
             "routing decision, which is what to use when a fallback behaves "
-            "unexpectedly."
+            "unexpectedly. "
+            "Requires a restart: the level belongs to the server log's file sink, which"
+            " is opened once, when the server starts."
         ),
     ),
     ConfigFieldSpec(
@@ -1473,7 +1478,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "beyond this cap are removed, both when a new rotation happens and "
             "at startup. Set to 0 to keep every rotated file. An earlier install "
             "left hundreds of 50 MB rotated files, so the startup sweep is what "
-            "actually reclaims the space."
+            "actually reclaims the space. "
+            "Requires a restart: the cap is set on the server log's file sink when it "
+            "is opened, at start."
         ),
     ),
     ConfigFieldSpec(
@@ -1485,10 +1492,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        restart_scope="messaging",
         description=(
             "Log every message edit the messaging bridge performs, with the reason it "
             "fired. For diagnosing a chat whose messages keep rewriting themselves; "
-            "noisy, so leave it off in normal use. Requires restart."
+            "noisy, so leave it off in normal use. Requires a restart only while a "
+            "Telegram or Discord bot is running, because the bot is built once with "
+            "this value; with no bot running, Save applies it."
         ),
     ),
     ConfigFieldSpec(
@@ -1500,10 +1510,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        restart_scope="messaging",
         description=(
             "Log how MCC tracks nested subagent calls and which stack frame a reply "
             "belongs to. For diagnosing a subagent answer landing in the wrong place; "
-            "very noisy. Requires restart."
+            "very noisy. Requires a restart only while a Telegram or Discord bot is "
+            "running, because the bot is built once with this value; with no bot "
+            "running, Save applies it."
         ),
     ),
     ConfigFieldSpec(
@@ -1514,12 +1527,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="log_raw_api_payloads",
         default="false",
         advanced=True,
-        restart_required=True,
         description=(
             "Write the full request and response bodies of every API call to the server "
             "log. The most useful setting for diagnosing a provider that misbehaves, and "
             "the most dangerous: prompts, file contents and tool output all land on disk "
-            "in clear text. Requires restart."
+            "in clear text. Applies on Save."
         ),
     ),
     ConfigFieldSpec(
@@ -1545,10 +1557,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        restart_scope="messaging",
         description=(
             "Include Python tracebacks with API errors in the log, and return fuller "
             "error detail to the client. Helpful while debugging; the detail reaches "
-            "whoever is calling the proxy. Requires restart."
+            "whoever is calling the proxy. Applies on Save to the API and the "
+            "providers. A running Telegram or Discord bot was built with the old value,"
+            " so while one runs this requires a restart; with no bot running, Save "
+            "applies it."
         ),
     ),
     ConfigFieldSpec(
@@ -1560,10 +1576,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        restart_scope="messaging",
         description=(
             "Write the text of every Telegram or Discord message through the bridge to "
             "the server log. Private conversation ends up on disk in clear text, so this "
-            "is for reproducing a bridge bug and not for leaving on. Requires restart."
+            "is for reproducing a bridge bug and not for leaving on. Requires a restart"
+            " only while a Telegram or Discord bot is running, because the bot is built"
+            " once with this value; with no bot running, Save applies it."
         ),
     ),
     ConfigFieldSpec(
@@ -1575,10 +1594,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        restart_scope="messaging",
         description=(
             "Write the managed Claude Code CLI's own stderr diagnostics to the server "
             "log. Use it when the managed CLI fails to start or exits without saying why. "
-            "Requires restart."
+            "Requires a restart only while a Telegram or Discord bot is running, "
+            "because the bot is built once with this value; with no bot running, Save "
+            "applies it."
         ),
     ),
     ConfigFieldSpec(
@@ -1590,10 +1612,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         restart_required=True,
+        restart_scope="messaging",
         description=(
             "Log the platform's full error payload when a Telegram or Discord send fails, "
             "instead of a one-line summary. The payload can quote the message that "
-            "failed. Requires restart."
+            "failed. Requires a restart only while a Telegram or Discord bot is "
+            "running, because the bot is built once with this value; with no bot "
+            "running, Save applies it."
         ),
     ),
     # ---- Budgets: how long one answer may be -----------------------------
@@ -1814,7 +1839,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         minimum=0,
         maximum=86400,
         default="0",
-        restart_required=True,
         description=(
             "Seconds a model may think before the route stops waiting for it "
             "to start an answer and tries the next model. Only applies while "
@@ -1834,7 +1858,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="fallback_on_reasoning_only",
         default="true",
-        restart_required=True,
         description=(
             "A model that streams its reasoning and never writes an answer "
             "normally commits the route on the first thought, so the fallback "
@@ -1857,7 +1880,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="fallback_end_cleanly_after_commit",
         default="true",
-        restart_required=True,
         description=(
             "Once a model has started answering, the chain can no longer step "
             "in -- the reader has already seen its words. Until this setting "
@@ -1881,7 +1903,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="fallback_resume_after_commit",
         default="true",
-        restart_required=True,
         description=(
             "When a model dies part-way through an answer, the setting above "
             "ends the message early and the reader keeps whatever was written. "
@@ -1905,7 +1926,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="stream_commit_holdback_seconds",
         default="0.75",
-        restart_required=True,
         description=(
             "Seconds the first output is held before it goes to the client. "
             "While it is held a failure can still fall back silently, so this "
@@ -1920,7 +1940,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="stream_commit_holdback_chars",
         default="0",
-        restart_required=True,
         description=(
             "Visible characters that must also arrive before output is "
             "released, on top of the seconds above -- both conditions have to "
@@ -2091,7 +2110,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "desktop window counts down is this number plus the install "
             "allowance. Measured on a real machine, 300 here added five silent "
             "minutes to a fourteen-minute update and turned the window's "
-            '"reconnecting for up to 17 minutes" into 22.'
+            '"reconnecting for up to 17 minutes" into 22. '
+            "Requires a restart: the supervisor that runs the stop reads it once, when "
+            "the server starts."
         ),
     ),
     ConfigFieldSpec(
@@ -2121,7 +2142,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "behaviour of 6.58.4 and earlier: the server names the holder and "
             "refuses to start, and you sort it out by hand. The holder is "
             "identified by its process, never by what it answers on the port, "
-            "because a server that is still starting answers nothing at all."
+            "because a server that is still starting answers nothing at all. "
+            "Requires a restart: it is read only by the supervisor, once, when the "
+            "server starts and binds."
         ),
     ),
     ConfigFieldSpec(
@@ -2151,7 +2174,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "My Claude Code, or a launcher whose server process is gone "
             "entirely. It never stops a server merely because no listening "
             "socket was found for it. Turn this on if stale servers keep "
-            "holding files open and making your updates retry."
+            "holding files open and making your updates retry. "
+            "Requires a restart: it is read only by the supervisor, once, when the "
+            "server starts."
         ),
     ),
     ConfigFieldSpec(
@@ -2169,7 +2194,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "the default of 900 is thirty missed beats. Silence alone never "
             "stops anything -- it only makes the word available; something else "
             "must also be serving that server's port before the setting above "
-            "will act. Raise it if you keep servers parked for long periods."
+            "will act. Raise it if you keep servers parked for long periods. "
+            "Requires a restart: the start-up survey of other servers reads it once, "
+            "when the server starts (the Server page reads it on every load)."
         ),
     ),
     ConfigFieldSpec(
@@ -2301,7 +2328,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="fallback_cooldown_step_over_floor",
         default="5",
-        restart_required=True,
         advanced=True,
         description=(
             "Seconds of remaining rate-limit cooldown that make it worth "
@@ -2317,7 +2343,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="provider_retry_attempts",
         default="2",
-        restart_required=True,
         description=(
             "How many times one model is retried on the same key after an "
             "upstream 5xx or a dropped connection, before the next model is "
@@ -2334,7 +2359,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="stream_early_retry_attempts",
         default="5",
-        restart_required=True,
         advanced=True,
         description=(
             "Attempts a provider makes on its own, before the failure reaches "
@@ -2348,7 +2372,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="stream_midstream_recovery_attempts",
         default="5",
-        restart_required=True,
         description=(
             "After output has started and the connection drops, how many "
             "times the same model is asked to finish. No chain can help here, "
@@ -2362,7 +2385,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="provider_retry_backoff_base_seconds",
         default="2",
-        restart_required=True,
         advanced=True,
         description=(
             "How long a provider waits before its first retry of a 429 or "
@@ -2376,7 +2398,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="provider_retry_backoff_max_seconds",
         default="5",
-        restart_required=True,
         advanced=True,
         description=(
             "The longest single wait between one model's own retries -- the "
@@ -2394,7 +2415,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="provider_retry_backoff_jitter_seconds",
         default="0.5",
-        restart_required=True,
         advanced=True,
         description=(
             "Random spread added to each retry wait so several clients "
@@ -2452,7 +2472,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="rate_limit_cooldown_seconds",
         default="60",
-        restart_required=True,
         advanced=True,
         description=(
             "How long a rate-limited provider is paused when it sends no "
@@ -2468,7 +2487,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="rate_limit_cooldown_max_seconds",
         default="3600",
-        restart_required=True,
         advanced=True,
         minimum=0,
         description=(
@@ -2490,7 +2508,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "select",
         settings_attr="rate_limit_cooldown_mode",
         default="provider",
-        restart_required=True,
         advanced=True,
         options=(
             ConfigOptionSpec("provider", "Wait as long as the provider asked"),
@@ -2521,7 +2538,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "text",
         settings_attr="credential_lockout_tiers",
         default="300,3600,86400",
-        restart_required=True,
         description=(
             "How long a key is benched after the provider rejects it with "
             "401/403, escalating one step per consecutive rejection and "
@@ -2537,7 +2553,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="credential_model_bench_escalation",
         default="2",
-        restart_required=True,
         minimum=0,
         description=(
             "A 429 benches only the model it happened on, on the key it "
@@ -2553,7 +2568,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_max_switches_per_request",
         default="2",
-        restart_required=True,
         advanced=True,
         minimum=1,
         maximum=5,
@@ -2574,7 +2588,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_chain_max_entries",
         default="0",
-        restart_required=True,
         advanced=True,
         minimum=0,
         description=(
@@ -2593,7 +2606,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_max_open_legs",
         default="32",
-        restart_required=True,
         advanced=True,
         minimum=0,
         maximum=4096,
@@ -2612,7 +2624,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_connect_timeout_seconds",
         default="10",
-        restart_required=True,
         advanced=True,
         minimum=1,
         maximum=120,
@@ -2637,7 +2648,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_max_live_failures",
         default="5",
-        restart_required=True,
         advanced=True,
         minimum=0,
         maximum=1000,
@@ -2659,7 +2669,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="proxy_health_reprobe_enabled",
         default="true",
-        restart_required=True,
         advanced=True,
         description=(
             "An address that failed is held out of the rotation until a check "
@@ -2679,7 +2688,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="proxy_check_enabled",
         default="false",
-        restart_required=True,
         advanced=True,
         description=(
             "Re-measure every address in a proxy chain on a timer: does it "
@@ -2699,7 +2707,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_check_interval_minutes",
         default="30",
-        restart_required=True,
         advanced=True,
         minimum=0,
         maximum=1440,
@@ -2736,7 +2743,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="proxy_feed_refresh_enabled",
         default="false",
-        restart_required=True,
         advanced=True,
         affects_providers=False,
         description=(
@@ -2755,7 +2761,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_feed_refresh_minutes",
         default="60",
-        restart_required=True,
         advanced=True,
         affects_providers=False,
         minimum=0,
@@ -3032,7 +3037,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_cooldown_seconds",
         default="300",
-        restart_required=True,
         advanced=True,
         affects_providers=False,
         minimum=0,
@@ -3056,7 +3060,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="proxy_cooldown_max_seconds",
         default="3600",
-        restart_required=True,
         advanced=True,
         affects_providers=False,
         minimum=1,
@@ -3078,7 +3081,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "text",
         settings_attr="proxy_reachability_tiers",
         default="60,300,3600",
-        restart_required=True,
         advanced=True,
         affects_providers=False,
         description=(
@@ -3101,7 +3103,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="rate_limit_routes_around_model",
         default="true",
-        restart_required=True,
         description=(
             "On a 429, try another model on the same provider instead of "
             "retrying the same one and then spending the rest of the key "
@@ -3213,7 +3214,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="request_log_enabled",
         default="true",
-        restart_required=True,
         description="Turn the request log and the Analytics tab on or off.",
     ),
     ConfigFieldSpec(
@@ -3223,7 +3223,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="request_log_max_rows",
         default="700000",
-        restart_required=True,
         description=(
             "The newest N requests are kept and older ones are deleted as new "
             "ones arrive. All-time counters keep counting either way; only "
@@ -3237,7 +3236,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="request_log_capture_bodies",
         default="true",
-        restart_required=True,
         description=(
             "Keeps the full text of each request so content search can find "
             "it. Bodies are about 99% of the stored bytes."
@@ -3250,7 +3248,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="request_log_capture_folder",
         default="true",
-        restart_required=True,
         description=(
             "Stores the working directory your agent reported, e.g. "
             "C:\\Users\\you\\Projects\\app. It is written to your local "
@@ -3266,7 +3263,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="request_log_capture_session",
         default="true",
-        restart_required=True,
         description=(
             "Stores the conversation id your agent sends with every request, "
             "and the subagent id when a subagent is speaking, so requests can "
@@ -3282,7 +3278,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="request_inflight_enabled",
         default="true",
-        restart_required=True,
         affects_providers=False,
         description=(
             "Keeps an in-memory list of the requests this server is serving "
@@ -3300,7 +3295,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="request_log_wire_body_max_chars",
         default="8000",
-        restart_required=True,
         description=(
             "How much of each outbound request body the log stores. Sampling "
             "and reasoning parameters are always stored whole; this bounds the "
@@ -3316,7 +3310,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         minimum=0,
         maximum=10000000,
         default="800",
-        restart_required=True,
         description=(
             "How much of each upstream error body the retry ladder keeps, for "
             "every try behind an attempt. The ladder records the status, the "
@@ -3331,7 +3324,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="request_log_compress_bodies",
         default="true",
-        restart_required=True,
         description=(
             "Compresses bodies against a dictionary trained on your own "
             "traffic and stores a repeated prompt once. Applies to new rows; "
@@ -3345,7 +3337,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="request_log_capture_images",
         default="true",
-        restart_required=True,
         description=(
             "Keeps a downscaled copy of every image or document a request "
             "carried, so the request detail can show what the model was "
@@ -3359,7 +3350,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="request_log_image_max_pixels",
         default="512",
-        restart_required=True,
         description=(
             "Longest edge of a stored thumbnail. The same image re-sent on "
             "later turns of a conversation is stored once."
@@ -3372,7 +3362,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="request_log_text_max_chars",
         default="10000000",
-        restart_required=True,
         description=(
             "Text longer than this is truncated before it is stored, which "
             "also bounds what content search can ever find."
@@ -3385,7 +3374,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="request_log_compression_level",
         default="9",
-        restart_required=True,
         advanced=True,
         description=(
             "zstd level for stored bodies. Measured on a real log, level 19 "
@@ -3399,7 +3387,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "number",
         settings_attr="request_log_queue_max_size",
         default="10000",
-        restart_required=True,
         advanced=True,
         description=(
             "Records waiting to be written. When this fills under a burst, "

@@ -660,12 +660,13 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
         "ANTHROPIC_AUTH_TOKEN",
         "DEBUG_PLATFORM_EDITS",
         "DEBUG_SUBAGENT_STACK",
-        "LOG_RAW_API_PAYLOADS",
         "LOG_API_ERROR_TRACEBACKS",
         "LOG_RAW_MESSAGING_CONTENT",
         "LOG_RAW_CLI_DIAGNOSTICS",
         "LOG_MESSAGING_ERROR_DETAILS",
     } <= restart_required
+    # 7.48.0: the third-party loggers and the executor both follow a save.
+    assert "LOG_RAW_API_PAYLOADS" not in restart_required
 
 
 def test_admin_models_include_configured_and_cached_canonical_slugs():
@@ -1304,13 +1305,6 @@ def test_admin_key_change_requires_restart_for_active_voice_backend(
     ("key", "initial", "updated"),
     [
         ("ANTHROPIC_AUTH_TOKEN", "old-token", "new-token"),
-        ("DEBUG_PLATFORM_EDITS", "true", "false"),
-        ("DEBUG_SUBAGENT_STACK", "true", "false"),
-        ("LOG_RAW_API_PAYLOADS", "true", "false"),
-        ("LOG_API_ERROR_TRACEBACKS", "true", "false"),
-        ("LOG_RAW_MESSAGING_CONTENT", "true", "false"),
-        ("LOG_RAW_CLI_DIAGNOSTICS", "true", "false"),
-        ("LOG_MESSAGING_ERROR_DETAILS", "true", "false"),
     ],
 )
 def test_admin_constructor_captured_setting_requires_restart(
@@ -1342,6 +1336,49 @@ def test_admin_constructor_captured_setting_requires_restart(
         "admin_url": None,
         "fields": [key],
     }
+
+
+@pytest.mark.parametrize(
+    ("key", "initial", "updated"),
+    [
+        ("DEBUG_PLATFORM_EDITS", "true", "false"),
+        ("DEBUG_SUBAGENT_STACK", "true", "false"),
+        ("LOG_RAW_API_PAYLOADS", "true", "false"),
+        ("LOG_API_ERROR_TRACEBACKS", "true", "false"),
+        ("LOG_RAW_MESSAGING_CONTENT", "true", "false"),
+        ("LOG_RAW_CLI_DIAGNOSTICS", "true", "false"),
+        ("LOG_MESSAGING_ERROR_DETAILS", "true", "false"),
+    ],
+)
+def test_admin_diagnostics_apply_without_restart_when_no_bot_runs(
+    monkeypatch,
+    tmp_path,
+    key,
+    initial,
+    updated,
+):
+    """7.48.0: these were restart-required; with no messaging bot built with
+    them, nothing holds the old value (``LOG_RAW_API_PAYLOADS`` is never the
+    bot's). ``tests/runtime/test_hot_apply_settings.py`` proves the running-bot
+    case still restarts."""
+
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    env_file = tmp_path / ".mcc" / ".env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(f"{key}={initial}\n", encoding="utf-8")
+    app = create_test_app()
+
+    response = _local_client(app).post(
+        "/admin/api/config/apply",
+        json={"values": {key: updated}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applied"] is True
+    assert body["pending_fields"] == []
+    assert body["restart"]["required"] is False
 
 
 def test_admin_apply_writes_cohere_key_and_masks_preview(monkeypatch, tmp_path):

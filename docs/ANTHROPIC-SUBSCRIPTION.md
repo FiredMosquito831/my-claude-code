@@ -106,7 +106,8 @@ what stayed the same is that everything else is still refused.
 The gate is controlled by `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE` (default
 `true`), settable as **Only Serve Claude Code And The Agent SDK** on the Claude
 subscription card of the dashboard's Providers page. Turning it off removes
-the only structural protection here, and takes effect after a restart.
+the only structural protection here, and takes effect on Save (since 7.48.0,
+without a restart).
 
 ### What MCC sends upstream
 

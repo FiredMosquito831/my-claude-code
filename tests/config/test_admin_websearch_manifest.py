@@ -190,18 +190,19 @@ def test_websearch_field_specs_cover_section_fields() -> None:
     assert all(spec["section_id"] == "websearch" for spec in websearch_field_specs())
 
 
-def test_websearch_capture_fields_are_explicit_and_restart_aware() -> None:
+def test_websearch_capture_fields_are_explicit_and_hot() -> None:
     capture = FIELD_BY_KEY["WEBSEARCH_LOG_CAPTURE_CONTENT"]
     cap = FIELD_BY_KEY["WEBSEARCH_LOG_CONTENT_MAX_CHARS"]
 
     assert capture.field_type == "boolean"
     assert capture.settings_attr == "websearch_log_capture_content"
     assert capture.default == "true"
-    assert capture.restart_required is True
+    # 7.48.0: the open store is retuned on Save, so neither needs a restart.
+    assert capture.restart_required is False
     assert cap.field_type == "number"
     assert cap.settings_attr == "websearch_log_content_max_chars"
     assert cap.default == "2000000"
-    assert cap.restart_required is True
+    assert cap.restart_required is False
 
 
 def test_advanced_option_fields_generated_per_provider(monkeypatch) -> None:
