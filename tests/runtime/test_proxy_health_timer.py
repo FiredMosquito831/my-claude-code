@@ -389,3 +389,23 @@ async def test_early_confirm_never_escalates_ladder(store, monkeypatch) -> None:
         assert PROXY_REACHABILITY.is_unhealthy(label) is False
     finally:
         remove_listener()
+
+
+@pytest.mark.asyncio
+async def test_the_tick_flushes_the_speed_ledger_when_dirty(
+    store, monkeypatch, _isolate_proxy_speed
+) -> None:
+    """7.54.0: the speed file rides the health timer's beat, only when dirty."""
+
+    from my_claude_code.application.proxy_speed_store import record_check
+
+    record_check(
+        "198.51.100.9:8080",
+        "nvidia_nim",
+        ProxyCheckRecord(ok=True, tls="strict", connect_ms=100, tunnel_ms=100),
+    )
+    await _timer(enabled=False).tick()
+    assert _isolate_proxy_speed.exists()
+    stamp = _isolate_proxy_speed.stat().st_mtime_ns
+    await _timer(enabled=False).tick()
+    assert _isolate_proxy_speed.stat().st_mtime_ns == stamp

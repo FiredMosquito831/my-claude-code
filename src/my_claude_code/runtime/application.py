@@ -29,6 +29,7 @@ from my_claude_code.application.proxy_health_store import (
     install_listener,
     remove_listener,
 )
+from my_claude_code.application.proxy_speed_store import load_speed
 from my_claude_code.config.admin.manifest import update_affects_providers
 from my_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
@@ -397,6 +398,9 @@ class ApplicationRuntime:
             # rotation and charge the operator a connect timeout each to
             # rediscover them.
             await asyncio.to_thread(arm_health_from_store)
+            # The speed ledger (7.54.0): measurements, not verdicts, so a
+            # missing or damaged file is simply an empty history.
+            await asyncio.to_thread(load_speed)
             # And the third: a feed fetch is memory, so one that was running
             # when this process's predecessor stopped would otherwise be
             # reported as still running for ever. This reads the record it left

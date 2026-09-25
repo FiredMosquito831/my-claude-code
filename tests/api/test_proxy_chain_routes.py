@@ -498,3 +498,88 @@ def test_every_entry_reports_the_health_the_pools_measured(monkeypatch) -> None:
         assert entries[1]["health"]["checked"] is False
     finally:
         reset_proxy_health()
+
+
+def test_candidates_carry_measured_speed_and_rate() -> None:
+    """MCC's own measurement travels beside the feed's number, never as it.
+
+    7.54.0: ``speed`` is the ledger's score for the provider the candidate
+    was checked against; ``feed_latency_ms`` is what the feed published.
+    A chain entry carries ``speed`` for its own chain's provider.
+    """
+
+    from my_claude_code.application.proxy_ingest import candidate_id
+    from my_claude_code.config.proxy_chains import (
+        ProxyChain,
+        ProxyChainEntry,
+        ProxyChains,
+        ProxyEndpoint,
+        ProxyFeedFacts,
+        save_proxy_chains,
+    )
+    from my_claude_code.core.proxy_speed import KIND_CHECK, PROXY_SPEED, SpeedSample
+
+    label = "203.0.113.7:1080"
+    proxy_id = candidate_id(label)
+    store = ProxyChains().with_candidates(
+        [
+            (
+                proxy_id,
+                ProxyEndpoint(
+                    url="socks5h://203.0.113.7:1080",
+                    label=label,
+                    source="feed",
+                    feed=ProxyFeedFacts(latency_ms=42),
+                    checked_for="nvidia_nim",
+                ),
+            )
+        ]
+    )
+    store, typed_id = store.add_endpoint(SECOND_URL)
+    store = store.with_chain(
+        "nvidia_nim",
+        ProxyChain(enabled=True, entries=(ProxyChainEntry(proxy=typed_id),)),
+    )
+    save_proxy_chains(store)
+    import time
+
+    now = time.time()
+    for ok in (True, True, True, False):
+        PROXY_SPEED.note(
+            label,
+            "nvidia_nim",
+            SpeedSample(
+                kind=KIND_CHECK,
+                at=now,
+                ok=ok,
+                connect_ms=400,
+                tunnel_ms=300,
+                tls_ms=500,
+            ),
+        )
+    PROXY_SPEED.note(
+        "198.51.100.9:8080",
+        "nvidia_nim",
+        SpeedSample(kind=KIND_CHECK, at=now, ok=True, connect_ms=100, tunnel_ms=50),
+    )
+
+    payload = _client().get("/admin/api/proxy-chains").json()
+    row = next(item for item in payload["candidates"] if item["proxy"] == proxy_id)
+
+    assert row["feed_latency_ms"] == 42
+    assert row["latency_ms"] == 42
+    speed = row["speed"]
+    assert speed["setup_ms"] == 1200
+    assert (speed["successes"], speed["samples"]) == (3, 4)
+    assert speed["success_rate"] == round(4 / 6, 4)
+    assert speed["live_samples"] == 0
+    assert speed["ttft_factor"] == 1.0
+    # F is the connect timeout the operator runs with (10 s shipped).
+    assert speed["rank_key"] == round(1200 + (2 / 6) / (4 / 6) * 10000, 1)
+    # 3 of 4 is neither flaky (r >= 0.5) nor working (r < 0.8): no label.
+    assert speed["state"] == ""
+
+    entry = _provider(payload)["chain"]["entries"][0]
+    assert entry["speed"]["setup_ms"] == 150
+    assert entry["speed"]["samples"] == 1
+    assert entry["speed"]["state"] == "working"

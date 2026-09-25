@@ -60,6 +60,7 @@ HARNESS_TIERS_FILENAME = "harness_tiers.json"
 PROXY_CHAINS_FILENAME = "proxy_chains.json"
 CREDENTIAL_NAMES_FILENAME = "credential_names.json"
 PROXY_FETCH_STATUS_FILENAME = "proxy_fetch_status.json"
+PROXY_SPEED_FILENAME = "proxy_speed.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
 MACOS_MANAGED_SETTINGS_PATH = (
@@ -596,6 +597,18 @@ def proxy_fetch_status_path() -> Path:
     """
 
     return config_dir_path() / PROXY_FETCH_STATUS_FILENAME
+
+
+def proxy_speed_path() -> Path:
+    """Return the proxy speed ledger (7.54.0).
+
+    Its own document, not a key in the chain store: samples arrive with every
+    check and every proxied request, and the chain store is the operator's
+    configuration, edited by the page. A flush of measurements must never be
+    the write that races an edit.
+    """
+
+    return config_dir_path() / PROXY_SPEED_FILENAME
 
 
 def legacy_env_paths() -> tuple[Path, ...]:

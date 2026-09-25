@@ -44,7 +44,11 @@ from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
 from my_claude_code.core.image_geometry import image_dimensions
 from my_claude_code.core.keepalive_tally import install_keepalive_tally
-from my_claude_code.core.proxy_attribution import install_proxy_attribution
+from my_claude_code.core.proxy_attribution import (
+    DIRECT_PROXY_LABEL,
+    install_proxy_attribution,
+)
+from my_claude_code.core.proxy_speed import PROXY_SPEED
 from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
     ReasoningAdaptationKind,
@@ -1391,6 +1395,38 @@ class RequestCapture:
         self._apply_estimate(record)
         self._apply_cost(record)
         self._apply_prompt_origin()
+        try:
+            self._feed_proxy_speed()
+        except Exception as exc:
+            logger.debug("Proxy speed samples skipped: {}", exc)
+
+    def _feed_proxy_speed(self) -> None:
+        """Hand this request's proxy dials and first tokens to the speed ledger.
+
+        7.54.0. Reached only when the request log is on -- a request whose log
+        is off returns before this -- at the end of the request and, on the
+        streaming path, off the loop. The dial rows are exactly the ones this
+        capture stored under ``params.ladder.dials``; the first-token time is
+        each attempt's own clock. Every attempt with a first token joins its
+        model's baseline; a proxied one is also rated against it.
+        """
+        for attempt in self._attempts:
+            provider = attempt.provider or ""
+            if not provider:
+                continue
+            ladder = (attempt.params or {}).get("ladder")
+            dials = ladder.get("dials") if isinstance(ladder, dict) else None
+            if isinstance(dials, list) and dials:
+                PROXY_SPEED.note_dial_rows(provider, dials)
+            if attempt.ttft_ms is None or not attempt.model_ref:
+                continue
+            label = attempt.proxy_label or ""
+            PROXY_SPEED.note_ttft(
+                provider,
+                attempt.model_ref,
+                float(attempt.ttft_ms),
+                address=None if label in ("", DIRECT_PROXY_LABEL) else label,
+            )
 
     def _apply_origin(self, origin: RequestOrigin) -> None:
         """Copy a resolved origin onto the row."""

@@ -98,6 +98,7 @@ from my_claude_code.application.proxy_ingest import (
     harvest_feeds,
     rank_merged,
 )
+from my_claude_code.application.proxy_speed_store import record_check
 from my_claude_code.config.atomic_json import write_json_document_atomically
 from my_claude_code.config.constants import (
     PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
@@ -975,6 +976,9 @@ async def run_fetch_pass(
             pending.append(index)
             return
         record = hold_refusal(label, raw)
+        # Every try the fetch makes is a speed sample for this provider
+        # (7.54.0), screen and confirm alike; a re-queued try above is not.
+        record_check(label, provider_id, record)
         tries[index] = tries.get(index, 0) + 1
         if attempt == 1:
             counters.tested += 1

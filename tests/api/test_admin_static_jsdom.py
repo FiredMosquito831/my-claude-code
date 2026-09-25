@@ -6500,3 +6500,64 @@ def test_route_widgets_also_name_the_last_settings_save(rendered) -> None:
             "Window: all stored rows \u00b7 settings last saved "
         ), heading
     assert "settings last saved" not in captions["Top errors"]
+
+
+# ------------------------------------------------ 7.54.0 measured proxy speed
+
+
+def _hosts(labels: list[str]) -> list[int]:
+    return [int(label.split(":")[0].rsplit(".", 1)[1]) for label in labels]
+
+
+def test_candidate_sort_by_measured_setup(rendered) -> None:
+    """MCC's own median setup, fastest first; an unmeasured row last."""
+
+    speed = rendered["proxying"]["speedSort"]
+    values = [option["value"] for option in speed["options"]]
+    for value in ("setup", "rate", "rank"):
+        assert value in values, values
+    labels = {option["value"]: option["text"] for option in speed["options"]}
+    assert labels["setup"] == "measured setup (MCC)"
+    assert _hosts(speed["bySetup"]) == [3, 2, 4, 1, 5]
+    # Success rate, best first; rank (expected setup x live factor), lowest first.
+    assert _hosts(speed["byRate"]) == [4, 2, 1, 3, 5]
+    assert _hosts(speed["byRank"]) == [2, 4, 1, 3, 5]
+    # The column: measured setup and k of n ok.
+    assert "setup 4200 ms · 3 of 3 ok" in speed["speedCells"], speed["speedCells"]
+    assert "not measured yet" in speed["speedCells"], speed["speedCells"]
+
+
+def test_max_setup_filter(rendered) -> None:
+    speed = rendered["proxying"]["speedSort"]
+    # At most 1,600 ms: the slow one and the never-timed one are hidden.
+    assert _hosts(speed["maxSetup1600"]) == [3, 2, 4]
+    assert _hosts(speed["maxSetupNoFlaky"]) == [2, 4]
+    assert speed["maxSetupCleared"] == 5
+    assert _hosts(speed["hideSlow"]) == [3, 2, 4, 5]
+
+
+def test_select_fastest_n(rendered) -> None:
+    """It ticks the N best-ranked rows for the bulk buttons, and adds nothing."""
+
+    fastest = rendered["proxying"]["speedSort"]["fastest"]
+    assert fastest["selected"] == ["px_spd2", "px_spd4"]
+    assert fastest["count"].startswith("2 selected"), fastest["count"]
+    assert fastest["writes"] == []
+    assert "Nothing is added until you press Add" in fastest["announcement"]
+
+
+def test_feed_latency_sort_is_labelled_as_feed(rendered) -> None:
+    speed = rendered["proxying"]["speedSort"]
+    assert speed["feedLabel"] == "latency the feed published"
+    # Sorted by the feed's claim, which is not MCC's order.
+    assert _hosts(speed["byFeed"]) == [5, 1, 2, 3, 4]
+
+
+def test_chain_entry_shows_speed_readout_and_chip(rendered) -> None:
+    entry = rendered["proxying"]["speedSort"]["entry"]
+    assert entry is not None
+    assert entry["text"].startswith(
+        "≈1.8 s · 4/5 ok · 12 samples · first token 1.4\u00d7"
+    ), entry
+    assert "proxy-state-working" in entry["chip"], entry
+    assert "1200 ms when it works; fails 1 in 5" in entry["title"], entry

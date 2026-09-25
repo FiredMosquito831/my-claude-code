@@ -37,12 +37,14 @@ from my_claude_code.application.proxy_check import (
     PROXY_CHECK_MAX_CONCURRENCY,
     PROXY_CHECK_TIMEOUT_SECONDS,
     check_endpoints,
+    check_target_providers,
     check_targets,
 )
 from my_claude_code.application.proxy_health_store import (
     flush_health,
     take_early_confirms,
 )
+from my_claude_code.application.proxy_speed_store import flush_speed
 from my_claude_code.config.constants import (
     PROXY_CHECK_CONFIRM_ATTEMPTS_DEFAULT,
     PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
@@ -296,6 +298,7 @@ class ProxyHealthTimer:
         # One last write on the way out, so a clean shutdown does not lose the
         # benches the final requests earned.
         await asyncio.to_thread(flush_health)
+        await asyncio.to_thread(flush_speed)
 
     async def run(self) -> None:
         while True:
@@ -325,6 +328,9 @@ class ProxyHealthTimer:
         """
 
         await asyncio.to_thread(flush_health)
+        # The speed ledger rides the same beat (7.54.0): written only when a
+        # sample arrived since the last tick, never from the request path.
+        await asyncio.to_thread(flush_speed)
         early_labels = take_early_confirms()
         if not self._enabled():
             return 0
@@ -338,6 +344,7 @@ class ProxyHealthTimer:
             )
             return 0
         targets = check_targets(settings, store, enabled_only=True)
+        providers = check_target_providers(settings, store, enabled_only=True)
         due: list[str] = []
         early: list[str] = []
         for proxy_id in targets:
@@ -356,16 +363,22 @@ class ProxyHealthTimer:
                 early.append(proxy_id)
         checked = 0
         if early:
-            checked += await self._early_confirm(early, targets, settings)
+            checked += await self._early_confirm(early, targets, settings, providers)
         if not due or self._sweeping:
             return checked
         if background:
-            self._round = asyncio.create_task(self._reprobe(due, targets, settings))
+            self._round = asyncio.create_task(
+                self._reprobe(due, targets, settings, providers)
+            )
             return checked
-        return checked + await self._reprobe(due, targets, settings)
+        return checked + await self._reprobe(due, targets, settings, providers)
 
     async def _early_confirm(
-        self, early: list[str], targets: dict[str, str], settings: object
+        self,
+        early: list[str],
+        targets: dict[str, str],
+        settings: object,
+        providers: dict[str, str] | None = None,
     ) -> int:
         """One try each; a pass is applied, a failure is not (7.53.0)."""
 
@@ -379,6 +392,7 @@ class ProxyHealthTimer:
                 concurrency=concurrency,
                 max_concurrency=concurrency,
                 charge_failures=False,
+                providers=providers,
             )
         except asyncio.CancelledError:
             raise
@@ -398,7 +412,11 @@ class ProxyHealthTimer:
         return len(outcomes)
 
     async def _reprobe(
-        self, due: list[str], targets: dict[str, str], settings: object
+        self,
+        due: list[str],
+        targets: dict[str, str],
+        settings: object,
+        providers: dict[str, str] | None = None,
     ) -> int:
         """One round for every due address. Returns how many were checked."""
 
@@ -442,6 +460,7 @@ class ProxyHealthTimer:
                         PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
                     )
                 ),
+                providers=providers,
             )
         except asyncio.CancelledError:
             raise

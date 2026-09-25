@@ -4453,6 +4453,173 @@ if (withChain) {
   await reload();
 }
 
+/* 7.54.0: MCC's own speed measurements on the candidate list and the chain
+   card -- sort by measured setup, the max-setup filter, "Select the fastest
+   N", and the feed's number labelled as the feed's. Driven through the page's
+   own load path and controls, then put back exactly as it was. */
+{
+  const state = ROUTES["/admin/api/proxy-chains"];
+  const savedCandidates = state.candidates;
+  const panel = () => doc.querySelector("#proxyingCandidates");
+  const rows = () =>
+    Array.from(panel().querySelectorAll(".proxy-candidate[data-proxy]"));
+  const labels = () =>
+    rows().map((row) => row.querySelector(".proxy-candidate-label").textContent.trim());
+  const control = (text) =>
+    Array.from(panel().querySelectorAll(".proxy-candidate-control")).find((node) =>
+      (node.textContent || "").includes(text),
+    );
+  const reload = async () => {
+    navLinks.find((link) => link.dataset.view === "providers").click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    navLinks.find((link) => link.dataset.view === "proxying").click();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+  };
+  const speed = (setup, ok, samples, rank, stateWord) => ({
+    setup_ms: setup,
+    success_rate: (ok + 1) / (samples + 2),
+    successes: ok,
+    samples,
+    live_samples: 0,
+    ttft_factor: 1.0,
+    expected_ms: rank,
+    rank_key: rank,
+    state: stateWord,
+  });
+  const row = (id, label, feedLatency, measured) => ({
+    proxy: id,
+    label,
+    scheme: "http",
+    source_count: 1,
+    sources: [{ id: "f", name: "Feed" }],
+    country: "",
+    anonymity: "",
+    https_ok: true,
+    latency_ms: feedLatency,
+    feed_latency_ms: feedLatency,
+    uptime_pct: null,
+    last_check: { at: "2026-09-25T12:00:00Z", ok: true, tls: "strict", depth: "tls" },
+    refused: false,
+    working: true,
+    state: "working",
+    checked_for: "nvidia_nim",
+    checked_for_name: "NVIDIA NIM",
+    untested: false,
+    speed: measured,
+  });
+  // The feed's order (fastest claim first) is the opposite of MCC's.
+  state.candidates = [
+    row("px_spd1", "192.0.2.1:8080", 50, speed(4200, 3, 3, 4200 + 3000, "slow")),
+    row("px_spd2", "192.0.2.2:8080", 90, speed(800, 4, 4, 800 + 1600, "working")),
+    row("px_spd3", "192.0.2.3:8080", 120, speed(300, 1, 4, 300 + 20000, "flaky")),
+    row("px_spd4", "192.0.2.4:8080", 150, speed(1500, 5, 5, 1500 + 1400, "working")),
+    row("px_spd5", "192.0.2.5:8080", 10, speed(null, 0, 0, null, "untested")),
+  ];
+  // A chain entry with a speed readout, on the card the page already draws.
+  const nim = (state.providers || []).find((item) => item.provider_id === "nvidia_nim");
+  const entry = nim && nim.chain && (nim.chain.entries || []).find((item) => !item.direct);
+  const savedSpeed = entry ? entry.speed : undefined;
+  if (entry) {
+    entry.speed = {
+      ...speed(1200, 4, 5, 1800, "working"),
+      live_samples: 7,
+      ttft_factor: 1.4,
+    };
+  }
+  await reload();
+
+  const sortSelect = control("Sort by").querySelector("select");
+  const options = Array.from(sortSelect.options).map((option) => ({
+    value: option.value,
+    text: option.textContent,
+  }));
+  const choose = (value) => {
+    sortSelect.value = value;
+    sortSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  const speedSort = {
+    options,
+    speedCells: rows().map((node) =>
+      (node.querySelector(".proxy-candidate-speed")?.textContent || "").trim(),
+    ),
+  };
+  choose("setup");
+  speedSort.bySetup = labels();
+  choose("rate");
+  speedSort.byRate = labels();
+  choose("rank");
+  speedSort.byRank = labels();
+  choose("latency");
+  speedSort.byFeed = labels();
+  speedSort.feedLabel = options.find((option) => option.value === "latency")?.text || "";
+
+  choose("setup");
+  const maxBox = panel().querySelector("input.proxy-candidate-max-setup");
+  maxBox.value = "1600";
+  maxBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+  speedSort.maxSetup1600 = labels();
+  const hideFlaky = panel().querySelector("input.proxy-candidate-hide-flaky");
+  hideFlaky.checked = true;
+  hideFlaky.dispatchEvent(new window.Event("change", { bubbles: true }));
+  speedSort.maxSetupNoFlaky = labels();
+  hideFlaky.checked = false;
+  hideFlaky.dispatchEvent(new window.Event("change", { bubbles: true }));
+  maxBox.value = "";
+  maxBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+  speedSort.maxSetupCleared = labels().length;
+  const hideSlow = panel().querySelector("input.proxy-candidate-hide-slow");
+  hideSlow.checked = true;
+  hideSlow.dispatchEvent(new window.Event("change", { bubbles: true }));
+  speedSort.hideSlow = labels();
+  hideSlow.checked = false;
+  hideSlow.dispatchEvent(new window.Event("change", { bubbles: true }));
+
+  const urlsBefore = fetchUrls.length;
+  const nBox = panel().querySelector("input.proxy-candidate-fastest-n");
+  nBox.value = "2";
+  nBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+  panel().querySelector(".proxy-candidate-fastest-button").click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  speedSort.fastest = {
+    selected: rows()
+      .filter((node) => node.querySelector("input.proxy-candidate-select").checked)
+      .map((node) => node.dataset.proxy)
+      .sort(),
+    count: (panel().querySelector(".proxy-candidate-count")?.textContent || "").trim(),
+    // Selecting is not adding: nothing may have been sent anywhere.
+    writes: fetchUrls
+      .slice(urlsBefore)
+      .map((url) => String(url).split("?")[0])
+      .filter((path) => path.startsWith("/admin/api/proxy-chains/")),
+    announcement: (doc.querySelector("#proxyingStatus")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  };
+
+  const card = proxyCardFor("nvidia_nim");
+  const cell = card ? card.querySelector(".proxy-entry-speed") : null;
+  speedSort.entry = cell
+    ? {
+        text: cell.textContent.replace(/\s+/g, " ").trim(),
+        title: cell.title,
+        chip: cell.querySelector(".proxy-state-chip")?.className || "",
+      }
+    : null;
+  proxying.speedSort = speedSort;
+
+  // Put everything back: the selection, the controls, the fixture.
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  nBox.value = "10";
+  nBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+  choose("sources");
+  state.candidates = savedCandidates;
+  if (entry) {
+    if (savedSpeed === undefined) delete entry.speed;
+    else entry.speed = savedSpeed;
+  }
+  await reload();
+}
+
 /* The card's own bulk remove: tick two entries, press once, and the draft is
    shorter without anything having been written. */
 {

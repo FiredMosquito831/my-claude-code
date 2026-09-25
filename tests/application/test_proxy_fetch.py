@@ -18,6 +18,7 @@ does not own a second copy of it.
 import asyncio
 import json
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -1271,3 +1272,38 @@ async def test_link_guard_pauses_and_marks_nothing_dead(monkeypatch):
     assert (run.tested, run.working, run.dead) == (1, 1, 0)
     assert progress.paused is False
     assert _labels(load_proxy_chains()) == ["198.51.100.3:80"]
+
+
+@pytest.mark.asyncio
+async def test_every_fetch_try_feeds_the_speed_ledger(monkeypatch):
+    """7.54.0: screen and confirm tries are samples for the fetch's provider."""
+
+    from my_claude_code.core.proxy_speed import PROXY_SPEED
+
+    _offer(monkeypatch, ["198.51.100.1:8080", "198.51.100.2:8080"])
+    seen: dict[str, int] = {}
+
+    def verdict(url):
+        seen[url] = seen.get(url, 0) + 1
+        if "198.51.100.1" in url:
+            return replace(_ok(), connect_ms=100, tunnel_ms=100, tls_ms=100)
+        return _dead() if seen[url] < 2 else _ok()
+
+    _checker(monkeypatch, verdict)
+    await _run(confirm_attempts=2, confirm_spacing=0.0)
+
+    def score(address):
+        return PROXY_SPEED.score(
+            address, "anthropic", failure_cost_ms=10000, slow_ms=3000
+        )
+
+    assert (
+        score("198.51.100.1:8080").successes,
+        score("198.51.100.1:8080").samples,
+    ) == (1, 1)
+    assert score("198.51.100.1:8080").setup_ms == 300
+    # A screen failure and the confirm pass that followed it: two samples.
+    assert (
+        score("198.51.100.2:8080").successes,
+        score("198.51.100.2:8080").samples,
+    ) == (1, 2)

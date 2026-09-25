@@ -9488,6 +9488,44 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+/* 7.54.0: what MCC measured about an address -- the candidate column, the
+   filters above the list, and the chain entry readout. */
+.proxy-candidate-speed,
+.proxy-entry-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.proxy-candidate-speed-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  width: 100%;
+}
+
+.proxy-candidate-max-setup,
+.proxy-candidate-fastest-n {
+  width: 7em;
+}
+
+.proxy-candidate-toggle,
+.proxy-candidate-fastest {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.proxy-candidate-hide-slow,
+.proxy-candidate-hide-flaky,
+.proxy-candidate-fastest-button {
+  margin: 0;
+}
+
 /* ------------------------------------------------------ the fetch progress
    Rendered whether or not anything is on offer yet: the commonest moment to
    look at this panel is while the sweep is still running. */
