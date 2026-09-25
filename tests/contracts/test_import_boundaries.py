@@ -194,6 +194,32 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "Reason: admin routes expose the Codex CLI token import endpoint backed by the provider utility."
     ),
     (
+        "my_claude_code.api.route_status",
+        "my_claude_code.providers.chatgpt_oauth.credentials",
+    ): (
+        "Owner: Model Config per-rail credential hint. "
+        "Reason: whether a ChatGPT sign-in can serve is answered by the same "
+        "account listing the executor resolves from; a mirror would be a "
+        "second answer that drifts. Read-only (migrate=False), no network."
+    ),
+    (
+        "my_claude_code.api.route_status",
+        "my_claude_code.providers.anthropic_oauth.credentials",
+    ): (
+        "Owner: Model Config per-rail credential hint. "
+        "Reason: a Claude subscription credential is usable exactly when the "
+        "provider's own credential_viability says so; reading that function "
+        "keeps the hint and the executor one answer. Read-only, no network."
+    ),
+    (
+        "my_claude_code.api.route_status",
+        "my_claude_code.providers.runtime.opencode_credentials",
+    ): (
+        "Owner: Model Config per-rail credential hint. "
+        "Reason: OpenCode Zen serves its free models with no key on the public "
+        "credential; the id that side applies to is owned by that module."
+    ),
+    (
         "my_claude_code.api.admin_routes",
         "my_claude_code.providers.chatgpt_oauth.codex_catalogue",
     ): (

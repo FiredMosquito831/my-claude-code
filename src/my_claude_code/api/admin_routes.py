@@ -55,6 +55,7 @@ from my_claude_code.api.models_page_cache import (
     merge_moving_parts,
 )
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
+from my_claude_code.api.route_status import config_changed_at, credential_problems
 from my_claude_code.application.derived_payloads import (
     LATENCY_ALL_TIME_ENTRY,
     LATENCY_DEFAULT_ENTRY,
@@ -657,10 +658,69 @@ def _config_response() -> dict[str, Any]:
     return payload
 
 
+async def _pool_key_health(
+    services: ApiServices, provider_ids: Sequence[str]
+) -> dict[str, dict[str, Any]]:
+    """Live pool health for the providers this generation has already built.
+
+    Never builds one: a provider nobody has routed to yet has no bench state to
+    report, and constructing it here would be a side effect of opening a page.
+    """
+
+    health: dict[str, dict[str, Any]] = {}
+    # Informational only: a provider that cannot report is simply absent, and
+    # the config payload must load whatever any one of them does.
+    with suppress(Exception):
+        async with await services.requests.acquire() as lease:
+            for provider_id in provider_ids:
+                if not lease.is_provider_cached(provider_id):
+                    continue
+                with suppress(Exception):
+                    provider = lease.resolve_provider(provider_id)
+                    reporter = getattr(provider, "key_health", None)
+                    if callable(reporter):
+                        health[provider_id] = {
+                            "slots": list(reporter()),
+                            # The runtime's own "can any key serve this
+                            # instant": 0 when one can, else the shortest wait.
+                            "wait": provider.throttle_remaining(),
+                        }
+    return health
+
+
+async def _route_status(
+    payload: Mapping[str, Any], services: ApiServices
+) -> dict[str, Any]:
+    """Which rail providers cannot serve now, and when settings last changed.
+
+    One additive, read-only key on the config payload the page already loads,
+    so the Model Config hints refresh whenever the page reloads its status.
+    """
+
+    provider_status = list(payload.get("provider_status") or [])
+    health = await _pool_key_health(
+        services, [str(entry.get("provider_id") or "") for entry in provider_status]
+    )
+    values = await asyncio.to_thread(load_value_state)
+    problems = await asyncio.to_thread(
+        credential_problems, provider_status, values, health.get
+    )
+    managed = (payload.get("paths") or {}).get("managed")
+    return {
+        "providers": problems,
+        "config_changed_at": config_changed_at(managed),
+    }
+
+
 @router.get("/admin/api/config")
-async def get_admin_config(request: Request):
+async def get_admin_config(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
     require_loopback_admin(request)
-    return _config_response()
+    payload = _config_response()
+    payload["route_status"] = await _route_status(payload, services)
+    return payload
 
 
 @router.post("/admin/api/config/validate")
