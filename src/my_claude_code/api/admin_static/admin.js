@@ -5260,6 +5260,117 @@ function syncRoutePauseUi() {
     const chip = node.querySelector(".route-pause-chip");
     if (chip) chip.hidden = !paused;
   });
+  syncRouteCredentialHints();
+}
+
+/* ------------------------------------------------- rail credential hints
+   A rail entry whose provider has no usable credential looked exactly like one
+   that works. On 2026-09-20 MODEL_FABLE pointed at chatgpt_oauth after its
+   store was retired: every Fable request failed on the spot and this page said
+   nothing, so the setting read as ignored rather than as unable to serve.
+
+   The answer comes from `route_status.providers` on the config payload the page
+   already loads -- no request of its own -- so it refreshes whenever the page
+   reloads its status (after Apply, after a key is added). Only providers that
+   cannot serve are listed; every other rail renders exactly as before. */
+
+function routeRefProvider(ref) {
+  const slash = String(ref || "").indexOf("/");
+  return slash > 0 ? ref.slice(0, slash) : "";
+}
+
+function clockTime(epochSeconds) {
+  return new Date(epochSeconds * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** What to say about a provider on a rail, or null when it can serve. */
+function routeCredentialProblem(providerId) {
+  const problems = state.config?.route_status?.providers || {};
+  const problem = providerId ? problems[providerId] : null;
+  if (!problem) return null;
+  if (problem.state === "all_benched") {
+    const until = Number(problem.until) || 0;
+    // A bench that has already run out is stale data, not a problem: the key
+    // is selectable again even though the page has not reloaded yet.
+    if (!until || until * 1000 <= Date.now()) return null;
+    const keys = Number(problem.keys) || 0;
+    return {
+      text: `${keys === 1 ? "its only key is" : "every key"} benched until ${clockTime(until)}`,
+      title:
+        `Every ${problem.display_name || providerId} key is benched, so this ` +
+        "entry is skipped and the next one serves until a key comes back.",
+    };
+  }
+  if (problem.state === "no_credentials") {
+    const action = problem.action === "sign_in" ? "sign in" : "add a key";
+    return {
+      text: `no usable credentials — ${action}`,
+      title:
+        `${problem.display_name || providerId} has no credential it can use, ` +
+        "so every request routed here fails at once and the next entry serves.",
+    };
+  }
+  return null;
+}
+
+/** Show a provider's card on the Providers page, opened. */
+function openProviderCard(providerId) {
+  setActiveView("providers", { scroll: true });
+  const card = document.querySelector(`.pv-card[data-provider="${providerId}"]`);
+  if (!card) return;
+  const configure = card.querySelector(".pv-configure");
+  if (configure && configure.getAttribute("aria-expanded") === "false") {
+    configure.click();
+  }
+  if (typeof card.scrollIntoView === "function") {
+    card.scrollIntoView({ block: "start" });
+  }
+}
+
+function syncRouteCredentialHints() {
+  const rails = document.getElementById("modelConfigSections");
+  if (!rails) return;
+  rails.querySelectorAll("[data-route-id]").forEach((node) => {
+    const input = node.querySelector("input");
+    const providerId = routeRefProvider(input ? input.value.trim() : "");
+    const problem = routeCredentialProblem(providerId);
+    // A direct child, so a hint never lands in a nested rail's row.
+    let hint = Array.from(node.children).find((child) =>
+      child.classList.contains("route-cred-hint"),
+    );
+    if (!problem) {
+      if (hint) hint.remove();
+      node.classList.remove("has-cred-problem");
+      return;
+    }
+    if (!hint) {
+      hint = document.createElement("p");
+      hint.className = "route-cred-hint";
+      // Last child, spanning from the control column to the end, so it opens a
+      // line of its own and never takes a column from a control on the row.
+      node.appendChild(hint);
+    }
+    hint.dataset.provider = providerId;
+    hint.title = problem.title;
+    hint.textContent = "";
+    const text = document.createElement("span");
+    text.className = "route-cred-hint-text";
+    text.textContent = problem.text;
+    const link = document.createElement("a");
+    link.href = "#";
+    link.className = "route-cred-hint-link";
+    link.textContent = "Open provider";
+    link.setAttribute("aria-label", `Open the ${providerId} provider card`);
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      openProviderCard(providerId);
+    });
+    hint.append(text, link);
+    node.classList.add("has-cred-problem");
+  });
 }
 
 async function toggleRoutePause(modelKey, ref, paused, button) {
@@ -16050,9 +16161,66 @@ function reqFilters() {
   return params;
 }
 
+/* Every Analytics widget that aggregates history says which history. A
+   Failover table over "all time" still lists chains the Model Config page no
+   longer holds, and read without its window it looks like the current routing
+   being ignored. The caption names the window the page actually asked for,
+   and the route widgets also name when the settings were last saved. */
+const ANALYTICS_CONFIG_BOUNDARY = new Set(["Failover", "Vision adapter", "Provider performance"]);
+
+function analyticsWindowText() {
+  const select = byId("reqFilterWindow");
+  const option = select ? select.options[select.selectedIndex] : null;
+  const label = option && option.value ? option.textContent.trim() : "all stored rows";
+  const filtered = Array.from(reqFilters().keys()).some(
+    (key) => key !== "since" && key !== "local",
+  );
+  return `Window: ${label}${filtered ? ", filtered" : ""}`;
+}
+
+function configChangedText() {
+  const changed = Number(state.config?.route_status?.config_changed_at) || 0;
+  if (!changed) return "";
+  const when = new Date(changed * 1000);
+  const sameDay = when.toDateString() === new Date().toDateString();
+  const day = sameDay
+    ? "today"
+    : when.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `settings last saved ${clockTime(changed)} ${day}`;
+}
+
+function paintAnalyticsWindowCaptions() {
+  const view = document.getElementById("view-requests");
+  if (!view) return;
+  const windowText = analyticsWindowText();
+  const changedText = configChangedText();
+  view
+    .querySelectorAll(".requests-chart h4, .analytics-panel > h4")
+    .forEach((heading) => {
+      if (heading.closest("#reqInflightPanel, .requests-lifetime")) return;
+      // The four cost tables sit inside the Cost panel, whose caption covers them.
+      if (heading.id !== "reqCostHeading" && heading.closest(".cost-panel")) return;
+      const anchor = heading.parentElement.classList.contains("chart-heading")
+        ? heading.parentElement
+        : heading;
+      let caption = anchor.nextElementSibling;
+      if (!caption || !caption.classList.contains("analytics-window")) {
+        caption = document.createElement("p");
+        caption.className = "analytics-window";
+        anchor.after(caption);
+      }
+      const title = heading.textContent.trim();
+      caption.textContent =
+        changedText && ANALYTICS_CONFIG_BOUNDARY.has(title)
+          ? `${windowText} · ${changedText}`
+          : windowText;
+    });
+}
+
 async function loadRequestsView() {
   const loadId = ++reqState.loadId;
   const params = reqFilters();
+  paintAnalyticsWindowCaptions();
   let stats;
   let list;
   let lifetime;

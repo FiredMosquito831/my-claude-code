@@ -9337,6 +9337,149 @@ const inflight = {};
   await setInterval_("0");
 }
 
+/* ------------------------------------------------ rail credential hints (7.49.0)
+   One OAuth provider with no credential, one provider with every key benched,
+   one whose bench has already run out, and the p1 rows every other section
+   uses, which stay healthy. Delivered the way the server delivers it: on the
+   config payload, picked up by a reload of the page's status. */
+const credHints = {};
+{
+  // The page's own status reload. Everything load() does after the config
+  // payload is drawn (Claude settings, harnesses...) reads routes this harness
+  // answers once with a shape only the first load expects; what it throws
+  // there is recorded rather than allowed to end the run.
+  credHints.reloadErrors = [];
+  const reloadStatus = async () => {
+    try {
+      await window.eval("load()");
+    } catch (error) {
+      credHints.reloadErrors.push(String(error && error.message));
+    }
+  };
+  const configRoute = ROUTES["/admin/api/config"];
+  const fieldByKey = (key) => FIELDS.find((field) => field.key === key);
+  const saved = {
+    fable: fieldByKey("MODEL_FABLE").value,
+    mythosChain: fieldByKey("MODEL_MYTHOS_FALLBACKS").value,
+    routeStatus: configRoute.route_status,
+  };
+  const nowSeconds = Date.now() / 1000;
+  const benchedUntil = nowSeconds + 3600;
+  const changedAt = nowSeconds - 600;
+  fieldByKey("MODEL_FABLE").value = "chatgpt_oauth/gpt-5.6-sol";
+  fieldByKey("MODEL_MYTHOS_FALLBACKS").value = "p1/y1,nvidia_nim/m-benched,zai/m-expired";
+  configRoute.route_status = {
+    providers: {
+      chatgpt_oauth: {
+        state: "no_credentials",
+        action: "sign_in",
+        display_name: "ChatGPT OAuth (experimental)",
+      },
+      nvidia_nim: {
+        state: "all_benched",
+        until: benchedUntil,
+        keys: 2,
+        display_name: "NVIDIA NIM",
+      },
+      zai: { state: "all_benched", until: nowSeconds - 60, keys: 1, display_name: "Z.ai" },
+      cerebras: { state: "no_credentials", action: "add_key", display_name: "Cerebras" },
+    },
+    config_changed_at: changedAt,
+  };
+  const fetchesBefore = fetchCalls.length;
+  await reloadStatus();
+  await settle();
+  credHints.reloadFetches = Array.from(new Set(fetchCalls.slice(fetchesBefore))).sort();
+
+  const freshNav = (view) =>
+    Array.from(doc.querySelectorAll(".nav-link")).find((link) => link.dataset.view === view);
+  freshNav("model_config").click();
+  await settle();
+
+  const container = doc.getElementById("modelConfigSections");
+  const hintRows = () =>
+    Array.from(container.querySelectorAll(".route-cred-hint")).map((hint) => {
+      const node = hint.parentElement;
+      const input = node.querySelector("input");
+      return {
+        ref: input ? input.value : "",
+        provider: hint.dataset.provider,
+        text: (hint.querySelector(".route-cred-hint-text")?.textContent || "").trim(),
+        link: (hint.querySelector(".route-cred-hint-link")?.textContent || "").trim(),
+        lastChild: node.lastElementChild === hint,
+        title: hint.title,
+      };
+    });
+  credHints.rows = hintRows();
+  credHints.expectedClock = new Date(benchedUntil * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  credHints.healthyRowsWithHint = Array.from(container.querySelectorAll("[data-route-id]"))
+    .filter((node) => (node.querySelector("input")?.value || "").startsWith("p1/"))
+    .filter((node) => node.querySelector(".route-cred-hint")).length;
+  credHints.markedNodes = container.querySelectorAll(".has-cred-problem").length;
+
+  // Typing a different ref re-evaluates the row at once, before any Save.
+  const fableInput = doc.querySelector(CONTROL_SELECTOR("MODEL_FABLE"));
+  fableInput.value = "cerebras/m-nokey";
+  fableInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await settle();
+  credHints.afterEditToKeyless = hintRows().map((row) => `${row.provider}: ${row.text}`);
+  fableInput.value = "p1/f0";
+  fableInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await settle();
+  credHints.afterEditToHealthy = hintRows().map((row) => row.provider);
+
+  // The link opens the Providers page.
+  const link = container.querySelector(".route-cred-hint-link");
+  link.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await settle();
+  credHints.viewAfterLink = doc.querySelector(".nav-link[aria-current='page']")?.dataset.view;
+
+  // Analytics: every aggregating widget names its window; the route widgets
+  // also name when the settings were last saved.
+  freshNav("requests").click();
+  await settle();
+  await settle();
+  const captions = () =>
+    Array.from(doc.querySelectorAll("#view-requests .analytics-window")).map((caption) => {
+      const panel = caption.closest(".analytics-panel, .requests-chart");
+      const heading = panel ? panel.querySelector("h4") : null;
+      return [(heading?.textContent || "").trim(), caption.textContent.trim()];
+    });
+  credHints.captionsAllTime = captions();
+  const windowSelect = doc.getElementById("reqFilterWindow");
+  windowSelect.value = "86400";
+  windowSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await settle();
+  await settle();
+  credHints.captions24h = captions();
+  credHints.lifetimeCaptions = doc.querySelectorAll(
+    ".requests-lifetime .analytics-window, #reqInflightPanel .analytics-window",
+  ).length;
+  windowSelect.value = "";
+  windowSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await settle();
+
+  // Hot refresh: the bench lifts and a sign-in lands; the next status reload
+  // clears both hints without anything else changing.
+  fieldByKey("MODEL_FABLE").value = "chatgpt_oauth/gpt-5.6-sol";
+  configRoute.route_status = { providers: {}, config_changed_at: changedAt };
+  await reloadStatus();
+  await settle();
+  freshNav("model_config").click();
+  await settle();
+  credHints.afterHealthyReload = hintRows().length;
+
+  fieldByKey("MODEL_FABLE").value = saved.fable;
+  fieldByKey("MODEL_MYTHOS_FALLBACKS").value = saved.mythosChain;
+  if (saved.routeStatus === undefined) delete configRoute.route_status;
+  else configRoute.route_status = saved.routeStatus;
+  await reloadStatus();
+  await settle();
+}
+
 console.log(
   JSON.stringify(
     {
@@ -9350,6 +9493,7 @@ console.log(
       toolCatalogue,
       requestOrigin,
       originFilters,
+      credHints,
       inflight,
       cancelledViews,
       catalogueReadout,

@@ -1359,6 +1359,52 @@ textarea:focus-visible,
   font-weight: 600;
 }
 
+/* A rail entry whose provider cannot serve right now. The hint is the node's
+   last child and spans from the control column to the end, so it opens a line
+   of its own under the ref and never takes a column from a control. */
+.route-cred-hint {
+  grid-column: 3 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.route-cred-hint-text {
+  min-width: 0;
+}
+
+/* The ref itself is edged in the same warning colour, so the row reads as one
+   thing with the hint under it rather than as a note about the row below. */
+.has-cred-problem > .model-combobox input[type="text"],
+.has-cred-problem .field-control .model-combobox input[type="text"] {
+  border-color: var(--warn-border);
+}
+
+.route-cred-hint-link {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+/* Which history an Analytics widget aggregates. */
+.analytics-window {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .route-pause-cell {
   display: flex;
   flex: 0 0 auto;
@@ -2180,6 +2226,25 @@ textarea:focus-visible,
    prose, so they're set in the shared mono stack here. */
 #webSearchGrid .provider-meta {
   font-family: var(--font-mono);
+}
+
+/* The Web Search cards carry option fields the other provider grids do not,
+   and a grid item's automatic minimum is its min-content: the widest option
+   label ("Max content age in hours (0 = always fresh)" plus its two tags)
+   widened the track past the page -- 532px of scroll at 420px, 1629px at
+   1500px. The track is the width; the label wraps inside it. */
+#webSearchGrid {
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+}
+
+#webSearchGrid > .provider-card,
+#webSearchGrid .ws-advanced,
+#webSearchGrid .field {
+  min-width: 0;
+}
+
+#webSearchGrid .field label {
+  flex-wrap: wrap;
 }
 
 @media (max-width: 560px) {

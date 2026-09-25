@@ -6317,3 +6317,101 @@ def test_the_apply_banner_names_only_the_fields_that_need_a_restart(rendered) ->
     assert banner["automatic"] == "Applied. Restarting server for: PORT, LOG_LEVEL..."
     assert banner["manual"] == "Applied. Restart my-claude-code to use: HOST"
     assert banner["hot"] == "Applied"
+
+
+# ------------------------------------------------- rail credential hints (7.49.0)
+
+
+def test_a_rail_entry_whose_provider_cannot_serve_says_so(rendered) -> None:
+    """The 2026-09-20 case: MODEL_FABLE on chatgpt_oauth with nothing signed in
+    rendered like any working rail. Now the row says why it cannot serve."""
+
+    hints = rendered["credHints"]
+    by_ref = {row["ref"]: row for row in hints["rows"]}
+
+    fable = by_ref["chatgpt_oauth/gpt-5.6-sol"]
+    assert fable["text"] == "no usable credentials \u2014 sign in"
+    assert fable["link"] == "Open provider"
+    assert "ChatGPT OAuth (experimental)" in fable["title"]
+
+    benched = by_ref["nvidia_nim/m-benched"]
+    assert benched["text"] == f"every key benched until {hints['expectedClock']}"
+
+
+def test_the_hint_covers_primaries_and_fallbacks_and_nothing_healthy(rendered) -> None:
+    hints = rendered["credHints"]
+
+    assert sorted(row["provider"] for row in hints["rows"]) == [
+        "chatgpt_oauth",
+        "nvidia_nim",
+    ]
+    # A bench that has already run out is not shown, even before a reload.
+    assert "zai/m-expired" not in {row["ref"] for row in hints["rows"]}
+    assert hints["healthyRowsWithHint"] == 0
+    assert hints["markedNodes"] == 2
+
+
+def test_the_hint_is_the_rows_last_child(rendered) -> None:
+    """The rails are explicit grids: a hint anywhere but last would take a
+    control's column (CLAUDE.md, "Adding a child to a rendered row")."""
+
+    assert all(row["lastChild"] for row in rendered["credHints"]["rows"])
+
+
+def test_the_hint_follows_an_edit_before_any_save(rendered) -> None:
+    hints = rendered["credHints"]
+
+    assert (
+        "cerebras: no usable credentials \u2014 add a key"
+        in hints["afterEditToKeyless"]
+    )
+    assert hints["afterEditToHealthy"] == ["nvidia_nim"]
+
+
+def test_the_hint_link_opens_the_providers_page(rendered) -> None:
+    assert rendered["credHints"]["viewAfterLink"] == "providers"
+
+
+def test_the_hint_costs_no_request_of_its_own(rendered) -> None:
+    """It rides the config payload the page already loads."""
+
+    fetched = rendered["credHints"]["reloadFetches"]
+    assert "/admin/api/config" in fetched
+    assert not [path for path in fetched if "credentials" in path or "oauth" in path]
+
+
+def test_a_status_reload_clears_the_hints(rendered) -> None:
+    assert rendered["credHints"]["afterHealthyReload"] == 0
+
+
+def test_every_analytics_aggregate_names_its_window(rendered) -> None:
+    hints = rendered["credHints"]
+    all_time = dict(hints["captionsAllTime"])
+    last_day = dict(hints["captions24h"])
+
+    for heading in (
+        "Requests over time",
+        "Tokens by model",
+        "Model latency",
+        "Requests by harness",
+        "Top errors",
+        "Upstream statuses",
+    ):
+        assert all_time[heading] == "Window: all stored rows", heading
+        assert last_day[heading] == "Window: last 24h", heading
+    # The lifetime counters and the in-flight panel are not history windows.
+    assert hints["lifetimeCaptions"] == 0
+    # One caption for the Cost panel, none on each of its four tables.
+    assert [heading for heading, _ in hints["captionsAllTime"]].count(
+        "Cost by model"
+    ) == 0
+
+
+def test_route_widgets_also_name_the_last_settings_save(rendered) -> None:
+    captions = dict(rendered["credHints"]["captionsAllTime"])
+
+    for heading in ("Failover", "Vision adapter", "Provider performance"):
+        assert captions[heading].startswith(
+            "Window: all stored rows \u00b7 settings last saved "
+        ), heading
+    assert "settings last saved" not in captions["Top errors"]
