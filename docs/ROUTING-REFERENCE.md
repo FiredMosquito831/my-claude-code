@@ -415,6 +415,28 @@ The same rule reaches the other checkers. The **health re-prober** gives an addr
 
 **Candidates stored by 7.18–7.20** were offered without being tested. They are not deleted on upgrade, and they are never shown as working: each is marked *not tested — fetch again*. The next fetch replaces the offer list, so they clear themselves the first time you press the button.
 
+#### Measured speed and success rate (7.54.0)
+
+A single verdict says little about a free proxy: an address that works at all passes about half its tries, and through the best proxy the first token of an answer arrived in 5.7 s while through the worst it took 186 s. So MCC now keeps, per address **and per provider**, a short history of how fast its connection sets up and how often it works, and the Proxying page can sort and filter by it. Nothing is reordered automatically.
+
+**What is measured.** Every check reaching the ledgers — a fetch's screen and confirm tries, **Check now**, **Test all**, a bulk add, the health re-prober and its early confirm (a pass only) — adds a sample: passed or not, and its connect, tunnel and TLS times (a request-depth check's first byte). With the **request log on**, every proxied request adds its dials too (connect and tunnel time, and whether the request it carried was answered), and each proxied attempt's time to first token, divided by the median time to first token of the **same model on the same provider** over the last 24 hours. With the request log off, nothing from live traffic is recorded — only checks. An interception is not a speed sample; `refused` and the reachability bench (`dead`) stay what they were.
+
+**The score**, one number per row:
+
+- success rate `r = (passes + 1) / (samples + 2)` — a single pass is not 100 %;
+- setup `s` = the median connect + tunnel [+ TLS] of the passing samples;
+- expected setup `E = s + (1 − r) / r × F`, where `F` is `PROXY_CONNECT_TIMEOUT_SECONDS` — what one failed dial costs a live request before the chain moves on (since 7.52.1 a proxied leg no longer sleeps before switching, so no retry sleep is added);
+- live factor `L` = the median of those first-token ratios, clamped to 0.5–4.0, and 1.0 until three have been measured;
+- **rank** = `E × L`, lower is better.
+
+Labels: **working** (it passes, setup within `PROXY_CHECK_SLOW_MS`, and `r` ≥ 0.8 — below three samples, a record with no failure), **slow** (it passes, median setup above `PROXY_CHECK_SLOW_MS`), **flaky** (`r` below 0.5 over three or more samples), **untested** (no sample). A record between flaky and working carries no label; its "k of n ok" says why. Labels never take an address out of a chain.
+
+**Bounds** — constants, not settings: the last 20 checks and dials per address and provider (and separately the last 20 first-token ratios), only samples from the last 24 hours count, at most 2,048 address/provider pairs (least recently updated dropped first), and a model's first-token baseline is its last 50 answers. The history is kept in `~/.mcc/proxy_speed.json`, written by the health timer every 30 s when something changed; a missing or damaged file starts an empty history.
+
+**On the page.** Candidates sort by **measured setup (MCC)**, **success rate (MCC)** or **rank (MCC)**; the feed's own number is still sortable and labelled **latency the feed published** — it is the feed's claim, never MCC's measurement. Filters: **Max setup (ms)** (an address MCC has not timed is hidden while a limit is set), **Hide slow**, **Hide flaky**. **Select the fastest N** ticks the N best-ranked rows matching the filters for the Add and Discard buttons; it adds nothing by itself. Each row shows its measured setup and "k of n ok". A chain entry reads, for example, `≈1.8 s · 4/5 ok · 12 samples · first token 1.4×` with its label beside it.
+
+**Caveat.** The first-token factor assumes the model mix and the proxies carrying each model are similar over a day: each answer is compared with the median of the same model on the same provider, so if one model is served mostly through a few slow proxies its median is slow too and they look ordinary, and a proxy that carried only one slow model on a provider whose baseline comes from other traffic can look slower than it is. Live data also exists only while the request log is on.
+
 #### Testing an address before you rely on it
 
 Every saved entry has a **Test** button, and each card has **Test all**. One press does three things, in order:

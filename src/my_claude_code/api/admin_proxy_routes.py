@@ -64,10 +64,13 @@ from my_claude_code.application.proxy_ingest import (
     feed_payload,
     known_feed_name,
 )
+from my_claude_code.application.proxy_speed_store import speed_payload
 from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.admin.status import provider_config_status
 from my_claude_code.config.constants import (
     PROXY_CANDIDATE_BULK_MAX_DEFAULT,
+    PROXY_CHECK_SLOW_MS_DEFAULT,
+    PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
     PROXY_FEED_MAX_DEFAULT,
     PROXY_FEED_MINIMUM_MINUTES,
     PROXY_FETCH_TEST_CONCURRENCY_MAX,
@@ -369,6 +372,7 @@ async def check_proxy_chain(
         outcomes = await check_endpoints(
             wanted,
             dict.fromkeys(wanted, destination),
+            providers=dict.fromkeys(wanted, provider_id),
             timeout=float(settings.proxy_check_timeout_seconds),
             exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
             attempts=1 if single else int(settings.proxy_check_confirm_attempts),
@@ -1268,6 +1272,7 @@ async def bulk_proxy_candidates(
             await check_endpoints(
                 tuple(testable),
                 dict.fromkeys(testable, destination),
+                providers=dict.fromkeys(testable, provider_id),
                 timeout=float(settings.proxy_check_timeout_seconds),
                 exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
                 concurrency=pace.value,
@@ -1652,7 +1657,8 @@ def _payload(services: ApiServices) -> dict[str, Any]:
         },
         "feeds": feed_payload(store),
         "candidates": [
-            _candidate_payload(proxy_id, store) for proxy_id in store.candidates
+            _candidate_payload(proxy_id, store, settings)
+            for proxy_id in store.candidates
         ],
         # The addresses a sweep refused, which until 7.35.1 the page could only
         # count. A refusal is a durable fact about a stranger's machine -- it
@@ -1671,7 +1677,8 @@ def _payload(services: ApiServices) -> dict[str, Any]:
         # report with the same sentence as "nothing passed".
         "chained_passing": _chained_passing(store),
         "providers": [
-            _provider_payload(entry, store) for entry in _configured_providers(settings)
+            _provider_payload(entry, store, settings)
+            for entry in _configured_providers(settings)
         ],
     }
 
@@ -1724,7 +1731,9 @@ def _refused_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
     }
 
 
-def _candidate_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
+def _candidate_payload(
+    proxy_id: str, store: ProxyChains, settings: Any = None
+) -> dict[str, Any]:
     """One address on offer, and where it came from.
 
     The URL never leaves the server -- the same rule every other row on this
@@ -1753,7 +1762,11 @@ def _candidate_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
         "country": facts.country if facts is not None else "",
         "anonymity": facts.anonymity if facts is not None else "",
         "https_ok": bool(facts is not None and facts.https_ok),
+        # The latency the FEED published, under its own name (7.54.0) and
+        # under the old one for a reader written before it. MCC's own
+        # measurement is ``speed`` below; the two are never the same number.
         "latency_ms": facts.latency_ms if facts is not None else None,
+        "feed_latency_ms": facts.latency_ms if facts is not None else None,
         "uptime_pct": facts.uptime_pct if facts is not None else None,
         "last_check": None if last_check is None else last_check.as_document(),
         "refused": bool(endpoint.refused),
@@ -1782,7 +1795,35 @@ def _candidate_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
         # the next fetch replaces the offer list wholesale, so it clears itself
         # the first time the operator presses the button.
         "untested": bool(last_check is None),
+        # What MCC itself measured about this address for the provider it was
+        # checked against (7.54.0): median setup, success rate, the live
+        # first-token factor and the rank key of spec §7.3. Sortable and
+        # filterable on the page; it never decides anything by itself.
+        "speed": _speed(
+            endpoint.label or mask_proxy_label(endpoint.url),
+            endpoint.checked_for,
+            settings,
+        ),
     }
+
+
+def _speed(label: str, provider_id: str, settings: Any) -> dict[str, Any]:
+    """The speed ledger's score for one address and provider, for the page."""
+
+    return speed_payload(
+        label,
+        provider_id,
+        connect_timeout_seconds=float(
+            getattr(
+                settings,
+                "proxy_connect_timeout_seconds",
+                PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
+            )
+        ),
+        slow_ms=float(
+            getattr(settings, "proxy_check_slow_ms", PROXY_CHECK_SLOW_MS_DEFAULT)
+        ),
+    )
 
 
 def _display_name(provider_id: str) -> str:
@@ -1884,7 +1925,9 @@ def _configured_providers(settings: Settings) -> list[dict[str, Any]]:
     return configured
 
 
-def _provider_payload(entry: dict[str, Any], store: ProxyChains) -> dict[str, Any]:
+def _provider_payload(
+    entry: dict[str, Any], store: ProxyChains, settings: Any = None
+) -> dict[str, Any]:
     chain = store.chain(entry["provider_id"])
     inherited = str(entry.pop("inherited_proxy") or "")
     payload = dict(entry)
@@ -1894,7 +1937,7 @@ def _provider_payload(entry: dict[str, Any], store: ProxyChains) -> dict[str, An
     payload["inherited_label"] = mask_proxy_label(inherited)
     payload["inherited_scheme"] = _scheme(inherited)
     payload["chain"] = (
-        _chain_payload(chain, store, str(entry["provider_id"]))
+        _chain_payload(chain, store, str(entry["provider_id"]), settings)
         if chain is not None
         else None
     )
@@ -1902,7 +1945,7 @@ def _provider_payload(entry: dict[str, Any], store: ProxyChains) -> dict[str, An
 
 
 def _chain_payload(
-    chain: ProxyChain, store: ProxyChains, provider_id: str
+    chain: ProxyChain, store: ProxyChains, provider_id: str, settings: Any = None
 ) -> dict[str, Any]:
     return {
         "enabled": chain.enabled,
@@ -1912,12 +1955,17 @@ def _chain_payload(
         "direct_fallback": chain.direct_fallback,
         "on": list(chain.on),
         "oauth_acknowledged": chain.oauth_acknowledged,
-        "entries": [_entry_payload(item, store, provider_id) for item in chain.entries],
+        "entries": [
+            _entry_payload(item, store, provider_id, settings) for item in chain.entries
+        ],
     }
 
 
 def _entry_payload(
-    entry: ProxyChainEntry, store: ProxyChains, provider_id: str
+    entry: ProxyChainEntry,
+    store: ProxyChains,
+    provider_id: str,
+    settings: Any = None,
 ) -> dict[str, Any]:
     endpoint = store.endpoint(entry.proxy) if entry.proxy else None
     url = endpoint.url if endpoint is not None else ""
@@ -1946,6 +1994,10 @@ def _entry_payload(
         "health": PROXY_HEALTH.snapshot(
             provider_id, DIRECT_PROXY_LABEL if entry.is_direct else label
         ),
+        # How fast and how often this address has worked for THIS provider
+        # (7.54.0), from checks and -- with the request log on -- live dials
+        # and first tokens. Direct has no address to measure.
+        "speed": _speed("" if entry.is_direct else label, provider_id, settings),
     }
 
 

@@ -592,6 +592,11 @@ const proxyState = {
     minSources: 1,
     sort: "sources",
     destination: "",
+    // 7.54.0: MCC's own measurements. "" is no limit, never 0 read as one.
+    maxSetup: "",
+    hideSlow: false,
+    hideFlaky: false,
+    fastestN: 10,
     // Whether the addresses the sweep refused are shown. Off by default: they
     // are not offers, and the common case is not wanting to look at them.
     showRefused: false,
@@ -1803,7 +1808,117 @@ function proxyCandidateMatches(candidate) {
   }
   if (view.scheme && candidate.scheme !== view.scheme) return false;
   if (proxyCandidateSources(candidate) < Number(view.minSources || 1)) return false;
+  // 7.54.0: the filters on what MCC measured. A row with no measured setup is
+  // hidden by a max-setup limit -- "at most 2,000 ms" is not a claim anybody
+  // can make about an address nobody timed.
+  const maxSetup = proxySpeedNumber(view.maxSetup);
+  if (maxSetup !== null && maxSetup > 0) {
+    const setup = proxySpeedNumber((proxySpeedOf(candidate) || {}).setup_ms);
+    if (setup === null || setup > maxSetup) return false;
+  }
+  const state = proxyCandidateSpeedState(candidate);
+  if (view.hideSlow && state === "slow") return false;
+  if (view.hideFlaky && state === "flaky") return false;
   return true;
+}
+
+/* ------------------------------------------------- measured speed (7.54.0)
+   `speed` is the server's score of this address for one provider, from the
+   checks MCC ran and -- with the request log on -- the dials and first tokens
+   of real requests: `setup_ms` (median setup when it works), `success_rate`
+   ((passes + 1) / (samples + 2)), `expected_ms` (setup plus the expected cost
+   of its failures), `ttft_factor` and `rank_key` (lower is better). Any number
+   can be absent and 0 is a real value, so nothing here reads one with
+   `x || default`. */
+function proxySpeedOf(row) {
+  const speed = row && row.speed;
+  return speed && typeof speed === "object" ? speed : null;
+}
+
+function proxySpeedNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+/* The label a row shows: the ledger's when it has earned one, else the one
+   the fetch gave the pass (7.53.0). */
+function proxyCandidateSpeedState(candidate) {
+  const speed = proxySpeedOf(candidate);
+  const measured = speed ? String(speed.state || "") : "";
+  if (measured && measured !== "untested") return measured;
+  return String(candidate.state || "");
+}
+
+function proxySpeedSeconds(ms) {
+  return ms >= 10000 ? `${Math.round(ms / 1000)} s` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/* "≈1.8 s · 4/5 ok · 12 samples · first token 1.4×" -- the expected setup,
+   how many checks and dials passed, how many samples the window holds, and
+   the live first-token factor once three requests have measured one. */
+function proxySpeedReadout(speed) {
+  const samples = speed ? proxySpeedNumber(speed.samples) || 0 : 0;
+  const live = speed ? proxySpeedNumber(speed.live_samples) || 0 : 0;
+  if (!speed || (samples <= 0 && live <= 0)) {
+    return {
+      text: "no speed samples yet",
+      title:
+        "MCC has not measured this address for this provider in the last 24 " +
+        "hours. A check, a fetch, or a request through it with the request " +
+        "log on will.",
+    };
+  }
+  const parts = [];
+  const expected = proxySpeedNumber(speed.expected_ms);
+  const setup = proxySpeedNumber(speed.setup_ms);
+  const successes = proxySpeedNumber(speed.successes) || 0;
+  if (expected !== null) parts.push(`≈${proxySpeedSeconds(expected)}`);
+  if (samples > 0) parts.push(`${successes}/${samples} ok`);
+  const total = samples + live;
+  parts.push(`${total} sample${total === 1 ? "" : "s"}`);
+  const factor = proxySpeedNumber(speed.ttft_factor);
+  if (live >= 3 && factor !== null) {
+    parts.push(`first token ${factor.toFixed(1)}×`);
+  }
+  const failing = samples - successes;
+  const title =
+    (expected !== null
+      ? `Expected setup ≈${Math.round(expected)} ms per use` +
+        (setup !== null ? ` (${Math.round(setup)} ms when it works` : " (") +
+        (failing > 0 ? `; fails ${failing} in ${samples})` : ")") +
+        ". A failure is counted as a full connect timeout, which is what it " +
+        "costs a live request before the chain moves on. "
+      : "No passing sample timed a setup yet. ") +
+    (live >= 3 && factor !== null
+      ? `Its first tokens arrive ${factor.toFixed(1)}× as late as this ` +
+        `model's usual on this provider (over ${live} proxied requests). `
+      : live > 0
+        ? `${live} live first-token sample(s) so far; three are needed before ` +
+          "they count. "
+        : "") +
+    "Measured by MCC over the last 24 hours: the last 20 checks and dials.";
+  return { text: parts.join(" · "), title };
+}
+
+function proxySpeedChip(state, title) {
+  if (state !== "working" && state !== "slow" && state !== "flaky") return null;
+  const chip = document.createElement("span");
+  chip.className = `proxy-state-chip proxy-state-${state}`;
+  chip.textContent = state;
+  if (title) chip.title = title;
+  return chip;
+}
+
+/* Lower rank first; a row with no rank (nothing timed yet) after every
+   ranked one. */
+function proxyRankCompare(left, right) {
+  const a = proxySpeedNumber((proxySpeedOf(left) || {}).rank_key);
+  const b = proxySpeedNumber((proxySpeedOf(right) || {}).rank_key);
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a - b;
 }
 
 /* What the filter matches, in the order the sort asks for. "Select all" means
@@ -1812,12 +1927,40 @@ function proxyCandidateMatches(candidate) {
 function proxyFilteredCandidates() {
   const sort = proxyState.view.sort;
   const rows = proxyCandidates().filter(proxyCandidateMatches);
-  const latency = (candidate) =>
-    candidate.latency_ms === null || candidate.latency_ms === undefined
-      ? Number.POSITIVE_INFINITY
-      : Number(candidate.latency_ms);
+  // The FEED's published number, under its own key since 7.54.0 (and the old
+  // one from an older server). Never MCC's own: that is `speed` below.
+  const latency = (candidate) => {
+    const value = proxySpeedNumber(
+      candidate.feed_latency_ms !== undefined
+        ? candidate.feed_latency_ms
+        : candidate.latency_ms,
+    );
+    return value === null ? Number.POSITIVE_INFINITY : value;
+  };
+  const measured = (candidate, key) =>
+    proxySpeedNumber((proxySpeedOf(candidate) || {})[key]);
+  const nullsLast = (a, b, descending) => {
+    if (a === null && b === null) return 0;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    return descending ? b - a : a - b;
+  };
   rows.sort((left, right) => {
     if (sort === "latency") return latency(left) - latency(right);
+    if (sort === "setup") {
+      return nullsLast(measured(left, "setup_ms"), measured(right, "setup_ms"), false);
+    }
+    if (sort === "rate") {
+      const rate = (candidate) =>
+        (measured(candidate, "samples") || 0) > 0
+          ? measured(candidate, "success_rate")
+          : null;
+      return (
+        nullsLast(rate(left), rate(right), true) ||
+        nullsLast(measured(left, "samples"), measured(right, "samples"), true)
+      );
+    }
+    if (sort === "rank") return proxyRankCompare(left, right);
     if (sort === "address") {
       return String(left.label || "").localeCompare(String(right.label || ""));
     }
@@ -2134,6 +2277,9 @@ function proxyCandidateControls() {
       "Sort by",
       [
         { value: "sources", label: "feeds agreeing" },
+        { value: "setup", label: "measured setup (MCC)" },
+        { value: "rate", label: "success rate (MCC)" },
+        { value: "rank", label: "rank (MCC)" },
         { value: "latency", label: "latency the feed published" },
         { value: "address", label: "address" },
         { value: "scheme", label: "scheme" },
@@ -2144,7 +2290,118 @@ function proxyCandidateControls() {
       },
     ),
   );
+  controls.appendChild(proxyCandidateSpeedFilters());
   return controls;
+}
+
+/* The filters on what MCC measured, and "Select the fastest N" (7.54.0). The
+   last one only ticks rows for the bulk buttons beside it; it never adds
+   anything by itself. */
+function proxyCandidateSpeedFilters() {
+  const box = document.createElement("div");
+  box.className = "proxy-candidate-speed-filters";
+
+  const max = document.createElement("label");
+  max.className = "proxy-candidate-control";
+  const maxText = document.createElement("span");
+  maxText.textContent = "Max setup (ms)";
+  const maxBox = document.createElement("input");
+  maxBox.type = "number";
+  maxBox.min = "0";
+  maxBox.step = "100";
+  maxBox.className = "proxy-candidate-max-setup";
+  maxBox.placeholder = "any";
+  maxBox.value =
+    proxyState.view.maxSetup === "" ? "" : String(proxyState.view.maxSetup);
+  maxBox.title =
+    "Only addresses whose median setup -- connect, tunnel and TLS, measured " +
+    "by MCC -- is at most this many milliseconds. An address MCC has not " +
+    "timed yet is hidden while a limit is set. Empty is no limit.";
+  maxBox.addEventListener("input", () => {
+    const value = proxySpeedNumber(maxBox.value);
+    proxyState.view.maxSetup = value === null || value <= 0 ? "" : value;
+    saveProxyCandidateView();
+    paintProxyCandidateList();
+  });
+  max.append(maxText, maxBox);
+  box.appendChild(max);
+
+  const toggle = (text, key, className) => {
+    const label = document.createElement("label");
+    label.className = "proxy-candidate-control proxy-candidate-toggle";
+    const tick = document.createElement("input");
+    tick.type = "checkbox";
+    tick.className = className;
+    tick.checked = Boolean(proxyState.view[key]);
+    tick.addEventListener("change", () => {
+      proxyState.view[key] = tick.checked;
+      saveProxyCandidateView();
+      paintProxyCandidateList();
+    });
+    const words = document.createElement("span");
+    words.textContent = text;
+    label.append(tick, words);
+    return label;
+  };
+  box.appendChild(toggle("Hide slow", "hideSlow", "proxy-candidate-hide-slow"));
+  box.appendChild(toggle("Hide flaky", "hideFlaky", "proxy-candidate-hide-flaky"));
+
+  const fastest = document.createElement("span");
+  fastest.className = "proxy-candidate-control proxy-candidate-fastest";
+  const pick = document.createElement("button");
+  pick.type = "button";
+  pick.className = "secondary-button proxy-candidate-fastest-button";
+  pick.textContent = "Select the fastest";
+  pick.title =
+    "Selects the N best-ranked addresses matching the filters -- expected " +
+    "setup, counting failures, times the live first-token factor -- for the " +
+    "Add and Discard buttons below. It adds nothing by itself.";
+  pick.addEventListener("click", () => selectFastestProxyCandidates());
+  const count = document.createElement("input");
+  count.type = "number";
+  count.min = "1";
+  count.step = "1";
+  count.className = "proxy-candidate-fastest-n";
+  count.value = String(proxyState.view.fastestN);
+  count.setAttribute("aria-label", "How many of the fastest to select");
+  count.addEventListener("input", () => {
+    const value = proxySpeedNumber(count.value);
+    if (value !== null && value >= 1) {
+      proxyState.view.fastestN = Math.round(value);
+      saveProxyCandidateView();
+    }
+  });
+  fastest.append(pick, count);
+  box.appendChild(fastest);
+  return box;
+}
+
+function selectFastestProxyCandidates() {
+  const asked = proxySpeedNumber(proxyState.view.fastestN);
+  const wanted = asked !== null && asked >= 1 ? Math.round(asked) : 1;
+  const ranked = proxyFilteredCandidates()
+    .filter(
+      (candidate) =>
+        !candidate.refused &&
+        proxySpeedNumber((proxySpeedOf(candidate) || {}).rank_key) !== null,
+    )
+    .sort(proxyRankCompare)
+    .slice(0, wanted);
+  proxyState.selected.clear();
+  proxyState.anchor = null;
+  proxyState.arrowRange = [];
+  setProxyCandidateSelection(
+    ranked.map((candidate) => candidate.proxy),
+    true,
+  );
+  announceProxy(
+    ranked.length
+      ? `Selected the ${ranked.length} fastest measured address${
+          ranked.length === 1 ? "" : "es"
+        } matching the filters. Nothing is added until you press Add.`
+      : "No address matching the filters has a measured speed yet. Run a " +
+          "fetch or a test first.",
+  );
 }
 
 function proxyCandidateSelect(text, options, value, apply) {
@@ -2799,9 +3056,25 @@ function proxyCandidateRow(candidate) {
   );
   actions.appendChild(discard);
 
+  /* What MCC measured, beside what the feed claimed (7.54.0): the median
+     setup when it works and how many of its checks passed, for the provider
+     it was checked against. */
+  const speed = proxySpeedOf(candidate);
+  const speedCell = document.createElement("span");
+  speedCell.className = "proxy-candidate-speed";
+  const setupMs = proxySpeedNumber((speed || {}).setup_ms);
+  const speedSamples = proxySpeedNumber((speed || {}).samples) || 0;
+  const speedOk = proxySpeedNumber((speed || {}).successes) || 0;
+  speedCell.textContent =
+    speedSamples > 0
+      ? `${setupMs === null ? "setup not timed" : `setup ${Math.round(setupMs)} ms`}` +
+        ` · ${speedOk} of ${speedSamples} ok`
+      : "not measured yet";
+  speedCell.title = proxySpeedReadout(speed).title;
+
   const chip = proxyCandidateStateChip(candidate);
-  if (chip) row.append(label, scheme, measured, chip, facts, sources, actions);
-  else row.append(label, scheme, measured, facts, sources, actions);
+  if (chip) row.append(label, scheme, measured, speedCell, chip, facts, sources, actions);
+  else row.append(label, scheme, measured, speedCell, facts, sources, actions);
   return row;
 }
 
@@ -2827,14 +3100,16 @@ function proxyCandidateSetupMs(check) {
 }
 
 function proxyCandidateStateChip(candidate) {
-  const state = String(candidate.state || "");
+  const state = proxyCandidateSpeedState(candidate);
   if (state !== "working" && state !== "slow" && state !== "flaky") return null;
   const check = candidate.last_check || null;
   const chip = document.createElement("span");
   chip.textContent = state;
   if (state === "slow") {
     chip.className = "proxy-state-chip proxy-state-slow";
-    const setup = proxyCandidateSetupMs(check);
+    const measuredSetup = proxySpeedNumber((proxySpeedOf(candidate) || {}).setup_ms);
+    const setup =
+      measuredSetup !== null ? Math.round(measuredSetup) : proxyCandidateSetupMs(check);
     chip.title =
       "Passed, but setting up the connection -- connect + tunnel + TLS -- " +
       (setup === null ? "took" : `took ${setup} ms,`) +
@@ -3679,7 +3954,29 @@ function proxyEntryRow(provider, draft, entry, index) {
     renderProxying();
   });
 
-  row.append(select, handle, position, label, scheme, state, check, actions);
+  // How fast and how often this address has worked for THIS provider
+  // (7.54.0). A label, never a verdict: the health word beside it is still
+  // what decides whether the chain may use it.
+  const speedCell = document.createElement("span");
+  speedCell.className = "proxy-entry-speed";
+  const speed = proxySpeedOf(entry);
+  if (entry.direct) {
+    speedCell.textContent = "";
+  } else {
+    const readout = proxySpeedReadout(speed);
+    speedCell.textContent = readout.text;
+    speedCell.title = readout.title;
+    const chip = proxySpeedChip(
+      speed ? String(speed.state || "") : "",
+      "MCC's label from its own measurements of this address for this " +
+        "provider: working, slow (setup above PROXY_CHECK_SLOW_MS) or flaky " +
+        "(passed on fewer than half of 3 or more samples). It never takes an " +
+        "address out of the chain.",
+    );
+    if (chip) speedCell.appendChild(chip);
+  }
+
+  row.append(select, handle, position, label, scheme, state, check, speedCell, actions);
   return row;
 }
 

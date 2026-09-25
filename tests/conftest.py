@@ -448,6 +448,24 @@ def _isolate_proxy_fetch_status(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_proxy_speed(monkeypatch, tmp_path):
+    """No test may write the real speed ledger, or see another test's samples.
+
+    The ledger is process-wide (7.54.0) and every check, fetch and logged
+    request feeds it, so without this one test's measurements would rank the
+    next test's addresses -- and a flush would write the developer's file.
+    """
+    from my_claude_code.application import proxy_speed_store
+    from my_claude_code.core.proxy_speed import PROXY_SPEED
+
+    path = tmp_path / "fcc-config" / "proxy_speed.json"
+    monkeypatch.setattr(proxy_speed_store, "proxy_speed_path", lambda: path)
+    PROXY_SPEED.reset()
+    yield path
+    PROXY_SPEED.reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_provider_registry(monkeypatch, tmp_path):
     """Keep custom provider registry state out of the real ~/.fcc directory."""
     from my_claude_code.config import provider_registry

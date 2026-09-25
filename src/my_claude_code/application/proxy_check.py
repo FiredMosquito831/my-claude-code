@@ -43,7 +43,7 @@ import errno
 import ssl
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -53,6 +53,7 @@ import httpx
 import socksio.socks5
 from loguru import logger
 
+from my_claude_code.application.proxy_speed_store import record_check
 from my_claude_code.config.constants import (
     PROXY_CHECK_MAX_CONCURRENCY_DEFAULT,
     PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT,
@@ -239,7 +240,35 @@ def check_targets(
     un-pauses it wants a current answer rather than a stale one.
     """
 
-    targets: dict[str, str] = {}
+    return {
+        proxy_id: destination
+        for proxy_id, (_, destination) in _check_pairs(
+            settings, store, enabled_only=enabled_only
+        ).items()
+    }
+
+
+def check_target_providers(
+    settings: Any, store: ProxyChains, *, enabled_only: bool = False
+) -> dict[str, str]:
+    """The provider each :func:`check_targets` address is checked against.
+
+    Same rules, same order, so the speed ledger files a check under the
+    provider whose host it actually dialled (7.54.0).
+    """
+
+    return {
+        proxy_id: provider_id
+        for proxy_id, (provider_id, _) in _check_pairs(
+            settings, store, enabled_only=enabled_only
+        ).items()
+    }
+
+
+def _check_pairs(
+    settings: Any, store: ProxyChains, *, enabled_only: bool
+) -> dict[str, tuple[str, str]]:
+    pairs: dict[str, tuple[str, str]] = {}
     for provider_id, chain in store.chains.items():
         if enabled_only and not chain.enabled:
             continue
@@ -247,9 +276,18 @@ def check_targets(
         if not destination.lower().startswith("https://"):
             continue
         for entry in chain.entries:
-            if entry.proxy and entry.proxy not in targets:
-                targets[entry.proxy] = destination
-    return targets
+            if entry.proxy and entry.proxy not in pairs:
+                pairs[entry.proxy] = (provider_id, destination)
+    return pairs
+
+
+def _first_chain_provider(store: ProxyChains, proxy_id: str) -> str:
+    """The first provider in store order whose chain names ``proxy_id``."""
+
+    for provider_id, chain in store.chains.items():
+        if proxy_id in chain.proxy_ids():
+            return provider_id
+    return ""
 
 
 def _now() -> str:
@@ -1239,6 +1277,7 @@ async def check_endpoints(
     spacing: float = 0.0,
     charge_failures: bool = True,
     sleep: Callable[[float], Awaitable[object]] | None = None,
+    providers: Mapping[str, str] | None = None,
 ) -> dict[str, ProxyCheckOutcome]:
     """Check several stored addresses, persist the verdicts, arm the ledgers.
 
@@ -1295,6 +1334,12 @@ async def check_endpoints(
     nothing at all -- no ladder rung, no stored record. An interception is
     still applied, because that is the security control and is never skipped.
     ``sleep`` replaces ``asyncio.sleep`` for the spacing, for tests.
+
+    ``providers`` maps a proxy id to the provider its destination belongs to,
+    so every try is filed in the speed ledger (7.54.0) under the provider it
+    measured. A caller that does not say gets the first chain in store order
+    that names the address -- the rule :func:`check_targets` uses. A failure
+    an early confirm does not charge is not filed either: it changes nothing.
     """
 
     table = load_proxy_chains()
@@ -1319,6 +1364,11 @@ async def check_endpoints(
         if worker is None:
             return await coroutine
         return await worker.run(coroutine)
+
+    def provider_for(proxy_id: str) -> str:
+        if providers is not None and providers.get(proxy_id):
+            return str(providers[proxy_id])
+        return _first_chain_provider(table, proxy_id)
 
     tries_allowed = max(1, int(attempts))
     gap = max(0.0, float(spacing))
@@ -1364,6 +1414,10 @@ async def check_endpoints(
             record = hold_refusal(
                 label, await one_try(endpoint.url, destinations[proxy_id], label)
             )
+            if record.ok or charge_failures:
+                # Every try is a sample: each one is what a live dial would
+                # have met, so a round of three failures is three of them.
+                record_check(label, provider_for(proxy_id), record)
             if record.ok or record.intercepted or tried >= tries_allowed:
                 break
             if gap > 0:
@@ -1425,6 +1479,7 @@ __all__ = [
     "check_budget",
     "check_endpoints",
     "check_proxy",
+    "check_target_providers",
     "check_targets",
     "default_ssl_context",
     "destination_for_provider",
