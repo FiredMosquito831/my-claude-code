@@ -114,6 +114,10 @@ class FeedEndpoint:
     uptime_pct: float | None = None
     last_checked: str = ""
     asn: str = ""
+    #: The scheme a line wrote in front of the address itself -- ``https`` in
+    #: ``https://1.2.3.4:8080`` -- or empty when the protocol came from the
+    #: feed's labels. Only the written form is dialled with TLS to the proxy.
+    written_scheme: str = ""
 
     @property
     def address(self) -> str:
@@ -128,9 +132,23 @@ class FeedEndpoint:
         ``socks5`` becomes ``socks5h``: resolving the destination's hostname at
         the proxy rather than here is what a SOCKS proxy is for, and the ``h``
         form is the one that does it.
+
+        A feed's ``https`` *label* becomes ``http`` (7.52.3). Feeds publish
+        ``https`` for an HTTP proxy that can tunnel HTTPS -- a CONNECT proxy --
+        not for a proxy that must itself be reached over TLS. Dialled as
+        ``https://`` none of 160 such addresses passed a check; dialled as
+        ``http://`` 23 did (``specs/PR-PROXY-CHECK-VERDICTS-AND-SPEED-SPEC.md``
+        §4.3). ``https_ok`` keeps what the feed said. A line that wrote
+        ``https://`` in front of its own address keeps it: that was written,
+        not labelled.
         """
 
-        scheme = "socks5h" if self.protocol == "socks5" else self.protocol
+        if self.protocol == "socks5":
+            scheme = "socks5h"
+        elif self.protocol == "https" and self.written_scheme != "https":
+            scheme = "http"
+        else:
+            scheme = self.protocol
         return f"{scheme}://{self.address}"
 
 
@@ -444,8 +462,10 @@ def _parse_lines(text: str, feed: ProxyFeed) -> list[FeedEndpoint]:
         if not line or line.startswith("#"):
             continue
         protocol = feed.assume_protocol
+        written = ""
         if "://" in line:
             scheme, _, line = line.partition("://")
+            written = scheme.strip().lower()
             protocol = _protocol(scheme) or protocol
         host, separator, port = line.partition(":")
         if not separator:
@@ -458,6 +478,7 @@ def _parse_lines(text: str, feed: ProxyFeed) -> list[FeedEndpoint]:
                 _port(port),
                 anonymity=feed.assume_anonymity,
                 https_ok=feed.assume_https_ok,
+                written_scheme=written,
             ),
         )
     return found
