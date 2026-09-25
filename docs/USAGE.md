@@ -1270,7 +1270,9 @@ on the reporting machine:
   fire a background `/models` query against *every* configured provider —
   1.6–9.7 s of held loop per call. A chain edit changes the address a provider
   dials *from*, not the models it has, so it no longer asks. The generation is
-  still rebuilt before the save answers, so the new chain routes immediately.
+  still rebuilt before the save answers, so the new chain routes immediately —
+  and since 7.55.0 only the provider whose chain you saved is rebuilt: every
+  other provider keeps its client, its credential pool and its benches.
 - **A bulk add rebuilds once, not once per batch.** The page sends a long
   selection in batches of ten and used to republish after each one — thirty
   generation rebuilds for three hundred addresses. Now only the last batch

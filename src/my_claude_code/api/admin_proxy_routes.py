@@ -36,6 +36,7 @@ The release that adds the runtime seam adds the republish with it.
 import asyncio
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -122,6 +123,15 @@ router = APIRouter()
 # would silently drop the first -- the race ``apply_admin_config_with`` closes
 # for the env-var settings, which this file cannot use.
 _CHAIN_WRITE_LOCK = threading.Lock()
+
+#: Providers whose chain a bulk batch wrote without republishing (7.55.0).
+#: A gesture republishes on its last batch, and a stopped one through
+#: ``/republish``; until then the chain is stored and not yet routing. Before
+#: a republish was scoped to the saved provider, *any* later save rebuilt
+#: these too, by accident; now every republish owes them explicitly, so a lost
+#: ``/republish`` is still picked up by the next chain write of any provider.
+#: Touched only on the event loop.
+_UNROUTED: set[str] = set()
 
 #: What each policy actually does to a per-address allowance. This is the point
 #: of the feature for an operator whose quota is metered by IP, and it is the
@@ -257,7 +267,7 @@ async def put_proxy_chain(
 
     if payload.remove:
         await asyncio.to_thread(_commit, provider_id, None)
-        await _republish(services)
+        await _republish(services, {provider_id})
         return await asyncio.to_thread(_payload, services)
 
     _reject_bad_policy(payload)
@@ -290,7 +300,9 @@ async def put_proxy_chain(
     await asyncio.to_thread(
         _commit_chain, provider_id, payload, providers[provider_id]["inherited_proxy"]
     )
-    await _republish(services)
+    # Only this provider: a chain is read by its own provider alone, and
+    # ``_commit_chain`` writes no other chain's legs (see ``_republish``).
+    await _republish(services, {provider_id})
     return await asyncio.to_thread(_payload, services)
 
 
@@ -414,8 +426,8 @@ def _ids_to_check(
     return tuple(proxy_id for proxy_id in ids if proxy_id == requested)
 
 
-async def _republish(services: ApiServices) -> None:
-    """Rebuild the provider generation so the new chain is what routes.
+async def _republish(services: ApiServices, provider_ids: Iterable[str] | None) -> None:
+    """Publish a new provider generation so the new chain is what routes.
 
     A proxy is read once, in a provider's constructor, and baked into a
     long-lived client; a chain is read in the same place. So a chain edit that
@@ -423,10 +435,19 @@ async def _republish(services: ApiServices) -> None:
     restart -- which is exactly what the release that shipped the page did on
     purpose, because there was no runtime to tell.
 
-    The known cost, stated on the page's save confirmation rather than hidden:
-    a generation replace resets the credential pools' counters, so key health
-    reads zeros immediately after a chain is saved. The numbers were never
-    wrong; the pools they were measured on no longer exist.
+    ``provider_ids`` names the providers whose chain the write changed, and
+    since 7.55.0 only those are rebuilt: every other provider keeps the very
+    object it had -- its client, its credential pool with its counters and
+    benches, its limiter and its proxy engine. A chain is keyed by one
+    provider and read by that provider alone, and a write to one chain cannot
+    change another chain's legs (an address two chains share is reused under
+    its id, never rewritten), so nothing else has anything to pick up. The
+    saved provider's own pool does start again, and the page's save
+    confirmation says so: its numbers were never wrong, the pool they were
+    measured on no longer exists. ``None`` rebuilds every provider, as every
+    republish did before 7.55.0 -- for a caller that cannot say what changed.
+    Providers a batch wrote without republishing (:data:`_UNROUTED`) are
+    always added: they are owed a rebuild too.
 
     ``sweep=False`` since 7.27.0. A chain edit changes the address a provider
     dials *from*; it cannot change which models that provider has. The blanket
@@ -440,15 +461,56 @@ async def _republish(services: ApiServices) -> None:
     own schedule exactly as it did.
     """
 
+    rebuild = (
+        None if provider_ids is None else frozenset(provider_ids) | frozenset(_UNROUTED)
+    )
     # Never fail the write for it. The chain is already on disk, and a
     # republish that could not run leaves the operator with a saved chain that
     # starts routing at the next restart -- worse than a 500 that suggests
     # nothing was saved at all.
     try:
         with loop_health().working("a proxy chain is being republished"):
-            await services.admin.reload_providers("proxy_chains", sweep=False)
+            await services.admin.reload_providers(
+                "proxy_chains", sweep=False, rebuild_provider_ids=rebuild
+            )
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("PROXY CHAINS: saved, but could not republish: {}", exc)
+        return
+    if rebuild is None:
+        _UNROUTED.clear()
+    else:
+        _UNROUTED.difference_update(rebuild)
+
+
+def _chain_inputs(store: ProxyChains, key: str) -> object:
+    """Everything ``resolve_proxy_chain`` reads from the store for one chain.
+
+    The chain itself, and the URL and label of each address it names -- the
+    two fields a leg is built from. An address's checks, health and
+    provenance are not read at build time and do not count as a change.
+    """
+
+    chain = store.chains.get(key)
+    if chain is None:
+        return None
+    legs: list[tuple[str, str, str] | None] = []
+    for proxy_id in chain.proxy_ids():
+        endpoint = store.endpoint(proxy_id)
+        legs.append(
+            None if endpoint is None else (proxy_id, endpoint.url, endpoint.label)
+        )
+    return chain.as_document(), tuple(legs)
+
+
+def changed_chain_providers(before: ProxyChains, after: ProxyChains) -> frozenset[str]:
+    """The providers whose built chain would differ between two documents."""
+
+    keys = set(before.chains) | set(after.chains)
+    return frozenset(
+        key.strip().lower()
+        for key in keys
+        if _chain_inputs(before, key) != _chain_inputs(after, key)
+    )
 
 
 def _reject_bad_policy(payload: ProxyChainPayload) -> None:
@@ -1348,7 +1410,9 @@ async def bulk_proxy_candidates(
         # unrouted for the few seconds until the batch that does. See
         # ``ProxyCandidateBulkPayload.republish``.
         if payload.republish:
-            await _republish(services)
+            await _republish(services, {provider_id})
+        else:
+            _UNROUTED.add(provider_id)
     token = (
         await asyncio.to_thread(_remember_undo, payload.undo_token.strip(), before)
         if keep
@@ -1375,10 +1439,15 @@ async def republish_proxy_chains(
     Idempotent and cheap by construction. It replaces the generation from
     whatever the store says right now, exactly as a save does, and a call with
     nothing to pick up costs one generation replace and no network at all.
+
+    Scoped since 7.55.0 to the providers the stopped run's batches wrote
+    (:data:`_UNROUTED`), which is exactly what is owed. When this process has
+    recorded none -- a second call, or a call after a restart -- it cannot
+    tell what else might be, and rebuilds every provider as it always did.
     """
 
     require_loopback_admin(request)
-    await _republish(services)
+    await _republish(services, frozenset(_UNROUTED) if _UNROUTED else None)
     return await asyncio.to_thread(_payload, services)
 
 
@@ -1397,7 +1466,7 @@ async def undo_proxy_candidates(
     """
 
     require_loopback_admin(request)
-    restored = await asyncio.to_thread(_commit_undo, payload.token.strip())
+    restored, changed = await asyncio.to_thread(_commit_undo, payload.token.strip())
     if restored == "unknown":
         raise HTTPException(
             status_code=422,
@@ -1415,7 +1484,10 @@ async def undo_proxy_candidates(
                 "that change too. Reload the page to see where it stands."
             ),
         )
-    await _republish(services)
+    # The chains the restore actually changed, by diffing the two documents:
+    # an undo can span a gesture that touched one provider's chain, and it
+    # must not cost every other provider its pool.
+    await _republish(services, changed)
     return await asyncio.to_thread(_payload, services)
 
 
@@ -1568,17 +1640,22 @@ def _remember_undo(continuing: str, before: dict[str, Any]) -> str:
         return token
 
 
-def _commit_undo(token: str) -> str:
-    """``"done"``, ``"unknown"`` for a stale token, ``"moved"`` if it changed."""
+def _commit_undo(token: str) -> tuple[str, frozenset[str]]:
+    """``"done"``, ``"unknown"`` for a stale token, ``"moved"`` if it changed.
+
+    With the providers whose chain the restore changed (empty unless done).
+    """
 
     with _UNDO_LOCK, _CHAIN_WRITE_LOCK:
         if not token or _UNDO_SLOT.get("token") != token:
-            return "unknown"
-        if load_proxy_chains().as_document() != _UNDO_SLOT.get("after"):
-            return "moved"
-        save_proxy_chains(ProxyChains.from_document(_UNDO_SLOT["before"]))
+            return "unknown", frozenset()
+        current = load_proxy_chains()
+        if current.as_document() != _UNDO_SLOT.get("after"):
+            return "moved", frozenset()
+        restored = ProxyChains.from_document(_UNDO_SLOT["before"])
+        save_proxy_chains(restored)
         _UNDO_SLOT.clear()
-        return "done"
+        return "done", changed_chain_providers(current, restored)
 
 
 # ------------------------------------------------------------------- payload

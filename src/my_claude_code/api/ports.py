@@ -32,6 +32,7 @@ class AdminRuntimePort(Protocol):
         *,
         refresh_provider_id: str | None = None,
         sweep: bool = True,
+        rebuild_provider_ids: frozenset[str] | None = None,
     ) -> dict[str, Any]: ...
 
     async def test_provider(self, provider_id: str) -> dict[str, Any]: ...

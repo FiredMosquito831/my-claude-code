@@ -665,6 +665,7 @@ class ApplicationRuntime:
         *,
         refresh_provider_id: str | None = None,
         sweep: bool = True,
+        rebuild_provider_ids: frozenset[str] | None = None,
     ) -> dict[str, Any]:
         """Republish the provider generation after a non-Settings mutation.
 
@@ -687,6 +688,12 @@ class ApplicationRuntime:
         three or more times by one bulk add. The generation is still replaced,
         so the new chain is what routes the instant the save returns; only the
         sweep it never needed is gone.
+
+        ``rebuild_provider_ids`` names the providers whose build-time inputs
+        the mutation changed (7.55.0). ``None`` -- every caller but the proxy
+        chain routes -- rebuilds every provider, as it always did. A set keeps
+        every other provider's already-built object, pool and benches included;
+        see ``ProviderRuntimeManager.replace``.
         """
         async with self._config_lock:
             await self.provider_manager.replace(
@@ -694,6 +701,7 @@ class ApplicationRuntime:
                 commit=lambda: None,
                 reason=reason,
                 background_refresh=sweep and refresh_provider_id is None,
+                rebuild_provider_ids=rebuild_provider_ids,
             )
             if refresh_provider_id is None:
                 return {}
