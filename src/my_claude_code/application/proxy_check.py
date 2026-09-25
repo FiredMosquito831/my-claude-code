@@ -43,7 +43,7 @@ import ssl
 import threading
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -820,6 +820,75 @@ async def _exit_ip(proxy_url: str, exit_ip_url: str, timeout: float) -> str:
         return ""
 
 
+#: How many passing checks *in a row* retire an interception refusal (7.52.4).
+#: One used to be enough. Measured on 1,000 feed addresses over five runs
+#: (``specs/PR-PROXY-CHECK-VERDICTS-AND-SPEED-SPEC.md`` §4.4): 69 were refused
+#: at least once, and 2 of them were refused in some runs and passed in another
+#: -- each time with "self-signed certificate in certificate chain". One lucky
+#: pass let such an address back into a chain. User decision 10, 2026-09-25.
+REFUSAL_LIFT_PASSES = 2
+
+#: Consecutive passes each refused address has earned towards its lift. Only
+#: refused addresses have a row, so it is bounded by the refusals themselves.
+#: Process-lifetime on purpose: after a restart an address starts again from
+#: zero, which can only make a lift *later*, never sooner.
+_LIFT_PASSES: dict[str, int] = {}
+_LIFT_LOCK = threading.Lock()
+_LIFT_NOTE = " -- passed "
+
+
+def hold_refusal(label: str, record: ProxyCheckRecord) -> ProxyCheckRecord:
+    """The record a check should be filed as, given any refusal on ``label``.
+
+    A pass on an address that is not refused, a failure and an interception
+    are returned unchanged. A pass on a **refused** address counts towards
+    lifting the refusal. The pass that completes :data:`REFUSAL_LIFT_PASSES` in a row is returned
+    unchanged, so :func:`apply_outcome` lifts the refusal exactly as it always
+    has. Every pass before it comes back as a *refused* record -- ``ok`` false,
+    ``tls`` intercepted, the refusal's own reason plus how far the lift has
+    got. That is what the ledgers see and what the store keeps, so the
+    refusal survives a restart like any other. Anything but a pass breaks the
+    row: a check that did not answer is no evidence the interception stopped.
+
+    The credential was never at risk either way -- nothing is ever sent over a
+    connection that failed verification -- so this is about which addresses a
+    chain may *use*, not about what one check could leak.
+    """
+
+    if not label:
+        return record
+    with _LIFT_LOCK:
+        if not record.ok or record.intercepted:
+            _LIFT_PASSES.pop(label, None)
+            return record
+        if not PROXY_INTERCEPTION.is_refused(label):
+            _LIFT_PASSES.pop(label, None)
+            return record
+        passes = _LIFT_PASSES.get(label, 0) + 1
+        if passes >= REFUSAL_LIFT_PASSES:
+            _LIFT_PASSES.pop(label, None)
+            return record
+        _LIFT_PASSES[label] = passes
+    # The refusal's own reason, without the note an earlier held pass added.
+    reason = PROXY_INTERCEPTION.detail(label).split(_LIFT_NOTE)[0]
+    return replace(
+        record,
+        ok=False,
+        tls=TLS_INTERCEPTED,
+        detail=(
+            f"{reason or 'TLS intercepted'}{_LIFT_NOTE}{passes} of the "
+            f"{REFUSAL_LIFT_PASSES} checks in a row that lift this refusal"
+        ),
+    )
+
+
+def reset_refusal_lifts() -> None:
+    """Forget every lift in progress. For tests."""
+
+    with _LIFT_LOCK:
+        _LIFT_PASSES.clear()
+
+
 def apply_outcome(label: str, record: ProxyCheckRecord) -> None:
     """Tell the running pools what one check found.
 
@@ -1117,6 +1186,7 @@ async def check_endpoints(
                         detail=f"did not finish within {budget:.0f}s",
                         depth=CHECK_DEPTH_REQUEST,
                     )
+        record = hold_refusal(label, record)
         apply_outcome(label, record)
         outcomes[proxy_id] = ProxyCheckOutcome(label=label, record=record)
         # One yield per address. A sweep of a full catalogue is a dozen network
@@ -1155,6 +1225,7 @@ __all__ = [
     "PROXY_CHECK_MAX_CONCURRENCY",
     "PROXY_CHECK_TIMEOUT_SECONDS",
     "PROXY_CLOSE_TIMEOUT_SECONDS",
+    "REFUSAL_LIFT_PASSES",
     "ProxyCheckOutcome",
     "apply_fetch_outcome",
     "apply_outcome",
@@ -1165,4 +1236,6 @@ __all__ = [
     "check_targets",
     "default_ssl_context",
     "destination_for_provider",
+    "hold_refusal",
+    "reset_refusal_lifts",
 ]

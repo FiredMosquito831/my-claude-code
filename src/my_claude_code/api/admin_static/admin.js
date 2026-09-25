@@ -3272,8 +3272,8 @@ function proxyEntryHealth(entry) {
   const waiting = Math.round(Number(health.cooldown_remaining) || 0);
   const wait = waiting >= 60 ? `${Math.round(waiting / 60)}m` : `${waiting}s`;
   // Ahead of every other state, and it is not a bench: the checker measured
-  // this address terminating TLS, so it is refused until a later check says
-  // the destination's certificate verifies again.
+  // this address terminating TLS, so it is refused until two checks in a row
+  // say the destination's certificate verifies again (7.52.4).
   if (entry.refused || health.state === "intercepted") {
     return {
       state: "intercepted",
