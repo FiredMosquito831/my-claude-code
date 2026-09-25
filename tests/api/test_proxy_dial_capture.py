@@ -33,6 +33,10 @@ def store(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _fresh_slots():
+    """Both slots are context variables a worker keeps between tests."""
+
+    _LADDER.set(None)
+    _CURRENT.set(None)
     yield
     _LADDER.set(None)
     _CURRENT.set(None)
