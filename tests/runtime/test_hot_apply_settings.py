@@ -43,6 +43,7 @@ from my_claude_code.api.handlers.messages import MessagesHandler
 from my_claude_code.api.request_capture import build_capture
 from my_claude_code.application.execution import route_execution_policy
 from my_claude_code.config.admin.manifest import FIELD_BY_KEY
+from my_claude_code.config.env_files import LazyEnvFiles
 from my_claude_code.config.paths import managed_env_path
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import (
@@ -300,8 +301,11 @@ def managed_env(monkeypatch) -> Any:
         *MESSAGING_RESTART_KEYS,
     ):
         monkeypatch.delenv(key, raising=False)
+    # Production's own value: resolved at every read, so ``Settings()`` reads
+    # the file the apply wrote even if the config directory is resolved again
+    # in between (a fixed tuple here made the proof order-dependent on CI).
     monkeypatch.setattr(
-        Settings, "model_config", {**Settings.model_config, "env_file": (path,)}
+        Settings, "model_config", {**Settings.model_config, "env_file": LazyEnvFiles()}
     )
     get_settings.cache_clear()
     yield path
