@@ -35,7 +35,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from my_claude_code.config.settings import get_settings
+from my_claude_code.config import settings as config_settings
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
     OpenAIToolNameCodec,
@@ -84,6 +84,18 @@ PI_DEFAULTS = ["read", "bash", "edit", "write"]
 CLAUDE_CASES = ("claude_code_free", "claude_code_sub_request_free", "tool_less_free")
 
 
+def _clear_settings() -> None:
+    """Clear the cache production code actually reads.
+
+    Through the module attribute, not an imported name:
+    ``tests/config/test_env_aliases.py`` reloads the settings module, which
+    rebinds ``get_settings`` in place, and a name imported before that would
+    clear a cache nothing reads any more.
+    """
+
+    config_settings.get_settings.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _fresh_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name in (
@@ -92,9 +104,9 @@ def _fresh_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "OPENCODE_FREE_TIER_CREDENTIAL",
     ):
         monkeypatch.delenv(name, raising=False)
-    get_settings.cache_clear()
+    _clear_settings()
     yield
-    get_settings.cache_clear()
+    _clear_settings()
 
 
 def _names(body: dict[str, Any]) -> list[str]:
@@ -364,7 +376,7 @@ def test_opt_out_mcc_identity_disables_every_family(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", "mcc")
-    get_settings.cache_clear()
+    _clear_settings()
     provider = opencode_provider("opencode")
     for family in OPENCODE_TOOL_FAMILIES:
         request = tool_request(FREE, list(family.spellings))
@@ -946,7 +958,7 @@ def test_stand_ins_never_added_to_claude_or_tool_less_requests(
     assert opencode_provider("opencode_go").with_stand_ins(go_paid) is go_paid
     # And the operator's opt-out turns them off with everything else.
     monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", "mcc")
-    get_settings.cache_clear()
+    _clear_settings()
     opted_out = tool_request(FREE, CODEX_0_155_1)
     assert _stand_ins(opted_out) is opted_out
 
