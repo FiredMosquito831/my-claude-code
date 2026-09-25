@@ -6240,6 +6240,84 @@ const costPanel = {};
   costPanel.noteAfterCostLands = doc.getElementById("reqCostNote").textContent;
 }
 
+// ------------------------------------------- deferred answers that land first
+/* A free-text search paints its rows from a placeholder while the real stats
+   and the real count are fetched off the wait. Those two requests are fired
+   before the paint's own Promise.all, so nothing stops them answering first --
+   and the paint that follows used to redraw every breakdown from the empty
+   placeholder ("No activity") and the pager back to "counting…", until the
+   next reload. Both orders are driven here: the deferred answers first, and
+   the ordinary order where they land after the paint. */
+const deferredRace = {};
+{
+  const snapshot = () => ({
+    providerRows: Array.from(
+      doc.querySelectorAll("#reqProviderBreakdown tbody tr"),
+    ).map((tr) => tr.textContent.trim()),
+    harnessRows: Array.from(
+      doc.querySelectorAll("#reqHarnessBreakdown tbody tr"),
+    ).map((tr) => tr.textContent.trim()),
+    keyRows: doc.querySelectorAll("#reqKeyBreakdown tbody tr").length,
+    countingCards: Array.from(
+      doc.querySelectorAll("#reqStatsCards .requests-card strong"),
+    ).filter((el) => el.textContent.startsWith("counting")).length,
+    cards: doc.querySelectorAll("#reqStatsCards .requests-card").length,
+    pager: doc.getElementById("reqPageInfo").textContent,
+    tableRows: doc.querySelectorAll("#reqTableBody tr").length,
+  });
+  const listRoute = ROUTES["/admin/api/requests"];
+  const countRoute = ROUTES["/admin/api/requests/count"];
+  // The list a search really gets: no total, the count deferred.
+  ROUTES["/admin/api/requests"] = {
+    ...listRoute,
+    total: null,
+    total_deferred: true,
+    has_more: false,
+  };
+  ROUTES["/admin/api/requests/count"] = { total: 7 };
+  const hold = (paths) => {
+    const releases = [];
+    for (const path of paths) {
+      slowRoutes.set(
+        path,
+        new Promise((resolve) => {
+          releases.push(resolve);
+        }),
+      );
+    }
+    return () => {
+      paths.forEach((path) => slowRoutes.delete(path));
+      releases.forEach((release) => release());
+    };
+  };
+  doc.getElementById("reqFilterSearch").value = "race";
+
+  // --- the deferred stats and count answer while the list is still out
+  let release = hold(["/admin/api/requests", "/admin/api/requests/lifetime"]);
+  let load = window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  deferredRace.deferredFirst_beforePaint = snapshot();
+  release();
+  await load;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  deferredRace.deferredFirst_afterPaint = snapshot();
+
+  // --- the ordinary order: the paint first, the deferred answers after it
+  release = hold(["/admin/api/requests/stats", "/admin/api/requests/count"]);
+  load = window.eval("loadRequestsView()");
+  await load;
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  deferredRace.paintFirst_beforeDeferred = snapshot();
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  deferredRace.paintFirst_afterDeferred = snapshot();
+
+  ROUTES["/admin/api/requests"] = listRoute;
+  if (countRoute === undefined) delete ROUTES["/admin/api/requests/count"];
+  else ROUTES["/admin/api/requests/count"] = countRoute;
+  doc.getElementById("reqFilterSearch").value = "boom";
+}
+
 // ------------------------------------------------- harness attribution
 /* Who sent the request, end to end: the column and its chip, the empty-state
    colspan that has to follow the header, the modal's two wordings, the filter
@@ -9244,6 +9322,7 @@ console.log(
       describedImages,
       analytics,
       costPanel,
+      deferredRace,
       logReadout,
       harnessAttr,
       optimizer: {

@@ -15997,6 +15997,13 @@ const reqState = {
   lastStats: null,
   pageRows: 0,
   lastCaptureBodies: null,
+  // The load whose deferred stats / deferred count are already on screen. A
+  // free-text search fires both before its own paint and paints from a
+  // placeholder; when either answer lands first, the paint must not redraw it
+  // back to "counting...". Compared against `loadId`, so an older load's
+  // answer never counts for a newer one.
+  statsPaintedFor: 0,
+  countPaintedFor: 0,
 };
 
 function reqWindowSeconds() {
@@ -16094,6 +16101,10 @@ async function loadRequestsView() {
     throw error;
   }
   if (loadId !== reqState.loadId) return;
+  // The placeholder is the oldest answer this load has. If the real stats for
+  // this same load already painted, paint those again instead of drawing the
+  // breakdowns back to "No activity" and the cards back to "counting...".
+  if (deferring && reqState.statsPaintedFor === loadId) stats = reqState.lastStats;
   if (stats.enabled === false) {
     byId("reqStatsCards").innerHTML = "";
     byId("reqTableBody").innerHTML = "";
@@ -16150,8 +16161,12 @@ async function loadRequestsView() {
   renderRequestFallbackRoutes(stats.fallback_routes || []);
   renderRequestDivertedRoutes(stats.diverted_routes || []);
   renderReqBreakdownTruncatedNote(stats);
-  reqState.total = list.total_deferred ? null : list.total || 0;
-  reqState.countDeferred = Boolean(list.total_deferred);
+  // Likewise the deferred count: once it has landed for this load, the list's
+  // own "total deferred" is older news and must not put "counting..." back.
+  if (!(deferring && reqState.countPaintedFor === loadId)) {
+    reqState.total = list.total_deferred ? null : list.total || 0;
+    reqState.countDeferred = Boolean(list.total_deferred);
+  }
   reqState.hasMore = Boolean(list.has_more);
   reqState.pageRows = (list.rows || []).length;
   reqState.lastCaptureBodies = list.capture_bodies;
@@ -16190,11 +16205,13 @@ async function loadRequestSearchCount(loadId, params) {
   try {
     const result = await api(`/admin/api/requests/count?${params}`);
     if (loadId !== reqState.loadId) return;
+    reqState.countPaintedFor = loadId;
     reqState.total = Number(result.total || 0);
     reqState.countDeferred = false;
     renderReqPager();
   } catch (_error) {
     if (loadId !== reqState.loadId) return;
+    reqState.countPaintedFor = loadId;
     reqState.countDeferred = false;
     reqState.total = null;
     renderReqPager();
@@ -16207,6 +16224,7 @@ async function loadRequestDeferredStats(loadId, params) {
     const stats = await api(`/admin/api/requests/stats?${params}`);
     if (loadId !== reqState.loadId) return;
     if (stats.enabled === false) return;
+    reqState.statsPaintedFor = loadId;
     reqState.harnessLabels =
       stats.harness_labels && typeof stats.harness_labels === "object"
         ? stats.harness_labels

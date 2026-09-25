@@ -3439,6 +3439,60 @@ def test_analytics_paints_while_the_cost_breakdown_is_still_loading(rendered) ->
     assert panel["noteAfterCostLands"] != panel["noteWhileCostPending"]
 
 
+# The pager's own punctuation, spelled by code point so the source stays ASCII.
+PAGER_OF_7 = f"1{chr(0x2013)}7 of 7"
+PAGER_COUNTING = f"1{chr(0x2013)}3 of counting{chr(0x2026)}"
+
+
+def test_a_search_paint_never_overwrites_deferred_answers_that_landed_first(
+    rendered,
+) -> None:
+    """The placeholder paint is older than the deferred stats and count.
+
+    A free-text search fires its real stats and its real count before the
+    paint's own ``Promise.all`` and paints from an empty placeholder. When the
+    two deferred answers came back first, that paint redrew every breakdown as
+    "No ... activity in this range", every card as "counting…" and the pager
+    back to "counting…", and nothing repainted them until the next reload.
+    """
+
+    race = rendered["deferredRace"]
+    landed = race["deferredFirst_beforePaint"]
+    after = race["deferredFirst_afterPaint"]
+
+    # The deferred answers did land first: real rows, real cards, real count.
+    assert landed["providerRows"][0].startswith("nous_portal")
+    assert landed["countingCards"] == 0
+    assert landed["pager"] == PAGER_OF_7
+
+    # And the paint that followed kept them.
+    assert after["providerRows"] == landed["providerRows"]
+    assert after["harnessRows"] == landed["harnessRows"]
+    assert after["keyRows"] == landed["keyRows"]
+    assert after["countingCards"] == 0
+    assert after["cards"] == landed["cards"]
+    assert after["pager"] == PAGER_OF_7
+    assert after["tableRows"] == 3
+
+
+def test_a_search_paint_still_says_counting_until_its_deferred_answers_land(
+    rendered,
+) -> None:
+    """The ordinary order is unchanged: placeholder first, then the numbers."""
+
+    race = rendered["deferredRace"]
+    waiting = race["paintFirst_beforeDeferred"]
+    landed = race["paintFirst_afterDeferred"]
+
+    assert waiting["providerRows"] == ["No provider activity in this range."]
+    assert waiting["countingCards"] == waiting["cards"] > 0
+    assert waiting["pager"] == PAGER_COUNTING
+
+    assert landed["providerRows"] == race["deferredFirst_beforePaint"]["providerRows"]
+    assert landed["countingCards"] == 0
+    assert landed["pager"] == PAGER_OF_7
+
+
 def test_the_lifetime_panel_says_what_the_log_costs(rendered) -> None:
     """No capping was the decision; showing the size is what replaced it.
 
