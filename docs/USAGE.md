@@ -2758,6 +2758,29 @@ turns it into a shell command. Measured with a real Codex 0.155.1 turn on
 - the model called `read`, and Codex answered `unsupported call: read`;
 - the model then reported exactly that.
 
+**Agents read from their source (7.52.0).** Six more agents that MCC can
+launch were not installed on the machine these rows were written on. Their
+spellings are read from each one's published source at a pinned release, or
+from the installed bundle for Droid, which publishes no source. Each row cites
+the file and line, or for Droid the byte offset, it came from.
+
+| agent | its names -> OpenCode's | OpenCode names on the wire |
+| --- | --- | --- |
+| Droid 0.227.0 | `Execute`, `Read`, `Edit`, `Glob`, `Grep` | 5 of 5 |
+| Crush 0.96.1 | `bash`, `view`, `edit`, `glob`, `grep` | 5 of 5 |
+| Kimi Code 1.52.0 | `Shell`, `ReadFile`, `StrReplaceFile`, `Glob`, `Grep` | 5 of 5 |
+| Kilo CLI 7.8.0 | OpenCode's own spellings | 5 of 5 |
+| Cline CLI 3.0.65 | `run_commands`, `read_files`, `editor`, `search_codebase` | 4 of 5 |
+| goose 1.52.0 | `shell`, `edit` | 2 of 5, plus stand-ins for `read`, `glob`, `grep` |
+
+Four was enough on `muse-spark-1.3-contributor-free` for a Cline-shaped request
+(`read, grep, bash, edit`, measured 2026-09-25), so Cline gets no stand-in.
+Aider sends no tools at all, so there is nothing to translate; its requests
+stay tool-less and are refused on gated free models, like every tool-less
+request. Google Antigravity publishes no source and no package that can be
+read without running its installer, so it has no row. A guessed row would fail
+silently.
+
 Which models: any whose id ends in `-free` or `:free`, any the catalogue
 prices at zero on this host, and anything you list in
 `OPENCODE_FREE_TIER_MODELS` (`big-pickle` by default — it is free and its name

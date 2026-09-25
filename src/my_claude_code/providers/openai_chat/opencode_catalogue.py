@@ -223,6 +223,28 @@ _CODEX_STAND_INS: Mapping[str, str] = MappingProxyType(
     }
 )
 
+#: goose has a shell and an editor and nothing else of the five; like Codex it
+#: reads and searches through the shell, which is ``bash`` on the wire.
+_GOOSE_STAND_INS: Mapping[str, str] = MappingProxyType(
+    {
+        "read": (
+            "Not available in this client: goose has no file-reading tool. "
+            "Read a file with the `bash` tool (goose's `shell`), for example "
+            "`cat <path>`."
+        ),
+        "glob": (
+            "Not available in this client: goose has no file-finding tool. "
+            "Find files with the `bash` tool (goose's `shell`), for example "
+            "`rg --files`."
+        ),
+        "grep": (
+            "Not available in this client: goose has no search tool. Search file "
+            "contents with the `bash` tool (goose's `shell`), for example "
+            "`rg <pattern>`."
+        ),
+    }
+)
+
 #: Gemini CLI and Qwen Code share one declaration on purpose. Run headless they
 #: send the same three tools under the same names, so the two families tie and
 #: either may be chosen; a description naming one client would then be wrong
@@ -276,7 +298,10 @@ OPENCODE_TOOL_FAMILIES: tuple[ToolFamily, ...] = (
             "todowrite, webfetch, websearch, write); request log wire_body._names "
             "for harness opencode. Pi sends the same spellings "
             "(@earendil-works/pi-coding-agent 0.82.1 dist/core/sdk.js:132, "
-            "defaults read, bash, edit, write; dist/core/tools/index.js:17 all)"
+            "defaults read, bash, edit, write; dist/core/tools/index.js:17 all). "
+            "So does Kilo CLI (@kilocode/cli 7.8.0, Kilo-Org/kilocode v7.8.0 commit "
+            "6c9ac9542818: packages/opencode/src/tool/shell/id.ts:16 ToolID bash, "
+            "read.ts:80, edit.ts:85, glob.ts:35, grep.ts:22)"
         ),
         spellings=MappingProxyType(
             {name: name for name in ("bash", "read", "edit", "glob", "grep")}
@@ -353,6 +378,101 @@ OPENCODE_TOOL_FAMILIES: tuple[ToolFamily, ...] = (
                 "edit_file": "edit",
                 "glob": "glob",
                 "grep": "grep",
+            }
+        ),
+    ),
+    # -- 7.52.0: clients not installed on the machine these rows were written on.
+    # Each is read from the client's published source at a pinned release, or
+    # -- Droid, which publishes no source -- from its npm bundle unpacked into a
+    # scratch folder with ``npm pack`` (no install script run) and read.
+    ToolFamily(
+        name="droid",
+        provenance="source",
+        cited=(
+            "Factory Droid 0.227.0: npm @factory/cli-win32-x64@0.227.0, "
+            "bin/droid.exe (sha256 d4fa7749...8f67a0082) read as text. Tool "
+            "definitions' llmId at byte offsets Read 164806825, Edit 164812133, "
+            "Grep 164821750, Glob 164823333, Execute 164851360; its own "
+            'Claude-to-Droid map Bash:"Execute" at 161557147'
+        ),
+        spellings=MappingProxyType(
+            {
+                "Execute": "bash",
+                "Read": "read",
+                "Edit": "edit",
+                "Glob": "glob",
+                "Grep": "grep",
+            }
+        ),
+    ),
+    ToolFamily(
+        name="crush",
+        provenance="source",
+        cited=(
+            "charmbracelet/crush v0.96.1 (commit 17a62b72549d), "
+            "internal/agent/tools/bash.go:52 BashToolName, view.go:75 ViewToolName, "
+            "edit.go:45 EditToolName, glob.go:23 GlobToolName, grep.go:90 "
+            "GrepToolName"
+        ),
+        spellings=MappingProxyType(
+            {
+                "bash": "bash",
+                "view": "read",
+                "edit": "edit",
+                "glob": "glob",
+                "grep": "grep",
+            }
+        ),
+    ),
+    ToolFamily(
+        name="kimi_code",
+        provenance="source",
+        cited=(
+            "MoonshotAI/kimi-cli 1.52.0 (commit 9ab1286b8fe4), src/kimi_cli/tools/"
+            "shell/__init__.py:61 Shell, file/read.py:64 ReadFile, "
+            "file/replace.py:44 StrReplaceFile, file/glob.py:56 Glob, "
+            "file/grep_local.py:386 Grep"
+        ),
+        spellings=MappingProxyType(
+            {
+                "Shell": "bash",
+                "ReadFile": "read",
+                "StrReplaceFile": "edit",
+                "Glob": "glob",
+                "Grep": "grep",
+            }
+        ),
+    ),
+    ToolFamily(
+        name="goose",
+        provenance="source",
+        cited=(
+            "block/goose v1.52.0 (commit 302b60806639), crates/goose/src/agents/"
+            "platform_extensions/developer/mod.rs:122-123 edit (find and replace), "
+            ":150 shell; the developer extension is enabled by default and "
+            "unprefixed (platform_extensions/mod.rs:170-176). No read, glob or grep "
+            "tool: goose reads and searches through its shell"
+        ),
+        spellings=MappingProxyType({"shell": "bash", "edit": "edit"}),
+        stand_ins=_GOOSE_STAND_INS,
+    ),
+    ToolFamily(
+        name="cline",
+        provenance="source",
+        cited=(
+            "cline/cline cli-v3.0.65 (commit 9131e3642931), @cline/cli 3.0.65 on "
+            "@cline/core: sdk/packages/core/src/extensions/tools/definitions.ts:514 "
+            "run_commands, :272 read_files, :703 editor, :654 apply_patch (only "
+            "when the editor is off), :369 search_codebase (regex search); defaults "
+            "in createDefaultTools :912. No file-finding tool"
+        ),
+        spellings=MappingProxyType(
+            {
+                "run_commands": "bash",
+                "read_files": "read",
+                "editor": "edit",
+                "apply_patch": "edit",
+                "search_codebase": "grep",
             }
         ),
     ),
