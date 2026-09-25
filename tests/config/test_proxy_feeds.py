@@ -436,3 +436,76 @@ def test_a_stored_feed_with_no_name_is_called_by_its_url():
     again = CustomFeed.from_document(raw, "feeds[0]")
     assert again is not None
     assert again.name == "https://example.com/proxies.json"
+
+
+# ------------------------- 7.52.3: a feed's "https" label is an HTTP proxy
+
+
+def test_https_protocol_is_dialled_as_http():
+    """Feeds label a CONNECT proxy that can tunnel HTTPS as ``https``.
+
+    Dialled as a TLS-wrapped proxy none of 160 such addresses passed; dialled
+    as plain ``http://`` 23 did. What the feed said about HTTPS is kept.
+    """
+
+    labelled = FeedEndpoint(
+        protocol="https", ip="203.0.113.7", port=8080, https_ok=True
+    )
+    assert labelled.url == "http://203.0.113.7:8080"
+    assert labelled.protocol == "https"
+    assert labelled.https_ok is True
+
+    # Every reader that turns a published protocol field into an endpoint.
+    found = parse(
+        "proxifly",
+        json.dumps(
+            [
+                {
+                    "proxy": "https://203.0.113.8:3128",
+                    "protocol": "https",
+                    "ip": "203.0.113.8",
+                    "port": 3128,
+                    "https": True,
+                    "anonymity": "elite",
+                    "score": 1,
+                    "geolocation": {"country": "ZZ", "city": "Unknown"},
+                }
+            ]
+        ),
+    )
+    assert [endpoint.url for endpoint in found] == ["http://203.0.113.8:3128"]
+
+    # A line feed whose *file* says https is a label too.
+    label_feed = ProxyFeed(
+        id="fd_https_lines",
+        name="An https list",
+        url="https://example.invalid/https.txt",
+        parser="lines",
+        homepage="",
+        assume_protocol="https",
+    )
+    assert [endpoint.url for endpoint in label_feed.parse("203.0.113.9:443\n")] == [
+        "http://203.0.113.9:443"
+    ]
+
+
+def test_explicit_https_scheme_in_a_line_is_kept():
+    """``https://`` written in front of the address is kept as written."""
+
+    feed = feed_for("lines")
+    found = feed.parse("https://203.0.113.10:8443\n203.0.113.11:8080\n")
+    assert [endpoint.url for endpoint in found] == [
+        "https://203.0.113.10:8443",
+        "http://203.0.113.11:8080",
+    ]
+
+
+def test_the_other_schemes_are_dialled_exactly_as_before():
+    assert FeedEndpoint(protocol="http", ip="203.0.113.12", port=80).url == (
+        "http://203.0.113.12:80"
+    )
+    assert FeedEndpoint(protocol="socks5", ip="203.0.113.13", port=1080).url == (
+        "socks5h://203.0.113.13:1080"
+    )
+    written = feed_for("lines").parse("socks5://203.0.113.14:1080\n")
+    assert [endpoint.url for endpoint in written] == ["socks5h://203.0.113.14:1080"]
