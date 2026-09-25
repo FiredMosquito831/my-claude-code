@@ -374,6 +374,14 @@ async function loadDashboardState() {
   if (savedState?.autoRefreshInterval && byId("reqAutoRefreshInterval")) {
     byId("reqAutoRefreshInterval").value = String(savedState.autoRefreshInterval);
   }
+  if (savedState?.inflightInterval != null && byId("reqInflightInterval")) {
+    const select = byId("reqInflightInterval");
+    const value = String(savedState.inflightInterval);
+    if (Array.from(select.options).some((option) => option.value === value)) {
+      select.value = value;
+    }
+  }
+  if (savedState?.inflightCollapsed) setInflightCollapsed(true);
   if (savedState?.webSearchStatsPeriod) {
     state.webSearchStatsPeriod = savedState.webSearchStatsPeriod;
     const periodSelect = byId("webSearchStatsPeriod");
@@ -414,6 +422,9 @@ async function loadDashboardState() {
   initClaudeConnectCopyButtons();
   // A restored "on" auto-refresh must actually start polling.
   updateRequestAutoRefresh();
+  // The in-flight panel polls on its own interval, table auto-refresh or not.
+  updateInflightTimer();
+  pollInflight();
 }
 
 function renderNav() {
@@ -425,6 +436,15 @@ function renderNav() {
     button.className = `nav-link${index === 0 ? " active" : ""}`;
     button.dataset.view = view.id;
     button.textContent = view.label;
+    if (view.id === "requests") {
+      // How many requests the server is serving right now (7.45.0). Empty and
+      // hidden at zero, so the link reads "Analytics" until there is a count.
+      const badge = document.createElement("span");
+      badge.id = "navInflightBadge";
+      badge.className = "nav-badge";
+      badge.hidden = true;
+      button.appendChild(badge);
+    }
     if (index === 0) {
       button.setAttribute("aria-current", "page");
     }
@@ -435,6 +455,7 @@ function renderNav() {
     nav.appendChild(button);
   });
   setActiveView(state.activeView, { scroll: false });
+  setInflightBadge(inflightState.badge);
 }
 
 function setActiveView(viewId, { scroll = false } = {}) {
@@ -495,6 +516,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
 
   if (activeView.id === "requests") {
     loadRequestsView().catch((error) => showMessage(error.message, "error"));
+    pollInflight();
     loadOriginBackfillStatus().catch(() => {
       // An older server has no backfill route; the card keeps its button.
     });
@@ -17775,6 +17797,9 @@ function persistDashboardState() {
       autoRefreshInterval: byId("reqAutoRefreshInterval")?.value
         ? String(byId("reqAutoRefreshInterval").value)
         : undefined,
+      inflightInterval: byId("reqInflightInterval")?.value ?? undefined,
+      inflightCollapsed:
+        byId("reqInflightToggle")?.getAttribute("aria-expanded") === "false" || undefined,
       webSearchStatsPeriod: state.webSearchStatsPeriod || undefined,
       // Analytics filters + page so an F5 refresh continues the same query.
       reqFilters: {
@@ -20322,6 +20347,8 @@ async function pollRequestPulse() {
     showMessage(error.message, "error");
     return;
   }
+  // The in-flight count rides along (7.44.0): one `len`, no query.
+  if (typeof pulse.in_flight === "number") setInflightBadge(pulse.in_flight);
   if (pulse.enabled === false) return;
   const signature = params.toString();
   const first =
@@ -20468,6 +20495,793 @@ byId("reqAutoRefresh").addEventListener("change", () => {
 byId("reqAutoRefreshInterval").addEventListener("change", () => {
   updateRequestAutoRefresh();
   persistDashboardState();
+});
+
+/* ------------------------------------------------------------- in flight
+   The requests this server is serving right now (7.45.0), read from
+   `GET /admin/api/requests/in-flight` (7.44.0): memory only, no query, so the
+   panel polls on its own interval (default 3 s) instead of the table's 15 s
+   pulse, and keeps polling with the table's auto-refresh switched off.
+
+   What the panel never does: invent a phase. The server stamps the phase; the
+   only thing named here that the server does not send is the difference
+   between "waiting for upstream" and "backing off" before the first byte, and
+   that is read from two consecutive snapshots (`waited_s` grows only while MCC
+   sleeps), never from one. It never writes into the Requests table either: a
+   finished request stays one refresh as "Finished" while the table's own
+   pulse picks its row up. */
+const INFLIGHT_PAGE_SIZE = 50;
+// The endpoint's own ceiling on `limit`; paging past it would ask for rows
+// the server refuses to describe.
+const INFLIGHT_MAX_ROWS = 1000;
+// Claude Code gives up on a stream that has been idle this long (its own
+// stream-idle deadline, and the default REQUEST_WATCHDOG_STALL_SECONDS), so a
+// request that has sat in one phase longer has outlived its own client's
+// patience. A watchdog floor, not a guess at what is "slow".
+const INFLIGHT_STUCK_SECONDS = 300;
+
+/* How long this request has been still, as the client's watchdog would count
+   it: the time since the last chunk while streaming (a stream that is still
+   delivering is not stuck, however long it runs -- measured on the rig, a
+   five-minute stream at one chunk every 2 s), the time in its phase
+   otherwise. Milliseconds at the moment of the reading. */
+function inflightStillMs(row) {
+  if (row.phase === "streaming" && row.last_chunk_age_s != null) {
+    return Number(row.last_chunk_age_s) * 1000;
+  }
+  return Number(row.phase_elapsed_ms);
+}
+const INFLIGHT_PHASES = {
+  received: ["Received", "The request has arrived and nothing has been routed yet."],
+  describe: [
+    "Describing images",
+    "An attached image is being described by the vision model before routing.",
+  ],
+  routing: ["Routing", "The route is chosen and no attempt has started yet."],
+  attempt: [
+    "Attempt started",
+    "An attempt has started and no byte has reached the client. One reading cannot " +
+      "tell waiting on the model from MCC asleep on a backoff; the next refresh can.",
+  ],
+  awaiting_content: [
+    "Awaiting content",
+    "The first byte is out (usually MCC's own message_start, sent when the upstream " +
+      "accepts) and the model has produced no text, reasoning or tool call yet.",
+  ],
+  streaming: ["Streaming", "The model's own content is reaching the client."],
+  // The stall watchdog's names, in case a server reports them.
+  awaiting_first_upstream_byte: [
+    "Awaiting first byte",
+    "An attempt is in flight and no byte has reached the client yet.",
+  ],
+  streaming_stopped: ["Stream stopped", "Bytes reached the client and then stopped."],
+  between_attempts: [
+    "Between attempts",
+    "MCC is not reading an upstream stream: routing, asleep on a backoff or a " +
+      "limiter, or switching models.",
+  ],
+};
+// Phases in which nothing has reached the client, so time asleep is the only
+// thing a growing `waited_s` can mean.
+const INFLIGHT_PRE_BYTE_PHASES = new Set([
+  "received",
+  "routing",
+  "attempt",
+  "between_attempts",
+  "awaiting_first_upstream_byte",
+]);
+
+const inflightState = {
+  timer: null,
+  ticker: null,
+  loadId: 0,
+  page: 0,
+  collapsed: false,
+  // Client clock when the last snapshot arrived. Every timer on the panel is
+  // "the server's value at that moment + time since", so timers move between
+  // refreshes without claiming a measurement nobody took.
+  fetchedAt: 0,
+  total: null,
+  enabled: null,
+  oldestMs: null,
+  // id -> row, over the whole fetched window (not only the page shown).
+  rows: new Map(),
+  // id -> {phase, phase_since, waited_s, attempt_index} from the snapshot before.
+  previous: new Map(),
+  // id -> row, left one refresh after it disappeared.
+  finishing: new Map(),
+  badge: null,
+  detailId: null,
+};
+
+function formatInflightElapsed(ms) {
+  const total = Math.max(0, Math.floor(Number(ms) / 1000));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  if (minutes < 60) return `${minutes}m ${seconds}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/* The phase as shown: the server's, except before the first byte, where two
+   snapshots can say which of two things is happening. `previous` is this
+   request as the snapshot before saw it, or undefined on its first sighting. */
+function inflightDisplayPhase(row, previous) {
+  const known = INFLIGHT_PHASES[row.phase];
+  const base = {
+    key: row.phase || "unknown",
+    label: known ? known[0] : String(row.phase || "unknown"),
+    title: known ? known[1] : "",
+  };
+  if (!previous || !INFLIGHT_PRE_BYTE_PHASES.has(row.phase)) return base;
+  const now = Number(row.waited_s) || 0;
+  const before = Number(previous.waited_s) || 0;
+  if (now > before + 0.0005) {
+    return {
+      key: "backing_off",
+      label: "Backing off",
+      title:
+        `Time asleep grew from ${before.toFixed(1)} s to ${now.toFixed(1)} s ` +
+        "between the last two refreshes: MCC slept (a backoff or a rate limiter), " +
+        "so that wait was not the model's.",
+    };
+  }
+  const sameAttempt =
+    previous.phase === row.phase &&
+    previous.phase_since === row.phase_since &&
+    previous.attempt_index === row.attempt_index;
+  if (row.phase === "attempt" && sameAttempt) {
+    return {
+      key: "waiting_upstream",
+      label: "Waiting for upstream",
+      title:
+        "The attempt is open, nothing has reached the client, and time asleep did " +
+        "not move between the last two refreshes: MCC is waiting on the model.",
+    };
+  }
+  return base;
+}
+
+function inflightNow() {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function inflightSinceFetch() {
+  return Math.max(0, inflightNow() - inflightState.fetchedAt);
+}
+
+// The same words the table uses for `route_attempt`.
+function inflightAttemptLabel(index) {
+  if (index == null) return "—";
+  return Number(index) === 0 ? "Primary" : `Fallback ${index}`;
+}
+
+function inflightStreamedText(row) {
+  if (row.observed === false && row.output_chars == null) return "not observed";
+  if (row.output_chars == null) return NOT_MEASURED;
+  const parts = [`${Number(row.output_chars).toLocaleString()} chars`];
+  if (row.thinking_chars) {
+    parts.push(`${Number(row.thinking_chars).toLocaleString()} reasoning`);
+  }
+  return parts.join(" + ");
+}
+
+function inflightTimerSpan(baseMs, className) {
+  const span = document.createElement("span");
+  span.className = className;
+  if (baseMs == null) {
+    span.textContent = NOT_MEASURED;
+    return span;
+  }
+  span.dataset.inflightBase = String(baseMs);
+  span.textContent = formatInflightElapsed(baseMs);
+  return span;
+}
+
+function inflightTextCell(text, title) {
+  const td = document.createElement("td");
+  td.textContent = text == null || text === "" ? "—" : String(text);
+  if (title) td.title = title;
+  return td;
+}
+
+function buildInflightPhaseCell(row, finishing) {
+  const td = document.createElement("td");
+  td.className = "inflight-col-phase";
+  const chip = document.createElement("span");
+  if (finishing) {
+    chip.className = "inflight-chip inflight-phase-finished";
+    chip.textContent = "Finished";
+    chip.title =
+      "No longer in flight. Its row is written to the table below, which picks it " +
+      "up on its own refresh.";
+    td.appendChild(chip);
+    return td;
+  }
+  const phase = inflightDisplayPhase(row, inflightState.previous.get(row.id));
+  chip.className = `inflight-chip inflight-phase-${phase.key}`;
+  chip.textContent = phase.label;
+  chip.title = phase.title;
+  td.appendChild(chip);
+  td.appendChild(inflightTimerSpan(row.phase_elapsed_ms, "inflight-phase-timer"));
+  const stuck = document.createElement("span");
+  stuck.className = "inflight-stuck-badge";
+  stuck.textContent = "stuck";
+  stuck.title =
+    row.phase === "streaming"
+      ? `No new chunk for more than ${INFLIGHT_STUCK_SECONDS} s. That is the client's ` +
+        "own watchdog floor: Claude Code gives up on a stream idle that long."
+      : `In this phase for more than ${INFLIGHT_STUCK_SECONDS} s. That is the client's ` +
+        "own watchdog floor: Claude Code gives up on a stream idle that long.";
+  stuck.hidden = true;
+  td.appendChild(stuck);
+  return td;
+}
+
+function buildInflightFolderCell(row) {
+  if (!row.project_dir && row.project_dir_pending) {
+    const td = document.createElement("td");
+    td.className = "req-col-folder";
+    td.textContent = "pending";
+    td.title =
+      "Claude Code's folder is read from the prompt when the request is logged, " +
+      "after it is answered.";
+    return td;
+  }
+  return buildFolderCell(row);
+}
+
+function buildInflightCells(row, finishing) {
+  const cells = [];
+  const age = document.createElement("td");
+  age.className = "inflight-col-age";
+  if (finishing) {
+    const frozen = document.createElement("span");
+    frozen.className = "inflight-age";
+    frozen.textContent = formatInflightElapsed(row.elapsed_ms);
+    age.appendChild(frozen);
+  } else {
+    age.appendChild(inflightTimerSpan(row.elapsed_ms, "inflight-age"));
+  }
+  cells.push(age);
+  cells.push(buildInflightPhaseCell(row, finishing));
+  cells.push(inflightTextCell(row.harness));
+  cells.push(buildSessionCell(row));
+  cells.push(buildInflightFolderCell(row));
+  cells.push(buildOriginChipCell(row));
+  cells.push(buildRequestedModelCell(row));
+  const model = row.model_ref || row.provider;
+  const modelCell = inflightTextCell(model || "not routed yet", row.provider || "");
+  modelCell.className = "inflight-col-model";
+  cells.push(modelCell);
+  const attempt = document.createElement("td");
+  attempt.className = "inflight-col-attempt";
+  attempt.textContent = inflightAttemptLabel(row.attempt_index);
+  if (row.attempt_tries) {
+    const tries = document.createElement("span");
+    tries.className = "inflight-sub";
+    const last = [row.last_try_status, row.last_try_error_kind].filter(Boolean).join(" ");
+    const noun = row.attempt_tries === 1 ? "try" : "tries";
+    tries.textContent = `${row.attempt_tries} ${noun}${last ? `, last ${last}` : ""}`;
+    attempt.appendChild(tries);
+  }
+  cells.push(attempt);
+  cells.push(
+    inflightTextCell(
+      inflightStreamedText(row),
+      row.observed === false ? "The request log is off, so streamed text is not counted." : "",
+    ),
+  );
+  const key = document.createElement("td");
+  key.className = "inflight-col-key";
+  key.textContent = row.key_label || "—";
+  if (row.proxy_label) {
+    const proxy = document.createElement("span");
+    proxy.className = "inflight-sub";
+    proxy.textContent = row.proxy_label;
+    proxy.title = "Proxy";
+    key.appendChild(proxy);
+  }
+  cells.push(key);
+  const details = document.createElement("td");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary-button req-detail-button";
+  button.dataset.inflightId = row.id;
+  button.textContent = "Live";
+  button.setAttribute("aria-label", `Live detail for request ${row.id}`);
+  details.appendChild(button);
+  cells.push(details);
+  return cells;
+}
+
+/* Update a row in place, replacing only the cells whose content changed, so
+   a focused Live button survives a refresh and nothing visibly redraws. */
+function syncInflightRow(tr, cells) {
+  if (tr.children.length !== cells.length) {
+    tr.replaceChildren(...cells);
+    return;
+  }
+  cells.forEach((cell, index) => {
+    const current = tr.children[index];
+    if (current.outerHTML !== cell.outerHTML) tr.replaceChild(cell, current);
+  });
+}
+
+function inflightOrderedRows() {
+  const start = inflightState.page * INFLIGHT_PAGE_SIZE;
+  const live = Array.from(inflightState.rows.values()).slice(
+    start,
+    start + INFLIGHT_PAGE_SIZE,
+  );
+  const finishing = Array.from(inflightState.finishing.values());
+  return [
+    ...live.map((row) => [row, false]),
+    ...finishing.map((row) => [row, true]),
+  ].sort((a, b) => Number(a[0].started_at_mono) - Number(b[0].started_at_mono));
+}
+
+function renderInflightRows() {
+  const body = byId("reqInflightRows");
+  const existing = new Map(
+    Array.from(body.children).map((tr) => [tr.dataset.inflightId, tr]),
+  );
+  const wanted = [];
+  for (const [row, finishing] of inflightOrderedRows()) {
+    let tr = existing.get(row.id);
+    if (!tr) {
+      tr = document.createElement("tr");
+      tr.className = "inflight-row";
+      tr.dataset.inflightId = row.id;
+    }
+    existing.delete(row.id);
+    tr.classList.toggle("inflight-finishing", finishing);
+    syncInflightRow(tr, buildInflightCells(row, finishing));
+    wanted.push(tr);
+  }
+  existing.forEach((tr) => tr.remove());
+  const inOrder =
+    body.children.length === wanted.length &&
+    wanted.every((tr, index) => body.children[index] === tr);
+  if (!inOrder) {
+    const focused = document.activeElement;
+    wanted.forEach((tr) => body.appendChild(tr));
+    if (focused instanceof HTMLElement && body.contains(focused)) focused.focus();
+  }
+  tickInflightTimers();
+}
+
+function inflightStatusText() {
+  if (inflightState.enabled === false) return "In-flight list is off";
+  if (inflightState.total == null) return "Not loaded";
+  const total = inflightState.total;
+  if (total === 0) return "Nothing in flight";
+  return `${total.toLocaleString()} ${total === 1 ? "request" : "requests"} in flight`;
+}
+
+/* The page's one live region. It changes only when the count does, so a
+   screen reader hears "3 requests in flight" once, never a ticking timer and
+   never the rows. */
+function setInflightStatus(text) {
+  const status = byId("reqInflightStatus");
+  if (status.textContent !== text) status.textContent = text;
+}
+
+/* The count beside Analytics in the sidebar, on every page. */
+function setInflightBadge(count) {
+  inflightState.badge = typeof count === "number" && !Number.isNaN(count) ? count : null;
+  const badge = byId("navInflightBadge");
+  if (!badge) return;
+  const show = inflightState.badge != null && inflightState.badge > 0;
+  badge.hidden = !show;
+  badge.replaceChildren();
+  badge.removeAttribute("title");
+  if (!show) return;
+  const number = document.createElement("span");
+  number.textContent = inflightState.badge.toLocaleString();
+  const words = document.createElement("span");
+  words.className = "sr-only";
+  words.textContent = " in flight";
+  badge.append(number, words);
+  const noun = inflightState.badge === 1 ? "request" : "requests";
+  badge.title = `${inflightState.badge.toLocaleString()} ${noun} in flight`;
+}
+
+function renderInflightPager() {
+  const total = inflightState.total || 0;
+  const pager = byId("reqInflightPager");
+  const note = byId("reqInflightNote");
+  if (total <= INFLIGHT_PAGE_SIZE) {
+    pager.hidden = true;
+    note.hidden = true;
+    note.textContent = "";
+    return;
+  }
+  const fetchable = Math.min(total, INFLIGHT_MAX_ROWS);
+  const pages = Math.ceil(fetchable / INFLIGHT_PAGE_SIZE);
+  const start = inflightState.page * INFLIGHT_PAGE_SIZE;
+  const end = Math.min(start + INFLIGHT_PAGE_SIZE, fetchable);
+  pager.hidden = false;
+  byId("reqInflightPageInfo").textContent =
+    `${(start + 1).toLocaleString()}–${end.toLocaleString()} of ` +
+    `${total.toLocaleString()}, oldest first`;
+  byId("reqInflightPrev").disabled = inflightState.page === 0;
+  byId("reqInflightNext").disabled = inflightState.page >= pages - 1;
+  note.hidden = false;
+  note.textContent =
+    inflightState.page === 0
+      ? `…and ${(total - end).toLocaleString()} more — showing the ` +
+        `${INFLIGHT_PAGE_SIZE} oldest.`
+      : `Showing ${(start + 1).toLocaleString()}–${end.toLocaleString()}, oldest first.`;
+  if (total > INFLIGHT_MAX_ROWS && inflightState.page >= pages - 1) {
+    note.textContent += ` The server describes at most ${INFLIGHT_MAX_ROWS.toLocaleString()}.`;
+  }
+}
+
+function renderInflight() {
+  setInflightStatus(inflightStatusText());
+  const empty = byId("reqInflightEmpty");
+  const wrap = byId("reqInflightTableWrap");
+  const note = byId("reqInflightNote");
+  if (inflightState.enabled !== true) {
+    empty.hidden = true;
+    wrap.hidden = true;
+    byId("reqInflightPager").hidden = true;
+    byId("reqInflightRows").replaceChildren();
+    byId("reqInflightOldest").textContent = "";
+    note.hidden = inflightState.enabled !== false;
+    note.textContent =
+      inflightState.enabled === false
+        ? "The in-flight list is switched off (REQUEST_INFLIGHT_ENABLED, on the " +
+          "Request log storage card)."
+        : "";
+    return;
+  }
+  const hasRows = inflightState.rows.size > 0 || inflightState.finishing.size > 0;
+  empty.hidden = hasRows;
+  wrap.hidden = !hasRows;
+  renderInflightPager();
+  renderInflightRows();
+  renderInflightDetail();
+}
+
+/* Take one snapshot: work out which requests left since the last one (they
+   stay one refresh as "Finished"), keep the previous readings for the
+   two-snapshot labels, and remember when it arrived for the timers. */
+function applyInflightReport(report) {
+  if (!report || report.enabled !== true) {
+    inflightState.enabled = report && report.enabled === false ? false : null;
+    inflightState.total = null;
+    inflightState.previous = new Map();
+    inflightState.rows = new Map();
+    inflightState.finishing = new Map();
+    return;
+  }
+  const incoming = new Map((report.rows || []).map((row) => [row.id, row]));
+  const previous = new Map();
+  inflightState.rows.forEach((row, id) => {
+    previous.set(id, {
+      phase: row.phase,
+      phase_since: row.phase_since,
+      waited_s: row.waited_s,
+      attempt_index: row.attempt_index,
+    });
+  });
+  const start = inflightState.page * INFLIGHT_PAGE_SIZE;
+  const shownBefore = new Set(
+    Array.from(inflightState.rows.keys()).slice(start, start + INFLIGHT_PAGE_SIZE),
+  );
+  const finishing = new Map();
+  let anyFinished = false;
+  inflightState.rows.forEach((row, id) => {
+    if (incoming.has(id)) return;
+    anyFinished = true;
+    if (shownBefore.has(id) || id === inflightState.detailId) finishing.set(id, row);
+  });
+  inflightState.previous = previous;
+  inflightState.rows = incoming;
+  inflightState.finishing = finishing;
+  inflightState.enabled = true;
+  inflightState.total = Number(report.total) || 0;
+  inflightState.fetchedAt = inflightNow();
+  const pages = Math.max(
+    1,
+    Math.ceil(Math.min(inflightState.total, INFLIGHT_MAX_ROWS) / INFLIGHT_PAGE_SIZE),
+  );
+  if (inflightState.page > pages - 1) inflightState.page = pages - 1;
+  if (anyFinished) {
+    // Hand the finished request to the table: its own pulse finds the new
+    // row. A no-op when the table's auto-refresh is off, as it always was.
+    pollRequestPulse().catch(() => {});
+  }
+}
+
+function inflightFetchLimit() {
+  if (state.activeView !== "requests" || inflightState.collapsed) return 1;
+  return Math.min(INFLIGHT_MAX_ROWS, (inflightState.page + 1) * INFLIGHT_PAGE_SIZE);
+}
+
+async function pollInflight() {
+  if (document.visibilityState === "hidden") return;
+  const limit = inflightFetchLimit();
+  const loadId = ++inflightState.loadId;
+  let report;
+  try {
+    report = await api(`/admin/api/requests/in-flight?limit=${limit}`);
+  } catch (error) {
+    if (loadId !== inflightState.loadId || state.activeView !== "requests") return;
+    setInflightStatus("In-flight list unavailable");
+    const note = byId("reqInflightNote");
+    note.hidden = false;
+    note.textContent = `Could not read the in-flight list: ${error.message}`;
+    return;
+  }
+  if (loadId !== inflightState.loadId) return;
+  const enabled = report && report.enabled === true;
+  setInflightBadge(enabled ? Number(report.total) || 0 : null);
+  if (state.activeView !== "requests") return;
+  if (limit === 1 && inflightState.collapsed) {
+    // Collapsed: the one-line summary only. Rows come oldest first, so the
+    // single row asked for is the oldest.
+    inflightState.enabled = enabled ? true : report && report.enabled === false ? false : null;
+    inflightState.total = enabled ? Number(report.total) || 0 : null;
+    inflightState.fetchedAt = inflightNow();
+    inflightState.oldestMs =
+      enabled && report.rows && report.rows[0] ? Number(report.rows[0].elapsed_ms) : null;
+    // The rows read while expanded are older than this reading; the next
+    // expanded reading starts afresh rather than timing them from now.
+    inflightState.rows = new Map();
+    inflightState.previous = new Map();
+    inflightState.finishing = new Map();
+    setInflightStatus(inflightStatusText());
+    tickInflightTimers();
+    return;
+  }
+  inflightState.oldestMs = null;
+  applyInflightReport(report);
+  renderInflight();
+}
+
+function tickInflightTimers() {
+  const since = inflightSinceFetch();
+  [byId("reqInflightPanel"), byId("reqInflightModal")].forEach((root) => {
+    root.querySelectorAll("[data-inflight-base]").forEach((span) => {
+      span.textContent = formatInflightElapsed(Number(span.dataset.inflightBase) + since);
+    });
+  });
+  byId("reqInflightRows")
+    .querySelectorAll("tr.inflight-row")
+    .forEach((tr) => {
+      const row = inflightState.rows.get(tr.dataset.inflightId);
+      const stuck =
+        Boolean(row) &&
+        !tr.classList.contains("inflight-finishing") &&
+        inflightStillMs(row) + since > INFLIGHT_STUCK_SECONDS * 1000;
+      tr.classList.toggle("inflight-stuck", stuck);
+      const badge = tr.querySelector(".inflight-stuck-badge");
+      if (badge) badge.hidden = !stuck;
+    });
+  let oldest = inflightState.oldestMs;
+  inflightState.rows.forEach((row) => {
+    if (row.elapsed_ms != null && (oldest == null || Number(row.elapsed_ms) > oldest)) {
+      oldest = Number(row.elapsed_ms);
+    }
+  });
+  byId("reqInflightOldest").textContent =
+    oldest != null && inflightState.total
+      ? `· oldest ${formatInflightElapsed(Number(oldest) + since)}`
+      : "";
+}
+
+function updateInflightTimer() {
+  if (inflightState.timer != null) {
+    window.clearInterval(inflightState.timer);
+    inflightState.timer = null;
+  }
+  const ms = Number(byId("reqInflightInterval").value) || 0;
+  if (ms > 0) inflightState.timer = window.setInterval(pollInflight, ms);
+  // Off means a still picture: the timers stop with the polling, so nothing
+  // on the panel keeps moving away from the last reading it actually took.
+  if (ms <= 0 && inflightState.ticker != null) {
+    window.clearInterval(inflightState.ticker);
+    inflightState.ticker = null;
+  } else if (ms > 0 && inflightState.ticker == null) {
+    inflightState.ticker = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      if (state.activeView === "requests") tickInflightTimers();
+    }, 1000);
+  }
+}
+
+function setInflightCollapsed(collapsed) {
+  inflightState.collapsed = Boolean(collapsed);
+  byId("reqInflightBody").hidden = inflightState.collapsed;
+  const toggle = byId("reqInflightToggle");
+  toggle.setAttribute("aria-expanded", String(!inflightState.collapsed));
+  toggle.textContent = inflightState.collapsed ? "Show" : "Hide";
+}
+
+/* ------------------------------------------------ in-flight live detail */
+function openInflightDetail(id) {
+  inflightState.detailId = id;
+  byId("reqInflightModal").hidden = false;
+  renderInflightDetail();
+  byId("reqInflightDetailClose").focus();
+}
+
+function closeInflightDetail() {
+  byId("reqInflightModal").hidden = true;
+  const id = inflightState.detailId;
+  inflightState.detailId = null;
+  const button = Array.from(
+    byId("reqInflightRows").querySelectorAll("button[data-inflight-id]"),
+  ).find((element) => element.dataset.inflightId === id);
+  if (button) button.focus();
+}
+
+function inflightDetailFields(row) {
+  const phase = inflightDisplayPhase(row, inflightState.previous.get(row.id));
+  const folder =
+    row.project_dir ||
+    (row.project_dir_pending ? "pending (read from the prompt when the request is logged)" : null);
+  const tier = row.tier ? `${row.tier}${row.tier_source ? ` (${row.tier_source})` : ""}` : null;
+  const lastChunk =
+    row.last_chunk_age_s == null
+      ? null
+      : `${Number(row.last_chunk_age_s).toFixed(1)} s before this reading`;
+  return [
+    ["Phase", phase.label, phase.title],
+    ["In this phase", inflightTimerSpan(row.phase_elapsed_ms, "inflight-phase-timer")],
+    ["Age", inflightTimerSpan(row.elapsed_ms, "inflight-age")],
+    [
+      "Endpoint",
+      [row.endpoint, row.protocol, row.stream ? "stream" : "no stream"]
+        .filter(Boolean)
+        .join(" · "),
+    ],
+    ["Harness", row.harness],
+    ["Session", row.session_id],
+    ["Subagent", row.agent_id],
+    ["Parent session", row.parent_session_id],
+    ["Folder", folder],
+    ["Requested model", row.requested_model],
+    ["Tier", tier],
+    ["Provider", row.provider],
+    ["Model", row.model_ref],
+    ["Key", row.key_label],
+    ["Proxy", row.proxy_label],
+    ["Time asleep", row.waited_s == null ? null : `${Number(row.waited_s).toFixed(1)} s`],
+    ["First byte", row.ttft_ms == null ? null : formatMilliseconds(row.ttft_ms)],
+    [
+      "First content",
+      row.first_content_ms == null ? null : formatMilliseconds(row.first_content_ms),
+    ],
+    ["Streamed", inflightStreamedText(row)],
+    ["Chunks to client", row.chunks_to_client],
+    ["Last chunk", lastChunk],
+    ["Tools / images", `${row.tools_count ?? 0} tools · ${row.image_count ?? 0} images`],
+    [
+      "Input",
+      row.input_chars == null ? null : `${Number(row.input_chars).toLocaleString()} chars`,
+    ],
+    ["Describe hops", row.describe_hops || null],
+  ];
+}
+
+function renderInflightDetail() {
+  const id = inflightState.detailId;
+  if (!id || byId("reqInflightModal").hidden) return;
+  const row = inflightState.rows.get(id);
+  byId("reqInflightDetailTitle").textContent = `In flight ${id}`;
+  const stateLine = byId("reqInflightDetailState");
+  const openFinished = byId("reqInflightDetailOpenFinished");
+  if (!row) {
+    stateLine.textContent = inflightState.finishing.has(id)
+      ? "Finished. Its row is written to the table below; open it for the full record."
+      : "No longer in flight. Open the finished request for the full record.";
+    openFinished.hidden = false;
+    return;
+  }
+  openFinished.hidden = true;
+  stateLine.textContent = "Live — updates on every refresh of the panel.";
+  const items = [];
+  for (const [label, value, title] of inflightDetailFields(row)) {
+    if (value == null || value === "") continue;
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    if (value instanceof HTMLElement) dd.appendChild(value);
+    else dd.textContent = String(value);
+    if (title) dd.title = title;
+    items.push(dt, dd);
+  }
+  byId("reqInflightDetailMeta").replaceChildren(...items);
+  const list = [];
+  const current = row.attempt_index == null ? -1 : Number(row.attempt_index);
+  for (let index = 0; index < current; index += 1) {
+    const li = document.createElement("li");
+    li.textContent =
+      `${inflightAttemptLabel(index)} — ended; its verdict is recorded when the ` +
+      "request finishes.";
+    list.push(li);
+  }
+  const li = document.createElement("li");
+  li.className = "inflight-attempt-current";
+  if (current < 0) {
+    li.textContent = "No attempt has started yet.";
+  } else {
+    const phase = inflightDisplayPhase(row, inflightState.previous.get(row.id));
+    const noun = row.attempt_tries === 1 ? "try" : "tries";
+    const tries =
+      row.attempt_tries == null ? "" : `, ${row.attempt_tries} ${noun} finished on it`;
+    const last = [row.last_try_status, row.last_try_error_kind].filter(Boolean).join(" ");
+    li.textContent =
+      `${inflightAttemptLabel(current)} — in progress: ${phase.label.toLowerCase()} on ` +
+      `${row.model_ref || row.provider || "a model not reported yet"}${tries}` +
+      `${last ? `, last ${last}` : ""}.`;
+  }
+  list.push(li);
+  byId("reqInflightDetailAttempts").replaceChildren(...list);
+  tickInflightTimers();
+}
+
+function trapInflightDetailFocus(event) {
+  if (event.key !== "Tab") return;
+  const modal = byId("reqInflightModal");
+  const focusable = Array.from(modal.querySelectorAll("button")).filter(
+    (element) => !element.hidden && !element.disabled,
+  );
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+byId("reqInflightRows").addEventListener("click", (event) => {
+  const tr = event.target.closest("tr.inflight-row");
+  if (tr) openInflightDetail(tr.dataset.inflightId);
+});
+byId("reqInflightDetailClose").addEventListener("click", closeInflightDetail);
+byId("reqInflightModal").addEventListener("click", (event) => {
+  if (event.target === byId("reqInflightModal")) closeInflightDetail();
+});
+byId("reqInflightDetailOpenFinished").addEventListener("click", () => {
+  const id = inflightState.detailId;
+  closeInflightDetail();
+  if (id) openRequestDetail(id).catch((error) => showMessage(error.message, "error"));
+});
+document.addEventListener("keydown", (event) => {
+  if (byId("reqInflightModal").hidden) return;
+  trapInflightDetailFocus(event);
+  if (event.key === "Escape") closeInflightDetail();
+});
+byId("reqInflightInterval").addEventListener("change", () => {
+  updateInflightTimer();
+  persistDashboardState();
+  pollInflight();
+});
+byId("reqInflightRefresh").addEventListener("click", () => pollInflight());
+byId("reqInflightToggle").addEventListener("click", () => {
+  setInflightCollapsed(!inflightState.collapsed);
+  persistDashboardState();
+  pollInflight();
+});
+byId("reqInflightPrev").addEventListener("click", () => {
+  inflightState.page = Math.max(0, inflightState.page - 1);
+  pollInflight();
+});
+byId("reqInflightNext").addEventListener("click", () => {
+  inflightState.page += 1;
+  pollInflight();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") pollInflight();
 });
 // Must match ``REQUEST_LOG_CLEAR_CONFIRMATION`` in api/admin_routes.py;
 // ``tests/contracts/test_config_dir_is_single_sourced.py`` pins the two.

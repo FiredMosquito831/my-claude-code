@@ -5804,3 +5804,305 @@ def test_a_failed_origin_breakdown_stays_in_its_panel(rendered) -> None:
 
     assert origin["errorNote"] == "Could not count folders: boom"
     assert origin["disabledRows"] == 0
+
+
+# ----------------------------------------------------------- in flight (7.45.0)
+# The panel above the Requests table, driven through the emulated registry in
+# the harness (`INFLIGHT`), which honours `limit` the way the route does.
+REQUESTS_TABLE_HEADERS = [
+    "Time",
+    "Endpoint",
+    "Harness",
+    "Session",
+    "Folder",
+    "Origin",
+    "Provider",
+    "Key",
+    "Requested model",
+    "Model",
+    "Status",
+    "Turn",
+    "Tokens",
+    "Cost",
+    "TTFT",
+    "Duration",
+    "Details",
+]
+
+
+def test_inflight_panel_empty_state(rendered) -> None:
+    empty = rendered["inflight"]["empty"]
+
+    assert empty["emptyHidden"] is False
+    assert empty["tableHidden"] is True
+    assert empty["emptyText"] == (
+        "Nothing in flight. Requests appear here the moment they arrive and move "
+        "to the table below when they finish."
+    )
+    assert empty["status"] == "Nothing in flight"
+    # No count, no badge: the link reads exactly as it did before 7.45.0.
+    assert empty["badgeHidden"] is True
+    assert empty["navLabel"] == "Analytics"
+
+
+def test_inflight_panel_sorts_by_age(rendered) -> None:
+    """Served newest first on purpose: the panel orders oldest first itself."""
+
+    five = rendered["inflight"]["five"]
+
+    assert five["order"] == ["req_0001", "req_0002", "req_0003", "req_0004", "req_0005"]
+    assert five["status"] == "5 requests in flight"
+    assert five["oldest"].endswith("oldest 1h 06m")
+    assert five["emptyHidden"] is True
+
+
+def test_inflight_panel_columns_and_origin_forms(rendered) -> None:
+    """Session and folder in the O1/O2 display forms, the masked key and proxy
+    as the server sent them, and "not measured" never drawn as zero."""
+
+    five = rendered["inflight"]["five"]
+    cells = five["cells"]
+
+    assert five["headers"] == [
+        "Age",
+        "Phase",
+        "Harness",
+        "Session",
+        "Folder",
+        "Origin",
+        "Requested model",
+        "Provider / model",
+        "Attempt",
+        "Streamed",
+        "Key / proxy",
+        "Details",
+    ]
+    first, second, third, fourth, fifth = cells
+    assert first[3] == "0f3c2a1b"
+    assert first[4] == "Projects\\demo · #76b11b"
+    assert first[5] == "Projects\\demo · 0f3c2a1b"
+    assert first[8] == "Fallback 12 tries, last 429 rate_limit"
+    assert second[8] == "Primary"
+    assert second[10] == "sk-8…Kofxproxy-3…a1"
+    assert third[9] == "1,234 chars + 56 reasoning"
+    # A Claude Code folder is only read at finalize: pending, not a guess.
+    assert fourth[4] == "pending"
+    assert fourth[3] == "0f3c2a1bsubagent"
+    assert fourth[7] == "not routed yet"
+    assert fourth[8] == "—"
+    # Log off: streamed text is not counted, and the row says so.
+    assert fifth[9] == "not observed"
+    assert fifth[3] == fifth[4] == fifth[5] == "—"
+    assert all(row[11] == "Live" for row in cells)
+
+
+def test_inflight_panel_stuck_is_the_300s_client_watchdog_floor(rendered) -> None:
+    five = rendered["inflight"]["five"]
+
+    # 301 s in phase is stuck; 299 s is not; 400 s of streaming with a chunk
+    # 2 s ago is not either -- the floor is an idle deadline.
+    assert five["stuck"] == [True, False, False, False, False]
+    assert five["stuckBadgeVisible"] == [True, False, False, False, False]
+    assert "more than 300 s" in five["stuckTitle"]
+    assert "watchdog floor" in five["stuckTitle"]
+    stuck = rendered["inflight"]["many"]["stuckOnPage1"]
+    assert [row_id for row_id, _ in stuck] == ["req_0001", "req_0002"]
+    assert stuck[0][1].startswith("In this phase for more than 300 s.")
+    assert stuck[1][1].startswith("No new chunk for more than 300 s.")
+
+
+def test_inflight_panel_derives_backing_off_from_two_snapshots(rendered) -> None:
+    """One reading never names it; the second does, from `waited_s` alone."""
+
+    five = rendered["inflight"]["five"]
+
+    assert five["firstSnapshotChips"]["req_0001"] == "Attempt started"
+    assert five["firstSnapshotChips"]["req_0002"] == "Attempt started"
+    assert five["secondSnapshotChips"] == {
+        "req_0001": "Backing off",
+        "req_0002": "Waiting for upstream",
+        "req_0003": "Streaming",
+        "req_0004": "Routing",
+        "req_0005": "Streaming",
+    }
+    assert "from 2.0 s to 6.5 s" in five["backingOffTitle"]
+
+
+def test_inflight_panel_timers_tick_between_refreshes_and_stop_when_off(
+    rendered,
+) -> None:
+    five = rendered["inflight"]["five"]
+
+    assert five["ageBefore"] != five["ageAfter"]
+    assert five["ageFrozenWhenOff"] is True
+
+
+def test_inflight_panel_single_live_region(rendered) -> None:
+    """One polite status line, never the rows, and silent while the count
+    holds -- a live region over a 50-row table would read it every tick."""
+
+    regions = rendered["inflight"]["liveRegions"]
+
+    assert regions["inPanel"] == 1
+    assert regions["inRows"] == 0
+    assert regions["statusRole"] == "status"
+    assert regions["statusLive"] == "polite"
+    assert (
+        regions["caption"] == "Requests this server is serving right now, oldest first"
+    )
+    assert rendered["inflight"]["five"]["statusMutationsOnSameCount"] == 0
+
+
+def test_inflight_panel_finishing_row_survives_one_tick(rendered) -> None:
+    finishing = rendered["inflight"]["finishing"]
+
+    assert finishing["ids"] == [
+        "req_0001",
+        "req_0002",
+        "req_0003",
+        "req_0004",
+        "req_0005",
+    ]
+    assert finishing["finishingIds"] == ["req_0003"]
+    assert finishing["chip"] == "Finished"
+    assert finishing["status"] == "4 requests in flight"
+    assert finishing["idsAfterOneMoreTick"] == [
+        "req_0001",
+        "req_0002",
+        "req_0004",
+        "req_0005",
+    ]
+    # The open detail says what happened and hands over to the finished record.
+    assert finishing["detailState"].startswith("Finished.")
+    assert finishing["openFinishedVisible"] is True
+
+    drain = rendered["inflight"]["drain"]
+    assert drain["finishingRows"] == 4
+    assert drain["emptyHidden"] is True
+    assert drain["rowsAfter"] == 0
+    assert drain["emptyHiddenAfter"] is False
+    assert drain["badgeHidden"] is True
+
+
+def test_inflight_panel_caps_at_fifty_with_overflow_note(rendered) -> None:
+    many = rendered["inflight"]["many"]
+
+    page1, page2, page3 = many["page1"], many["page2"], many["page3"]
+    assert many["status"] == "120 requests in flight"
+    assert page1["rows"] == 50
+    assert (page1["first"], page1["last"]) == ("req_0001", "req_0050")
+    assert page1["note"] == "…and 70 more — showing the 50 oldest."
+    assert page1["info"] == "1\N{EN DASH}50 of 120, oldest first"
+    assert page1["url"].endswith("?limit=50")
+    assert page1["prevDisabled"] is True
+    assert page1["nextDisabled"] is False
+    assert (page2["rows"], page2["first"], page2["last"]) == (
+        50,
+        "req_0051",
+        "req_0100",
+    )
+    assert page2["url"].endswith("?limit=100")
+    assert (page3["rows"], page3["first"], page3["last"]) == (
+        20,
+        "req_0101",
+        "req_0120",
+    )
+    assert page3["nextDisabled"] is True
+    assert many["backToPage1"]["first"] == "req_0001"
+    # The DOM budget: never more than one page of rows.
+    assert max(page1["rows"], page2["rows"], page3["rows"]) <= 50
+
+
+def test_inflight_panel_live_detail_and_keyboard_path(rendered) -> None:
+    detail = rendered["inflight"]["detail"]
+
+    assert detail["open"] is True
+    assert detail["title"] == "In flight req_0002"
+    assert detail["focusOnClose"] is True
+    assert "PhaseWaiting for upstream" in detail["text"]
+    assert "Proxyproxy-3…a1" in detail["text"]
+    assert detail["attempts"] == [
+        "Primary — in progress: waiting for upstream on opencode/qwen3-coder, "
+        "0 tries finished on it."
+    ]
+    # Live: the next refresh moves the open detail with it.
+    assert "PhaseAwaiting content" in detail["afterRefresh"]
+    assert detail["closedByEscape"] is True
+    assert detail["focusReturned"] == "req_0002"
+    assert detail["rowClickOpens"] == "In flight req_0003"
+
+
+def test_inflight_panel_does_not_touch_requests_table(rendered) -> None:
+    inflight = rendered["inflight"]
+
+    assert inflight["requestsTableUnchanged"] is True
+    assert inflight["requestsHeadersBefore"] == REQUESTS_TABLE_HEADERS
+    assert inflight["requestsHeadersAfter"] == REQUESTS_TABLE_HEADERS
+
+
+def test_inflight_panel_has_its_own_refresh_control(rendered) -> None:
+    """Default 3 s, independent of the table's auto-refresh, persisted."""
+
+    inflight = rendered["inflight"]
+
+    assert inflight["defaultInterval"] == "3000"
+    assert inflight["intervalOptions"] == [
+        "0",
+        "1000",
+        "3000",
+        "5000",
+        "10000",
+        "30000",
+    ]
+    assert inflight["persistedInterval"] == "0"
+
+
+def test_inflight_panel_collapses_to_one_line(rendered) -> None:
+    collapsed = rendered["inflight"]["collapsed"]
+
+    assert collapsed["bodyHidden"] is True
+    assert collapsed["expanded"] == "false"
+    assert collapsed["url"].endswith("?limit=1")
+    assert collapsed["status"] == "120 requests in flight"
+    assert collapsed["oldest"].endswith("oldest 1h 06m")
+    assert collapsed["persisted"] is True
+    assert collapsed["reopenedUrl"].endswith("?limit=50")
+
+
+def test_inflight_panel_says_when_the_view_is_off(rendered) -> None:
+    off = rendered["inflight"]["off"]
+
+    assert off["status"] == "In-flight list is off"
+    assert "REQUEST_INFLIGHT_ENABLED" in off["note"]
+    assert off["tableHidden"] is True
+    assert off["emptyHidden"] is True
+    assert off["badgeHidden"] is True
+
+
+def test_inflight_count_in_the_sidebar_on_every_page(rendered) -> None:
+    inflight = rendered["inflight"]
+
+    assert inflight["five"]["badge"] == "5 in flight"
+    assert inflight["five"]["badgeHidden"] is False
+    # Off Analytics the badge still counts, asking for a single row.
+    assert inflight["otherPage"]["url"].endswith("?limit=1")
+    assert inflight["otherPage"]["badge"] == "5 in flight"
+    assert inflight["otherPage"]["badgeTitle"] == "5 requests in flight"
+    # The run ends with nothing in flight, and the label is back to itself.
+    labels = rendered["navLabels"]
+    assert "Analytics" in labels
+
+
+def test_inflight_panel_css_keeps_the_origin_switch_and_its_own_table() -> None:
+    """Its own table class, so `.requests-table` selectors (the request log's
+    header reader among them) can never pick the panel up."""
+
+    css = (STATIC_DIR / "admin.css").read_text(encoding="utf-8")
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert '<table class="inflight-table">' in html
+    assert html.index('id="reqInflightPanel"') < html.index('class="requests-table"')
+    assert ".inflight-table .req-col-origin {\n  display: none;\n}" in css
+    narrow = css[css.index("@media (max-width: 1199px) {\n  .inflight-table") :]
+    assert ".inflight-table .req-col-origin {\n    display: table-cell;" in narrow
+    assert ".inflight-panel [hidden]" in css
