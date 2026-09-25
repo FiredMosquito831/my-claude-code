@@ -416,6 +416,7 @@ def test_saving_a_chain_republishes_the_provider_generation(monkeypatch) -> None
 
     seen: list[str] = []
     swept: list[bool] = []
+    rebuilt: list[frozenset[str] | None] = []
 
     async def _reload(
         self,
@@ -423,9 +424,11 @@ def test_saving_a_chain_republishes_the_provider_generation(monkeypatch) -> None
         *,
         refresh_provider_id: str | None = None,
         sweep: bool = True,
+        rebuild_provider_ids: frozenset[str] | None = None,
     ):
         seen.append(reason)
         swept.append(sweep)
+        rebuilt.append(rebuild_provider_ids)
         return {}
 
     monkeypatch.setattr(ApplicationRuntime, "reload_providers", _reload)
@@ -456,6 +459,9 @@ def test_saving_a_chain_republishes_the_provider_generation(monkeypatch) -> None
     # chain the one that routes -- but neither save asks for the blanket
     # /models sweep of every configured provider that used to come with it.
     assert swept == [False, False]
+    # 7.55.0: and each names the one provider it changed, so every other
+    # provider keeps its already-built object -- pool, benches and all.
+    assert rebuilt == [frozenset({"nvidia_nim"}), frozenset({"nvidia_nim"})]
 
 
 def test_every_entry_reports_the_health_the_pools_measured(monkeypatch) -> None:

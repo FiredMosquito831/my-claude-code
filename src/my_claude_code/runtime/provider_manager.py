@@ -69,6 +69,10 @@ class _ProviderGeneration:
     closed: bool = False
     drained: asyncio.Event = field(default_factory=asyncio.Event)
     cleanup_task: asyncio.Task[bool] | None = None
+    #: Provider objects this generation holds that another generation holds
+    #: too, by provider id. Empty unless a scoped replace carried something
+    #: (7.55.0); see :meth:`ProviderRuntimeManager._release_shared`.
+    shared: dict[str, BaseProvider] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.drained.set()
@@ -143,6 +147,11 @@ class ProviderRuntimeManager:
         self._catalogue_from_store = False
         self._next_generation_id = 2
         self._retired: dict[int, _ProviderGeneration] = {}
+        # How many live generations hold each carried provider object, keyed
+        # by ``id()``. Only a scoped replace ever puts anything here; the
+        # generations' own ``shared`` maps keep the objects alive, so an id is
+        # never reused while it has an entry.
+        self._holders: dict[int, int] = {}
         self._unpublished: set[ProviderRuntime] = set()
         self._closing = False
         self._closed = False
@@ -670,6 +679,7 @@ class ProviderRuntimeManager:
         commit: CommitConfig,
         reason: str = "admin_apply",
         background_refresh: bool = True,
+        rebuild_provider_ids: frozenset[str] | None = None,
     ) -> int:
         """Prepare, commit, and atomically publish one replacement generation.
 
@@ -678,6 +688,29 @@ class ProviderRuntimeManager:
         provider changed follows the replace with
         :meth:`refresh_provider_models` instead: the sweep raced that caller's
         own probe and hit a brand-new upstream twice within the same second.
+
+        ``rebuild_provider_ids`` scopes the rebuild (7.55.0). ``None`` -- what
+        every settings apply, custom-provider change and dialect probe passes
+        -- is the full rebuild it always was: the new generation starts empty
+        and builds every provider afresh. A set says only those providers'
+        build-time inputs changed. The new generation then *holds the previous
+        generation's already-built object* for every other id -- the same
+        client, the same credential pool with its counters and benches, the
+        same limiter and proxy engine -- and builds only the named ones anew,
+        lazily, as before. A proxy-chain save is the caller it exists for: a
+        chain is read in one provider's constructor and nowhere else, so
+        rebuilding every provider to pick one chain up reset every other
+        provider's pool for nothing.
+
+        Carrying is refused, and the replace falls back to a full rebuild, when
+        ``settings`` is not the very snapshot the previous generation was built
+        from: an object built from other settings is not the object these
+        settings would build.
+
+        An object two generations hold is closed exactly once, by whichever of
+        them is closed last (:meth:`_release_shared`), so a lease still running
+        on the retired generation keeps a live client and a shutdown closes
+        each provider once.
         """
         async with self._replace_lock:
             if self._closing or self._closed:
@@ -715,6 +748,10 @@ class ProviderRuntimeManager:
                 settings=settings,
                 runtime=candidate_runtime,
             )
+            # After the commit and before the swap, with no await in between: a
+            # carried object never enters a runtime the failure path above
+            # would clean up, and nothing can observe a half-carried runtime.
+            carried = self._carry_providers(previous, candidate, rebuild_provider_ids)
             self._current = candidate
             self._model_cache.set_available_providers(
                 model_cache_provider_ids_for_settings(
@@ -724,7 +761,13 @@ class ProviderRuntimeManager:
             self._publish_model_catalog()
             previous.retired = True
             self._retired[previous.generation_id] = previous
-            self._trace_published(candidate, previous=previous, reason=reason)
+            self._trace_published(
+                candidate,
+                previous=previous,
+                reason=reason,
+                rebuilt=rebuild_provider_ids,
+                carried=carried,
+            )
             self._trace_retired(previous, reason=reason)
 
             if background_refresh:
@@ -906,6 +949,62 @@ class ProviderRuntimeManager:
             generation.cleanup_task = task
         return await asyncio.shield(task)
 
+    def _carry_providers(
+        self,
+        previous: _ProviderGeneration,
+        candidate: _ProviderGeneration,
+        rebuild_provider_ids: frozenset[str] | None,
+    ) -> tuple[str, ...] | None:
+        """Hand every provider not being rebuilt to the new generation.
+
+        Returns the carried ids, or ``None`` when nothing was attempted -- a
+        full rebuild, asked for or fallen back to. Synchronous on purpose: the
+        caller publishes the candidate on the very next line, and nothing can
+        observe a half-carried runtime.
+        """
+        if rebuild_provider_ids is None:
+            return None
+        if candidate.settings is not previous.settings:
+            logger.debug(
+                "Scoped provider rebuild widened to a full one: the settings "
+                "snapshot changed with it"
+            )
+            return None
+        carried: list[str] = []
+        for provider_id, provider in previous.runtime.cached_providers().items():
+            if provider_id in rebuild_provider_ids:
+                continue
+            if not candidate.runtime.adopt(provider_id, provider):
+                continue
+            if previous.shared.get(provider_id) is not provider:
+                previous.shared[provider_id] = provider
+                self._holders[id(provider)] = self._holders.get(id(provider), 0) + 1
+            candidate.shared[provider_id] = provider
+            self._holders[id(provider)] = self._holders.get(id(provider), 0) + 1
+            carried.append(provider_id)
+        return tuple(carried)
+
+    def _release_shared(self, generation: _ProviderGeneration) -> None:
+        """Let go of carried objects some other live generation still holds.
+
+        Runs at the top of a generation's cleanup, before its first await, so
+        two generations closing concurrently (a shutdown) cannot both decide
+        the other one will close an object. Every holder but the last detaches
+        the object from its runtime without closing it; the last holder keeps
+        it, and its own ``runtime.cleanup()`` closes it -- exactly once. A
+        retired generation still leased when a newer one closes therefore
+        keeps a live client, whichever of them finishes first.
+        """
+        for provider_id, provider in generation.shared.items():
+            key = id(provider)
+            remaining = self._holders.get(key, 1) - 1
+            if remaining > 0:
+                self._holders[key] = remaining
+                generation.runtime.detach(provider_id, provider)
+            else:
+                self._holders.pop(key, None)
+        generation.shared.clear()
+
     async def _run_generation_cleanup(
         self,
         generation: _ProviderGeneration,
@@ -914,6 +1013,7 @@ class ProviderRuntimeManager:
     ) -> bool:
         task = asyncio.current_task()
         try:
+            self._release_shared(generation)
             try:
                 await generation.runtime.cleanup()
             except asyncio.CancelledError:
@@ -948,7 +1048,15 @@ class ProviderRuntimeManager:
         *,
         previous: _ProviderGeneration | None,
         reason: str,
+        rebuilt: frozenset[str] | None = None,
+        carried: tuple[str, ...] | None = None,
     ) -> None:
+        # A full rebuild's row is the row it always was; only a scoped one
+        # says what it rebuilt and what it kept.
+        scope: dict[str, object] = {}
+        if rebuilt is not None:
+            scope["rebuilt_provider_ids"] = sorted(rebuilt)
+            scope["carried_provider_ids"] = None if carried is None else sorted(carried)
         trace_event(
             stage="runtime",
             event="provider_generation.published",
@@ -958,6 +1066,7 @@ class ProviderRuntimeManager:
                 previous.generation_id if previous is not None else None
             ),
             reason=reason,
+            **scope,
         )
 
     @staticmethod
