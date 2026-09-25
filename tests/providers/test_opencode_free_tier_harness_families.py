@@ -708,8 +708,24 @@ def test_the_captured_families_are_declared_in_order() -> None:
         "gemini_cli",
         "qwen_code",
         "commandcode",
+        "droid",
+        "crush",
+        "kimi_code",
+        "goose",
+        "cline",
     ]
-    assert {family.provenance for family in OPENCODE_TOOL_FAMILIES} == {"captured"}
+    provenance = {family.name: family.provenance for family in OPENCODE_TOOL_FAMILIES}
+    # Every client installed on the machine the rows were written on was
+    # captured; the 7.52.0 rows were read from source or a scratch bundle.
+    assert {name for name, how in provenance.items() if how == "captured"} == {
+        "claude_code",
+        "opencode_native",
+        "codex",
+        "gemini_cli",
+        "qwen_code",
+        "commandcode",
+    }
+    assert set(provenance.values()) == {"captured", "source"}
 
 
 def test_a_row_nobody_could_cite_is_not_shipped() -> None:
@@ -717,14 +733,17 @@ def test_a_row_nobody_could_cite_is_not_shipped() -> None:
 
     The investigation's table listed Gemini CLI's older grep name and two more
     Codex shell spellings from memory; neither is in the bundle or the capture
-    this release cites.
+    this release cites. (``shell`` has been a cited spelling since 7.52.0 --
+    goose's, from its source -- but never Codex's.)
     """
 
     every_client_spelling = {
         client for family in OPENCODE_TOOL_FAMILIES for client in family.spellings
     }
     assert "search_file_content" not in every_client_spelling
-    assert "shell" not in every_client_spelling
+    assert [
+        family.name for family in OPENCODE_TOOL_FAMILIES if "shell" in family.spellings
+    ] == ["goose"]
     assert set(_family("codex").spellings) == {"exec_command", "apply_patch"}
 
 
@@ -1147,3 +1166,133 @@ def test_a_stand_in_call_reaches_codex_as_a_function_call() -> None:
     assert call["type"] == "function_call"
     assert call["name"] == "read"
     assert json.loads(call["arguments"]) == {"path": "hello.txt"}
+
+
+# -- 7.52.0: clients read from source ---------------------------------------------------
+
+#: Each list is the client's default tools as its pinned source names them,
+#: plus an MCP tool of the kind every real session carries. Only names the
+#: cited file:line (or byte offset) shows are used.
+FROM_SOURCE: dict[str, tuple[list[str], str, int]] = {
+    # Droid 0.227.0: the constants at droid.exe byte 160604141.
+    "droid_0_227_0": (
+        ["LS", "Read", "Create", "Edit", "Glob", "Grep", "Execute", "TodoWrite"],
+        "droid",
+        5,
+    ),
+    # Crush v0.96.1: internal/agent/tools/{bash,view,edit,glob,grep}.go.
+    "crush_0_96_1": (["bash", "view", "edit", "glob", "grep", "mcp_x_y"], "crush", 5),
+    # Kimi CLI 1.52.0: src/kimi_cli/tools/{shell,file/*}.
+    "kimi_1_52_0": (
+        ["Shell", "ReadFile", "StrReplaceFile", "Glob", "Grep", "mcp__x__y"],
+        "kimi_code",
+        5,
+    ),
+    # goose v1.52.0: developer/mod.rs test at :279.
+    "goose_1_52_0": (["write", "edit", "shell", "tree", "read_image"], "goose", 2),
+    # Cline CLI 3.0.65: createDefaultTools, definitions.ts:912.
+    "cline_3_0_65": (
+        [
+            "read_files",
+            "search_codebase",
+            "run_commands",
+            "fetch_web_content",
+            "editor",
+            "skills",
+            "ask_question",
+        ],
+        "cline",
+        4,
+    ),
+    # Kilo CLI 7.8.0: OpenCode's own spellings.
+    "kilo_7_8_0": (
+        ["bash", "read", "edit", "glob", "grep", "write", "task"],
+        "opencode_native",
+        5,
+    ),
+}
+
+
+@pytest.mark.parametrize("label", sorted(FROM_SOURCE))
+def test_each_source_catalogue_chooses_its_own_family(label: str) -> None:
+    names, expected, roles = FROM_SOURCE[label]
+    request = tool_request(FREE, names)
+    chosen = select_tool_family(request_tool_names(request), OPENCODE_TOOL_FAMILIES)
+    assert chosen is not None
+    assert chosen.name == expected
+    wire = _names(opencode_bodies("opencode", request)["responses"])
+    assert _roles(wire[: len(names)]) == roles
+    # Goose is topped up to five by its stand-ins; nobody else here needs them.
+    assert _roles(wire) == (5 if expected == "goose" else roles)
+
+
+@pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+def test_source_catalogues_on_every_door(surface: str) -> None:
+    expected_wire = {
+        "droid_0_227_0": ["LS", "read", "Create", "edit", "glob", "grep", "bash"],
+        "crush_0_96_1": ["bash", "read", "edit", "glob", "grep"],
+        "kimi_1_52_0": ["bash", "read", "edit", "glob", "grep"],
+        "goose_1_52_0": ["write", "edit", "bash", "tree", "read_image"],
+        "cline_3_0_65": ["read", "grep", "bash", "fetch_web_content", "edit"],
+    }
+    for label, prefix in expected_wire.items():
+        names, _family_name, _roles_expected = FROM_SOURCE[label]
+        wire = _names(opencode_bodies("opencode", tool_request(FREE, names))[surface])
+        assert wire[: len(prefix)] == prefix, label
+        folded = [name.casefold() for name in wire]
+        assert len(folded) == len(set(folded)), label
+
+
+def test_goose_gets_read_glob_and_grep_stand_ins() -> None:
+    names, _family_name, _roles_expected = FROM_SOURCE["goose_1_52_0"]
+    augmented = _stand_ins(tool_request(FREE, names))
+    assert _tool_names(augmented) == [*names, "read", "glob", "grep"]
+    for tool in (augmented.tools or [])[len(names) :]:
+        assert tool.description is not None
+        assert "goose's `shell`" in tool.description
+
+
+def test_droid_and_kimi_share_claude_codes_spellings_without_taking_its_requests() -> (
+    None
+):
+    """``Read``/``Edit``/``Glob``/``Grep`` mean the same tool in all three.
+
+    Mapped identically, so which family wins never changes those names; and a
+    Claude Code request, which carries ``Bash``, still chooses Claude Code's
+    family and the static five -- the 7.49.0 golden above holds it byte for
+    byte.
+    """
+
+    for shared in ("Read", "Edit", "Glob", "Grep"):
+        hosts = {
+            family.spellings[shared]
+            for family in OPENCODE_TOOL_FAMILIES
+            if shared in family.spellings
+        }
+        assert len(hosts) == 1, shared
+    for claude in (CLAUDE_FULL, CLAUDE_FIVE, ["Bash"], ["Read"], ["Glob", "Grep"]):
+        chosen = select_tool_family(frozenset(claude), OPENCODE_TOOL_FAMILIES)
+        assert chosen is not None
+        assert chosen.name == "claude_code", claude
+
+
+def test_a_tie_on_any_source_catalogue_cannot_change_a_byte() -> None:
+    for label, (names, _expected, _roles_expected) in FROM_SOURCE.items():
+        present = frozenset(names)
+        best = max(family.covers(present) for family in OPENCODE_TOOL_FAMILIES)
+        tied = [
+            family
+            for family in OPENCODE_TOOL_FAMILIES
+            if family.covers(present) == best
+        ]
+        assert len({tuple(sorted(f.catalogue(present).items())) for f in tied}) == 1, (
+            label
+        )
+        assert len({tuple(f.stand_ins.items()) for f in tied}) == 1, label
+
+
+def test_clients_not_shipped_are_named() -> None:
+    """Aider sends no tools; Antigravity publishes no source or bundle to read."""
+
+    names = {family.name for family in OPENCODE_TOOL_FAMILIES}
+    assert not names & {"aider", "antigravity"}
