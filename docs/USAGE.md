@@ -2702,10 +2702,31 @@ picks the set to use **from the tool names the request carries** — never from
 a header saying which agent sent it. An agent that already speaks OpenCode's
 spellings keeps them. A Claude Code or Agent SDK request is sent byte for byte
 as 7.49.0 sent it, and a test compares it with bodies the 7.49.0 code wrote.
-Codex, Gemini CLI, Qwen Code and Command Code name their tools differently
-again, and still reach the gated free models without enough of OpenCode's
-names. Not every free model checked when this was measured (2026-09-25):
-`space-bunny-free` answered a Codex request that carried none of them.
+
+From 7.50.0 four more agents are declared. Each row is read from that agent's
+own request or from its installed code, at the version named:
+
+| agent | its names -> OpenCode's | OpenCode names on the wire |
+| --- | --- | --- |
+| Gemini CLI 0.58.0 | `run_shell_command`, `read_file`, `replace`, `glob`, `grep_search` | 5 of 5 (3 headless) |
+| Qwen Code 0.15.11 | `run_shell_command`, `read_file`, `edit`, `glob`, `grep_search` | 5 of 5 (3 headless) |
+| Command Code 1.65.0 | `shell_command`, `read_file`, `edit_file`, `glob`, `grep` | 5 of 5 |
+| Codex 0.155.1 | `exec_command` -> `bash`, `apply_patch` -> `edit` | 2 of 5 |
+
+"Headless" means run with `-p` and no approval mode. In that mode Gemini CLI
+and Qwen Code do not send their shell or editor tools at all, so only three of
+the five names can go out. Three was enough on `muse-spark-1.3-contributor-free`
+when measured.
+
+Only tools that do the same job are mapped. Codex has no separate read, find
+or search tool — it does those through its shell — so it reaches only two of
+the five. On the free models that check (measured on
+`muse-spark-1.3-contributor-free`: two names were refused, three or four were
+accepted) Codex is still refused, and the route moves on to the next model. Not
+every free model checked when this was measured (2026-09-25):
+`space-bunny-free` answered a Codex request that carried none of OpenCode's
+names. Codex's `apply_patch` is a custom tool. It goes out as `edit` and comes
+back to Codex as the same custom tool call.
 
 Which models: any whose id ends in `-free` or `:free`, any the catalogue
 prices at zero on this host, and anything you list in

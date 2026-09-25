@@ -26,12 +26,14 @@ What these tests hold:
 import asyncio
 import functools
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from my_claude_code.config.settings import get_settings
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -39,6 +41,7 @@ from my_claude_code.core.anthropic.openai_tool_names import (
     OpenAIToolNameCodec,
     request_tool_names,
 )
+from my_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.providers.openai_chat.opencode_catalogue import (
     CLAUDE_CODE_FAMILY,
@@ -54,6 +57,7 @@ from my_claude_code.providers.openai_responses import (
     ResponsesStreamConverter,
     responses_tool_name_codec,
 )
+from tests.api.support import create_test_app
 from tests.providers.opencode_family_bodies import (
     CLAUDE_FIVE,
     FREE,
@@ -434,3 +438,425 @@ def test_every_family_says_where_it_was_read() -> None:
         assert family.provenance in ("captured", "source"), family.name
         assert len(family.cited) >= 20, family.name
         assert family.spellings, family.name
+
+
+# -- 7.50.0: the captured families ----------------------------------------------------
+
+#: ``@openai/codex`` 0.155.1's tools as its request carried them (local recorder,
+#: 2026-09-25); ``apply_patch`` is a custom tool, which MCC's Responses door turns
+#: into a function taking ``{input: string}``.
+CODEX_0_155_1 = [
+    "exec_command",
+    "write_stdin",
+    "request_user_input",
+    "apply_patch",
+    "view_image",
+    "get_goal",
+    "create_goal",
+    "update_goal",
+]
+#: The inbound catalogues below were sent by the real CLIs on 2026-09-25, each
+#: run once under a scratch home against a scratch MCC whose upstream was a
+#: local recorder (zero upstream calls), and read back from that MCC's own
+#: ``tool_catalogues``. Headless (``-p``) runs withhold every tool that writes
+#: or executes; ``--yolo`` runs send them.
+GEMINI_0_58_0_HEADLESS = [
+    "update_topic",
+    "list_directory",
+    "read_file",
+    "grep_search",
+    "glob",
+    "google_web_search",
+    "enter_plan_mode",
+    "invoke_agent",
+]
+GEMINI_0_58_0_YOLO = [
+    "update_topic",
+    "list_directory",
+    "read_file",
+    "grep_search",
+    "glob",
+    "replace",
+    "write_file",
+    "web_fetch",
+    "run_shell_command",
+    "list_background_processes",
+    "read_background_output",
+    "google_web_search",
+    "enter_plan_mode",
+    "invoke_agent",
+    "activate_skill",
+]
+QWEN_0_15_11_HEADLESS = [
+    "tool_search",
+    "agent",
+    "skill",
+    "list_directory",
+    "read_file",
+    "grep_search",
+    "glob",
+    "todo_write",
+    "ask_user_question",
+]
+QWEN_0_15_11_YOLO = [
+    "tool_search",
+    "agent",
+    "skill",
+    "list_directory",
+    "read_file",
+    "grep_search",
+    "glob",
+    "edit",
+    "write_file",
+    "run_shell_command",
+    "todo_write",
+    "ask_user_question",
+]
+#: Command Code's request as MCC's request log stored it (harness
+#: ``commandcode_cli``).
+COMMANDCODE_1_65_0 = [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "read_directory",
+    "glob",
+    "grep",
+    "shell_command",
+    "powershell",
+    "activate_skill",
+    "agent",
+    "agent_output",
+    "ask_user_question",
+    "search_tools",
+]
+#: Every captured catalogue, and the family whose mapping it must be encoded
+#: with. Gemini's and Qwen's headless catalogues carry only ``read_file``,
+#: ``grep_search`` and ``glob`` of the five, which both families declare
+#: identically -- see the tie test below.
+CAPTURED: dict[str, tuple[list[str], str]] = {
+    "claude_code": (
+        [*CLAUDE_FIVE, "Write", "WebFetch", "mcp__exa__web_search_exa"],
+        "claude_code",
+    ),
+    "opencode_1_18_32": (OPENCODE_NATIVE, "opencode_native"),
+    "pi_0_82_1": (PI_DEFAULTS, "opencode_native"),
+    "codex_0_155_1": (CODEX_0_155_1, "codex"),
+    "gemini_0_58_0_headless": (GEMINI_0_58_0_HEADLESS, "gemini_cli"),
+    "gemini_0_58_0_yolo": (GEMINI_0_58_0_YOLO, "gemini_cli"),
+    "qwen_0_15_11_headless": (QWEN_0_15_11_HEADLESS, "gemini_cli"),
+    "qwen_0_15_11_yolo": (QWEN_0_15_11_YOLO, "qwen_code"),
+    "commandcode_1_65_0": (COMMANDCODE_1_65_0, "commandcode"),
+}
+
+
+def _roles(names: list[str]) -> int:
+    return len(OPENCODE_FIVE & set(names))
+
+
+@pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+def test_codex_0_155_1_catalogue_maps_exec_command_and_apply_patch(
+    surface: str,
+) -> None:
+    """Two roles, because Codex has two of the five: it reads and searches by shell."""
+
+    request = tool_request(FREE, CODEX_0_155_1)
+    wire = _names(opencode_bodies("opencode", request)[surface])
+    assert wire == [
+        "bash",
+        "write_stdin",
+        "request_user_input",
+        "edit",
+        "view_image",
+        "get_goal",
+        "create_goal",
+        "update_goal",
+    ]
+    assert _roles(wire) == 2
+
+
+@pytest.mark.parametrize(
+    ("catalogue", "roles"),
+    [
+        (GEMINI_0_58_0_YOLO, 5),
+        (GEMINI_0_58_0_HEADLESS, 3),
+        (QWEN_0_15_11_YOLO, 5),
+        (QWEN_0_15_11_HEADLESS, 3),
+        (COMMANDCODE_1_65_0, 5),
+    ],
+    ids=[
+        "gemini_yolo",
+        "gemini_headless",
+        "qwen_yolo",
+        "qwen_headless",
+        "commandcode",
+    ],
+)
+@pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+def test_gemini_qwen_and_commandcode_catalogues_on_every_door(
+    catalogue: list[str], roles: int, surface: str
+) -> None:
+    """Five of five when the client sends its whole catalogue.
+
+    Three when it runs headless and withholds its shell and its editor, which
+    is every tool of the five it has left to send.
+    """
+
+    wire = _names(opencode_bodies("opencode", tool_request(FREE, catalogue))[surface])
+    assert _roles(wire) == roles
+    assert len(wire) == len(catalogue)
+    folded = [name.casefold() for name in wire]
+    assert len(folded) == len(set(folded))
+
+
+def test_gemini_0_58_0_catalogue_reaches_five() -> None:
+    request = tool_request(FREE, GEMINI_0_58_0_YOLO)
+    wire = _names(opencode_bodies("opencode", request)["responses"])
+    assert wire[:9] == [
+        "update_topic",
+        "list_directory",
+        "read",
+        "grep",
+        "glob",
+        "edit",
+        "write_file",
+        "web_fetch",
+        "bash",
+    ]
+
+
+def test_qwen_0_15_11_catalogue_reaches_five() -> None:
+    request = tool_request(FREE, QWEN_0_15_11_YOLO)
+    wire = _names(opencode_bodies("opencode", request)["responses"])
+    assert wire[3:10] == [
+        "list_directory",
+        "read",
+        "grep",
+        "glob",
+        "edit",
+        "write_file",
+        "bash",
+    ]
+
+
+def test_commandcode_1_65_0_catalogue_reaches_five() -> None:
+    request = tool_request(FREE, COMMANDCODE_1_65_0)
+    wire = _names(opencode_bodies("opencode", request)["responses"])
+    assert wire[:7] == [
+        "read",
+        "write_file",
+        "edit",
+        "read_directory",
+        "glob",
+        "grep",
+        "bash",
+    ]
+    # ``powershell`` is a shell too, but not the one OpenCode's ``bash`` is:
+    # it keeps its own name rather than claim a job it does differently.
+    assert "powershell" in wire
+
+
+def test_every_captured_catalogue_chooses_the_expected_family() -> None:
+    for label, (names, expected) in CAPTURED.items():
+        chosen = select_tool_family(frozenset(names), OPENCODE_TOOL_FAMILIES)
+        assert chosen is not None, label
+        assert chosen.name == expected, label
+
+
+def test_a_tie_on_any_captured_catalogue_cannot_change_a_byte() -> None:
+    """Families that tie at the top map the request's names identically.
+
+    The spec asked for "no two families tie". The real headless Gemini and
+    Qwen catalogues do tie -- both carry only ``read_file``, ``grep_search``
+    and ``glob``, which both families declare -- so the property worth pinning
+    is the one that matters: whichever tied family wins, the wire is the same.
+    """
+
+    for label, (names, _expected) in CAPTURED.items():
+        present = frozenset(names)
+        best = max(family.covers(present) for family in OPENCODE_TOOL_FAMILIES)
+        tied = [
+            family
+            for family in OPENCODE_TOOL_FAMILIES
+            if family.covers(present) == best
+        ]
+        mappings = {tuple(sorted(family.catalogue(present).items())) for family in tied}
+        assert len(mappings) == 1, (label, [family.name for family in tied])
+
+
+def test_the_captured_families_are_declared_in_order() -> None:
+    assert [family.name for family in OPENCODE_TOOL_FAMILIES] == [
+        "claude_code",
+        "opencode_native",
+        "codex",
+        "gemini_cli",
+        "qwen_code",
+        "commandcode",
+    ]
+    assert {family.provenance for family in OPENCODE_TOOL_FAMILIES} == {"captured"}
+
+
+def test_a_row_nobody_could_cite_is_not_shipped() -> None:
+    """Decision 15:00 #2: a guessed spelling fails silently, so it is left out.
+
+    The investigation's table listed Gemini CLI's older grep name and two more
+    Codex shell spellings from memory; neither is in the bundle or the capture
+    this release cites.
+    """
+
+    every_client_spelling = {
+        client for family in OPENCODE_TOOL_FAMILIES for client in family.spellings
+    }
+    assert "search_file_content" not in every_client_spelling
+    assert "shell" not in every_client_spelling
+    assert set(_family("codex").spellings) == {"exec_command", "apply_patch"}
+
+
+# -- Codex's custom apply_patch, end to end through the Responses door --------------
+
+
+def _codex_call_frames(wire: str, patch_text: str) -> bytes:
+    item = {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": wire,
+        "arguments": "",
+        "status": "in_progress",
+    }
+    arguments = json.dumps({"input": patch_text})
+    done = {**item, "arguments": arguments, "status": "completed"}
+    frames = [
+        {"type": "response.created", "response": {"id": "resp_1"}},
+        {"type": "response.output_item.added", "output_index": 0, "item": item},
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_1",
+            "output_index": 0,
+            "delta": arguments,
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "fc_1",
+            "output_index": 0,
+            "name": wire,
+            "arguments": arguments,
+        },
+        {"type": "response.output_item.done", "output_index": 0, "item": done},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "status": "completed",
+                "output": [done],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        },
+    ]
+    return b"".join(f"data: {json.dumps(frame)}\n\n".encode() for frame in frames)
+
+
+class _ZenResponsesDoor:
+    """The real OpenCode Responses transport behind a fake ``/zen/v1/responses``.
+
+    Stands where ``resolve_provider`` would put a provider, so the request the
+    API adapter routes is encoded, sent, answered and decoded by the shipped
+    transport; only the socket is fake. The fake model calls whatever name the
+    outbound body gave Codex's ``apply_patch``.
+    """
+
+    credential_label = None
+
+    def __init__(self, patch_text: str) -> None:
+        self.patch_text = patch_text
+        self.sent: list[dict[str, Any]] = []
+
+    def preflight_stream(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def stream_response(
+        self, request: MessagesRequest, **_kwargs: Any
+    ) -> AsyncIterator[str]:
+        transport = opencode_provider("opencode")._responses
+        body, headers = transport.build_body(
+            request, reasoning=REASONING, max_output_tokens=256
+        )
+        wire = next(
+            tool["name"]
+            for tool in body["tools"]
+            if "input" in tool["parameters"].get("properties", {})
+        )
+
+        def upstream(outbound: httpx.Request) -> httpx.Response:
+            self.sent.append(json.loads(outbound.content))
+
+            async def frames() -> AsyncIterator[bytes]:
+                yield _codex_call_frames(wire, self.patch_text)
+
+            return httpx.Response(
+                200, content=frames(), headers={"content-type": "text/event-stream"}
+            )
+
+        await transport.aclose()
+        transport._client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        try:
+            async for event in transport.stream(
+                request,
+                input_tokens=0,
+                reasoning=REASONING,
+                body=body,
+                headers=headers,
+                surface_label="responses",
+            ):
+                yield event
+        finally:
+            await transport.aclose()
+
+
+def test_codex_apply_patch_custom_tool_round_trips_as_custom() -> None:
+    """``edit`` on the wire, a ``custom_tool_call`` named ``apply_patch`` to Codex."""
+
+    door = _ZenResponsesDoor("*** Begin Patch\n*** End Patch")
+    tools: list[dict[str, Any]] = [
+        {
+            "type": "function",
+            "name": "exec_command",
+            "description": "Runs a command",
+            "parameters": {
+                "type": "object",
+                "properties": {"cmd": {"type": "string"}},
+                "required": ["cmd"],
+            },
+        },
+        {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "format": {
+                "type": "grammar",
+                "syntax": "lark",
+                "definition": "start: /.+/",
+            },
+        },
+    ]
+    with (
+        patch("my_claude_code.api.routes.resolve_provider", return_value=door),
+        TestClient(create_test_app()) as client,
+    ):
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": f"opencode/{FREE}",
+                "input": "Apply the patch",
+                "stream": True,
+                "tools": tools,
+            },
+        )
+
+    assert response.status_code == 200
+    assert [tool["name"] for tool in door.sent[0]["tools"]] == ["bash", "edit"]
+    events = parse_sse_text(response.text)
+    call = events[-1].data["response"]["output"][0]
+    assert call["type"] == "custom_tool_call"
+    assert call["name"] == "apply_patch"
+    assert call["input"] == "*** Begin Patch\n*** End Patch"
+    assert '"edit"' not in response.text
