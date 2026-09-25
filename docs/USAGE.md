@@ -2687,8 +2687,10 @@ way out `Bash`, `Read`, `Edit`, `Glob` and `Grep` are sent under the names
 OpenCode's own client uses, every other tool name is aliased through the codec
 that already handles this host's 64-character limit, and on the way back every
 tool call the model makes is mapped to the name your agent actually sent. Your
-agent never sees the wire names. No decoy tool is ever added — that is the
-`500` in the table.
+agent never sees the wire names. No decoy tool is added beside a name your
+agent already has — that is the `500` in the table. (Since 7.51.0 a clearly
+labelled stand-in may fill a role your agent has no tool for at all; see
+below.)
 
 **Every coding agent, not only Claude Code (7.49.1).** Until 7.49.0 the
 translation knew only Claude Code's five spellings, and it did worse than
@@ -2715,18 +2717,46 @@ own request or from its installed code, at the version named:
 
 "Headless" means run with `-p` and no approval mode. In that mode Gemini CLI
 and Qwen Code do not send their shell or editor tools at all, so only three of
-the five names can go out. Three was enough on `muse-spark-1.3-contributor-free`
-when measured.
+the five names can go out.
 
 Only tools that do the same job are mapped. Codex has no separate read, find
 or search tool — it does those through its shell — so it reaches only two of
-the five. On the free models that check (measured on
-`muse-spark-1.3-contributor-free`: two names were refused, three or four were
-accepted) Codex is still refused, and the route moves on to the next model. Not
-every free model checked when this was measured (2026-09-25):
+the five. Not every free model checks (measured 2026-09-25):
 `space-bunny-free` answered a Codex request that carried none of OpenCode's
-names. Codex's `apply_patch` is a custom tool. It goes out as `edit` and comes
-back to Codex as the same custom tool call.
+names. `muse-spark-1.3-contributor-free` does check, and on it two names
+(`bash, edit`) were refused, and so were three (`read, grep, glob`, a real
+headless Gemini CLI request). Four passed, and so did five. Codex's
+`apply_patch` is a custom tool. It goes out as `edit` and comes back to Codex
+as the same custom tool call.
+
+**Stand-ins (7.51.0).** For an agent that cannot reach four on its own, MCC
+now adds the missing OpenCode tools as *stand-ins*. Those agents are Codex,
+and Gemini CLI or Qwen Code run headless. A stand-in carries OpenCode's name
+and an empty argument list. Its description says plainly that the tool does
+not exist in this client and what to use instead. For Codex that reads, for
+example, *"Not available in this client: Codex has no file-reading tool. Read a
+file with the `bash` tool (Codex's `exec_command`)"*. The fences:
+
+- only for those three agents;
+- only on free-tier models (the same scope as above), never with
+  `OPENCODE_CLIENT_IDENTITY=mcc`;
+- only on a request that already has tools, so a tool-less request stays
+  tool-less;
+- only the roles the request lacks;
+- always after the agent's own tools, in a fixed order, so the prompt cache
+  keeps its prefix;
+- never a name the request already has in any casing.
+
+Claude Code, OpenCode, Pi and Command Code never get one.
+
+If the model calls a stand-in anyway, MCC passes the call to your agent as it
+is, and the agent answers it as a call to a tool it does not have. MCC never
+turns it into a shell command. Measured with a real Codex 0.155.1 turn on
+`muse-spark-1.3-contributor-free`:
+- the request with stand-ins was accepted (HTTP 200), where Codex's own tools
+  alone were refused;
+- the model called `read`, and Codex answered `unsupported call: read`;
+- the model then reported exactly that.
 
 Which models: any whose id ends in `-free` or `:free`, any the catalogue
 prices at zero on this host, and anything you list in
