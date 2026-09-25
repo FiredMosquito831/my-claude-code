@@ -26,7 +26,7 @@ from my_claude_code.core.anthropic import (
     HeuristicToolParser,
     ThinkTagParser,
 )
-from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.models import MessagesRequest, Tool
 from my_claude_code.core.anthropic.openai_tool_names import (
     EMPTY_TOOL_CATALOGUE,
     OpenAIToolNameCodec,
@@ -104,7 +104,7 @@ from .chunks import adopt_chat_stream
 from .client_identity import identity_headers_for_body
 from .identity_enforcement import observe_identity_enforcement
 from .messages_transport import MessagesTransport
-from .opencode_catalogue import model_is_zero_cost
+from .opencode_catalogue import STAND_IN_INPUT_SCHEMA, model_is_zero_cost
 from .opencode_identity import identity_wire_record
 from .profiles import OpenAIChatProfile
 from .request_policy import build_openai_chat_request_body
@@ -203,6 +203,12 @@ def _proxied_http_client(
     return bound_socks_handshake(
         DefaultAsyncHttpxClient(base_url=base_url, timeout=timeout, proxy=proxy)
     )
+
+
+def _tool_definitions(request: MessagesRequest) -> tuple[tuple[str, str | None], ...]:
+    """Each tool one request offers, as ``(name, description)``."""
+
+    return tuple((tool.name, tool.description) for tool in request.tools or ())
 
 
 class OpenAIChatProvider(BaseProvider):
@@ -517,9 +523,40 @@ class OpenAIChatProvider(BaseProvider):
             return EMPTY_TOOL_CATALOGUE
         return catalogue.catalogue_for_request(
             request.model,
+            catalogue.selection_names(
+                _tool_definitions(request), request_tool_names(request)
+            ),
+            zero_cost=model_is_zero_cost(self._provider_id, request.model),
+        )
+
+    def with_stand_ins(self, request: MessagesRequest) -> MessagesRequest:
+        """This request with the stand-ins its client's family declares, if any.
+
+        The one place a stand-in is added, before the request is shaped for any
+        of the three surfaces, so Chat Completions, Responses and Messages all
+        carry the same tools and every encode and decode site sees them. The
+        fences are :meth:`FreeTierToolCatalogue.stand_ins_for_request`'s; a
+        request none of them lets through -- every request of a profile with
+        no catalogue, every Claude Code request, every tool-less one -- is
+        returned as the same object.
+        """
+
+        catalogue = self._profile.free_tier_tool_catalogue
+        if catalogue is None or not request.tools:
+            return request
+        stand_ins = catalogue.stand_ins_for_request(
+            request.model,
+            _tool_definitions(request),
             request_tool_names(request),
             zero_cost=model_is_zero_cost(self._provider_id, request.model),
         )
+        if not stand_ins:
+            return request
+        added = [
+            Tool(name=name, description=text, input_schema=dict(STAND_IN_INPUT_SCHEMA))
+            for name, text in stand_ins
+        ]
+        return request.model_copy(update={"tools": [*request.tools, *added]})
 
     def tool_name_codec(self, request: MessagesRequest) -> OpenAIToolNameCodec | None:
         """The codec one Chat Completions request was encoded with, or None.
@@ -903,6 +940,7 @@ class OpenAIChatProvider(BaseProvider):
         keeps its place in the catalogue.
         """
 
+        request = self.with_stand_ins(request)
         resolved = self.resolved_surface(request.model)
         if resolved.surface is ResponseSurface.UNSERVABLE:
             raise ApplicationUnavailableError(

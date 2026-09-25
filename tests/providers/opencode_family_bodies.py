@@ -184,6 +184,12 @@ def opencode_bodies(provider_id: str, request: MessagesRequest) -> dict[str, Any
     """The body this request produces on each of the three OpenCode doors."""
 
     provider = opencode_provider(provider_id)
+    # What ``_stream_across_surfaces`` does first since 7.51.0. Looked up
+    # rather than called so this module still runs against the 7.49.0 code
+    # that wrote the golden, which had no stand-ins to add.
+    with_stand_ins = getattr(provider, "with_stand_ins", None)
+    if with_stand_ins is not None:
+        request = with_stand_ins(request)
     responses, _headers = provider._responses.build_body(
         request, reasoning=REASONING, max_output_tokens=64
     )

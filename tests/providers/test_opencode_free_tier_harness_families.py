@@ -35,7 +35,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from my_claude_code.config.settings import get_settings
+from my_claude_code.config import settings as config_settings
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
     OpenAIToolNameCodec,
@@ -60,6 +60,7 @@ from my_claude_code.providers.openai_responses import (
 from tests.api.support import create_test_app
 from tests.providers.opencode_family_bodies import (
     CLAUDE_FIVE,
+    CLAUDE_FULL,
     FREE,
     OPENCODE_NATIVE,
     PAID,
@@ -83,6 +84,18 @@ PI_DEFAULTS = ["read", "bash", "edit", "write"]
 CLAUDE_CASES = ("claude_code_free", "claude_code_sub_request_free", "tool_less_free")
 
 
+def _clear_settings() -> None:
+    """Clear the cache production code actually reads.
+
+    Through the module attribute, not an imported name:
+    ``tests/config/test_env_aliases.py`` reloads the settings module, which
+    rebinds ``get_settings`` in place, and a name imported before that would
+    clear a cache nothing reads any more.
+    """
+
+    config_settings.get_settings.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _fresh_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name in (
@@ -91,9 +104,9 @@ def _fresh_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "OPENCODE_FREE_TIER_CREDENTIAL",
     ):
         monkeypatch.delenv(name, raising=False)
-    get_settings.cache_clear()
+    _clear_settings()
     yield
-    get_settings.cache_clear()
+    _clear_settings()
 
 
 def _names(body: dict[str, Any]) -> list[str]:
@@ -363,7 +376,7 @@ def test_opt_out_mcc_identity_disables_every_family(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", "mcc")
-    get_settings.cache_clear()
+    _clear_settings()
     provider = opencode_provider("opencode")
     for family in OPENCODE_TOOL_FAMILIES:
         request = tool_request(FREE, list(family.spellings))
@@ -557,11 +570,14 @@ def _roles(names: list[str]) -> int:
 def test_codex_0_155_1_catalogue_maps_exec_command_and_apply_patch(
     surface: str,
 ) -> None:
-    """Two roles, because Codex has two of the five: it reads and searches by shell."""
+    """Two roles, because Codex has two of the five: it reads and searches by shell.
+
+    Since 7.51.0 the other three follow as stand-ins; see below.
+    """
 
     request = tool_request(FREE, CODEX_0_155_1)
     wire = _names(opencode_bodies("opencode", request)[surface])
-    assert wire == [
+    assert wire[: len(CODEX_0_155_1)] == [
         "bash",
         "write_stdin",
         "request_user_input",
@@ -571,7 +587,7 @@ def test_codex_0_155_1_catalogue_maps_exec_command_and_apply_patch(
         "create_goal",
         "update_goal",
     ]
-    assert _roles(wire) == 2
+    assert _roles(wire[: len(CODEX_0_155_1)]) == 2
 
 
 @pytest.mark.parametrize(
@@ -602,8 +618,9 @@ def test_gemini_qwen_and_commandcode_catalogues_on_every_door(
     """
 
     wire = _names(opencode_bodies("opencode", tool_request(FREE, catalogue))[surface])
-    assert _roles(wire) == roles
-    assert len(wire) == len(catalogue)
+    # The client's own tools; a headless run is topped up by stand-ins after them.
+    assert _roles(wire[: len(catalogue)]) == roles
+    assert _roles(wire) == 5
     folded = [name.casefold() for name in wire]
     assert len(folded) == len(set(folded))
 
@@ -714,7 +731,7 @@ def test_a_row_nobody_could_cite_is_not_shipped() -> None:
 # -- Codex's custom apply_patch, end to end through the Responses door --------------
 
 
-def _codex_call_frames(wire: str, patch_text: str) -> bytes:
+def _codex_call_frames(wire: str, arguments: str) -> bytes:
     item = {
         "type": "function_call",
         "id": "fc_1",
@@ -723,7 +740,6 @@ def _codex_call_frames(wire: str, patch_text: str) -> bytes:
         "arguments": "",
         "status": "in_progress",
     }
-    arguments = json.dumps({"input": patch_text})
     done = {**item, "arguments": arguments, "status": "completed"}
     frames = [
         {"type": "response.created", "response": {"id": "resp_1"}},
@@ -761,13 +777,15 @@ class _ZenResponsesDoor:
     Stands where ``resolve_provider`` would put a provider, so the request the
     API adapter routes is encoded, sent, answered and decoded by the shipped
     transport; only the socket is fake. The fake model calls whatever name the
-    outbound body gave Codex's ``apply_patch``.
+    outbound body gave Codex's ``apply_patch``, or ``call`` when one is given.
+    Stand-ins are added first, as ``_stream_across_surfaces`` adds them.
     """
 
     credential_label = None
 
-    def __init__(self, patch_text: str) -> None:
+    def __init__(self, patch_text: str, *, call: tuple[str, str] | None = None) -> None:
         self.patch_text = patch_text
+        self.call = call
         self.sent: list[dict[str, Any]] = []
 
     def preflight_stream(self, *_args: Any, **_kwargs: Any) -> None:
@@ -776,21 +794,27 @@ class _ZenResponsesDoor:
     async def stream_response(
         self, request: MessagesRequest, **_kwargs: Any
     ) -> AsyncIterator[str]:
-        transport = opencode_provider("opencode")._responses
+        provider = opencode_provider("opencode")
+        request = provider.with_stand_ins(request)
+        transport = provider._responses
         body, headers = transport.build_body(
             request, reasoning=REASONING, max_output_tokens=256
         )
-        wire = next(
-            tool["name"]
-            for tool in body["tools"]
-            if "input" in tool["parameters"].get("properties", {})
-        )
+        if self.call is not None:
+            wire, arguments = self.call
+        else:
+            wire = next(
+                tool["name"]
+                for tool in body["tools"]
+                if "input" in tool["parameters"].get("properties", {})
+            )
+            arguments = json.dumps({"input": self.patch_text})
 
         def upstream(outbound: httpx.Request) -> httpx.Response:
             self.sent.append(json.loads(outbound.content))
 
             async def frames() -> AsyncIterator[bytes]:
-                yield _codex_call_frames(wire, self.patch_text)
+                yield _codex_call_frames(wire, arguments)
 
             return httpx.Response(
                 200, content=frames(), headers={"content-type": "text/event-stream"}
@@ -853,10 +877,273 @@ def test_codex_apply_patch_custom_tool_round_trips_as_custom() -> None:
         )
 
     assert response.status_code == 200
-    assert [tool["name"] for tool in door.sent[0]["tools"]] == ["bash", "edit"]
+    assert [tool["name"] for tool in door.sent[0]["tools"]][:2] == ["bash", "edit"]
     events = parse_sse_text(response.text)
     call = events[-1].data["response"]["output"][0]
     assert call["type"] == "custom_tool_call"
     assert call["name"] == "apply_patch"
     assert call["input"] == "*** Begin Patch\n*** End Patch"
     assert '"edit"' not in response.text
+
+
+# -- 7.51.0: stand-ins ------------------------------------------------------------------
+
+
+def _stand_ins(request: MessagesRequest) -> MessagesRequest:
+    return opencode_provider("opencode").with_stand_ins(request)
+
+
+def _tool_names(request: MessagesRequest) -> list[str]:
+    return [tool.name for tool in request.tools or ()]
+
+
+def test_stand_ins_fill_only_missing_roles_for_a_declaring_family() -> None:
+    codex = _stand_ins(tool_request(FREE, CODEX_0_155_1))
+    assert _tool_names(codex) == [*CODEX_0_155_1, "read", "glob", "grep"]
+    for tool in (codex.tools or [])[len(CODEX_0_155_1) :]:
+        assert tool.input_schema == {"type": "object", "properties": {}}
+        assert tool.description is not None
+        assert tool.description.startswith("Not available in this client")
+        assert "`exec_command`" in tool.description
+
+    for headless in (GEMINI_0_58_0_HEADLESS, QWEN_0_15_11_HEADLESS):
+        augmented = _stand_ins(tool_request(FREE, headless))
+        assert _tool_names(augmented) == [*headless, "bash", "edit"]
+
+    # A client that sends all five of its own gets nothing added.
+    for complete in (
+        GEMINI_0_58_0_YOLO,
+        QWEN_0_15_11_YOLO,
+        COMMANDCODE_1_65_0,
+        OPENCODE_NATIVE,
+        PI_DEFAULTS,
+    ):
+        request = tool_request(FREE, complete)
+        assert _stand_ins(request) is request
+
+
+@pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+def test_stand_ins_take_codex_and_headless_clients_to_five_on_every_door(
+    surface: str,
+) -> None:
+    for catalogue, added in (
+        (CODEX_0_155_1, ["read", "glob", "grep"]),
+        (GEMINI_0_58_0_HEADLESS, ["bash", "edit"]),
+        (QWEN_0_15_11_HEADLESS, ["bash", "edit"]),
+    ):
+        wire = _names(
+            opencode_bodies("opencode", tool_request(FREE, catalogue))[surface]
+        )
+        assert _roles(wire) == 5
+        assert len(wire) == len(catalogue) + len(added)
+        assert wire[len(catalogue) :] == added
+        folded = [name.casefold() for name in wire]
+        assert len(folded) == len(set(folded))
+
+
+def test_stand_ins_never_added_to_claude_or_tool_less_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claude = tool_request(FREE, CLAUDE_FULL, history=["Bash"])
+    assert _stand_ins(claude) is claude
+    sub_request = tool_request(FREE, ["Bash"])
+    assert _stand_ins(sub_request) is sub_request
+    tool_less = tool_request(FREE, [], history=["exec_command"])
+    assert _stand_ins(tool_less) is tool_less
+    # Outside the scope, whatever the client.
+    for model in (PAID, "kimi-k2.6"):
+        paid = tool_request(model, CODEX_0_155_1)
+        assert _stand_ins(paid) is paid
+    go_paid = tool_request("kimi-k2.6", CODEX_0_155_1)
+    assert opencode_provider("opencode_go").with_stand_ins(go_paid) is go_paid
+    # And the operator's opt-out turns them off with everything else.
+    monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", "mcc")
+    _clear_settings()
+    opted_out = tool_request(FREE, CODEX_0_155_1)
+    assert _stand_ins(opted_out) is opted_out
+
+
+def test_stand_ins_are_appended_in_fixed_order() -> None:
+    """After the client's own tools, in declared order, however the client orders."""
+
+    shuffled = list(reversed(CODEX_0_155_1))
+    assert _tool_names(_stand_ins(tool_request(FREE, shuffled)))[-3:] == [
+        "read",
+        "glob",
+        "grep",
+    ]
+    turn_n = _stand_ins(tool_request(FREE, CODEX_0_155_1))
+    turn_n1 = _stand_ins(
+        tool_request(
+            FREE,
+            [*CODEX_0_155_1, "mcp__exa__web_search_exa"],
+            history=["exec_command", "read"],
+        )
+    )
+    assert _tool_names(turn_n1) == [
+        *CODEX_0_155_1,
+        "mcp__exa__web_search_exa",
+        "read",
+        "glob",
+        "grep",
+    ]
+    for surface in ("chat", "responses", "messages"):
+        first = _names(opencode_bodies("opencode", turn_n)[surface])
+        later = _names(opencode_bodies("opencode", turn_n1)[surface])
+        assert later[: len(CODEX_0_155_1)] == first[: len(CODEX_0_155_1)]
+
+
+def test_a_called_stand_in_never_changes_the_family() -> None:
+    """Three stand-ins called over a session leave Codex encoded as Codex.
+
+    Each call replays as history. Counted as the client's own tools, three of
+    them would out-score Codex's two and move the session onto OpenCode's
+    family -- a different wire, and a broken prompt cache.
+    """
+
+    request = tool_request(
+        FREE, CODEX_0_155_1, history=["read", "glob", "grep", "exec_command"]
+    )
+    augmented = _stand_ins(request)
+    assert _tool_names(augmented)[-3:] == ["read", "glob", "grep"]
+    provider = opencode_provider("opencode")
+    assert dict(provider.tool_catalogue_for_request(augmented)) == {
+        "exec_command": "bash",
+        "apply_patch": "edit",
+    }
+    assert dict(provider.tool_catalogue_for_request(request)) == {
+        "exec_command": "bash",
+        "apply_patch": "edit",
+    }
+
+
+def test_applying_stand_ins_twice_adds_nothing() -> None:
+    once = _stand_ins(tool_request(FREE, CODEX_0_155_1))
+    assert _stand_ins(once) is once
+
+
+def test_a_client_tool_that_only_shares_a_stand_ins_name_is_the_clients() -> None:
+    """Recognised by name *and* declared description, never by name alone."""
+
+    names = [*CODEX_0_155_1, "read"]
+    request = tool_request(FREE, names)
+    augmented = _stand_ins(request)
+    # The client's own ``read`` stays; no second ``read`` is added.
+    assert _tool_names(augmented) == [*names, "glob", "grep"]
+    assert OPENCODE_FREE_TIER_CATALOGUE.carried_stand_ins(
+        (tool.name, tool.description) for tool in augmented.tools or ()
+    ) == frozenset({"glob", "grep"})
+
+
+def test_tied_families_add_the_same_stand_ins() -> None:
+    """Headless Gemini and Qwen tie; whichever wins, the request is the same."""
+
+    present = frozenset(QWEN_0_15_11_HEADLESS)
+    tied = [family for family in OPENCODE_TOOL_FAMILIES if family.covers(present) == 3]
+    assert [family.name for family in tied] == ["gemini_cli", "qwen_code"]
+    assert tied[0].stand_ins is tied[1].stand_ins
+    for text in tied[0].stand_ins.values():
+        assert "Gemini CLI" in text and "Qwen Code" in text
+
+
+def test_claude_code_and_opencode_declare_no_stand_ins() -> None:
+    assert not _family("claude_code").stand_ins
+    assert not _family("opencode_native").stand_ins
+    assert not _family("commandcode").stand_ins
+    for family in OPENCODE_TOOL_FAMILIES:
+        assert set(family.stand_ins) <= OPENCODE_FIVE
+    # Codex has no tool at all for the roles it stands in for.
+    assert not set(_family("codex").stand_ins) & set(
+        _family("codex").spellings.values()
+    )
+
+
+# -- what happens when the model calls a stand-in -----------------------------------
+
+
+def test_a_stand_in_call_is_passed_through_not_invented() -> None:
+    """The client receives a call to a tool it does not have, unchanged.
+
+    Not an invented result, not a shell command MCC made up, not a dropped
+    stream: the call to ``read`` reaches the client as ``read`` with the
+    model's own arguments, the stream finishes, and answering it with an
+    error is the client's business (Codex 0.155.1 answers an unknown function
+    with an error output -- proven live in this release's PR).
+    """
+
+    provider = opencode_provider("opencode")
+    request = provider.with_stand_ins(tool_request(FREE, CODEX_0_155_1))
+
+    chat_codec = provider.tool_name_codec(request)
+    assert chat_codec is not None
+    assert chat_codec.encode("read") == "read"
+    assert chat_codec.decode("read") == "read"
+    responses_codec = responses_tool_name_codec(
+        request,
+        provider._responses.tool_name_max_length,
+        provider._responses.tool_catalogue(request),
+    )
+    assert responses_codec is not None
+    assert responses_codec.decode("read") == "read"
+
+    events = asyncio.run(_messages_call(provider, request, "read"))
+    assert '"name": "read"' in events or '"name":"read"' in events.replace(" ", "")
+    assert "message_stop" in events
+    assert "exec_command" not in events
+
+
+def test_a_stand_in_call_reaches_codex_as_a_function_call() -> None:
+    """End to end on the Responses door, as Codex would see it."""
+
+    door = _ZenResponsesDoor("", call=("read", json.dumps({"path": "hello.txt"})))
+    tools: list[dict[str, Any]] = [
+        {
+            "type": "function",
+            "name": "exec_command",
+            "description": "Runs a command",
+            "parameters": {
+                "type": "object",
+                "properties": {"cmd": {"type": "string"}},
+                "required": ["cmd"],
+            },
+        },
+        {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "format": {
+                "type": "grammar",
+                "syntax": "lark",
+                "definition": "start: /.+/",
+            },
+        },
+    ]
+    with (
+        patch("my_claude_code.api.routes.resolve_provider", return_value=door),
+        TestClient(create_test_app()) as client,
+    ):
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": f"opencode/{FREE}",
+                "input": "Read hello.txt",
+                "stream": True,
+                "tools": tools,
+            },
+        )
+
+    assert response.status_code == 200
+    assert [tool["name"] for tool in door.sent[0]["tools"]] == [
+        "bash",
+        "edit",
+        "read",
+        "glob",
+        "grep",
+    ]
+    events = parse_sse_text(response.text)
+    completed = events[-1].data["response"]
+    assert completed["status"] == "completed"
+    call = completed["output"][0]
+    assert call["type"] == "function_call"
+    assert call["name"] == "read"
+    assert json.loads(call["arguments"]) == {"path": "hello.txt"}

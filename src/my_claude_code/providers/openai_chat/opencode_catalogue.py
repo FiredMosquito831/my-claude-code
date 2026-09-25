@@ -57,7 +57,9 @@ has been prompted about differently. Everything unmapped goes through the
 **And nothing is ever appended.** The obvious cheat -- keep Claude Code's
 names and add five lowercase decoys so the classifier sees its catalogue -- is
 exactly probe H, and probe H is a 500. It also lies twice over: it tells the
-host about tools the model may call and MCC cannot run.
+host about tools the model may call and MCC cannot run. (7.51.0 adds one
+fenced exception, for a client that has *no* tool for a role: see
+:data:`STAND_IN_INPUT_SCHEMA`. It never sits beside a name the client has.)
 
 **Scope: the free tier only.** This is a workaround for one vendor's
 anti-abuse gate on one tier. A paid Zen model, a Go model with credit, and
@@ -147,6 +149,11 @@ class ToolFamily:
     #: The exact place the spellings were read, version included.
     cited: str
     spellings: Mapping[str, str]
+    #: ``{OpenCode spelling: description}`` for roles this client may have no
+    #: tool for, appended by :meth:`FreeTierToolCatalogue.stand_ins_for_request`
+    #: so the request carries all five names. Empty for every family whose
+    #: client offers all five, which is Claude Code's and OpenCode's.
+    stand_ins: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def covers(self, names: frozenset[str]) -> int:
         """How many distinct OpenCode roles this family finds in ``names``."""
@@ -169,6 +176,73 @@ class ToolFamily:
                 chosen[client] = host
                 taken.add(host)
         return MappingProxyType(chosen)
+
+
+#: **Stand-ins (7.51.0).** OpenCode's free tier refuses a request that carries
+#: too few of its own tool names. Measured on ``muse-spark-1.3-contributor-free``
+#: on 2026-09-25 (``specs/PR-ZEN-FREE-TIER-ALL-HARNESSES-SPEC.md`` and the
+#: 7.50.0 release): ``bash, edit`` was refused, and so was ``read, grep, glob``;
+#: four of OpenCode's own names passed, and so did five. Codex has only two of the five
+#: jobs as tools -- it reads and searches through its shell -- and Gemini CLI
+#: and Qwen Code, run headless, withhold their shell and editor and send three.
+#: For those clients the missing roles are declared here as *stand-ins*: a tool
+#: under OpenCode's name that says, in its own description, that it does not
+#: exist in this client and what to use instead. The user decided (2026-09-25,
+#: Q1) that this is the honest way to meet the gate. It is still a reversal of
+#: 7.28.0's "nothing is appended", so it is fenced: only a family that declares
+#: stand-ins, only inside the free-tier scope, only a request that already has
+#: tools, only the roles the request lacks, always after the client's own tools
+#: in declared order, and never a name that is already there in any case.
+#:
+#: A call the model makes to a stand-in reaches the client unchanged, as a
+#: call to a tool it does not have, and the client answers it with an error.
+#: MCC never turns it into a shell command: that would be inventing behaviour.
+STAND_IN_INPUT_SCHEMA: Mapping[str, object] = MappingProxyType(
+    {"type": "object", "properties": {}}
+)
+
+#: Codex runs every read and search through its shell. On the wire that shell
+#: is called ``bash``, so the description names both spellings.
+_CODEX_STAND_INS: Mapping[str, str] = MappingProxyType(
+    {
+        "read": (
+            "Not available in this client: Codex has no file-reading tool. "
+            "Read a file with the `bash` tool (Codex's `exec_command`), for "
+            "example `cat <path>`."
+        ),
+        "glob": (
+            "Not available in this client: Codex has no file-finding tool. "
+            "Find files with the `bash` tool (Codex's `exec_command`), for "
+            "example `rg --files`."
+        ),
+        "grep": (
+            "Not available in this client: Codex has no search tool. Search "
+            "file contents with the `bash` tool (Codex's `exec_command`), for "
+            "example `rg <pattern>`."
+        ),
+    }
+)
+
+#: Gemini CLI and Qwen Code share one declaration on purpose. Run headless they
+#: send the same three tools under the same names, so the two families tie and
+#: either may be chosen; a description naming one client would then be wrong
+#: for the other half of those requests.
+_HEADLESS_STAND_INS: Mapping[str, str] = MappingProxyType(
+    {
+        "bash": (
+            "Not available in this session: the client did not offer its shell "
+            "tool on this request (Gemini CLI and Qwen Code call it "
+            "`run_shell_command` and withhold it when run headless without an "
+            "approval mode). Do not call this tool."
+        ),
+        "edit": (
+            "Not available in this session: the client did not offer its file "
+            "editing tool on this request (Gemini CLI's `replace`, Qwen Code's "
+            "`edit`, both withheld when run headless without an approval mode). "
+            "Do not call this tool."
+        ),
+    }
+)
 
 
 #: The family whose mapping was the whole of this module from 7.28.0 to 7.49.0.
@@ -220,6 +294,7 @@ OPENCODE_TOOL_FAMILIES: tuple[ToolFamily, ...] = (
             "through the shell, so those roles have no row"
         ),
         spellings=MappingProxyType({"exec_command": "bash", "apply_patch": "edit"}),
+        stand_ins=_CODEX_STAND_INS,
     ),
     ToolFamily(
         name="gemini_cli",
@@ -239,6 +314,7 @@ OPENCODE_TOOL_FAMILIES: tuple[ToolFamily, ...] = (
                 "grep_search": "grep",
             }
         ),
+        stand_ins=_HEADLESS_STAND_INS,
     ),
     ToolFamily(
         name="qwen_code",
@@ -258,6 +334,7 @@ OPENCODE_TOOL_FAMILIES: tuple[ToolFamily, ...] = (
                 "grep_search": "grep",
             }
         ),
+        stand_ins=_HEADLESS_STAND_INS,
     ),
     ToolFamily(
         name="commandcode",
@@ -422,7 +499,9 @@ class FreeTierToolCatalogue:
 
         ``names`` is every tool name the request carries -- its tools, a forced
         ``tool_choice`` and the ``tool_use`` blocks it replays -- the same set
-        the codec is built from, so encode and decode choose alike.
+        the codec is built from, so encode and decode choose alike. Since
+        7.51.0 the caller passes it through :meth:`selection_names`, so a
+        stand-in never counts as the client's own tool.
         """
 
         static = self.catalogue_for(model_id, zero_cost=zero_cost)
@@ -433,6 +512,86 @@ class FreeTierToolCatalogue:
         if family is None or family.name == CLAUDE_CODE_FAMILY:
             return static
         return family.catalogue(present)
+
+    def carried_stand_ins(
+        self, tools: Iterable[tuple[str, str | None]]
+    ) -> frozenset[str]:
+        """Which of these ``(name, description)`` tools are MCC's own stand-ins.
+
+        Recognised by the exact declared name *and* description, so a client
+        tool that merely shares a name is never mistaken for one.
+        """
+
+        declared = {
+            (role, text)
+            for family in self.families
+            for role, text in family.stand_ins.items()
+        }
+        return frozenset(name for name, text in tools if (name, text) in declared)
+
+    def selection_names(
+        self, tools: Iterable[tuple[str, str | None]], names: Iterable[str]
+    ) -> frozenset[str]:
+        """The names a family is chosen by: the client's own, never a stand-in.
+
+        ``tools`` is the request's ``(name, description)`` list and ``names``
+        every tool name it carries. Two kinds of name are left out, and only
+        when the request offers tools of its own:
+
+        * a stand-in MCC appended on an earlier pass over this request;
+        * one of OpenCode's five spellings that appears only in replayed
+          history -- the model called a stand-in on an earlier turn. The
+          client never offered it, so it says nothing about who the client
+          is, and counting it would let three called stand-ins turn a Codex
+          session into an OpenCode one mid-conversation.
+
+        A tool-less request keeps every name, exactly as 7.49.1 read it.
+        """
+
+        tools = tuple(tools)
+        carried = self.carried_stand_ins(tools)
+        offered = {name for name, _text in tools} - carried
+        every = frozenset(names)
+        if not offered:
+            return every - carried
+        roles = frozenset(OPENCODE_TOOL_CATALOGUE.values())
+        return frozenset(name for name in every if name in offered or name not in roles)
+
+    def stand_ins_for_request(
+        self,
+        model_id: str,
+        tools: Iterable[tuple[str, str | None]],
+        names: Iterable[str],
+        *,
+        zero_cost: bool = False,
+    ) -> tuple[tuple[str, str], ...]:
+        """The ``(name, description)`` stand-ins one request should carry.
+
+        Empty unless every fence holds: the model is inside the free-tier scope
+        and the operator has not opted out (:meth:`catalogue_for`), the request
+        already has tools, and the family its own tools select declares
+        stand-ins. Then one per role that family declares and the request's
+        own tools do not already fill, in declared order, skipping any name
+        the request already carries in any case. Applying it to a request that
+        already carries them adds nothing.
+        """
+
+        tools = tuple(tools)
+        if not tools or not self.catalogue_for(model_id, zero_cost=zero_cost):
+            return ()
+        present = self.selection_names(tools, names)
+        family = select_tool_family(present, self.families)
+        if family is None or not family.stand_ins:
+            return ()
+        filled = set(family.catalogue(present).values())
+        taken = {name.casefold() for name, _text in tools}
+        added: list[tuple[str, str]] = []
+        for role, text in family.stand_ins.items():
+            if role in filled or role.casefold() in taken:
+                continue
+            added.append((role, text))
+            taken.add(role.casefold())
+        return tuple(added)
 
 
 #: The one instance both OpenCode profiles carry, so Zen and Go cannot drift
@@ -473,6 +632,7 @@ __all__ = [
     "OPENCODE_FREE_TIER_TAGS",
     "OPENCODE_TOOL_CATALOGUE",
     "OPENCODE_TOOL_FAMILIES",
+    "STAND_IN_INPUT_SCHEMA",
     "FreeTierToolCatalogue",
     "ToolFamily",
     "ToolFamilyProvenance",
