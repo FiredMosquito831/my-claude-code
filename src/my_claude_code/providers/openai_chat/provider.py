@@ -503,15 +503,23 @@ class OpenAIChatProvider(BaseProvider):
     def tool_name_codec(self, request: MessagesRequest) -> OpenAIToolNameCodec | None:
         """The codec one Chat Completions request was encoded with, or None.
 
-        ``None`` for every request whose host wants no spellings of its own,
-        and that is the answer that keeps the stream decoding to exactly what
-        it decoded before 7.28.0: nothing.
+        Built from exactly what ``build_openai_chat_request_body`` encodes
+        with -- the same request and the same catalogue -- so the two halves
+        of one translation cannot disagree. That body aliases every name a
+        Chat host could not accept (past 64 characters, or a character outside
+        ``[A-Za-z0-9_-]``) on *every* Chat host, not only on a host with a
+        catalogue of its own; until 7.47.1 only the catalogue hosts decoded,
+        and every other one handed Claude Code a ``tool_use`` naming a tool it
+        never declared.
+
+        ``None`` when the request needs no translation at all, which is the
+        answer that keeps such a stream on exactly the path it always took.
         """
 
-        catalogue = self.tool_catalogue_for(request.model)
-        if not catalogue:
-            return None
-        return OpenAIToolNameCodec.from_request(request, catalogue=catalogue)
+        codec = OpenAIToolNameCodec.from_request(
+            request, catalogue=self.tool_catalogue_for(request.model)
+        )
+        return codec if codec.has_aliases else None
 
     def _build_request_body(
         self,
