@@ -1,0 +1,6211 @@
+{
+ "generated_from": "v7.49.0 3fdbca22",
+ "cases": {
+  "claude_code_free": {
+   "chat": {
+    "model": "muse-spark-1.3-contributor-free",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are Claude Code, Anthropic's official CLI for Claude."
+     },
+     {
+      "role": "user",
+      "content": "list the files"
+     },
+     {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+       {
+        "id": "toolu_00",
+        "type": "function",
+        "function": {
+         "name": "bash",
+         "arguments": "{\"command\": \"ls\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "toolu_00",
+      "content": "a.txt"
+     },
+     {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+       {
+        "id": "toolu_01",
+        "type": "function",
+        "function": {
+         "name": "read",
+         "arguments": "{\"command\": \"ls\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "toolu_01",
+      "content": "a.txt"
+     },
+     {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+       {
+        "id": "toolu_02",
+        "type": "function",
+        "function": {
+         "name": "mcp__server_89__tool_89",
+         "arguments": "{\"command\": \"ls\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "toolu_02",
+      "content": "a.txt"
+     }
+    ],
+    "max_tokens": 64,
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "bash",
+       "description": "the Bash tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "read",
+       "description": "the Read tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "edit",
+       "description": "the Edit tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "glob",
+       "description": "the Glob tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "grep",
+       "description": "the Grep tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "Write",
+       "description": "the Write tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "WebFetch",
+       "description": "the WebFetch tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "WebSearch",
+       "description": "the WebSearch tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "TodoWrite",
+       "description": "the TodoWrite tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "Task",
+       "description": "the Task tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "NotebookEdit",
+       "description": "the NotebookEdit tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "PowerShell",
+       "description": "the PowerShell tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__exa__web_search_exa",
+       "description": "the mcp__exa__web_search_exa tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__plugin_chrome-devtools-mcp_chrome-devtools_81395d61100b7a58",
+       "description": "the mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__plugin_chrome-devtools-mcp_chrome-devtools_4d5b4b1f81ac9ab1",
+       "description": "the mcp__plugin_chrome-devtools-mcp_chrome-devtools__performance_analyze_insight tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_00__tool_00",
+       "description": "the mcp__server_00__tool_00 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_01__tool_01",
+       "description": "the mcp__server_01__tool_01 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_02__tool_02",
+       "description": "the mcp__server_02__tool_02 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_03__tool_03",
+       "description": "the mcp__server_03__tool_03 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_04__tool_04",
+       "description": "the mcp__server_04__tool_04 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_05__tool_05",
+       "description": "the mcp__server_05__tool_05 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_06__tool_06",
+       "description": "the mcp__server_06__tool_06 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_07__tool_07",
+       "description": "the mcp__server_07__tool_07 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_08__tool_08",
+       "description": "the mcp__server_08__tool_08 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_09__tool_09",
+       "description": "the mcp__server_09__tool_09 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_10__tool_10",
+       "description": "the mcp__server_10__tool_10 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_11__tool_11",
+       "description": "the mcp__server_11__tool_11 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_12__tool_12",
+       "description": "the mcp__server_12__tool_12 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_13__tool_13",
+       "description": "the mcp__server_13__tool_13 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_14__tool_14",
+       "description": "the mcp__server_14__tool_14 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_15__tool_15",
+       "description": "the mcp__server_15__tool_15 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_16__tool_16",
+       "description": "the mcp__server_16__tool_16 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_17__tool_17",
+       "description": "the mcp__server_17__tool_17 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_18__tool_18",
+       "description": "the mcp__server_18__tool_18 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_19__tool_19",
+       "description": "the mcp__server_19__tool_19 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_20__tool_20",
+       "description": "the mcp__server_20__tool_20 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_21__tool_21",
+       "description": "the mcp__server_21__tool_21 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_22__tool_22",
+       "description": "the mcp__server_22__tool_22 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_23__tool_23",
+       "description": "the mcp__server_23__tool_23 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_24__tool_24",
+       "description": "the mcp__server_24__tool_24 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_25__tool_25",
+       "description": "the mcp__server_25__tool_25 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_26__tool_26",
+       "description": "the mcp__server_26__tool_26 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_27__tool_27",
+       "description": "the mcp__server_27__tool_27 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_28__tool_28",
+       "description": "the mcp__server_28__tool_28 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_29__tool_29",
+       "description": "the mcp__server_29__tool_29 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_30__tool_30",
+       "description": "the mcp__server_30__tool_30 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_31__tool_31",
+       "description": "the mcp__server_31__tool_31 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_32__tool_32",
+       "description": "the mcp__server_32__tool_32 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_33__tool_33",
+       "description": "the mcp__server_33__tool_33 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_34__tool_34",
+       "description": "the mcp__server_34__tool_34 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_35__tool_35",
+       "description": "the mcp__server_35__tool_35 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_36__tool_36",
+       "description": "the mcp__server_36__tool_36 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_37__tool_37",
+       "description": "the mcp__server_37__tool_37 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_38__tool_38",
+       "description": "the mcp__server_38__tool_38 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_39__tool_39",
+       "description": "the mcp__server_39__tool_39 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_40__tool_40",
+       "description": "the mcp__server_40__tool_40 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_41__tool_41",
+       "description": "the mcp__server_41__tool_41 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_42__tool_42",
+       "description": "the mcp__server_42__tool_42 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_43__tool_43",
+       "description": "the mcp__server_43__tool_43 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_44__tool_44",
+       "description": "the mcp__server_44__tool_44 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_45__tool_45",
+       "description": "the mcp__server_45__tool_45 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_46__tool_46",
+       "description": "the mcp__server_46__tool_46 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_47__tool_47",
+       "description": "the mcp__server_47__tool_47 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_48__tool_48",
+       "description": "the mcp__server_48__tool_48 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_49__tool_49",
+       "description": "the mcp__server_49__tool_49 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_50__tool_50",
+       "description": "the mcp__server_50__tool_50 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_51__tool_51",
+       "description": "the mcp__server_51__tool_51 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_52__tool_52",
+       "description": "the mcp__server_52__tool_52 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_53__tool_53",
+       "description": "the mcp__server_53__tool_53 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_54__tool_54",
+       "description": "the mcp__server_54__tool_54 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_55__tool_55",
+       "description": "the mcp__server_55__tool_55 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_56__tool_56",
+       "description": "the mcp__server_56__tool_56 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_57__tool_57",
+       "description": "the mcp__server_57__tool_57 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_58__tool_58",
+       "description": "the mcp__server_58__tool_58 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_59__tool_59",
+       "description": "the mcp__server_59__tool_59 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_60__tool_60",
+       "description": "the mcp__server_60__tool_60 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_61__tool_61",
+       "description": "the mcp__server_61__tool_61 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_62__tool_62",
+       "description": "the mcp__server_62__tool_62 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_63__tool_63",
+       "description": "the mcp__server_63__tool_63 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_64__tool_64",
+       "description": "the mcp__server_64__tool_64 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_65__tool_65",
+       "description": "the mcp__server_65__tool_65 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_66__tool_66",
+       "description": "the mcp__server_66__tool_66 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_67__tool_67",
+       "description": "the mcp__server_67__tool_67 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_68__tool_68",
+       "description": "the mcp__server_68__tool_68 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_69__tool_69",
+       "description": "the mcp__server_69__tool_69 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_70__tool_70",
+       "description": "the mcp__server_70__tool_70 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_71__tool_71",
+       "description": "the mcp__server_71__tool_71 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_72__tool_72",
+       "description": "the mcp__server_72__tool_72 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_73__tool_73",
+       "description": "the mcp__server_73__tool_73 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_74__tool_74",
+       "description": "the mcp__server_74__tool_74 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_75__tool_75",
+       "description": "the mcp__server_75__tool_75 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_76__tool_76",
+       "description": "the mcp__server_76__tool_76 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_77__tool_77",
+       "description": "the mcp__server_77__tool_77 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_78__tool_78",
+       "description": "the mcp__server_78__tool_78 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_79__tool_79",
+       "description": "the mcp__server_79__tool_79 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_80__tool_80",
+       "description": "the mcp__server_80__tool_80 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_81__tool_81",
+       "description": "the mcp__server_81__tool_81 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_82__tool_82",
+       "description": "the mcp__server_82__tool_82 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_83__tool_83",
+       "description": "the mcp__server_83__tool_83 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_84__tool_84",
+       "description": "the mcp__server_84__tool_84 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_85__tool_85",
+       "description": "the mcp__server_85__tool_85 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_86__tool_86",
+       "description": "the mcp__server_86__tool_86 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_87__tool_87",
+       "description": "the mcp__server_87__tool_87 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_88__tool_88",
+       "description": "the mcp__server_88__tool_88 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "mcp__server_89__tool_89",
+       "description": "the mcp__server_89__tool_89 tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    ]
+   },
+   "responses": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": [
+     {
+      "type": "message",
+      "role": "user",
+      "content": [
+       {
+        "type": "input_text",
+        "text": "list the files"
+       }
+      ]
+     },
+     {
+      "type": "function_call",
+      "call_id": "toolu_00",
+      "name": "bash",
+      "arguments": "{\"command\": \"ls\"}"
+     },
+     {
+      "type": "function_call_output",
+      "call_id": "toolu_00",
+      "output": "a.txt"
+     },
+     {
+      "type": "function_call",
+      "call_id": "toolu_01",
+      "name": "read",
+      "arguments": "{\"command\": \"ls\"}"
+     },
+     {
+      "type": "function_call_output",
+      "call_id": "toolu_01",
+      "output": "a.txt"
+     },
+     {
+      "type": "function_call",
+      "call_id": "toolu_02",
+      "name": "mcp__server_89__tool_89",
+      "arguments": "{\"command\": \"ls\"}"
+     },
+     {
+      "type": "function_call_output",
+      "call_id": "toolu_02",
+      "output": "a.txt"
+     }
+    ],
+    "store": false,
+    "stream": true,
+    "parallel_tool_calls": false,
+    "max_output_tokens": 64,
+    "instructions": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "tools": [
+     {
+      "type": "function",
+      "name": "bash",
+      "description": "the Bash tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "read",
+      "description": "the Read tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "edit",
+      "description": "the Edit tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "glob",
+      "description": "the Glob tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "grep",
+      "description": "the Grep tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "Write",
+      "description": "the Write tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "WebFetch",
+      "description": "the WebFetch tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "WebSearch",
+      "description": "the WebSearch tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "TodoWrite",
+      "description": "the TodoWrite tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "Task",
+      "description": "the Task tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "NotebookEdit",
+      "description": "the NotebookEdit tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "PowerShell",
+      "description": "the PowerShell tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__exa__web_search_exa",
+      "description": "the mcp__exa__web_search_exa tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__plugin_chrome-devtools-mcp_chrome-devtools_81395d61100b7a58",
+      "description": "the mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__plugin_chrome-devtools-mcp_chrome-devtools_4d5b4b1f81ac9ab1",
+      "description": "the mcp__plugin_chrome-devtools-mcp_chrome-devtools__performance_analyze_insight tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_00__tool_00",
+      "description": "the mcp__server_00__tool_00 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_01__tool_01",
+      "description": "the mcp__server_01__tool_01 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_02__tool_02",
+      "description": "the mcp__server_02__tool_02 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_03__tool_03",
+      "description": "the mcp__server_03__tool_03 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_04__tool_04",
+      "description": "the mcp__server_04__tool_04 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_05__tool_05",
+      "description": "the mcp__server_05__tool_05 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_06__tool_06",
+      "description": "the mcp__server_06__tool_06 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_07__tool_07",
+      "description": "the mcp__server_07__tool_07 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_08__tool_08",
+      "description": "the mcp__server_08__tool_08 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_09__tool_09",
+      "description": "the mcp__server_09__tool_09 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_10__tool_10",
+      "description": "the mcp__server_10__tool_10 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_11__tool_11",
+      "description": "the mcp__server_11__tool_11 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_12__tool_12",
+      "description": "the mcp__server_12__tool_12 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_13__tool_13",
+      "description": "the mcp__server_13__tool_13 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_14__tool_14",
+      "description": "the mcp__server_14__tool_14 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_15__tool_15",
+      "description": "the mcp__server_15__tool_15 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_16__tool_16",
+      "description": "the mcp__server_16__tool_16 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_17__tool_17",
+      "description": "the mcp__server_17__tool_17 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_18__tool_18",
+      "description": "the mcp__server_18__tool_18 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_19__tool_19",
+      "description": "the mcp__server_19__tool_19 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_20__tool_20",
+      "description": "the mcp__server_20__tool_20 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_21__tool_21",
+      "description": "the mcp__server_21__tool_21 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_22__tool_22",
+      "description": "the mcp__server_22__tool_22 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_23__tool_23",
+      "description": "the mcp__server_23__tool_23 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_24__tool_24",
+      "description": "the mcp__server_24__tool_24 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_25__tool_25",
+      "description": "the mcp__server_25__tool_25 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_26__tool_26",
+      "description": "the mcp__server_26__tool_26 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_27__tool_27",
+      "description": "the mcp__server_27__tool_27 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_28__tool_28",
+      "description": "the mcp__server_28__tool_28 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_29__tool_29",
+      "description": "the mcp__server_29__tool_29 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_30__tool_30",
+      "description": "the mcp__server_30__tool_30 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_31__tool_31",
+      "description": "the mcp__server_31__tool_31 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_32__tool_32",
+      "description": "the mcp__server_32__tool_32 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_33__tool_33",
+      "description": "the mcp__server_33__tool_33 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_34__tool_34",
+      "description": "the mcp__server_34__tool_34 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_35__tool_35",
+      "description": "the mcp__server_35__tool_35 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_36__tool_36",
+      "description": "the mcp__server_36__tool_36 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_37__tool_37",
+      "description": "the mcp__server_37__tool_37 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_38__tool_38",
+      "description": "the mcp__server_38__tool_38 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_39__tool_39",
+      "description": "the mcp__server_39__tool_39 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_40__tool_40",
+      "description": "the mcp__server_40__tool_40 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_41__tool_41",
+      "description": "the mcp__server_41__tool_41 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_42__tool_42",
+      "description": "the mcp__server_42__tool_42 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_43__tool_43",
+      "description": "the mcp__server_43__tool_43 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_44__tool_44",
+      "description": "the mcp__server_44__tool_44 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_45__tool_45",
+      "description": "the mcp__server_45__tool_45 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_46__tool_46",
+      "description": "the mcp__server_46__tool_46 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_47__tool_47",
+      "description": "the mcp__server_47__tool_47 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_48__tool_48",
+      "description": "the mcp__server_48__tool_48 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_49__tool_49",
+      "description": "the mcp__server_49__tool_49 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_50__tool_50",
+      "description": "the mcp__server_50__tool_50 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_51__tool_51",
+      "description": "the mcp__server_51__tool_51 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_52__tool_52",
+      "description": "the mcp__server_52__tool_52 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_53__tool_53",
+      "description": "the mcp__server_53__tool_53 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_54__tool_54",
+      "description": "the mcp__server_54__tool_54 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_55__tool_55",
+      "description": "the mcp__server_55__tool_55 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_56__tool_56",
+      "description": "the mcp__server_56__tool_56 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_57__tool_57",
+      "description": "the mcp__server_57__tool_57 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_58__tool_58",
+      "description": "the mcp__server_58__tool_58 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_59__tool_59",
+      "description": "the mcp__server_59__tool_59 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_60__tool_60",
+      "description": "the mcp__server_60__tool_60 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_61__tool_61",
+      "description": "the mcp__server_61__tool_61 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_62__tool_62",
+      "description": "the mcp__server_62__tool_62 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_63__tool_63",
+      "description": "the mcp__server_63__tool_63 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_64__tool_64",
+      "description": "the mcp__server_64__tool_64 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_65__tool_65",
+      "description": "the mcp__server_65__tool_65 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_66__tool_66",
+      "description": "the mcp__server_66__tool_66 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_67__tool_67",
+      "description": "the mcp__server_67__tool_67 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_68__tool_68",
+      "description": "the mcp__server_68__tool_68 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_69__tool_69",
+      "description": "the mcp__server_69__tool_69 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_70__tool_70",
+      "description": "the mcp__server_70__tool_70 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_71__tool_71",
+      "description": "the mcp__server_71__tool_71 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_72__tool_72",
+      "description": "the mcp__server_72__tool_72 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_73__tool_73",
+      "description": "the mcp__server_73__tool_73 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_74__tool_74",
+      "description": "the mcp__server_74__tool_74 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_75__tool_75",
+      "description": "the mcp__server_75__tool_75 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_76__tool_76",
+      "description": "the mcp__server_76__tool_76 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_77__tool_77",
+      "description": "the mcp__server_77__tool_77 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_78__tool_78",
+      "description": "the mcp__server_78__tool_78 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_79__tool_79",
+      "description": "the mcp__server_79__tool_79 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_80__tool_80",
+      "description": "the mcp__server_80__tool_80 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_81__tool_81",
+      "description": "the mcp__server_81__tool_81 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_82__tool_82",
+      "description": "the mcp__server_82__tool_82 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_83__tool_83",
+      "description": "the mcp__server_83__tool_83 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_84__tool_84",
+      "description": "the mcp__server_84__tool_84 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_85__tool_85",
+      "description": "the mcp__server_85__tool_85 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_86__tool_86",
+      "description": "the mcp__server_86__tool_86 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_87__tool_87",
+      "description": "the mcp__server_87__tool_87 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_88__tool_88",
+      "description": "the mcp__server_88__tool_88 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "mcp__server_89__tool_89",
+      "description": "the mcp__server_89__tool_89 tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "prompt_cache_key": "ses_f3221b7cc0cc30SwlrlPpjKviq"
+   },
+   "messages": {
+    "model": "muse-spark-1.3-contributor-free",
+    "max_tokens": 64,
+    "messages": [
+     {
+      "role": "user",
+      "content": "list the files"
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_00",
+        "name": "bash",
+        "input": {
+         "command": "ls"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_00",
+        "content": "a.txt"
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01",
+        "name": "read",
+        "input": {
+         "command": "ls"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01",
+        "content": "a.txt"
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_02",
+        "name": "mcp__server_89__tool_89",
+        "input": {
+         "command": "ls"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_02",
+        "content": "a.txt"
+       }
+      ]
+     }
+    ],
+    "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "stream": true,
+    "tools": [
+     {
+      "name": "bash",
+      "description": "the Bash tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "read",
+      "description": "the Read tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "edit",
+      "description": "the Edit tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "glob",
+      "description": "the Glob tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "grep",
+      "description": "the Grep tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "Write",
+      "description": "the Write tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "WebFetch",
+      "description": "the WebFetch tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "WebSearch",
+      "description": "the WebSearch tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "TodoWrite",
+      "description": "the TodoWrite tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "Task",
+      "description": "the Task tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "NotebookEdit",
+      "description": "the NotebookEdit tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "PowerShell",
+      "description": "the PowerShell tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__exa__web_search_exa",
+      "description": "the mcp__exa__web_search_exa tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__plugin_chrome-devtools-mcp_chrome-devtools_81395d61100b7a58",
+      "description": "the mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__plugin_chrome-devtools-mcp_chrome-devtools_4d5b4b1f81ac9ab1",
+      "description": "the mcp__plugin_chrome-devtools-mcp_chrome-devtools__performance_analyze_insight tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_00__tool_00",
+      "description": "the mcp__server_00__tool_00 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_01__tool_01",
+      "description": "the mcp__server_01__tool_01 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_02__tool_02",
+      "description": "the mcp__server_02__tool_02 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_03__tool_03",
+      "description": "the mcp__server_03__tool_03 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_04__tool_04",
+      "description": "the mcp__server_04__tool_04 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_05__tool_05",
+      "description": "the mcp__server_05__tool_05 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_06__tool_06",
+      "description": "the mcp__server_06__tool_06 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_07__tool_07",
+      "description": "the mcp__server_07__tool_07 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_08__tool_08",
+      "description": "the mcp__server_08__tool_08 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_09__tool_09",
+      "description": "the mcp__server_09__tool_09 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_10__tool_10",
+      "description": "the mcp__server_10__tool_10 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_11__tool_11",
+      "description": "the mcp__server_11__tool_11 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_12__tool_12",
+      "description": "the mcp__server_12__tool_12 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_13__tool_13",
+      "description": "the mcp__server_13__tool_13 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_14__tool_14",
+      "description": "the mcp__server_14__tool_14 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_15__tool_15",
+      "description": "the mcp__server_15__tool_15 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_16__tool_16",
+      "description": "the mcp__server_16__tool_16 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_17__tool_17",
+      "description": "the mcp__server_17__tool_17 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_18__tool_18",
+      "description": "the mcp__server_18__tool_18 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_19__tool_19",
+      "description": "the mcp__server_19__tool_19 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_20__tool_20",
+      "description": "the mcp__server_20__tool_20 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_21__tool_21",
+      "description": "the mcp__server_21__tool_21 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_22__tool_22",
+      "description": "the mcp__server_22__tool_22 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_23__tool_23",
+      "description": "the mcp__server_23__tool_23 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_24__tool_24",
+      "description": "the mcp__server_24__tool_24 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_25__tool_25",
+      "description": "the mcp__server_25__tool_25 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_26__tool_26",
+      "description": "the mcp__server_26__tool_26 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_27__tool_27",
+      "description": "the mcp__server_27__tool_27 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_28__tool_28",
+      "description": "the mcp__server_28__tool_28 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_29__tool_29",
+      "description": "the mcp__server_29__tool_29 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_30__tool_30",
+      "description": "the mcp__server_30__tool_30 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_31__tool_31",
+      "description": "the mcp__server_31__tool_31 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_32__tool_32",
+      "description": "the mcp__server_32__tool_32 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_33__tool_33",
+      "description": "the mcp__server_33__tool_33 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_34__tool_34",
+      "description": "the mcp__server_34__tool_34 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_35__tool_35",
+      "description": "the mcp__server_35__tool_35 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_36__tool_36",
+      "description": "the mcp__server_36__tool_36 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_37__tool_37",
+      "description": "the mcp__server_37__tool_37 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_38__tool_38",
+      "description": "the mcp__server_38__tool_38 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_39__tool_39",
+      "description": "the mcp__server_39__tool_39 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_40__tool_40",
+      "description": "the mcp__server_40__tool_40 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_41__tool_41",
+      "description": "the mcp__server_41__tool_41 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_42__tool_42",
+      "description": "the mcp__server_42__tool_42 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_43__tool_43",
+      "description": "the mcp__server_43__tool_43 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_44__tool_44",
+      "description": "the mcp__server_44__tool_44 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_45__tool_45",
+      "description": "the mcp__server_45__tool_45 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_46__tool_46",
+      "description": "the mcp__server_46__tool_46 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_47__tool_47",
+      "description": "the mcp__server_47__tool_47 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_48__tool_48",
+      "description": "the mcp__server_48__tool_48 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_49__tool_49",
+      "description": "the mcp__server_49__tool_49 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_50__tool_50",
+      "description": "the mcp__server_50__tool_50 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_51__tool_51",
+      "description": "the mcp__server_51__tool_51 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_52__tool_52",
+      "description": "the mcp__server_52__tool_52 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_53__tool_53",
+      "description": "the mcp__server_53__tool_53 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_54__tool_54",
+      "description": "the mcp__server_54__tool_54 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_55__tool_55",
+      "description": "the mcp__server_55__tool_55 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_56__tool_56",
+      "description": "the mcp__server_56__tool_56 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_57__tool_57",
+      "description": "the mcp__server_57__tool_57 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_58__tool_58",
+      "description": "the mcp__server_58__tool_58 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_59__tool_59",
+      "description": "the mcp__server_59__tool_59 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_60__tool_60",
+      "description": "the mcp__server_60__tool_60 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_61__tool_61",
+      "description": "the mcp__server_61__tool_61 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_62__tool_62",
+      "description": "the mcp__server_62__tool_62 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_63__tool_63",
+      "description": "the mcp__server_63__tool_63 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_64__tool_64",
+      "description": "the mcp__server_64__tool_64 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_65__tool_65",
+      "description": "the mcp__server_65__tool_65 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_66__tool_66",
+      "description": "the mcp__server_66__tool_66 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_67__tool_67",
+      "description": "the mcp__server_67__tool_67 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_68__tool_68",
+      "description": "the mcp__server_68__tool_68 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_69__tool_69",
+      "description": "the mcp__server_69__tool_69 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_70__tool_70",
+      "description": "the mcp__server_70__tool_70 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_71__tool_71",
+      "description": "the mcp__server_71__tool_71 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_72__tool_72",
+      "description": "the mcp__server_72__tool_72 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_73__tool_73",
+      "description": "the mcp__server_73__tool_73 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_74__tool_74",
+      "description": "the mcp__server_74__tool_74 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_75__tool_75",
+      "description": "the mcp__server_75__tool_75 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_76__tool_76",
+      "description": "the mcp__server_76__tool_76 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_77__tool_77",
+      "description": "the mcp__server_77__tool_77 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_78__tool_78",
+      "description": "the mcp__server_78__tool_78 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_79__tool_79",
+      "description": "the mcp__server_79__tool_79 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_80__tool_80",
+      "description": "the mcp__server_80__tool_80 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_81__tool_81",
+      "description": "the mcp__server_81__tool_81 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_82__tool_82",
+      "description": "the mcp__server_82__tool_82 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_83__tool_83",
+      "description": "the mcp__server_83__tool_83 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_84__tool_84",
+      "description": "the mcp__server_84__tool_84 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_85__tool_85",
+      "description": "the mcp__server_85__tool_85 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_86__tool_86",
+      "description": "the mcp__server_86__tool_86 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_87__tool_87",
+      "description": "the mcp__server_87__tool_87 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_88__tool_88",
+      "description": "the mcp__server_88__tool_88 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "mcp__server_89__tool_89",
+      "description": "the mcp__server_89__tool_89 tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "thinking": {
+     "type": "adaptive"
+    }
+   }
+  },
+  "claude_code_sub_request_free": {
+   "chat": {
+    "model": "muse-spark-1.3-contributor-free",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are Claude Code, Anthropic's official CLI for Claude."
+     },
+     {
+      "role": "user",
+      "content": "list the files"
+     }
+    ],
+    "max_tokens": 64,
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "bash",
+       "description": "the Bash tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    ]
+   },
+   "responses": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": [
+     {
+      "type": "message",
+      "role": "user",
+      "content": [
+       {
+        "type": "input_text",
+        "text": "list the files"
+       }
+      ]
+     }
+    ],
+    "store": false,
+    "stream": true,
+    "parallel_tool_calls": false,
+    "max_output_tokens": 64,
+    "instructions": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "tools": [
+     {
+      "type": "function",
+      "name": "bash",
+      "description": "the Bash tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "prompt_cache_key": "ses_f3221b7cc0cc30SwlrlPpjKviq"
+   },
+   "messages": {
+    "model": "muse-spark-1.3-contributor-free",
+    "max_tokens": 64,
+    "messages": [
+     {
+      "role": "user",
+      "content": "list the files"
+     }
+    ],
+    "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "stream": true,
+    "tools": [
+     {
+      "name": "bash",
+      "description": "the Bash tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "thinking": {
+     "type": "adaptive"
+    }
+   }
+  },
+  "tool_less_free": {
+   "chat": {
+    "model": "muse-spark-1.3-contributor-free",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are Claude Code, Anthropic's official CLI for Claude."
+     },
+     {
+      "role": "user",
+      "content": "list the files"
+     }
+    ],
+    "max_tokens": 64
+   },
+   "responses": {
+    "model": "muse-spark-1.3-contributor-free",
+    "input": [
+     {
+      "type": "message",
+      "role": "user",
+      "content": [
+       {
+        "type": "input_text",
+        "text": "list the files"
+       }
+      ]
+     }
+    ],
+    "store": false,
+    "stream": true,
+    "parallel_tool_calls": false,
+    "max_output_tokens": 64,
+    "instructions": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "prompt_cache_key": "ses_f3221b7cc0cc30SwlrlPpjKviq"
+   },
+   "messages": {
+    "model": "muse-spark-1.3-contributor-free",
+    "max_tokens": 64,
+    "messages": [
+     {
+      "role": "user",
+      "content": "list the files"
+     }
+    ],
+    "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "stream": true,
+    "thinking": {
+     "type": "adaptive"
+    }
+   }
+  },
+  "opencode_native_paid_zen": {
+   "chat": {
+    "model": "claude-sonnet-4-5",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are Claude Code, Anthropic's official CLI for Claude."
+     },
+     {
+      "role": "user",
+      "content": "list the files"
+     },
+     {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+       {
+        "id": "toolu_00",
+        "type": "function",
+        "function": {
+         "name": "bash",
+         "arguments": "{\"command\": \"ls\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "toolu_00",
+      "content": "a.txt"
+     }
+    ],
+    "max_tokens": 64,
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "bash",
+       "description": "the bash tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "edit",
+       "description": "the edit tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "glob",
+       "description": "the glob tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "grep",
+       "description": "the grep tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "read",
+       "description": "the read tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "skill",
+       "description": "the skill tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "task",
+       "description": "the task tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "todowrite",
+       "description": "the todowrite tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "webfetch",
+       "description": "the webfetch tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "websearch",
+       "description": "the websearch tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "write",
+       "description": "the write tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    ]
+   },
+   "responses": {
+    "model": "claude-sonnet-4-5",
+    "input": [
+     {
+      "type": "message",
+      "role": "user",
+      "content": [
+       {
+        "type": "input_text",
+        "text": "list the files"
+       }
+      ]
+     },
+     {
+      "type": "function_call",
+      "call_id": "toolu_00",
+      "name": "bash",
+      "arguments": "{\"command\": \"ls\"}"
+     },
+     {
+      "type": "function_call_output",
+      "call_id": "toolu_00",
+      "output": "a.txt"
+     }
+    ],
+    "store": false,
+    "stream": true,
+    "parallel_tool_calls": false,
+    "max_output_tokens": 64,
+    "instructions": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "tools": [
+     {
+      "type": "function",
+      "name": "bash",
+      "description": "the bash tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "edit",
+      "description": "the edit tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "glob",
+      "description": "the glob tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "grep",
+      "description": "the grep tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "read",
+      "description": "the read tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "skill",
+      "description": "the skill tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "task",
+      "description": "the task tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "todowrite",
+      "description": "the todowrite tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "webfetch",
+      "description": "the webfetch tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "websearch",
+      "description": "the websearch tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "write",
+      "description": "the write tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "prompt_cache_key": "ses_f3221b7cc0cc30SwlrlPpjKviq"
+   },
+   "messages": {
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 64,
+    "messages": [
+     {
+      "role": "user",
+      "content": "list the files"
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_00",
+        "name": "bash",
+        "input": {
+         "command": "ls"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_00",
+        "content": "a.txt"
+       }
+      ]
+     }
+    ],
+    "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "stream": true,
+    "tools": [
+     {
+      "name": "bash",
+      "description": "the bash tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "edit",
+      "description": "the edit tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "glob",
+      "description": "the glob tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "grep",
+      "description": "the grep tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "read",
+      "description": "the read tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "skill",
+      "description": "the skill tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "task",
+      "description": "the task tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "todowrite",
+      "description": "the todowrite tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "webfetch",
+      "description": "the webfetch tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "websearch",
+      "description": "the websearch tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "write",
+      "description": "the write tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "thinking": {
+     "type": "adaptive"
+    }
+   }
+  },
+  "opencode_native_go": {
+   "chat": {
+    "model": "kimi-k2.6",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are Claude Code, Anthropic's official CLI for Claude."
+     },
+     {
+      "role": "user",
+      "content": "list the files"
+     },
+     {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+       {
+        "id": "toolu_00",
+        "type": "function",
+        "function": {
+         "name": "bash",
+         "arguments": "{\"command\": \"ls\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "toolu_00",
+      "content": "a.txt"
+     }
+    ],
+    "max_tokens": 64,
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "bash",
+       "description": "the bash tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "edit",
+       "description": "the edit tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "glob",
+       "description": "the glob tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "grep",
+       "description": "the grep tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "read",
+       "description": "the read tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "skill",
+       "description": "the skill tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "task",
+       "description": "the task tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "todowrite",
+       "description": "the todowrite tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "webfetch",
+       "description": "the webfetch tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "websearch",
+       "description": "the websearch tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "write",
+       "description": "the write tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    ]
+   },
+   "responses": {
+    "model": "kimi-k2.6",
+    "input": [
+     {
+      "type": "message",
+      "role": "user",
+      "content": [
+       {
+        "type": "input_text",
+        "text": "list the files"
+       }
+      ]
+     },
+     {
+      "type": "function_call",
+      "call_id": "toolu_00",
+      "name": "bash",
+      "arguments": "{\"command\": \"ls\"}"
+     },
+     {
+      "type": "function_call_output",
+      "call_id": "toolu_00",
+      "output": "a.txt"
+     }
+    ],
+    "store": false,
+    "stream": true,
+    "parallel_tool_calls": false,
+    "max_output_tokens": 64,
+    "instructions": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "tools": [
+     {
+      "type": "function",
+      "name": "bash",
+      "description": "the bash tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "edit",
+      "description": "the edit tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "glob",
+      "description": "the glob tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "grep",
+      "description": "the grep tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "read",
+      "description": "the read tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "skill",
+      "description": "the skill tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "task",
+      "description": "the task tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "todowrite",
+      "description": "the todowrite tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "webfetch",
+      "description": "the webfetch tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "websearch",
+      "description": "the websearch tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "write",
+      "description": "the write tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "prompt_cache_key": "ses_f3221b7cc0cc30SwlrlPpjKviq"
+   },
+   "messages": {
+    "model": "kimi-k2.6",
+    "max_tokens": 64,
+    "messages": [
+     {
+      "role": "user",
+      "content": "list the files"
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_00",
+        "name": "bash",
+        "input": {
+         "command": "ls"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_00",
+        "content": "a.txt"
+       }
+      ]
+     }
+    ],
+    "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "stream": true,
+    "tools": [
+     {
+      "name": "bash",
+      "description": "the bash tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "edit",
+      "description": "the edit tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "glob",
+      "description": "the glob tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "grep",
+      "description": "the grep tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "read",
+      "description": "the read tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "skill",
+      "description": "the skill tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "task",
+      "description": "the task tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "todowrite",
+      "description": "the todowrite tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "webfetch",
+      "description": "the webfetch tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "websearch",
+      "description": "the websearch tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "name": "write",
+      "description": "the write tool",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "thinking": {
+     "type": "adaptive"
+    }
+   }
+  },
+  "nvidia_nim": {
+   "chat": {
+    "model": "some-model",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are Claude Code, Anthropic's official CLI for Claude."
+     },
+     {
+      "role": "user",
+      "content": "list the files"
+     }
+    ],
+    "max_tokens": 64,
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "bash",
+       "description": "the bash tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "edit",
+       "description": "the edit tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "glob",
+       "description": "the glob tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "grep",
+       "description": "the grep tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "read",
+       "description": "the read tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "skill",
+       "description": "the skill tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "task",
+       "description": "the task tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "todowrite",
+       "description": "the todowrite tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "webfetch",
+       "description": "the webfetch tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "websearch",
+       "description": "the websearch tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "write",
+       "description": "the write tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "Bash",
+       "description": "the Bash tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "Read",
+       "description": "the Read tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "Edit",
+       "description": "the Edit tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "Glob",
+       "description": "the Glob tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "Grep",
+       "description": "the Grep tool",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "command": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    ],
+    "extra_body": {
+     "chat_template_kwargs": {
+      "thinking": true,
+      "enable_thinking": true
+     }
+    }
+   }
+  },
+  "chatgpt_oauth": {
+   "responses": {
+    "model": "some-model",
+    "input": [
+     {
+      "type": "message",
+      "role": "user",
+      "content": [
+       {
+        "type": "input_text",
+        "text": "list the files"
+       }
+      ]
+     }
+    ],
+    "store": false,
+    "stream": true,
+    "parallel_tool_calls": false,
+    "instructions": "You are Claude Code, Anthropic's official CLI for Claude.",
+    "tools": [
+     {
+      "type": "function",
+      "name": "bash",
+      "description": "the bash tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "edit",
+      "description": "the edit tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "glob",
+      "description": "the glob tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "grep",
+      "description": "the grep tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "read",
+      "description": "the read tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "skill",
+      "description": "the skill tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "task",
+      "description": "the task tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "todowrite",
+      "description": "the todowrite tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "webfetch",
+      "description": "the webfetch tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "websearch",
+      "description": "the websearch tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "write",
+      "description": "the write tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "Bash",
+      "description": "the Bash tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "Read",
+      "description": "the Read tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "Edit",
+      "description": "the Edit tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "Glob",
+      "description": "the Glob tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     {
+      "type": "function",
+      "name": "Grep",
+      "description": "the Grep tool",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "command": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ],
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ]
+   }
+  }
+ }
+}

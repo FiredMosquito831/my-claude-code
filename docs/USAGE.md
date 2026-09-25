@@ -2690,6 +2690,23 @@ tool call the model makes is mapped to the name your agent actually sent. Your
 agent never sees the wire names. No decoy tool is ever added — that is the
 `500` in the table.
 
+**Every coding agent, not only Claude Code (7.49.1).** Until 7.49.0 the
+translation knew only Claude Code's five spellings, and it did worse than
+nothing for an agent that *already* uses OpenCode's: to stop a stray `bash`
+from sitting beside Claude Code's `Bash`, it renamed every lowercase `bash`,
+`read`, `edit`, `glob` and `grep` to a hashed alias such as
+`bash_37d2b12d5d9abc2a`. So OpenCode itself reached OpenCode's free tier with
+none of its own tool names, and Pi (`read, bash, edit, write`) with none of
+its three. From 7.49.1 each agent's spellings are declared as data, and MCC
+picks the set to use **from the tool names the request carries** — never from
+a header saying which agent sent it. An agent that already speaks OpenCode's
+spellings keeps them. A Claude Code or Agent SDK request is sent byte for byte
+as 7.49.0 sent it, and a test compares it with bodies the 7.49.0 code wrote.
+Codex, Gemini CLI, Qwen Code and Command Code name their tools differently
+again, and still reach the gated free models without enough of OpenCode's
+names. Not every free model checked when this was measured (2026-09-25):
+`space-bunny-free` answered a Codex request that carried none of them.
+
 Which models: any whose id ends in `-free` or `:free`, any the catalogue
 prices at zero on this host, and anything you list in
 `OPENCODE_FREE_TIER_MODELS` (`big-pickle` by default — it is free and its name

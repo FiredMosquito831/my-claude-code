@@ -235,7 +235,9 @@ class ResponsesTransport:
         rate_limiter: ProviderRateLimiter,
         api_key_provider: Any | None = None,
         tool_name_max_length: int | None = None,
-        tool_catalogue_for: Callable[[str], Mapping[str, str]] | None = None,
+        tool_catalogue_for_request: (
+            Callable[[MessagesRequest], Mapping[str, str]] | None
+        ) = None,
         memory: RecoveryMemory | None = None,
         tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
     ) -> None:
@@ -250,10 +252,11 @@ class ResponsesTransport:
         # a host with no catalogue of its own -- which is every host but
         # OpenCode's free tier, and is why a transport built without it sends
         # exactly the bytes it sent before 7.28.0. A callable rather than a
-        # mapping because the answer is per *model*: the profile that declares
-        # it fronts paid models too, and those are entitled to their own tool
-        # names.
-        self._tool_catalogue_for = tool_catalogue_for
+        # mapping because the answer is per *request*: the profile that
+        # declares it fronts paid models too, and those are entitled to their
+        # own tool names; and since 7.49.1 which client's spellings apply is
+        # read off the request's own tool names.
+        self._tool_catalogue_for_request = tool_catalogue_for_request
         # What this host has taught MCC about its own Responses validator.
         # A bare transport (a unit test, an embedded use) gets an unpersisted
         # memory and behaves exactly as one built before 7.23.0 did: nothing
@@ -318,7 +321,7 @@ class ResponsesTransport:
         return cap, ""
 
     def tool_catalogue(self, request: MessagesRequest) -> Mapping[str, str]:
-        """This host's own tool spellings for one request's model.
+        """This host's own tool spellings for one request.
 
         Resolved in one place for the same reason
         :attr:`tool_name_max_length` is: the body encoder and the stream
@@ -326,9 +329,9 @@ class ResponsesTransport:
         under a name the client never sent.
         """
 
-        if self._tool_catalogue_for is None:
+        if self._tool_catalogue_for_request is None:
             return EMPTY_TOOL_CATALOGUE
-        return self._tool_catalogue_for(request.model)
+        return self._tool_catalogue_for_request(request)
 
     @property
     def url(self) -> str:

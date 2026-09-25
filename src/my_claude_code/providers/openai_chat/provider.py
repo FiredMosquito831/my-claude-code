@@ -30,6 +30,7 @@ from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
     EMPTY_TOOL_CATALOGUE,
     OpenAIToolNameCodec,
+    request_tool_names,
 )
 from my_claude_code.core.anthropic.stream_contracts import REASONING_HEARTBEAT
 from my_claude_code.core.anthropic.streaming import (
@@ -361,7 +362,7 @@ class OpenAIChatProvider(BaseProvider):
                 rate_limiter=self._rate_limiter,
                 api_key_provider=self._api_key_provider,
                 tool_name_max_length=self._profile.responses_tool_name_max_length,
-                tool_catalogue_for=self.tool_catalogue_for,
+                tool_catalogue_for_request=self.tool_catalogue_for_request,
                 # The same memory the Chat Completions ladder writes to, so a
                 # Responses refusal survives a config apply exactly as an
                 # output cap does and shows up on the same Models page row.
@@ -385,7 +386,7 @@ class OpenAIChatProvider(BaseProvider):
                 api_key=self._api_key,
                 rate_limiter=self._rate_limiter,
                 api_key_provider=self._api_key_provider,
-                tool_catalogue_for=self.tool_catalogue_for,
+                tool_catalogue_for_request=self.tool_catalogue_for_request,
                 # The same memory the other two doors write to, so a ceiling
                 # this host stated on one surface is applied on all three and
                 # shows up once on the Models page.
@@ -500,6 +501,26 @@ class OpenAIChatProvider(BaseProvider):
             zero_cost=model_is_zero_cost(self._provider_id, model_id),
         )
 
+    def tool_catalogue_for_request(self, request: MessagesRequest) -> Mapping[str, str]:
+        """The tool spellings this host wants for one request.
+
+        :meth:`tool_catalogue_for`'s scope, with the client's own spellings
+        chosen from the tool names the request carries: Claude Code's request
+        gets exactly what :meth:`tool_catalogue_for` gives it, and a client
+        that already speaks OpenCode's spellings keeps them. Every encode and
+        decode site on all three surfaces asks this one method with the same
+        request, so the two halves of a round trip cannot choose differently.
+        """
+
+        catalogue = self._profile.free_tier_tool_catalogue
+        if catalogue is None:
+            return EMPTY_TOOL_CATALOGUE
+        return catalogue.catalogue_for_request(
+            request.model,
+            request_tool_names(request),
+            zero_cost=model_is_zero_cost(self._provider_id, request.model),
+        )
+
     def tool_name_codec(self, request: MessagesRequest) -> OpenAIToolNameCodec | None:
         """The codec one Chat Completions request was encoded with, or None.
 
@@ -517,7 +538,7 @@ class OpenAIChatProvider(BaseProvider):
         """
 
         codec = OpenAIToolNameCodec.from_request(
-            request, catalogue=self.tool_catalogue_for(request.model)
+            request, catalogue=self.tool_catalogue_for_request(request)
         )
         return codec if codec.has_aliases else None
 
@@ -534,7 +555,7 @@ class OpenAIChatProvider(BaseProvider):
             policy=self._profile.request_policy,
             postprocessors=self._profile.request_postprocessors,
             provider_id=self._provider_id,
-            tool_catalogue=self.tool_catalogue_for(request.model),
+            tool_catalogue=self.tool_catalogue_for_request(request),
         )
 
     def preflight_stream(
