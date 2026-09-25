@@ -192,6 +192,8 @@ from .constants import (
     STREAM_KEEPALIVE_IDLE_SECONDS_DEFAULT,
     STREAM_KEEPALIVE_INTERVAL_SECONDS_DEFAULT,
     STREAM_KEEPALIVE_MAX_SECONDS_DEFAULT,
+    STREAM_KEEPALIVE_MODE_DEFAULT,
+    STREAM_KEEPALIVE_MODE_NAMES,
     STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT,
     TOOL_RESULT_IMAGE_DELIVERY_DEFAULT,
     TOOL_RESULT_IMAGE_DELIVERY_NAMES,
@@ -1061,6 +1063,15 @@ class Settings(BaseSettings):
         description=(
             "Longest stretch of silence MCC keeps alive; after it the client's "
             "own idle timer runs as if keepalives did not exist. 0 = no cap."
+        ),
+    )
+    stream_keepalive_mode: str = Field(
+        default=STREAM_KEEPALIVE_MODE_DEFAULT,
+        validation_alias="STREAM_KEEPALIVE_MODE",
+        description=(
+            "What the keepalive is on /v1/messages: ping (Anthropic's ping "
+            "event), or frames (an empty delta of the model's own open text "
+            "or tool-call block, falling back to ping anywhere else)."
         ),
     )
     # How often every usable provider's /models is re-read in the background.
@@ -2399,6 +2410,24 @@ class Settings(BaseSettings):
         """
         names = [part.strip().lower() for part in str(v or "").split(",")]
         return ",".join(dict.fromkeys(name for name in names if name))
+
+    @field_validator("stream_keepalive_mode")
+    @classmethod
+    def validate_stream_keepalive_mode(cls, v: str) -> str:
+        """Reject an unknown keepalive mode rather than guess at it.
+
+        Blank falls back to the default, as every other select does: the admin
+        UI writes ``KEY=`` for a cleared field, which is not a typo.
+        """
+        mode = str(v).strip().lower()
+        if not mode:
+            return STREAM_KEEPALIVE_MODE_DEFAULT
+        if mode not in STREAM_KEEPALIVE_MODE_NAMES:
+            raise ValueError(
+                f"Unknown stream keepalive mode: {v!r}. Known modes: "
+                f"{', '.join(sorted(STREAM_KEEPALIVE_MODE_NAMES))}"
+            )
+        return mode
 
     @field_validator("tool_result_image_delivery")
     @classmethod

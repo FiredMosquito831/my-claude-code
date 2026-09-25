@@ -80,6 +80,7 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
         "STREAM_KEEPALIVE_IDLE_SECONDS",
         "STREAM_KEEPALIVE_INTERVAL_SECONDS",
         "STREAM_KEEPALIVE_MAX_SECONDS",
+        "STREAM_KEEPALIVE_MODE",
     ),
     "benching": (
         "FALLBACK_BENCH_ENABLED",

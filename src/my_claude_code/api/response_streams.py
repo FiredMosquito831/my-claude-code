@@ -1,6 +1,7 @@
 """FastAPI streaming response wrappers for public API wire formats."""
 
 import asyncio
+import json
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -26,6 +27,10 @@ from my_claude_code.core.anthropic.streaming import (
 from my_claude_code.core.async_iterators import try_close_async_iterator
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import find_execution_failure
+from my_claude_code.core.keepalive_tally import (
+    KeepaliveTally,
+    current_keepalive_tally,
+)
 from my_claude_code.core.request_tasks import note_serving_task, note_stream_chunk
 from my_claude_code.core.stop_deadline import stop_deadline
 from my_claude_code.core.trace import close_stream_input, trace_event
@@ -51,6 +56,137 @@ class EmptyStreamError(RuntimeError):
 ANTHROPIC_KEEPALIVE_FRAME = format_sse_event("ping", {"type": "ping"})
 SSE_COMMENT_KEEPALIVE_FRAME = ": keepalive\n\n"
 
+#: ``STREAM_KEEPALIVE_MODE=frames``: the empty delta each keepable block kind
+#: takes, as ``(delta type, field)``. Only the model's own text and tool-call
+#: blocks. A thinking block is deliberately absent -- Claude Code replays
+#: thinking upstream on the next turn, so nothing MCC writes may ever pose as
+#: part of one -- and so is every server-side block.
+_EMPTY_DELTA_FOR_BLOCK: dict[str, tuple[str, str]] = {
+    "text": ("text_delta", "text"),
+    "tool_use": ("input_json_delta", "partial_json"),
+}
+
+#: Frames that leave whichever block is open, open.
+_BLOCK_NEUTRAL_EVENTS = frozenset({"content_block_delta", "ping"})
+
+
+def empty_delta_frame(index: int, block_type: str) -> str | None:
+    """The empty ``content_block_delta`` for an open block, or ``None``.
+
+    Byte for byte what MCC's own emitter writes for a delta, with an empty
+    payload: ``""`` appended to a text block or to a tool call's argument JSON
+    is the same text and the same JSON.
+    """
+
+    kind = _EMPTY_DELTA_FOR_BLOCK.get(block_type)
+    if kind is None:
+        return None
+    delta_type, field = kind
+    return format_sse_event(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": delta_type, field: ""},
+        },
+    )
+
+
+class _OpenBlockTracker:
+    """Which content block the client has open, read off the frames it was sent.
+
+    Fed every real frame once it has been handed to the client, never a
+    keepalive, so it follows the client's own view of the message: a block is
+    open from the model's ``content_block_start`` to its ``content_block_stop``,
+    and only inside a message. Anything it does not recognise closes the block,
+    so a frame it cannot read can only ever cost a ping -- never a delta on a
+    block the client has already closed, which Claude Code treats as a broken
+    stream.
+    """
+
+    __slots__ = ("_frame", "_in_message", "_tail")
+
+    def __init__(self) -> None:
+        self._tail = ""
+        self._in_message = False
+        self._frame: str | None = None
+
+    @property
+    def open_frame(self) -> str | None:
+        """The empty delta for the block open right now, or ``None``."""
+
+        return self._frame
+
+    def feed(self, chunk: str) -> None:
+        text = self._tail + chunk if self._tail else chunk
+        if "\r" in text:
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+        end = text.rfind("\n\n")
+        if end < 0:
+            self._tail = text
+            return
+        self._tail = text[end + 2 :]
+        for frame in text[:end].split("\n\n"):
+            frame = frame.strip("\n")
+            if frame:
+                self._observe(frame)
+
+    def _observe(self, frame: str) -> None:
+        name: str | None = None
+        data: str | None = None
+        for line in frame.split("\n"):
+            if line.startswith("event:"):
+                name = line[6:].strip()
+            elif line.startswith("data:"):
+                value = line[5:].lstrip(" ")
+                data = value if data is None else f"{data}\n{value}"
+        if name is None:
+            if data is None:
+                return  # a comment-only frame: nothing about the message changed
+            payload = _json_object(data)
+            name = payload.get("type") if payload is not None else None
+            if not isinstance(name, str):
+                self._frame = None
+                return
+        if name in _BLOCK_NEUTRAL_EVENTS:
+            return
+        if name == "message_start":
+            self._in_message = True
+            self._frame = None
+            return
+        if name == "content_block_start":
+            self._frame = self._frame_for_start(data) if self._in_message else None
+            return
+        # content_block_stop, message_delta, message_stop, error and anything
+        # unrecognised: no block the client could still append to.
+        self._frame = None
+        if name in {"message_stop", "error"}:
+            self._in_message = False
+
+    @staticmethod
+    def _frame_for_start(data: str | None) -> str | None:
+        payload = _json_object(data) if data is not None else None
+        if payload is None:
+            return None
+        index = payload.get("index")
+        block = payload.get("content_block")
+        if not isinstance(index, int) or isinstance(index, bool):
+            return None
+        if not isinstance(block, dict):
+            return None
+        block_type = block.get("type")
+        if not isinstance(block_type, str):
+            return None
+        return empty_delta_frame(index, block_type)
+
+
+def _json_object(data: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(data)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
 
 @dataclass(frozen=True, slots=True)
 class StreamKeepalive:
@@ -68,6 +204,10 @@ class StreamKeepalive:
     idle_seconds: float
     interval_seconds: float
     max_seconds: float
+    #: ``STREAM_KEEPALIVE_MODE=frames``: on ``/v1/messages``, while the model's
+    #: own text or tool-call block is open, the keepalive is an empty delta of
+    #: that block instead of a ping. Ignored by every other surface.
+    frames: bool = False
 
     @classmethod
     def from_settings(cls, settings: Settings) -> StreamKeepalive | None:
@@ -79,6 +219,7 @@ class StreamKeepalive:
             idle_seconds=settings.stream_keepalive_idle_seconds,
             interval_seconds=max(settings.stream_keepalive_interval_seconds, 1.0),
             max_seconds=max(settings.stream_keepalive_max_seconds, 0.0),
+            frames=settings.stream_keepalive_mode == "frames",
         )
 
 
@@ -341,6 +482,7 @@ async def _first_chunk_streaming_response(
     terminal_failure_observer: TerminalFailureObserver | None,
     keepalive: StreamKeepalive | None = None,
     keepalive_frame: str = SSE_COMMENT_KEEPALIVE_FRAME,
+    empty_delta_frames: bool = False,
 ) -> Response:
     if keepalive is not None:
         return await _keepalive_streaming_response(
@@ -351,6 +493,7 @@ async def _first_chunk_streaming_response(
             terminal_failure_observer=terminal_failure_observer,
             keepalive=keepalive,
             keepalive_frame=keepalive_frame,
+            empty_delta_frames=empty_delta_frames,
         )
     try:
         first_chunk = await anext(body)
@@ -392,6 +535,7 @@ async def _keepalive_streaming_response(
     terminal_failure_observer: TerminalFailureObserver | None,
     keepalive: StreamKeepalive,
     keepalive_frame: str,
+    empty_delta_frames: bool = False,
 ) -> Response:
     """The same prefetch, raced against the keepalive clock.
 
@@ -407,7 +551,18 @@ async def _keepalive_streaming_response(
     when a transport hid the status.
     """
 
-    source = _KeepaliveSource(body, keepalive, keepalive_frame)
+    blocks: _OpenBlockTracker | None = None
+    tally: KeepaliveTally | None = None
+    if keepalive.frames and empty_delta_frames:
+        blocks = _OpenBlockTracker()
+        # Picked up here, in the handler's own task, where the request capture
+        # installed it -- before any frame exists to be counted.
+        tally = current_keepalive_tally()
+        if tally is not None:
+            tally.frames_mode = True
+    source = _KeepaliveSource(
+        body, keepalive, keepalive_frame, blocks=blocks, tally=tally
+    )
     try:
         first_chunk = await source.next()
     except StopAsyncIteration:
@@ -437,7 +592,9 @@ async def _keepalive_streaming_response(
         )
     return ManagedStreamingResponse(
         _PrefetchedStream(
-            keepalive_frame if first_chunk is None else first_chunk,
+            # Nothing has been sent yet, so no block can be open: this is
+            # always the surface's plain keepalive.
+            source.keepalive_frame() if first_chunk is None else first_chunk,
             body,
             terminal_frame=terminal_frame,
             terminal_failure_observer=terminal_failure_observer,
@@ -488,12 +645,17 @@ class _KeepaliveSource:
         body: AsyncIterator[str],
         policy: StreamKeepalive,
         frame: str,
+        *,
+        blocks: _OpenBlockTracker | None = None,
+        tally: KeepaliveTally | None = None,
     ) -> None:
         loop = asyncio.get_running_loop()
         now = loop.time()
         self._body = body
         self._policy = policy
         self.frame = frame
+        self._blocks = blocks
+        self._tally = tally
         self._silent_since = now
         self._next_due: float | None = now + policy.idle_seconds
         self._demand = asyncio.Event()
@@ -525,6 +687,8 @@ class _KeepaliveSource:
             if done:
                 self._pending = None
                 chunk = pending.result()
+                if self._blocks is not None:
+                    self._blocks.feed(chunk)
                 now = loop.time()
                 self._silent_since = now
                 self._next_due = now + self._policy.idle_seconds
@@ -547,6 +711,24 @@ class _KeepaliveSource:
                 continue
             self._next_due = now + self._policy.interval_seconds
             return None
+
+    def keepalive_frame(self) -> str:
+        """The keepalive to write now that one is due.
+
+        In frames mode, while the client has the model's own text or tool-call
+        block open, an empty delta of that block -- the one frame Claude
+        Code's idle timer counts that adds nothing to the answer. Anywhere
+        else, and in every other mode, the surface's plain keepalive.
+        """
+
+        blocks = self._blocks
+        if blocks is not None:
+            frame = blocks.open_frame
+            if frame is not None:
+                if self._tally is not None:
+                    self._tally.frames += 1
+                return frame
+        return self.frame
 
     async def aclose(self) -> None:
         """Cancel the pump, wait for it, then close the body exactly once.
@@ -711,7 +893,7 @@ class _PrefetchedStream(AsyncIterator[str]):
                     # panel must still see a silent stream as silent. The task
                     # writing it is adopted, which is all the registry needs.
                     note_serving_task()
-                    return source.frame
+                    return source.keepalive_frame()
                 chunk = next_chunk
         except StopAsyncIteration:
             if self._awaiting_first_frame:
@@ -791,6 +973,7 @@ async def anthropic_sse_streaming_response(
         ),
         keepalive=keepalive,
         keepalive_frame=ANTHROPIC_KEEPALIVE_FRAME,
+        empty_delta_frames=True,
     )
 
 
