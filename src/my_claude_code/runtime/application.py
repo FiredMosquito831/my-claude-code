@@ -15,6 +15,7 @@ from loguru import logger
 import my_claude_code.cli.managed as cli_managed
 import my_claude_code.messaging.session as messaging_session
 import my_claude_code.messaging.workflow as messaging_workflow_module
+from my_claude_code.api.admin_proxy_routes import republish_chains
 from my_claude_code.api.request_pricing import backfill_pricer
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
@@ -106,6 +107,7 @@ from .loop_heartbeat import LoopHeartbeat
 from .provider_manager import ProviderRuntimeManager
 from .proxy_check_timer import ProxyCheckTimer, ProxyHealthTimer
 from .proxy_feed_timer import ProxyFeedTimer
+from .proxy_order import ProxyOrderTimer
 from .stall_watchdog import StallWatchdog
 
 RestartCallback = Callable[[], Awaitable[None] | None]
@@ -314,6 +316,16 @@ class ApplicationRuntime:
             lambda: self.settings,
             lambda: self.settings.proxy_health_reprobe_enabled,
         )
+        # "Keep the fastest healthy proxy first" (7.56.0). Runs always and
+        # does nothing for a chain whose switch is off -- every chain stored
+        # before 7.56.0 until its operator turns it on. It makes no request:
+        # it reads the ledgers the checks and live traffic already fill, and a
+        # new order is written through the chain save's own scoped republish,
+        # so only that chain's provider is rebuilt.
+        self._proxy_order_timer = ProxyOrderTimer(
+            lambda: self.settings,
+            lambda provider_ids: republish_chains(self, provider_ids),
+        )
 
     @property
     def settings(self) -> Settings:
@@ -411,6 +423,7 @@ class ApplicationRuntime:
             install_listener()
             self._proxy_check_timer.start()
             self._proxy_health_timer.start()
+            self._proxy_order_timer.start()
             # Before the feed timer reads the store, and before the Proxying
             # page can be opened: an install upgrading from 7.17.1 still names
             # its feeds by the ids of the seven this product used to ship, and
@@ -1351,6 +1364,7 @@ class ApplicationRuntime:
         await self._proxy_check_timer.close()
         await self._proxy_feed_timer.close()
         await self._proxy_health_timer.close()
+        await self._proxy_order_timer.close()
         remove_listener()
         await best_effort(
             "learned_facts.flush",

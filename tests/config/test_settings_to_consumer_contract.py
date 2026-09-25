@@ -860,3 +860,33 @@ def test_the_confirm_settings_reach_every_checker() -> None:
     timer = inspect.getsource(proxy_check_timer)
     assert '"proxy_check_confirm_attempts"' in timer
     assert '"proxy_check_confirm_spacing_seconds"' in timer
+
+
+def test_the_resort_interval_reaches_the_speed_order_writer() -> None:
+    """7.56.0's PROXY_ORDER_RESORT_MINUTES: default 30, bounds 5-1440, read."""
+
+    import inspect
+
+    from pydantic import ValidationError
+
+    from my_claude_code.api import admin_proxy_routes
+    from my_claude_code.runtime import application as runtime_application
+
+    assert Settings.model_validate({}).proxy_order_resort_minutes == 30
+    assert (
+        Settings.model_validate(
+            {"PROXY_ORDER_RESORT_MINUTES": 90}
+        ).proxy_order_resort_minutes
+        == 90
+    )
+    for bad in (4, 1441):
+        with pytest.raises(ValidationError):
+            Settings.model_validate({"PROXY_ORDER_RESORT_MINUTES": bad})
+    writer = inspect.getsource(admin_proxy_routes.commit_speed_order)
+    assert '"proxy_order_resort_minutes"' in writer
+    assert "resort_minutes=resort_minutes" in writer
+    # The loop is handed the live Settings on every tick, not a snapshot.
+    assert "ProxyOrderTimer(" in inspect.getsource(runtime_application)
+    assert "lambda: self.settings" in inspect.getsource(
+        runtime_application.ApplicationRuntime.__init__
+    )

@@ -600,6 +600,15 @@ PROXY_CHECK_SLOW_MS_MAX = 60000
 # the sweep and every 15 s during it. A failure or a handshake over 5 s pauses
 # the sweep and marks nothing dead until the link answers again.
 PROXY_CHECK_LINK_GUARD_DEFAULT = True
+# The shortest time between two speed orders MCC writes into one chain with
+# "Keep the fastest healthy proxy first" on (7.56.0). A STABILITY choice with
+# no measurement behind it: together with the 25 % / 500 ms margin it keeps a
+# chain from flapping between two addresses of similar speed, and it bounds how
+# often the automatic sort rebuilds that one provider. "Sort by speed now" is
+# not bound by it.
+PROXY_ORDER_RESORT_MINUTES_DEFAULT = 30
+PROXY_ORDER_RESORT_MINUTES_MIN = 5
+PROXY_ORDER_RESORT_MINUTES_MAX = 1440
 # How many addresses the background health re-prober has in flight. This is NOT
 # the fetch sweep, and not the operator's Add either -- both of those are paced
 # by PROXY_FETCH_TEST_CONCURRENCY. This one number belongs to the loop that

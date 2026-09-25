@@ -745,6 +745,19 @@ class ProxyChain:
     #: inert until it is, because changing source address between requests on
     #: a personal subscription is the operator's risk to take knowingly.
     oauth_acknowledged: bool = False
+    #: Whether MCC keeps this chain's fastest healthy address first (7.56.0).
+    #: Only the ORDER of :attr:`entries` changes -- the selection engine is
+    #: untouched and failover still takes the lowest selectable index. TRUE
+    #: for a chain created from here on, and FALSE for a chain stored before
+    #: this key existed: a document without it reads back as ``False``, so an
+    #: operator's existing order is never rearranged without them turning it
+    #: on. The inverse of :attr:`direct_fallback`'s reading, on purpose.
+    order_by_speed: bool = True
+    #: When MCC last wrote a speed order into this chain (ISO 8601, UTC), or
+    #: ``""`` for never. What the ``PROXY_ORDER_RESORT_MINUTES`` interval is
+    #: counted from, and stored rather than held in memory so a restart does
+    #: not make a chain sortable again at once.
+    order_sorted_at: str = ""
 
     @property
     def is_empty(self) -> bool:
@@ -756,7 +769,7 @@ class ProxyChain:
         return tuple(entry.proxy for entry in self.entries if entry.proxy)
 
     def as_document(self) -> dict[str, Any]:
-        return {
+        document: dict[str, Any] = {
             "enabled": self.enabled,
             "policy": self.policy,
             "entries": [entry.as_document() for entry in self.entries],
@@ -766,6 +779,15 @@ class ProxyChain:
             "direct_fallback": self.direct_fallback,
             "oauth_acknowledged": self.oauth_acknowledged,
         }
+        # Written only when they say something. An absent ``order_by_speed``
+        # already reads OFF, so a chain from before 7.56.0 that is rewritten
+        # for any other reason (a feed migration, an edit elsewhere in the
+        # file) comes back byte-for-byte what it was.
+        if self.order_by_speed:
+            document["order_by_speed"] = True
+        if self.order_sorted_at:
+            document["order_sorted_at"] = self.order_sorted_at
+        return document
 
     @classmethod
     def from_document(cls, raw: object, where: str) -> Self | None:
@@ -813,6 +835,12 @@ class ProxyChain:
                 else bool(raw.get("direct_fallback"))
             ),
             oauth_acknowledged=bool(raw.get("oauth_acknowledged")),
+            # Absent reads False, unlike ``direct_fallback`` above: a chain
+            # written before 7.56.0 is an order somebody arranged by hand, and
+            # it is never re-sorted until they switch this on (user decision,
+            # 2026-09-25). A chain created since carries the key explicitly.
+            order_by_speed=raw.get("order_by_speed") is True,
+            order_sorted_at=str(raw.get("order_sorted_at") or "").strip(),
         )
 
 

@@ -477,3 +477,100 @@ def test_a_refetch_keeps_what_was_added_and_what_was_refused() -> None:
     # The address nothing objected to is still offered, so the assertion above
     # is about the refusal rather than about the pass having dropped the lot.
     assert "px_plain003" in refetched.candidates
+
+
+# ------------------------------------------- 7.56.0 keep the fastest first
+
+
+def _legacy_document(proxy_id: str) -> dict:
+    """A chain exactly as 7.55.0 and earlier wrote it: no ordering keys."""
+
+    return {
+        "version": 1,
+        "proxies": {proxy_id: {"url": "http://198.51.100.9:8080"}},
+        "chains": {
+            "nvidia_nim": {
+                "enabled": True,
+                "policy": "failover",
+                "entries": [{"proxy": proxy_id, "paused": False}],
+                "on": ["quota"],
+                "scope": "provider",
+                "max_switches": 2,
+                "direct_fallback": True,
+                "oauth_acknowledged": False,
+            }
+        },
+        "candidates": [],
+        "feeds": [],
+    }
+
+
+def test_order_by_speed_absent_reads_false(tmp_path: Path) -> None:
+    """The user's existing chains are never re-sorted without them asking.
+
+    A document written before the key existed reads OFF -- the opposite of
+    ``direct_fallback``'s missing-key reading, on purpose -- and a round trip
+    writes the chain back exactly as it was: no key, still OFF, never ON.
+    """
+
+    path = tmp_path / "proxy_chains.json"
+    legacy = _legacy_document("px_legacy01")
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    chain = load_proxy_chains(path).chain("nvidia_nim")
+    assert chain is not None
+    assert chain.order_by_speed is False
+    assert chain.order_sorted_at == ""
+
+    save_proxy_chains(load_proxy_chains(path), path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["chains"]["nvidia_nim"] == legacy["chains"]["nvidia_nim"]
+    reread = load_proxy_chains(path).chain("nvidia_nim")
+    assert reread is not None and reread.order_by_speed is False
+
+
+def test_order_by_speed_reads_only_a_real_true(tmp_path: Path) -> None:
+    """A hand-edited ``"false"`` string is not an opt-in."""
+
+    document = _legacy_document("px_legacy02")
+    document["chains"]["nvidia_nim"]["order_by_speed"] = "false"
+    path = tmp_path / "proxy_chains.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    chain = load_proxy_chains(path).chain("nvidia_nim")
+    assert chain is not None and chain.order_by_speed is False
+
+
+def test_new_chain_defaults_order_by_speed_true(tmp_path: Path) -> None:
+    """A chain created from here on starts with the switch ON, and keeps it.
+
+    The route half -- a PUT that creates a chain without naming the field --
+    is ``tests/api/test_proxy_order_routes.py``.
+    """
+
+    assert ProxyChain().order_by_speed is True
+    store, proxy_id = ProxyChains().add_endpoint("http://203.0.113.9:3128")
+    store = store.with_chain(
+        "nvidia_nim", ProxyChain(entries=(ProxyChainEntry(proxy=proxy_id),))
+    )
+    path = tmp_path / "proxy_chains.json"
+    save_proxy_chains(store, path)
+
+    chain = load_proxy_chains(path).chain("nvidia_nim")
+    assert chain is not None
+    assert chain.order_by_speed is True
+    # An explicit OFF survives a round trip too.
+    save_proxy_chains(
+        store.with_chain(
+            "nvidia_nim",
+            ProxyChain(
+                entries=(ProxyChainEntry(proxy=proxy_id),),
+                order_by_speed=False,
+                order_sorted_at="2026-09-26T10:00:00Z",
+            ),
+        ),
+        path,
+    )
+    chain = load_proxy_chains(path).chain("nvidia_nim")
+    assert chain is not None
+    assert chain.order_by_speed is False
+    assert chain.order_sorted_at == "2026-09-26T10:00:00Z"

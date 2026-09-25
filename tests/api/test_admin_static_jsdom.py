@@ -6561,3 +6561,81 @@ def test_chain_entry_shows_speed_readout_and_chip(rendered) -> None:
     ), entry
     assert "proxy-state-working" in entry["chip"], entry
     assert "1200 ms when it works; fails 1 in 5" in entry["title"], entry
+
+
+# ------------------------------- 7.56.0 keep the fastest healthy proxy first
+
+
+def test_existing_chain_shows_switch_off(rendered) -> None:
+    """A chain stored before the switch existed reads OFF, and one click is
+    one write of the flag -- nothing moves at the click."""
+
+    order = rendered["proxying"]["speedOrder"]
+    existing = order["existing"]
+    assert existing["present"] is True
+    assert existing["hasKey"] is False  # the fixture is a pre-7.56.0 chain
+    assert existing["checked"] is False
+    assert existing["disabled"] is False
+    assert existing["label"] == "Keep the fastest healthy proxy first"
+    assert existing["note"].startswith("Off: this chain keeps the order you gave it")
+    assert order["writesOnRender"] == []
+
+    on = order["switchedOn"]
+    assert on["writes"] == [
+        {
+            "path": "/admin/api/proxy-chains/order",
+            "method": "POST",
+            "body": {"provider": "nvidia_nim", "order_by_speed": True},
+        }
+    ]
+    assert on["checked"] is True
+    # The click reorders nothing: the server's loop does, later, by margin.
+    assert on["labelsAfter"] == existing["labelsBefore"]
+    assert "Nothing has moved yet" in on["announcement"], on["announcement"]
+    assert on["note"].startswith("On."), on["note"]
+
+    # Offered for failover and single only: round_robin shows it off and
+    # disabled, with the reason.
+    rr = order["roundRobin"]
+    assert rr["checked"] is False
+    assert rr["disabled"] is True
+    assert "failover and single" in rr["note"]
+
+
+def test_sort_now_button(rendered) -> None:
+    sort = rendered["proxying"]["speedOrder"]["sortNow"]
+    assert sort["present"] is True
+    assert sort["text"] == "Sort by speed now"
+    assert sort["writes"] == [
+        {
+            "path": "/admin/api/proxy-chains/sort",
+            "method": "POST",
+            "body": {"provider": "nvidia_nim"},
+        }
+    ]
+    # The page redraws the order the server wrote.
+    assert sort["labelsAfter"][:2] == ["198.51.100.9:8080", "203.0.113.7:1080"]
+    assert sort["announcement"].startswith("Sorted NVIDIA NIM by speed."), sort
+    assert "198.51.100.9:8080 is now the first healthy address" in sort["announcement"]
+    assert "(was 203.0.113.7:1080)" in sort["announcement"]
+
+
+def test_pause_all_but_fastest_n_is_explicit(rendered) -> None:
+    pause = rendered["proxying"]["speedOrder"]["pause"]
+    assert pause["defaultKeep"] == "3"
+    assert pause["defaultText"] == "Pause all but the fastest 3"
+    assert pause["text"] == "Pause all but the fastest 1"
+    # Choosing N sends nothing: only the press does.
+    assert pause["writesBeforeClick"] == []
+    assert pause["writes"] == [
+        {
+            "path": "/admin/api/proxy-chains/pause-fastest",
+            "method": "POST",
+            "body": {"provider": "nvidia_nim", "keep": 1},
+        }
+    ]
+    assert len(pause["pausedRows"]) == 2, pause
+    # Reversible with each row's ordinary Resume.
+    assert pause["resumeButtons"] == 2
+    assert pause["announcement"].startswith("Paused 2 addresses on NVIDIA NIM"), pause
+    assert "Resume" in pause["announcement"]

@@ -170,6 +170,9 @@ from .constants import (
     PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
     PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
     PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
+    PROXY_ORDER_RESORT_MINUTES_DEFAULT,
+    PROXY_ORDER_RESORT_MINUTES_MAX,
+    PROXY_ORDER_RESORT_MINUTES_MIN,
     PROXY_REACHABILITY_TIERS_DEFAULT,
     RATE_LIMIT_COOLDOWN_MAX_SECONDS_DEFAULT,
     RATE_LIMIT_COOLDOWN_MODE_DEFAULT,
@@ -1303,6 +1306,14 @@ class Settings(BaseSettings):
     proxy_check_link_guard: bool = Field(
         default=PROXY_CHECK_LINK_GUARD_DEFAULT,
         validation_alias="PROXY_CHECK_LINK_GUARD",
+    )
+    # The shortest time between two automatic speed orders written into one
+    # chain ("Keep the fastest healthy proxy first"). A stability choice.
+    proxy_order_resort_minutes: int = Field(
+        default=PROXY_ORDER_RESORT_MINUTES_DEFAULT,
+        validation_alias="PROXY_ORDER_RESORT_MINUTES",
+        ge=PROXY_ORDER_RESORT_MINUTES_MIN,
+        le=PROXY_ORDER_RESORT_MINUTES_MAX,
     )
     # How many addresses a check sweep has in flight. Not the fetch sweep --
     # this paces the background health re-probe and the operator's own Add.

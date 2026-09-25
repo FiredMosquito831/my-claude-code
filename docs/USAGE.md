@@ -1273,6 +1273,9 @@ on the reporting machine:
   still rebuilt before the save answers, so the new chain routes immediately —
   and since 7.55.0 only the provider whose chain you saved is rebuilt: every
   other provider keeps its client, its credential pool and its benches.
+  The automatic speed order of 7.56.0 ("Keep the fastest healthy proxy
+  first", off for every chain saved before it) writes through the same
+  save, so it too rebuilds only the provider whose chain it reordered.
 - **A bulk add rebuilds once, not once per batch.** The page sends a long
   selection in batches of ten and used to republish after each one — thirty
   generation rebuilds for three hundred addresses. Now only the last batch
