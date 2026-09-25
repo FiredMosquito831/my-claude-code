@@ -3004,6 +3004,29 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_ORDER_RESORT_MINUTES",
+        "Minutes between automatic speed orders of one chain",
+        "credential_health",
+        "number",
+        settings_attr="proxy_order_resort_minutes",
+        default="30",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=5,
+        maximum=1440,
+        description=(
+            "With 'Keep the fastest healthy proxy first' on for a chain, MCC "
+            "writes a new order into it at most once in this many minutes. "
+            "This is a stability choice, not a measured number: with the "
+            "25% / 500 ms margin a newcomer must beat the first address by, "
+            "it keeps a chain from swapping back and forth between two "
+            "addresses of similar speed, and it bounds how often that "
+            "provider is rebuilt for a new order. 'Sort by speed now' is "
+            "not held back by it."
+        ),
+    ),
+    ConfigFieldSpec(
         "PROXY_CHECK_MAX_CONCURRENCY",
         "Addresses checked at once outside a fetch",
         "credential_health",

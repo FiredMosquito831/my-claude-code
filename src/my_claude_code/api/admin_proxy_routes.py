@@ -47,7 +47,7 @@ from pydantic import BaseModel, Field
 
 from my_claude_code.api.admin_routes import require_loopback_admin
 from my_claude_code.api.dependencies import get_services
-from my_claude_code.api.ports import ApiServices
+from my_claude_code.api.ports import AdminRuntimePort, ApiServices
 from my_claude_code.application.proxy_check import (
     check_budget,
     check_endpoints,
@@ -65,6 +65,19 @@ from my_claude_code.application.proxy_ingest import (
     feed_payload,
     known_feed_name,
 )
+from my_claude_code.application.proxy_order import (
+    ORDERABLE_POLICIES,
+    PROXY_ORDER_TICK_SECONDS,
+    RESORT_MARGIN_MS,
+    RESORT_MARGIN_RATIO,
+    RESORT_MIN_SAMPLES,
+    OrderPlan,
+    entry_facts,
+    iso_now,
+    pause_all_but_fastest,
+    plan_speed_order,
+    ranked,
+)
 from my_claude_code.application.proxy_speed_store import speed_payload
 from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.admin.status import provider_config_status
@@ -75,6 +88,7 @@ from my_claude_code.config.constants import (
     PROXY_FEED_MAX_DEFAULT,
     PROXY_FEED_MINIMUM_MINUTES,
     PROXY_FETCH_TEST_CONCURRENCY_MAX,
+    PROXY_ORDER_RESORT_MINUTES_DEFAULT,
     ROTATION_POLICY_ORDER,
 )
 from my_claude_code.config.credentials import mask_proxy_label
@@ -229,6 +243,12 @@ class ProxyChainPayload(BaseModel):
     direct_fallback: bool = True
     on: list[str] = Field(default_factory=lambda: list(DEFAULT_TRIGGER_KINDS))
     oauth_acknowledged: bool = False
+    #: "Keep the fastest healthy proxy first" (7.56.0). ``None`` -- a client
+    #: that does not name it -- means TRUE for a chain this write creates and
+    #: the stored value for one it updates, so an older client can neither
+    #: turn it off by omission nor turn it on for a chain somebody arranged by
+    #: hand. The page always sends it.
+    order_by_speed: bool | None = None
     entries: list[ProxyEntryPayload] = Field(default_factory=list)
 
 
@@ -461,6 +481,19 @@ async def _republish(services: ApiServices, provider_ids: Iterable[str] | None) 
     own schedule exactly as it did.
     """
 
+    await republish_chains(services.admin, provider_ids)
+
+
+async def republish_chains(
+    admin: AdminRuntimePort, provider_ids: Iterable[str] | None
+) -> None:
+    """:func:`_republish` for a caller that holds the runtime, not a request.
+
+    The one body both share, so the automatic speed order (7.56.0) rebuilds
+    exactly what a chain save of the same provider would -- that provider,
+    plus any a stopped bulk add still owes -- and nothing else.
+    """
+
     rebuild = (
         None if provider_ids is None else frozenset(provider_ids) | frozenset(_UNROUTED)
     )
@@ -470,7 +503,7 @@ async def _republish(services: ApiServices, provider_ids: Iterable[str] | None) 
     # nothing was saved at all.
     try:
         with loop_health().working("a proxy chain is being republished"):
-            await services.admin.reload_providers(
+            await admin.reload_providers(
                 "proxy_chains", sweep=False, rebuild_provider_ids=rebuild
             )
     except Exception as exc:  # pragma: no cover - defensive
@@ -583,6 +616,7 @@ def _entry_cap(settings: Any) -> int:
 def _commit_chain(provider_id: str, payload: ProxyChainPayload, inherited: str) -> None:
     with _CHAIN_WRITE_LOCK:
         store = load_proxy_chains()
+        previous = store.chain(provider_id)
         store, entries = _resolve_entries(store, payload.entries, inherited)
         chain = ProxyChain(
             enabled=payload.enabled,
@@ -597,6 +631,17 @@ def _commit_chain(provider_id: str, payload: ProxyChainPayload, inherited: str) 
             max_switches=clamp_max_switches(payload.max_switches),
             direct_fallback=payload.direct_fallback,
             oauth_acknowledged=payload.oauth_acknowledged,
+            # A new chain is ON unless the write says otherwise; an existing
+            # one keeps what it had -- which, for a chain stored before 7.56.0,
+            # is the OFF its missing key reads as.
+            order_by_speed=(
+                payload.order_by_speed
+                if payload.order_by_speed is not None
+                else (True if previous is None else previous.order_by_speed)
+            ),
+            # The interval is about writes MCC made, and an operator's save is
+            # not one of them: carried across, never reset by a save.
+            order_sorted_at="" if previous is None else previous.order_sorted_at,
         )
         # An address the operator typed may be one a feed had already offered:
         # ``add_endpoint`` files it under the id it already has rather than
@@ -684,6 +729,308 @@ def _refuse_if_intercepted(store: ProxyChains, proxy_id: str, index: int) -> Non
                 "Press Test on that row again if you believe this has changed."
             ),
         )
+
+
+# ------------------------------------------------------------ speed order
+
+
+class ProxyOrderPayload(BaseModel):
+    """Turn "Keep the fastest healthy proxy first" on or off for one chain."""
+
+    provider: str
+    order_by_speed: bool
+
+
+class ProxySortPayload(BaseModel):
+    """Sort one chain by speed now, once."""
+
+    provider: str
+
+
+class ProxyPauseFastestPayload(BaseModel):
+    """Pause every address in one chain except the fastest ``keep``."""
+
+    provider: str
+    keep: int = Field(default=3, ge=1)
+
+
+@router.post("/admin/api/proxy-chains/order")
+async def set_proxy_chain_order(
+    payload: ProxyOrderPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """The one-click switch on an existing chain's card (7.56.0).
+
+    Writes the flag and nothing else: not the entries, not a new order. The
+    order changes only when the ordering loop finds a clearly faster healthy
+    address, so turning this on never moves anything by itself. And since the
+    runtime never reads the flag -- it reads ``entries`` -- this write
+    republishes no provider.
+    """
+
+    require_loopback_admin(request)
+    provider_id = _require_configured(services, payload.provider)
+    await asyncio.to_thread(_commit_order_flag, provider_id, payload.order_by_speed)
+    return await asyncio.to_thread(_payload, services)
+
+
+@router.post("/admin/api/proxy-chains/sort")
+async def sort_proxy_chain(
+    payload: ProxySortPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """ "Sort by speed now": the same sort as the loop, minus its thresholds.
+
+    Still never puts first an address that is unhealthy, refused, paused or
+    holding a trigger bench, and still keeps Direct where it is. Works whether
+    or not the switch is on -- it is a one-shot, not a setting.
+    """
+
+    require_loopback_admin(request)
+    provider_id = _require_configured(services, payload.provider)
+    settings = services.requests.current_settings()
+    outcome = await asyncio.to_thread(
+        commit_speed_order, provider_id, settings, explicit=True
+    )
+    if outcome["written"]:
+        await _republish(services, {provider_id})
+    refreshed = await asyncio.to_thread(_payload, services)
+    refreshed["sorted"] = outcome
+    return refreshed
+
+
+@router.post("/admin/api/proxy-chains/pause-fastest")
+async def pause_all_but_fastest_route(
+    payload: ProxyPauseFastestPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """ "Pause all but the fastest N" (user decision 8): explicit, reversible.
+
+    Sets ``paused`` on every address except the ``keep`` best-ranked healthy
+    ones. Nothing is removed and nothing is un-paused; each row's Resume
+    brings an address back. Never run by anything but this button.
+    """
+
+    require_loopback_admin(request)
+    provider_id = _require_configured(services, payload.provider)
+    settings = services.requests.current_settings()
+    outcome = await asyncio.to_thread(
+        commit_pause_all_but_fastest, provider_id, settings, payload.keep
+    )
+    if outcome["paused"]:
+        await _republish(services, {provider_id})
+    refreshed = await asyncio.to_thread(_payload, services)
+    refreshed["paused"] = outcome
+    return refreshed
+
+
+def _require_configured(services: ApiServices, raw: str) -> str:
+    settings = services.requests.current_settings()
+    provider_id = raw.strip().lower()
+    if provider_id not in {
+        entry["provider_id"] for entry in _configured_providers(settings)
+    }:
+        raise HTTPException(status_code=404, detail=f"Not a configured provider: {raw}")
+    return provider_id
+
+
+def _stored_chain(store: ProxyChains, provider_id: str) -> ProxyChain:
+    chain = store.chain(provider_id)
+    if chain is None:
+        raise HTTPException(
+            status_code=404,
+            detail="This provider has no saved chain yet. Save it first.",
+        )
+    return chain
+
+
+def _refuse_unorderable(chain: ProxyChain) -> None:
+    if chain.policy not in ORDERABLE_POLICIES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Speed ordering is offered for failover and single chains; "
+                f"this one is {chain.policy}, which does not use the order to "
+                "pick one address, so putting the fastest first would change "
+                "nothing about which one carries a request."
+            ),
+        )
+
+
+def _order_costs(settings: Any) -> tuple[float, float]:
+    """``F`` and the slow limit, exactly as the page's speed readout uses them."""
+
+    connect = float(
+        getattr(
+            settings,
+            "proxy_connect_timeout_seconds",
+            PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
+        )
+    )
+    slow = float(getattr(settings, "proxy_check_slow_ms", PROXY_CHECK_SLOW_MS_DEFAULT))
+    return max(0.0, connect) * 1000.0, slow
+
+
+def _commit_order_flag(provider_id: str, enabled: bool) -> None:
+    with _CHAIN_WRITE_LOCK:
+        store = load_proxy_chains()
+        chain = _stored_chain(store, provider_id)
+        if enabled:
+            _refuse_unorderable(chain)
+        if chain.order_by_speed == enabled:
+            return
+        save_proxy_chains(
+            store.with_chain(provider_id, replace(chain, order_by_speed=enabled))
+        )
+    logger.info(
+        "PROXY ORDER: {} keep-fastest-first switched {}",
+        provider_id,
+        "on" if enabled else "off",
+    )
+
+
+def commit_speed_order(
+    provider_id: str,
+    settings: Any,
+    *,
+    explicit: bool,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Sort one chain by speed, if the rules allow, through the ordinary save.
+
+    The writer both the ordering loop (``explicit=False``) and "Sort by speed
+    now" (``explicit=True``) use: inside the chain writer lock, on the store
+    re-read from disk, so a sort never overwrites an edit that landed first.
+    The caller republishes ``{provider_id}`` when this says it wrote.
+
+    Returns what happened, for the log, the loop and the page.
+    """
+
+    failure_cost_ms, slow_ms = _order_costs(settings)
+    resort_minutes = float(
+        getattr(
+            settings, "proxy_order_resort_minutes", PROXY_ORDER_RESORT_MINUTES_DEFAULT
+        )
+    )
+    with _CHAIN_WRITE_LOCK:
+        store = load_proxy_chains()
+        chain = store.chain(provider_id)
+        if chain is None:
+            if explicit:
+                _stored_chain(store, provider_id)
+            return _order_outcome(None, provider_id, "no chain")
+        if chain.policy not in ORDERABLE_POLICIES:
+            if explicit:
+                _refuse_unorderable(chain)
+            return _order_outcome(None, provider_id, "policy is not orderable")
+        if not explicit and not (chain.enabled and chain.order_by_speed):
+            return _order_outcome(None, provider_id, "the switch is off")
+        facts = entry_facts(
+            chain,
+            store,
+            provider_id,
+            failure_cost_ms=failure_cost_ms,
+            slow_ms=slow_ms,
+            now=None if now is None else now.timestamp(),
+        )
+        plan = plan_speed_order(
+            facts,
+            explicit=explicit,
+            last_sorted_at=chain.order_sorted_at,
+            resort_minutes=resort_minutes,
+            now=now,
+        )
+        if plan.write:
+            sorted_chain = replace(
+                chain,
+                entries=tuple(chain.entries[index] for index in plan.order),
+                order_sorted_at=iso_now(now),
+            )
+            save_proxy_chains(store.with_chain(provider_id, sorted_chain))
+    outcome = _order_outcome(plan, provider_id, plan.reason)
+    if plan.write:
+        logger.info(
+            "PROXY ORDER: {} re-sorted by speed ({}): first {} (rank {}) -> {} "
+            "(rank {})",
+            provider_id,
+            "on request" if explicit else "automatic",
+            outcome["old_first"] or "none",
+            _rank_text(outcome["old_rank"]),
+            outcome["new_first"] or "none",
+            _rank_text(outcome["new_rank"]),
+        )
+    return outcome
+
+
+def _rank_text(rank: float | None) -> str:
+    return "unmeasured" if rank is None else f"{rank:.0f} ms"
+
+
+def _order_outcome(
+    plan: OrderPlan | None, provider_id: str, reason: str
+) -> dict[str, Any]:
+    old = None if plan is None else plan.old_first
+    new = None if plan is None else plan.new_first
+    return {
+        "provider": provider_id,
+        "written": bool(plan is not None and plan.write),
+        "changed": bool(plan is not None and plan.changed),
+        "reason": reason,
+        "old_first": "" if old is None else old.name,
+        "old_rank": None if old is None else old.rank_key,
+        "new_first": "" if new is None else new.name,
+        "new_rank": None if new is None else new.rank_key,
+    }
+
+
+def commit_pause_all_but_fastest(
+    provider_id: str, settings: Any, keep: int
+) -> dict[str, Any]:
+    """Pause every address but the ``keep`` fastest healthy ones. One write."""
+
+    failure_cost_ms, slow_ms = _order_costs(settings)
+    with _CHAIN_WRITE_LOCK:
+        store = load_proxy_chains()
+        chain = _stored_chain(store, provider_id)
+        facts = entry_facts(
+            chain,
+            store,
+            provider_id,
+            failure_cost_ms=failure_cost_ms,
+            slow_ms=slow_ms,
+        )
+        if not any(fact.rankable and fact.rank_key is not None for fact in facts):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "MCC has not measured any healthy address in this chain "
+                    "yet, so it cannot tell which are the fastest. Press Test "
+                    "all first."
+                ),
+            )
+        pause = set(pause_all_but_fastest(facts, keep))
+        kept = [fact.name for fact in ranked(facts)[:keep]]
+        paused = [facts[index].name for index in sorted(pause)]
+        if pause:
+            entries = tuple(
+                replace(entry, paused=True) if index in pause else entry
+                for index, entry in enumerate(chain.entries)
+            )
+            save_proxy_chains(
+                store.with_chain(provider_id, replace(chain, entries=entries))
+            )
+    if paused:
+        logger.info(
+            "PROXY ORDER: {} paused {} address(es), keeping the fastest {}: {}",
+            provider_id,
+            len(paused),
+            len(kept),
+            ", ".join(kept),
+        )
+    return {"provider": provider_id, "keep": keep, "kept": kept, "paused": paused}
 
 
 # ------------------------------------------------------------------ feeds
@@ -1681,6 +2028,23 @@ def _payload(services: ApiServices) -> dict[str, Any]:
                 "default": 2,
             },
             "tls_intercepted": TLS_INTERCEPTED,
+            # "Keep the fastest healthy proxy first" (7.56.0), in the
+            # operator's own numbers, so the card's explanation is never a
+            # copy of a rule the server has since changed.
+            "order": {
+                "policies": list(ORDERABLE_POLICIES),
+                "resort_minutes": int(
+                    getattr(
+                        settings,
+                        "proxy_order_resort_minutes",
+                        PROXY_ORDER_RESORT_MINUTES_DEFAULT,
+                    )
+                ),
+                "margin_ratio": RESORT_MARGIN_RATIO,
+                "margin_ms": RESORT_MARGIN_MS,
+                "min_samples": RESORT_MIN_SAMPLES,
+                "tick_seconds": PROXY_ORDER_TICK_SECONDS,
+            },
             # What the page says about the checker, so it can tell the operator
             # whether anything is measuring these addresses without them
             # pressing a button. Off is the shipped answer and the page says so
@@ -2032,6 +2396,11 @@ def _chain_payload(
         "direct_fallback": chain.direct_fallback,
         "on": list(chain.on),
         "oauth_acknowledged": chain.oauth_acknowledged,
+        # 7.56.0. False for a chain stored before the key existed, which is
+        # the "existing chain reads OFF" the card shows.
+        "order_by_speed": chain.order_by_speed,
+        "order_sorted_at": chain.order_sorted_at,
+        "order_offered": chain.policy in ORDERABLE_POLICIES,
         "entries": [
             _entry_payload(item, store, provider_id, settings) for item in chain.entries
         ],

@@ -3225,6 +3225,50 @@ window.fetch = async (url, options = {}) => {
   // back: a check writes `last_check` on the store, so the card that was
   // tested has to re-render from a payload that carries the new verdict rather
   // than from the one it was holding.
+  /* 7.56.0 "Keep the fastest healthy proxy first": the switch, "Sort by
+     speed now" and "Pause all but the fastest N", emulated against the same
+     document the page reads back, the way the real routes answer. */
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/order") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const provider = state.providers.find((item) => item.provider_id === sent.provider);
+    provider.chain.order_by_speed = Boolean(sent.order_by_speed);
+    return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(state)), text: async () => "" };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/sort") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const provider = state.providers.find((item) => item.provider_id === sent.provider);
+    const entries = provider.chain.entries;
+    const oldFirst = entries[0].label;
+    // The emulated measurement: the second address is the fastest healthy one.
+    [entries[0], entries[1]] = [entries[1], entries[0]];
+    const sorted = {
+      provider: sent.provider,
+      written: true,
+      changed: true,
+      reason: "sorted by speed on request",
+      old_first: oldFirst,
+      old_rank: 4000,
+      new_first: entries[0].label,
+      new_rank: 900,
+    };
+    return { ok: true, status: 200, json: async () => ({ ...JSON.parse(JSON.stringify(state)), sorted }), text: async () => "" };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/pause-fastest") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const provider = state.providers.find((item) => item.provider_id === sent.provider);
+    const addresses = provider.chain.entries.filter((entry) => entry.proxy && !entry.direct);
+    const kept = addresses.slice(0, sent.keep).map((entry) => entry.label);
+    const paused = [];
+    addresses.slice(sent.keep).forEach((entry) => {
+      if (!entry.paused) paused.push(entry.label);
+      entry.paused = true;
+    });
+    const result = { provider: sent.provider, keep: sent.keep, kept, paused };
+    return { ok: true, status: 200, json: async () => ({ ...JSON.parse(JSON.stringify(state)), paused: result }), text: async () => "" };
+  }
   if (String(url).split("?")[0] === "/admin/api/proxy-chains/check") {
     const sent = JSON.parse(options.body);
     const state = ROUTES["/admin/api/proxy-chains"];
@@ -4617,6 +4661,110 @@ if (withChain) {
     if (savedSpeed === undefined) delete entry.speed;
     else entry.speed = savedSpeed;
   }
+  await reload();
+}
+
+/* 7.56.0: "Keep the fastest healthy proxy first" on the chain card. The
+   fixture's NVIDIA chain carries no `order_by_speed` key -- a chain stored
+   before the switch existed -- so it must read OFF; the click is one write of
+   the flag and moves nothing; "Sort by speed now" and "Pause all but the
+   fastest N" write only when pressed. The fixture is put back afterwards. */
+{
+  const state = ROUTES["/admin/api/proxy-chains"];
+  const nim = state.providers.find((item) => item.provider_id === "nvidia_nim");
+  const savedChain = JSON.parse(JSON.stringify(nim.chain));
+  const reload = async () => {
+    navLinks.find((link) => link.dataset.view === "providers").click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    navLinks.find((link) => link.dataset.view === "proxying").click();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+  };
+  const renderFrom = fetchBodies.length;
+  await reload();
+  const card = () => proxyCardFor("nvidia_nim");
+  const orderWrites = (since) =>
+    fetchBodies
+      .slice(since)
+      .filter((entry) =>
+        [
+          "/admin/api/proxy-chains",
+          "/admin/api/proxy-chains/order",
+          "/admin/api/proxy-chains/sort",
+          "/admin/api/proxy-chains/pause-fastest",
+        ].includes(entry.path),
+      )
+      .map((entry) => ({ path: entry.path, method: entry.method, body: entry.body }));
+  const status = () =>
+    (doc.querySelector("#proxyingStatus")?.textContent || "").replace(/\s+/g, " ").trim();
+  const noteText = () => (card().querySelector(".proxy-order-note")?.textContent || "").trim();
+  const order = {};
+
+  const input = card().querySelector("input.proxy-order-input");
+  order.existing = {
+    present: Boolean(input),
+    hasKey: Object.prototype.hasOwnProperty.call(nim.chain, "order_by_speed"),
+    checked: input ? input.checked : null,
+    disabled: input ? input.disabled : null,
+    label: (card().querySelector(".proxy-order-switch")?.textContent || "").trim(),
+    note: noteText(),
+    labelsBefore: proxyEntryLabels(card()),
+  };
+  // Rendering, and pressing nothing, wrote nothing.
+  order.writesOnRender = orderWrites(renderFrom);
+
+  let since = fetchBodies.length;
+  input.checked = true;
+  input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  order.switchedOn = {
+    writes: orderWrites(since),
+    checked: card().querySelector("input.proxy-order-input")?.checked,
+    labelsAfter: proxyEntryLabels(card()),
+    announcement: status(),
+    note: noteText(),
+  };
+
+  since = fetchBodies.length;
+  const sortNow = card().querySelector("button.proxy-order-sort-now");
+  order.sortNow = { present: Boolean(sortNow), text: sortNow ? sortNow.textContent : "" };
+  sortNow.click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  order.sortNow.writes = orderWrites(since);
+  order.sortNow.labelsAfter = proxyEntryLabels(card());
+  order.sortNow.announcement = status();
+
+  since = fetchBodies.length;
+  const keep = card().querySelector("input.proxy-order-keep-n");
+  const pause = card().querySelector("button.proxy-order-pause-n");
+  order.pause = { defaultText: pause ? pause.textContent : "", defaultKeep: keep ? keep.value : "" };
+  keep.value = "1";
+  keep.dispatchEvent(new window.Event("input", { bubbles: true }));
+  order.pause.text = card().querySelector("button.proxy-order-pause-n").textContent;
+  // Typing a number is not pressing the button.
+  order.pause.writesBeforeClick = orderWrites(since);
+  card().querySelector("button.proxy-order-pause-n").click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  order.pause.writes = orderWrites(since);
+  order.pause.pausedRows = Array.from(card().querySelectorAll(".proxy-entry"))
+    .filter((row) => row.classList.contains("proxy-entry-paused"))
+    .map((row) => row.querySelector(".proxy-entry-label").textContent.trim());
+  order.pause.resumeButtons = Array.from(card().querySelectorAll(".proxy-entry button"))
+    .filter((button) => button.textContent === "Resume").length;
+  order.pause.announcement = status();
+
+  // round_robin: the switch is there, off and disabled, and says why.
+  const policy = card().querySelector("select.proxy-policy");
+  policy.value = "round_robin";
+  policy.dispatchEvent(new window.Event("change", { bubbles: true }));
+  const rr = card().querySelector("input.proxy-order-input");
+  order.roundRobin = {
+    checked: rr ? rr.checked : null,
+    disabled: rr ? rr.disabled : null,
+    note: noteText(),
+  };
+  proxying.speedOrder = order;
+
+  nim.chain = savedChain;
   await reload();
 }
 

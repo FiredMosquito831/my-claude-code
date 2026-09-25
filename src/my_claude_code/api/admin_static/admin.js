@@ -833,6 +833,10 @@ function proxyDraft(provider) {
         direct_fallback: chain.direct_fallback !== false,
         on: (chain.on || []).slice(),
         oauth_acknowledged: Boolean(chain.oauth_acknowledged),
+        // 7.56.0. Strictly `=== true`: a chain stored before the switch
+        // existed has no key, the server reads that as off, and so must the
+        // card -- the one reading an existing chain may never get is "on".
+        order_by_speed: chain.order_by_speed === true,
         entries: (chain.entries || []).map((entry) => ({ ...entry })),
         existing: true,
       }
@@ -844,6 +848,9 @@ function proxyDraft(provider) {
         direct_fallback: true,
         on: (vocabulary.default_kinds || []).slice(),
         oauth_acknowledged: false,
+        // On for a chain being created: the user's decision, and the server's
+        // default for a new chain too.
+        order_by_speed: true,
         entries: [],
         existing: false,
       };
@@ -3393,6 +3400,7 @@ function proxyCard(provider) {
   card.appendChild(proxyInheritedNote(provider, draft));
   card.appendChild(proxyTriggers(provider, draft));
   card.appendChild(proxyEntryList(provider, draft));
+  card.appendChild(proxyOrderRow(provider, draft));
   card.appendChild(proxyAddRow(provider, draft));
   card.appendChild(proxyCardFoot(provider, draft));
   return card;
@@ -4385,6 +4393,238 @@ function proxyCardFoot(provider, draft) {
   return foot;
 }
 
+/* "Keep the fastest healthy proxy first" (7.56.0), and the two explicit
+ * gestures beside it.
+ *
+ * The switch on an EXISTING chain is a write of its own -- one click, the
+ * user's decision -- and it writes the flag only: the order changes when the
+ * server's loop finds a clearly faster healthy address, never at the click.
+ * An existing chain stored before 7.56.0 reads OFF until someone clicks it.
+ * On a chain that is not saved yet the switch is part of the draft and goes
+ * out with Save, on by default.
+ *
+ * "Sort by speed now" and "Pause all but the fastest N" are one-shot writes
+ * the operator asks for. Neither is ever done by anything else. */
+const proxyKeepN = new Map();
+
+function proxyOrderRow(provider, draft) {
+  const row = document.createElement("div");
+  row.className = "proxy-order";
+  const order = proxyVocabulary().order || {};
+  const offered = Array.isArray(order.policies) ? order.policies : ["failover", "single"];
+  const saved = provider.chain || null;
+  const policyOk = offered.includes(draft.policy);
+  const minutes = Number(order.resort_minutes);
+  const ratio = Number(order.margin_ratio);
+  const marginMs = Number(order.margin_ms);
+  const samples = Number(order.min_samples);
+  const rule =
+    "MCC moves a proxy to the top only when it is clearly faster than the " +
+    "one there now" +
+    (Number.isFinite(ratio) && Number.isFinite(marginMs)
+      ? ` -- at least ${Math.round((1 - ratio) * 100)}% and ${marginMs} ms ` +
+        "better by its measured rank"
+      : "") +
+    (Number.isFinite(samples) ? `, over ${samples} or more measurements` : "") +
+    (Number.isFinite(minutes) && minutes > 0
+      ? ` -- and at most once every ${minutes} minutes`
+      : "") +
+    ". Unhealthy, refused, paused and cooldown addresses are never moved up, " +
+    "and Direct keeps its place.";
+
+  const label = document.createElement("label");
+  label.className = "proxy-control proxy-order-switch";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.className = "proxy-order-input";
+  input.checked = policyOk && draft.order_by_speed === true;
+  input.disabled = !policyOk;
+  const text = document.createElement("span");
+  text.textContent = "Keep the fastest healthy proxy first";
+  label.append(input, text);
+  label.title = rule;
+  input.addEventListener("change", () => {
+    if (saved) {
+      setProxyOrder(provider, draft, input.checked, input);
+      return;
+    }
+    draft.order_by_speed = input.checked;
+    renderProxying();
+  });
+  row.appendChild(label);
+
+  const note = document.createElement("span");
+  note.className = "proxy-order-note";
+  if (!policyOk) {
+    note.textContent =
+      `Offered for failover and single chains. ${draft.policy} does not use ` +
+      "the order to pick one address, so fastest-first would change nothing.";
+  } else if (draft.order_by_speed === true) {
+    const at = saved && saved.order_sorted_at ? Date.parse(saved.order_sorted_at) : NaN;
+    note.textContent = Number.isFinite(at)
+      ? `On. Last sorted by speed at ${clockTime(at / 1000)}.`
+      : "On. Nothing has been reordered yet.";
+  } else {
+    note.textContent = saved
+      ? "Off: this chain keeps the order you gave it."
+      : "Off for this new chain.";
+  }
+  note.title = rule;
+  row.appendChild(note);
+
+  const addresses = ((saved && saved.entries) || []).filter(
+    (entry) => entry.proxy && !entry.direct,
+  );
+  if (saved && offered.includes(saved.policy) && addresses.length >= 2) {
+    const sortNow = document.createElement("button");
+    sortNow.type = "button";
+    sortNow.className = "secondary-button proxy-order-sort-now";
+    sortNow.textContent = "Sort by speed now";
+    sortNow.title =
+      "Sorts the saved chain once, fastest healthy address first, without " +
+      "waiting for the margins above. It still never moves an unhealthy, " +
+      "refused, paused or cooldown address up, and Direct keeps its place.";
+    sortNow.addEventListener("click", () => sortProxyChainNow(provider, sortNow));
+    row.appendChild(sortNow);
+  }
+  if (saved && addresses.length >= 2) {
+    const keepLabel = document.createElement("label");
+    keepLabel.className = "proxy-control proxy-order-keep";
+    const keepText = document.createElement("span");
+    keepText.textContent = "Keep";
+    const keep = document.createElement("input");
+    keep.type = "number";
+    keep.className = "proxy-order-keep-n";
+    keep.min = "1";
+    keep.max = String(addresses.length);
+    const remembered = Number(proxyKeepN.get(provider.provider_id));
+    const value =
+      Number.isInteger(remembered) && remembered >= 1
+        ? remembered
+        : Math.min(3, addresses.length);
+    keep.value = String(value);
+    keepLabel.append(keepText, keep);
+    const pause = document.createElement("button");
+    pause.type = "button";
+    pause.className = "secondary-button proxy-order-pause-n";
+    const labelFor = (count) => `Pause all but the fastest ${count}`;
+    pause.textContent = labelFor(value);
+    pause.title =
+      "Pauses every address in this saved chain except the N fastest healthy " +
+      "ones. Nothing is removed; each row's Resume brings one back (then " +
+      "Save). MCC never does this by itself.";
+    keep.addEventListener("input", () => {
+      const count = Math.floor(Number(keep.value));
+      if (Number.isFinite(count) && count >= 1) {
+        proxyKeepN.set(provider.provider_id, count);
+        pause.textContent = labelFor(count);
+      }
+    });
+    pause.addEventListener("click", () => {
+      const count = Math.floor(Number(keep.value));
+      if (!Number.isFinite(count) || count < 1) {
+        announceProxy("Keep at least one address.");
+        return;
+      }
+      pauseAllButFastest(provider, count, pause);
+    });
+    row.append(keepLabel, pause);
+  }
+  return row;
+}
+
+async function setProxyOrder(provider, draft, on, input) {
+  input.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/order", {
+      method: "POST",
+      body: JSON.stringify({ provider: provider.provider_id, order_by_speed: on }),
+    });
+    // Only the flag: the rest of the draft may be an order somebody is still
+    // arranging, and this write did not touch it.
+    draft.order_by_speed = on;
+    renderProxying();
+    announceProxy(
+      on
+        ? `${provider.display_name} now keeps its fastest healthy proxy first. ` +
+            "Nothing has moved yet: MCC looks every minute and reorders only " +
+            "when a clearly faster healthy address has been measured."
+        : `${provider.display_name} keeps the order you gave it from now on.`,
+    );
+  } catch (error) {
+    input.checked = !on;
+    input.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function sortProxyChainNow(provider, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Sorting...";
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/sort", {
+      method: "POST",
+      body: JSON.stringify({ provider: provider.provider_id }),
+    });
+    proxyState.drafts.delete(provider.provider_id);
+    renderProxying();
+    const sorted = proxyState.data.sorted || {};
+    if (!sorted.written) {
+      announceProxy(`${provider.display_name} is already in speed order.`);
+      return;
+    }
+    announceProxy(
+      `Sorted ${provider.display_name} by speed. ` +
+        (sorted.new_first
+          ? `${sorted.new_first} is now the first healthy address` +
+            (sorted.old_first && sorted.old_first !== sorted.new_first
+              ? ` (was ${sorted.old_first})`
+              : "") +
+            ". "
+          : "") +
+        "Its provider was rebuilt to pick the order up.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = label;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function pauseAllButFastest(provider, keep, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Pausing...";
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/pause-fastest", {
+      method: "POST",
+      body: JSON.stringify({ provider: provider.provider_id, keep }),
+    });
+    proxyState.drafts.delete(provider.provider_id);
+    renderProxying();
+    const result = proxyState.data.paused || {};
+    const paused = result.paused || [];
+    const kept = result.kept || [];
+    announceProxy(
+      paused.length
+        ? `Paused ${paused.length} address${paused.length === 1 ? "" : "es"} on ` +
+            `${provider.display_name}, keeping the fastest ${kept.length}: ` +
+            `${kept.join(", ")}. Each paused row's Resume brings it back ` +
+            "(then Save)."
+        : `Nothing to pause on ${provider.display_name}: only the fastest ` +
+            `${kept.length} are active.`,
+    );
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = label;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
 /* Take entries out of a chain being edited -- one, or every ticked one.
  *
  * A draft change, not a write: the chain on disk is unchanged until Save, and
@@ -4424,6 +4664,9 @@ async function saveProxyChain(provider, draft, button, remove = false) {
         direct_fallback: draft.direct_fallback !== false,
         on: draft.on,
         oauth_acknowledged: draft.oauth_acknowledged,
+        // Always named, so the server never has to guess: omitted, it would
+        // read as "on" for a chain this save creates.
+        order_by_speed: draft.order_by_speed === true,
         entries: draft.entries.map((entry) => ({
           proxy: entry.proxy || "",
           url: entry.url || "",
