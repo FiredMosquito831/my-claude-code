@@ -345,6 +345,18 @@ STREAM_KEEPALIVE_INTERVAL_SECONDS_DEFAULT = 20.0
 # have without them. 300 is the lower of the two client idle floors seen in
 # the request log. 0 keeps a silent stream alive for as long as it stays open.
 STREAM_KEEPALIVE_MAX_SECONDS_DEFAULT = 300.0
+# What the keepalive is on /v1/messages. ``ping`` is Anthropic's own ``ping``
+# event, which the official Anthropic SDK -- and therefore Claude Code --
+# throws away before its idle timer sees it. ``frames`` is opt-in: while the
+# model's own text or tool-call block is open, the keepalive is an EMPTY delta
+# of that block (``text_delta`` with ``""``, ``input_json_delta`` with ``""``),
+# which Claude Code's timer does count and which concatenates to nothing.
+# Anywhere else -- before ``message_start``, between blocks, inside a thinking
+# block -- it is still a ping. Never a fabricated thinking block. Every other
+# surface keeps its SSE comment whatever this says. ``ping`` by default because
+# ``frames`` changes the wire shape, even though it changes no content.
+STREAM_KEEPALIVE_MODE_NAMES: frozenset[str] = frozenset({"ping", "frames"})
+STREAM_KEEPALIVE_MODE_DEFAULT = "ping"
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0
 # The ceiling on a wait a provider published in a header. 3600 was hard-coded

@@ -6203,6 +6203,29 @@ def test_the_watchdog_card_says_plainly_what_keepalive_does_for_claude_code(
     assert off.startswith("Stream keepalive is off.")
 
 
+def test_the_watchdog_card_follows_the_keepalive_mode(rendered) -> None:
+    """7.47.0: in frames mode the Claude Code line says what frames do, and
+    where they do not: only inside the model's own open block."""
+    ping = rendered["limits"]["watchdog"]["stallZero"]["keepalive"]
+    assert "Keepalive mode is frames" in ping
+    frames = rendered["limits"]["watchdog"]["framesMode"]["keepalive"]
+    assert "In frames mode it does move Claude Code's timer" in frames
+    assert "text or tool-call block is open" in frames
+    assert "while the model is thinking it is still a ping" in frames
+    assert "changes nothing" in frames
+
+
+def test_the_request_detail_shows_keepalive_frames_only_when_recorded(
+    rendered,
+) -> None:
+    harness = rendered["harnessAttr"]
+    assert harness["keepalive_explicit"] == (
+        "4 empty deltas while the model was silent inside a block"
+    )
+    assert harness["keepalive_inferred"].startswith("0 (frames mode on;")
+    assert harness["keepalive_unidentified"] is None
+
+
 def test_the_watchdog_card_never_proposes_a_value(rendered) -> None:
     """The deadlines are the operator's choice: the card states, it never asks."""
     shown = rendered["limits"]["watchdog"]["stallZero"]

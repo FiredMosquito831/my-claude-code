@@ -346,6 +346,20 @@ const FIELDS = [
       { value: "legacy", label: "legacy" },
     ],
   },
+  // 7.47.0: what the keepalive is on /v1/messages. The card's Claude Code
+  // line follows it.
+  {
+    key: "STREAM_KEEPALIVE_MODE",
+    label: "Keepalive mode",
+    section: "stream_keepalive",
+    type: "select",
+    value: "ping",
+    default: "ping",
+    options: [
+      { value: "ping", label: "ping" },
+      { value: "frames", label: "frames" },
+    ],
+  },
   {
     key: "CREDENTIAL_LOCKOUT_TIERS",
     label: "Lockout ladder",
@@ -1734,6 +1748,8 @@ const ROUTES = {
   "/admin/api/requests/req-explicit": {
     id: "req-explicit",
     harness: "opencode",
+    // 7.47.0: frames mode ran and sent four empty deltas.
+    keepalive_frames: 4,
     headers: {
       "x-mcc-harness": "opencode",
       "user-agent": "opencode/1.18.26",
@@ -1755,6 +1771,8 @@ const ROUTES = {
   "/admin/api/requests/req-ua": {
     id: "req-ua",
     harness: "claude",
+    // Frames mode ran and was never needed: a fact, so it is shown.
+    keepalive_frames: 0,
     headers: { "user-agent": "claude-cli/2.0.14 (external, cli)" },
         ts_iso: "2026-09-02T10:00:00Z",
         endpoint: "/v1/messages",
@@ -4781,6 +4799,12 @@ if (firstInput && totalInput && floorInput) {
   if (stallInput && idleInput) {
     drive(stallInput, "0");
     limits.watchdog.stallZero = watchdogNow();
+    const modeSelect = controlIn("STREAM_KEEPALIVE_MODE");
+    if (modeSelect) {
+      drive(modeSelect, "frames");
+      limits.watchdog.framesMode = watchdogNow();
+      drive(modeSelect, modeSelect.dataset.original);
+    }
     drive(idleInput, "0");
     limits.watchdog.keepaliveOff = watchdogNow();
     drive(idleInput, idleInput.dataset.original);
@@ -6269,6 +6293,13 @@ const harnessAttr = {};
     await window.eval(`openRequestDetail(${JSON.stringify(id)})`);
     await settle();
     harnessAttr[`detail_${name}`] = harnessLine();
+    harnessAttr[`keepalive_${name}`] = (() => {
+      const nodes = Array.from(doc.getElementById("reqDetailMeta").children);
+      const index = nodes.findIndex(
+        (el) => el.tagName === "DT" && el.textContent === "Keepalive frames",
+      );
+      return index === -1 ? null : nodes[index + 1].textContent;
+    })();
     window.eval("closeRequestDetail()");
   }
   harnessAttr.detailHasMeta = metaText().includes("Harness");

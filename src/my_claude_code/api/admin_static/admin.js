@@ -6173,7 +6173,16 @@ const KEEPALIVE_KEYS = [
   "STREAM_KEEPALIVE_IDLE_SECONDS",
   "STREAM_KEEPALIVE_INTERVAL_SECONDS",
   "STREAM_KEEPALIVE_MAX_SECONDS",
+  "STREAM_KEEPALIVE_MODE",
 ];
+
+/* The keepalive mode as typed, else as saved: "ping" or "frames" (7.47.0). */
+function keepaliveMode() {
+  const typed = liveValue("STREAM_KEEPALIVE_MODE").trim().toLowerCase();
+  if (typed) return typed;
+  const field = state.fields.get("STREAM_KEEPALIVE_MODE") || {};
+  return String(field.effective ?? field.default ?? "ping").toLowerCase();
+}
 let watchdogListenerBound = false;
 
 function renderStreamKeepalive(fields) {
@@ -6257,15 +6266,25 @@ function updateWatchdogCard(root) {
 
   const idle = calcNumber("STREAM_KEEPALIVE_IDLE_SECONDS");
   const cap = calcNumber("STREAM_KEEPALIVE_MAX_SECONDS");
+  const clientLine =
+    keepaliveMode() === "frames"
+      ? "In frames mode it does move Claude Code's timer, but only while " +
+        "the model's own text or tool-call block is open: there it is an " +
+        "empty delta of that block. Before the first block, between blocks " +
+        "and while the model is thinking it is still a ping, which the " +
+        "official Anthropic SDK drops. OpenAI and Gemini clients, and " +
+        "proxies in between, count it either way."
+      : "It does not move Claude Code's timer: the official Anthropic SDK " +
+        "drops ping events, unless Claude Code runs with " +
+        "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1 or Keepalive mode is " +
+        "frames. OpenAI and Gemini clients, and proxies in between, do " +
+        "count it.";
   const keepaliveLine =
     idle === 0
       ? "Stream keepalive is off."
       : `Stream keepalive starts after ${idle} s of silence and ` +
         (cap === 0 ? "has no cap. " : `stops after ${cap} s of it. `) +
-        "It does not move Claude Code's timer: the official Anthropic SDK " +
-        "drops ping events, unless Claude Code runs with " +
-        "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1. OpenAI and Gemini " +
-        "clients, and proxies in between, do count it.";
+        clientLine;
   keepalive.textContent =
     `${keepaliveLine} This card only says which clock fires first; it ` +
     "changes nothing.";
@@ -18169,6 +18188,10 @@ async function openRequestDetail(requestId) {
     ["TTFT (incl. fallbacks)", formatMilliseconds(row.ttft_ms)],
     ["Lost to fallbacks", formatFallbackLoss(row)],
     ["Duration", row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—"],
+    // Empty-delta keepalives (STREAM_KEEPALIVE_MODE=frames, 7.47.0). Absent
+    // unless frames mode ran on this stream; 0 is shown, because "it ran and
+    // was never needed" is a fact.
+    ["Keepalive frames", formatKeepaliveFrames(row)],
     ["Turn", formatTurnSummary(row)],
     ["Image input", formatImageSummary(row)],
     ["Reasoning policy", row.reasoning],
@@ -18209,6 +18232,13 @@ async function openRequestDetail(requestId) {
 
    A request that carried tools but has no hash predates the recording; it says
    so rather than showing nothing, which would read as "no tools". */
+function formatKeepaliveFrames(row) {
+  if (row.keepalive_frames == null) return null;
+  const count = Number(row.keepalive_frames);
+  if (count === 0) return "0 (frames mode on; the model never went quiet inside a block)";
+  return `${count} empty ${count === 1 ? "delta" : "deltas"} while the model was silent inside a block`;
+}
+
 function appendToolCatalogueDetail(meta, row) {
   const catalogue = row.tool_catalogue;
   const sha = row.tool_catalogue_sha;

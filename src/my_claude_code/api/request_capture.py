@@ -43,6 +43,7 @@ from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
 from my_claude_code.core.image_geometry import image_dimensions
+from my_claude_code.core.keepalive_tally import install_keepalive_tally
 from my_claude_code.core.proxy_attribution import install_proxy_attribution
 from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
@@ -262,6 +263,13 @@ class RequestCapture:
         # through. Only a logged request installs one, so providers exercised
         # directly stay unrecorded.
         self._recovery = install_recovery_trace() if self.enabled else None
+        # The empty-delta keepalive frames the streaming seam writes in
+        # STREAM_KEEPALIVE_MODE=frames arrive the same way. They are written
+        # outside this capture on purpose -- so they can never move
+        # ``ttft_ms`` or ``output_chars`` -- which is also why the count has
+        # to be handed back rather than observed. Only a logged request
+        # installs one.
+        self._keepalive = install_keepalive_tally() if self.enabled else None
         # A host's own answer about what this request cost arrives the same
         # way, from the one statement in the OpenAI-shaped stream runner that
         # sees the final usage block. Anthropic SSE has no field for a cost,
@@ -1344,6 +1352,10 @@ class RequestCapture:
         # keep their NULL and keep counting as unmeasured; a backfill would
         # invent measurements.
         record.thinking_chars = self._thinking_chars
+        # NULL unless frames mode ran on this stream; 0 is "it ran and the
+        # model never went quiet inside a block".
+        if self._keepalive is not None:
+            record.keepalive_frames = self._keepalive.recorded_frames()
         # Reasoning text and tool arguments are request bodies, so they follow
         # the same capture switch; the counts above stay either way.
         if self._capture_bodies:

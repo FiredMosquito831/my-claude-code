@@ -1953,9 +1953,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "them, so for Claude Code this does nothing unless "
             "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1 is set in its "
             "environment, which turns on the byte-level timer that does count "
-            "them. It does help OpenAI and Gemini SDK clients, whose timeouts "
-            "count bytes, and any proxy or load balancer between the client "
-            "and MCC that closes idle connections. One trade: if the first "
+            "them, or Keepalive mode below is frames, which covers a model "
+            "that has started answering and then goes quiet. It does help "
+            "OpenAI and Gemini SDK clients, whose timeouts count bytes, and "
+            "any proxy or load balancer between the client and MCC that "
+            "closes idle connections. One trade: if the first "
             "keepalive goes out before any model has answered, the HTTP status "
             "is already 200, so a failure after it reaches the client as an "
             "error inside the stream instead of an HTTP error status. 0 never "
@@ -1991,6 +1993,32 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "answers cannot hold a client on a spinner for longer than this "
             "plus that timer. 0 keeps a silent stream alive for as long as it "
             "stays open, which with every deadline at 0 can be indefinitely."
+        ),
+    ),
+    ConfigFieldSpec(
+        "STREAM_KEEPALIVE_MODE",
+        "Keepalive mode",
+        "stream_keepalive",
+        "select",
+        settings_attr="stream_keepalive_mode",
+        default="ping",
+        options=("ping", "frames"),
+        affects_providers=False,
+        description=(
+            "What the keepalive is on /v1/messages. ping (default): Anthropic's "
+            'own "event: ping", which Claude Code ignores. frames (opt-in): '
+            "while the model's own text or tool-call block is open, the "
+            "keepalive is an empty delta of that same block -- a text_delta "
+            'with "" or an input_json_delta with "" -- which Claude Code\'s '
+            "idle timer does count, and which adds nothing to the answer: the "
+            "text and tool arguments the client puts together are identical "
+            "with it on or off. The bytes on the wire are not, which is why "
+            "it is off by default. Anywhere else it is still a ping, so it "
+            "does not help before the model's first block, between blocks or "
+            "while the model is thinking; it never invents a thinking block. "
+            "The cap above still applies. Each request records how many of "
+            "these frames it sent. The other surfaces keep their SSE comment "
+            "whatever this says."
         ),
     ),
     ConfigFieldSpec(

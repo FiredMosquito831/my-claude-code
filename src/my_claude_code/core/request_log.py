@@ -1469,6 +1469,14 @@ _ADDED_COLUMNS = (
     # ``field=source.signal`` per captured field, so the detail pane can say
     # how each value is known.
     ("origin_source", "ALTER TABLE requests ADD COLUMN origin_source TEXT"),
+    # 7.47.0: how many empty-delta keepalive frames (STREAM_KEEPALIVE_MODE=
+    # frames) the client was sent while the model's own text or tool-call
+    # block was open and silent. Written at the HTTP boundary, outside the
+    # capture, so no other column counts them. NULL is "frames mode was not
+    # running for this request" -- ping mode, a surface without frames, a
+    # non-stream request, the log's own older rows -- and 0 is "it ran and was
+    # never needed". Not backfillable: nothing recorded them before.
+    ("keepalive_frames", "ALTER TABLE requests ADD COLUMN keepalive_frames INTEGER"),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1613,6 +1621,7 @@ _REQUEST_INSERT_COLUMNS = (
     "parent_session_id",
     "project_dir",
     "origin_source",
+    "keepalive_frames",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -2229,6 +2238,9 @@ class RequestRecord:
     parent_session_id: str | None = None
     project_dir: str | None = None
     origin_source: str | None = None
+    # Empty-delta keepalive frames sent (7.47.0). None unless
+    # STREAM_KEEPALIVE_MODE=frames ran on this stream.
+    keepalive_frames: int | None = None
 
     @property
     def ts_iso(self) -> str:
@@ -4889,6 +4901,7 @@ class RequestLogStore:
             record.parent_session_id,
             record.project_dir,
             record.origin_source,
+            record.keepalive_frames,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
