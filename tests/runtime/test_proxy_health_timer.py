@@ -7,6 +7,9 @@ it never probes an address that is not due, and its flush half runs whether
 probing is on or off.
 """
 
+import asyncio
+import contextlib
+
 import pytest
 
 from my_claude_code.application import proxy_check as check_module
@@ -163,3 +166,88 @@ async def test_the_flush_runs_even_with_probing_switched_off(
         remove_listener()
 
     assert load_proxy_chains().proxies[proxy_id].health is not None
+
+
+# ------------------ 7.52.2: the re-prober uses the operator's check settings
+
+
+def _settings_with(**env: object) -> Settings:
+    return Settings.model_validate(
+        {"model": "nvidia_nim/primary", "nvidia_nim_api_key": "k", **env}
+    )
+
+
+def _seed_many(count: int) -> list[str]:
+    table = load_proxy_chains()
+    ids: list[str] = []
+    for index in range(count):
+        table, proxy_id = table.add_endpoint(f"http://198.51.100.{10 + index}:8080")
+        ids.append(proxy_id)
+    table = table.with_chain(
+        "nvidia_nim",
+        ProxyChain(
+            enabled=True,
+            entries=tuple(ProxyChainEntry(proxy=proxy_id) for proxy_id in ids),
+        ),
+    )
+    save_proxy_chains(table)
+    stored = load_proxy_chains().proxies
+    labels = [
+        stored[proxy_id].label or mask_proxy_label(stored[proxy_id].url)
+        for proxy_id in ids
+    ]
+    for label in labels:
+        PROXY_REACHABILITY.note_failure(label, "ConnectError")
+        PROXY_REACHABILITY.restore(label, 1, 0.0, "ConnectError")
+    return labels
+
+
+@pytest.mark.asyncio
+async def test_reprobe_uses_proxy_check_timeout_setting(store, monkeypatch) -> None:
+    """``PROXY_CHECK_TIMEOUT_SECONDS`` reaches the re-probe, not the constant 10."""
+
+    _seed_many(1)
+    seen: list[float] = []
+
+    async def _passes(url, destination, **kwargs):
+        seen.append(kwargs["timeout"])
+        return ProxyCheckRecord(at="2026-09-25T00:00:00Z", ok=True, tls="strict")
+
+    monkeypatch.setattr(check_module, "check_proxy", _passes)
+    timer = ProxyHealthTimer(
+        lambda: _settings_with(PROXY_CHECK_TIMEOUT_SECONDS=3.5), lambda: True
+    )
+
+    assert await timer.tick() == 1
+    assert seen == [3.5]
+
+
+@pytest.mark.asyncio
+async def test_reprobe_concurrency_can_exceed_four(store, monkeypatch) -> None:
+    """``PROXY_CHECK_MAX_CONCURRENCY`` above the old ceiling of four is honoured."""
+
+    _seed_many(8)
+    in_flight = 0
+    peak = 0
+    all_started = asyncio.Event()
+
+    async def _passes(url, destination, **kwargs):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        if in_flight == 8:
+            all_started.set()
+        # Released when all eight are in flight at once; a ceiling of four
+        # never gets there, and the wait gives up after two seconds.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(all_started.wait(), 2.0)
+        in_flight -= 1
+        return ProxyCheckRecord(at="2026-09-25T00:00:00Z", ok=True, tls="strict")
+
+    monkeypatch.setattr(check_module, "check_proxy", _passes)
+    timer = ProxyHealthTimer(
+        lambda: _settings_with(PROXY_CHECK_MAX_CONCURRENCY=8), lambda: True
+    )
+
+    assert await timer.tick() == 8
+    assert peak == 8

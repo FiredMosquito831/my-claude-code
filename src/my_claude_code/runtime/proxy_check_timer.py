@@ -35,6 +35,7 @@ from loguru import logger
 
 from my_claude_code.application.proxy_check import (
     PROXY_CHECK_MAX_CONCURRENCY,
+    PROXY_CHECK_TIMEOUT_SECONDS,
     check_endpoints,
     check_targets,
 )
@@ -299,19 +300,32 @@ class ProxyHealthTimer:
                 due.append(proxy_id)
         if not due:
             return 0
+        # Both of the operator's check settings reach the re-probe (7.52.2).
+        # Before, the timeout was the module constant -- ten seconds whatever
+        # ``PROXY_CHECK_TIMEOUT_SECONDS`` said -- and the concurrency was
+        # clamped to ``check_endpoints``' default ceiling of four, so raising
+        # ``PROXY_CHECK_MAX_CONCURRENCY`` above four changed nothing. The
+        # setting *is* the ceiling here, so it is passed as both.
+        concurrency = int(
+            getattr(
+                settings, "proxy_check_max_concurrency", PROXY_CHECK_MAX_CONCURRENCY
+            )
+        )
         self._sweeping = True
         try:
             outcomes = await check_endpoints(
                 due,
                 targets,
-                exit_ip_url="",
-                concurrency=int(
+                timeout=float(
                     getattr(
                         settings,
-                        "proxy_check_max_concurrency",
-                        PROXY_CHECK_MAX_CONCURRENCY,
+                        "proxy_check_timeout_seconds",
+                        PROXY_CHECK_TIMEOUT_SECONDS,
                     )
                 ),
+                exit_ip_url="",
+                concurrency=concurrency,
+                max_concurrency=concurrency,
             )
         except asyncio.CancelledError:
             raise
