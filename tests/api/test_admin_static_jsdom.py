@@ -6302,3 +6302,18 @@ def test_the_watchdog_card_builds_no_markup_from_a_label(rendered) -> None:
     """Labels come from the manifest; they are written with textContent."""
     html = rendered["limits"]["watchdog"]["stallZero"]["html"]
     assert "<li>FALLBACK_STALL_TIMEOUT: 0 (no limit)</li>" in html
+
+
+def test_the_apply_banner_names_only_the_fields_that_need_a_restart(rendered) -> None:
+    """7.48.0: a restart is the exception, so the banner says who asked for it.
+
+    The automatic restart used to say only "Restarting server..." -- which,
+    when almost every field restarted, told the reader nothing they could act
+    on. It now names the fields the server reported, the manual fallback keeps
+    naming them, and a hot apply names nothing.
+    """
+
+    banner = rendered["applyBanner"]
+    assert banner["automatic"] == "Applied. Restarting server for: PORT, LOG_LEVEL..."
+    assert banner["manual"] == "Applied. Restart my-claude-code to use: HOST"
+    assert banner["hot"] == "Applied"

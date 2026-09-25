@@ -6318,6 +6318,69 @@ const deferredRace = {};
   doc.getElementById("reqFilterSearch").value = "boom";
 }
 
+// ------------------------------------------------- the Apply banner (7.48.0)
+/* Since 7.48.0 only a handful of fields need a restart, so the banner has to
+   say which of the reader's changes asked for one. Three answers from the
+   apply route: an automatic restart naming its fields, a manual one, and a
+   hot apply that names nothing. The automatic branch schedules a navigation;
+   `setTimeout` is held for that one call so jsdom never tries to navigate. */
+const applyBanner = {};
+{
+  const area = doc.getElementById("messageArea");
+  const applyRoute = ROUTES["/admin/api/config/apply"];
+  // apply() reloads the whole dashboard after a non-automatic answer. That
+  // reload is not what is under test and it would run against whatever the
+  // blocks above left in ROUTES, so it is held for this block only.
+  const realLoad = window.load;
+  window.load = async () => {};
+  const answer = (restart) => ({
+    applied: true,
+    valid: true,
+    errors: [],
+    warnings: [],
+    pending_fields: restart.required ? restart.fields : [],
+    restart,
+  });
+
+  ROUTES["/admin/api/config/apply"] = answer({
+    required: true,
+    automatic: true,
+    admin_url: "/admin",
+    fields: ["PORT", "LOG_LEVEL"],
+  });
+  const realSetTimeout = window.setTimeout;
+  window.setTimeout = () => 0;
+  try {
+    await window.eval("apply()");
+  } finally {
+    window.setTimeout = realSetTimeout;
+  }
+  applyBanner.automatic = area.textContent.trim();
+  doc.getElementById("applyButton").disabled = false;
+
+  ROUTES["/admin/api/config/apply"] = answer({
+    required: true,
+    automatic: false,
+    admin_url: null,
+    fields: ["HOST"],
+  });
+  await window.eval("apply()");
+  applyBanner.manual = area.textContent.trim();
+
+  ROUTES["/admin/api/config/apply"] = answer({
+    required: false,
+    automatic: false,
+    admin_url: null,
+    fields: [],
+  });
+  await window.eval("apply()");
+  applyBanner.hot = area.textContent.trim();
+
+  window.load = realLoad;
+  if (applyRoute === undefined) delete ROUTES["/admin/api/config/apply"];
+  else ROUTES["/admin/api/config/apply"] = applyRoute;
+}
+
 // ------------------------------------------------- harness attribution
 /* Who sent the request, end to end: the column and its chip, the empty-state
    colspan that has to follow the header, the modal's two wordings, the filter
@@ -9323,6 +9386,7 @@ console.log(
       analytics,
       costPanel,
       deferredRace,
+      applyBanner,
       logReadout,
       harnessAttr,
       optimizer: {
