@@ -71,6 +71,17 @@ maps to ``httpx.ConnectTimeout``: the same class a dead address's TCP dial
 produces today, already in ``proxy_rotating._REACHABILITY_TYPES``, so the rung
 is benched, the chain switches and the ladder reads exactly as it does for any
 other address that did not answer. No new failure kind is introduced.
+
+The one other thing it installs
+-------------------------------
+
+Every call site that can be handed an operator's proxy already calls
+:func:`bound_socks_handshake`, so it is also where each proxy pool -- SOCKS
+*and* HTTP -- gets the stopwatch from ``providers/proxy_dial_clock.py``, which
+times the connect to the proxy and the tunnel handshake for the request's
+ladder. That is timing only: no deadline, no byte changed, and nothing for an
+un-proxied client. On a SOCKS pool the stopwatch sits *inside* the deadline,
+so the deadline sees exactly the stream it always saw.
 """
 
 import ssl
@@ -79,6 +90,8 @@ import typing
 
 import httpcore
 import httpx
+
+from my_claude_code.providers.proxy_dial_clock import clock_proxy_pool
 
 #: Every private name this module reads off ``httpx``/``httpcore``. Pinned by
 #: ``tests/contracts/test_socks_deadline_contract.py`` so that an upgrade which
@@ -215,9 +228,10 @@ def bound_socks_handshake(client: httpx.AsyncClient) -> httpx.AsyncClient:
     """Bound the SOCKS5 handshake of every SOCKS pool *client* holds.
 
     Returns the same client object, so it reads as a wrapper at the call site
-    and costs nothing at every call site that has no SOCKS proxy: a client
-    built with no proxy, or with an ``http``/``https`` one, comes back
-    byte-for-byte the object that was passed in.
+    and costs nothing at every call site that has no proxy: a client built
+    with no proxy comes back byte-for-byte the object that was passed in. An
+    ``http``/``https`` proxy pool gets no deadline -- it never needed one --
+    and only the dial stopwatch.
 
     Call it *after* the client is constructed. The backend is read out of each
     connection at dial time, so wrapping it before the first request reaches
@@ -229,5 +243,12 @@ def bound_socks_handshake(client: httpx.AsyncClient) -> httpx.AsyncClient:
     for transport in transports:
         pool = getattr(transport, TRANSPORT_POOL_ATTR, None)
         if isinstance(pool, httpcore.AsyncSOCKSProxy):
+            # The stopwatch goes on first, so it ends up inside the deadline;
+            # a pool that is already bounded was clocked when it was bounded.
+            backend = getattr(pool, POOL_BACKEND_ATTR, None)
+            if not isinstance(backend, _HandshakeDeadlineBackend):
+                clock_proxy_pool(pool)
             _bind_pool(pool)
+        elif isinstance(pool, httpcore.AsyncHTTPProxy):
+            clock_proxy_pool(pool)
     return client

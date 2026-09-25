@@ -4849,6 +4849,15 @@ function driveDetail(row) {
     ladderHeadLabels: Array.from(
       chain.querySelectorAll(".req-chain-try-head summary"),
     ).map((el) => el.textContent),
+    dialTitles: Array.from(chain.querySelectorAll(".req-chain-dials-title")).map(
+      (el) => el.textContent,
+    ),
+    dials: Array.from(chain.querySelectorAll(".req-chain-dial")).map(
+      (el) => el.textContent,
+    ),
+    dialClasses: Array.from(chain.querySelectorAll(".req-chain-dial")).map(
+      (el) => el.className,
+    ),
   };
 }
 
@@ -5144,6 +5153,125 @@ const requestDetail = {
      gate used to read summary.tries alone, so precisely the case an operator
      asks about -- "why did my request go somewhere else?" -- showed no
      ladder at all. */
+  /* 7.45.1: every proxy dial on the ladder. The 09-16 shape on attempt 0 --
+     a 429 on the first address, a dead second one, and a third dial that
+     never finished -- and a fallback that went out through one address and
+     was answered. */
+  proxyDials: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "interrupted",
+        error_message: "The client went away.",
+        key_index: 0,
+        key_label: "aa...bb",
+        params: {
+          ladder: {
+            tries: [
+              { source: "upstream", key_index: 0, status: 429, upstream_ms: 3800 },
+              { source: "upstream", key_index: 0, kind: "ConnectTimeout", upstream_ms: 10000 },
+            ],
+            summary: {
+              tries: 2,
+              statuses_by_code: { 429: 1, ConnectTimeout: 1 },
+              keys: 1,
+              time_sleeping_ms: 0,
+              time_limiter_ms: 0,
+              tries_dropped: 0,
+            },
+            credentials: [],
+            root_cause: "",
+            dials: [
+              {
+                at_try: 0,
+                proxy: "173.249.24.121:1080",
+                connect_ms: 41.5,
+                handshake_ms: 310.2,
+                verdict_ms: 3800,
+                outcome: "switched",
+                switch_ms: 12.4,
+                reason: "429",
+              },
+              {
+                at_try: 1,
+                proxy: "45.77.244.108:1080",
+                connect_ms: 88,
+                verdict_ms: 10000,
+                outcome: "switched",
+                switch_ms: 3,
+                reason: "ConnectTimeout",
+              },
+              {
+                at_try: 2,
+                proxy: "direct",
+                outcome: "dialing",
+                elapsed_ms: 2820000,
+              },
+            ],
+          },
+        },
+      }),
+      detailAttempt({
+        attempt: 1,
+        outcome: "succeeded",
+        key_index: 0,
+        key_label: "aa...bb",
+        params: {
+          ladder: {
+            tries: [{ source: "upstream", key_index: 0, upstream_ms: 900 }],
+            summary: {
+              tries: 1,
+              statuses_by_code: {},
+              keys: 1,
+              time_sleeping_ms: 0,
+              time_limiter_ms: 0,
+              tries_dropped: 0,
+            },
+            credentials: [],
+            root_cause: "",
+            dials: [{ at_try: 0, proxy: "10.0.0.9:3128", verdict_ms: 900, outcome: "answered" }],
+          },
+        },
+      }),
+    ],
+  }),
+  /* One attempt, one try, one dial: the panel used to stay hidden for this
+     shape, and the dial is the only place the address is shown per attempt. */
+  proxyOneDial: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        params: {
+          ladder: {
+            tries: [{ source: "upstream", key_index: 0, status: 429, upstream_ms: 3800 }],
+            summary: {
+              tries: 1,
+              statuses_by_code: { 429: 1 },
+              keys: 1,
+              time_sleeping_ms: 0,
+              time_limiter_ms: 0,
+              tries_dropped: 0,
+            },
+            credentials: [],
+            root_cause: "",
+            dials: [
+              {
+                at_try: 0,
+                proxy: "173.249.24.121:1080",
+                verdict_ms: 3800,
+                outcome: "failed",
+                idle_ms: 2820000,
+                reason: "429",
+              },
+            ],
+          },
+        },
+      }),
+    ],
+  }),
   singleTryWithProbe: driveDetail({
     reasoning_adaptation: null,
     reasoning_adaptation_kind: null,

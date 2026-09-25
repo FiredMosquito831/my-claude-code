@@ -6106,3 +6106,55 @@ def test_inflight_panel_css_keeps_the_origin_switch_and_its_own_table() -> None:
     narrow = css[css.index("@media (max-width: 1199px) {\n  .inflight-table") :]
     assert ".inflight-table .req-col-origin {\n    display: table-cell;" in narrow
     assert ".inflight-panel [hidden]" in css
+
+
+# ------------------------------------------------------------ proxy dials --
+
+
+def test_every_proxy_dial_renders_as_a_row_under_its_attempt(rendered) -> None:
+    """Three dials on the first attempt, one on the fallback, in order."""
+
+    detail = rendered["requestDetail"]["proxyDials"]
+
+    assert detail["chainHidden"] is False
+    assert detail["dialTitles"] == ["3 proxy dials · 2 switches", "1 proxy dial"]
+    assert detail["dials"] == [
+        "#1 · 173.249.24.121:1080 · connect 42 ms · handshake 310 ms"
+        " · 429 after 3.8s · switched in 12 ms",
+        "#2 · 45.77.244.108:1080 · connect 88 ms · ConnectTimeout after 10.0s"
+        " · switched in 3 ms",
+        "#3 · Direct (no proxy) · never completed — open 47m 0s",
+        "#1 · 10.0.0.9:3128 · answered in 900 ms",
+    ]
+    assert detail["dialClasses"] == [
+        "req-chain-dial is-switched",
+        "req-chain-dial is-switched",
+        "req-chain-dial is-dialing",
+        "req-chain-dial is-answered",
+    ]
+
+
+def test_the_tries_are_drawn_exactly_as_before_beside_the_dials(rendered) -> None:
+    detail = rendered["requestDetail"]["proxyDials"]
+    assert len(detail["ladderTries"]) == 2
+    assert detail["ladderSummaries"][0].startswith("2 tries")
+
+
+def test_one_dial_is_enough_to_show_the_panel(rendered) -> None:
+    """One try hides nothing -- but where it went, and that it never moved on,
+    is said nowhere else."""
+
+    detail = rendered["requestDetail"]["proxyOneDial"]
+    assert detail["chainHidden"] is False
+    assert detail["ladderTries"] == []
+    assert detail["dials"] == [
+        "#1 · 173.249.24.121:1080 · 429 after 3.8s · then 47m 0s without a switch"
+    ]
+    assert detail["dialClasses"] == ["req-chain-dial is-failed"]
+
+
+def test_an_attempt_with_no_chain_draws_no_dial_rows(rendered) -> None:
+    for name in ("ladder", "singleTry", "singleTryWithProbe"):
+        detail = rendered["requestDetail"][name]
+        assert detail["dials"] == []
+        assert detail["dialTitles"] == []
