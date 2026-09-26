@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
 import pytest
@@ -289,6 +290,190 @@ async def test_task_cancellation_records_cancelled(store: RequestLogStore) -> No
 
     row = _final_row(store)
     assert row["status"] == "cancelled"
+
+
+_ANSWER_FRAMES = _events(
+    (
+        "message_start",
+        {"type": "message_start", "message": {"usage": {"input_tokens": 3}}},
+    ),
+    (
+        "content_block_delta",
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "OK"}},
+    ),
+    ("message_delta", {"type": "message_delta", "usage": {"output_tokens": 1}}),
+    ("message_stop", {"type": "message_stop"}),
+)
+
+
+class _GatedOffload:
+    """Hold ``_compute_finalize_fields`` in its worker thread until released.
+
+    Makes the window deterministic: the request task is cancelled while the
+    arithmetic is provably still running, which is what a client that hangs
+    up on the terminal event does to a real request (Starlette cancels the
+    response task group on the disconnect).
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.commits = 0
+        compute = RequestCapture._compute_finalize_fields
+        commit = RequestCapture._commit_finalize
+
+        def gated(capture: RequestCapture, record: Any) -> None:
+            self.started.set()
+            self.release.wait(10)
+            compute(capture, record)
+
+        def counted(capture: RequestCapture, record: Any) -> None:
+            self.commits += 1
+            commit(capture, record)
+
+        monkeypatch.setattr(RequestCapture, "_compute_finalize_fields", gated)
+        monkeypatch.setattr(RequestCapture, "_commit_finalize", counted)
+
+    async def wait_started(self) -> None:
+        async with asyncio.timeout(10):
+            while not self.started.is_set():
+                await asyncio.sleep(0.005)
+
+    async def release_and_wait_for_commit(self) -> None:
+        self.release.set()
+        async with asyncio.timeout(10):
+            while self.commits == 0:
+                await asyncio.sleep(0.005)
+
+
+async def _cancel_during_offload(
+    gate: _GatedOffload, work: Callable[[], Coroutine[Any, Any, None]]
+) -> None:
+    task = asyncio.create_task(work())
+    await gate.wait_started()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert gate.commits == 0, "nothing may be committed before the arithmetic lands"
+    await gate.release_and_wait_for_commit()
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_finalize_offload_keeps_the_success_row_drained_reader(
+    store: RequestLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/v1/messages shape: the reader drains, then the client hangs up.
+
+    The cancellation lands in ``_observe``'s ``finally`` while it awaits the
+    offloaded arithmetic. ``_begin_finalize`` has already latched the capture
+    as finalized, so before 7.56.1 the answered request left no row at all.
+    """
+    gate = _GatedOffload(monkeypatch)
+
+    async def body() -> AsyncIterator[str]:
+        for chunk in _ANSWER_FRAMES:
+            yield chunk
+
+    capture = _make_capture(store)
+
+    async def consume() -> None:
+        async for _ in capture.wrap(body()):
+            pass
+
+    await _cancel_during_offload(gate, consume)
+    store.close()
+
+    row = _final_row(store)
+    assert row["status"] == "success"
+    assert row["output_text"] == "OK"
+    assert row["tokens_out"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_finalize_offload_keeps_the_success_row_adapter_close(
+    store: RequestLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/v1/responses shape: the adapter closes the wrapper after message_stop.
+
+    The ``GeneratorExit`` branch awaits the offload; Codex hangs up on
+    ``response.completed`` and the cancellation lands inside that await.
+    """
+    gate = _GatedOffload(monkeypatch)
+
+    async def body() -> AsyncIterator[str]:
+        for chunk in _ANSWER_FRAMES:
+            yield chunk
+        await asyncio.sleep(60)
+
+    capture = _make_capture(store, endpoint="/v1/responses")
+    stream = capture.wrap(body())
+
+    async def consume_then_close() -> None:
+        for _ in _ANSWER_FRAMES:
+            await anext(stream)
+        assert isinstance(stream, AsyncCloseable)
+        await stream.aclose()
+
+    await _cancel_during_offload(gate, consume_then_close)
+    store.close()
+
+    row = _final_row(store)
+    assert row["status"] == "success"
+    assert row["endpoint"] == "/v1/responses"
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_finalize_offload_keeps_the_error_row(
+    store: RequestLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stream that ended on an ``error`` event keeps its error row too."""
+    gate = _GatedOffload(monkeypatch)
+
+    async def body() -> AsyncIterator[str]:
+        yield _ANSWER_FRAMES[0]
+        yield _events(
+            (
+                "error",
+                {
+                    "type": "error",
+                    "error": {"type": "overloaded_error", "message": "busy"},
+                },
+            )
+        )[0]
+
+    capture = _make_capture(store)
+
+    async def consume() -> None:
+        async for _ in capture.wrap(body()):
+            pass
+
+    await _cancel_during_offload(gate, consume)
+    store.close()
+
+    row = _final_row(store)
+    assert row["status"] == "error"
+    assert row["error_kind"] == "overloaded_error"
+
+
+@pytest.mark.asyncio
+async def test_an_uncancelled_offload_commits_exactly_once(
+    store: RequestLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The normal path is unchanged: one commit, after the arithmetic."""
+    gate = _GatedOffload(monkeypatch)
+    gate.release.set()
+
+    async def body() -> AsyncIterator[str]:
+        for chunk in _ANSWER_FRAMES:
+            yield chunk
+
+    capture = _make_capture(store)
+    await _collect(capture.wrap(body()))
+    await asyncio.sleep(0.05)
+    store.close()
+
+    assert gate.commits == 1
+    assert _final_row(store)["status"] == "success"
 
 
 @pytest.mark.asyncio
