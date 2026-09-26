@@ -17,6 +17,7 @@ from typing import Any, Literal, cast
 
 from my_claude_code.core.cancelled_reasons import CANCELLED_SUB_LABEL_TEXT
 from my_claude_code.core.request_log import ATTEMPT_PARAMS_KEY, PROVIDER_KEY_SQL
+from my_claude_code.core.success_reasons import SUCCESS_SUB_LABEL_TEXT
 
 Format = Literal["json", "csv", "xlsx", "txt"]
 REQUEST_SCOPE = "requests"
@@ -368,6 +369,10 @@ _REQUEST_ALWAYS_DERIVED: tuple[str, ...] = (
     # requests that could not say why they were cancelled is the gap this
     # column closes. Empty on every row that was not cancelled.
     "cancel_reason",
+    # Which of the two shapes a success with no answer had ("thought only",
+    # "empty"), always present for the same reason. Empty on every other row,
+    # which is almost every row: a success that answered has no sub-label.
+    "success_reason",
     # The human name the operator gave this credential, resolved from the
     # *current* pool at export time. ``key_label`` and ``key_index`` keep their
     # meanings exactly: a name is a display join, never a stored dimension, so
@@ -405,6 +410,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "key_name",
     "status",
     "cancel_reason",
+    "success_reason",
     "error_kind",
     "error_message",
     "tokens_in",
@@ -466,6 +472,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "key_name": "Key name",
     "status": "Status",
     "cancel_reason": "Cancelled because",
+    "success_reason": "No answer",
     "error_kind": "Error kind",
     "error_message": "Error message",
     "tokens_in": "Input (uncached)",
@@ -610,6 +617,7 @@ def compute_request_detail_derived(
     if "ttft_lost_to_fallbacks_ms" not in row:
         row["ttft_lost_to_fallbacks_ms"] = _ttft_lost_to_fallbacks(row)
     row["cancel_reason"] = _cancel_reason_text(row.get("cancel_reason"))
+    row["success_reason"] = _success_reason_text(row.get("success_reason"))
     row["key_name"] = resolve_key_name(row, key_names)
     if "cache_hit" in selected and "cache_hit_rate" not in row:
         row["cache_hit_rate"] = _cache_hit_ratio(row)
@@ -627,6 +635,18 @@ def _cancel_reason_text(label: Any) -> Any:
     if not label:
         return None
     return CANCELLED_SUB_LABEL_TEXT.get(str(label), str(label))
+
+
+def _success_reason_text(label: Any) -> Any:
+    """The success sub-label in the chip's words, like :func:`_cancel_reason_text`.
+
+    ``None`` stays ``None``: a success that answered, and every row that is
+    not a success, has no sub-label.
+    """
+
+    if not label:
+        return None
+    return SUCCESS_SUB_LABEL_TEXT.get(str(label), str(label))
 
 
 def _ttft_lost_to_fallbacks(row: dict[str, Any]) -> Any:
@@ -1079,6 +1099,9 @@ _ATTEMPT_ALWAYS_DERIVED: tuple[str, ...] = (
     # the question: an attempt under a cancelled request says "cancelled"
     # and nothing about which of the four cancellations it was.
     "request_cancel_reason",
+    # And the success sub-label beside it, for an attempt under a success
+    # that carried no answer.
+    "request_success_reason",
 )
 
 _ATTEMPT_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
@@ -1105,6 +1128,7 @@ _ATTEMPT_COLUMN_ORDER: tuple[str, ...] = (
     "resolved_model",
     "request_status",
     "request_cancel_reason",
+    "request_success_reason",
     "attempt_provider",
     "attempt_model",
     "outcome",
@@ -1141,6 +1165,7 @@ _ATTEMPT_COLUMN_LABELS: dict[str, str] = {
     "resolved_model": "Resolved model",
     "request_status": "Request status",
     "request_cancel_reason": "Request cancelled because",
+    "request_success_reason": "Request no answer",
     "attempt_provider": "Attempt provider",
     "attempt_model": "Attempt model",
     "outcome": "Outcome",
@@ -1239,6 +1264,9 @@ def compute_attempt_detail_derived(
 
     row["ended_by"] = _attempt_ended_by(row, bench, ladder)
     row["request_cancel_reason"] = _cancel_reason_text(row.get("request_cancel_reason"))
+    row["request_success_reason"] = _success_reason_text(
+        row.get("request_success_reason")
+    )
     row["key_name"] = resolve_key_name(row, key_names)
     if "failure" in selected:
         row["bench_reason"] = _bench_reason(bench)

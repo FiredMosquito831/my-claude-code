@@ -45,6 +45,15 @@ from my_claude_code.core.request_origin import (
     session_filter,
     session_short,
 )
+from my_claude_code.core.success_reasons import (
+    SUCCESS_REASON_SOURCE_COLUMNS,
+    SUCCESS_STATUS,
+    SUCCESS_SUB_LABELS,
+    classify_success,
+    classify_success_row,
+    split_success_status_filter,
+    success_sub_label_case_sql,
+)
 from my_claude_code.core.tool_catalogue import (
     TOOL_SHA_BYTES,
     ToolCatalogue,
@@ -5094,11 +5103,18 @@ class RequestLogStore:
             # beside it, never instead of it -- so ``status=cancelled`` and
             # every URL that carries it keep selecting all four.
             status_value, sub_label = split_status_filter(status)
+            # ``success:<sub-label>`` the same way: ``status = 'success'``
+            # stays the indexed equality and the label is a predicate beside
+            # it. A cancelled value passes through this untouched.
+            status_value, success_label = split_success_status_filter(status_value)
             clauses.append("status = ?")
             args.append(status_value)
             if sub_label is not None:
                 clauses.append(f"{sub_label_case_sql()} = ?")
                 args.append(sub_label)
+            if success_label is not None:
+                clauses.append(f"{success_sub_label_case_sql()} = ?")
+                args.append(success_label)
         if endpoint:
             clauses.append("endpoint = ?")
             args.append(endpoint)
@@ -5693,10 +5709,15 @@ class RequestLogStore:
         derived from even when the caller did not name them. They go into the
         SQL, never into the caller's ``columns``: the route projects each row
         down to the columns it asked for, so an export gains exactly one field
-        and not five.
+        and not five. The success sub-label tops the SELECT up the same way.
         """
         sql_columns = list(columns) + [
             column for column in _CANCEL_REASON_SOURCE_COLUMNS if column not in columns
+        ]
+        sql_columns += [
+            column
+            for column in SUCCESS_REASON_SOURCE_COLUMNS
+            if column not in sql_columns
         ]
         boundaries = self.restart_boundaries()
         where, args = self._where(
@@ -5823,8 +5844,10 @@ class RequestLogStore:
                     # Not exported as columns of their own: they are here only
                     # so the parent's cancelled sub-label can ride on the
                     # attempt beside ``request_status``, which is the column
-                    # that raised the question.
-                    " ttft_ms, duration_ms, output_chars, thinking_chars"
+                    # that raised the question. The last three are the same
+                    # for its success sub-label.
+                    " ttft_ms, duration_ms, output_chars, thinking_chars,"
+                    " tool_call_count, tokens_out, optimization"
                     f" FROM requests{page_where}"
                     " ORDER BY ts_epoch DESC, id DESC LIMIT ?"
                 )
@@ -5850,6 +5873,14 @@ class RequestLogStore:
                         output_chars=parent["output_chars"],
                         thinking_chars=parent["thinking_chars"],
                         boundaries=boundaries,
+                    )
+                    attempt["request_success_reason"] = classify_success(
+                        status=parent["status"],
+                        output_chars=parent["output_chars"],
+                        tool_call_count=parent["tool_call_count"],
+                        thinking_chars=parent["thinking_chars"],
+                        tokens_out=parent["tokens_out"],
+                        optimization=parent["optimization"],
                     )
                     yield attempt
                 cursor = (rows[-1]["ts_epoch"], rows[-1]["id"])
@@ -6045,6 +6076,15 @@ class RequestLogStore:
                 thinking_chars=data.get("thinking_chars"),
                 boundaries=boundaries,
             )
+            # Which of the two things a success with no answer carried, by the
+            # same rule. Only when every column the rule reads was projected:
+            # a label computed from a column the query left out -- say
+            # ``optimization`` -- would call a local answer an empty turn.
+            data["success_reason"] = (
+                classify_success_row(data)
+                if all(column in data for column in SUCCESS_REASON_SOURCE_COLUMNS)
+                else None
+            )
         if bodies:
             # Only fill columns this query actually projected: list views carry
             # ``thinking_chars`` instead of ``thinking_text`` and must keep
@@ -6159,10 +6199,18 @@ class RequestLogStore:
         # is derived from the request row instead, which only the row scan can
         # do -- exactly the way a free-text search already forces this path.
         _, sub_label = split_status_filter(status)
+        # A success sub-label is derived from the row for the same reason and
+        # takes the same path.
+        _, success_label = split_success_status_filter(status)
         origin_filtered = (
             session_filter(session) is not None or folder_filter(folder) is not None
         )
-        if not q and sub_label is None and not origin_filtered:
+        if (
+            not q
+            and sub_label is None
+            and success_label is None
+            and not origin_filtered
+        ):
             payload = self._stats_from_rollup(
                 provider=provider,
                 model=model,
@@ -7319,6 +7367,131 @@ class RequestLogStore:
                 if reason in counts:
                     counts[reason] = int(row["n"] or 0)
             payload = {
+                "total": sum(counts.values()),
+                "counts": counts,
+                "selected": asked_sub_label,
+            }
+        with self._stats_lock:
+            self._stats_cache[cache_key] = (now, payload)
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return dict(payload)
+
+    def no_answer_breakdown(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
+    ) -> dict[str, Any]:
+        """The successes that carried no answer, split into the two shapes.
+
+        ``successes`` is every success the filters select; ``counts`` holds
+        the two labels and ``total`` is their sum, so the panel can say "N of
+        M successes had no answer" and the parts add up to the whole they
+        claim. The rows that are neither answered nor labelled -- written
+        before ``tool_call_count`` existed -- are inside ``successes`` and
+        outside ``total``, which is the honest place for rows nobody can
+        classify.
+
+        A live query and never a rollup dimension, for the reason
+        :meth:`cancelled_breakdown` gives -- but *not* part of ``stats()``'s
+        answer the way that one is. Cancelled rows are rare and
+        ``idx_requests_status`` seeks straight to them; successes are nearly
+        every row, and the label reads columns no index carries. Measured
+        read-only on an 8.4 GB, 462,567-row log with the dashboard's own
+        ``local=hide``: 0.32 s for 24 hours, 0.92 s for 7 days, 3.6 s for 30
+        days and 5.2 s all time, against the ~0.1 s rollup-served stats. So
+        it has its own route and the dashboard fetches it off the paint path,
+        the way the TTFT and cost panels already are.
+
+        Every filter ``stats()`` takes applies here and is part of the cache
+        key. ``status`` is handled the way :meth:`cancelled_breakdown`
+        handles it: a page filtered to another status has nothing to break
+        down, and a page narrowed to one success sub-label still sees both.
+        """
+
+        cache_key = (
+            "no_answer_breakdown",
+            provider,
+            model,
+            status,
+            endpoint,
+            key,
+            since,
+            until,
+            q,
+            local,
+            harness,
+            session,
+            folder,
+        )
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return dict(cached[1])
+                del self._stats_cache[cache_key]
+        counts = dict.fromkeys(SUCCESS_SUB_LABELS, 0)
+        asked_status, asked_sub_label = split_success_status_filter(status)
+        if asked_status is not None and asked_status != SUCCESS_STATUS:
+            payload: dict[str, Any] = {
+                "successes": 0,
+                "total": 0,
+                "counts": counts,
+                "selected": asked_sub_label,
+            }
+        else:
+            where, args = self._where(
+                provider=provider,
+                model=model,
+                status=SUCCESS_STATUS,
+                endpoint=endpoint,
+                key=key,
+                since=since,
+                until=until,
+                q=q,
+                local=local,
+                harness=harness,
+                session=session,
+                folder=folder,
+            )
+            try:
+                with self._connection() as conn:
+                    rows = conn.execute(
+                        f"SELECT {success_sub_label_case_sql()} AS reason,"
+                        f" COUNT(*) AS n FROM requests{where} GROUP BY reason",
+                        args,
+                    ).fetchall()
+            except sqlite3.Error as exc:
+                logger.warning("No-answer breakdown unavailable: {}", exc)
+                return {
+                    "successes": 0,
+                    "total": 0,
+                    "counts": counts,
+                    "selected": asked_sub_label,
+                }
+            successes = 0
+            for row in rows:
+                count = int(row["n"] or 0)
+                successes += count
+                reason = row["reason"]
+                if reason is not None and str(reason) in counts:
+                    counts[str(reason)] = count
+            payload = {
+                "successes": successes,
                 "total": sum(counts.values()),
                 "counts": counts,
                 "selected": asked_sub_label,

@@ -108,8 +108,12 @@ def test_the_existing_request_columns_are_unchanged_apart_from_the_insert() -> N
     # like it, it is appended rather than inserted: every column that existed
     # keeps its exact position, so an export that ignores the new one is the
     # file it was before.
+    # ``success_reason`` (7.57.0) is appended beside ``cancel_reason`` the same
+    # way.
     without = [
-        column for column in columns if column not in {"key_name", "cancel_reason"}
+        column
+        for column in columns
+        if column not in {"key_name", "cancel_reason", "success_reason"}
     ]
 
     assert without == [
@@ -142,5 +146,10 @@ def test_the_existing_request_columns_are_unchanged_apart_from_the_insert() -> N
         "ttft_lost_to_fallbacks_ms",
         "cache_hit_rate",
     ]
-    # And the two additions are exactly where "appended" says they are.
-    assert columns[-3:] == ["cancel_reason", "key_name", "cache_hit_rate"]
+    # And the additions are exactly where "appended" says they are.
+    assert columns[-4:] == [
+        "cancel_reason",
+        "success_reason",
+        "key_name",
+        "cache_hit_rate",
+    ]

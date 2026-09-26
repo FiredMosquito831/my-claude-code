@@ -3925,6 +3925,27 @@ Two panels summarise it across the window: **Failover** pairs each failing prima
 
 Requests logged before v4.42.0 have no chain recorded, so the panel is hidden for them rather than inventing one.
 
+#### Successes with no answer (7.57.0)
+
+`success` means the client received a valid message, and it keeps meaning that. A few of those messages carry no text and no tool call, and from 7.57.0 each one says which of two shapes it had. It keeps its `success` status, and every count and rate on this page stays as it was:
+
+| Label | What came back |
+| --- | --- |
+| **thought only** | The model reasoned and the turn ended there. No text and no tool call reached the client. |
+| **empty** | Nothing at all: no text, no tool call, no reasoning and no output tokens. |
+
+On one real log this was 201 of 116,679 successes over 14 days (0.17 %), and 199 of the 201 were *thought only*. MCC's own local answers (for example the empty reply to Claude Code's suggestion-mode request) are empty on purpose and are never labelled.
+
+Where you see it:
+
+- **The Requests list.** A chip beside `success` in the status cell, with the sentence in its tooltip.
+- **The request dialog.** A *No answer* line with the same chip and the sentence.
+- **The Status filter.** *success — no answer, thought only* and *success — no answer, empty*. Plain *success* still selects every success, so saved links and scripts keep their meaning. The API takes the same values, `status=success:thought_only` and `status=success:empty`.
+- **Analytics.** A *Successful requests with no answer* panel beside *Why requests were cancelled*, and a one-line note under the *Success rate* card. The panel shows each label's count and share of the successes in the range, plus a total row. It loads after the rest of the page, because it reads every success in the range. On an 8.4 GB log that took about 0.3 s for a day and about 5 s for all time.
+- **Exports.** A *No answer* column in the request export, and *Request no answer* in the Route attempts export, in all four formats.
+
+The labels are worked out from columns the log already stores (`output_chars`, `tool_call_count`, `thinking_chars`, `tokens_out`, `optimization`). Nothing new is recorded and nothing is migrated, so older rows get labels too. The one exception is rows logged before MCC began counting tool calls. Those rows cannot show whether the turn called a tool, so a row from then with output tokens and no text gets no label.
+
 #### The three time-to-first-token numbers, and which one to trust
 
 From **7.4.0** the log stores a first-token time per *attempt*, not only per request. There are three numbers and they answer three different questions:

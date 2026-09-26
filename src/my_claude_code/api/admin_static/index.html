@@ -1096,6 +1096,12 @@
                 <select id="reqFilterStatus">
                   <option value="">any</option>
                   <option value="success">success</option>
+                  <!-- The same rule for successes: "success" still selects every
+                       success; these two narrow to the ones with no answer. -->
+                  <option value="success:thought_only">
+                    success — no answer, thought only
+                  </option>
+                  <option value="success:empty">success — no answer, empty</option>
                   <option value="error">error</option>
                   <option value="cancelled">cancelled</option>
                   <!-- Added beside the three originals, never instead of them:
@@ -1238,6 +1244,16 @@
                 before this panel existed are counted too.
               </p>
               <div id="reqCancelledBreakdown"></div>
+            </section>
+            <section class="analytics-panel">
+              <h4>Successful requests with no answer</h4>
+              <p class="analytics-footnote">
+                "Success" means the client received a valid message. A few of
+                those messages carried no text and no tool call. They keep the
+                success status; this panel counts them, derived from what was
+                already recorded. MCC's own local answers are not counted.
+              </p>
+              <div id="reqNoAnswerBreakdown"></div>
             </section>
             <section class="analytics-panel">
               <h4>Model latency</h4>
