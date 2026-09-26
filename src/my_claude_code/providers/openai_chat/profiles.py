@@ -70,6 +70,21 @@ _LOW_TO_MAX = (
     (ReasoningEffort.XHIGH, "max"),
     (ReasoningEffort.MAX, "max"),
 )
+# Agnes AI's effort words, as its host named them in a 400 on 2026-09-22:
+# ``none|low|medium|high|max``. This is, rung for rung, the table
+# ``learned_dialect.learned_effort_values`` builds from those words for a
+# custom provider on the same host -- nearest rung at or below, so ``xhigh``
+# goes out as ``high`` and only ``max`` as ``max``. Written out here rather
+# than computed because ``learned_dialect`` imports this module;
+# ``tests/providers/test_agnes.py`` pins the two equal.
+_AGNES_EFFORTS = (
+    (ReasoningEffort.MINIMAL, "low"),
+    (ReasoningEffort.LOW, "low"),
+    (ReasoningEffort.MEDIUM, "medium"),
+    (ReasoningEffort.HIGH, "high"),
+    (ReasoningEffort.XHIGH, "high"),
+    (ReasoningEffort.MAX, "max"),
+)
 
 # The OpenAI Chat Completions standard control, and this file's default.
 # ``reasoning_effort`` is defined by the API itself, so an OpenAI-compatible
@@ -815,6 +830,18 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             pagination=OpenAIModelPagination(),
         ),
     ),
+    # Agnes AI's page documents ``chat_template_kwargs.enable_thinking``, and
+    # this profile used to send it. The host in front of the models is a
+    # LiteLLM proxy over SGLang, and it was *probed* speaking
+    # ``reasoning_effort``: on 2026-09-22 a bad value came back as a 400 naming
+    # ``none|low|medium|high|max``, and 44,182 request bodies since then went
+    # out with ``reasoning_effort: "max"`` through a custom provider on this
+    # same base URL, with no rejection; reasoning came back on 41,500 of its
+    # 41,504 successes. So
+    # the built-in now sends exactly those bytes: the same effort table the
+    # custom provider learned, ``none`` for OFF, and the same ``<think>``
+    # replay. On 2026-09-26 ``reasoning_effort: "none"`` answered 200 with no
+    # reasoning, and a bogus value was refused with the full SGLang literal.
     "agnes": OpenAIChatProfile(
         _policy(
             "AGNES",
@@ -823,7 +850,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
-        ChatTemplateReasoning(field="enable_thinking"),
+        NamedEffortReasoning(_AGNES_EFFORTS, disabled_value="none"),
     ),
     "wandb": OpenAIChatProfile(
         _policy(

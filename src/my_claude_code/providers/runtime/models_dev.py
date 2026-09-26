@@ -788,12 +788,14 @@ PROVIDER_ID_ALIASES: dict[str, str] = {
 #                                     about a deployment we cannot inspect.
 #                                     Wrong in that direction is worse than
 #                                     unknown, which behaves exactly as today.
-# These six have no models.dev bucket at all: agnes, commandcode,
-# featherless, nous_portal, qwencloud_coding, sambanova. For them -- and only
-# for them -- the approximate cross-provider tier below supplies an answer;
-# see ``_cross_provider_match``. A provider that HAS a bucket is still never
-# allowed to read outside it, because a wrong same-name row would then
-# override its own provider's authoritative one.
+# These five have no models.dev bucket at all: commandcode, featherless,
+# nous_portal, qwencloud_coding, sambanova. (agnes used to be on this list;
+# models.dev has since added an "agnes" bucket whose ``api`` is exactly
+# AGNES_DEFAULT_BASE, so it resolves under its own id with no alias.) For
+# them -- and only for them -- the approximate cross-provider tier below
+# supplies an answer; see ``_cross_provider_match``. A provider that HAS a
+# bucket is still never allowed to read outside it, because a wrong same-name
+# row would then override its own provider's authoritative one.
 
 
 def _single_tagged_variant[T](bucket: Mapping[str, T], model_id: str) -> T | None:

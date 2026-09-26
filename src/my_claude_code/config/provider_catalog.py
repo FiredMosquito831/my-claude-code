@@ -632,6 +632,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_url="https://agnes-ai.com/",
         credential_attr="agnes_api_key",
         default_base_url=AGNES_DEFAULT_BASE,
+        base_url_attr="agnes_base_url",
         proxy_attr="agnes_proxy",
         group="gateway",
     ),
