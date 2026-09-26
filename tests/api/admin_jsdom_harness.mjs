@@ -9655,21 +9655,57 @@ const inflight = {};
     navLabel: doc.querySelector('.nav-link[data-view="requests"]').textContent,
   };
   // Timers tick between refreshes while the panel polls, and stop with it.
+  //
+  // Driven by a manual clock, not by real time: the page's one-second ticker
+  // is captured as it is armed and run explicitly after the clock is moved on.
+  // Waiting 1150 ms of wall time for a 1000 ms interval failed whenever a
+  // loaded CI runner fired the interval late, and a longer sleep would only
+  // make that rarer. The page reads its clock through performance.now(), so
+  // that is what is advanced; every other timer keeps the real one.
+  const realSetInterval = window.setInterval.bind(window);
+  const realClearInterval = window.clearInterval.bind(window);
+  const liveIntervals = new Map();
+  window.setInterval = (fn, ms, ...args) => {
+    const id = realSetInterval(fn, ms, ...args);
+    liveIntervals.set(id, { fn, ms });
+    return id;
+  };
+  window.clearInterval = (id) => {
+    liveIntervals.delete(id);
+    return realClearInterval(id);
+  };
+  const realNow = window.performance.now.bind(window.performance);
+  let clockOffset = 0;
+  window.performance.now = () => realNow() + clockOffset;
+  const secondTickers = () => [...liveIntervals.values()].filter((t) => t.ms === 1000);
+  const advance = (ms) => {
+    clockOffset += ms;
+    secondTickers().forEach((t) => t.fn());
+  };
   const setInterval_ = async (value) => {
     $("reqInflightInterval").value = value;
     $("reqInflightInterval").dispatchEvent(new window.Event("change", { bubbles: true }));
     await wait(80);
   };
-  await setInterval_("30000");
-  const ageBefore = rowsShown()[4].querySelector(".inflight-age").textContent;
-  await wait(1150);
-  inflight.five.ageBefore = ageBefore;
-  inflight.five.ageAfter = rowsShown()[4].querySelector(".inflight-age").textContent;
-  await setInterval_("0");
-  const frozen = rowsShown()[4].querySelector(".inflight-age").textContent;
-  await wait(1150);
-  inflight.five.ageFrozenWhenOff =
-    frozen === rowsShown()[4].querySelector(".inflight-age").textContent;
+  try {
+    await setInterval_("30000");
+    inflight.five.tickersWhenOn = secondTickers().length;
+    const ageBefore = rowsShown()[4].querySelector(".inflight-age").textContent;
+    advance(1100);
+    inflight.five.ageBefore = ageBefore;
+    inflight.five.ageAfter = rowsShown()[4].querySelector(".inflight-age").textContent;
+    await setInterval_("0");
+    inflight.five.tickersWhenOff = secondTickers().length;
+    const frozen = rowsShown()[4].querySelector(".inflight-age").textContent;
+    advance(1100);
+    inflight.five.ageFrozenWhenOff =
+      frozen === rowsShown()[4].querySelector(".inflight-age").textContent;
+  } finally {
+    window.setInterval = realSetInterval;
+    window.clearInterval = realClearInterval;
+    // The shifted clock stays: it only ever moved forward, and putting it back
+    // would make the next reading appear to have happened in the past.
+  }
 
   // Second snapshot: row 1 slept (waited_s 2 -> 6.5), row 2 did not.
   const mutationsBefore = statusMutations.length;

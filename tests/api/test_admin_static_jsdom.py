@@ -6073,9 +6073,18 @@ def test_inflight_panel_derives_backing_off_from_two_snapshots(rendered) -> None
 def test_inflight_panel_timers_tick_between_refreshes_and_stop_when_off(
     rendered,
 ) -> None:
+    """Driven by a manual clock in the harness: the page's one-second ticker is
+    captured when polling turns it on and run after the clock moves 1.1 s --
+    never by sleeping and hoping the interval fired (that failed on loaded CI
+    runners with ``'5s' != '5s'``)."""
+
     five = rendered["inflight"]["five"]
 
+    assert five["tickersWhenOn"] == 1
+    # 1.1 s on a whole-second display always changes the reading, whatever
+    # real time had already passed since the snapshot.
     assert five["ageBefore"] != five["ageAfter"]
+    assert five["tickersWhenOff"] == 0
     assert five["ageFrozenWhenOff"] is True
 
 
