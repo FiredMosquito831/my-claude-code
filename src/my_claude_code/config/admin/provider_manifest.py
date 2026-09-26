@@ -341,6 +341,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
             "Defaults to https://hyper.charm.land/v1."
         ),
     },
+    "BAI_API_KEY": {
+        "label": "B.AI API Key",
+        "description": (
+            "B.AI OpenAI-compatible gateway API key for api.b.ai/v1. Create one "
+            "on the API Key Management page at https://chat.b.ai/key."
+        ),
+    },
+    "BAI_BASE_URL": {
+        "description": (
+            "B.AI OpenAI-compatible Chat Completions base URL. "
+            "Defaults to https://api.b.ai/v1."
+        ),
+    },
     "QWENCLOUD_API_KEY": {
         "label": "QwenCloud Token Plan API Key",
         "description": (

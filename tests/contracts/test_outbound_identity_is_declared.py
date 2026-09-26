@@ -64,14 +64,34 @@ def _header_names(provider_id: str) -> frozenset[str]:
     return frozenset(name.lower() for name in request.headers)
 
 
+#: Profiles added after the recording, each mapped to the recorded profile
+#: whose header names it must send exactly. The baseline file itself is a
+#: frozen recording and is not rewritten; a new profile that declares no
+#: identity is held to the set a recorded identity-less profile sends, which
+#: is the same strength of check an entry in the file would give it.
+ADDED_SINCE_RECORDING: dict[str, str] = {
+    # 7.58.0: B.AI, the generic custom-provider profile under its own name.
+    "bai": "hypercharm",
+}
+
+
+def _recorded(provider_id: str) -> frozenset[str]:
+    return frozenset(BASELINE[ADDED_SINCE_RECORDING.get(provider_id, provider_id)])
+
+
 def test_the_baseline_still_covers_every_profile() -> None:
     """A profile added since the recording would slip through unchecked."""
-    assert set(BASELINE) == set(OPENAI_CHAT_PROFILES)
+    assert set(BASELINE).isdisjoint(ADDED_SINCE_RECORDING)
+    assert set(BASELINE) | set(ADDED_SINCE_RECORDING) == set(OPENAI_CHAT_PROFILES)
+    for provider_id, recorded_as in ADDED_SINCE_RECORDING.items():
+        assert provider_id not in IDENTIFIED
+        assert recorded_as in BASELINE
+        assert recorded_as not in IDENTIFIED
 
 
 @pytest.mark.parametrize("provider_id", sorted(OPENAI_CHAT_PROFILES))
 def test_no_profile_sends_a_header_it_did_not_declare(provider_id: str) -> None:
-    before = frozenset(BASELINE[provider_id])
+    before = _recorded(provider_id)
     after = _header_names(provider_id)
     expected = before | ADDED_NAMES if provider_id in IDENTIFIED else before
     assert after == expected, (

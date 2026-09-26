@@ -399,13 +399,13 @@ def test_the_restart_list_is_exactly_the_fields_that_physically_need_one() -> No
 
 
 def test_every_hot_field_has_a_proof_here() -> None:
-    """115 fields made hot; each is in exactly one proof table above."""
+    """116 fields made hot; each is in exactly one proof table above."""
 
     for key in HOT_KEYS:
         assert key in FIELD_BY_KEY, key
         assert FIELD_BY_KEY[key].restart_required is False, key
-    assert len(HOT_KEYS) == 115
-    assert len(ROTATION_KEYS) == 51
+    assert len(HOT_KEYS) == 116
+    assert len(ROTATION_KEYS) == 52
     for key in HOT_KEYS:
         assert "Requires restart" not in FIELD_BY_KEY[key].description, key
 

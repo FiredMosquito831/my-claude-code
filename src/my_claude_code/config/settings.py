@@ -632,6 +632,13 @@ class Settings(BaseSettings):
         validation_alias="HYPERCHARM_BASE_URL",
     )
 
+    # ==================== B.AI Config ====================
+    bai_api_key: str = Field(default="", validation_alias="BAI_API_KEY")
+    bai_base_url: str = Field(
+        default="https://api.b.ai/v1",
+        validation_alias="BAI_BASE_URL",
+    )
+
     # ==================== QwenCloud Token Plan (OpenAI-compatible) ====================
     qwencloud_api_key: str = Field(default="", validation_alias="QWENCLOUD_API_KEY")
 
@@ -1478,6 +1485,7 @@ class Settings(BaseSettings):
     tokenrouter_proxy: str = Field(default="", validation_alias="TOKENROUTER_PROXY")
     nararoute_proxy: str = Field(default="", validation_alias="NARAROUTE_PROXY")
     hypercharm_proxy: str = Field(default="", validation_alias="HYPERCHARM_PROXY")
+    bai_proxy: str = Field(default="", validation_alias="BAI_PROXY")
     xai_proxy: str = Field(default="", validation_alias="XAI_PROXY")
     together_proxy: str = Field(default="", validation_alias="TOGETHER_PROXY")
     deepinfra_proxy: str = Field(default="", validation_alias="DEEPINFRA_PROXY")

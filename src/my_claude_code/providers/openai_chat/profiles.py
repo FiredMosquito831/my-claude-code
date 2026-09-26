@@ -925,6 +925,24 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         OPENAI_STANDARD_REASONING,
     ),
+    # B.AI is a reseller over many vendors' models (its 429s name Tencent
+    # Cloud and Zhipu), so what a model takes in ``reasoning_effort`` differs
+    # model by model -- glm-5.3-flash takes ``low|high|max``, qwen took
+    # ``xhigh`` -- and a host-wide probe on 2026-09-22 measured nothing. That
+    # is the per-model gate's and reject-and-remember's job, not a
+    # provider-wide table's. So this is the generic profile a custom provider
+    # on https://api.b.ai/v1 runs on today, field for field (only the name in
+    # log lines differs): ``<think>`` replay, the standard four-rung field, no
+    # default output cap. ``tests/providers/test_bai.py`` pins the bodies equal.
+    "bai": OpenAIChatProfile(
+        _policy(
+            "BAI",
+            ReasoningReplayMode.THINK_TAGS,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+        ),
+        OPENAI_STANDARD_REASONING,
+    ),
     "tokenrouter": OpenAIChatProfile(
         _policy(
             "TOKENROUTER",

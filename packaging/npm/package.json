@@ -1,6 +1,6 @@
 {
   "name": "@firedmosquito831/my-claude-code",
-  "version": "7.57.1",
+  "version": "7.58.0",
   "description": "My Claude Code (MCC): a local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents, with 57 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance. This npm package installs and launches the Python server.",
   "license": "AGPL-3.0-or-later",
   "author": "FiredMosquito831",
