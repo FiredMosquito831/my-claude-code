@@ -16811,6 +16811,9 @@ const reqState = {
   // the stats payload the cards were last drawn from so they can be redrawn
   // with them.
   ttft: null,
+  // The successes-with-no-answer breakdown, which arrives the same way and
+  // feeds the Success rate card's note and its own panel.
+  noAnswer: null,
   lastStats: null,
   pageRows: 0,
   lastCaptureBodies: null,
@@ -16941,6 +16944,10 @@ async function loadRequestsView() {
   // `requests.ttft_ms`, measured at 0.69-0.99 s over 331,086 rows on a 4.5 GB
   // log against the tenth of a second the rollup-served stats cost.
   loadRequestTtftPanel(loadId, params);
+  // Off the paint path for the same reason again: the no-answer label reads
+  // columns no index carries, over every success in the window -- 0.3 s for a
+  // day and 5.2 s all time on an 8.4 GB log.
+  loadRequestNoAnswerPanel(loadId, params);
   // Off the paint path for the same reason again: neither session nor folder
   // is a rollup dimension, so these two tables are a row query, and the
   // rollup-served stats the cards are drawn from stay exactly as they were.
@@ -16987,6 +16994,7 @@ async function loadRequestsView() {
     renderRequestOriginBreakdowns(null);
     byId("reqKeyBreakdown").innerHTML = "";
     byId("reqCancelledBreakdown").innerHTML = "";
+    byId("reqNoAnswerBreakdown").innerHTML = "";
     byId("reqTopErrors").innerHTML = "";
     byId("reqFallbackRoutes").innerHTML = "";
     byId("reqDivertedRoutes").innerHTML = "";
@@ -17392,7 +17400,7 @@ function renderRequestStatsCards(stats) {
       stats.total,
       atRetentionCap(stats) ? "at the storage cap — older ones deleted" : null,
     ],
-    ["Success rate", `${successRate}%`],
+    ["Success rate", `${successRate}%`, noAnswerBreakdownNote(reqState.noAnswer)],
     ["Error rate", `${((stats.error_rate || 0) * 100).toFixed(1)}%`],
     ["Served by fallback", formatFallbackShare(stats)],
     // Transparent stream recovery: retries and continuations a provider took
@@ -17552,6 +17560,97 @@ async function loadRequestTtftPanel(loadId, params) {
     reqState.ttft = { error: error.message };
   }
   if (reqState.lastStats) renderRequestStatsCards(reqState.lastStats);
+}
+
+/** Fetch the successes-with-no-answer breakdown and paint it when it lands.
+ *
+ * Its own route rather than a key of `stats`, where the cancelled breakdown
+ * rides: cancelled rows are rare and indexed, successes are nearly every row
+ * and the label reads columns no index carries. Awaited by nobody, like the
+ * TTFT panel beside it, and cached per filter for 5 s by the store.
+ */
+async function loadRequestNoAnswerPanel(loadId, params) {
+  reqState.noAnswer = null;
+  let panel;
+  try {
+    panel = await api(`/admin/api/requests/no-answer?${params}`);
+  } catch (error) {
+    if (loadId !== reqState.loadId) return;
+    // Not rethrown, for the TTFT panel's reason: a readout that failed says
+    // so in its own panel and leaves the rest of the page alone.
+    panel = { error: error.message };
+  }
+  if (loadId !== reqState.loadId) return;
+  reqState.noAnswer = panel;
+  renderRequestNoAnswerBreakdown(panel);
+  if (reqState.lastStats) renderRequestStatsCards(reqState.lastStats);
+}
+
+/* The one-line version, under the Success rate card, so a rate of 99.9% is
+ * never on the page without the handful of those successes that said nothing.
+ * Absent when none did, and absent until the panel has answered. Absent too
+ * while the page is narrowed to one success sub-label: the breakdown still
+ * counts both, and "no answer 3" under a card of 2 stored requests would read
+ * as a contradiction. The panel below says the same numbers with their
+ * denominator. */
+function noAnswerBreakdownNote(breakdown) {
+  if (!breakdown || breakdown.enabled === false || breakdown.error) return null;
+  if (breakdown.selected) return null;
+  if (!Number(breakdown.total)) return null;
+  const counts = breakdown.counts || {};
+  const parts = SUCCESS_REASON_ORDER.filter((reason) => Number(counts[reason])).map(
+    (reason) =>
+      `${SUCCESS_REASON_LABELS[reason]} ` +
+      formatAnalyticsNumber(Number(counts[reason])),
+  );
+  return `no answer ${formatAnalyticsNumber(Number(breakdown.total))}: ${parts.join(" · ")}`;
+}
+
+/* The successes that carried no answer, split into the two shapes.
+ *
+ * Both rows always show, including a zero, for the cancelled panel's reason.
+ * The share is of every success in the window -- the population the Success
+ * rate card counts -- and the footer row says how many that was, so the two
+ * labelled rows add up to what the panel claims and nothing else. */
+function renderRequestNoAnswerBreakdown(breakdown) {
+  const container = byId("reqNoAnswerBreakdown");
+  if (!container) return;
+  container.innerHTML = "";
+  const usable =
+    breakdown && breakdown.enabled !== false && !breakdown.error && breakdown.counts;
+  const successes = usable ? Number(breakdown.successes || 0) : 0;
+  const counts = usable ? breakdown.counts : {};
+  const share = (count) =>
+    successes ? `${((count / successes) * 100).toFixed(2)}%` : "—";
+  const rows = !usable || !successes
+    ? []
+    : SUCCESS_REASON_ORDER.map((reason) => {
+        const count = Number(counts[reason] || 0);
+        return [
+          SUCCESS_REASON_LABELS[reason],
+          formatAnalyticsNumber(count),
+          share(count),
+          SUCCESS_REASON_EXPLANATIONS[reason],
+        ];
+      });
+  if (rows.length) {
+    const total = Number(breakdown.total || 0);
+    rows.push([
+      "no answer, in all",
+      formatAnalyticsNumber(total),
+      share(total),
+      `Of ${formatAnalyticsNumber(successes)} successful requests in this range.`,
+    ]);
+  }
+  container.appendChild(
+    analyticsTable(
+      ["What came back", "Requests", "Share of successes", "What it means"],
+      rows,
+      breakdown && breakdown.error
+        ? "Could not count them right now."
+        : "No successful requests in this range.",
+    ),
+  );
 }
 
 /* Reported and estimated are rendered as two numbers and are never added
@@ -18719,6 +18818,8 @@ function buildStatusCell(row) {
   td.appendChild(text);
   const chip = buildCancelReasonChip(row);
   if (chip) td.appendChild(chip);
+  const successChip = buildSuccessReasonChip(row);
+  if (successChip) td.appendChild(successChip);
   return td;
 }
 
@@ -19104,6 +19205,7 @@ async function openRequestDetail(requestId) {
     meta.append(dt, dd);
   });
   appendCancelReasonDetail(meta, row);
+  appendSuccessReasonDetail(meta, row);
   appendRequestCostDetail(meta, row);
   appendToolCatalogueDetail(meta, row);
   renderRequestRouteTrace(row);
@@ -19307,6 +19409,24 @@ function appendCancelReasonDetail(meta, row) {
     detail.textContent = sentence;
     dd.appendChild(detail);
   }
+  meta.append(dt, dd);
+}
+
+/* What this success carried instead of an answer, the way the cancelled
+ * line above says why a request was cancelled: the list's chip plus one
+ * sentence. Absent on every success that answered and on every other status. */
+function appendSuccessReasonDetail(meta, row) {
+  const chip = buildSuccessReasonChip(row);
+  if (!chip) return;
+  const dt = document.createElement("dt");
+  dt.textContent = "No answer";
+  const dd = document.createElement("dd");
+  dd.className = "req-success-reason";
+  dd.appendChild(chip);
+  const detail = document.createElement("p");
+  detail.className = "req-success-reason-note";
+  detail.textContent = SUCCESS_REASON_EXPLANATIONS[row.success_reason] || "";
+  dd.appendChild(detail);
   meta.append(dt, dd);
 }
 
@@ -20778,6 +20898,47 @@ function buildCancelReasonChip(row) {
   chip.dataset.reason = String(row.cancel_reason);
   chip.textContent = label;
   chip.title = cancelReasonSentence(row);
+  return chip;
+}
+
+/* What each of the two kinds of "success with no answer" is called.
+ *
+ * Mirrors `core/success_reasons.py` exactly, and
+ * `test_the_dashboard_and_the_store_agree_on_the_success_sub_labels` keeps the
+ * two spellings one. Derived from columns the log already had, so old rows
+ * carry one too. */
+const SUCCESS_REASON_LABELS = {
+  thought_only: "thought only",
+  empty: "empty",
+};
+
+const SUCCESS_REASON_EXPLANATIONS = {
+  thought_only:
+    "The model reasoned and the turn ended there: no text and no tool call" +
+    " reached the client, so it received a valid message with no answer in it.",
+  empty:
+    "The turn ended cleanly with nothing in it: no text, no tool call, no" +
+    " reasoning and no output tokens.",
+};
+
+const SUCCESS_REASON_ORDER = ["thought_only", "empty"];
+
+/** The chip words for a success's sub-label, or "" for every other row. */
+function successReasonLabel(row) {
+  const reason = row && row.success_reason;
+  if (!reason) return "";
+  return SUCCESS_REASON_LABELS[reason] || String(reason);
+}
+
+/** The success chip, drawn by one function for the list and the modal. */
+function buildSuccessReasonChip(row) {
+  const label = successReasonLabel(row);
+  if (!label) return null;
+  const chip = document.createElement("span");
+  chip.className = "success-reason-chip";
+  chip.dataset.reason = String(row.success_reason);
+  chip.textContent = label;
+  chip.title = SUCCESS_REASON_EXPLANATIONS[row.success_reason] || "";
   return chip;
 }
 

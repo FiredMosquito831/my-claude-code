@@ -179,7 +179,6 @@ from my_claude_code.core.async_stacks import (
     DEFAULT_FRAME_LIMIT,
     DEFAULT_TASK_LIMIT,
 )
-from my_claude_code.core.cancelled_reasons import STATUS_FILTER_VALUES
 from my_claude_code.core.client_fingerprint import (
     NON_REGISTRY_HARNESS_LABELS,
 )
@@ -203,6 +202,7 @@ from my_claude_code.core.stuck_requests import (
     DEFAULT_REQUEST_LIMIT,
     stuck_report,
 )
+from my_claude_code.core.success_reasons import REQUEST_STATUS_FILTER_VALUES
 from my_claude_code.core.tier_refs import tier_alias_by_route_env_var
 from my_claude_code.providers.anthropic_oauth.constants import (
     INFERENCE_SCOPE as ANTHROPIC_INFERENCE_SCOPE,
@@ -3545,15 +3545,16 @@ def _request_log_store_or_none(
 
 
 def _validate_request_log_status(status: str | None) -> None:
-    """Reject an unknown status, including an unknown cancelled sub-label.
+    """Reject an unknown status, including an unknown sub-label.
 
     The three original values are unchanged and still mean exactly what they
-    meant; ``cancelled:<sub-label>`` is added beside them, so every saved
-    link and every scripted export keeps working and ``status=cancelled``
-    still selects all four.
+    meant; ``cancelled:<sub-label>`` and ``success:<sub-label>`` are added
+    beside them, so every saved link and every scripted export keeps working,
+    ``status=cancelled`` still selects all four and ``status=success`` every
+    success.
     """
 
-    if status is not None and status not in STATUS_FILTER_VALUES:
+    if status is not None and status not in REQUEST_STATUS_FILTER_VALUES:
         raise HTTPException(status_code=422, detail="Invalid status filter")
 
 
@@ -3755,6 +3756,56 @@ async def request_log_ttft(
     _validate_request_log_local(local)
     result = await asyncio.to_thread(
         store.ttft_percentiles,
+        provider=provider,
+        model=model,
+        status=status,
+        endpoint=endpoint,
+        key=key,
+        since=since,
+        until=until,
+        q=q,
+        local=local,
+        harness=harness,
+        session=session,
+        folder=folder,
+    )
+    return {"enabled": True, **result}
+
+
+@router.get("/admin/api/requests/no-answer")
+async def request_log_no_answer(
+    request: Request,
+    provider: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+    endpoint: str | None = None,
+    key: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    q: str | None = None,
+    local: str | None = None,
+    harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """How many successes carried no answer, split into the two shapes.
+
+    Its own route rather than a key of ``stats`` -- where the cancelled
+    breakdown lives -- because it has to read every success in the window,
+    and nothing it reads is indexed: 0.3 s for a day and 5.2 s all time on an
+    8.4 GB log, against the ~0.1 s the rollup-served stats cost. The
+    dashboard asks for it off the paint path, like the TTFT and cost panels.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False}
+    _validate_request_log_status(status)
+    _validate_request_log_local(local)
+    result = await asyncio.to_thread(
+        store.no_answer_breakdown,
         provider=provider,
         model=model,
         status=status,

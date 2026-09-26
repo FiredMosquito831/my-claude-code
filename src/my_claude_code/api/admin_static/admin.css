@@ -3432,6 +3432,38 @@ details.turn-pane > summary:focus-visible {
   line-height: 1.45;
 }
 
+/* The same chip for a success that carried no answer (7.57.0). */
+.success-reason-chip {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 1px 7px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.success-reason-chip[data-reason="empty"] {
+  border-color: var(--line-strong);
+  color: var(--muted);
+}
+
+.req-success-reason {
+  display: block;
+}
+
+.req-success-reason-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  /* The modal's <dd> breaks anywhere, for hashes and ids; a sentence should
+     wrap between words. */
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
 /* ---- Which tools array the request carried (7.40.0) ---- */
 
 .req-tool-catalogue {

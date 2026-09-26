@@ -263,7 +263,9 @@ def split_status_filter(status: str | None) -> tuple[str | None, str | None]:
     return head, tail
 
 
-#: Every value the ``status`` filter accepts, old ones first and unchanged.
+#: The three statuses and the cancelled sub-labels, old ones first and
+#: unchanged. ``success_reasons.REQUEST_STATUS_FILTER_VALUES`` appends the two
+#: success sub-labels and is what the routes validate against.
 STATUS_FILTER_VALUES: tuple[str, ...] = (
     "success",
     "error",

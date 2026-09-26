@@ -5584,6 +5584,136 @@ def test_jsdom_the_latency_panel_keeps_hang_ups_out_of_the_failed_row(
     assert [row[3] for row in rows] == ["66.7%", "20.0%", "13.3%"]
 
 
+# ------------------------------------------------- success sub-labels (7.57.0)
+#
+# "Success" keeps meaning the client received a valid message. The few that
+# carried no answer say which of two shapes they were, on every surface the
+# cancelled sub-label reaches.
+
+
+def test_jsdom_a_no_answer_success_row_carries_its_chip(rendered) -> None:
+    rows = rendered["successViews"]["rows"]
+
+    assert [row["chip"] for row in rows] == [
+        "thought only",
+        "empty",
+        # An ordinary success carries no chip at all, not an empty one.
+        None,
+        None,
+    ]
+    assert [row["reason"] for row in rows[:2]] == ["thought_only", "empty"]
+    # The status word is unchanged and still in its own cell.
+    assert [row["status"] for row in rows] == [
+        "success",
+        "success",
+        "success",
+        "cancelled",
+    ]
+    # A cancelled row keeps its own chip and gains none.
+    assert rows[3]["cancelChip"] == "stopped mid-answer"
+    assert [row["cancelChip"] for row in rows[:3]] == [None, None, None]
+    assert "The model reasoned and the turn ended there" in rows[0]["title"]
+    assert "nothing in it" in rows[1]["title"]
+
+
+def test_jsdom_the_status_filter_offers_the_two_success_sub_labels(rendered) -> None:
+    options = rendered["successViews"]["filterOptions"]
+    values = [value for value, _ in options]
+
+    # Every old value is still there, in its old order.
+    old = [value for value in values if not value.startswith("success:")]
+    assert old == [
+        "",
+        "success",
+        "error",
+        "cancelled",
+        "cancelled:client_gave_up_waiting",
+        "cancelled:committed_then_silent",
+        "cancelled:stopped_mid_answer",
+        "cancelled:server_restart",
+    ]
+    assert values[values.index("success") + 1 : values.index("success") + 3] == [
+        "success:thought_only",
+        "success:empty",
+    ]
+    assert dict(options)["success:thought_only"] == (
+        "success — no answer, thought only"
+    )
+    assert dict(options)["success:empty"] == "success — no answer, empty"
+
+
+def test_jsdom_the_modal_names_it_in_a_line_and_a_sentence(rendered) -> None:
+    views = rendered["successViews"]
+
+    assert "No answer" in views["detailLabels"]
+    assert views["modalChip"] == "thought only"
+    assert views["modalSentence"].startswith(
+        "The model reasoned and the turn ended there"
+    )
+    # A cancelled request's modal says why it was cancelled, and nothing here.
+    assert "Cancelled because" in views["cancelledModalLabels"]
+    assert "No answer" not in views["cancelledModalLabels"]
+
+
+def test_jsdom_the_page_load_asks_for_the_breakdown_with_its_filters(
+    rendered,
+) -> None:
+    views = rendered["successViews"]
+
+    assert len(views["noAnswerUrls"]) == 1
+    # The page's own filters ride along, sub-label included.
+    assert "status=success%3Athought_only" in views["noAnswerUrls"][0]
+    assert "status=success%3Athought_only" in views["listUrls"][-1]
+
+
+def test_jsdom_the_no_answer_panel_sums_to_what_it_claims(rendered) -> None:
+    panel = rendered["successViews"]["panel"]
+
+    assert panel["headers"] == [
+        "What came back",
+        "Requests",
+        "Share of successes",
+        "What it means",
+    ]
+    assert [row[0] for row in panel["rows"]] == [
+        "thought only",
+        "empty",
+        "no answer, in all",
+    ]
+    assert [row[1] for row in panel["rows"]] == ["199", "2", "201"]
+    # Shares of the 116,679 successes, two decimals because they are small.
+    assert [row[2] for row in panel["rows"]] == ["0.17%", "0.00%", "0.17%"]
+    assert panel["rows"][2][3] == "Of 116,679 successful requests in this range."
+
+
+def test_jsdom_the_success_rate_card_carries_the_one_line_version(rendered) -> None:
+    card = rendered["successViews"]["successCard"]
+
+    assert card is not None
+    assert card["note"] == "no answer 201: thought only 199 · empty 2"
+
+
+def test_jsdom_a_page_narrowed_to_one_label_keeps_both_rows_and_drops_the_note(
+    rendered,
+) -> None:
+    """The breakdown still counts both; the card would contradict itself."""
+
+    views = rendered["successViews"]
+
+    assert [row[1] for row in views["selectedPanel"]["rows"]] == ["199", "2", "201"]
+    assert views["selectedCard"]["note"] is None
+
+
+def test_jsdom_a_range_with_none_keeps_the_rows_and_drops_the_note(rendered) -> None:
+    views = rendered["successViews"]
+
+    assert [row[1] for row in views["zeroPanel"]["rows"]] == ["0", "0", "0"]
+    assert views["zeroCard"]["note"] is None
+    # The log being off is a different answer from nothing being counted.
+    assert views["disabledPanel"]["rows"] == [["No successful requests in this range."]]
+    assert views["disabledCard"] is None or views["disabledCard"]["note"] is None
+
+
 # --------------------------------------------------------- tool catalogue (7.40.0)
 
 

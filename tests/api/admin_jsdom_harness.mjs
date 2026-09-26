@@ -2443,6 +2443,37 @@ const ROUTES = {
      16.7 s, then 296.7 s of nothing, then the client's 300 s idle watchdog.
      `output_chars` is 0 -- MCC had committed a response and gone quiet, which
      is neither "the user pressed Esc" nor "nothing ever arrived". */
+  /* 7.57.0: a success that carried reasoning and nothing else, and the
+     breakdown route the Analytics panel and the Success rate card read. */
+  "/admin/api/requests/no-answer": {
+    enabled: true,
+    successes: 116679,
+    total: 201,
+    counts: { thought_only: 199, empty: 2 },
+    selected: null,
+  },
+  "/admin/api/requests/req-thought": {
+    id: "req-thought",
+    harness: "claude",
+    headers: {},
+    ts_iso: "2026-09-20T05:25:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "custom_agnes",
+    key_label: "AGNES_API_KEY",
+    requested_model: "claude-fable-5.1",
+    resolved_model: "custom_agnes/agnes-3.0-flash",
+    status: "success",
+    cancel_reason: null,
+    success_reason: "thought_only",
+    tokens_in: 120,
+    tokens_out: 4200,
+    ttft_ms: 900,
+    duration_ms: 185000,
+    output_chars: 0,
+    thinking_chars: 18800,
+    tool_call_count: null,
+  },
   "/admin/api/requests/req-cancelled": {
     id: "req-cancelled",
     harness: "claude",
@@ -8769,6 +8800,154 @@ const cancelledViews = {};
     .find((card) => card.label === "Cancelled");
 }
 
+/* ------------------------------------------------ success sub-labels
+   7.57.0: "success" keeps meaning the client got a valid message; the few
+   successes that carried no answer say which of two shapes they were. Every
+   surface through the real renderer: the chip, the modal line, the filter's
+   options, the Analytics panel and the Success rate card's note -- the last
+   two through the page's own load, so the route and its filters are real. */
+const successViews = {};
+{
+  const body = doc.getElementById("reqTableBody");
+  const baseRow = {
+    ts_iso: "2026-09-20T05:25:00Z",
+    endpoint: "/v1/messages",
+    provider: "custom_agnes",
+    key_label: "AGNES_API_KEY",
+    resolved_model: "custom_agnes/agnes-3.0-flash",
+    tokens_in: 120,
+    ttft_ms: 900,
+    duration_ms: 185000,
+  };
+  window.eval(
+    `renderRequestsTable(${JSON.stringify([
+      {
+        ...baseRow,
+        id: "s-thought",
+        status: "success",
+        success_reason: "thought_only",
+        thinking_chars: 18800,
+        tokens_out: 4200,
+      },
+      { ...baseRow, id: "s-empty", status: "success", success_reason: "empty" },
+      // An ordinary success: no chip at all, not an empty one.
+      {
+        ...baseRow,
+        id: "s-fine",
+        status: "success",
+        success_reason: null,
+        output_chars: 900,
+      },
+      // A cancelled row keeps its own chip and gains none.
+      {
+        ...baseRow,
+        id: "s-cut",
+        status: "cancelled",
+        cancel_reason: "stopped_mid_answer",
+        success_reason: null,
+        output_chars: 140,
+      },
+    ])})`,
+  );
+  successViews.rows = Array.from(body.querySelectorAll("tr")).map((tr) => {
+    const chip = tr.querySelector(".success-reason-chip");
+    const cancel = tr.querySelector(".cancel-reason-chip");
+    return {
+      status: (tr.querySelector(".req-status-text") || {}).textContent,
+      chip: chip ? chip.textContent : null,
+      reason: chip ? chip.dataset.reason : null,
+      title: chip ? chip.title : null,
+      cancelChip: cancel ? cancel.textContent : null,
+    };
+  });
+
+  successViews.filterOptions = Array.from(
+    doc.getElementById("reqFilterStatus").querySelectorAll("option"),
+  ).map((option) => [option.value, option.textContent.replace(/\s+/g, " ").trim()]);
+
+  // --- the modal, through the real loader
+  await window.eval('openRequestDetail("req-thought")');
+  await settle();
+  successViews.detailLabels = Array.from(
+    doc.querySelectorAll("#reqDetailMeta dt"),
+  ).map((el) => el.textContent);
+  successViews.modalChip = (
+    doc.querySelector("#reqDetailMeta .success-reason-chip") || {}
+  ).textContent;
+  successViews.modalSentence = (
+    doc.querySelector("#reqDetailMeta .req-success-reason-note") || {}
+  ).textContent;
+  window.eval("closeRequestDetail()");
+  // The cancelled request's modal carries no success line.
+  await window.eval('openRequestDetail("req-cancelled")');
+  await settle();
+  successViews.cancelledModalLabels = Array.from(
+    doc.querySelectorAll("#reqDetailMeta dt"),
+  ).map((el) => el.textContent);
+  window.eval("closeRequestDetail()");
+
+  // --- the panel and the card note, through the page's own load
+  const readPanel = () => ({
+    headers: Array.from(doc.querySelectorAll("#reqNoAnswerBreakdown thead th")).map(
+      (th) => th.textContent,
+    ),
+    rows: Array.from(doc.querySelectorAll("#reqNoAnswerBreakdown tbody tr")).map(
+      (tr) => Array.from(tr.children).map((td) => td.textContent),
+    ),
+  });
+  const readSuccessCard = () =>
+    Array.from(doc.querySelectorAll("#reqStatsCards .requests-card"))
+      .map((card) => ({
+        label: (card.querySelector("span") || {}).textContent,
+        note: (card.querySelector("small") || {}).textContent || null,
+      }))
+      .find((card) => card.label === "Success rate") || null;
+  doc.getElementById("reqFilterSearch").value = "";
+  doc.getElementById("reqFilterStatus").value = "success:thought_only";
+  fetchUrls.length = 0;
+  await window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  successViews.panel = readPanel();
+  successViews.successCard = readSuccessCard();
+  successViews.noAnswerUrls = fetchUrls.filter((url) =>
+    url.startsWith("/admin/api/requests/no-answer"),
+  );
+  successViews.listUrls = fetchUrls.filter((url) =>
+    url.startsWith("/admin/api/requests?"),
+  );
+
+  // --- narrowed to one sub-label, as the real route echoes it: the panel
+  // still shows both, and the card drops its note rather than printing a
+  // count larger than the card it sits under
+  const saved = ROUTES["/admin/api/requests/no-answer"];
+  ROUTES["/admin/api/requests/no-answer"] = { ...saved, selected: "thought_only" };
+  await window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  successViews.selectedPanel = readPanel();
+  successViews.selectedCard = readSuccessCard();
+
+  // --- nothing was a no-answer success in this range: zero rows stay
+  ROUTES["/admin/api/requests/no-answer"] = {
+    enabled: true,
+    successes: 40,
+    total: 0,
+    counts: { thought_only: 0, empty: 0 },
+    selected: null,
+  };
+  doc.getElementById("reqFilterStatus").value = "";
+  await window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  successViews.zeroPanel = readPanel();
+  successViews.zeroCard = readSuccessCard();
+  // --- the log switched off: the panel says there is nothing, and no note
+  ROUTES["/admin/api/requests/no-answer"] = { enabled: false };
+  await window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  successViews.disabledPanel = readPanel();
+  successViews.disabledCard = readSuccessCard();
+  ROUTES["/admin/api/requests/no-answer"] = saved;
+}
+
 /* --------------------------------------------------- advanced fields
    7.29.1: nothing is hidden by default. `advanced` orders a field after the
    common ones in its card and tags it; a collapse control stays for readers
@@ -10041,6 +10220,7 @@ console.log(
       credHints,
       inflight,
       cancelledViews,
+      successViews,
       catalogueReadout,
       desktopAppBanner,
       guideLinks,

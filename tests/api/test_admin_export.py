@@ -658,10 +658,12 @@ class TestLadderColumns:
         # ``cancel_reason`` is always-derived for the third variant of the same
         # reason: its inputs are columns the row always carries, and a
         # cancelled request exported without the reason it was cancelled is
-        # the question this column was added to answer.
+        # the question this column was added to answer. ``success_reason`` is
+        # its twin for a success that carried no answer (7.57.0).
         assert export_engine.request_detail_derived_columns(["ladder"]) == [
             "ttft_lost_to_fallbacks_ms",
             "cancel_reason",
+            "success_reason",
             "key_name",
             "ladder_tries",
             "ladder_statuses",
