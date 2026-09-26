@@ -363,6 +363,12 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
             "Agnes AI OpenAI-compatible API key for apihub.agnes-ai.com/v1."
         ),
     },
+    "AGNES_BASE_URL": {
+        "description": (
+            "Agnes AI OpenAI-compatible Chat Completions base URL. "
+            "Defaults to https://apihub.agnes-ai.com/v1."
+        ),
+    },
     "XAI_API_KEY": {
         "label": "xAI API Key",
         "description": (

@@ -642,6 +642,10 @@ class Settings(BaseSettings):
 
     # ==================== Agnes AI (OpenAI-compatible) ====================
     agnes_api_key: str = Field(default="", validation_alias="AGNES_API_KEY")
+    agnes_base_url: str = Field(
+        default="https://apihub.agnes-ai.com/v1",
+        validation_alias="AGNES_BASE_URL",
+    )
 
     # ==================== ZenMux (OpenAI-compatible) ====================
     zenmux_api_key: str = Field(default="", validation_alias="ZENMUX_API_KEY")
