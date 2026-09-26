@@ -75,6 +75,7 @@ from my_claude_code.core.request_origin import (
     origin_inputs,
     resolve_origin,
 )
+from my_claude_code.core.trace import trace_event
 from my_claude_code.core.upstream_ladder import (
     DEFAULT_LADDER_BODY_MAX_CHARS,
     install_ladder_trace,
@@ -197,6 +198,8 @@ class RequestCapture:
         # verdict is never worth a database round trip while a client is
         # still waiting for tokens.
         self._attempts: list[RouteAttempt] = []
+        #: Set by :meth:`wrap`; see there.
+        self._discard_after_terminal = False
         # The client's own ``max_tokens`` for any attempt whose allowance was
         # raised because it was going to think, keyed by attempt index. Kept
         # beside the attempts rather than on the record: it is a per-attempt
@@ -881,11 +884,37 @@ class RequestCapture:
             }
         self._finalize("success")
 
-    def wrap(self, body: AsyncIterator[str]) -> AsyncIterator[str]:
-        """Wrap the Anthropic SSE stream, observing every chunk pass through."""
+    def wrap(
+        self, body: AsyncIterator[str], *, discard_after_terminal: bool = False
+    ) -> AsyncIterator[str]:
+        """Wrap the Anthropic SSE stream, observing every chunk pass through.
+
+        ``discard_after_terminal`` is for the surfaces whose adapter reads the
+        stream to its end but translates nothing after ``message_stop``
+        (``/v1/responses``, ``/v1/chat/completions``, Gemini): the client never
+        sees what arrives there, so it must not decide the row either. An
+        ``error`` event or a raised failure after the answer is complete is
+        traced and the row keeps the status of the answer the client got.
+        """
+        self._discard_after_terminal = discard_after_terminal
         if not self.enabled:
             return body
         return self._observe(body)
+
+    def _after_terminal_is_discarded(self, what: str) -> bool:
+        """Whether a failure seen now arrived after a delivered answer, and is dropped."""
+        if not (self._discard_after_terminal and self._saw_terminal_event):
+            return False
+        if self._error is not None:
+            return False
+        trace_event(
+            stage="lifecycle",
+            event="request_log.after_terminal.discarded",
+            source="api",
+            request_id=self._record.id,
+            what=what,
+        )
+        return True
 
     async def _observe(self, body: AsyncIterator[str]) -> AsyncIterator[str]:
         buffer = ""
@@ -931,6 +960,8 @@ class RequestCapture:
             self._finalize(status)
             raise
         except BaseException as exc:
+            if self._after_terminal_is_discarded(type(exc).__name__):
+                raise
             failure = find_execution_failure(exc)
             self._error = (
                 failure_kind_name(exc),
@@ -1012,6 +1043,8 @@ class RequestCapture:
         elif event_type == "message_stop":
             self._saw_terminal_event = True
         elif event_type == "error":
+            if self._after_terminal_is_discarded("error_event"):
+                return
             error = payload.get("error")
             if isinstance(error, dict):
                 kind = error.get("type")

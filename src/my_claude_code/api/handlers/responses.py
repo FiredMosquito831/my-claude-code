@@ -126,7 +126,8 @@ class ResponsesHandler:
                     request_id=request_id,
                     on_attempt=capture.set_routing,
                     on_attempt_result=capture.record_attempt_result,
-                )
+                ),
+                discard_after_terminal=True,
             )
             return await openai_sse_streaming_response(
                 self._responses_adapter.iter_sse_from_anthropic(
