@@ -1308,12 +1308,54 @@ class RequestCapture:
         Awaited inside the request's own task on purpose, so the graceful
         shutdown budget still bounds it -- a fire-and-forget thread would
         outlive the loop it was started from.
+
+        The await is shielded, and a cancellation that lands during it hands
+        the commit to the worker's completion instead of dropping it. A client
+        that hangs up as soon as it reads the terminal event -- Codex always
+        does -- makes Starlette cancel this task while the arithmetic is still
+        running. ``_begin_finalize`` has already latched ``_finalized`` by
+        then, so every later finalize call returns early: without this, the
+        answered request lost its row, its rollup, its totals and its attempts
+        (6.62.0 to 7.56.0). The worker thread could not be cancelled anyway, so
+        nothing extra runs; the commit still happens on the loop thread. Only a
+        loop that stops before the thread finishes -- shutdown -- can still
+        lose the row.
         """
         record = self._begin_finalize(status)
         if record is None:
             return
-        await asyncio.to_thread(self._compute_finalize_fields, record)
+        work = asyncio.ensure_future(
+            asyncio.to_thread(self._compute_finalize_fields, record)
+        )
+        try:
+            await asyncio.shield(work)
+        except asyncio.CancelledError:
+            work.add_done_callback(
+                lambda done: self._commit_after_cancelled_offload(done, record)
+            )
+            raise
         self._commit_finalize(record)
+
+    def _commit_after_cancelled_offload(
+        self, work: asyncio.Future[None], record: RequestRecord
+    ) -> None:
+        """Commit a row whose request task was cancelled during the offload.
+
+        Runs on the loop thread as the worker's done callback. The answer is
+        already with the client, so the row is written even when the
+        arithmetic itself raised -- the rule ``_compute_finalize_fields``
+        states: an answered request is never lost because arithmetic about it
+        failed.
+        """
+        if not work.cancelled() and work.exception() is not None:
+            logger.debug(
+                "Request finalize arithmetic failed after a hang-up: {}",
+                work.exception(),
+            )
+        try:
+            self._commit_finalize(record)
+        except Exception as exc:
+            logger.warning("Request row commit after a hang-up failed: {}", exc)
 
     def _begin_finalize(
         self, status: Literal["success", "error", "cancelled"]
