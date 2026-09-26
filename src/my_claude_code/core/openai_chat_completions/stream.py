@@ -8,6 +8,7 @@ from typing import Any
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
 from my_claude_code.core.openai_common import iter_sse_events
+from my_claude_code.core.openai_common.drain import drain_after_terminal
 from my_claude_code.core.trace import close_stream_input
 
 from .assembler import ChatCompletionsStreamAssembler
@@ -40,6 +41,12 @@ async def iter_chat_sse_from_anthropic(
                 yield chunk
                 emitted_any_chunk = True
             if assembler.terminal:
+                # Read the rest, translate none of it: the executor records
+                # the attempt and route health only once its stream is
+                # exhausted, and a close here reported it as interrupted.
+                await drain_after_terminal(
+                    events, owner="openai_chat_completions.stream"
+                )
                 return
         for chunk in assembler.finish_if_needed():
             yield chunk

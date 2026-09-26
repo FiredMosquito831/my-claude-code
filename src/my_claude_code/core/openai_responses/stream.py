@@ -7,6 +7,7 @@ from typing import Any
 
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
+from my_claude_code.core.openai_common.drain import drain_after_terminal
 from my_claude_code.core.trace import close_stream_input
 
 from .anthropic_sse import iter_sse_events
@@ -32,6 +33,10 @@ async def iter_responses_sse_from_anthropic(
                 yield chunk
                 emitted_any_chunk = True
             if assembler.terminal:
+                # Read the rest, translate none of it: the executor records
+                # the attempt and route health only once its stream is
+                # exhausted, and a close here reported it as interrupted.
+                await drain_after_terminal(events, owner="openai_responses.stream")
                 return
         for chunk in assembler.finish_if_needed():
             yield chunk

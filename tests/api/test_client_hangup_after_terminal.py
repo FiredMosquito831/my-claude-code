@@ -29,7 +29,9 @@ import pytest
 import uvicorn
 
 from my_claude_code.api.request_capture import RequestCapture
+from my_claude_code.application.route_health import RouteHealthRegistry
 from my_claude_code.core.anthropic.streaming import format_sse_event
+from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.request_log import get_request_log_store
 from tests.api.support import create_test_app
 
@@ -115,8 +117,9 @@ def _answer() -> list[str]:
 class _StubProvider:
     """Answers "OK" through the real executor, handlers and adapters."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, fail_after_answer: bool = False) -> None:
         self.preflight_stream = MagicMock()
+        self.fail_after_answer = fail_after_answer
 
     @property
     def credential_label(self) -> str | None:
@@ -125,6 +128,13 @@ class _StubProvider:
     async def stream_response(self, request_data, **_kwargs):
         for chunk in _answer():
             yield chunk
+        if self.fail_after_answer:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message="peer closed connection after the answer",
+                retryable=False,
+            )
 
 
 class _HeldFinalize:
@@ -219,6 +229,7 @@ def test_a_client_that_hangs_up_on_the_terminal_event_keeps_its_row(
 ) -> None:
     path, body, terminal = SURFACES[surface]
     held = _HeldFinalize(monkeypatch)
+    successes = _count_route_successes(monkeypatch)
     target = (
         "my_claude_code.api.gemini_routes.resolve_provider"
         if surface == "gemini"
@@ -244,3 +255,66 @@ def test_a_client_that_hangs_up_on_the_terminal_event_keeps_its_row(
     assert row["status"] == "success"
     assert row["endpoint"] == path.split("?")[0]
     assert row["tokens_out"] == 1
+    # 7.56.2: every surface now lets the executor finish, so the attempt that
+    # answered is stored and route health hears about the success -- before,
+    # only /v1/messages did; the other three closed the executor on the
+    # terminal event and both were lost.
+    stored = store.get_request(row["id"])
+    assert stored is not None
+    (attempt,) = stored["route_attempts"]
+    assert attempt["outcome"] == "succeeded", (surface, attempt)
+    assert attempt["model_ref"] == MODEL
+    assert successes == [MODEL], (surface, successes)
+
+
+def _count_route_successes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    successes: list[str] = []
+    record_success = RouteHealthRegistry.record_success
+
+    def counted(registry: RouteHealthRegistry, model_ref: str) -> None:
+        successes.append(model_ref)
+        record_success(registry, model_ref)
+
+    monkeypatch.setattr(RouteHealthRegistry, "record_success", counted)
+    return successes
+
+
+@pytest.mark.parametrize("surface", ["chat", "gemini", "responses"])
+def test_a_failure_after_the_answer_never_reaches_the_client_or_the_row(
+    surface: str,
+) -> None:
+    """The reviewed E2 rule: read to the end, but nothing after it counts.
+
+    The upstream fails after the terminal event. A client reading to EOF must
+    get exactly the frames of a clean answer -- no error frame -- and the row
+    must stay ``success``.
+    """
+    path, body, _terminal = SURFACES[surface]
+    target = (
+        "my_claude_code.api.gemini_routes.resolve_provider"
+        if surface == "gemini"
+        else "my_claude_code.api.routes.resolve_provider"
+    )
+    texts: dict[bool, str] = {}
+    for fail in (False, True):
+        with (
+            patch(target, return_value=_StubProvider(fail_after_answer=fail)),
+            _Live() as live,
+            httpx.Client(base_url=f"http://127.0.0.1:{live.port}", timeout=30) as c,
+        ):
+            response = c.post(path, json=body, headers={"x-mcc-harness": "probe"})
+            assert response.status_code == 200
+            texts[fail] = response.text
+    events = {
+        fail: [line.split(":", 1)[0] for line in text.splitlines() if line]
+        for fail, text in texts.items()
+    }
+    assert events[True] == events[False], texts[True][-600:]
+    assert "peer closed" not in texts[True]
+
+    store = get_request_log_store()
+    assert store is not None
+    store.close()
+    rows, total = store.list_requests()
+    assert total == 2
+    assert {row["status"] for row in rows} == {"success"}

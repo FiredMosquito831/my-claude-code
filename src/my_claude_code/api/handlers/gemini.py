@@ -141,7 +141,8 @@ class GeminiHandler:
                     request_id=request_id,
                     on_attempt=capture.set_routing,
                     on_attempt_result=capture.record_attempt_result,
-                )
+                ),
+                discard_after_terminal=True,
             )
             if not stream:
                 return await self._complete_response(

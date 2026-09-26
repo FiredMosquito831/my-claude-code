@@ -1862,3 +1862,89 @@ def test_describe_attempt_carries_its_own_ttft(store: RequestLogStore) -> None:
     assert attempt["first_reasoning_ms"] == 90.0
     # And its own usage is still its own, and still priced on its own row.
     assert attempt["tokens_out"] == 9
+
+
+# --- the non-Messages surfaces: nothing after the answer decides the row -----
+
+_LATE_ERROR_EVENT = _events(
+    (
+        "error",
+        {"type": "error", "error": {"type": "api_error", "message": "late"}},
+    )
+)[0]
+
+
+async def _answer_then(tail: str | None, *, fail: bool) -> AsyncIterator[str]:
+    for chunk in _ANSWER_FRAMES:
+        yield chunk
+    if tail is not None:
+        yield tail
+    if fail:
+        raise ExecutionFailure(
+            kind=FailureKind.UPSTREAM,
+            status_code=502,
+            message="peer closed connection after the answer",
+            retryable=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("tail", "fail"),
+    [(_LATE_ERROR_EVENT, False), (None, True)],
+    ids=["error_event", "raised_failure"],
+)
+@pytest.mark.asyncio
+async def test_a_failure_after_message_stop_does_not_flip_a_translated_row(
+    store: RequestLogStore, tail: str | None, fail: bool
+) -> None:
+    """7.56.2: the adapters now read to the end, and discard what follows."""
+    capture = _make_capture(store, endpoint="/v1/responses")
+    stream = capture.wrap(_answer_then(tail, fail=fail), discard_after_terminal=True)
+    if fail:
+        with pytest.raises(ExecutionFailure):
+            await _collect(stream)
+    else:
+        await _collect(stream)
+    store.close()
+
+    row = _final_row(store)
+    assert row["status"] == "success"
+    assert row["error_kind"] is None
+
+
+@pytest.mark.parametrize(
+    ("tail", "fail"),
+    [(_LATE_ERROR_EVENT, False), (None, True)],
+    ids=["error_event", "raised_failure"],
+)
+@pytest.mark.asyncio
+async def test_messages_rows_still_record_a_failure_after_message_stop(
+    store: RequestLogStore, tail: str | None, fail: bool
+) -> None:
+    """/v1/messages passes every frame to its client, so nothing changes there."""
+    capture = _make_capture(store)
+    stream = capture.wrap(_answer_then(tail, fail=fail))
+    if fail:
+        with pytest.raises(ExecutionFailure):
+            await _collect(stream)
+    else:
+        await _collect(stream)
+    store.close()
+
+    assert _final_row(store)["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_an_error_before_message_stop_still_decides_a_translated_row(
+    store: RequestLogStore,
+) -> None:
+    capture = _make_capture(store, endpoint="/v1/chat/completions")
+
+    async def body() -> AsyncIterator[str]:
+        yield _ANSWER_FRAMES[0]
+        yield _LATE_ERROR_EVENT
+
+    await _collect(capture.wrap(body(), discard_after_terminal=True))
+    store.close()
+
+    assert _final_row(store)["status"] == "error"
