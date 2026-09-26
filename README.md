@@ -280,6 +280,7 @@ The legacy `fcc-*` names were retired in 7.0.0: `fcc-claude`, `fcc-codex`, `fcc-
 | [TokenRouter](https://www.tokenrouter.com/) | `TOKENROUTER_API_KEY` | `tokenrouter/moonshotai/kimi-k3-free` |
 | [NaraRoute](https://router.bynara.id/) | `NARAROUTE_API_KEY` | `nararoute/kimi-k3-free` |
 | [HyperCharm](https://hyper.charm.land) | `HYPERCHARM_API_KEY` | `hypercharm/kimi-k3` |
+| [B.AI](https://chat.b.ai/key) | `BAI_API_KEY` | `bai/glm-5.3-flash` |
 | [xAI (Grok)](https://console.x.ai/team/default/api-keys) | `XAI_API_KEY` | `xai/grok-4.5` |
 | [Together AI](https://api.together.ai/settings/api-keys) | `TOGETHER_API_KEY` | `together/zai-org/GLM-5.2` |
 | [DeepInfra](https://deepinfra.com/dash/api_keys) | `DEEPINFRA_API_KEY` | `deepinfra/deepseek-ai/DeepSeek-V4-Flash` |

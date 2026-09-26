@@ -104,6 +104,10 @@ NARAROUTE_DEFAULT_BASE = "https://router.bynara.id/v1"
 # over the same open-weight roster -- no claude-* id exists there -- so
 # chat completions is the only protocol wired.
 HYPERCHARM_DEFAULT_BASE = "https://hyper.charm.land/v1"
+# B.AI OpenAI-compatible Chat Completions gateway (docs.b.ai/llmservice/api),
+# a reseller over many vendors' models. It also documents /v1/messages and
+# /v1/responses; chat completions is the only protocol wired.
+BAI_DEFAULT_BASE = "https://api.b.ai/v1"
 # xAI OpenAI-compatible Chat Completions API.
 XAI_DEFAULT_BASE = "https://api.x.ai/v1"
 # Together AI OpenAI-compatible Chat Completions API.
@@ -698,6 +702,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=HYPERCHARM_DEFAULT_BASE,
         base_url_attr="hypercharm_base_url",
         proxy_attr="hypercharm_proxy",
+        group="gateway",
+    ),
+    "bai": ProviderDescriptor(
+        provider_id="bai",
+        display_name="B.AI",
+        credential_env="BAI_API_KEY",
+        credential_url="https://chat.b.ai/key",
+        credential_attr="bai_api_key",
+        default_base_url=BAI_DEFAULT_BASE,
+        base_url_attr="bai_base_url",
+        proxy_attr="bai_proxy",
         group="gateway",
     ),
     "xai": ProviderDescriptor(

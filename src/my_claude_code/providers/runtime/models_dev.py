@@ -788,8 +788,9 @@ PROVIDER_ID_ALIASES: dict[str, str] = {
 #                                     about a deployment we cannot inspect.
 #                                     Wrong in that direction is worse than
 #                                     unknown, which behaves exactly as today.
-# These five have no models.dev bucket at all: commandcode, featherless,
-# nous_portal, qwencloud_coding, sambanova. (agnes used to be on this list;
+# These six have no models.dev bucket at all: bai, commandcode, featherless,
+# nous_portal, qwencloud_coding, sambanova. (No bucket's ``api`` names
+# api.b.ai, so bai has no alias either.) (agnes used to be on this list;
 # models.dev has since added an "agnes" bucket whose ``api`` is exactly
 # AGNES_DEFAULT_BASE, so it resolves under its own id with no alias.) For
 # them -- and only for them -- the approximate cross-provider tier below
