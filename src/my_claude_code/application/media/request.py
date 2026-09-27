@@ -189,6 +189,13 @@ class MediaResponse:
     body: bytes
     #: Upstream response headers worth keeping for the log (never auth).
     headers: Mapping[str, str] = field(default_factory=dict)
+    #: The host's token usage, when the translated body cannot carry it (a
+    #: Gemini native answer: the audio itself, or a transcript as text).
+    usage: Mapping[str, Any] | None = None
+    #: The audio length measured while translating (raw PCM states none).
+    audio_seconds: float | None = None
+    #: Request fields this answer's surface had no exact place for.
+    not_forwarded: tuple[str, ...] = ()
 
 
 #: What a media provider yields: one buffered response, or raw stream frames.

@@ -99,6 +99,7 @@ audio = client.audio.speech.create(model="gpt-4o-mini-tts", voice="alloy", input
 | Groq | `audio/speech` | not listed (the host judges) |
 | SiliconFlow | `audio/speech` | not listed (the host judges) |
 | ZenMux | `audio/speech` | not listed (the host judges) |
+| Gemini | native `generateContent` (see below) | wav, pcm |
 
 **Formats are never converted.** A client that names a `response_format` a provider does not
 document skips that provider without charging it, and the rail moves on; a client that names
@@ -129,6 +130,7 @@ text = client.audio.transcriptions.create(model="whisper-1", file=open("clip.wav
 | SiliconFlow | `audio/transcriptions` | -- |
 | Mistral | `audio/transcriptions` (streams) | -- |
 | OpenRouter | `audio/transcriptions` | -- |
+| Gemini | native `generateContent` with a built-in instruction (see below) | -- |
 
 A translation skips every model whose provider declares transcription only, uncharged.
 `stream=true` is routed only to a surface that streams (Mistral); its `transcript.text.delta`
@@ -231,6 +233,26 @@ operation = client.operations.get(operation)  # ask again until operation.done
   provider's message.
 - Errors use Google's error envelope. `:predict` (the Imagen shape) is not served.
 
+**Gemini on the Speech and Transcription rails (7.66.0).** Gemini's OpenAI-compatible layer has no
+speech or transcription endpoint, so a Gemini model on these rails is called through Gemini's own
+`models/{model}:generateContent` (with the API key in `x-goog-api-key`):
+
+- **Speech:** the text is sent with `responseModalities: ["AUDIO"]`; `voice` is forwarded as the
+  prebuilt voice only when it is one of the 30 voices Google's speech page lists (Zephyr ...
+  Sulafat) -- any other voice, `instructions` and `speed` are not forwarded (Gemini's default voice
+  speaks) and are listed in the row's `media.not_forwarded`. Gemini returns WAV or raw 24 kHz PCM.
+  A client that named `wav` gets a WAV (raw PCM is given a WAV header -- framing, not transcoding);
+  one that named `pcm` gets raw PCM; one that named nothing gets what Gemini sent, with its own
+  content type. `mp3`, `opus`, `aac` and `flac` skip Gemini, uncharged.
+- **Transcription:** the uploaded audio is sent inline (base64) with this instruction, verbatim:
+  *"Transcribe the speech in this audio exactly as spoken. Answer with the transcript only, with no
+  introduction or commentary."* -- plus *"The speech is in &lt;language&gt;."* when the client sent
+  `language`. `prompt`, `temperature` and timestamps are not forwarded. The answer is `json`
+  (`{"text": ..., "usage": {tokens}}`) or `text`; `srt`, `vtt` and `verbose_json` skip Gemini,
+  uncharged. Translation is not declared for Gemini.
+- An answer with no audio (or no text) counts as a failure of that model and the rail moves on.
+  Token usage from Gemini's `usageMetadata` fills the row's tokens.
+
 ## Retry, fallback, keys, 429s and proxies
 
 Every media rail follows the same rules as a chat chain, applied by a separate copy of the chat
@@ -293,7 +315,7 @@ cleared; turning the setting off stops new copies and leaves existing files alon
 
 ## Not yet
 
-Gemini as the provider behind the Speech and Transcription rails, media pricing and the
-Analytics media block each arrive in their own release. Video on ZenMux, Agnes AI, xAI, Together, SiliconFlow, MiniMax and Alibaba
+Media pricing and the Analytics media block each arrive in their own release. Gemini's
+Interactions API (and the transcription model offered only there) is not used. Video on ZenMux, Agnes AI, xAI, Together, SiliconFlow, MiniMax and Alibaba
 is not routed: each documents its own job API rather than the OpenAI shape, and each would be
 its own small release. OpenAI's own video API (Sora) was shut down on 2026-09-24.

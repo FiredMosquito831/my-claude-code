@@ -35,6 +35,11 @@ MEDIA_SHAPE_OPENAI_IMAGES = "openai_images"
 MEDIA_SHAPE_OPENAI_SPEECH = "openai_speech"
 MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS = "openai_transcriptions"
 MEDIA_SHAPE_OPENAI_VIDEOS = "openai_videos"
+#: 7.66.0: Gemini's native ``generateContent`` serving speech (``AUDIO`` out)
+#: and transcription (audio in, text out). Gemini's OpenAI-compatible layer
+#: has neither ``audio/speech`` nor ``audio/transcriptions``.
+MEDIA_SHAPE_GEMINI_TTS = "gemini_tts"
+MEDIA_SHAPE_GEMINI_TRANSCRIBE = "gemini_transcribe"
 
 #: A surface whose host documents a JSON body only (``MediaSurface.encoding``).
 MEDIA_ENCODING_JSON = "json"
@@ -55,6 +60,58 @@ MEDIA_SHAPES: tuple[str, ...] = (
     MEDIA_SHAPE_OPENAI_SPEECH,
     MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
     MEDIA_SHAPE_OPENAI_VIDEOS,
+    MEDIA_SHAPE_GEMINI_TTS,
+    MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+)
+
+#: The header Gemini's native API reads the key from (instead of Bearer).
+GEMINI_API_KEY_HEADER = "x-goog-api-key"
+
+#: Gemini's native ``generateContent``. Declared absolute: MCC has no Gemini
+#: base-URL setting, and the catalogue's base is the OpenAI-compatible layer
+#: (``.../v1beta/openai/``), not the native API.
+GEMINI_GENERATE_CONTENT_PATH = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
+
+#: Gemini's prebuilt TTS voices, exactly as the "Prebuilt voices" table of
+#: https://ai.google.dev/gemini-api/docs/speech-generation lists them (read
+#: 2026-09-27: 30 voices). A client's ``voice`` outside this list is not
+#: forwarded -- the host's default voice speaks -- and is logged under
+#: ``media.not_forwarded``. The same page's Extended Voice Library and custom
+#: ``voice_...`` ids are documented for the Interactions API, not for
+#: ``generateContent``'s ``prebuiltVoiceConfig``, so they are not listed.
+GEMINI_TTS_VOICES: tuple[str, ...] = (
+    "Zephyr",
+    "Puck",
+    "Charon",
+    "Kore",
+    "Fenrir",
+    "Leda",
+    "Orus",
+    "Aoede",
+    "Callirrhoe",
+    "Autonoe",
+    "Enceladus",
+    "Iapetus",
+    "Umbriel",
+    "Algieba",
+    "Despina",
+    "Erinome",
+    "Algenib",
+    "Rasalgethi",
+    "Laomedeia",
+    "Achernar",
+    "Alnilam",
+    "Schedar",
+    "Gacrux",
+    "Pulcherrima",
+    "Achird",
+    "Zubenelgenubi",
+    "Vindemiatrix",
+    "Sadachbia",
+    "Sadaltager",
+    "Sulafat",
 )
 
 
@@ -64,7 +121,9 @@ class MediaSurface:
 
     ``path`` is joined onto the provider's configured base URL (so a user who
     points a provider at a gateway moves its media endpoints with it), unless
-    it is an absolute ``https://`` URL.
+    it is an absolute ``https://`` URL. ``{model}`` in it is the URL-quoted
+    provider model id (``model_path``), for a host that names the model in
+    the URL rather than in the body (Gemini's native API).
 
     ``stream`` is whether the endpoint is documented to stream partial results
     (OpenAI's ``image_generation.partial_image`` events). A client that asks
@@ -92,6 +151,14 @@ class MediaSurface:
     #: The client query parameters forwarded on this surface; any other is
     #: dropped (DeepInfra's video content takes ``variant``).
     query: tuple[str, ...] = ()
+    #: The header the key goes in, sent as the bare key; ``None`` is
+    #: ``Authorization: Bearer <key>`` (Gemini's native API reads
+    #: ``x-goog-api-key``).
+    auth_header: str | None = None
+    #: The voice names the host documents; a client's ``voice`` outside the
+    #: list is not forwarded (and is logged as such). ``None``: the host
+    #: judges the name.
+    voices: tuple[str, ...] | None = None
 
 
 def image_generation_surface(
@@ -161,6 +228,36 @@ def translation_surface(path: str = "audio/translations") -> MediaSurface:
     )
 
 
+def gemini_speech_surface() -> MediaSurface:
+    """Gemini's native TTS: ``generateContent`` with ``AUDIO`` out.
+
+    The host answers raw 16-bit PCM or WAV; a client that names ``wav`` or
+    ``pcm`` gets that framing (a header added or removed, never a transcode),
+    and any other named format skips this surface uncharged.
+    """
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_SPEECH,
+        shape=MEDIA_SHAPE_GEMINI_TTS,
+        path=GEMINI_GENERATE_CONTENT_PATH,
+        formats=("wav", "pcm"),
+        auth_header=GEMINI_API_KEY_HEADER,
+        voices=GEMINI_TTS_VOICES,
+    )
+
+
+def gemini_transcription_surface() -> MediaSurface:
+    """Gemini's native ASR: the audio inline in ``generateContent``, text out."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_TRANSCRIBE,
+        shape=MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+        path=GEMINI_GENERATE_CONTENT_PATH,
+        formats=("json", "text"),
+        auth_header=GEMINI_API_KEY_HEADER,
+    )
+
+
 def video_surfaces(
     *,
     create: str = "videos",
@@ -216,6 +313,12 @@ def job_path(path: str, job_id: str) -> str:
     """``path`` with ``{id}`` replaced by the URL-quoted upstream job id."""
 
     return path.replace("{id}", quote(job_id, safe=""))
+
+
+def model_path(path: str, model: str) -> str:
+    """``path`` with ``{model}`` replaced by the URL-quoted provider model id."""
+
+    return path.replace("{model}", quote(model, safe=""))
 
 
 def surface_for(

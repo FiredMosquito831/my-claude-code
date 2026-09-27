@@ -39,6 +39,9 @@ class MediaOutputs:
     text: str | None = None
     #: Seconds of audio the host says it heard (transcription usage).
     input_audio_seconds: float | None = None
+    #: Request fields the answering surface had no exact place for (a
+    #: Gemini native answer), logged with the request's own list.
+    not_forwarded: tuple[str, ...] = ()
 
     @property
     def bytes_total(self) -> int | None:
