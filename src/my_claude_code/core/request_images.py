@@ -148,6 +148,28 @@ def _with_thumbnail(
     )
 
 
+def capture_upload(
+    raw: bytes,
+    *,
+    sha256: str,
+    media_type: str | None,
+    max_pixels: int,
+) -> CapturedImage:
+    """Describe one uploaded image (a media edit's input), thumbnailed if readable.
+
+    Synchronous and CPU-bound (Pillow): callers run it in a worker thread.
+    """
+    captured = CapturedImage(
+        sha256=sha256,
+        kind="image",
+        media_type=media_type,
+        source_bytes=len(raw),
+    )
+    if max_pixels <= 0:
+        return captured
+    return _with_thumbnail(captured, raw, max_pixels=max_pixels)
+
+
 def _decode(data: str | None) -> bytes | None:
     if not data:
         return None
@@ -161,4 +183,5 @@ __all__ = [
     "THUMBNAIL_MEDIA_TYPE",
     "CapturedImage",
     "capture_images",
+    "capture_upload",
 ]

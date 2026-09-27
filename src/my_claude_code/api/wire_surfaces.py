@@ -29,6 +29,7 @@ GEMINI_ENDPOINT_PREFIX = "/v1beta/models"
 # Media endpoints (7.60.0) answer in the OpenAI error envelope, the shape
 # every OpenAI SDK client reads.
 IMAGES_GENERATIONS_ENDPOINT = "/v1/images/generations"
+IMAGES_EDITS_ENDPOINT = "/v1/images/edits"
 
 WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
@@ -36,6 +37,7 @@ _WIRE_API_BY_PATH: dict[str, WireApi] = {
     RESPONSES_ENDPOINT: "responses",
     CHAT_COMPLETIONS_ENDPOINT: "chat_completions",
     IMAGES_GENERATIONS_ENDPOINT: "chat_completions",
+    IMAGES_EDITS_ENDPOINT: "chat_completions",
 }
 
 #: The surfaces whose clients parse OpenAI's ``{"error": {...}}``. Membership

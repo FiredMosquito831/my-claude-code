@@ -784,7 +784,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "optional_model",
         settings_attr="model_image",
         description=(
-            "Model that serves POST /v1/images/generations (the OpenAI images API). "
+            "Model that serves POST /v1/images/generations and /v1/images/edits "
+            "(the OpenAI images API). "
             "A media rail, never a chat tier: it is not offered to coding agents and "
             "is never reached from /v1/messages. A client that names a provider/model "
             "ref pins that model; any other model name uses this rail. None answers "

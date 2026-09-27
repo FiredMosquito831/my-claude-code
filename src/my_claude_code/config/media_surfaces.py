@@ -17,11 +17,15 @@ from dataclasses import dataclass
 #: the rest arrive one release each and are named here so the vocabulary is
 #: one list.
 MEDIA_OPERATION_IMAGE_GENERATE = "image_generate"
+MEDIA_OPERATION_IMAGE_EDIT = "image_edit"
 
 #: Wire-shape families: one adapter per family, never per provider.
 MEDIA_SHAPE_OPENAI_IMAGES = "openai_images"
 
-MEDIA_OPERATIONS: tuple[str, ...] = (MEDIA_OPERATION_IMAGE_GENERATE,)
+MEDIA_OPERATIONS: tuple[str, ...] = (
+    MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_IMAGE_EDIT,
+)
 MEDIA_SHAPES: tuple[str, ...] = (MEDIA_SHAPE_OPENAI_IMAGES,)
 
 
@@ -52,6 +56,24 @@ def image_generation_surface(
 
     return MediaSurface(
         operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        shape=MEDIA_SHAPE_OPENAI_IMAGES,
+        path=path,
+        stream=stream,
+    )
+
+
+def image_edit_surface(
+    path: str = "images/edits", *, stream: bool = False
+) -> MediaSurface:
+    """The OpenAI ``POST /images/edits`` shape at ``path``.
+
+    The client's own encoding is forwarded: a multipart upload goes out as
+    multipart, streamed from the spooled files, and the JSON variant
+    (``images: [{image_url}]``) goes out as JSON.
+    """
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_EDIT,
         shape=MEDIA_SHAPE_OPENAI_IMAGES,
         path=path,
         stream=stream,

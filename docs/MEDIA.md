@@ -1,21 +1,28 @@
 # Media routing
 
-My Claude Code routes **media requests** -- image generation today, with editing, speech,
+My Claude Code routes **media requests** -- image generation and editing today, with speech,
 transcription and video arriving one release at a time -- over **media rails** on Model
 Config, the way it routes chat over tiers. A client that speaks the OpenAI media API points
 its base URL at the proxy and keeps its own code.
 
-## What ships in 7.60.0
+## What ships
 
-| Endpoint | Rail | Settings |
-|---|---|---|
-| `POST /v1/images/generations` | Image | `MODEL_IMAGE`, `MODEL_IMAGE_FALLBACKS`, `MODEL_IMAGE_PAUSED` |
+| Endpoint | Since | Rail | Settings |
+|---|---|---|---|
+| `POST /v1/images/generations` | 7.60.0 | Image | `MODEL_IMAGE`, `MODEL_IMAGE_FALLBACKS`, `MODEL_IMAGE_PAUSED` |
+| `POST /v1/images/edits` | 7.61.0 | Image | the same rail |
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8082/v1", api_key="your-proxy-token")
 image = client.images.generate(model="gpt-image-2", prompt="a red cube on a white table")
+edited = client.images.edit(
+    model="gpt-image-2",
+    image=[open("scene.png", "rb")],
+    mask=open("mask.png", "rb"),
+    prompt="make the cube blue",
+)
 ```
 
 The proxy token is the same one every other client uses (`Authorization: Bearer`,
@@ -23,7 +30,7 @@ The proxy token is the same one every other client uses (`Authorization: Bearer`
 
 ## How a request finds its model
 
-- The **endpoint** picks the rail: `images/generations` is the Image rail.
+- The **endpoint** picks the rail: `images/generations` and `images/edits` are the Image rail.
 - A `model` written as `provider/model` (for example `xai/grok-2-image`) pins that one model.
 - Any other `model` -- a vendor name such as `gpt-image-2`, or none -- uses the rail:
   `MODEL_IMAGE` first, then `MODEL_IMAGE_FALLBACKS` in order, skipping anything in
@@ -40,19 +47,30 @@ A provider serves a media operation only when it **declares** that endpoint; MCC
 from a model name. A model on a provider that declares nothing for the operation is skipped
 and **not charged** a failure -- the request log shows it as `unsupported`.
 
-| Provider | Image generation endpoint (relative to the provider's base URL) |
-|---|---|
-| Gemini | `images/generations` on its OpenAI-compatible base URL |
-| xAI | `images/generations` |
-| Together | `images/generations` |
-| DeepInfra | `images/generations` on its OpenAI-compatible base URL |
-| Agnes AI | `images/generations` |
-| SiliconFlow | `images/generations` |
-| ZenMux | `images/generations` |
+| Provider | Generation | Edits (relative to the provider's base URL) |
+|---|---|---|
+| Gemini | `images/generations` on its OpenAI-compatible base URL | -- |
+| xAI | `images/generations` | `images/edits` |
+| Together | `images/generations` | -- |
+| DeepInfra | `images/generations` on its OpenAI-compatible base URL | -- |
+| Agnes AI | `images/generations` | -- |
+| SiliconFlow | `images/generations` | -- |
+| ZenMux | `images/generations` | -- |
+
+An edit on the Image rail therefore skips every model whose provider declares no edit endpoint,
+uncharged, and is served by the first one that does.
 
 The body the client sent is forwarded field for field, with `model` replaced by the rail's
 model id, so a parameter only one host understands still reaches it. What the host answers is
 what the client receives -- `b64_json` or `url`, exactly as the host returned it.
+
+**Edits** are forwarded in the client's own encoding. A multipart upload (`image`, `image[]`,
+`mask` and the text fields) goes out as multipart, streamed from the server's spooled copy of
+each file -- in memory below the multipart library's own threshold, on disk above it -- and
+re-read from the start if the rail falls back to the next model; nothing is ever read whole on
+the server's event loop. The JSON variant (`images: [{"image_url": ...}]`) goes out as JSON.
+MCC sets no upload size limit of its own; the provider's limit applies, and a refusal is an
+ordinary failure.
 
 **Streaming** (`"stream": true`, partial images as server-sent events) is routed only to a
 surface documented to stream it. None of the providers above documents it yet, so a streaming
@@ -84,17 +102,21 @@ produced the whole answer, so a failure before that falls back without the clien
 
 ## What is recorded
 
-Every request writes an ordinary request-log row (endpoint `/v1/images/generations`) with the
-chain's attempts, plus:
+Every request writes an ordinary request-log row (its endpoint, e.g. `/v1/images/generations`)
+with the chain's attempts, plus:
 
 | Column | Meaning |
 |---|---|
-| `media_operation` | `image_generate` |
+| `media_operation` | `image_generate` or `image_edit` |
+| `input_image_count` | images uploaded to an edit |
 | `output_image_count` | items the host returned |
 | `media_bytes_out` | decoded size of the base64 images (empty for a URL-only answer: not measured) |
 | `media_sha_out` | SHA-256 of the first image |
 
-Token usage, when the host reports it, fills the usual `tokens_in` / `tokens_out`.
+Token usage, when the host reports it, fills the usual `tokens_in` / `tokens_out`. An edit's
+uploaded files are always recorded by SHA-256, size and type (never their bytes); with
+`MEDIA_STORE_ENABLED` on, each uploaded image also gets the request log's usual thumbnail
+(`REQUEST_LOG_CAPTURE_IMAGES`, `REQUEST_LOG_IMAGE_MAX_PIXELS`).
 
 ### Keeping the images: `MEDIA_STORE_ENABLED`
 
@@ -106,5 +128,5 @@ cleared; turning the setting off stops new copies and leaves existing files alon
 
 ## Not yet
 
-Image edits, speech, transcription, video, Gemini-native media requests, media pricing and the
+Speech, transcription, video, Gemini-native media requests, media pricing and the
 Analytics media block each arrive in their own release.

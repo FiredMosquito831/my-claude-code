@@ -1,23 +1,35 @@
-"""OpenAI-compatible media endpoints (7.60.0: image generation).
+"""OpenAI-compatible media endpoints.
 
-``POST /v1/images/generations`` routes on the Image rail (``MODEL_IMAGE`` +
-``MODEL_IMAGE_FALLBACKS``, minus ``MODEL_IMAGE_PAUSED``) through the media
-executor -- a separate copy of the chat executor's rules with its own health
-books. Every request takes a runtime lease like the chat surfaces, so graceful
-shutdown drains it, and writes one request-log row.
+7.60.0: ``POST /v1/images/generations``. 7.61.0: ``POST /v1/images/edits`` --
+multipart (``image`` / ``image[]``, ``mask``) or the JSON variant
+(``images: [{image_url}]``).
+
+Both route on the Image rail (``MODEL_IMAGE`` + ``MODEL_IMAGE_FALLBACKS``,
+minus ``MODEL_IMAGE_PAUSED``) through the media executor -- a separate copy of
+the chat executor's rules with its own health books. Every request takes a
+runtime lease like the chat surfaces, so graceful shutdown drains it, and
+writes one request-log row.
 
 A non-streaming request is answered only once a model has produced the whole
 answer, so any failure before that falls back invisibly. A streaming request
 commits on the first forwarded event; an upstream failure after that ends the
 stream with an OpenAI ``error`` event.
+
+Uploads are parsed by Starlette's form parser, which spools a file to disk
+above the multipart library's own threshold (user decision 10: the library
+default) and writes rolled-over files from a worker thread. They are hashed
+off the loop, streamed to the upstream from the spooled copy, and closed when
+the request is finished with them.
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any
+import hashlib
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from typing import IO, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
+from starlette.datastructures import FormData, UploadFile
 
 from my_claude_code.application.errors import ApplicationError
 from my_claude_code.application.execution import route_execution_policy
@@ -32,9 +44,13 @@ from my_claude_code.application.media.request import (
     MediaRail,
     MediaRequest,
     MediaResponse,
+    MediaUpload,
 )
 from my_claude_code.application.ports import RequestRuntimeLease
-from my_claude_code.config.media_surfaces import MEDIA_OPERATION_IMAGE_GENERATE
+from my_claude_code.config.media_surfaces import (
+    MEDIA_OPERATION_IMAGE_EDIT,
+    MEDIA_OPERATION_IMAGE_GENERATE,
+)
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import (
     ExecutionFailure,
@@ -58,9 +74,18 @@ from .media_capture import MediaCapture
 from .ports import ApiServices
 from .request_ids import get_request_id
 from .response_streams import ManagedStreamingResponse, bind_response_lifetime
-from .wire_surfaces import IMAGES_GENERATIONS_ENDPOINT
+from .wire_surfaces import IMAGES_EDITS_ENDPOINT, IMAGES_GENERATIONS_ENDPOINT
 
 router = APIRouter()
+
+#: Bytes hashed per worker-thread read of an uploaded file.
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+Cleanup = Callable[[], Awaitable[None]]
+
+
+async def _nothing_to_clean() -> None:
+    return None
 
 
 def _error_response(
@@ -72,6 +97,10 @@ def _error_response(
             message=message, error_type=openai_error_type_for_failure(kind)
         ),
     )
+
+
+def _invalid(message: str) -> JSONResponse:
+    return _error_response(400, message, FailureKind.INVALID_REQUEST)
 
 
 def _failure_response(exc: BaseException) -> JSONResponse:
@@ -143,40 +172,72 @@ async def _read_json_object(request: Request) -> Mapping[str, Any] | None:
     return {str(key): value for key, value in payload.items()}
 
 
-@router.post(IMAGES_GENERATIONS_ENDPOINT)
-async def create_image(
+def _measure(file: IO[bytes]) -> tuple[str, int]:
+    """Runs in a worker thread: SHA-256 and size of one spooled upload."""
+    digest = hashlib.sha256()
+    size = 0
+    file.seek(0)
+    while chunk := file.read(_HASH_CHUNK_BYTES):
+        digest.update(chunk)
+        size += len(chunk)
+    file.seek(0)
+    return digest.hexdigest(), size
+
+
+async def _uploads_from_form(
+    form: FormData,
+) -> tuple[dict[str, Any], tuple[MediaUpload, ...]]:
+    """Split a parsed form into its text fields and its measured uploads."""
+    fields: dict[str, Any] = {}
+    uploads: list[MediaUpload] = []
+    for name, value in form.multi_items():
+        if isinstance(value, UploadFile):
+            sha256, size = await asyncio.to_thread(_measure, value.file)
+            uploads.append(
+                MediaUpload(
+                    field=name,
+                    filename=value.filename or name,
+                    content_type=value.content_type or "application/octet-stream",
+                    size=size,
+                    sha256=sha256,
+                    file=value.file,
+                )
+            )
+            continue
+        if name in fields:
+            existing = fields[name]
+            fields[name] = (
+                [*existing, value] if isinstance(existing, list) else [existing, value]
+            )
+        else:
+            fields[name] = value
+    return fields, tuple(uploads)
+
+
+def _stream_flag(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return value is True
+
+
+async def _serve(
     request: Request,
-    services: ApiServices = Depends(get_services),
-    _auth=Depends(require_proxy_auth),
-):
-    """Generate images through the Image rail (OpenAI ``images.generate``)."""
+    services: ApiServices,
+    media_request: MediaRequest,
+    *,
+    endpoint: str,
+    cleanup: Cleanup = _nothing_to_clean,
+) -> Response:
+    """Plan, execute and answer one media request; ``cleanup`` runs once at the end."""
     request_id = get_request_id(request)
-    payload = await _read_json_object(request)
-    if payload is None:
-        return _error_response(
-            400, "The request body must be a JSON object.", FailureKind.INVALID_REQUEST
-        )
-    prompt = payload.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
-        return _error_response(
-            400,
-            "'prompt' is required and must be a string.",
-            FailureKind.INVALID_REQUEST,
-        )
     media = services.media
     if media is None:
+        await cleanup()
         return _error_response(
             503,
             "Media routing is not available in this server.",
             FailureKind.UNAVAILABLE,
         )
-    media_request = MediaRequest(
-        operation=MEDIA_OPERATION_IMAGE_GENERATE,
-        rail=MediaRail.IMAGE,
-        model=str(payload.get("model") or ""),
-        body={key: value for key, value in payload.items() if key != "model"},
-        stream=payload.get("stream") is True,
-    )
     lease: RequestRuntimeLease | None = None
     capture: MediaCapture | None = None
     try:
@@ -185,7 +246,7 @@ async def create_image(
         capture = MediaCapture(
             settings,
             request_id=request_id,
-            endpoint=IMAGES_GENERATIONS_ENDPOINT,
+            endpoint=endpoint,
             request=media_request,
             headers=request.headers,
         )
@@ -206,6 +267,7 @@ async def create_image(
             await lease.release()
         if capture is not None:
             await capture.finish("error", error=exc)
+        await cleanup()
         return _error_response(
             502, "The provider returned an empty answer.", FailureKind.UPSTREAM
         )
@@ -214,20 +276,115 @@ async def create_image(
             await lease.release()
         if capture is not None:
             await capture.finish("error", error=exc)
+        await cleanup()
         return _failure_response(exc)
     except BaseException:
         if lease is not None:
             await lease.release()
         if capture is not None:
             await capture.finish("cancelled")
+        await cleanup()
         raise
 
     if not media_request.stream:
-        return await _complete_response(first, stream, lease, capture)
+        try:
+            return await _complete_response(first, stream, lease, capture)
+        finally:
+            await cleanup()
     response = ManagedStreamingResponse(
-        _stream_body(first, stream, capture), media_type="text/event-stream"
+        _stream_body(first, stream, capture, cleanup), media_type="text/event-stream"
     )
-    return await bind_response_lifetime(response, lease.release)
+    bound = await bind_response_lifetime(response, lease.release)
+    assert isinstance(bound, Response)
+    return bound
+
+
+@router.post(IMAGES_GENERATIONS_ENDPOINT)
+async def create_image(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    """Generate images through the Image rail (OpenAI ``images.generate``)."""
+    payload = await _read_json_object(request)
+    if payload is None:
+        return _invalid("The request body must be a JSON object.")
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _invalid("'prompt' is required and must be a string.")
+    media_request = MediaRequest(
+        operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        rail=MediaRail.IMAGE,
+        model=str(payload.get("model") or ""),
+        body={key: value for key, value in payload.items() if key != "model"},
+        stream=payload.get("stream") is True,
+    )
+    return await _serve(
+        request, services, media_request, endpoint=IMAGES_GENERATIONS_ENDPOINT
+    )
+
+
+@router.post(IMAGES_EDITS_ENDPOINT)
+async def edit_image(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    """Edit images through the Image rail (OpenAI ``images.edit``)."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+
+        async def close_form() -> None:
+            await form.close()
+
+        try:
+            fields, uploads = await _uploads_from_form(form)
+        except BaseException:
+            await close_form()
+            raise
+        prompt = fields.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            await close_form()
+            return _invalid("'prompt' is required and must be a string.")
+        if not any(upload.field.startswith("image") for upload in uploads):
+            await close_form()
+            return _invalid("An 'image' file is required to edit an image.")
+        media_request = MediaRequest(
+            operation=MEDIA_OPERATION_IMAGE_EDIT,
+            rail=MediaRail.IMAGE,
+            model=str(fields.get("model") or ""),
+            body={key: value for key, value in fields.items() if key != "model"},
+            stream=_stream_flag(fields.get("stream")),
+            uploads=uploads,
+        )
+        return await _serve(
+            request,
+            services,
+            media_request,
+            endpoint=IMAGES_EDITS_ENDPOINT,
+            cleanup=close_form,
+        )
+    payload = await _read_json_object(request)
+    if payload is None:
+        return _invalid(
+            "The request body must be multipart/form-data or a JSON object."
+        )
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _invalid("'prompt' is required and must be a string.")
+    if not payload.get("images"):
+        return _invalid("'images' is required to edit an image.")
+    media_request = MediaRequest(
+        operation=MEDIA_OPERATION_IMAGE_EDIT,
+        rail=MediaRail.IMAGE,
+        model=str(payload.get("model") or ""),
+        body={key: value for key, value in payload.items() if key != "model"},
+        stream=payload.get("stream") is True,
+    )
+    return await _serve(
+        request, services, media_request, endpoint=IMAGES_EDITS_ENDPOINT
+    )
 
 
 async def _complete_response(
@@ -262,12 +419,13 @@ async def _stream_body(
     first: MediaChunk,
     stream: AsyncIterator[MediaChunk],
     capture: MediaCapture,
+    cleanup: Cleanup,
 ) -> AsyncIterator[bytes]:
     """Forward SSE frames; measure the completed images once the stream ends.
 
-    The row is written from a task rather than awaited here: a client that
-    hangs up closes this generator with ``GeneratorExit``, and awaiting during
-    that is unsafe.
+    The row is written (and the uploads closed) from a task rather than awaited
+    here: a client that hangs up closes this generator with ``GeneratorExit``,
+    and awaiting during that is unsafe.
     """
     seen = bytearray()
     status = "success"
@@ -289,21 +447,35 @@ async def _stream_body(
     finally:
         if status == "success" and b"event: error" in seen:
             status = "error"
-        asyncio.ensure_future(_finish_stream(capture, status, error, bytes(seen)))
+        asyncio.ensure_future(
+            _finish_stream(capture, status, error, bytes(seen), cleanup)
+        )
 
 
 async def _finish_stream(
-    capture: MediaCapture, status: str, error: BaseException | None, seen: bytes
+    capture: MediaCapture,
+    status: str,
+    error: BaseException | None,
+    seen: bytes,
+    cleanup: Cleanup,
 ) -> None:
-    outputs = await asyncio.to_thread(parse_images_stream, seen)
-    if status == "success":
-        await capture.finish("success", outputs=outputs)
-    elif status == "cancelled":
-        await capture.finish("cancelled", outputs=outputs)
-    else:
-        await capture.finish("error", error=error, outputs=outputs)
+    try:
+        outputs = await asyncio.to_thread(parse_images_stream, seen)
+        if status == "success":
+            await capture.finish("success", outputs=outputs)
+        elif status == "cancelled":
+            await capture.finish("cancelled", outputs=outputs)
+        else:
+            await capture.finish("error", error=error, outputs=outputs)
+    finally:
+        await cleanup()
 
 
 @router.api_route(IMAGES_GENERATIONS_ENDPOINT, methods=["HEAD", "OPTIONS"])
 async def probe_images_generations(_auth=Depends(require_proxy_auth)):
+    return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
+
+
+@router.api_route(IMAGES_EDITS_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_images_edits(_auth=Depends(require_proxy_auth)):
     return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
