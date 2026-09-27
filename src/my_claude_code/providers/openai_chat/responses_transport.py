@@ -55,6 +55,7 @@ from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
     alias_responses_body_tool_names,
     build_responses_request_body,
+    history_thinking_marker,
     iter_responses_sse_events,
     note_responses_event_shape,
     responses_tool_name_codec,
@@ -633,6 +634,7 @@ class ResponsesTransport:
                 **marker,
                 **schema_marker,
                 **count_marker,
+                **history_thinking_marker(wire_notes),
             )
             try:
                 response = await self._rate_limiter.execute_with_retry(

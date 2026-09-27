@@ -1186,7 +1186,13 @@ Reasoning history replay is a separate request-conversion decision. Every
 profile explicitly chooses native `reasoning_content`, native `reasoning`,
 `<think>` tags, provider-specific chunks, or no replay. Turning off computation
 for the next generation does not silently erase prior assistant state required
-for a valid continuation.
+for a valid continuation. The outbound Responses surface (ChatGPT OAuth, and
+OpenCode models served on `/responses`) replays none since 7.58.1: shown their
+past reasoning as `<think>` output text, those models wrote their answers in
+tags, and the documented continuity mechanism there is the encrypted reasoning
+item, which MCC does not keep. The request log's `history_thinking_omitted`
+wire note counts what was left out, and the Responses stream runs the same
+`<think>` parser as the Chat Completions door.
 
 The boundary has four hard rules:
 
