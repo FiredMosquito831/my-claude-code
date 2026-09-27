@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.core.anthropic.content import get_block_attr, get_block_type
 from my_claude_code.core.anthropic.conversion import (
     AnthropicToOpenAIConverter,
     OpenAIConversionError,
@@ -38,6 +39,32 @@ from .tool_schema_dialect import (
 
 RESPONSES_DEFAULT_REASONING_EFFORT = "medium"
 RESPONSES_DEFAULT_REASONING_SUMMARY = "auto"
+
+#: How earlier assistant thinking is replayed into a Responses ``input``: not
+#: at all. Until 7.58.1 this was ``THINK_TAGS`` -- every earlier thinking block
+#: went back upstream as literal ``<think>\n...\n</think>`` *output text* of the
+#: assistant, and a model shown its own past turns in that format writes its
+#: next turn in it. 1,308 logged answers carried literal tags, ~97 % on
+#: ``chatgpt_oauth`` and the rest on OpenCode's Responses-only ``muse-spark``;
+#: all 107 muse rows with a recorded shape were plain ``content`` with no
+#: reasoning and no function call -- the model narrated "let me ..." in tags and
+#: ended the turn.
+#:
+#: Omission is the only honest option on this wire: OpenAI documents stateless
+#: reasoning continuity (``store: false``) as replaying the *reasoning items*
+#: with their ``encrypted_content``, which the stream converter never keeps,
+#: and nothing shows a Responses host accepting a summary-only reasoning item
+#: we would have to invent. So nothing is sent rather than something the host
+#: did not write.
+RESPONSES_REASONING_REPLAY = ReasoningReplayMode.DISABLED
+
+#: The ``params.wire`` key recording that earlier thinking was left out of
+#: ``input``. Counts only, never text -- the same rule every other marker on
+#: that record keeps (``tool_schema_pruned``, ``tools_trimmed``). Deliberately
+#: not spelled ``reasoning_*``/``thinking_*``: the wire recorder reads any key
+#: with those prefixes as a reasoning *instruction* (``is_reasoning_key``), and
+#: a note about the history would then count as reasoning sent.
+HISTORY_THINKING_OMITTED = "history_thinking_omitted"
 
 
 def responses_tool_name_codec(
@@ -431,6 +458,69 @@ def _reasoning_block(policy: ReasoningPolicy) -> dict[str, Any] | None:
     }
 
 
+def _earlier_thinking(messages: list[Any]) -> tuple[int, int]:
+    """Count the thinking an Anthropic history carries, as ``(blocks, chars)``.
+
+    Exactly what ``THINK_TAGS`` used to write back as ``<think>`` text: every
+    ``thinking`` block of an assistant turn given as a block list, and the
+    top-level ``reasoning_content`` of an assistant turn given as a plain
+    string. ``redacted_thinking`` was never replayed in any mode, so it is
+    not counted as omitted now.
+    """
+
+    blocks = 0
+    chars = 0
+    for message in messages:
+        if getattr(message, "role", None) != "assistant":
+            continue
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            for block in content:
+                if get_block_type(block) != "thinking":
+                    continue
+                blocks += 1
+                thinking = get_block_attr(block, "thinking", "")
+                chars += len(thinking) if isinstance(thinking, str) else 0
+        elif isinstance(content, str):
+            reasoning = getattr(message, "reasoning_content", None)
+            if isinstance(reasoning, str) and reasoning:
+                blocks += 1
+                chars += len(reasoning)
+    return blocks, chars
+
+
+def _history_thinking_note(messages: list[Any]) -> dict[str, str]:
+    """The ``history_thinking_omitted`` record for one history, or ``{}``."""
+
+    blocks, chars = _earlier_thinking(messages)
+    if not blocks:
+        return {}
+    noun = "block" if blocks == 1 else "blocks"
+    return {
+        HISTORY_THINKING_OMITTED: (
+            f"omitted {blocks} earlier thinking {noun} ({chars} chars) from "
+            "input; the Responses surface replays no reasoning as text"
+        )
+    }
+
+
+def history_thinking_marker(
+    wire_notes: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """The replay record out of one build's ``wire_notes``, or ``{}``.
+
+    Separate from the schema markers on purpose: those are merged per key by
+    :func:`~my_claude_code.providers.recovery.merge_tool_schema_markers`,
+    which keeps only its own keys, and a retry never changes what the history
+    left out -- so every attempt row of one request carries the same line.
+    """
+
+    if not wire_notes:
+        return {}
+    note = wire_notes.get(HISTORY_THINKING_OMITTED)
+    return {HISTORY_THINKING_OMITTED: note} if note else {}
+
+
 def _extract_system_instructions(request: MessagesRequest) -> str | None:
     """Return the top-level Anthropic system prompt as a single string."""
     system = request.system
@@ -516,9 +606,13 @@ def build_responses_request_body(
         the name codec; identity when nothing offends.
     ``wire_notes``
         a caller's mapping to receive what this build took out of the
-        client's request -- ``tool_schema_pruned``, names and paths only --
-        so the sender records it beside the body it describes. Left untouched
-        when nothing was removed.
+        client's request -- ``tool_schema_pruned``, names and paths only, and
+        ``history_thinking_omitted``, counts only -- so the sender records it
+        beside the body it describes. Left untouched when nothing was removed.
+
+    Earlier assistant thinking is never replayed on this surface
+    (:data:`RESPONSES_REASONING_REPLAY`); what was left out is counted into
+    ``wire_notes``.
 
     Order of operations, fixed: the free-tier catalogue (if any) has already
     replaced ``request.tools`` one layer up; the name codec is chosen here and
@@ -534,10 +628,12 @@ def build_responses_request_body(
     try:
         openai_messages = AnthropicToOpenAIConverter.convert_messages(
             request.messages,
-            reasoning_replay=ReasoningReplayMode.THINK_TAGS,
+            reasoning_replay=RESPONSES_REASONING_REPLAY,
         )
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
+    if wire_notes is not None:
+        wire_notes.update(_history_thinking_note(request.messages))
 
     tool_names = responses_tool_name_codec(
         request, tool_name_max_length, tool_catalogue

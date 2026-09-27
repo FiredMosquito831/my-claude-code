@@ -14,6 +14,11 @@ from typing import Any
 
 from my_claude_code.core.anthropic.openai_tool_names import OpenAIToolNameCodec
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+from my_claude_code.core.anthropic.thinking import (
+    ContentChunk,
+    ContentType,
+    ThinkTagParser,
+)
 from my_claude_code.core.wire_capture import ResponseShape
 
 
@@ -120,6 +125,16 @@ class ResponsesStreamConverter:
         #: second summary part is separated from the first instead of being
         #: glued onto it.
         self._thinking_chars_in_block = 0
+        #: The Chat door's own ``<think>`` parser, run over the answer text.
+        #: A model that writes its reasoning as tags -- the format MCC itself
+        #: replayed on this surface until 7.58.1 -- gets a thinking block
+        #: instead of literal tags in the answer. The same class the Chat
+        #: Completions path uses, so the same text parses the same way on
+        #: either door, including a genuine answer that spells the tag.
+        self._think_parser = ThinkTagParser()
+        #: Whether the model sent any answer text at all. Before the parser,
+        #: answer text always opened a text block; see :meth:`finish`.
+        self._answer_text_seen = False
         self._active_tool_calls: dict[str, dict[str, Any]] = {}
         self._usage: dict[str, int] = {
             "input_tokens": 0,
@@ -146,8 +161,9 @@ class ResponsesStreamConverter:
         if event_type == "response.output_text.delta":
             delta = event.get("delta")
             if isinstance(delta, str) and delta:
-                yield from self._ledger.ensure_text_block()
-                yield self._ledger.emit_text_delta(delta)
+                self._answer_text_seen = True
+                for part in self._think_parser.feed(delta):
+                    yield from self._emit_answer_part(part)
             return
 
         if event_type in _REASONING_DELTA_EVENTS:
@@ -191,6 +207,9 @@ class ResponsesStreamConverter:
                     "arguments": "",
                     "index": len(self._active_tool_calls),
                 }
+                # Answer text the tag parser still holds belongs before the
+                # call, not after it.
+                yield from self._flush_answer_text()
                 yield from self._ledger.close_content_blocks()
                 yield self._ledger.start_tool_block(
                     tool_index=self._active_tool_calls[tool_id]["index"],
@@ -214,6 +233,11 @@ class ResponsesStreamConverter:
             if item_type == "reasoning":
                 yield from self._flush_reasoning_item(item)
                 return
+            if item_type == "message":
+                # The message's text is complete: a held partial tag was not
+                # a tag after all.
+                yield from self._flush_answer_text()
+                return
             if item_type == "function_call":
                 tool_id = item.get("id")
                 tool = self._active_tool_calls.get(tool_id)
@@ -233,6 +257,7 @@ class ResponsesStreamConverter:
             if self._finished:
                 return
             self._finished = True
+            yield from self._flush_answer_text()
             yield from self._ledger.close_content_blocks()
             usage = response.get("usage") if isinstance(response, dict) else None
             if isinstance(usage, Mapping):
@@ -292,6 +317,32 @@ class ResponsesStreamConverter:
         yield from self._ledger.ensure_thinking_block()
         yield self._ledger.emit_thinking_delta(text)
         self._thinking_chars_in_block += len(text)
+
+    def _emit_answer_part(self, part: ContentChunk) -> Iterator[str]:
+        """Emit one piece of answer text the tag parser has classified.
+
+        Tagged reasoning goes where the Chat door sends it: into the thinking
+        block, and nowhere when the client's policy hides reasoning. Every
+        other piece is answer text, exactly as it arrived.
+        """
+        if part.type is ContentType.THINKING:
+            yield from self._emit_thinking(part.content)
+            return
+        if not part.content:
+            return
+        yield from self._ledger.ensure_text_block()
+        yield self._ledger.emit_text_delta(part.content)
+
+    def _flush_answer_text(self) -> Iterator[str]:
+        """Emit whatever the tag parser is holding back as a possible tag.
+
+        It holds at most a trailing ``<``-prefix of ``<think>``/``</think>``;
+        once the text around it is known to be complete, that is text (or,
+        inside an open tag, thinking) and must not be lost.
+        """
+        remaining = self._think_parser.flush()
+        if remaining is not None:
+            yield from self._emit_answer_part(remaining)
 
     def _flush_reasoning_item(self, item: Mapping[str, Any]) -> Iterator[str]:
         """Emit any summary text of a finished reasoning item nobody streamed.
@@ -365,6 +416,15 @@ class ResponsesStreamConverter:
 
     def finish(self, stop_reason: str | None = None) -> Iterator[str]:
         """Emit final message_delta and message_stop events."""
+        yield from self._flush_answer_text()
+        if self._answer_text_seen and self._ledger.blocks.next_index == 0:
+            # The answer was nothing but tagged reasoning, and the client's
+            # policy hides reasoning: without this the message would carry no
+            # content block at all, which answer text never produced before
+            # the tag parser. One space, as the Chat door emits in the same
+            # case.
+            yield from self._ledger.ensure_text_block()
+            yield self._ledger.emit_text_delta(" ")
         yield from self._ledger.close_content_blocks()
         reason = stop_reason or "end_turn"
         yield self._ledger.message_delta(

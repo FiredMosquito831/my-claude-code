@@ -48,7 +48,10 @@ from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
 from my_claude_code.providers.oauth_names import account_name
-from my_claude_code.providers.openai_responses import ToolSchemaDialect
+from my_claude_code.providers.openai_responses import (
+    ToolSchemaDialect,
+    history_thinking_marker,
+)
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     RUNG_TOOL_SCHEMA,
@@ -801,6 +804,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                             surface=WIRE_SURFACE,
                             **schema_marker,
                             **count_marker,
+                            **history_thinking_marker(declared_marker),
                         )
                         try:
                             response = await self._rate_limiter.execute_with_retry(
