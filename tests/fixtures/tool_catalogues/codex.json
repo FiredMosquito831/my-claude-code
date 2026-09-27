@@ -1,0 +1,254 @@
+{
+ "harness": "codex",
+ "source": "@openai/codex 0.155.1 `codex exec` via mcc-codex, tester's scratch log D:/mcc-scratch-zenh2 (2026-09-27)",
+ "catalogue_sha_prefix": "eeace7a081a61fb0",
+ "tool_count": 8,
+ "tools": [
+  {
+   "name": "exec_command",
+   "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\nWindows safety rules:\n- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-Li",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "cmd": {
+      "description": "Shell command to execute.",
+      "type": "string"
+     },
+     "justification": {
+      "description": "User-facing approval question for `require_escalated`; omit otherwise.",
+      "type": "string"
+     },
+     "login": {
+      "description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true.",
+      "type": "boolean"
+     },
+     "max_output_tokens": {
+      "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.",
+      "type": "number"
+     },
+     "prefix_rule": {
+      "description": "Reusable approval prefix for `cmd`, only with `sandbox_permissions: \"require_escalated\"`; for example [\"git\", \"pull\"].",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "sandbox_permissions": {
+      "description": "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` for unsandboxed execution.",
+      "enum": [
+       "use_default",
+       "require_escalated"
+      ],
+      "type": "string"
+     },
+     "shell": {
+      "description": "Shell binary to launch. Defaults to the user's default shell.",
+      "type": "string"
+     },
+     "tty": {
+      "description": "True allocates a PTY for the command; false or omitted uses plain pipes.",
+      "type": "boolean"
+     },
+     "workdir": {
+      "description": "Working directory for the command. Defaults to the turn cwd.",
+      "type": "string"
+     },
+     "yield_time_ms": {
+      "description": "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 10000-30000 ms.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "cmd"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "write_stdin",
+   "description": "Writes characters to an existing unified exec session and returns recent output.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "chars": {
+      "description": "Bytes to write to stdin. Defaults to empty, which polls without writing.",
+      "type": "string"
+     },
+     "max_output_tokens": {
+      "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.",
+      "type": "number"
+     },
+     "session_id": {
+      "description": "Identifier of the running unified exec session.",
+      "type": "number"
+     },
+     "yield_time_ms": {
+      "description": "Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "session_id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "request_user_input",
+   "description": "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "questions": {
+      "description": "Questions to show the user. Prefer 1 and do not exceed 3",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "header": {
+         "description": "Short header label shown in the UI (12 or fewer chars).",
+         "type": "string"
+        },
+        "id": {
+         "description": "Stable identifier for mapping answers (snake_case).",
+         "type": "string"
+        },
+        "options": {
+         "description": "Provide 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; the client will add a free-form \"Other\" option automatically.",
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "description": {
+            "description": "One short sentence explaining impact/tradeoff if selected.",
+            "type": "string"
+           },
+           "label": {
+            "description": "User-facing label (1-5 words).",
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "question": {
+         "description": "Single-sentence prompt shown to the user.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "header",
+        "question",
+        "options"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "apply_patch",
+   "description": "The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.\n\nCustom tool input format: grammar (lark): start: begin_patch hunk+ end_patch\r\nbegin_patch: \"*** Begin Patch\" LF\r\nend_patch: \"*** End Patch\" LF?\r\n\r\nhunk: add_hunk | delete_hunk | update_hunk\r\nadd_hunk: \"*** Add File: \" filename LF add_line+\r\ndelete_hunk: \"*** Delete File: \" filename LF\r\nupd",
+   "input_schema": {
+    "properties": {
+     "input": {
+      "description": "Free-form input for the custom tool.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "input"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "view_image",
+   "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "detail": {
+      "description": "Image detail level. Defaults to `high`; use `original` to preserve exact resolution.",
+      "enum": [
+       "high",
+       "original"
+      ],
+      "type": "string"
+     },
+     "path": {
+      "description": "Local filesystem path to an image file.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "get_goal",
+   "description": "Get the current goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   }
+  },
+  {
+   "name": "create_goal",
+   "description": "Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks.\nSet token_budget only when an explicit token budget is requested. Fails if an unfinished goal exists; use update_goal only for status.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "objective": {
+      "description": "Required. The concrete objective to start pursuing. This starts a new active goal when no goal exists or replaces the current goal when it is complete.",
+      "type": "string"
+     },
+     "token_budget": {
+      "description": "Positive token budget for the new goal. Omit unless explicitly requested.",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "objective"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "update_goal",
+   "description": "Update the existing goal.\nSet status to `paused` only at the user's explicit request to pause this goal, never on your own initiative. Ask if unclear; a later resume revokes that request. Report the returned status and stop goal work. Budget limits take precedence over pausing.\nSet status to `complete` only when the objective has actually been achieved and no required work remains.\nSet status to `",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "status": {
+      "description": "Required. `paused` requires an explicit user request. Set to `complete` only when the objective is achieved and no required work remains. Set to `blocked` only after the same blocking condition has recurred for at least three consecutive goal turns and the agent is at an impasse. After a previously blocked goal is resumed, the resumed run starts a fresh blocked audit.",
+      "enum": [
+       "complete",
+       "blocked",
+       "paused"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   }
+  }
+ ]
+}

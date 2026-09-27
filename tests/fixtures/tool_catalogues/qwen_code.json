@@ -1,0 +1,322 @@
+{
+ "harness": "qwen_code",
+ "source": "@qwen-code/qwen-code 0.15.11 headless `-p` via mcc-qwen, tester's scratch log (2026-09-27)",
+ "catalogue_sha_prefix": "056e13abd86347d5",
+ "tool_count": 9,
+ "tools": [
+  {
+   "name": "tool_search",
+   "description": "Fetches function declarations for deferred tools and registers them with the active session so subsequent turns can call them.\n\nDeferred tools appear by name in the \"Deferred Tools\" section of the system prompt. Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query, matches it against the deferred tool list, and returns the mat",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "max_results": {
+      "default": 5,
+      "description": "Maximum number of results to return (default: 5)",
+      "maximum": 20,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "query": {
+      "description": "Query to find deferred tools. Use \"select:<tool_name>\" for direct selection, or keywords to search.",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "agent",
+   "description": "Launch a new agent to handle complex, multi-step tasks autonomously.\nThe Agent tool launches specialized agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.\n\nAvailable agent types and the tools they have access to:\n- **general-purpose**: General-purpose agent for researching complex questions, searching for code, and ex",
+   "input_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "description": "A short (3-5 word) description of the task",
+      "type": "string"
+     },
+     "prompt": {
+      "description": "The task for the agent to perform",
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": "Set to true to run this agent in the background. You will be notified when it completes.",
+      "type": "boolean"
+     },
+     "subagent_type": {
+      "description": "The type of specialized agent to use for this task",
+      "enum": [
+       "general-purpose",
+       "Explore",
+       "statusline-setup"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "description",
+     "prompt"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "skill",
+   "description": "Execute a skill within the main conversation\n\n<skills_instructions>\nWhen users ask you to perform tasks, check if any of the available skills below can help complete the task more effectively. Skills provide specialized capabilities and domain knowledge.\n\nHow to invoke:\n- Use this tool with the skill name only (no arguments)\n- Examples:\n  - `skill: \"pdf\"` - invoke the pdf skill\n  - `skill: \"xlsx\"`",
+   "input_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+     "skill": {
+      "description": "The skill name (no arguments). E.g., \"pdf\" or \"xlsx\"",
+      "type": "string"
+     }
+    },
+    "required": [
+     "skill"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "list_directory",
+   "description": "Lists the names of files and subdirectories directly within a specified directory path. Can optionally ignore entries matching provided glob patterns.",
+   "input_schema": {
+    "properties": {
+     "file_filtering_options": {
+      "description": "Optional: Whether to respect ignore patterns from .gitignore or .qwenignore",
+      "properties": {
+       "respect_git_ignore": {
+        "description": "Optional: Whether to respect .gitignore patterns when listing files. Only available in git repositories. Defaults to true.",
+        "type": "boolean"
+       },
+       "respect_qwen_ignore": {
+        "description": "Optional: Whether to respect .qwenignore patterns when listing files. Defaults to true.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "ignore": {
+      "description": "List of glob patterns to ignore",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "path": {
+      "description": "The absolute path to the directory to list (must be absolute, not relative)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "read_file",
+   "description": "Reads and returns the content of a specified file. If the file is large, the content will be truncated. The tool's response will clearly indicate if truncation has occurred and will provide details on how to read more of the file using the 'offset' and 'limit' parameters. Handles text, images (PNG, JPG, GIF, WEBP, SVG, BMP), PDF files, and Jupyter notebooks (.ipynb). For text files, it can read sp",
+   "input_schema": {
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to read (e.g., '<scrubbed>'). Relative paths are not supported. You must provide an absolute path.",
+      "type": "string"
+     },
+     "limit": {
+      "description": "Optional: For text files, maximum number of lines to read. Use with 'offset' to paginate through large files. If omitted, reads the entire file (if feasible, up to a default limit).",
+      "type": "number"
+     },
+     "offset": {
+      "description": "Optional: For text files, the 0-based line number to start reading from. Requires 'limit' to be set. Use for paginating through large files.",
+      "type": "number"
+     },
+     "pages": {
+      "description": "Optional: For PDF files, the page range to extract as text (e.g., '1-5', '3', '10-20'). Pages are 1-indexed. Max 20 pages per request. Open-ended ranges like '3-' are not supported. When provided, PDF content is extracted as text regardless of model capabilities.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "grep_search",
+   "description": "A powerful search tool built on ripgrep\n\n  Usage:\n  - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash command. The Grep tool has been optimized for correct permissions and access.\n  - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")\n  - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\")\n  - Use Agent tool for open-ended searches requiring multiple ",
+   "input_schema": {
+    "properties": {
+     "glob": {
+      "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob",
+      "type": "string"
+     },
+     "limit": {
+      "description": "Limit output to first N lines/entries. Optional - shows all matches if not specified.",
+      "type": "number"
+     },
+     "path": {
+      "description": "File or directory to search in (rg PATH). Defaults to current working directory.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "The regular expression pattern to search for in file contents",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "glob",
+   "description": "Fast file pattern matching tool that works with any codebase size\n- Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\"\n- Returns matching file paths sorted by modification time\n- Use this tool when you need to find files by name patterns\n- When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead\n- You have the capability to c",
+   "input_schema": {
+    "properties": {
+     "path": {
+      "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "The glob pattern to match files against",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "todo_write",
+   "description": "\nUse this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.\nIt also helps the user understand the progress of the task and overall progress of their requests.\n\n## When to Use This Tool\nUse this tool proactively in these scenarios:\n\n1. Complex multi-step tasks - When a ta",
+   "input_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+     "todos": {
+      "description": "The updated todo list",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "content": {
+         "minLength": 1,
+         "type": "string"
+        },
+        "id": {
+         "type": "string"
+        },
+        "status": {
+         "enum": [
+          "pending",
+          "in_progress",
+          "completed"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "content",
+        "status",
+        "id"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "todos"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "ask_user_question",
+   "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\n1. Gather user preferences or requirements\n2. Clarify ambiguous instructions\n3. Get decisions on implementation choices as you work\n4. Offer choices to the user about what direction to take.\n\nUsage notes:\n- Users will always be able to select \"Other\" to provide custom text input\n- Use multiSelect: true to a",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "metadata": {
+      "additionalProperties": false,
+      "description": "Optional metadata for tracking and analytics purposes. Not displayed to user.",
+      "properties": {
+       "source": {
+        "description": "Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used for analytics tracking.",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "questions": {
+      "description": "Questions to ask the user (1-4 questions)",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "header": {
+         "description": "Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".",
+         "type": "string"
+        },
+        "multiSelect": {
+         "default": false,
+         "description": "Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.",
+         "type": "boolean"
+        },
+        "options": {
+         "description": "The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.",
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "description": {
+            "description": "Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.",
+            "type": "string"
+           },
+           "label": {
+            "description": "The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "type": "object"
+         },
+         "maxItems": 4,
+         "minItems": 2,
+         "type": "array"
+        },
+        "question": {
+         "description": "The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"",
+         "type": "string"
+        }
+       },
+       "required": [
+        "question",
+        "header",
+        "options"
+       ],
+       "type": "object"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "type": "object"
+   }
+  }
+ ]
+}

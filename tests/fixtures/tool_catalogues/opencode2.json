@@ -1,0 +1,364 @@
+{
+ "harness": "opencode2",
+ "source": "@opencode-ai/cli 0.0.0-beta-18866 `opencode2 run` via mcc-opencode2, tester's scratch log (2026-09-27)",
+ "catalogue_sha_prefix": "66ddbb6817bc5f83",
+ "tool_count": 12,
+ "tools": [
+  {
+   "name": "edit",
+   "description": "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in oldString or newString. The edit fails if oldString is not found. By default, oldString must identify a UNIQUE location. Multiple matches FAIL unless replaceAll is true. Add m",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "newString": {
+      "description": "Text to replace oldString with (must differ from oldString)",
+      "type": "string"
+     },
+     "oldString": {
+      "description": "Exact text to find and replace",
+      "type": "string"
+     },
+     "path": {
+      "description": "File to edit",
+      "type": "string"
+     },
+     "replaceAll": {
+      "description": "Whether to replace every occurrence of oldString. When false, oldString must match exactly once. Defaults to false.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "path",
+     "oldString",
+     "newString"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "glob",
+   "description": "Search file paths using a glob pattern (examples: \"**/*.ts\", \"src/**/*.tsx\").",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "description": "Maximum number of matching files to return (default: 100)",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "path": {
+      "description": "Directory to search. Defaults to the current working directory.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "Glob pattern to match files against",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "grep",
+   "description": "Search file contents using ripgrep's regular expression syntax or literal text matching. Use it to locate specific code, symbols, or text patterns, and narrow searches with `path` or `include`. Returns matching file paths, line numbers, and line previews.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "caseSensitive": {
+      "description": "Use case-sensitive matching (default: true).",
+      "type": "boolean"
+     },
+     "include": {
+      "description": "Glob pattern to filter files (for example, \"*.js\" or \"*.{ts,tsx}\")",
+      "type": "string"
+     },
+     "limit": {
+      "description": "Maximum number of matching lines to return (default: 100)",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "literal": {
+      "description": "Treat `pattern` as exact text instead of a regular expression (default: false).",
+      "type": "boolean"
+     },
+     "path": {
+      "description": "File or directory to search. Defaults to the current working directory.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "Regular expression or literal text to match in file contents.",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "question",
+   "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\n1. Gather user preferences or requirements\n2. Clarify ambiguous instructions\n3. Get decisions on implementation choices as you work\n4. Offer choices to the user about what direction to take.\n\nUsage notes:\n- A \"Type your own answer\" option is added automatically; don't include a separate option for free form",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "questions": {
+      "description": "Questions to ask",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "header": {
+         "description": "Very short label (max 30 chars)",
+         "type": "string"
+        },
+        "multiple": {
+         "type": "boolean"
+        },
+        "options": {
+         "description": "Available choices",
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "description": {
+            "description": "Explanation of choice",
+            "type": "string"
+           },
+           "label": {
+            "description": "Display text (1-5 words, concise)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "question": {
+         "description": "Complete question",
+         "type": "string"
+        }
+       },
+       "required": [
+        "question",
+        "header",
+        "options"
+       ],
+       "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "read",
+   "description": "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one ",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "description": "The maximum number of lines or directory entries to read (defaults to 2000)",
+      "maximum": 2000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "offset": {
+      "description": "The line or directory entry to start reading from (1-based)",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "path": {
+      "description": "File or directory to read",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "shell",
+   "description": "Execute a shell command and return its output. Commands run on Windows using pwsh. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeou",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "background": {
+      "description": "Run the command in the background and return immediately. You will be notified when it completes. DO NOT poll its progress.",
+      "type": "boolean"
+     },
+     "command": {
+      "description": "Shell command string to execute",
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "workdir": {
+      "description": "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "skill",
+   "description": "Load a specialized skill's instructions and resources into the current conversation when the task at hand matches its description.\n\nThe skill ID must match an available skill or a skill explicitly referenced by the user.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "id": {
+      "description": "The ID of an available skill or a skill explicitly referenced by the user",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "subagent",
+   "description": "Spawns an agent in a child session to work on the specified task.\nThe output includes a sessionID you can pass back later to continue that specific conversation with the subagent.\nNew child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.\nForeground (default) runs the subagent to completion and returns its final response.\nBackgrou",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "agent": {
+      "description": "The type of specialized agent to use for this task",
+      "type": "string"
+     },
+     "background": {
+      "description": "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress.",
+      "type": "boolean"
+     },
+     "description": {
+      "description": "A short 3-5 word label for the task, displayed to the user",
+      "type": "string"
+     },
+     "prompt": {
+      "description": "The task for the subagent to perform",
+      "type": "string"
+     },
+     "sessionID": {
+      "description": "Continue a specific previous subagent conversation by passing its sessionID. Calls without a sessionID start a new conversation.",
+      "pattern": "^ses",
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent",
+     "description",
+     "prompt"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "webfetch",
+   "description": "Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.\n\nUse a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "format": {
+      "description": "The format to return the content in. Defaults to markdown.",
+      "enum": [
+       "text",
+       "markdown",
+       "html"
+      ],
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Optional timeout in seconds (maximum: 120)",
+      "exclusiveMinimum": 0,
+      "maximum": 120,
+      "type": "number"
+     },
+     "url": {
+      "description": "The HTTP or HTTPS URL to fetch content from",
+      "type": "string"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "websearch",
+   "description": "Search the web using the user's selected search integration. Use this for current information beyond knowledge cutoff.\n\nThe current year is 2026. Use this year when searching for recent information or current events.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "query": {
+      "description": "Websearch query",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "write",
+   "description": "Writes a file to the local filesystem, overwriting if one exists.\n\nMissing parent directories are created automatically.\n\nUse this tool to create new files or overwrite existing files. For partial changes, use the edit tool instead.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "content": {
+      "description": "Content to write to the file",
+      "type": "string"
+     },
+     "path": {
+      "description": "Path to the file to write to",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "content"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "execute",
+   "description": "Run JavaScript in a confined Code Mode runtime to orchestrate tool calls and compose their results.\nImports, direct filesystem access, and timers are unavailable. Do not use `fetch`; all external access goes through `tools`.\nWithin `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by `search`. Inside `{ code }`, ignore tools shown out",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "code": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code"
+    ],
+    "type": "object"
+   }
+  }
+ ]
+}

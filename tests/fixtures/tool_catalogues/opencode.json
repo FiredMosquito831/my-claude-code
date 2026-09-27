@@ -1,0 +1,286 @@
+{
+ "harness": "opencode",
+ "source": "opencode-ai 1.18.32 `opencode run` via mcc-opencode, tester's scratch log (2026-09-27)",
+ "catalogue_sha_prefix": "00cab1cb4780b84a",
+ "tool_count": 10,
+ "tools": [
+  {
+   "name": "bash",
+   "description": "Executes a given PowerShell (7+) command with optional timeout, ensuring proper handling and security measures.\n\nBe aware: OS: win32, Shell: pwsh\n\nAll commands run in the current working directory by default. Use the `workdir` parameter if you need to run a command in a different directory. AVOID changing directories inside the command - use `workdir` instead.\n\nUse `<scrubbed>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "command": {
+      "description": "The command to execute",
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Optional timeout in milliseconds",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "workdir": {
+      "description": "The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "edit",
+   "description": "Performs exact string replacements in files. \n\nUsage:\n- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. \n- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + co",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "filePath": {
+      "description": "The absolute path to the file to modify",
+      "type": "string"
+     },
+     "newString": {
+      "description": "The text to replace it with (must be different from oldString)",
+      "type": "string"
+     },
+     "oldString": {
+      "description": "The text to replace",
+      "type": "string"
+     },
+     "replaceAll": {
+      "description": "Replace all occurrences of oldString (default false)",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "filePath",
+     "oldString",
+     "newString"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "glob",
+   "description": "- Fast file pattern matching tool that works with any codebase size\n- Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\"\n- Returns matching file paths\n- Use this tool when you need to find files by name patterns\n- When you are doing an open-ended search that may require multiple rounds of globbing and grepping, use the Task tool instead\n- You have the capability to call multiple tools in a sin",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "path": {
+      "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "The glob pattern to match files against",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "grep",
+   "description": "- Fast content search tool that works with any codebase size\n- Searches file contents using regular expressions\n- Supports full regex syntax (eg. \"log.*Error\", \"function\\s+\\w+\", etc.)\n- Filter files by pattern with the include parameter (eg. \"*.js\", \"*.{ts,tsx}\")\n- Returns file paths and line numbers with matching lines\n- Use this tool when you need to find files containing specific patterns\n- If ",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "include": {
+      "description": "File pattern to include in the search (e.g. \"*.js\", \"*.{ts,tsx}\")",
+      "type": "string"
+     },
+     "path": {
+      "description": "The directory to search in. Defaults to the current working directory.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "The regex pattern to search for in file contents",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "read",
+   "description": "Read a file or directory from the local filesystem. If the path does not exist, an error is returned.\n\nUsage:\n- The filePath parameter should be an absolute path.\n- By default, this tool returns up to 2000 lines from the start of the file.\n- The offset parameter is the line number to start from (1-indexed).\n- To read later sections, call this tool again with a larger offset.\n- Use the grep tool to",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "filePath": {
+      "description": "The absolute path to the file or directory to read",
+      "type": "string"
+     },
+     "limit": {
+      "description": "The maximum number of lines to read (defaults to 2000)",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "offset": {
+      "description": "The line number to start reading from (1-indexed)",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "filePath"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "skill",
+   "description": "Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.\n\nUse this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.\n\nThe skill name must match one of the skills listed in your system prompt.\n",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "name": {
+      "description": "The name of the skill from available_skills",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "task",
+   "description": "Launch a new agent to handle complex, multistep tasks autonomously.\n\nWhen using the Task tool, you must specify a subagent_type parameter to select which agent type to use.\n\nWhen NOT to use the Task tool:\n- If you want to read a specific file path, use the Read or Glob tool instead of the Task tool, to find the match more quickly\n- If you are searching for a specific class definition like \"class F",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "command": {
+      "description": "The command that triggered this task",
+      "type": "string"
+     },
+     "description": {
+      "description": "A short (3-5 words) description of the task",
+      "type": "string"
+     },
+     "prompt": {
+      "description": "The task for the agent to perform",
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": "The type of specialized agent to use for this task",
+      "type": "string"
+     },
+     "task_id": {
+      "description": "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "description",
+     "prompt",
+     "subagent_type"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "todowrite",
+   "description": "Create and maintain a structured task list for the current coding session. Tracks progress, organizes multi-step work, and surfaces status to the user.\n\n## When to use\nUse proactively when:\n- The task requires 3+ distinct steps or actions (not just 3 tool calls for a single conceptual step)\n- The work is non-trivial and benefits from planning\n- The user provides multiple tasks (numbered or comma-s",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "todos": {
+      "description": "The updated todo list",
+      "items": {
+       "properties": {
+        "content": {
+         "description": "Brief description of the task",
+         "type": "string"
+        },
+        "priority": {
+         "description": "Priority level of the task: high, medium, low",
+         "type": "string"
+        },
+        "status": {
+         "description": "Current status of the task: pending, in_progress, completed, cancelled",
+         "type": "string"
+        }
+       },
+       "required": [
+        "content",
+        "status",
+        "priority"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "todos"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "webfetch",
+   "description": "- Fetches content from a specified URL\n- Takes a URL and optional format as input\n- Fetches the URL content, converts to requested format (markdown by default)\n- Returns the content in the specified format\n- Use this tool when you need to retrieve and analyze web content\n\nUsage notes:\n  - IMPORTANT: if another tool is present that offers better web fetching capabilities, is more targeted to the ta",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "format": {
+      "default": "markdown",
+      "description": "The format to return the content in (text, markdown, or html). Defaults to markdown.",
+      "enum": [
+       "text",
+       "markdown",
+       "html"
+      ],
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Optional timeout in seconds (max 120)",
+      "type": "number"
+     },
+     "url": {
+      "description": "The URL to fetch content from",
+      "type": "string"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "write",
+   "description": "Writes a file to the local filesystem.\n\nUsage:\n- This tool will overwrite the existing file if there is one at the provided path.\n- If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.\n- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n- NEVER proacti",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "content": {
+      "description": "The content to write to the file",
+      "type": "string"
+     },
+     "filePath": {
+      "description": "The absolute path to the file to write (must be absolute, not relative)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "content",
+     "filePath"
+    ],
+    "type": "object"
+   }
+  }
+ ]
+}

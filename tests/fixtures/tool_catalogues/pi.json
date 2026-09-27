@@ -1,0 +1,111 @@
+{
+ "harness": "pi",
+ "source": "@earendil-works/pi-coding-agent 0.82.1 `-p` via mcc-pi (probe bypassed), tester's scratch log (2026-09-27)",
+ "catalogue_sha_prefix": "f3ea02fb6a2e399c",
+ "tool_count": 4,
+ "tools": [
+  {
+   "name": "read",
+   "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+   "input_schema": {
+    "properties": {
+     "limit": {
+      "description": "Maximum number of lines to read",
+      "type": "number"
+     },
+     "offset": {
+      "description": "Line number to start reading from (1-indexed)",
+      "type": "number"
+     },
+     "path": {
+      "description": "Path to the file to read (relative or absolute)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "bash",
+   "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+   "input_schema": {
+    "properties": {
+     "command": {
+      "description": "Bash command to execute",
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Timeout in seconds (optional, no default timeout)",
+      "type": "number"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "edit",
+   "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+   "input_schema": {
+    "properties": {
+     "edits": {
+      "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+      "items": {
+       "properties": {
+        "newText": {
+         "description": "Replacement text for this targeted edit.",
+         "type": "string"
+        },
+        "oldText": {
+         "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "oldText",
+        "newText"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "path": {
+      "description": "Path to the file to edit (relative or absolute)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "edits"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "name": "write",
+   "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+   "input_schema": {
+    "properties": {
+     "content": {
+      "description": "Content to write to the file",
+      "type": "string"
+     },
+     "path": {
+      "description": "Path to the file to write (relative or absolute)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "content"
+    ],
+    "type": "object"
+   }
+  }
+ ]
+}
