@@ -1842,6 +1842,14 @@ _PARTIAL_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_requests_optimization_v1 ON requests("
     " optimization, ts_epoch, optimization_tokens_saved)"
     " WHERE optimization IS NOT NULL",
+    # 7.67.0: the Analytics Media card reads only the rows a media endpoint
+    # wrote. Without this its all-time window was a full scan -- measured
+    # read-only on the real 473,493-row log: 25.0 s (SCAN requests), and 0.31 s
+    # for a 7-day window over idx_requests_ts. Media rows are a sliver of the
+    # log, so this index is tiny and walked only on media inserts.
+    "CREATE INDEX IF NOT EXISTS idx_requests_media_v1 ON requests("
+    " ts_epoch, media_operation)"
+    " WHERE media_operation IS NOT NULL",
 )
 # ``idx_requests_origin_v1`` (7.43.0) serves the Session and Folder filters and
 # the two breakdowns beside them. Every row written before 7.42.0 has neither

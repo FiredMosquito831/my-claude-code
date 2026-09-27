@@ -5,6 +5,7 @@ media ones, over the page's own time window, per rail and per provider/model,
 and never changes what the chat stats count. Every id and ref is fake.
 """
 
+import sqlite3
 import time
 
 import pytest
@@ -294,3 +295,38 @@ def test_the_route_is_local_only(seeded):
     client = TestClient(create_test_app(), client=("203.0.113.9", 50000))
 
     assert client.get("/admin/api/analytics/media").status_code == 403
+
+
+def test_the_media_rows_are_read_through_their_partial_index(seeded) -> None:
+    """The all-time window must not scan the whole log (25 s on a real one).
+
+    Both shapes the Media card queries -- with and without a time window --
+    are answered from ``idx_requests_media_v1``, which holds only media rows.
+    """
+    path = seeded.db_path
+    seeded.close()
+    conn = sqlite3.connect(path)
+    try:
+        names = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+        assert "idx_requests_media_v1" in names
+        for where in (
+            "WHERE media_operation IS NOT NULL",
+            "WHERE ts_epoch >= 0 AND ts_epoch <= 9e9 AND media_operation IS NOT NULL",
+        ):
+            plan = " ".join(
+                str(row[3])
+                for row in conn.execute(
+                    "EXPLAIN QUERY PLAN SELECT media_operation, COUNT(*),"
+                    " SUM(output_image_count) FROM requests "
+                    + where
+                    + " GROUP BY media_operation"
+                )
+            )
+            assert "idx_requests_media_v1" in plan, plan
+    finally:
+        conn.close()
