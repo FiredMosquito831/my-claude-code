@@ -15,6 +15,7 @@ from my_claude_code.application.media.request import MediaAttempt
 from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_OPENAI_IMAGES,
     MEDIA_SHAPE_OPENAI_SPEECH,
+    MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
     MediaSurface,
 )
 
@@ -45,7 +46,7 @@ def _form_value(value: Any) -> str:
     return str(value)
 
 
-def _openai_images_multipart(attempt: MediaAttempt) -> MultipartBody:
+def _openai_multipart(attempt: MediaAttempt) -> MultipartBody:
     fields: list[tuple[str, str]] = [("model", attempt.resolved.provider_model)]
     for name, value in attempt.request.body.items():
         if name in {"model", "stream"}:
@@ -62,7 +63,7 @@ def build_request_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody
 
     if surface.shape == MEDIA_SHAPE_OPENAI_IMAGES:
         if attempt.request.uploads:
-            return WireBody(multipart=_openai_images_multipart(attempt))
+            return WireBody(multipart=_openai_multipart(attempt))
         return WireBody(json=_openai_images_body(attempt))
     if surface.shape == MEDIA_SHAPE_OPENAI_SPEECH:
         # The client spoke this shape too: its fields (``stream_format``
@@ -70,4 +71,7 @@ def build_request_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody
         body = dict(attempt.request.body)
         body["model"] = attempt.resolved.provider_model
         return WireBody(json=body)
+    if surface.shape == MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS:
+        # Always an upload: the audio goes out as multipart, streamed.
+        return WireBody(multipart=_openai_multipart(attempt))
     raise ValueError(f"unknown media shape {surface.shape!r}")

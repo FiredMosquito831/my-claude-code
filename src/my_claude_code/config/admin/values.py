@@ -103,6 +103,7 @@ ROUTE_PAUSE_KEYS: tuple[tuple[str, str, str], ...] = (
     # deleted or disabled all mean the same thing on a media rail.
     ("MODEL_IMAGE", "MODEL_IMAGE_FALLBACKS", "MODEL_IMAGE_PAUSED"),
     ("MODEL_TTS", "MODEL_TTS_FALLBACKS", "MODEL_TTS_PAUSED"),
+    ("MODEL_ASR", "MODEL_ASR_FALLBACKS", "MODEL_ASR_PAUSED"),
 )
 
 PAUSE_KEY_FOR_ROUTE: dict[str, str] = {

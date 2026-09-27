@@ -249,6 +249,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "model_vision",
     "model_image",
     "model_tts",
+    "model_asr",
     "model_fallbacks",
     "model_mythos_fallbacks",
     "model_fable_fallbacks",
@@ -258,6 +259,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "model_vision_fallbacks",
     "model_image_fallbacks",
     "model_tts_fallbacks",
+    "model_asr_fallbacks",
     "model_paused",
     "model_mythos_paused",
     "model_fable_paused",
@@ -267,6 +269,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "model_vision_paused",
     "model_image_paused",
     "model_tts_paused",
+    "model_asr_paused",
     "ollama_search_api_key",
     "exa_api_key",
     "tavily_api_key",
@@ -783,6 +786,12 @@ class Settings(BaseSettings):
     model_tts_fallbacks: str | None = Field(
         default=None, validation_alias="MODEL_TTS_FALLBACKS"
     )
+    # The Transcription rail (7.63.0): `POST /v1/audio/transcriptions` and
+    # `/v1/audio/translations` route here. A media rail, never a chat tier.
+    model_asr: str | None = Field(default=None, validation_alias="MODEL_ASR")
+    model_asr_fallbacks: str | None = Field(
+        default=None, validation_alias="MODEL_ASR_FALLBACKS"
+    )
 
     # ==================== Paused route entries ====================
     # Comma-separated `provider/model` refs the operator has switched off for
@@ -814,6 +823,9 @@ class Settings(BaseSettings):
     )
     model_tts_paused: str | None = Field(
         default=None, validation_alias="MODEL_TTS_PAUSED"
+    )
+    model_asr_paused: str | None = Field(
+        default=None, validation_alias="MODEL_ASR_PAUSED"
     )
 
     # ==================== Coding agent tier aliases ====================
@@ -2597,6 +2609,7 @@ class Settings(BaseSettings):
         "model_vision",
         "model_image",
         "model_tts",
+        "model_asr",
     )
     @classmethod
     def validate_model_format(cls, v: str | None) -> str | None:
@@ -2615,6 +2628,7 @@ class Settings(BaseSettings):
         "model_vision_fallbacks",
         "model_image_fallbacks",
         "model_tts_fallbacks",
+        "model_asr_fallbacks",
         "model_paused",
         "model_mythos_paused",
         "model_fable_paused",
@@ -2624,6 +2638,7 @@ class Settings(BaseSettings):
         "model_vision_paused",
         "model_image_paused",
         "model_tts_paused",
+        "model_asr_paused",
     )
     @classmethod
     def validate_model_fallback_chain(cls, v: str | None) -> str | None:

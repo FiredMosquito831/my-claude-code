@@ -146,6 +146,17 @@ class MediaCapture:
         params["media"] = media
         return params
 
+    def _input_audio_seconds(self, outputs: MediaOutputs | None) -> float | None:
+        """What the host says it heard, else what a WAV upload's header says."""
+        if outputs is not None and outputs.input_audio_seconds is not None:
+            return outputs.input_audio_seconds
+        stated = [
+            upload.audio_seconds
+            for upload in self._request.uploads
+            if upload.audio_seconds is not None
+        ]
+        return sum(stated) if stated else None
+
     def _input_records(self) -> tuple[MediaOutputRecord, ...]:
         return tuple(
             MediaOutputRecord(
@@ -263,6 +274,11 @@ class MediaCapture:
                 else outputs.count
             ),
             output_audio_seconds=None if outputs is None else outputs.audio_seconds,
+            input_audio_seconds=self._input_audio_seconds(outputs),
+            output_text=None if outputs is None else outputs.text,
+            output_chars=(
+                None if outputs is None or outputs.text is None else len(outputs.text)
+            ),
             media_bytes_out=None if outputs is None else outputs.bytes_total,
             media_sha_out=None if outputs is None else outputs.first_sha,
             media_outputs=media_outputs,

@@ -5425,6 +5425,7 @@ const ROUTE_PAUSE_KEY = new Map([
   ["MODEL_VISION", "MODEL_VISION_PAUSED"],
   ["MODEL_IMAGE", "MODEL_IMAGE_PAUSED"],
   ["MODEL_TTS", "MODEL_TTS_PAUSED"],
+  ["MODEL_ASR", "MODEL_ASR_PAUSED"],
 ]);
 
 /* The media rails (7.60.0+), drawn after the vision adapter: one entry per
@@ -5451,6 +5452,17 @@ const MEDIA_RAILS = [
       "a speech endpoint can answer it; a client that names a format a provider " +
       "does not document skips that provider -- audio is never transcoded. The " +
       "answer is the provider's own audio, with its own content type.",
+  },
+  {
+    modelKey: "MODEL_ASR",
+    chainKey: "MODEL_ASR_FALLBACKS",
+    tier: "asr",
+    title: "Transcription rail",
+    note:
+      "Serves POST /v1/audio/transcriptions and /v1/audio/translations (speech " +
+      "to text). Only providers that declare the endpoint can answer it; a " +
+      "translation skips providers that only transcribe. The uploaded audio is " +
+      "re-sent whole to each model tried.",
   },
 ];
 

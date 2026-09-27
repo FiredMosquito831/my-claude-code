@@ -35,6 +35,10 @@ class MediaOutputs:
     items: tuple[GeneratedMedia, ...] = ()
     usage: dict[str, Any] | None = None
     audio_seconds: float | None = None
+    #: A text answer (a transcript), logged as the row's output text.
+    text: str | None = None
+    #: Seconds of audio the host says it heard (transcription usage).
+    input_audio_seconds: float | None = None
 
     @property
     def bytes_total(self) -> int | None:

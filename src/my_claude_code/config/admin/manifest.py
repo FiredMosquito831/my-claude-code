@@ -865,6 +865,49 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         affects_providers=False,
     ),
     ConfigFieldSpec(
+        "MODEL_ASR",
+        "Transcription Rail",
+        "models",
+        "optional_model",
+        settings_attr="model_asr",
+        description=(
+            "Model that serves POST /v1/audio/transcriptions and "
+            "/v1/audio/translations (the OpenAI speech-to-text API). A media rail, "
+            "never a chat tier. A client that names a provider/model ref pins that "
+            "model; any other model name uses this rail. Only providers that "
+            "declare the endpoint can serve it; a translation skips providers that "
+            "declare transcription only."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_ASR_FALLBACKS",
+        "Transcription Fallback Chain",
+        "models",
+        "model_chain",
+        settings_attr="model_asr_fallbacks",
+        description=(
+            "Ordered provider/model refs tried after MODEL_ASR fails, is paused or is "
+            "benched -- the chat engine's retry, key-rotation, 429, bench and proxy "
+            "rules, with health records of their own. The uploaded audio is re-sent "
+            "whole from the server's spooled copy to each model tried."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_ASR_PAUSED",
+        "Transcription Paused Models",
+        "models",
+        "text",
+        settings_attr="model_asr_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on the Transcription rail that are "
+            "switched off. A paused model is never tried and costs no attempt, but "
+            "keeps its place and appears in the request log as skipped. When every "
+            "model on the rail is paused the endpoint names this setting."
+        ),
+        affects_providers=False,
+    ),
+    ConfigFieldSpec(
         "MODEL_VISIBILITY_ALLOW",
         "Only list these models",
         "models",

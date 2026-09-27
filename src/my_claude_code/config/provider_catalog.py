@@ -11,6 +11,8 @@ from .media_surfaces import (
     image_edit_surface,
     image_generation_surface,
     speech_surface,
+    transcription_surface,
+    translation_surface,
 )
 
 # Default upstream base URLs are owned here with the provider catalog.
@@ -316,7 +318,10 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "open_router": ProviderDescriptor(
         provider_id="open_router",
-        media_surfaces=(speech_surface(formats=("mp3", "pcm")),),
+        media_surfaces=(
+            speech_surface(formats=("mp3", "pcm")),
+            transcription_surface(),
+        ),
         display_name="OpenRouter",
         credential_env="OPENROUTER_API_KEY",
         credential_url="https://openrouter.ai/keys",
@@ -383,6 +388,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "mistral": ProviderDescriptor(
         provider_id="mistral",
+        # Mistral documents SSE on its transcription endpoint.
+        media_surfaces=(transcription_surface(stream=True),),
         display_name="Mistral",
         credential_env="MISTRAL_API_KEY",
         credential_url="https://console.mistral.ai/",
@@ -524,7 +531,11 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "groq": ProviderDescriptor(
         provider_id="groq",
-        media_surfaces=(speech_surface(),),
+        media_surfaces=(
+            speech_surface(),
+            transcription_surface(),
+            translation_surface(),
+        ),
         display_name="Groq",
         credential_env="GROQ_API_KEY",
         credential_url="https://console.groq.com/keys",
@@ -748,6 +759,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         media_surfaces=(
             image_generation_surface(),
             speech_surface(formats=("mp3", "wav", "raw")),
+            transcription_surface(),
         ),
         display_name="Together AI",
         credential_env="TOGETHER_API_KEY",
@@ -759,7 +771,11 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "deepinfra": ProviderDescriptor(
         provider_id="deepinfra",
-        media_surfaces=(image_generation_surface(),),
+        media_surfaces=(
+            image_generation_surface(),
+            transcription_surface(),
+            translation_surface(),
+        ),
         display_name="DeepInfra",
         credential_env="DEEPINFRA_API_KEY",
         credential_url="https://deepinfra.com/dash/api_keys",
@@ -770,7 +786,11 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "siliconflow": ProviderDescriptor(
         provider_id="siliconflow",
-        media_surfaces=(image_generation_surface(), speech_surface()),
+        media_surfaces=(
+            image_generation_surface(),
+            speech_surface(),
+            transcription_surface(),
+        ),
         display_name="SiliconFlow",
         credential_env="SILICONFLOW_API_KEY",
         credential_url="https://cloud.siliconflow.com/account/ak",
