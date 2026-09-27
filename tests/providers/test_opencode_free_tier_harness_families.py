@@ -713,6 +713,8 @@ def test_the_captured_families_are_declared_in_order() -> None:
         "kimi_code",
         "goose",
         "cline",
+        # 7.58.3, declared last so it can never win a tie (see its row).
+        "opencode2",
     ]
     provenance = {family.name: family.provenance for family in OPENCODE_TOOL_FAMILIES}
     # Every client installed on the machine the rows were written on was
@@ -724,6 +726,7 @@ def test_the_captured_families_are_declared_in_order() -> None:
         "gemini_cli",
         "qwen_code",
         "commandcode",
+        "opencode2",
     }
     assert set(provenance.values()) == {"captured", "source"}
 
@@ -734,7 +737,8 @@ def test_a_row_nobody_could_cite_is_not_shipped() -> None:
     The investigation's table listed Gemini CLI's older grep name and two more
     Codex shell spellings from memory; neither is in the bundle or the capture
     this release cites. (``shell`` has been a cited spelling since 7.52.0 --
-    goose's, from its source -- but never Codex's.)
+    goose's, from its source -- and since 7.58.3 OpenCode 2's, from its
+    captured request and binary -- but never Codex's.)
     """
 
     every_client_spelling = {
@@ -743,7 +747,7 @@ def test_a_row_nobody_could_cite_is_not_shipped() -> None:
     assert "search_file_content" not in every_client_spelling
     assert [
         family.name for family in OPENCODE_TOOL_FAMILIES if "shell" in family.spellings
-    ] == ["goose"]
+    ] == ["goose", "opencode2"]
     assert set(_family("codex").spellings) == {"exec_command", "apply_patch"}
 
 
@@ -1277,14 +1281,17 @@ def test_droid_and_kimi_share_claude_codes_spellings_without_taking_its_requests
 
 
 def test_a_tie_on_any_source_catalogue_cannot_change_a_byte() -> None:
+    # 7.58.3's ``opencode2`` row maps goose's ``shell`` and ``edit`` exactly as
+    # goose's row does but declares no stand-ins, so on goose's request it ties
+    # and differs. It is declared last, so declaration order hands every such
+    # tie to the earlier row: ``test_opencode2_row_changes_no_earlier_choice``
+    # in ``test_opencode2_shell_maps_to_bash.py`` pins that for every
+    # catalogue here, and the goose tests above pin goose's wire and stand-ins.
+    earlier = tuple(f for f in OPENCODE_TOOL_FAMILIES if f.name != "opencode2")
     for label, (names, _expected, _roles_expected) in FROM_SOURCE.items():
         present = frozenset(names)
-        best = max(family.covers(present) for family in OPENCODE_TOOL_FAMILIES)
-        tied = [
-            family
-            for family in OPENCODE_TOOL_FAMILIES
-            if family.covers(present) == best
-        ]
+        best = max(family.covers(present) for family in earlier)
+        tied = [family for family in earlier if family.covers(present) == best]
         assert len({tuple(sorted(f.catalogue(present).items())) for f in tied}) == 1, (
             label
         )

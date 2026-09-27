@@ -476,6 +476,41 @@ OPENCODE_TOOL_FAMILIES: tuple[ToolFamily, ...] = (
             }
         ),
     ),
+    # -- 7.58.3: OpenCode 2 renamed its shell tool from ``bash`` to ``shell``;
+    # its other four names are OpenCode's own. A row of its own, declared
+    # LAST, rather than a ``shell`` row inside ``opencode_native``: goose sends
+    # ``shell`` and ``edit`` too, and a second family that maps those two
+    # names is a tie on goose's (and an old Codex's) requests. Ties go to
+    # declaration order, so a row declared before goose would take goose's
+    # requests and drop the stand-ins it needs to pass the gate; declared
+    # last, this row wins only where it finds strictly more roles than every
+    # earlier family -- OpenCode 2's own catalogue, five against four.
+    ToolFamily(
+        name="opencode2",
+        provenance="captured",
+        cited=(
+            "@opencode-ai/cli 0.0.0-beta-18866 (binary opencode2), its request "
+            "captured 2026-09-27 through a scratch MCC onto a local recorder "
+            "(edit, glob, grep, question, read, shell, skill, subagent, webfetch, "
+            "websearch, write, execute; shell's arguments command, workdir, "
+            "timeout, background); the same names in its installed "
+            "@opencode-ai/cli-windows-x64 bin/opencode2.exe (sha256 "
+            "c3fa57ae...8b8b5eb3) read as text: ShellTool name gd, var "
+            'gd="shell" at byte 103151911; ReadTool "read" 103141137, EditTool '
+            '"edit" 103123791, GlobTool "glob" 103128649, GrepTool "grep" '
+            "103131254; its own v1 migration maps bash to shell "
+            '(if(e==="bash")return"shell") at 99280707'
+        ),
+        spellings=MappingProxyType(
+            {
+                "shell": "bash",
+                "read": "read",
+                "edit": "edit",
+                "glob": "glob",
+                "grep": "grep",
+            }
+        ),
+    ),
 )
 
 

@@ -2786,6 +2786,20 @@ request. Google Antigravity publishes no source and no package that can be
 read without running its installer, so it has no row. A guessed row would fail
 silently.
 
+**OpenCode 2 (7.58.3).** The OpenCode 2 preview (`mcc-opencode2`, measured on
+`@opencode-ai/cli` 0.0.0-beta-18866) calls its shell tool `shell`, not `bash`;
+its `read`, `edit`, `glob` and `grep` keep OpenCode's names. Until 7.58.2 only
+those four reached the free tier, with `shell` sent as it was. From 7.58.3
+OpenCode 2 has its own row, `shell` -> `bash`, so all five go out and a `bash`
+call from the model comes back to OpenCode 2 as `shell`. The row is declared
+after every other agent's, so it is chosen only when it finds more of the five
+than any other row does: OpenCode 1, Pi, Kilo, goose and Codex are translated
+exactly as before (goose also says `shell`, and keeps its stand-ins).
+
+| agent | its names -> OpenCode's | OpenCode names on the wire |
+| --- | --- | --- |
+| OpenCode 2 beta-18866 | `shell`, `read`, `edit`, `glob`, `grep` | 5 of 5 |
+
 Which models: any whose id ends in `-free` or `:free`, any the catalogue
 prices at zero on this host, and anything you list in
 `OPENCODE_FREE_TIER_MODELS` (`big-pickle` by default — it is free and its name
