@@ -36,6 +36,7 @@ from .admin_proxy_routes import router as admin_proxy_router
 from .admin_routes import router as admin_router
 from .admin_server_routes import router as admin_server_router
 from .admin_websearch_routes import router as admin_websearch_router
+from .gemini_media_routes import router as gemini_media_router
 from .gemini_routes import gemini_router
 from .media_routes import router as media_router
 from .media_video_routes import router as media_video_router
@@ -68,6 +69,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_websearch_router)
     app.include_router(admin_export_router)
     app.include_router(gemini_router)
+    app.include_router(gemini_media_router)
     app.include_router(media_router)
     app.include_router(media_video_router)
     app.include_router(router)

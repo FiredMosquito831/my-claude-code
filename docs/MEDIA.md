@@ -14,6 +14,7 @@ its base URL at the proxy and keeps its own code.
 | `POST /v1/audio/speech` | 7.62.0 | Speech | `MODEL_TTS`, `MODEL_TTS_FALLBACKS`, `MODEL_TTS_PAUSED` |
 | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | 7.63.0 | Transcription | `MODEL_ASR`, `MODEL_ASR_FALLBACKS`, `MODEL_ASR_PAUSED` |
 | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content`, `GET /v1/videos`, `DELETE /v1/videos/{id}` | 7.64.0 | Video | `MODEL_VIDEO`, `MODEL_VIDEO_FALLBACKS`, `MODEL_VIDEO_PAUSED` |
+| Gemini `:generateContent` / `:streamGenerateContent` with image or audio output, `:predictLongRunning`, `GET /v1beta/operations/{id}` | 7.65.0 | Image, Speech, Video | the same rails |
 
 ```python
 from openai import OpenAI
@@ -185,6 +186,51 @@ it. A provider that documents JSON only cannot take an uploaded `input_reference
 request skips it, uncharged. A download URL on another host than the provider's own is fetched
 **without** the API key.
 
+## Gemini-shaped requests (7.65.0)
+
+A client that speaks Google's Gemini API (the `google-genai` SDK, or REST on `/v1beta`) reaches the
+same rails:
+
+| Request | Rail | Answer |
+|---|---|---|
+| `models/{model}:generateContent` or `:streamGenerateContent` with `generationConfig.responseModalities` containing `IMAGE` | Image | `candidates[0].content.parts[].inlineData` (base64 image) |
+| the same with `AUDIO` | Speech | one `inlineData` part with the audio and the provider's own MIME type |
+| `models/{model}:predictLongRunning` (the Veo shape) | Video | an operation `{"name": "operations/..."}` |
+| `GET /v1beta/operations/{id}` | -- | Google's operation shape: `done`, then `response.generateVideoResponse.generatedSamples[0].video.uri`, or `error` |
+| `GET /v1beta/files/{id}:download?alt=media` | -- | the video bytes (what `client.files.download(file=video)` fetches) |
+
+```python
+from google import genai
+from google.genai import types
+
+client = genai.Client(api_key="your-proxy-token",
+                      http_options=types.HttpOptions(base_url="http://127.0.0.1:8082"))
+image = client.models.generate_content(
+    model="gemini-3.1-flash-image", contents="a red cube",
+    config=types.GenerateContentConfig(response_modalities=["IMAGE"]))
+operation = client.models.generate_videos(model="veo-3.1-generate-preview", prompt="a paper boat")
+operation = client.operations.get(operation)  # ask again until operation.done
+```
+
+- A request **without** `IMAGE` or `AUDIO` in `responseModalities` is an ordinary chat request and
+  takes the chat path exactly as before. Asking for both `IMAGE` and `AUDIO` answers `400`.
+- The request is translated to the rail's OpenAI-shaped endpoints: the user's text parts become the
+  `prompt` (or the text to speak), `candidateCount` becomes `n`, a voice named in `speechConfig`
+  becomes `voice`, and inline images in the contents make it an **edit** with those images as the
+  uploads. What has no exact equivalent there (`imageConfig`, `temperature`, ...) is **not
+  forwarded** -- never guessed -- and is listed under `media.not_forwarded` in the request log row.
+- Images are asked for as base64. A provider that answers with a URL only is downloaded through the
+  same key (the key is sent only to the provider's own host) and inlined.
+- `:streamGenerateContent` answers with one server-sent event carrying the whole answer, sent when
+  the answer is complete.
+- `:predictLongRunning` follows the video rules above: the rail is walked until a provider accepts
+  the job; the operation is then pinned to it. `durationSeconds` becomes `seconds`; `aspectRatio`,
+  `resolution`, `negativePrompt` and `seed` are sent under the OpenAI-compatible names Gemini's layer
+  documents; a first-frame `image` is sent as `input_reference` (a provider that takes JSON only is
+  skipped for it, uncharged). A failed job answers `done: true` with `error.code` 13 and the
+  provider's message.
+- Errors use Google's error envelope. `:predict` (the Imagen shape) is not served.
+
 ## Retry, fallback, keys, 429s and proxies
 
 Every media rail follows the same rules as a chat chain, applied by a separate copy of the chat
@@ -247,7 +293,7 @@ cleared; turning the setting off stops new copies and leaves existing files alon
 
 ## Not yet
 
-Gemini-native media requests, media pricing and the Analytics media block each arrive in
-their own release. Video on ZenMux, Agnes AI, xAI, Together, SiliconFlow, MiniMax and Alibaba
+Gemini as the provider behind the Speech and Transcription rails, media pricing and the
+Analytics media block each arrive in their own release. Video on ZenMux, Agnes AI, xAI, Together, SiliconFlow, MiniMax and Alibaba
 is not routed: each documents its own job API rather than the OpenAI shape, and each would be
 its own small release. OpenAI's own video API (Sora) was shut down on 2026-09-24.

@@ -124,6 +124,11 @@ class MediaRequest:
     #: arrived as a string. Read by a surface that re-encodes a form as JSON
     #: (only a form's digit strings become numbers there).
     multipart: bool = False
+    #: What the client asked for that this request does not carry upstream,
+    #: because no OpenAI-shaped field means exactly the same thing (a Gemini
+    #: body's ``imageConfig.aspectRatio``, ``temperature``, ...). Logged under
+    #: ``media.not_forwarded``; never translated by guess.
+    not_forwarded: tuple[str, ...] = ()
 
     @property
     def prompt(self) -> str | None:

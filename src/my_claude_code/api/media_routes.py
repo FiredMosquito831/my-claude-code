@@ -25,6 +25,7 @@ the request is finished with them.
 import asyncio
 import hashlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import IO, Any
 
 from fastapi import APIRouter, Depends, Request
@@ -78,7 +79,7 @@ from my_claude_code.core.openai_transcriptions import (
 )
 
 from .dependencies import get_services, require_proxy_auth, resolve_provider
-from .media_capture import MediaCapture
+from .media_capture import MEDIA_PROTOCOL_OPENAI, MediaCapture
 from .ports import ApiServices
 from .request_ids import get_request_id
 from .response_streams import ManagedStreamingResponse, bind_response_lifetime
@@ -146,6 +147,39 @@ def _failure_response(exc: BaseException) -> JSONResponse:
         return _error_response(exc.status_code, exc.message, as_failure)
     kind = failure_kind(exc) or FailureKind.UPSTREAM
     return _error_response(502, safe_exception_message(exc), kind)
+
+
+def _expired_response(message: str) -> JSONResponse:
+    """A job's finished file the host no longer holds (``video_expired``)."""
+    payload = openai_error_payload(message=message, error_type="not_found_error")
+    payload["error"]["code"] = "video_expired"
+    return JSONResponse(status_code=404, content=payload)
+
+
+@dataclass(frozen=True, slots=True)
+class MediaWire:
+    """How the client that asked speaks: its log protocol and its error envelope.
+
+    OpenAI's by default (``OPENAI_WIRE``). The Gemini surface (7.65.0) routes
+    onto the same rails with the same functions and answers every failure in
+    Google's envelope instead; nothing else about a request differs.
+    """
+
+    protocol: str
+    #: ``(status, message, kind)`` -> the error answer.
+    error: Callable[[int, str, FailureKind | ExecutionFailure], JSONResponse]
+    #: Whatever ended the route -> the error answer.
+    failure: Callable[[BaseException], JSONResponse]
+    #: A job's file the host no longer holds -> the 404 answer.
+    expired: Callable[[str], JSONResponse]
+
+
+OPENAI_WIRE = MediaWire(
+    protocol=MEDIA_PROTOCOL_OPENAI,
+    error=_error_response,
+    failure=_failure_response,
+    expired=_expired_response,
+)
 
 
 def _commit_error_frames(exc: BaseException) -> Sequence[bytes]:
@@ -257,17 +291,20 @@ async def _serve(
     endpoint: str,
     cleanup: Cleanup = _nothing_to_clean,
     complete: Complete | None = None,
+    wire: MediaWire = OPENAI_WIRE,
 ) -> Response:
     """Plan, execute and answer one media request; ``cleanup`` runs once at the end.
 
     ``complete`` answers a buffered request (default ``_complete_response``);
     it must release the lease and finish the capture, as the default does.
+    ``wire`` is the client's protocol: the row's ``protocol`` and the
+    envelope a failure before the answer is worded in.
     """
     request_id = get_request_id(request)
     media = services.media
     if media is None:
         await cleanup()
-        return _error_response(
+        return wire.error(
             503,
             "Media routing is not available in this server.",
             FailureKind.UNAVAILABLE,
@@ -283,6 +320,7 @@ async def _serve(
             endpoint=endpoint,
             request=media_request,
             headers=request.headers,
+            protocol=wire.protocol,
         )
         plan = MediaRouter(
             settings, probe_candidates=lambda: chat_probe_candidates(settings)
@@ -302,7 +340,7 @@ async def _serve(
         if capture is not None:
             await capture.finish("error", error=exc)
         await cleanup()
-        return _error_response(
+        return wire.error(
             502, "The provider returned an empty answer.", FailureKind.UPSTREAM
         )
     except Exception as exc:
@@ -311,7 +349,7 @@ async def _serve(
         if capture is not None:
             await capture.finish("error", error=exc)
         await cleanup()
-        return _failure_response(exc)
+        return wire.failure(exc)
     except BaseException:
         if lease is not None:
             await lease.release()
