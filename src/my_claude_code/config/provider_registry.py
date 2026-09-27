@@ -22,6 +22,10 @@ from pathlib import Path
 from loguru import logger
 
 from my_claude_code.config.constants import TIER_NAMESPACE
+from my_claude_code.config.media_surfaces import (
+    CUSTOM_MEDIA_OPERATIONS,
+    custom_media_surfaces,
+)
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
@@ -107,6 +111,12 @@ class CustomProviderEntry:
     # paused. Recorded rather than recomputed so re-enabling lifts its own
     # pauses and leaves a hand-paused ref exactly where the operator put it.
     auto_paused_refs: tuple[tuple[str, str], ...] = ()
+    # 7.67.0: the media endpoints this host serves, from
+    # ``CUSTOM_MEDIA_OPERATIONS``, each at OpenAI's default path under
+    # ``base_url``. Empty -- every entry written before this field, and every
+    # card left unticked -- declares no media surface at all, so the entry is
+    # skipped uncharged by every media rail exactly as before.
+    media_operations: tuple[str, ...] = ()
 
 
 def _slug(display_name: str) -> str:
@@ -193,6 +203,48 @@ def normalize_custom_surfaces(value: object) -> tuple[str, ...]:
             f"valid: {list(CUSTOM_PROVIDER_SURFACES)}"
         )
     return named
+
+
+def _media_operations_from_payload(value: object) -> tuple[str, ...]:
+    """Read back a declared media list; unknown words are dropped.
+
+    Lenient for the same reason ``_surfaces_from_payload`` is: a file written
+    by a newer build may name an operation this one cannot serve, and the
+    entry's keys and routes are still good. Unlike chat surfaces, an empty
+    list is a real answer -- a host that serves no media -- and reads back
+    as exactly that.
+    """
+
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        operation
+        for operation in CUSTOM_MEDIA_OPERATIONS
+        if any(item == operation for item in value)
+    )
+
+
+def normalize_custom_media_operations(value: object) -> tuple[str, ...]:
+    """Validate a media list an operator submitted, in canonical order.
+
+    Raises on a word this build does not know, like
+    :func:`normalize_custom_surfaces`; an empty list is valid and means
+    "serves no media".
+    """
+
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Custom provider media_operations must be a list")
+    unknown = sorted(str(item) for item in value if item not in CUSTOM_MEDIA_OPERATIONS)
+    if unknown:
+        raise ValueError(
+            f"Unknown media operation(s): {unknown}. "
+            f"Valid: {list(CUSTOM_MEDIA_OPERATIONS)}"
+        )
+    return tuple(
+        operation for operation in CUSTOM_MEDIA_OPERATIONS if operation in value
+    )
 
 
 def _paused_pair(item: object) -> tuple[str, str] | None:
@@ -310,6 +362,9 @@ class ProviderRegistry:
             reasoning_probed_at=_text_or_empty(item.get("reasoning_probed_at")),
             surfaces=_surfaces_from_payload(item.get("surfaces")),
             auto_paused_refs=_paused_pairs_from_payload(item.get("auto_paused_refs")),
+            media_operations=_media_operations_from_payload(
+                item.get("media_operations")
+            ),
         )
 
     # ------------------------------------------------------------- persistence
@@ -343,6 +398,14 @@ class ProviderRegistry:
                         [paused_key, model_ref]
                         for paused_key, model_ref in entry.auto_paused_refs
                     ],
+                    # Written only when something is declared, so the file
+                    # of an install that never ticks a media box stays
+                    # byte-for-byte what earlier builds wrote.
+                    **(
+                        {"media_operations": list(entry.media_operations)}
+                        if entry.media_operations
+                        else {}
+                    ),
                 }
                 for entry in self._custom.values()
             ]
@@ -414,6 +477,7 @@ class ProviderRegistry:
             dynamic=True,
             reasoning_effort_enum=entry.reasoning_effort_enum,
             response_surfaces=entry.surfaces,
+            media_surfaces=custom_media_surfaces(entry.media_operations),
         )
 
     # ---------------------------------------------------------------- mutations
@@ -427,6 +491,7 @@ class ProviderRegistry:
         proxy: str | None = None,
         enabled: bool = True,
         surfaces: tuple[str, ...] | list[str] | None = None,
+        media_operations: tuple[str, ...] | list[str] | None = None,
     ) -> CustomProviderEntry:
         """Register a new custom provider; the id is slugged from the name."""
         name = display_name.strip()
@@ -450,6 +515,7 @@ class ProviderRegistry:
                 f"Valid: {sorted(CUSTOM_CREDENTIAL_ROTATION_POLICIES)}"
             )
         declared = normalize_custom_surfaces(surfaces)
+        declared_media = normalize_custom_media_operations(media_operations)
         with self._lock:
             self._ensure_loaded()
             provider_id = self._unique_provider_id_locked(name)
@@ -465,6 +531,7 @@ class ProviderRegistry:
                 enabled=enabled,
                 added_at=_utc_now_iso(),
                 surfaces=declared,
+                media_operations=declared_media,
             )
             self._custom[provider_id] = entry
             self._persist_locked()
@@ -497,6 +564,7 @@ class ProviderRegistry:
         reasoning_probed_at: str | None = None,
         surfaces: tuple[str, ...] | list[str] | None = None,
         auto_paused_refs: tuple[tuple[str, str], ...] | None = None,
+        media_operations: tuple[str, ...] | list[str] | None = None,
     ) -> CustomProviderEntry:
         """Update fields of one custom provider and return the new entry."""
         with self._lock:
@@ -573,6 +641,11 @@ class ProviderRegistry:
                     current.auto_paused_refs
                     if auto_paused_refs is None
                     else tuple(auto_paused_refs)
+                ),
+                media_operations=(
+                    current.media_operations
+                    if media_operations is None
+                    else normalize_custom_media_operations(media_operations)
                 ),
             )
             self._custom[provider_id] = updated

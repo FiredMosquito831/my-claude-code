@@ -1895,6 +1895,36 @@ TOOL_CALL_FIELD: _LadderField[bool] = _LadderField(
     minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
 )
 
+
+def _models_dev_output_modalities(
+    metadata: Mapping[str, Any],
+) -> tuple[str, ...] | None:
+    """models.dev's ``modalities.output`` for one row, sorted, or None.
+
+    A row without the list has not said "text only"; it is unknown.
+    """
+
+    modalities = metadata.get("modalities")
+    if not isinstance(modalities, Mapping):
+        return None
+    output = modalities.get("output")
+    if not isinstance(output, list):
+        return None
+    named = sorted({item for item in output if isinstance(item, str) and item})
+    return tuple(named) or None
+
+
+#: 7.67.0: what a model is catalogued as producing (``image``, ``audio``,
+#: ``video``, ``text``), for the Models page's media rows. Advisory only: the
+#: media router never reads it -- a provider's declared surfaces decide what
+#: it serves -- so a split vote leans to the richer list, like the rest.
+OUTPUT_MODALITIES_FIELD: _LadderField[tuple[str, ...]] = _LadderField(
+    name="output_modalities",
+    reader=_models_dev_output_modalities,
+    tie_break=len,
+    minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+)
+
 #: The five price rates, in the catalogue's own vocabulary. models.dev
 #: publishes all five under ``cost``; ``ProviderModelInfo`` carries only the
 #: first two, so the cache and reasoning rates have no provider rung and
@@ -2192,6 +2222,18 @@ def model_tool_call_tiered(
     """models.dev's ``tool_call`` boolean for one model, plus its rung."""
 
     return _model_field_tiered(TOOL_CALL_FIELD, provider_id, model_id, path)
+
+
+def model_output_modalities_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[tuple[str, ...] | None, ResolutionTier | None]:
+    """models.dev's output modalities for one model, plus its rung (7.67.0).
+
+    Read from the on-disk cache through the same memoized ladder as every
+    other field here; never a network call.
+    """
+
+    return _model_field_tiered(OUTPUT_MODALITIES_FIELD, provider_id, model_id, path)
 
 
 def model_prices_tiered(

@@ -12,6 +12,14 @@ from enum import StrEnum
 from typing import IO, Any
 
 from my_claude_code.application.routing import ResolvedModel
+from my_claude_code.config.media_surfaces import (
+    MEDIA_OPERATION_IMAGE_EDIT,
+    MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_SPEECH,
+    MEDIA_OPERATION_TRANSCRIBE,
+    MEDIA_OPERATION_TRANSLATE,
+    MEDIA_OPERATION_VIDEO_CREATE,
+)
 
 
 class MediaRail(StrEnum):
@@ -78,6 +86,23 @@ RAIL_SETTINGS: Mapping[MediaRail, MediaRailSettings] = {
         paused_attr="model_video_paused",
         paused_env="MODEL_VIDEO_PAUSED",
     ),
+}
+
+#: The routed operations each rail carries (7.67.0, for the dashboard). A
+#: video's retrieve/content/delete are calls on an accepted job, pinned to the
+#: provider that took it, so the rail itself routes only the create.
+RAIL_OPERATIONS: Mapping[MediaRail, tuple[str, ...]] = {
+    MediaRail.IMAGE: (MEDIA_OPERATION_IMAGE_GENERATE, MEDIA_OPERATION_IMAGE_EDIT),
+    MediaRail.TTS: (MEDIA_OPERATION_SPEECH,),
+    MediaRail.ASR: (MEDIA_OPERATION_TRANSCRIBE, MEDIA_OPERATION_TRANSLATE),
+    MediaRail.VIDEO: (MEDIA_OPERATION_VIDEO_CREATE,),
+}
+
+#: The rail a logged ``media_operation`` is counted under.
+OPERATION_RAILS: Mapping[str, MediaRail] = {
+    operation: rail
+    for rail, operations in RAIL_OPERATIONS.items()
+    for operation in operations
 }
 
 

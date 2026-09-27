@@ -758,7 +758,273 @@ const BULK_RESULT = {
   visibility: { allow: [], deny: ["alpha/*"] },
 };
 
+/* 7.67.0: the Models page's media rows, as /admin/api/media/models answers.
+   One row of each shape the section has to say something different about:
+   a served primary, a fallback whose provider declares nothing for the rail,
+   a paused ref the MEDIA books have benched, and a provider with no key. */
+const MEDIA_DECLARED_TOGETHER = [
+  {
+    operation: "image_generate",
+    label: "image generate",
+    path: "images/generations",
+    stream: false,
+    formats: null,
+  },
+  {
+    operation: "speech",
+    label: "speech",
+    path: "audio/speech",
+    stream: false,
+    formats: ["mp3", "wav", "raw"],
+  },
+];
+const MEDIA_DECLARED_GROQ = [
+  { operation: "speech", label: "speech", path: "audio/speech", stream: false, formats: null },
+  {
+    operation: "transcribe",
+    label: "transcribe",
+    path: "audio/transcriptions",
+    stream: false,
+    formats: null,
+  },
+];
+const MEDIA_MODELS = {
+  bench_enabled: true,
+  rails: [
+    { rail: "image", label: "Image", model_env: "MODEL_IMAGE", operations: [], refs: [] },
+    { rail: "tts", label: "Speech", model_env: "MODEL_TTS", operations: [], refs: [] },
+    { rail: "asr", label: "Transcription", model_env: "MODEL_ASR", operations: [], refs: [] },
+    { rail: "video", label: "Video", model_env: "MODEL_VIDEO", operations: [], refs: [] },
+  ],
+  models: [
+    {
+      model_ref: "together/flux-schnell",
+      provider_id: "together",
+      provider_name: "Together AI",
+      model_id: "flux-schnell",
+      custom: false,
+      provider_state: "known",
+      placements: [
+        { rail: "image", label: "Image", position: "primary", index: 0, paused: false, served: true },
+      ],
+      declared: MEDIA_DECLARED_TOGETHER,
+      modalities: { output: ["image"], tier: "models.dev bucket, exact id", approximate: false },
+      health: { benched: false },
+      key: { status: "configured", label: "Configured", key_count: 2 },
+    },
+    {
+      model_ref: "groq/not-an-image-model",
+      provider_id: "groq",
+      provider_name: "Groq",
+      model_id: "not-an-image-model",
+      custom: false,
+      provider_state: "known",
+      placements: [
+        { rail: "image", label: "Image", position: "fallback 1", index: 1, paused: false, served: false },
+      ],
+      declared: MEDIA_DECLARED_GROQ,
+      modalities: { output: null, tier: null, approximate: false },
+      health: { benched: false },
+      key: { status: "configured", label: "Configured", key_count: 1 },
+    },
+    {
+      model_ref: "groq/playai-tts",
+      provider_id: "groq",
+      provider_name: "Groq",
+      model_id: "playai-tts",
+      custom: false,
+      provider_state: "known",
+      placements: [
+        { rail: "tts", label: "Speech", position: "primary", index: 0, paused: true, served: true },
+      ],
+      declared: MEDIA_DECLARED_GROQ,
+      modalities: { output: ["audio"], tier: "cross-provider, exact id", approximate: true },
+      health: {
+        benched: true,
+        reason: "benched: 3 consecutive failures (last: 500 upstream), 42 s left",
+        remaining_seconds: 42,
+      },
+      key: { status: "configured", label: "Configured", key_count: 1 },
+    },
+    {
+      model_ref: "deepinfra/whisper-large-v3",
+      provider_id: "deepinfra",
+      provider_name: "DeepInfra",
+      model_id: "whisper-large-v3",
+      custom: false,
+      provider_state: "known",
+      placements: [
+        { rail: "asr", label: "Transcription", position: "primary", index: 0, paused: false, served: true },
+      ],
+      declared: [
+        {
+          operation: "transcribe",
+          label: "transcribe",
+          path: "audio/transcriptions",
+          stream: false,
+          formats: null,
+        },
+      ],
+      modalities: { output: ["text"], tier: "models.dev bucket, exact id", approximate: false },
+      health: { benched: false },
+      key: { status: "missing_key", label: "Missing key", key_count: 0 },
+    },
+  ],
+  providers: [
+    {
+      provider_id: "together",
+      display_name: "Together AI",
+      custom: false,
+      enabled: true,
+      declared: MEDIA_DECLARED_TOGETHER,
+      rails: ["Image", "Speech", "Transcription"],
+      key: { status: "configured", label: "Configured", key_count: 2 },
+    },
+    {
+      provider_id: "custom_acme",
+      display_name: "Acme",
+      custom: true,
+      enabled: true,
+      declared: [MEDIA_DECLARED_GROQ[0]],
+      rails: ["Speech"],
+      key: { status: "configured", label: "Configured", key_count: 2 },
+    },
+  ],
+};
+
+/* The Analytics page's Media card, as /admin/api/analytics/media answers. The
+   Speech rail's seconds and the Video rail's bytes were measured by no row,
+   and the Transcription rail had no traffic: three kinds of "not measured"
+   that must each read as a dash, never as 0. */
+const MEDIA_UNMEASURED = {
+  images_out: null,
+  images_out_measured: 0,
+  audio_seconds_out: null,
+  audio_seconds_out_measured: 0,
+  audio_seconds_in: null,
+  audio_seconds_in_measured: 0,
+  video_seconds: null,
+  video_seconds_measured: 0,
+  bytes_out: null,
+  bytes_out_measured: 0,
+  avg_duration_ms: null,
+  median_duration_ms: null,
+};
+const MEDIA_COUNTS_ZERO = {
+  requests: 0,
+  succeeded: 0,
+  failed: 0,
+  cancelled: 0,
+  video_jobs: 0,
+  duration_count: 0,
+};
+const MEDIA_ANALYTICS = {
+  enabled: true,
+  window: { since: null, until: null },
+  total: 7,
+  rails: [
+    {
+      ...MEDIA_COUNTS_ZERO,
+      ...MEDIA_UNMEASURED,
+      rail: "image",
+      group: "image",
+      label: "Image",
+      requests: 3,
+      succeeded: 2,
+      failed: 1,
+      duration_count: 3,
+      images_out: 3,
+      images_out_measured: 2,
+      bytes_out: 1500,
+      bytes_out_measured: 2,
+      avg_duration_ms: 500,
+      median_duration_ms: 400,
+    },
+    {
+      ...MEDIA_COUNTS_ZERO,
+      ...MEDIA_UNMEASURED,
+      rail: "tts",
+      group: "tts",
+      label: "Speech",
+      requests: 2,
+      succeeded: 1,
+      cancelled: 1,
+      duration_count: 1,
+      bytes_out: 2048,
+      bytes_out_measured: 1,
+      avg_duration_ms: 300,
+      median_duration_ms: 300,
+    },
+    { ...MEDIA_COUNTS_ZERO, ...MEDIA_UNMEASURED, rail: "asr", group: "asr", label: "Transcription" },
+    {
+      ...MEDIA_COUNTS_ZERO,
+      ...MEDIA_UNMEASURED,
+      rail: "video",
+      group: "video",
+      label: "Video",
+      requests: 2,
+      succeeded: 1,
+      failed: 1,
+      video_jobs: 1,
+      duration_count: 2,
+      video_seconds: 8,
+      video_seconds_measured: 1,
+      avg_duration_ms: 1075,
+      median_duration_ms: 1075,
+    },
+  ],
+  models: [
+    {
+      ...MEDIA_COUNTS_ZERO,
+      ...MEDIA_UNMEASURED,
+      rail: "image",
+      group: "image",
+      label: "Image",
+      provider: "together",
+      provider_name: "Together AI",
+      model: "flux",
+      requests: 2,
+      succeeded: 1,
+      failed: 1,
+      images_out: 2,
+      images_out_measured: 1,
+      bytes_out: 1000,
+      median_duration_ms: 250,
+      avg_duration_ms: 250,
+    },
+    {
+      ...MEDIA_COUNTS_ZERO,
+      ...MEDIA_UNMEASURED,
+      rail: "video",
+      group: "video",
+      label: "Video",
+      provider: "open_router",
+      provider_name: "OpenRouter",
+      model: "veo",
+      requests: 2,
+      succeeded: 1,
+      failed: 1,
+      video_jobs: 1,
+      video_seconds: 8,
+      median_duration_ms: 1075,
+      avg_duration_ms: 1075,
+    },
+  ],
+  jobs: [
+    {
+      provider: "open_router",
+      provider_name: "OpenRouter",
+      model: "veo",
+      states: { completed: 1, in_progress: 1, unknown: 1 },
+      total: 3,
+    },
+  ],
+  job_states: { completed: 1, in_progress: 1, unknown: 1 },
+};
+
 const ROUTES = {
+  "/admin/api/media/models": MEDIA_MODELS,
+  "/admin/api/analytics/media": MEDIA_ANALYTICS,
   /* Two credential pools for the key manager: one whose keys hold live
      (key, model) 429 benches, and one plain healthy pool that must render
      exactly as it did before model benches existed. */
@@ -1494,6 +1760,17 @@ const ROUTES = {
           },
           { value: "responses", label: "Responses (/responses)" },
           { value: "messages", label: "Messages (/messages)" },
+        ],
+        // 7.67.0: and one media endpoint, which puts a media clause on the
+        // same line and one ticked box in the Media endpoints group.
+        media_operations: ["speech"],
+        available_media_operations: [
+          { value: "image_generate", label: "Image generation (/images/generations)" },
+          { value: "image_edit", label: "Image edits (/images/edits)" },
+          { value: "speech", label: "Speech (/audio/speech)" },
+          { value: "transcribe", label: "Transcription (/audio/transcriptions)" },
+          { value: "translate", label: "Translation (/audio/translations)" },
+          { value: "video", label: "Video jobs (/videos, /videos/{id})" },
         ],
       },
       {
@@ -7704,6 +7981,20 @@ const customProviders = {};
     .filter((box) => box.checked)
     .map((box) => box.value);
   customProviders.surfaceHelp = textOf(doc, "#desc-cpSurfaces");
+  // 7.67.0: the Media endpoints group beside it, built the same way.
+  customProviders.mediaLabels = Array.from(
+    doc.querySelectorAll("#cpMediaOperations .cp-surface span"),
+  ).map((el) => el.textContent);
+  customProviders.mediaChecked = Array.from(
+    doc.querySelectorAll("#cpMediaOperations input[type=checkbox]"),
+  )
+    .filter((box) => box.checked)
+    .map((box) => box.value);
+  customProviders.mediaHelp = textOf(doc, "#desc-cpMediaOperations");
+  const transcribeBox = doc.querySelector(
+    '#cpMediaOperations input[data-cp-media-operation="transcribe"]',
+  );
+  if (transcribeBox) transcribeBox.checked = true;
   const messagesBox = doc.querySelector(
     '#cpSurfaces input[data-cp-surface="messages"]',
   );
@@ -7723,6 +8014,21 @@ const customProviders = {};
         entry.method === "PATCH",
     );
     return sent.length ? sent[sent.length - 1].body.surfaces : null;
+  })();
+  customProviders.patchedMedia = (() => {
+    const sent = fetchBodies.filter(
+      (entry) =>
+        entry.path.startsWith("/admin/api/custom-providers/") &&
+        entry.method === "PATCH",
+    );
+    return sent.length ? sent[sent.length - 1].body.media_operations : null;
+  })();
+  customProviders.createdMedia = (() => {
+    const sent = fetchBodies.filter(
+      (entry) =>
+        entry.path === "/admin/api/custom-providers" && entry.method === "POST",
+    );
+    return sent.length ? sent[sent.length - 1].body.media_operations : null;
   })();
 }
 
@@ -10262,6 +10568,143 @@ const credHints = {};
   await settle();
 }
 
+/* ------------------------------------------------------ media dashboard
+   7.67.0: the Models page's "Media models" section and the Analytics page's
+   Media card. jsdom has no box model, so the 420 px claim is read as the class
+   contract it rests on: every media table sits in a `.table-scroll`, whose
+   rule (asserted from admin.css) scrolls it inside its card. */
+const mediaDashboard = {};
+{
+  const flat = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim() : "");
+  const tableRows = (table) =>
+    table
+      ? Array.from(table.querySelectorAll("tbody tr")).map((tr) =>
+          Array.from(tr.children).map((td) => flat(td)),
+        )
+      : [];
+  const headers = (table) =>
+    table ? Array.from(table.querySelectorAll("thead th")).map((th) => flat(th)) : [];
+  const chipsIn = (cell) =>
+    Array.from(cell.querySelectorAll(".media-chip")).map((chip) => ({
+      text: flat(chip),
+      className: chip.className,
+      title: chip.title || "",
+    }));
+
+  // --- the Models page, as the first open of the view rendered it
+  const modelsTable = doc.querySelector("#mediaModelsTable table");
+  const providersTable = doc.querySelector("#mediaProvidersTable table");
+  mediaDashboard.modelsHeaders = headers(modelsTable);
+  mediaDashboard.modelRefs = modelsTable
+    ? Array.from(modelsTable.querySelectorAll(".media-ref")).map((el) => el.textContent)
+    : [];
+  mediaDashboard.modelChips = modelsTable
+    ? Array.from(modelsTable.querySelectorAll("tbody tr")).map((tr) =>
+        Array.from(tr.children)
+          .slice(1)
+          .map((td) => chipsIn(td)),
+      )
+    : [];
+  mediaDashboard.providersHeaders = headers(providersTable);
+  mediaDashboard.providerRows = tableRows(providersTable);
+  mediaDashboard.modelsScrollClass = modelsTable ? modelsTable.parentElement.className : "";
+  mediaDashboard.providersScrollClass = providersTable
+    ? providersTable.parentElement.className
+    : "";
+  mediaDashboard.statusHidden = doc.getElementById("mediaModelsStatus").hidden;
+  // The media rows never join the chat tree above them.
+  mediaDashboard.treeHasMediaRef = flat(doc.getElementById("modelsTree")).includes(
+    "together/flux-schnell",
+  );
+
+  // --- an empty install: no rail has a model
+  const savedModels = ROUTES["/admin/api/media/models"];
+  ROUTES["/admin/api/media/models"] = { ...savedModels, models: [], providers: [] };
+  await window.eval("loadMediaModels(true)");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  mediaDashboard.emptyModelsText = flat(doc.getElementById("mediaModelsTable"));
+  mediaDashboard.emptyProvidersText = flat(doc.getElementById("mediaProvidersTable"));
+  ROUTES["/admin/api/media/models"] = savedModels;
+  await window.eval("loadMediaModels(true)");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  // --- the Analytics Media card, with a provider filter set on the page: the
+  // card is sent the window only, and its caption does not claim a filter
+  const provider = doc.getElementById("reqFilterProvider");
+  const windowSelect = doc.getElementById("reqFilterWindow");
+  provider.value = "groq";
+  windowSelect.value = "86400";
+  fetchUrls.length = 0;
+  await window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  mediaDashboard.analyticsUrls = fetchUrls.filter((url) =>
+    url.startsWith("/admin/api/analytics/media"),
+  );
+  const panel = doc.getElementById("reqMediaPanel");
+  const caption = panel.querySelector(".analytics-window");
+  mediaDashboard.caption = caption ? caption.textContent : null;
+  mediaDashboard.otherCaption = (() => {
+    const errors = doc.getElementById("reqTopErrors");
+    const block = errors ? errors.closest(".analytics-panel") : null;
+    const text = block ? block.querySelector(".analytics-window") : null;
+    return text ? text.textContent : null;
+  })();
+  const railTable = doc.querySelector("#reqMediaRails table");
+  const modelTable = doc.querySelector("#reqMediaModels table");
+  const jobTable = doc.querySelector("#reqMediaJobs table");
+  mediaDashboard.railHeaders = headers(railTable);
+  mediaDashboard.railRows = tableRows(railTable);
+  mediaDashboard.modelHeaders = headers(modelTable);
+  mediaDashboard.modelRows = tableRows(modelTable);
+  mediaDashboard.jobHeaders = headers(jobTable);
+  mediaDashboard.jobRows = tableRows(jobTable);
+  mediaDashboard.jobOtherTitle = jobTable
+    ? (jobTable.querySelector("tbody tr td:last-child span") || {}).title || ""
+    : "";
+  mediaDashboard.dashes = Array.from(panel.querySelectorAll(".media-not-measured")).map(
+    (el) => [el.textContent, el.title],
+  );
+  mediaDashboard.analyticsScrollClasses = [railTable, modelTable, jobTable].map((table) =>
+    table ? table.parentElement.className : "",
+  );
+  mediaDashboard.noteHidden = doc.getElementById("reqMediaNote").hidden;
+  mediaDashboard.headingCount = panel.querySelectorAll(":scope > h4").length;
+
+  // --- a window with no media traffic
+  const savedAnalytics = ROUTES["/admin/api/analytics/media"];
+  ROUTES["/admin/api/analytics/media"] = {
+    enabled: true,
+    window: { since: null, until: null },
+    total: 0,
+    rails: savedAnalytics.rails.map((rail) => ({
+      ...rail,
+      ...MEDIA_COUNTS_ZERO,
+      ...MEDIA_UNMEASURED,
+    })),
+    models: [],
+    jobs: [],
+    job_states: {},
+  };
+  await window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  mediaDashboard.emptyNote = doc.getElementById("reqMediaNote").hidden
+    ? null
+    : doc.getElementById("reqMediaNote").textContent;
+  mediaDashboard.emptyTables = panel.querySelectorAll("table").length;
+
+  // --- the request log switched off
+  ROUTES["/admin/api/analytics/media"] = { enabled: false };
+  await window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  mediaDashboard.disabledNote = doc.getElementById("reqMediaNote").textContent;
+
+  ROUTES["/admin/api/analytics/media"] = savedAnalytics;
+  provider.value = "";
+  windowSelect.value = "";
+  await window.eval("loadRequestsView()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+}
+
 console.log(
   JSON.stringify(
     {
@@ -10337,6 +10780,7 @@ console.log(
       exportWindow,
       themePicker,
       customProviders,
+      mediaDashboard,
       codingAgents,
       proxying,
       desktopApps,

@@ -29,12 +29,14 @@ from my_claude_code.config.credential_names import (
     forget_pool,
     set_name,
 )
+from my_claude_code.config.media_surfaces import CUSTOM_MEDIA_OPERATIONS
 from my_claude_code.config.provider_registry import (
     CUSTOM_PROVIDER_SURFACES,
     CustomProviderEntry,
     ProviderRegistry,
     custom_provider_id,
     get_provider_registry,
+    normalize_custom_media_operations,
     normalize_custom_surfaces,
 )
 from my_claude_code.config.reasoning_enum import normalize_effort_words
@@ -63,6 +65,17 @@ CUSTOM_PROVIDER_SURFACE_LABELS: dict[str, str] = {
     "messages": "Messages (/messages)",
 }
 
+#: The media endpoints the card offers (7.67.0), in the registry's order.
+#: Each is OpenAI's own path under the provider's base URL.
+CUSTOM_MEDIA_OPERATION_LABELS: dict[str, str] = {
+    "image_generate": "Image generation (/images/generations)",
+    "image_edit": "Image edits (/images/edits)",
+    "speech": "Speech (/audio/speech)",
+    "transcribe": "Transcription (/audio/transcriptions)",
+    "translate": "Translation (/audio/translations)",
+    "video": "Video jobs (/videos, /videos/{id})",
+}
+
 ROTATION_POLICIES = ("single", "round_robin", "least_used", "failover")
 DEFAULT_ROTATION = "failover"
 HOT_RELOAD_REASON = "custom_provider_change"
@@ -89,6 +102,9 @@ class CustomProviderCreatePayload(BaseModel):
     # 7.33.0, and the card with nothing ticked beyond the default -- means Chat
     # Completions alone, which is what a custom provider has always spoken.
     surfaces: list[str] | None = None
+    # The media endpoints this host serves (7.67.0). Absent or empty: none,
+    # which is every custom provider before this field existed.
+    media_operations: list[str] | None = None
 
 
 class CustomProviderUpdatePayload(BaseModel):
@@ -107,6 +123,9 @@ class CustomProviderUpdatePayload(BaseModel):
     # untouched; a list replaces it wholesale, which is what a checkbox group
     # submits.
     surfaces: list[str] | None = None
+    # The media endpoints, the same way: absent leaves them, a list (empty
+    # included) replaces them.
+    media_operations: list[str] | None = None
 
 
 class CustomProviderKeyPayload(BaseModel):
@@ -184,6 +203,14 @@ def _provider_id_for(display_name: str) -> str:
     return provider_id
 
 
+def _validated_media_operations(value: list[str] | None) -> tuple[str, ...]:
+    """The registry's own check, answered as the chat surfaces' one is."""
+    try:
+        return normalize_custom_media_operations(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _registry_get_or_404(
     registry: ProviderRegistry, provider_id: str
 ) -> CustomProviderEntry:
@@ -237,6 +264,13 @@ def _serialize_entry(
         "auto_paused_refs": [
             {"paused_key": paused_key, "model_ref": model_ref}
             for paused_key, model_ref in entry.auto_paused_refs
+        ],
+        # The media endpoints it serves and the vocabulary the card offers,
+        # sent for the same reason ``available_surfaces`` is.
+        "media_operations": list(entry.media_operations),
+        "available_media_operations": [
+            {"value": value, "label": CUSTOM_MEDIA_OPERATION_LABELS[value]}
+            for value in CUSTOM_MEDIA_OPERATIONS
         ],
     }
 
@@ -329,6 +363,7 @@ async def create_custom_provider(
     api_key = _validate_api_key(payload.api_key)
     rotation = _validate_rotation(payload.credential_rotation)
     proxy = _normalize_proxy(payload.proxy)
+    media_operations = _validated_media_operations(payload.media_operations)
     # The registry would happily allocate ``custom_acme_2`` for a second
     # provider named "Acme"; two identically-named cards are indistinguishable
     # in the dashboard, so the name is claimed exclusively here instead.
@@ -346,6 +381,7 @@ async def create_custom_provider(
             credential_rotation=rotation,
             proxy=proxy,
             surfaces=payload.surfaces,
+            media_operations=media_operations,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -416,6 +452,10 @@ async def update_custom_provider(
             changes["surfaces"] = normalize_custom_surfaces(payload.surfaces)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if payload.media_operations is not None:
+        changes["media_operations"] = _validated_media_operations(
+            payload.media_operations
+        )
     if payload.reasoning_effort_enum is not None:
         words = normalize_effort_words(payload.reasoning_effort_enum)
         changes["reasoning_effort_enum"] = list(words) if words else None

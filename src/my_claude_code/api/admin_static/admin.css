@@ -9748,3 +9748,124 @@ details.turn-pane > summary:focus-visible {
 .proxy-status-undo {
   margin-right: var(--space-1);
 }
+
+/* ------------------------------------------------------------ media (7.67.0)
+   The Models page's "Media models" section and the Analytics page's Media
+   card. Both tables scroll inside their own card: at 420 px six columns of
+   chips are wider than the page, and a wide table must never widen the page. */
+.media-models-body {
+  min-width: 0;
+  margin-top: var(--space-2);
+}
+
+.media-models-subhead {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 14px;
+  color: var(--text-strong);
+}
+
+.media-models-scroll {
+  max-width: 100%;
+}
+
+.media-models-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.media-models-table th,
+.media-models-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.media-models-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.media-ref {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.media-provider-name {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.media-models-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.media-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.media-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--neutral-border);
+  border-radius: 999px;
+  background: var(--neutral-bg);
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.media-chip-rail {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.media-chip-paused,
+.media-chip-warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+/* A warning sentence is the one chip long enough to need a second line. */
+.media-chip-warn {
+  white-space: normal;
+}
+
+.media-chip-ok {
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.media-chip-muted {
+  color: var(--muted);
+}
+
+.media-analytics-panel {
+  margin-bottom: 16px;
+}
+
+.media-analytics-panel .analytics-block {
+  margin-top: var(--space-3);
+  min-width: 0;
+}
+
+.media-analytics-note {
+  margin-top: var(--space-2);
+}
+
+.media-not-measured {
+  color: var(--muted);
+}

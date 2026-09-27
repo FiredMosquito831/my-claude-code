@@ -309,6 +309,51 @@ def video_surfaces(
     return tuple(surfaces)
 
 
+#: 7.67.0: the media endpoints a custom (hand-configured) provider may say it
+#: serves, in the card's order. Each is OpenAI's own endpoint at its default
+#: path, joined onto the provider's base URL; ``video`` is the job shape of
+#: ``video_surfaces()`` (create + retrieve; the finished file is read from the
+#: URL the host's retrieve answer carries). Declared by the operator, like the
+#: chat ``surfaces`` beside it -- only they know what their gateway fronts.
+CUSTOM_MEDIA_VIDEO = "video"
+CUSTOM_MEDIA_OPERATIONS: tuple[str, ...] = (
+    MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_IMAGE_EDIT,
+    MEDIA_OPERATION_SPEECH,
+    MEDIA_OPERATION_TRANSCRIBE,
+    MEDIA_OPERATION_TRANSLATE,
+    CUSTOM_MEDIA_VIDEO,
+)
+
+
+def custom_media_surfaces(operations: tuple[str, ...]) -> tuple[MediaSurface, ...]:
+    """The surfaces a custom provider's declared operations stand for.
+
+    Canonical order whatever order they were declared in; a name outside
+    ``CUSTOM_MEDIA_OPERATIONS`` stands for nothing (the registry refuses one
+    an operator submits). Nothing declared is ``()``: the custom provider
+    every earlier release built, skipped uncharged by every media rail.
+    """
+
+    surfaces: list[MediaSurface] = []
+    for operation in CUSTOM_MEDIA_OPERATIONS:
+        if operation not in operations:
+            continue
+        if operation == MEDIA_OPERATION_IMAGE_GENERATE:
+            surfaces.append(image_generation_surface())
+        elif operation == MEDIA_OPERATION_IMAGE_EDIT:
+            surfaces.append(image_edit_surface())
+        elif operation == MEDIA_OPERATION_SPEECH:
+            surfaces.append(speech_surface())
+        elif operation == MEDIA_OPERATION_TRANSCRIBE:
+            surfaces.append(transcription_surface())
+        elif operation == MEDIA_OPERATION_TRANSLATE:
+            surfaces.append(translation_surface())
+        else:
+            surfaces.extend(video_surfaces())
+    return tuple(surfaces)
+
+
 def job_path(path: str, job_id: str) -> str:
     """``path`` with ``{id}`` replaced by the URL-quoted upstream job id."""
 

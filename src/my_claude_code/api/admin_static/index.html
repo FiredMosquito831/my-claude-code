@@ -269,6 +269,19 @@
                     Which wire APIs this host serves. MCC routes each model to the first one that works, and remembers what it proved. Leave Chat Completions ticked on its own unless you know your gateway also answers /responses or /messages — that is what every OpenAI-compatible host speaks.
                   </div>
                 </div>
+                <div class="field" id="cpMediaOperationsField">
+                  <label id="cpMediaOperationsLabel"><span>Media endpoints</span></label>
+                  <div
+                    id="cpMediaOperations"
+                    class="cp-surfaces"
+                    role="group"
+                    aria-labelledby="cpMediaOperationsLabel"
+                    aria-describedby="desc-cpMediaOperations"
+                  ></div>
+                  <div class="field-description" id="desc-cpMediaOperations">
+                    Which OpenAI media endpoints this host serves, at their standard paths under the base URL. Tick only what your gateway documents: a media rail (Image, Speech, Transcription, Video on Model Config) skips a provider that declares nothing for it, without charging it a failure. None ticked is a chat-only provider.
+                  </div>
+                </div>
                 <div class="cp-form-actions">
                   <button id="cpSubmitButton" class="primary-button" type="submit">Add provider</button>
                   <button id="cpCancelButton" class="secondary-button" type="button">Cancel</button>
@@ -976,6 +989,32 @@
               <div id="modelsBulkBar" class="models-bulk-bar" role="group"
                 aria-label="Bulk visibility actions" hidden></div>
             </section>
+
+            <!-- 7.67.0: the refs on the media rails, apart from the chat models
+                 above -- a media model is never a chat model and never listed on
+                 /v1/models. Filled from /admin/api/media/models when the view is
+                 opened and on Reload. -->
+            <section class="settings-section" id="section-media-models"
+              aria-labelledby="mediaModelsHeading">
+              <h3 id="mediaModelsHeading">Media models</h3>
+              <p class="section-help">
+                Every model on a media rail (Image, Speech, Transcription and Video on
+                Model Config). They answer the media endpoints only. What a row can
+                serve is what its provider declares; a provider that declares nothing
+                for a rail is skipped on it without being charged a failure. The
+                models.dev output list is advisory, and the bench shown is the media
+                one, which is kept apart from the chat bench.
+              </p>
+              <p id="mediaModelsStatus" class="models-status" role="status"
+                aria-live="polite" hidden></p>
+              <div id="mediaModelsTable" class="media-models-body"></div>
+              <h4 class="media-models-subhead">Providers with media endpoints</h4>
+              <p class="section-help">
+                Every provider, built-in or custom, that declares at least one media
+                endpoint, and which rails those endpoints can serve.
+              </p>
+              <div id="mediaProvidersTable" class="media-models-body"></div>
+            </section>
           </section>
 
           <section id="view-messaging" class="admin-view" data-view="messaging" hidden>
@@ -1300,6 +1339,23 @@
                 <div id="reqDivertedRoutes"></div>
               </section>
             </div>
+            <!-- 7.67.0: media requests, apart from every chat number above. -->
+            <section id="reqMediaPanel" class="analytics-panel media-analytics-panel"
+              aria-labelledby="reqMediaHeading">
+              <h4 id="reqMediaHeading">Media</h4>
+              <p class="analytics-footnote">
+                Requests to the image, speech, transcription and video endpoints, by
+                rail and by provider and model. Only the window applies to this
+                block; the page's other filters do not. A dash is a measure no
+                request reported (an MP3 states no length, a URL answer carries no
+                bytes), never a zero.
+              </p>
+              <p id="reqMediaNote" class="analytics-footnote media-analytics-note"
+                role="status" hidden></p>
+              <div id="reqMediaRails"></div>
+              <div id="reqMediaModels"></div>
+              <div id="reqMediaJobs"></div>
+            </section>
             <section
               id="reqInflightPanel"
               class="inflight-panel"
@@ -3531,7 +3587,10 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Video is served by Gemini, OpenRouter and DeepInfra. Clients that speak
                   Google's Gemini API reach the same rails: a <code>generateContent</code> asking
                   for image or audio output, and <code>:predictLongRunning</code> for video.
-                  Gemini models can also serve the Speech and Transcription rails.
+                  Gemini models can also serve the Speech and Transcription rails. The
+                  <strong>Models</strong> page lists every media-rail model and what its provider
+                  declares; <strong>Analytics</strong> has a separate <em>Media</em> card; a custom
+                  provider declares media endpoints with the <em>Media endpoints</em> checkboxes.
                 </p>
                 <p>
                   The rail keeps health records of its own, so a model or key that fails at
