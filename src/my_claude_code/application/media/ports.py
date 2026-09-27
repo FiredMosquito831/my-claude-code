@@ -6,12 +6,18 @@ stack (key pool, proxy pool, leaf) lives in ``providers/media`` and is wired in
 by the runtime, since ``api`` may not import ``providers``.
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Protocol, runtime_checkable
 
 from my_claude_code.config.settings import Settings
 
-from .request import MediaAttempt, MediaChunk, MediaRequest
+from .request import (
+    MediaAttempt,
+    MediaChunk,
+    MediaDownload,
+    MediaRequest,
+    MediaResponse,
+)
 
 
 class MediaProviderPort(Protocol):
@@ -53,9 +59,62 @@ class PooledMediaPort(Protocol):
 MediaProviderResolver = Callable[[str], MediaProviderPort]
 
 
+class MediaJobClient(Protocol):
+    """Calls on one accepted job, pinned to the provider, key and leg that took it.
+
+    One upstream call per method call, through that key's own client and
+    limiter; a failure is charged to that key and that model the way an
+    attempt's is, and nothing ever rotates or falls back -- the job exists
+    only where it was accepted.
+    """
+
+    async def call(
+        self,
+        operation: str,
+        upstream_id: str,
+        *,
+        model: str,
+        request_id: str,
+        query: Mapping[str, str] | None = None,
+    ) -> MediaResponse:
+        """A buffered call on the job (retrieve, delete)."""
+        ...
+
+    async def download(
+        self,
+        *,
+        operation: str | None,
+        upstream_id: str,
+        url: str | None,
+        model: str,
+        request_id: str,
+        query: Mapping[str, str] | None = None,
+    ) -> MediaDownload:
+        """Open the finished file: the declared ``operation``'s path, else ``url``."""
+        ...
+
+
 class MediaRuntimePort(Protocol):
     """The process-wide owner of every provider's media stack."""
 
     def resolver(self, settings: Settings) -> MediaProviderResolver: ...
+
+    def job_client(
+        self,
+        settings: Settings,
+        provider_id: str,
+        *,
+        key_fingerprint: str | None,
+        key_index: int | None,
+        proxy_label: str | None,
+    ) -> MediaJobClient | None:
+        """The pinned client for a job, or ``None`` when its key is gone."""
+        ...
+
+    def key_fingerprint(
+        self, settings: Settings, provider_id: str, key_index: int | None
+    ) -> str | None:
+        """The stable id of the provider's key at ``key_index`` (never the key)."""
+        ...
 
     async def close(self) -> None: ...

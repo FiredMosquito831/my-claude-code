@@ -1041,6 +1041,40 @@ CREATE TABLE IF NOT EXISTS request_media (
     sha256 TEXT NOT NULL,
     PRIMARY KEY (request_id, direction, idx)
 );
+-- Video jobs a host accepted (7.64.0), one row per job, keyed on MCC's own
+-- id. ``upstream_id`` is the host's name for the job and the key it was
+-- accepted with is pinned by index, masked label and fingerprint -- never
+-- the key itself, and never a URL the host serves the file at. Written the
+-- moment the job is accepted (not by the batched writer), so a client's first
+-- poll finds it; pruned with its request row after an hour's grace.
+CREATE TABLE IF NOT EXISTS media_jobs (
+    job_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    requested_model TEXT,
+    upstream_id TEXT NOT NULL,
+    key_index INTEGER,
+    key_fingerprint TEXT,
+    key_label TEXT,
+    proxy_label TEXT,
+    status TEXT,
+    status_raw TEXT,
+    progress INTEGER,
+    seconds REAL,
+    size TEXT,
+    prompt TEXT,
+    error TEXT,
+    usage_json TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL,
+    completed_at REAL,
+    content_sha TEXT,
+    content_bytes INTEGER,
+    content_mime TEXT,
+    row_seconds_written INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_media_jobs_created ON media_jobs(created_at);
 -- One row per model the chain reached, or deliberately did not reach.
 --
 -- ``requests`` holds one row per request, so it can only ever name the model
@@ -1534,6 +1568,14 @@ _ADDED_COLUMNS = (
         "input_audio_seconds",
         "ALTER TABLE requests ADD COLUMN input_audio_seconds REAL",
     ),
+    # 7.64.0: the video job a ``video_create`` row accepted (``media_jobs``),
+    # and the seconds of video it produced -- written when a poll first reads
+    # the job completed with a stated length; NULL = not (yet) measured.
+    ("media_job_id", "ALTER TABLE requests ADD COLUMN media_job_id TEXT"),
+    (
+        "output_video_seconds",
+        "ALTER TABLE requests ADD COLUMN output_video_seconds REAL",
+    ),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1685,6 +1727,8 @@ _REQUEST_INSERT_COLUMNS = (
     "media_sha_out",
     "output_audio_seconds",
     "input_audio_seconds",
+    "media_job_id",
+    "output_video_seconds",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -2151,6 +2195,91 @@ def record_recovery_event(kind: str) -> None:
         slot.record(kind)
 
 
+@dataclass(frozen=True, slots=True)
+class MediaJobRecord:
+    """One accepted video job, as ``media_jobs`` stores it.
+
+    Never a key and never an upstream URL: the key is pinned by index, masked
+    label and fingerprint, and the file's address is asked for again when it
+    is fetched.
+    """
+
+    job_id: str
+    request_id: str
+    provider: str
+    model: str
+    upstream_id: str
+    created_at: float
+    requested_model: str | None = None
+    key_index: int | None = None
+    key_fingerprint: str | None = None
+    key_label: str | None = None
+    proxy_label: str | None = None
+    status: str | None = None
+    status_raw: str | None = None
+    progress: int | None = None
+    seconds: float | None = None
+    size: str | None = None
+    prompt: str | None = None
+    error: str | None = None
+    usage_json: str | None = None
+    updated_at: float | None = None
+    completed_at: float | None = None
+
+
+# Written in this order by ``insert_media_job``: the names are the record's
+# own fields, and the placeholders are generated from the same tuple.
+_MEDIA_JOB_INSERT_COLUMNS = (
+    "job_id",
+    "request_id",
+    "provider",
+    "model",
+    "upstream_id",
+    "created_at",
+    "requested_model",
+    "key_index",
+    "key_fingerprint",
+    "key_label",
+    "proxy_label",
+    "status",
+    "status_raw",
+    "progress",
+    "seconds",
+    "size",
+    "prompt",
+    "error",
+    "usage_json",
+    "updated_at",
+    "completed_at",
+)
+_MEDIA_JOB_INSERT_SQL = (
+    "INSERT INTO media_jobs"
+    f" ({', '.join(_MEDIA_JOB_INSERT_COLUMNS)})"
+    f" VALUES ({', '.join('?' * len(_MEDIA_JOB_INSERT_COLUMNS))})"
+)
+#: What a poll or a download may change on a job; anything else is refused.
+_MEDIA_JOB_UPDATABLE = frozenset(
+    {
+        "status",
+        "status_raw",
+        "progress",
+        "seconds",
+        "size",
+        "error",
+        "usage_json",
+        "updated_at",
+        "completed_at",
+        "content_sha",
+        "content_bytes",
+        "content_mime",
+        "row_seconds_written",
+    }
+)
+#: A job's request row is written by the batched writer, after the job row:
+#: prune waits this long before calling a job without one an orphan.
+_MEDIA_JOB_ORPHAN_GRACE_SECONDS = 3600.0
+
+
 @dataclass(slots=True)
 class RequestRecord:
     """One completed request, queued for the background writer."""
@@ -2311,6 +2440,8 @@ class RequestRecord:
     media_sha_out: str | None = None
     output_audio_seconds: float | None = None
     input_audio_seconds: float | None = None
+    media_job_id: str | None = None
+    output_video_seconds: float | None = None
     #: Generated outputs to link in ``request_media`` (sha256, mime, bytes,
     #: stored). Written by the writer thread with the row.
     media_outputs: tuple[MediaOutputRecord, ...] = ()
@@ -5073,6 +5204,8 @@ class RequestLogStore:
             record.media_sha_out,
             record.output_audio_seconds,
             record.input_audio_seconds,
+            record.media_job_id,
+            record.output_video_seconds,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -8307,6 +8440,15 @@ class RequestLogStore:
                 )
                 if orphaned_media:
                     delete_media_files(media_root(self._db_path), orphaned_media)
+                # A video job goes with its request row, after the grace: the
+                # job is written the moment it is accepted, its row only when
+                # the writer next flushes.
+                conn.execute(
+                    "DELETE FROM media_jobs WHERE created_at < ? AND NOT EXISTS ("
+                    " SELECT 1 FROM requests WHERE requests.id ="
+                    " media_jobs.request_id)",
+                    (time.time() - _MEDIA_JOB_ORPHAN_GRACE_SECONDS,),
+                )
                 now = time.monotonic()
                 if removed and (
                     self._last_tool_sweep is None
@@ -8382,6 +8524,7 @@ class RequestLogStore:
             ]
             conn.execute("DELETE FROM request_media")
             conn.execute("DELETE FROM media_blobs")
+            conn.execute("DELETE FROM media_jobs")
             conn.execute("DELETE FROM request_attempts")
             conn.execute("DELETE FROM tool_catalogues")
             conn.execute("DELETE FROM tool_schemas")
@@ -8389,6 +8532,116 @@ class RequestLogStore:
         if stored_media:
             delete_media_files(media_root(self._db_path), stored_media)
         return removed
+
+    # ------------------------------------------------------------ media jobs ---
+    # Video jobs (7.64.0). Each call opens its own short connection and is
+    # made only through ``asyncio.to_thread``: a job is read and written by the
+    # request serving a client's poll, not by the batched writer, so a job
+    # accepted a moment ago is readable at once.
+
+    def insert_media_job(self, job: MediaJobRecord) -> None:
+        """Record a job the moment a host accepted it."""
+        row = tuple(getattr(job, column) for column in _MEDIA_JOB_INSERT_COLUMNS)
+        with self._connection() as conn:
+            conn.execute(_MEDIA_JOB_INSERT_SQL, row)
+
+    def media_job(self, job_id: str) -> dict[str, Any] | None:
+        """One job's row, or ``None`` when MCC has no such job."""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM media_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def update_media_job(self, job_id: str, **fields: Any) -> bool:
+        """Change what a poll or a download learned; ``True`` if the job exists."""
+        unknown = set(fields) - _MEDIA_JOB_UPDATABLE
+        if unknown:
+            raise ValueError(f"not updatable on a media job: {sorted(unknown)}")
+        if not fields:
+            return False
+        names = sorted(fields)
+        assignments = ", ".join(f"{name} = ?" for name in names)
+        with self._connection() as conn:
+            cursor = conn.execute(
+                f"UPDATE media_jobs SET {assignments} WHERE job_id = ?",
+                (*(fields[name] for name in names), job_id),
+            )
+        return cursor.rowcount > 0
+
+    def list_media_jobs(
+        self,
+        *,
+        after: str | None = None,
+        limit: int | None = None,
+        order: Literal["asc", "desc"] = "desc",
+    ) -> list[dict[str, Any]]:
+        """MCC's own jobs, newest first by default; ``after`` is a job id cursor."""
+        direction = "ASC" if order == "asc" else "DESC"
+        comparison = ">" if order == "asc" else "<"
+        sql = "SELECT * FROM media_jobs"
+        params: list[Any] = []
+        if after is not None:
+            sql += (
+                f" WHERE (created_at, job_id) {comparison}"
+                " (SELECT created_at, job_id FROM media_jobs WHERE job_id = ?)"
+            )
+            params.append(after)
+        sql += f" ORDER BY created_at {direction}, job_id {direction}"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self._connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_media_job(self, job_id: str) -> bool:
+        """Forget one job; ``True`` if it existed."""
+        with self._connection() as conn:
+            cursor = conn.execute("DELETE FROM media_jobs WHERE job_id = ?", (job_id,))
+        return cursor.rowcount > 0
+
+    def set_request_video_seconds(self, request_id: str, seconds: float) -> bool:
+        """Put a finished video's length on its create row; ``True`` once written.
+
+        ``False`` while the writer has not flushed that row yet -- the caller
+        tries again on the next poll.
+        """
+        with self._connection() as conn:
+            cursor = conn.execute(
+                "UPDATE requests SET output_video_seconds = ? WHERE id = ?",
+                (seconds, request_id),
+            )
+        return cursor.rowcount > 0
+
+    def record_media_job_content(
+        self, job_id: str, request_id: str, output: MediaOutputRecord, *, at: float
+    ) -> None:
+        """What a download of the job's video measured, linked to its create row."""
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE media_jobs SET content_sha = ?, content_bytes = ?,"
+                " content_mime = ? WHERE job_id = ?",
+                (output.sha256, output.bytes, output.mime, job_id),
+            )
+            conn.execute(
+                "INSERT INTO media_blobs (sha256, mime, bytes, created_at, stored)"
+                " VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(sha256) DO UPDATE SET"
+                " stored = MAX(media_blobs.stored, excluded.stored)",
+                (
+                    output.sha256,
+                    output.mime,
+                    output.bytes,
+                    at,
+                    1 if output.stored else 0,
+                ),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO request_media"
+                " (request_id, direction, idx, sha256) VALUES (?, ?, ?, ?)",
+                (request_id, output.direction, output.idx, output.sha256),
+            )
 
     # ------------------------------------------------- image descriptions ---
 

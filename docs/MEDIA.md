@@ -1,7 +1,7 @@
 # Media routing
 
-My Claude Code routes **media requests** -- image generation and editing, speech and
-transcription today, with video arriving in a later release -- over **media rails** on Model
+My Claude Code routes **media requests** -- image generation and editing, speech,
+transcription and video -- over **media rails** on Model
 Config, the way it routes chat over tiers. A client that speaks the OpenAI media API points
 its base URL at the proxy and keeps its own code.
 
@@ -13,6 +13,7 @@ its base URL at the proxy and keeps its own code.
 | `POST /v1/images/edits` | 7.61.0 | Image | the same rail |
 | `POST /v1/audio/speech` | 7.62.0 | Speech | `MODEL_TTS`, `MODEL_TTS_FALLBACKS`, `MODEL_TTS_PAUSED` |
 | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | 7.63.0 | Transcription | `MODEL_ASR`, `MODEL_ASR_FALLBACKS`, `MODEL_ASR_PAUSED` |
+| `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content`, `GET /v1/videos`, `DELETE /v1/videos/{id}` | 7.64.0 | Video | `MODEL_VIDEO`, `MODEL_VIDEO_FALLBACKS`, `MODEL_VIDEO_PAUSED` |
 
 ```python
 from openai import OpenAI
@@ -34,7 +35,7 @@ The proxy token is the same one every other client uses (`Authorization: Bearer`
 
 - The **endpoint** picks the rail: `images/generations` and `images/edits` are the Image rail,
   `audio/speech` the Speech rail, `audio/transcriptions` and `audio/translations` the
-  Transcription rail.
+  Transcription rail, `videos` the Video rail.
 - A `model` written as `provider/model` (for example `xai/grok-2-image`) pins that one model.
 - Any other `model` -- a vendor name such as `gpt-image-2`, or none -- uses the rail:
   `MODEL_IMAGE` first, then `MODEL_IMAGE_FALLBACKS` in order, skipping anything in
@@ -132,9 +133,61 @@ A translation skips every model whose provider declares transcription only, unch
 `stream=true` is routed only to a surface that streams (Mistral); its `transcript.text.delta`
 events are forwarded as they arrive.
 
+## Video (a job: submit, then poll)
+
+`POST /v1/videos` routes on the **Video rail** (`MODEL_VIDEO`, `MODEL_VIDEO_FALLBACKS`,
+`MODEL_VIDEO_PAUSED`). A video is not one answer but a **job**: the provider accepts it, works
+for seconds to minutes, and the client asks for its status until it is done.
+
+```python
+video = client.videos.create(model="veo-3.1-generate-preview", prompt="a paper boat on a pond")
+video = client.videos.retrieve(video.id)  # ask again until status is "completed" or "failed"
+client.videos.download_content(video.id).write_to_file("boat.mp4")
+```
+
+- **The rail is walked only until a provider accepts the job.** A refusal, an error or an
+  answer without a job id moves to the next model under the usual rules. The first provider
+  that answers with a job id wins, and the client gets MCC's own id for it (`video_...`).
+- **After that the job never moves.** Every status check, the download and a delete go to the
+  same provider, with the same key and through the same proxy address. A job the provider
+  accepted and that later fails is reported as `failed` with the provider's reason; it is
+  **never resubmitted** to the next model, so it is never billed twice. Submit again to start
+  from the rail's primary.
+- **Polling is yours.** Each `GET /v1/videos/{id}` makes exactly one status call upstream;
+  MCC runs no background poller. Statuses are reported in OpenAI's four words (`queued`,
+  `in_progress`, `completed`, `failed`) because the OpenAI SDK stops polling on any other word;
+  a host's `processing` or `pending` is translated, and a word MCC does not know is passed
+  through as the host wrote it.
+- `GET /v1/videos/{id}/content` streams the video from the provider through the same key.
+  After the provider has dropped it (Gemini documents two days for Veo), the answer is `404`
+  with the code `video_expired` -- unless `MEDIA_STORE_ENABLED` kept a copy, which is then
+  served from disk.
+- `GET /v1/videos` lists the jobs submitted through MCC (not the provider's own list: jobs
+  span providers and keys). `DELETE /v1/videos/{id}` forgets MCC's record; none of the
+  providers below documents a delete, so the provider keeps the file until it expires.
+- Jobs live in the request log, so with `REQUEST_LOG_ENABLED` off `POST /v1/videos` answers `503`
+  before calling any provider (a job MCC could never read back would still be billed).
+- If the key that created a job is removed from the configuration, the job answers `409`
+  naming the provider: a job can only be read with the key that created it.
+- A status check follows the chat rules for **key health**: a `401`/`403` or a `429` on that
+  key is charged to it exactly as a chat request on that key would be. It is never rotated
+  to another key, because the job belongs to this one.
+
+| Provider | Submit | Status | Download |
+|---|---|---|---|
+| Gemini | `videos` on its OpenAI-compatible base URL (multipart, as the OpenAI SDK sends it) | `videos/{id}` | the `url` in the status answer |
+| OpenRouter | `videos` (JSON: the SDK's form is re-encoded; `seconds` is sent as `duration`) | `videos/{id}` | `videos/{id}/content` |
+| DeepInfra | `videos` on its OpenAI-compatible base URL (JSON, re-encoded) | `videos/{id}` | `videos/{id}/content?variant=` |
+
+The body is otherwise forwarded field for field with `model` replaced by the rail's model, so a
+host's own options (`aspect_ratio`, `resolution`, ... sent with the SDK's `extra_body`) reach
+it. A provider that documents JSON only cannot take an uploaded `input_reference` file; such a
+request skips it, uncharged. A download URL on another host than the provider's own is fetched
+**without** the API key.
+
 ## Retry, fallback, keys, 429s and proxies
 
-The Image rail follows the same rules as a chat chain, applied by a separate copy of the chat
+Every media rail follows the same rules as a chat chain, applied by a separate copy of the chat
 engine that is held to it by a contract test (`tests/contracts/test_media_chat_parity.py`):
 
 - `FALLBACK_SKIP_KINDS` decides which failures end the route (default: a malformed request).
@@ -163,13 +216,20 @@ with the chain's attempts, plus:
 
 | Column | Meaning |
 |---|---|
-| `media_operation` | `image_generate`, `image_edit`, `speech`, `transcribe` or `translate` |
+| `media_operation` | `image_generate`, `image_edit`, `speech`, `transcribe`, `translate` or `video_create` |
 | `input_image_count` | images uploaded to an edit |
 | `output_image_count` | items the host returned |
 | `media_bytes_out` | decoded size of the base64 images (empty for a URL-only answer: not measured) |
 | `media_sha_out` | SHA-256 of the first image, or of the audio |
 | `input_audio_seconds` | audio a transcription heard: the provider's own figure, else a WAV upload's header; empty otherwise |
 | `output_audio_seconds` | length of the audio, when its container states it (WAV); empty for MP3/Opus/AAC: not measured |
+| `media_job_id` | the video job's MCC id (`video_...`) on the row of the request that submitted it |
+| `output_video_seconds` | the video's length as the provider reports it, written once a status check sees the job completed; empty until then |
+
+A video job's status checks and downloads do not add rows: the job itself (provider, model,
+which key by position and fingerprint, which proxy address, status, progress, the provider's
+error) is kept in the request log's `media_jobs` table and pruned with its submit row. The key
+itself and the provider's download URLs are never stored.
 
 A transcript is the row's output text (`output_text`, `output_chars`), like a chat answer.
 Token usage, when the host reports it, fills the usual `tokens_in` / `tokens_out`. An edit's
@@ -187,5 +247,7 @@ cleared; turning the setting off stops new copies and leaves existing files alon
 
 ## Not yet
 
-Video, Gemini-native media requests, media pricing and the
-Analytics media block each arrive in their own release.
+Gemini-native media requests, media pricing and the Analytics media block each arrive in
+their own release. Video on ZenMux, Agnes AI, xAI, Together, SiliconFlow, MiniMax and Alibaba
+is not routed: each documents its own job API rather than the OpenAI shape, and each would be
+its own small release. OpenAI's own video API (Sora) was shut down on 2026-09-24.

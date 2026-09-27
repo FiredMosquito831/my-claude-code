@@ -908,6 +908,49 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         affects_providers=False,
     ),
     ConfigFieldSpec(
+        "MODEL_VIDEO",
+        "Video Rail",
+        "models",
+        "optional_model",
+        settings_attr="model_video",
+        description=(
+            "Model that serves POST /v1/videos (the OpenAI Videos API shape). A media "
+            "rail, never a chat tier. A client that names a provider/model ref pins "
+            "that model; any other model name uses this rail. The rail is walked only "
+            "until a provider accepts the job: from then on every status check, "
+            "download and delete goes to that provider with the same key."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_VIDEO_FALLBACKS",
+        "Video Fallback Chain",
+        "models",
+        "model_chain",
+        settings_attr="model_video_fallbacks",
+        description=(
+            "Ordered provider/model refs tried after MODEL_VIDEO refuses to accept "
+            "the job, is paused or is benched -- the chat engine's retry, "
+            "key-rotation, 429, bench and proxy rules, with health records of their "
+            "own. A job a provider already accepted is never resubmitted elsewhere, "
+            "even if it later fails, so it is never billed twice."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_VIDEO_PAUSED",
+        "Video Paused Models",
+        "models",
+        "text",
+        settings_attr="model_video_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on the Video rail that are switched "
+            "off. A paused model is never tried and costs no attempt, but keeps its "
+            "place and appears in the request log as skipped. When every model on "
+            "the rail is paused the endpoint names this setting."
+        ),
+        affects_providers=False,
+    ),
+    ConfigFieldSpec(
         "MODEL_VISIBILITY_ALLOW",
         "Only list these models",
         "models",

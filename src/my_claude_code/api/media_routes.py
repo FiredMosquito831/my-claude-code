@@ -96,6 +96,18 @@ router = APIRouter()
 _HASH_CHUNK_BYTES = 1024 * 1024
 
 Cleanup = Callable[[], Awaitable[None]]
+#: How a buffered (non-streaming) answer is turned into the client's response.
+#: ``_complete_response`` by default; the Video rail answers with its job.
+Complete = Callable[
+    [
+        MediaChunk,
+        AsyncIterator[MediaChunk],
+        RequestRuntimeLease,
+        MediaCapture,
+        Callable[[MediaResponse], MediaOutputs],
+    ],
+    Awaitable[Response],
+]
 
 
 async def _nothing_to_clean() -> None:
@@ -244,8 +256,13 @@ async def _serve(
     *,
     endpoint: str,
     cleanup: Cleanup = _nothing_to_clean,
+    complete: Complete | None = None,
 ) -> Response:
-    """Plan, execute and answer one media request; ``cleanup`` runs once at the end."""
+    """Plan, execute and answer one media request; ``cleanup`` runs once at the end.
+
+    ``complete`` answers a buffered request (default ``_complete_response``);
+    it must release the lease and finish the capture, as the default does.
+    """
     request_id = get_request_id(request)
     media = services.media
     if media is None:
@@ -304,8 +321,9 @@ async def _serve(
         raise
 
     if not media_request.stream:
+        answer = _complete_response if complete is None else complete
         try:
-            return await _complete_response(
+            return await answer(
                 first, stream, lease, capture, _parser_for(media_request)
             )
         finally:

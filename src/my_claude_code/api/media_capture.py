@@ -94,14 +94,33 @@ class MediaCapture:
         self._headers = capture_headers(headers)
         self._credential = install_attribution()
         self._proxy = install_proxy_attribution()
+        self._job_id: str | None = None
         self._finished = False
 
     @property
     def enabled(self) -> bool:
         return self._store is not None
 
+    @property
+    def request_id(self) -> str:
+        return self._request_id
+
+    @property
+    def routed(self) -> MediaAttempt | None:
+        """The attempt the chain last announced: the one that answered, on success."""
+        return self._routed
+
+    @property
+    def proxy_label(self) -> str | None:
+        """The egress address the last dial of this request went out through."""
+        return self._proxy.label
+
     def set_plan(self, plan: MediaPlan) -> None:
         self._plan = plan
+
+    def set_job(self, job_id: str) -> None:
+        """The video job this request's answer created (``media_jobs``)."""
+        self._job_id = job_id
 
     def on_attempt(self, attempt: MediaAttempt, index: int) -> None:
         """The model the chain is about to try; the last one names the row."""
@@ -275,6 +294,7 @@ class MediaCapture:
             ),
             output_audio_seconds=None if outputs is None else outputs.audio_seconds,
             input_audio_seconds=self._input_audio_seconds(outputs),
+            media_job_id=self._job_id,
             output_text=None if outputs is None else outputs.text,
             output_chars=(
                 None if outputs is None or outputs.text is None else len(outputs.text)

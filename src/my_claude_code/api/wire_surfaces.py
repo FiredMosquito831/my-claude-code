@@ -33,6 +33,7 @@ IMAGES_EDITS_ENDPOINT = "/v1/images/edits"
 AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
 AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
 AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
+VIDEOS_ENDPOINT = "/v1/videos"
 
 WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
@@ -44,6 +45,7 @@ _WIRE_API_BY_PATH: dict[str, WireApi] = {
     AUDIO_SPEECH_ENDPOINT: "chat_completions",
     AUDIO_TRANSCRIPTIONS_ENDPOINT: "chat_completions",
     AUDIO_TRANSLATIONS_ENDPOINT: "chat_completions",
+    VIDEOS_ENDPOINT: "chat_completions",
 }
 
 #: The surfaces whose clients parse OpenAI's ``{"error": {...}}``. Membership
@@ -65,6 +67,10 @@ def wire_api_for_path(path: str) -> WireApi:
     """
     if path.startswith(GEMINI_ENDPOINT_PREFIX):
         return "gemini"
+    if path.startswith(VIDEOS_ENDPOINT + "/"):
+        # A video job's own paths (``/v1/videos/{id}``, ``.../content``) are
+        # OpenAI-shaped like the create; their clients parse OpenAI errors.
+        return "chat_completions"
     return _WIRE_API_BY_PATH.get(path, "messages")
 
 

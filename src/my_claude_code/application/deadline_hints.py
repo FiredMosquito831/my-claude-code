@@ -51,6 +51,7 @@ _SECTION_FOR_ENV_VAR: dict[str, str] = {
     "MODEL_IMAGE_PAUSED": "models",
     "MODEL_TTS_PAUSED": "models",
     "MODEL_ASR_PAUSED": "models",
+    "MODEL_VIDEO_PAUSED": "models",
 }
 
 # Manifest section id -> the dashboard page its card is rendered on. A single

@@ -3106,6 +3106,9 @@ Unlike everything else on this page, a pause is written the moment you click it:
 | `MODEL_ASR` | the Transcription rail's model: `POST /v1/audio/transcriptions` and `/v1/audio/translations` route here ([Media routing](MEDIA.md)) |
 | `MODEL_ASR_FALLBACKS` | the Transcription rail's fallback chain |
 | `MODEL_ASR_PAUSED` | paused entries on the Transcription rail |
+| `MODEL_VIDEO` | the Video rail's model: `POST /v1/videos` routes here until a provider accepts the job ([Media routing](MEDIA.md)) |
+| `MODEL_VIDEO_FALLBACKS` | the Video rail's fallback chain (tried only before a provider accepts the job) |
+| `MODEL_VIDEO_PAUSED` | paused entries on the Video rail |
 | `VISION_ADAPTER_MODE` | what the vision adapter does with an image: `route` (default, divert the whole request) or `describe` (describe the image, keep the model) |
 | `TOOL_RESULT_IMAGE_DELIVERY` | how an image a *tool* returned reaches a non-Anthropic model: `auto` (default), `attach`, `strip` |
 | `IMAGE_MAX_LONG_EDGE` | longest edge, in px, an outbound image may have. `1568` (default), `0` to send images untouched |

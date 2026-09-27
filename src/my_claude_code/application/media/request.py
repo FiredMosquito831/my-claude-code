@@ -6,7 +6,7 @@ which chain of models may serve it; the operation decides which declared
 provider surface (``config/media_surfaces.py``) an attempt goes out through.
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import IO, Any
@@ -25,6 +25,7 @@ class MediaRail(StrEnum):
     IMAGE = "image"
     TTS = "tts"
     ASR = "asr"
+    VIDEO = "video"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,15 @@ RAIL_SETTINGS: Mapping[MediaRail, MediaRailSettings] = {
         paused_attr="model_asr_paused",
         paused_env="MODEL_ASR_PAUSED",
     ),
+    MediaRail.VIDEO: MediaRailSettings(
+        label="Video",
+        model_attr="model_video",
+        model_env="MODEL_VIDEO",
+        fallbacks_attr="model_video_fallbacks",
+        fallbacks_env="MODEL_VIDEO_FALLBACKS",
+        paused_attr="model_video_paused",
+        paused_env="MODEL_VIDEO_PAUSED",
+    ),
 }
 
 
@@ -110,6 +120,10 @@ class MediaRequest:
     #: Uploaded files, in the order the client sent them. Present only when
     #: the client used multipart; ``body`` then holds its text fields.
     uploads: tuple[MediaUpload, ...] = ()
+    #: The client sent multipart/form-data, so every text field in ``body``
+    #: arrived as a string. Read by a surface that re-encodes a form as JSON
+    #: (only a form's digit strings become numbers there).
+    multipart: bool = False
 
     @property
     def prompt(self) -> str | None:
@@ -174,3 +188,17 @@ class MediaResponse:
 
 #: What a media provider yields: one buffered response, or raw stream frames.
 MediaChunk = MediaResponse | bytes
+
+
+@dataclass(frozen=True, slots=True)
+class MediaDownload:
+    """A file the host is sending, still open: read ``chunks``, then ``close``.
+
+    ``close`` must be awaited exactly once whatever happened to the body: it
+    closes the upstream response and frees the concurrency slot it holds.
+    """
+
+    status_code: int
+    content_type: str
+    chunks: AsyncIterator[bytes] = field(repr=False)
+    close: Callable[[], Awaitable[None]] = field(repr=False)
