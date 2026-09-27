@@ -23,6 +23,7 @@ the request is finished with them.
 """
 
 import asyncio
+import dataclasses
 import hashlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -469,12 +470,33 @@ def _parse_images(response: MediaResponse) -> MediaOutputs:
     return parse_images_response(response.body)
 
 
+def _with_leaf_measures(outputs: MediaOutputs, response: MediaResponse) -> MediaOutputs:
+    """What the leaf measured while translating a native answer.
+
+    Only a Gemini native answer carries any (token usage its body cannot
+    hold, raw PCM's length, fields its surface did not take); every other
+    answer comes back unchanged.
+    """
+    changes: dict[str, Any] = {}
+    if outputs.usage is None and response.usage is not None:
+        changes["usage"] = {str(key): value for key, value in response.usage.items()}
+    if outputs.audio_seconds is None and response.audio_seconds is not None:
+        changes["audio_seconds"] = response.audio_seconds
+    if response.not_forwarded:
+        changes["not_forwarded"] = outputs.not_forwarded + response.not_forwarded
+    return dataclasses.replace(outputs, **changes) if changes else outputs
+
+
 def _parse_transcription(response: MediaResponse) -> MediaOutputs:
-    return parse_transcription_response(response.body, response.content_type)
+    return _with_leaf_measures(
+        parse_transcription_response(response.body, response.content_type), response
+    )
 
 
 def _parse_speech(response: MediaResponse) -> MediaOutputs:
-    return parse_speech_response(response.body, response.content_type)
+    return _with_leaf_measures(
+        parse_speech_response(response.body, response.content_type), response
+    )
 
 
 def _parser_for(media_request: MediaRequest) -> Callable[[MediaResponse], MediaOutputs]:

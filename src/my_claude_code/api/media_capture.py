@@ -147,7 +147,7 @@ class MediaCapture:
             )
         )
 
-    def _params(self) -> dict[str, Any]:
+    def _params(self, outputs: MediaOutputs | None) -> dict[str, Any]:
         params = {
             str(key): value
             for key, value in self._request.body.items()
@@ -165,8 +165,13 @@ class MediaCapture:
                 }
                 for upload in self._request.uploads
             ]
-        if self._request.not_forwarded:
-            media["not_forwarded"] = list(self._request.not_forwarded)
+        not_forwarded = list(self._request.not_forwarded)
+        if outputs is not None:
+            not_forwarded.extend(
+                name for name in outputs.not_forwarded if name not in not_forwarded
+            )
+        if not_forwarded:
+            media["not_forwarded"] = not_forwarded
         params["media"] = media
         return params
 
@@ -277,7 +282,7 @@ class MediaCapture:
             stream=self._request.stream,
             input_text=prompt,
             input_chars=None if prompt is None else len(prompt),
-            params=self._params(),
+            params=self._params(outputs),
             tokens_in=_usage_int(usage, "input_tokens"),
             tokens_out=_usage_int(usage, "output_tokens"),
             duration_ms=(time.monotonic() - self._started) * 1000.0,

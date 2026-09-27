@@ -15,8 +15,13 @@ books (user decision 2026-09-26 03:38 #4).
 A video create is accepted only when the host names the job: a 2xx without a
 job id is raised as an upstream failure here, so the executor charges the
 model and falls back exactly as for any other failed attempt.
+
+A Gemini native answer (``generateContent``, 7.66.0) is translated here, off
+the loop, before it is yielded: the audio the client named, or the transcript.
+An answer with neither is raised the same way (charged, falls back).
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Protocol
@@ -34,11 +39,19 @@ from my_claude_code.config.credentials import mask_key_label
 from my_claude_code.config.media_surfaces import (
     MEDIA_ENCODING_JSON,
     MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+    MEDIA_SHAPE_GEMINI_TTS,
     MediaSurface,
     media_url,
+    model_path,
     surface_for,
 )
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.core.gemini_native_media import (
+    GeminiAnswerError,
+    speech_answer,
+    transcript_answer,
+)
 from my_claude_code.core.openai_videos import parse_job
 from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.providers.base import ProviderConfig
@@ -47,7 +60,7 @@ from my_claude_code.providers.http import error_response_headers, read_error_bod
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
-from .adapters import WireBody, build_request_body
+from .adapters import WireBody, build_wire_body
 
 #: Upstream response headers carried onto a buffered media response. Only what
 #: the client or the log can use; never anything that could carry a secret.
@@ -157,20 +170,36 @@ class MediaLeaf:
     ) -> AsyncIterator[MediaChunk]:
         return self._execute(attempt, request_id=request_id)
 
-    async def _send(self, url: str, body: WireBody, stream: bool) -> httpx.Response:
+    async def _send(
+        self,
+        url: str,
+        body: WireBody,
+        stream: bool,
+        auth_header: str | None = None,
+    ) -> httpx.Response:
         """POST one body; a refusal is read whole and raised as HTTPStatusError.
 
         The same shape the Responses transport uses, so ``classify_provider_failure``
         and every error matcher read the host's own words and real status.
+        ``auth_header`` is the surface's declared key header (the bare key);
+        ``None`` sends ``Authorization: Bearer``.
         """
         headers: dict[str, str] = {}
         if self._config.api_key:
-            headers["Authorization"] = f"Bearer {self._config.api_key}"
+            if auth_header is None:
+                headers["Authorization"] = f"Bearer {self._config.api_key}"
+            else:
+                headers[auth_header] = self._config.api_key
         if body.multipart is not None:
             headers["Content-Type"] = body.multipart.content_type
             headers["Content-Length"] = str(body.multipart.content_length)
             request = self._client.build_request(
                 "POST", url, headers=headers, content=body.multipart.stream()
+            )
+        elif body.encoded is not None:
+            headers["Content-Type"] = "application/json"
+            request = self._client.build_request(
+                "POST", url, headers=headers, content=body.encoded
             )
         else:
             headers["Content-Type"] = "application/json"
@@ -242,13 +271,16 @@ class MediaLeaf:
             raise RuntimeError(
                 f"{self._provider_id} declares no {attempt.request.operation} surface"
             )
-        url = media_url(self._config.base_url, surface.path)
-        body = build_request_body(surface, attempt)
+        url = media_url(
+            self._config.base_url,
+            model_path(surface.path, attempt.resolved.provider_model),
+        )
+        body = await build_wire_body(surface, attempt)
         stream = bool(attempt.request.stream)
         async with self._rate_limiter.concurrency_slot():
             try:
                 response = await self._rate_limiter.execute_with_retry(
-                    self._send, url, body, stream
+                    self._send, url, body, stream, surface.auth_header
                 )
             except Exception as error:
                 raise classify_provider_failure(
@@ -263,7 +295,7 @@ class MediaLeaf:
             if attempt.request.operation == MEDIA_OPERATION_VIDEO_CREATE:
                 self._require_job_id(response)
             if not stream:
-                yield MediaResponse(
+                answer = MediaResponse(
                     status_code=response.status_code,
                     content_type=response.headers.get(
                         "content-type", "application/json"
@@ -275,6 +307,12 @@ class MediaLeaf:
                         if name in response.headers
                     },
                 )
+                if surface.shape in (
+                    MEDIA_SHAPE_GEMINI_TTS,
+                    MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+                ):
+                    answer = await self._translated(surface, attempt, answer, body)
+                yield answer
                 return
             try:
                 async for raw in response.aiter_bytes():
@@ -282,6 +320,47 @@ class MediaLeaf:
                         yield raw
             finally:
                 await response.aclose()
+
+    async def _translated(
+        self,
+        surface: MediaSurface,
+        attempt: MediaAttempt,
+        answer: MediaResponse,
+        body: WireBody,
+    ) -> MediaResponse:
+        """A native Gemini answer as the client's audio or transcript, off the loop.
+
+        No audio (or no transcript) in a 2xx is no answer: raised as an
+        upstream failure so the model is charged and the chain moves on.
+        """
+        named = attempt.request.body.get("response_format")
+        translate = (
+            speech_answer
+            if surface.shape == MEDIA_SHAPE_GEMINI_TTS
+            else transcript_answer
+        )
+        try:
+            translated = await asyncio.to_thread(
+                translate,
+                answer.body,
+                named if isinstance(named, str) and named else None,
+            )
+        except GeminiAnswerError as error:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message=f"{self._provider_id} answered {error}",
+                retryable=False,
+            ) from error
+        return MediaResponse(
+            status_code=answer.status_code,
+            content_type=translated.content_type,
+            body=translated.body,
+            headers={**answer.headers, "content-type": translated.content_type},
+            usage=translated.usage,
+            audio_seconds=translated.audio_seconds,
+            not_forwarded=body.not_forwarded,
+        )
 
     def _require_job_id(self, response: httpx.Response) -> None:
         """A video create is accepted only when the answer names the job.

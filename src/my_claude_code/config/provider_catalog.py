@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from .media_surfaces import (
     MEDIA_ENCODING_JSON,
     MediaSurface,
+    gemini_speech_surface,
+    gemini_transcription_surface,
     image_edit_surface,
     image_generation_surface,
     speech_surface,
@@ -345,8 +347,15 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         provider_id="gemini",
         # Video: the OpenAI-compatible layer takes the SDK's multipart create
         # and serves the finished video at the ``url`` its retrieve answer
-        # carries (no content endpoint, no delete).
-        media_surfaces=(image_generation_surface(), *video_surfaces()),
+        # carries (no content endpoint, no delete). Speech and transcription:
+        # that layer has neither, so they go to native ``generateContent``
+        # (7.66.0). No translation surface: none is documented.
+        media_surfaces=(
+            image_generation_surface(),
+            gemini_speech_surface(),
+            gemini_transcription_surface(),
+            *video_surfaces(),
+        ),
         display_name="Gemini",
         credential_env="GEMINI_API_KEY",
         credential_url="https://aistudio.google.com/apikey",
