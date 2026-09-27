@@ -5241,6 +5241,64 @@ def test_jsdom_every_field_in_a_card_renders_without_a_click(rendered) -> None:
         )
 
 
+MEDIA_SHA = {seed: (seed * 32)[:64] for seed in ("a1", "b2", "c3", "d4", "e5")}
+
+
+def test_jsdom_request_modal_media_metadata_always_preview_only_when_stored(
+    rendered,
+) -> None:
+    """7.68.0: every media row states its facts; only a stored file is shown."""
+
+    media = rendered["requestMedia"]
+    assert media["present"] is True
+    assert media["hidden"] is False
+    assert media["heading"] == "Media (6)"
+    items = media["items"]
+    assert [item["direction"] for item in items] == [
+        "in",
+        "out",
+        "out",
+        "out",
+        "out",
+        "out",
+    ]
+    assert [item["preview"] for item in items] == [
+        None,  # an upload: never stored
+        "img",
+        "audio",
+        "video",
+        None,  # stored, but not a picture, a sound or a film
+        None,  # not a content address: nothing is fetched for it
+    ]
+    image, sound, film = items[1], items[2], items[3]
+    assert image["src"] == f"/admin/api/media/{MEDIA_SHA['b2']}"
+    assert image["loading"] == "lazy"
+    assert sound["src"] == f"/admin/api/media/{MEDIA_SHA['c3']}"
+    assert (sound["preload"], sound["controls"]) == ("none", True)
+    assert film["src"] == f"/admin/api/media/{MEDIA_SHA['d4']}"
+    assert (film["preload"], film["controls"]) == ("none", True)
+    assert items[0]["missing"] == "file not stored"
+    assert items[4]["missing"] == "no preview for this type"
+    # The facts on every row -- 0 bytes is a size, not a blank.
+    assert items[0]["caption"] == f"Input 1 · image/png · 2 KB · {MEDIA_SHA['a1'][:12]}"
+    assert items[1]["caption"] == f"Output 1 · image/png · 0 B · {MEDIA_SHA['b2'][:12]}"
+    assert items[3]["caption"] == (
+        f"Output 3 · video/mp4 · 3.3 MB · {MEDIA_SHA['d4'][:12]}"
+    )
+
+
+def test_jsdom_request_modal_media_is_never_inlined_or_listed(rendered) -> None:
+    media = rendered["requestMedia"]
+    assert media["dataUris"] == 0
+    # The browser fetches a preview itself; the page's own fetches are only
+    # the detail row.
+    assert media["fetched"] == ["/admin/api/requests/req-media"]
+    assert media["afterClose"] == {"hidden": True, "children": 0}
+    assert media["pageSourcesAfterClose"] == 0
+    assert media["chatRowHidden"] is True
+    assert media["chatRowChildren"] == 0
+
+
 def test_jsdom_the_old_hiding_class_is_applied_nowhere(rendered) -> None:
     advanced = rendered["advancedFields"]
     assert advanced["showAdvancedInScript"] is False

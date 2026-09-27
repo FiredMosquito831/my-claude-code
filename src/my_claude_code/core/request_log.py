@@ -35,7 +35,9 @@ from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.media_store import (
     MediaOutputRecord,
     delete_media_files,
+    media_file_path,
     media_root,
+    remove_media_file,
 )
 from my_claude_code.core.request_images import CapturedImage
 from my_claude_code.core.request_origin import (
@@ -2474,10 +2476,30 @@ class RequestRecord:
     #: Generated outputs to link in ``request_media`` (sha256, mime, bytes,
     #: stored). Written by the writer thread with the row.
     media_outputs: tuple[MediaOutputRecord, ...] = ()
+    #: ``MEDIA_STORE_MAX_MB`` in bytes, as it stood when this request was
+    #: served (7.68.0). When the row stored a file, the writer trims the media
+    #: store to it once the batch is committed. 0 sets no cap. Never a column.
+    media_store_max_bytes: int = 0
 
     @property
     def ts_iso(self) -> str:
         return datetime.fromtimestamp(self.ts_epoch, tz=UTC).isoformat()
+
+
+#: One generated file's content address, recorded or re-recorded. ``stored``
+#: only ever rises on a conflict -- a later request that kept the file makes
+#: the address stored even if an earlier one recorded metadata only -- and
+#: when it rises from 0, ``created_at`` moves to that moment (7.68.0): the
+#: file on disk is then that new, and ``MEDIA_STORE_MAX_MB`` deletes the
+#: oldest stored files first.
+_MEDIA_BLOB_UPSERT_SQL = (
+    "INSERT INTO media_blobs (sha256, mime, bytes, created_at, stored)"
+    " VALUES (?, ?, ?, ?, ?)"
+    " ON CONFLICT(sha256) DO UPDATE SET"
+    " created_at = CASE WHEN media_blobs.stored = 0 AND excluded.stored = 1"
+    " THEN excluded.created_at ELSE media_blobs.created_at END,"
+    " stored = MAX(media_blobs.stored, excluded.stored)"
+)
 
 
 class RequestLogStore:
@@ -4683,13 +4705,7 @@ class RequestLogStore:
                 links.append((record.id, output.direction, output.idx, output.sha256))
         if not links:
             return
-        conn.executemany(
-            "INSERT INTO media_blobs (sha256, mime, bytes, created_at, stored)"
-            " VALUES (?, ?, ?, ?, ?)"
-            " ON CONFLICT(sha256) DO UPDATE SET"
-            " stored = MAX(media_blobs.stored, excluded.stored)",
-            blobs,
-        )
+        conn.executemany(_MEDIA_BLOB_UPSERT_SQL, blobs)
         conn.executemany(
             "INSERT OR REPLACE INTO request_media (request_id, direction, idx, sha256)"
             " VALUES (?, ?, ?, ?)",
@@ -5145,6 +5161,18 @@ class RequestLogStore:
         except sqlite3.Error as exc:
             logger.warning("Request log write failed: {}", exc)
             return
+        # After the rows are committed, so the files this batch stored are
+        # counted -- with the cap of the newest request that stored one.
+        cap = next(
+            (
+                record.media_store_max_bytes
+                for record in reversed(batch)
+                if any(output.stored for output in record.media_outputs)
+            ),
+            0,
+        )
+        if cap > 0:
+            self._trim_media(conn, cap)
         self._inserts_since_prune += len(batch)
         if self._inserts_since_prune >= _PRUNE_EVERY_INSERTS:
             self._inserts_since_prune = 0
@@ -5818,6 +5846,7 @@ class RequestLogStore:
                 return None
             bodies = self._fetch_bodies(conn, [request_id])
             images = self._fetch_images(conn, request_id)
+            media = self._fetch_media(conn, request_id)
             attempts = self._fetch_attempts(conn, request_id)
             # The guarded ALTER in ``_init_db`` guarantees the column.
             catalogue_sha = row["tool_catalogue_sha"]
@@ -5833,9 +5862,37 @@ class RequestLogStore:
             boundaries=boundaries,
         )
         data["input_images"] = images
+        data["media"] = media
         data["route_attempts"] = attempts
         data["tool_catalogue"] = tool_catalogue
         return data
+
+    @staticmethod
+    def _fetch_media(conn: sqlite3.Connection, request_id: str) -> list[dict[str, Any]]:
+        """One request's media, inputs then outputs (7.68.0).
+
+        The facts are always there -- direction, position, content address,
+        type, size -- and ``stored`` says whether the media store holds the
+        file itself, which is the only case the request detail previews.
+        """
+        rows = conn.execute(
+            "SELECT m.direction, m.idx, m.sha256, b.mime, b.bytes, b.stored"
+            " FROM request_media AS m LEFT JOIN media_blobs AS b"
+            " ON b.sha256 = m.sha256"
+            " WHERE m.request_id = ? ORDER BY m.direction, m.idx",
+            (request_id,),
+        ).fetchall()
+        return [
+            {
+                "direction": row["direction"],
+                "idx": row["idx"],
+                "sha256": row["sha256"],
+                "mime": row["mime"],
+                "bytes": row["bytes"],
+                "stored": bool(row["stored"]),
+            }
+            for row in rows
+        ]
 
     @staticmethod
     def _fetch_tool_catalogue(
@@ -8549,6 +8606,90 @@ class RequestLogStore:
             delete_media_files(media_root(self._db_path), stored_media)
         return removed
 
+    # ------------------------------------------------------------ media store ---
+    # MEDIA_STORE_MAX_MB (7.68.0). The cap is always handed in by the caller:
+    # the writer thread with a record's own number, a video download through
+    # ``asyncio.to_thread`` with its request's. Only files go; every row and
+    # link stays, with ``stored`` set to 0.
+
+    def trim_media_store(self, max_bytes: int) -> int:
+        """Delete the oldest stored media files until the rest fit ``max_bytes``.
+
+        Its own short connection; call it off the event loop. Returns how
+        many files went. A cap of 0 or less never scans.
+        """
+        if max_bytes <= 0:
+            return 0
+        conn = self._connect()
+        try:
+            return self._trim_media(conn, max_bytes)
+        finally:
+            conn.close()
+
+    def _trim_media(self, conn: sqlite3.Connection, max_bytes: int) -> int:
+        """Oldest first (``created_at``, then address) until the total fits.
+
+        A file that cannot be deleted (held open elsewhere) is still on disk,
+        so it stays ``stored`` and counted, and the next oldest goes instead.
+        """
+        if max_bytes <= 0:
+            return 0
+        released: list[tuple[str]] = []
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(bytes), 0) FROM media_blobs WHERE stored = 1"
+            ).fetchone()
+            total = int(row[0] or 0)
+            if total <= max_bytes:
+                return 0
+            root = media_root(self._db_path)
+            oldest = conn.execute(
+                "SELECT sha256, bytes FROM media_blobs WHERE stored = 1"
+                " ORDER BY created_at, sha256"
+            )
+            try:
+                for sha256, size in oldest:
+                    if total <= max_bytes:
+                        break
+                    if remove_media_file(root, str(sha256)):
+                        released.append((str(sha256),))
+                        total -= int(size or 0)
+            finally:
+                oldest.close()
+            if released:
+                with conn:
+                    conn.executemany(
+                        "UPDATE media_blobs SET stored = 0 WHERE sha256 = ?",
+                        released,
+                    )
+        except sqlite3.Error as exc:
+            logger.warning("MEDIA STORE: trimming to the cap failed: {}", exc)
+            return 0
+        if released:
+            logger.info(
+                "MEDIA STORE: deleted the {} oldest stored media files to stay"
+                " under {} MB",
+                len(released),
+                max_bytes // (1024 * 1024),
+            )
+        return len(released)
+
+    def stored_media_file(self, sha256: str) -> tuple[Path, str | None] | None:
+        """Where the media store keeps one address, and its type.
+
+        ``None`` unless the address is recorded as stored and its file is on
+        disk. Call it off the event loop.
+        """
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT mime, stored FROM media_blobs WHERE sha256 = ?", (sha256,)
+            ).fetchone()
+        if row is None or not row["stored"]:
+            return None
+        mime = row["mime"]
+        path = media_file_path(media_root(self._db_path), sha256, mime)
+        return (path, mime) if path.is_file() else None
+
     # ------------------------------------------------------------ media jobs ---
     # Video jobs (7.64.0). Each call opens its own short connection and is
     # made only through ``asyncio.to_thread``: a job is read and written by the
@@ -8641,10 +8782,7 @@ class RequestLogStore:
                 (output.sha256, output.bytes, output.mime, job_id),
             )
             conn.execute(
-                "INSERT INTO media_blobs (sha256, mime, bytes, created_at, stored)"
-                " VALUES (?, ?, ?, ?, ?)"
-                " ON CONFLICT(sha256) DO UPDATE SET"
-                " stored = MAX(media_blobs.stored, excluded.stored)",
+                _MEDIA_BLOB_UPSERT_SQL,
                 (
                     output.sha256,
                     output.mime,

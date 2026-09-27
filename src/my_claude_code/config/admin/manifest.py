@@ -2047,6 +2047,24 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "MEDIA_FALLBACK_ON_UNDOWNLOADABLE",
+        "Next model when a generated image cannot be downloaded",
+        "deadlines",
+        "boolean",
+        settings_attr="media_fallback_on_undownloadable",
+        default="false",
+        affects_providers=False,
+        description=(
+            "On: an image the provider generated but MCC could not download "
+            "is retried on the next model (the first image may still be "
+            "billed). Off: the error is returned. "
+            "It covers the one media answer MCC has to download itself before "
+            "it can answer: a Gemini-shaped image request (generateContent "
+            "asking for IMAGE) whose provider answered with a link instead of "
+            "the picture. A video job is never resubmitted to another model."
+        ),
+    ),
+    ConfigFieldSpec(
         "FALLBACK_END_CLEANLY_AFTER_COMMIT",
         "End a dead stream as a message, not an error",
         "deadlines",
@@ -3640,6 +3658,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "and leaves existing ones in place."
         ),
         affects_providers=False,
+    ),
+    ConfigFieldSpec(
+        "MEDIA_STORE_MAX_MB",
+        "Stored media cap (MB)",
+        "request_log",
+        "number",
+        settings_attr="media_store_max_mb",
+        default="0",
+        affects_providers=False,
+        minimum=0,
+        maximum=10_000_000,
+        description=(
+            "0 = keep every stored file until its request row is pruned. "
+            "Above 0, the oldest stored media files are deleted first once "
+            "their total passes this many MB; the request rows and their "
+            "metadata stay."
+        ),
     ),
     ConfigFieldSpec(
         "REQUEST_LOG_IMAGE_MAX_PIXELS",

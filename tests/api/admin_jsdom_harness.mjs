@@ -9732,6 +9732,70 @@ const toolCatalogue = {};
   window.eval("closeRequestDetail()");
 }
 
+/* The media a media endpoint took in or produced (7.68.0): the facts on
+   every row, and a preview element only for a file the media store kept --
+   fetched by the browser from /admin/api/media/<sha> when shown, never
+   inlined as a data: URI. Driven through the real openRequestDetail(). */
+const requestMedia = {};
+{
+  const shaOf = (seed) => seed.repeat(64 / seed.length).slice(0, 64);
+  ROUTES["/admin/api/requests/req-media"] = {
+    id: "req-media",
+    ts_iso: "2026-09-28T10:00:00Z",
+    endpoint: "/v1/images/edits",
+    protocol: "openai_images",
+    provider: "xai",
+    requested_model: "mcc/image",
+    resolved_model: "grok-2-image",
+    status: "success",
+    duration_ms: 3100,
+    media_operation: "image_edit",
+    media: [
+      { direction: "in", idx: 0, sha256: shaOf("a1"), mime: "image/png", bytes: 2048, stored: false },
+      { direction: "out", idx: 0, sha256: shaOf("b2"), mime: "image/png", bytes: 0, stored: true },
+      { direction: "out", idx: 1, sha256: shaOf("c3"), mime: "audio/mpeg", bytes: 48000, stored: true },
+      { direction: "out", idx: 2, sha256: shaOf("d4"), mime: "video/mp4", bytes: 3500000, stored: true },
+      { direction: "out", idx: 3, sha256: shaOf("e5"), mime: "application/json", bytes: 12, stored: true },
+      { direction: "out", idx: 4, sha256: "not-a-sha", mime: "image/png", bytes: 10, stored: true },
+    ],
+  };
+  const container = doc.getElementById("reqDetailMedia");
+  const before = fetchUrls.length;
+  await window.eval('openRequestDetail("req-media")');
+  await settle();
+  requestMedia.present = Boolean(container);
+  requestMedia.hidden = container ? container.hidden : null;
+  requestMedia.heading = textOf(container, "h4");
+  requestMedia.items = container
+    ? Array.from(container.querySelectorAll(".req-media-item")).map((figure) => {
+        const preview = figure.querySelector(".req-media-preview");
+        return {
+          direction: figure.dataset.direction,
+          preview: preview ? preview.tagName.toLowerCase() : null,
+          src: preview ? preview.getAttribute("src") : null,
+          loading: preview ? preview.getAttribute("loading") : null,
+          preload: preview ? preview.getAttribute("preload") : null,
+          controls: preview ? preview.hasAttribute("controls") : null,
+          missing: textOf(figure, ".req-media-missing"),
+          caption: textOf(figure, "figcaption"),
+        };
+      })
+    : [];
+  requestMedia.dataUris = container ? (container.innerHTML.match(/data:/g) || []).length : null;
+  requestMedia.fetched = fetchUrls.slice(before);
+  window.eval("closeRequestDetail()");
+  requestMedia.afterClose = container
+    ? { hidden: container.hidden, children: container.children.length }
+    : null;
+  // Nothing outside the modal -- no list view -- ever points at a stored file.
+  requestMedia.pageSourcesAfterClose = doc.querySelectorAll('[src^="/admin/api/media/"]').length;
+  await window.eval('openRequestDetail("req-no-tools")');
+  await settle();
+  requestMedia.chatRowHidden = container ? container.hidden : null;
+  requestMedia.chatRowChildren = container ? container.children.length : null;
+  window.eval("closeRequestDetail()");
+}
+
 /* Where a request came from (7.42.0): the Session, Folder, Origin chip and
    Requested model cells, the modal's provenance lines, and the folder backfill
    card on the Request log storage section. Driven through the real
@@ -10754,6 +10818,7 @@ console.log(
       visionMode,
       imageRail,
       describedImages,
+      requestMedia,
       analytics,
       costPanel,
       deferredRace,

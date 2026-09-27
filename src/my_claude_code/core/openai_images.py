@@ -8,6 +8,7 @@ every parser here is synchronous and is only ever called through
 import base64
 import binascii
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from my_claude_code.core.media_outputs import GeneratedMedia, MediaOutputs
@@ -66,6 +67,52 @@ def parse_images_response(body: bytes) -> MediaOutputs:
         return MediaOutputs(usage=_usage(payload))
     images = tuple(image for image in (_decode(item) for item in items) if image)
     return MediaOutputs(count=len(items), items=images, usage=_usage(payload))
+
+
+def url_only_images(body: bytes) -> tuple[tuple[int, str], ...]:
+    """Every answer item that names a URL and carries no ``b64_json``.
+
+    ``(position in data, URL)``, in order: the pictures MCC must download
+    itself before it can hand them on as bytes. Empty for anything that is
+    not an Images answer.
+    """
+
+    try:
+        payload = json.loads(body)
+    except ValueError, UnicodeDecodeError:
+        return ()
+    items = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return ()
+    found: list[tuple[int, str]] = []
+    for position, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        encoded = item.get("b64_json")
+        if isinstance(encoded, str) and encoded:
+            continue
+        url = item.get("url")
+        if isinstance(url, str) and url:
+            found.append((position, url))
+    return tuple(found)
+
+
+def inline_image_urls(body: bytes, fetched: Mapping[int, bytes]) -> bytes:
+    """The answer with each downloaded item's ``url`` replaced by ``b64_json``.
+
+    ``fetched`` maps an item's position in ``data`` to its downloaded bytes;
+    every other field of the answer and of the item is kept as the host sent
+    it. Run off the loop: this base64-encodes whole pictures.
+    """
+
+    payload = json.loads(body)
+    items = payload["data"]
+    for position, data in fetched.items():
+        item = dict(items[position])
+        item.pop("url", None)
+        item["b64_json"] = base64.b64encode(data).decode("ascii")
+        items[position] = item
+    return json.dumps(payload).encode()
 
 
 def parse_images_stream(frames: bytes) -> MediaOutputs:

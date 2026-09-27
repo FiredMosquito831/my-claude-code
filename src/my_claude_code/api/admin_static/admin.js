@@ -19557,6 +19557,7 @@ async function openRequestDetail(requestId) {
   appendToolCatalogueDetail(meta, row);
   renderRequestRouteTrace(row);
   renderRequestImages(row);
+  renderRequestDetailMedia(row);
   renderRequestChain(row);
   renderWireRequest(row);
   renderTurnTranscript(row);
@@ -21527,6 +21528,86 @@ function requestImageSource(image) {
 }
 
 /**
+ * The media a media endpoint took in or produced (7.68.0).
+ *
+ * The facts are always shown -- which way it went, its type, its size and the
+ * start of its SHA-256. A picture, a player or a film only for a file the
+ * media store kept (MEDIA_STORE_ENABLED), fetched from /admin/api/media/<sha>
+ * when it is shown: `loading="lazy"` / `preload="none"`, never inlined into
+ * the page, and never in the request list -- only here.
+ */
+function renderRequestDetailMedia(row) {
+  const container = byId("reqDetailMedia");
+  if (!container) return;
+  container.innerHTML = "";
+  const items = Array.isArray(row.media) ? row.media : [];
+  if (!items.length) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  const heading = document.createElement("h4");
+  heading.textContent = items.length === 1 ? "Media" : `Media (${items.length})`;
+  container.appendChild(heading);
+  const grid = document.createElement("div");
+  grid.className = "req-media-grid";
+  items.forEach((item) => grid.appendChild(buildRequestDetailMedia(item)));
+  container.appendChild(grid);
+}
+
+const STORED_MEDIA_SHA256 = /^[0-9a-f]{64}$/;
+
+/** The element that shows a stored file, or null: not stored, or not a picture, sound or film. */
+function requestDetailMediaPreview(item) {
+  const sha = String(item.sha256 || "").toLowerCase();
+  if (item.stored !== true || !STORED_MEDIA_SHA256.test(sha)) return null;
+  const type = String(item.mime || "").toLowerCase();
+  const source = `/admin/api/media/${sha}`;
+  const direction = item.direction === "in" ? "input" : "output";
+  if (type.startsWith("image/")) {
+    const img = document.createElement("img");
+    img.setAttribute("loading", "lazy");
+    img.alt = `Stored ${direction} image`;
+    img.src = source;
+    return img;
+  }
+  if (type.startsWith("audio/") || type.startsWith("video/")) {
+    const player = document.createElement(type.startsWith("audio/") ? "audio" : "video");
+    player.controls = true;
+    player.setAttribute("preload", "none");
+    player.src = source;
+    return player;
+  }
+  return null;
+}
+
+function buildRequestDetailMedia(item) {
+  const figure = document.createElement("figure");
+  figure.className = "req-media-item";
+  figure.dataset.direction = item.direction === "in" ? "in" : "out";
+  const preview = requestDetailMediaPreview(item);
+  if (preview) {
+    preview.classList.add("req-media-preview");
+    figure.appendChild(preview);
+  } else {
+    const note = document.createElement("div");
+    note.className = "req-media-missing";
+    note.textContent = item.stored === true ? "no preview for this type" : "file not stored";
+    figure.appendChild(note);
+  }
+  const caption = document.createElement("figcaption");
+  const position = Number.isInteger(item.idx) ? ` ${item.idx + 1}` : "";
+  const parts = [`${item.direction === "in" ? "Input" : "Output"}${position}`];
+  if (item.mime) parts.push(String(item.mime));
+  if (Number.isFinite(item.bytes)) parts.push(formatImageBytes(item.bytes));
+  if (item.sha256) parts.push(String(item.sha256).slice(0, 12));
+  caption.textContent = parts.join(" · ");
+  caption.title = item.sha256 ? `SHA-256 ${item.sha256}` : "";
+  figure.appendChild(caption);
+  return figure;
+}
+
+/**
  * Fill the prompt / reasoning / tool calls / response panes.
  *
  * Emptiness is not one condition. A pane can be empty because the turn had
@@ -21633,6 +21714,12 @@ function clearChart(canvas) {
 
 function closeRequestDetail() {
   byId("reqDetailModal").hidden = true;
+  // A player left in a hidden modal would go on playing; removing it stops it.
+  const media = byId("reqDetailMedia");
+  if (media) {
+    media.innerHTML = "";
+    media.hidden = true;
+  }
   if (reqState.detailReturnFocus instanceof HTMLElement) {
     reqState.detailReturnFocus.focus();
   }

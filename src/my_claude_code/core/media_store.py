@@ -163,6 +163,28 @@ class MediaFileTee:
                 temp.unlink()
 
 
+def remove_media_file(root: Path, sha256: str) -> bool:
+    """Delete one address's stored file; ``True`` once no file is left for it.
+
+    ``False`` when a file is still there because it could not be deleted (held
+    open, a permissions error): it still takes up the space, so the caller
+    must go on counting it as stored. An address with no file is ``True``.
+    """
+
+    folder = root / sha256[:2]
+    if not folder.is_dir():
+        return True
+    gone = True
+    for path in folder.glob(f"{sha256}.*"):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            gone = False
+    return gone
+
+
 def delete_media_files(root: Path, shas: Iterable[str]) -> int:
     """Delete every stored file for these addresses. Returns how many went."""
 

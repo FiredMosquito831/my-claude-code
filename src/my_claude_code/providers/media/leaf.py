@@ -19,12 +19,20 @@ model and falls back exactly as for any other failed attempt.
 A Gemini native answer (``generateContent``, 7.66.0) is translated here, off
 the loop, before it is yielded: the audio the client named, or the transcript.
 An answer with neither is raised the same way (charged, falls back).
+
+An image request marked ``inline_urls`` (``MEDIA_FALLBACK_ON_UNDOWNLOADABLE``,
+7.68.0) has its URL-only pictures downloaded here, before the answer is
+yielded, and handed on as ``b64_json``. A picture that cannot be downloaded
+is raised the same way: the model is charged and the next one is tried --
+although the host has usually billed the picture it could not deliver.
 """
 
 import asyncio
+import dataclasses
 import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -52,6 +60,7 @@ from my_claude_code.core.gemini_native_media import (
     speech_answer,
     transcript_answer,
 )
+from my_claude_code.core.openai_images import inline_image_urls, url_only_images
 from my_claude_code.core.openai_videos import parse_job
 from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.providers.base import ProviderConfig
@@ -65,6 +74,17 @@ from .adapters import WireBody, build_wire_body
 #: Upstream response headers carried onto a buffered media response. Only what
 #: the client or the log can use; never anything that could carry a secret.
 _KEPT_HEADERS = ("content-type", "x-request-id", "request-id")
+
+
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower()
+
+
+def same_host(url: str, base_url: str) -> bool:
+    """Whether ``url`` is on the provider's own host (the only one given a key)."""
+
+    host = _host(url)
+    return bool(host) and host == _host(base_url)
 
 
 class MediaNode(MediaProviderPort, Protocol):
@@ -312,6 +332,8 @@ class MediaLeaf:
                     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
                 ):
                     answer = await self._translated(surface, attempt, answer, body)
+                elif attempt.request.inline_urls:
+                    answer = await self._inlined(answer)
                 yield answer
                 return
             try:
@@ -360,6 +382,53 @@ class MediaLeaf:
             usage=translated.usage,
             audio_seconds=translated.audio_seconds,
             not_forwarded=body.not_forwarded,
+        )
+
+    async def _inlined(self, answer: MediaResponse) -> MediaResponse:
+        """The answer with every URL-only picture downloaded and inlined.
+
+        One download per picture, up this key's own retry ladder; the key is
+        sent only to the provider's own host (a CDN URL is fetched bare), and
+        httpx drops it on a redirect that leaves that host.
+        """
+        urls = await asyncio.to_thread(url_only_images, answer.body)
+        if not urls:
+            return answer
+        fetched: dict[int, bytes] = {}
+        for position, url in urls:
+            fetched[position] = await self._download(url)
+        body = await asyncio.to_thread(inline_image_urls, answer.body, fetched)
+        return dataclasses.replace(answer, body=body)
+
+    async def _download(self, url: str) -> bytes:
+        """One picture's bytes; any failure is this attempt's failure."""
+        if urlsplit(url).scheme not in {"https", "http"}:
+            raise self._undownloadable("the answer gave no http(s) address")
+        try:
+            response = await self._rate_limiter.execute_with_retry(
+                self.request,
+                "GET",
+                url,
+                auth=same_host(url, self._config.base_url),
+                stream=False,
+            )
+        except httpx.HTTPStatusError as error:
+            raise self._undownloadable(f"HTTP {error.response.status_code}") from error
+        except Exception as error:
+            # The type only: a transport error's text can carry the address,
+            # and a signed address is a credential of its own.
+            raise self._undownloadable(type(error).__name__) from error
+        return response.content
+
+    def _undownloadable(self, reason: str) -> ExecutionFailure:
+        return ExecutionFailure(
+            kind=FailureKind.UPSTREAM,
+            status_code=502,
+            message=(
+                f"{self._provider_id} produced the image but it could not be "
+                f"downloaded: {reason}"
+            ),
+            retryable=False,
         )
 
     def _require_job_id(self, response: httpx.Response) -> None:

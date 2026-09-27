@@ -14,16 +14,21 @@ Two read-only views, both kept apart from their chat neighbours on purpose:
   stats and their rollups are not touched; this reads only rows a media
   endpoint wrote.
 
+And one file (7.68.0): ``GET /admin/api/media/{sha}`` serves a file the media
+store kept, for the request detail's preview -- loopback only, like the rest.
+
 Nothing here contacts an upstream, builds a provider or writes a file. The
 settings are the request runtime's, SQLite is read off the event loop, and
 models.dev is read from its disk cache through ``api.model_admin``.
 """
 
 import asyncio
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 
 from my_claude_code.api.model_admin import media_output_modalities
 from my_claude_code.application.media.executor import media_route_health_registry
@@ -79,6 +84,30 @@ OPERATION_LABELS: dict[str, str] = {
 
 #: What a request row that never reached a provider is filed under.
 UNROUTED_LABEL = "(not routed)"
+
+#: A media store content address: a SHA-256, as 64 hex characters.
+_SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+
+#: On every stored file served: never sniffed into another type, and run
+#: sandboxed -- no script -- if a browser opens it as a page of its own.
+_FILE_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox",
+}
+
+
+def _served_type(mime: str | None) -> str:
+    """A picture, a sound or a film as its own type; anything else as bytes.
+
+    The type was recorded from what the host said, so it is not trusted to
+    be harmless: only ``image/``, ``audio/`` and ``video/`` types are served
+    as themselves, and never an XML one (SVG can carry script).
+    """
+
+    base = (mime or "").split(";")[0].strip().lower()
+    if base.startswith(("image/", "audio/", "video/")) and "xml" not in base:
+        return base
+    return "application/octet-stream"
 
 
 def _declared(descriptor: ProviderDescriptor | None) -> list[dict[str, Any]]:
@@ -391,3 +420,29 @@ async def analytics_media(
         "window": {"since": since, "until": until},
         **payload,
     }
+
+
+@router.get("/admin/api/media/{sha}")
+async def media_file(
+    sha: str, request: Request, settings: Settings = Depends(get_settings)
+):
+    """One file the media store kept, as its own type (the request detail's preview).
+
+    Loopback only. 400 for anything but a SHA-256; 404 unless the media store
+    holds that address's file. Declared after ``/admin/api/media/models`` so
+    that path is never read as an address.
+    """
+
+    require_loopback_admin(request)
+    if not _SHA256.fullmatch(sha):
+        raise HTTPException(status_code=400, detail="Not a SHA-256 content address")
+    store = store_from_settings(settings)
+    found = (
+        await asyncio.to_thread(store.stored_media_file, sha.lower())
+        if store is not None
+        else None
+    )
+    if found is None:
+        raise HTTPException(status_code=404, detail="Media file not stored")
+    path, mime = found
+    return FileResponse(path, media_type=_served_type(mime), headers=_FILE_HEADERS)

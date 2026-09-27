@@ -1090,6 +1090,19 @@ class Settings(BaseSettings):
             "a model that thinks without ever answering falls back."
         ),
     )
+    # A Gemini-shaped image request whose provider answered with a URL: MCC
+    # must download the picture before it can answer (7.68.0). Off, the
+    # download happens after the answer committed and a failure is the
+    # client's error; on, it happens inside the attempt, so a failure falls
+    # back to the next model -- which may bill a second picture.
+    media_fallback_on_undownloadable: bool = Field(
+        default=False,
+        validation_alias="MEDIA_FALLBACK_ON_UNDOWNLOADABLE",
+        description=(
+            "Try the next model when a generated image cannot be downloaded, "
+            "instead of returning the error."
+        ),
+    )
     fallback_end_cleanly_after_commit: bool = Field(
         default=FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT,
         validation_alias="FALLBACK_END_CLEANLY_AFTER_COMMIT",
@@ -1938,6 +1951,10 @@ class Settings(BaseSettings):
     media_store_enabled: bool = Field(
         default=False, validation_alias="MEDIA_STORE_ENABLED"
     )
+    # How many MB of those files may be kept (7.68.0). 0 keeps every file until
+    # its request row is pruned; above 0 the oldest stored files are deleted
+    # once their total passes the cap. Rows and metadata stay either way.
+    media_store_max_mb: int = Field(default=0, validation_alias="MEDIA_STORE_MAX_MB")
     request_log_image_max_pixels: int = Field(
         default=REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
         validation_alias="REQUEST_LOG_IMAGE_MAX_PIXELS",

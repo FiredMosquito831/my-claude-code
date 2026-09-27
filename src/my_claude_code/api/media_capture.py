@@ -8,7 +8,8 @@ came back, their size and the first one's content address -- and, only when
 ``MEDIA_STORE_ENABLED`` is on, the files themselves.
 
 Hashing and file writes happen in ``asyncio.to_thread``; the row goes to the
-request log's own writer thread.
+request log's own writer thread, which also trims the store to
+``MEDIA_STORE_MAX_MB`` once a row that stored a file is committed.
 """
 
 import asyncio
@@ -52,6 +53,12 @@ from my_claude_code.core.request_log import (
 MEDIA_PROTOCOL_OPENAI = "openai_images"
 
 
+def media_store_cap_bytes(settings: Settings) -> int:
+    """``MEDIA_STORE_MAX_MB`` in bytes; 0 (no cap) for 0 or anything below it."""
+    megabytes = int(getattr(settings, "media_store_max_mb", 0) or 0)
+    return max(0, megabytes) * 1024 * 1024
+
+
 def _usage_int(usage: Mapping[str, Any] | None, key: str) -> int | None:
     if usage is None:
         return None
@@ -75,6 +82,7 @@ class MediaCapture:
         self._store = store_from_settings(settings)
         self._protocol = protocol
         self._store_bytes = bool(getattr(settings, "media_store_enabled", False))
+        self._store_cap = media_store_cap_bytes(settings)
         # Uploaded inputs: metadata always; a thumbnail only when media
         # storage is on (user decision 7) and image thumbnails are too.
         self._thumb_pixels = (
@@ -312,5 +320,6 @@ class MediaCapture:
             media_bytes_out=None if outputs is None else outputs.bytes_total,
             media_sha_out=None if outputs is None else outputs.first_sha,
             media_outputs=media_outputs,
+            media_store_max_bytes=self._store_cap,
         )
         self._store.enqueue(record)

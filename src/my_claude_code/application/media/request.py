@@ -154,6 +154,12 @@ class MediaRequest:
     #: body's ``imageConfig.aspectRatio``, ``temperature``, ...). Logged under
     #: ``media.not_forwarded``; never translated by guess.
     not_forwarded: tuple[str, ...] = ()
+    #: Download an image answer's URL-only pictures inside the attempt, before
+    #: it commits, and hand them on as ``b64_json`` (7.68.0). Set only by the
+    #: Gemini IMAGE branch, whose client needs bytes, and only while
+    #: ``MEDIA_FALLBACK_ON_UNDOWNLOADABLE`` is on: a picture that cannot be
+    #: downloaded then fails the attempt, and the next model is tried.
+    inline_urls: bool = False
 
     @property
     def prompt(self) -> str | None:
