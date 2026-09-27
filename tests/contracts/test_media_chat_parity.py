@@ -727,7 +727,10 @@ def _scenarios() -> list[Scenario]:
         ),
         Scenario(
             "429 probe answering 200 moves to the next model",
-            {"a": two_keys, "b": one},
+            # A 2 s bench, as in the escalation scenario: the (key, model)
+            # bench this 429 leaves must still be on the books when both sides
+            # are compared -- a 0.05 s one expired first on a loaded CI runner.
+            {"a": ProviderSpec(keys=2, cooldown=2.0), "b": one},
             (("a", "m1"), ("b", "x")),
             Script({("a", "m1", None, None): [status(429, "slow down")]}),
             probes={"a": "probe"},
