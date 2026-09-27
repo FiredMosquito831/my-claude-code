@@ -20,7 +20,7 @@ from .common import preflight_proxy, run_client_process
 HARNESS_ID = "pi"
 _API_KEY_ENV = "MCC_PI_API_KEY"
 _BASE_URL_ENV = "MCC_PI_BASE_URL"
-_HELP_TIMEOUT_SECONDS = 5.0
+_HELP_TIMEOUT_SECONDS = 30.0
 _MODEL_SCOPE = "free-claude-code/**"
 
 
