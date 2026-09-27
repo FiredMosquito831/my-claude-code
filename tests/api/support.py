@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from my_claude_code.api.app import create_app
 from my_claude_code.api.ports import ApiServices
+from my_claude_code.application.media.ports import MediaRuntimePort
 from my_claude_code.config.provider_registry import ProviderRegistry
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -96,6 +97,7 @@ def create_test_app(
     providers: MutableMapping[str, BaseProvider] | None = None,
     restart_callback: RestartCallback | None = None,
     process_restart_callback: RestartCallback | None = None,
+    media: MediaRuntimePort | None = None,
 ) -> FastAPI:
     """Build an API app with explicit in-memory runtime services."""
     settings = settings or Settings()
@@ -120,6 +122,7 @@ def create_test_app(
             requests=manager,
             admin=runtime,
             tasks=runtime,
+            media=media,
         )
     )
 

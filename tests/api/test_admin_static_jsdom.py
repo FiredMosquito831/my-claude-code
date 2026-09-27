@@ -6778,3 +6778,13 @@ def test_pause_all_but_fastest_n_is_explicit(rendered) -> None:
     assert pause["resumeButtons"] == 2
     assert pause["announcement"].startswith("Paused 2 addresses on NVIDIA NIM"), pause
     assert "Resume" in pause["announcement"]
+
+
+def test_the_image_rail_is_its_own_card(rendered) -> None:
+    """A media rail (7.60.0) is drawn with the ordinary rail editor, apart
+    from the chat tiers, and none of its settings lands in the leftovers."""
+    rail = rendered["imageRail"]
+    assert rail["card"] is True
+    assert rail["heading"] == "Image rail"
+    assert rail["primaryInCard"] is True
+    assert rail["inTheLeftovers"] == []

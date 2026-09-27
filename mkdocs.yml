@@ -196,6 +196,7 @@ nav:
       - OAuth providers: OAUTH-PROVIDERS.md
       - Anthropic subscription: ANTHROPIC-SUBSCRIPTION.md
       - Web search: WEB-SEARCH.md
+      - Media routing: MEDIA.md
   - Project:
       - All documentation: documentation.md
       - Architecture: ARCHITECTURE.md

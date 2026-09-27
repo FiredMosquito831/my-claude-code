@@ -37,6 +37,7 @@ from .admin_routes import router as admin_router
 from .admin_server_routes import router as admin_server_router
 from .admin_websearch_routes import router as admin_websearch_router
 from .gemini_routes import gemini_router
+from .media_routes import router as media_router
 from .ports import ApiServices
 from .request_errors import ordinary_application_error_response
 from .request_ids import (
@@ -66,6 +67,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_websearch_router)
     app.include_router(admin_export_router)
     app.include_router(gemini_router)
+    app.include_router(media_router)
     app.include_router(router)
 
     @app.exception_handler(StarletteHTTPException)

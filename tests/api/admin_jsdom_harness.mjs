@@ -210,6 +210,9 @@ const FIELDS = [
     ["MODEL_VISION", "<img src=x onerror=boom()>", "optional_model"],
     ["MODEL_VISION_FALLBACKS", "", "model_chain"],
     ["VISION_ADAPTER_MODE", "route", "select"],
+    // The Image rail (7.60.0): a media rail drawn as its own card.
+    ["MODEL_IMAGE", "p1/i0", "optional_model"],
+    ["MODEL_IMAGE_FALLBACKS", "", "model_chain"],
     // The pause lists. Written by the Pause button rather than typed, so they
     // are never rendered as controls -- but they are in the payload, which is
     // where the page reads which rows are switched off.
@@ -220,6 +223,7 @@ const FIELDS = [
     ["MODEL_SONNET_PAUSED", "", "text"],
     ["MODEL_HAIKU_PAUSED", "", "text"],
     ["MODEL_VISION_PAUSED", "", "text"],
+    ["MODEL_IMAGE_PAUSED", "", "text"],
   ].map(([key, value, type]) => ({
     key,
     label: key,
@@ -2819,6 +2823,7 @@ const PAUSE_KEY_BY_MODEL = {
   MODEL_SONNET: "MODEL_SONNET_PAUSED",
   MODEL_HAIKU: "MODEL_HAIKU_PAUSED",
   MODEL_VISION: "MODEL_VISION_PAUSED",
+  MODEL_IMAGE: "MODEL_IMAGE_PAUSED",
 };
 const pausedByKey = new Map();
 const fetchUrls = [];
@@ -8139,6 +8144,28 @@ const anthropicOAuthSignInLabel = await (async () => {
   return { empty, stored };
 })();
 
+/* ------------------------------------------------------ the Image rail (7.60.0)
+   A media rail is drawn as its own card with the ordinary rail editor; none
+   of its three settings may fall into the leftovers grid. */
+const imageRail = {};
+{
+  const routingLinkForImage = navLinks.find(
+    (link) => link.dataset.view === "model_config",
+  );
+  if (routingLinkForImage) {
+    routingLinkForImage.click();
+    await settle();
+    const card = doc.querySelector(".route-media");
+    imageRail.card = Boolean(card);
+    imageRail.heading = card ? card.querySelector("h4")?.textContent || "" : "";
+    imageRail.primaryInCard = Boolean(
+      card && card.querySelector("[data-model-key='MODEL_IMAGE']"),
+    );
+    imageRail.inTheLeftovers = ["MODEL_IMAGE", "MODEL_IMAGE_FALLBACKS", "MODEL_IMAGE_PAUSED"]
+      .filter((key) => doc.querySelector(`.route-layout > .field-grid [data-key='${key}']`));
+  }
+}
+
 /* --------------------------------------------------- the vision adapter mode
    Two things the mode has to do on this page: sit inside the adapter's own
    card rather than in the leftovers grid, and change what the hop under each
@@ -10251,6 +10278,7 @@ console.log(
       models,
       routing,
       visionMode,
+      imageRail,
       describedImages,
       analytics,
       costPanel,

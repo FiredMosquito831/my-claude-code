@@ -26,12 +26,16 @@ CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 #: :generateContent`` -- so membership is decided by prefix where the other
 #: three are decided by an exact match.
 GEMINI_ENDPOINT_PREFIX = "/v1beta/models"
+# Media endpoints (7.60.0) answer in the OpenAI error envelope, the shape
+# every OpenAI SDK client reads.
+IMAGES_GENERATIONS_ENDPOINT = "/v1/images/generations"
 
 WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
 _WIRE_API_BY_PATH: dict[str, WireApi] = {
     RESPONSES_ENDPOINT: "responses",
     CHAT_COMPLETIONS_ENDPOINT: "chat_completions",
+    IMAGES_GENERATIONS_ENDPOINT: "chat_completions",
 }
 
 #: The surfaces whose clients parse OpenAI's ``{"error": {...}}``. Membership

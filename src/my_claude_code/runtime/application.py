@@ -74,6 +74,7 @@ from my_claude_code.providers.chatgpt_oauth.provider import (
     CHATGPT_OAUTH_PROVIDER_ID,
     WITHHELD_MODEL_IDS,
 )
+from my_claude_code.providers.media.registry import MEDIA_REGISTRY
 from my_claude_code.providers.recovery import (
     FACT_MODEL_WITHHELD,
     SOURCE_PROBE,
@@ -1383,6 +1384,11 @@ class ApplicationRuntime:
         if self._provider_manager_closed:
             return True
         verbose = self.settings.log_api_error_tracebacks
+        await best_effort(
+            "media_registry.close",
+            MEDIA_REGISTRY.close(),
+            log_verbose_errors=verbose,
+        )
         self._provider_manager_closed = await best_effort(
             "provider_manager.close",
             self.provider_manager.close(),

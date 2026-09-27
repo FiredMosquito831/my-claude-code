@@ -330,6 +330,21 @@ def _isolate_route_health():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_media_books():
+    """Media keeps its own route, key and proxy books (7.60.0); reset them too."""
+    from my_claude_code.application.media import executor as media_executor
+    from my_claude_code.providers.media import proxy_pool, registry
+
+    media_executor.reset_media_route_health_registries()
+    proxy_pool.reset_media_proxy_books()
+    registry.MEDIA_REGISTRY.forget()
+    yield
+    media_executor.reset_media_route_health_registries()
+    proxy_pool.reset_media_proxy_books()
+    registry.MEDIA_REGISTRY.forget()
+
+
+@pytest.fixture(autouse=True)
 def _reset_config_dir_cache():
     """Forget the cached config-directory decision before each test.
 

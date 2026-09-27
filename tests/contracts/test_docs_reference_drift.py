@@ -56,6 +56,7 @@ TOPIC_DOCS: tuple[str, ...] = (
     "docs/OAUTH-PROVIDERS.md",
     "docs/ROUTING-REFERENCE.md",
     "docs/WEB-SEARCH.md",
+    "docs/MEDIA.md",
 )
 
 

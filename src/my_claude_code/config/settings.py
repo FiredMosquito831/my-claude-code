@@ -247,6 +247,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "model_sonnet",
     "model_haiku",
     "model_vision",
+    "model_image",
     "model_fallbacks",
     "model_mythos_fallbacks",
     "model_fable_fallbacks",
@@ -254,6 +255,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "model_sonnet_fallbacks",
     "model_haiku_fallbacks",
     "model_vision_fallbacks",
+    "model_image_fallbacks",
     "model_paused",
     "model_mythos_paused",
     "model_fable_paused",
@@ -261,6 +263,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "model_sonnet_paused",
     "model_haiku_paused",
     "model_vision_paused",
+    "model_image_paused",
     "ollama_search_api_key",
     "exa_api_key",
     "tavily_api_key",
@@ -763,6 +766,14 @@ class Settings(BaseSettings):
     model_vision_fallbacks: str | None = Field(
         default=None, validation_alias="MODEL_VISION_FALLBACKS"
     )
+    # The Image rail (7.60.0): `POST /v1/images/generations` routes here.
+    # A media rail, never a chat tier -- nothing on it is advertised to a
+    # coding agent or accepted on /v1/messages. Empty means the endpoint
+    # answers "no model configured" rather than borrowing a chat model.
+    model_image: str | None = Field(default=None, validation_alias="MODEL_IMAGE")
+    model_image_fallbacks: str | None = Field(
+        default=None, validation_alias="MODEL_IMAGE_FALLBACKS"
+    )
 
     # ==================== Paused route entries ====================
     # Comma-separated `provider/model` refs the operator has switched off for
@@ -788,6 +799,9 @@ class Settings(BaseSettings):
     )
     model_vision_paused: str | None = Field(
         default=None, validation_alias="MODEL_VISION_PAUSED"
+    )
+    model_image_paused: str | None = Field(
+        default=None, validation_alias="MODEL_IMAGE_PAUSED"
     )
 
     # ==================== Coding agent tier aliases ====================
@@ -1882,6 +1896,12 @@ class Settings(BaseSettings):
     request_log_capture_images: bool = Field(
         default=True, validation_alias="REQUEST_LOG_CAPTURE_IMAGES"
     )
+    # Keep the media a media endpoint GENERATED (7.60.0), content-addressed
+    # under the config dir's media/ folder. Off by default: metadata (hash,
+    # bytes, type, counts) is recorded either way; only the bytes are opt-in.
+    media_store_enabled: bool = Field(
+        default=False, validation_alias="MEDIA_STORE_ENABLED"
+    )
     request_log_image_max_pixels: int = Field(
         default=REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
         validation_alias="REQUEST_LOG_IMAGE_MAX_PIXELS",
@@ -2563,6 +2583,7 @@ class Settings(BaseSettings):
         "model_sonnet",
         "model_haiku",
         "model_vision",
+        "model_image",
     )
     @classmethod
     def validate_model_format(cls, v: str | None) -> str | None:
@@ -2579,6 +2600,7 @@ class Settings(BaseSettings):
         "model_sonnet_fallbacks",
         "model_haiku_fallbacks",
         "model_vision_fallbacks",
+        "model_image_fallbacks",
         "model_paused",
         "model_mythos_paused",
         "model_fable_paused",
@@ -2586,6 +2608,7 @@ class Settings(BaseSettings):
         "model_sonnet_paused",
         "model_haiku_paused",
         "model_vision_paused",
+        "model_image_paused",
     )
     @classmethod
     def validate_model_fallback_chain(cls, v: str | None) -> str | None:

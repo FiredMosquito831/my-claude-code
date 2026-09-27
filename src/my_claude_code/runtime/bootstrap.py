@@ -11,6 +11,7 @@ from my_claude_code.config.paths import server_log_path
 from my_claude_code.config.settings import Settings
 from my_claude_code.messaging.transcription import TranscriptionService
 from my_claude_code.messaging.voice import Transcriber
+from my_claude_code.providers.media.registry import MEDIA_REGISTRY
 from my_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
 
 from .application import ApplicationRuntime, RestartCallback
@@ -48,6 +49,7 @@ def build_asgi_app(
         requests=provider_manager,
         admin=runtime,
         tasks=runtime,
+        media=MEDIA_REGISTRY,
     )
     return RuntimeASGIApp(
         create_app(services),

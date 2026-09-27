@@ -1309,7 +1309,8 @@ textarea:focus-visible,
 }
 
 .route-grid.is-dragging,
-.route-vision.is-dragging {
+.route-vision.is-dragging,
+.route-media.is-dragging {
   user-select: none;
 }
 
@@ -1745,6 +1746,18 @@ textarea:focus-visible,
 }
 
 .route-vision .route-vision-control {
+  max-width: 460px;
+}
+
+/* A media rail (7.60.0) is a route but not a chat tier: same editor, drawn
+   apart from the tier grid like the vision adapter. */
+.route-media {
+  border-style: dashed;
+  background: var(--panel);
+  margin-top: var(--space-3, 12px);
+}
+
+.route-media .route-media-control {
   max-width: 460px;
 }
 

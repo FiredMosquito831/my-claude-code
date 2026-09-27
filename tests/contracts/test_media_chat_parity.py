@@ -1,0 +1,856 @@
+"""PARITY CONTRACT: the media engine decides exactly as the chat engine does.
+
+User decision (2026-09-26 03:38, #4): media requests go through a SEPARATE
+copy of chat's retry / key / 429 / pause / bench / proxy rules, and "a parity
+contract test that runs the same failure scenarios through chat and media and
+asserts identical decisions" is the required safeguard.
+
+How: one scripted upstream world, two stacks built over it.
+
+* chat  = ``ProviderExecutor`` -> ``RotatingProvider`` -> ``ProxyRotatingProvider``
+  (all frozen, unmodified) -> a chat leaf;
+* media = ``MediaExecutor`` -> ``MediaKeyPool`` -> ``MediaProxyPool`` (the copies)
+  -> a media leaf.
+
+Both leaves are the same :class:`MediaLeaf` HTTP exchange (the chat leaf wraps
+it and speaks SSE), so the leaf's limiter ladder and failure classification are
+identical by construction and every difference the test can see comes from the
+copied layers. For each scenario the test compares: the ordered upstream calls
+(provider, model, key, proxy leg), the final outcome, every ledger verdict, the
+route-health bench of every ref, and every key's health record.
+
+Known boundary, stated rather than hidden: the 429 probe is a *chat* request
+on both sides, so it goes out through the chat provider's own proxy selection.
+Scenarios that combine a probe with a proxy chain would compare two different
+proxy books by design, so none is included.
+"""
+
+import asyncio
+import dataclasses
+import json
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+import httpx
+import pytest
+
+from my_claude_code.application.execution import (
+    ProviderExecutor,
+    RouteAttemptRecord,
+    RouteExecutionPolicy,
+)
+from my_claude_code.application.media.executor import MediaExecutor
+from my_claude_code.application.media.request import (
+    MediaAttempt,
+    MediaPlan,
+    MediaRail,
+    MediaRequest,
+)
+from my_claude_code.application.route_health import RouteHealthRegistry
+from my_claude_code.application.routing import (
+    ResolvedModel,
+    RoutedMessagesPlan,
+    RoutedMessagesRequest,
+)
+from my_claude_code.config.media_surfaces import (
+    MEDIA_OPERATION_IMAGE_GENERATE,
+    image_generation_surface,
+)
+from my_claude_code.config.reasoning import ReasoningPreference
+from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.credential_attribution import install_attribution
+from my_claude_code.core.failures import (
+    FailureKind,
+    failure_kind_name,
+    find_execution_failure,
+)
+from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
+from my_claude_code.core.proxy_rotation import (
+    PROXY_HEALTH,
+    PROXY_INTERCEPTION,
+    PROXY_REACHABILITY,
+)
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningAdaptation,
+    ReasoningAdaptationKind,
+    ReasoningPolicy,
+)
+from my_claude_code.providers.base import (
+    BaseProvider,
+    ProviderConfig,
+    ProxyChainPlan,
+    ProxyLeg,
+)
+from my_claude_code.providers.credential_rotation import CredentialRotationState
+from my_claude_code.providers.media import proxy_pool as media_proxy_pool
+from my_claude_code.providers.media.key_pool import MediaKeyPool
+from my_claude_code.providers.media.leaf import MediaLeaf, MediaNode
+from my_claude_code.providers.media.proxy_pool import (
+    MediaProxyPool,
+    MediaProxyRotationState,
+)
+from my_claude_code.providers.media.registry import _leaf_limiter
+from my_claude_code.providers.runtime.proxy_rotating import (
+    ProxyRotatingProvider,
+    ProxyRotationState,
+)
+from my_claude_code.providers.runtime.rotating import RotatingProvider
+
+# --------------------------------------------------------------- the world
+
+
+@dataclass(frozen=True)
+class Outcome:
+    kind: str = "ok"  # ok | status | connect
+    status: int = 200
+    message: str = ""
+    headers: tuple[tuple[str, str], ...] = ()
+
+
+OK = Outcome()
+
+
+def status(code: int, message: str = "upstream said no", **headers: str) -> Outcome:
+    return Outcome("status", code, message, tuple(headers.items()))
+
+
+CONNECT = Outcome("connect")
+
+Key = tuple[str, str | None, int | None, str | None]
+
+
+@dataclass
+class Script:
+    """Answers by (provider, model, key, leg); ``None`` in a rule is a wildcard.
+
+    A rule with several outcomes answers them in order and then repeats its
+    last one. Every call is recorded, in order, on :attr:`calls`.
+    """
+
+    rules: dict[Key, list[Outcome]] = field(default_factory=dict)
+    calls: list[tuple[str, str, int, str]] = field(default_factory=list)
+    _served: dict[Key, int] = field(default_factory=dict)
+
+    def respond(self, provider: str, model: str, key: int, leg: str) -> Outcome:
+        self.calls.append((provider, model, key, leg))
+        candidates = (
+            (provider, model, key, leg),
+            (provider, model, key, None),
+            (provider, model, None, leg),
+            (provider, model, None, None),
+            (provider, None, key, leg),
+            (provider, None, key, None),
+            (provider, None, None, leg),
+            (provider, None, None, None),
+        )
+        for rule in candidates:
+            outcomes = self.rules.get(rule)
+            if outcomes:
+                served = self._served.get(rule, 0)
+                self._served[rule] = served + 1
+                return outcomes[min(served, len(outcomes) - 1)]
+        return OK
+
+    def fresh(self) -> Script:
+        return Script(rules=self.rules)
+
+
+def _transport(
+    script: Script, provider: str, key: int, leg: str
+) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        outcome = script.respond(provider, model, key, leg)
+        if outcome.kind == "connect":
+            raise httpx.ConnectError("connection refused", request=request)
+        if outcome.kind == "status":
+            return httpx.Response(
+                outcome.status,
+                json={"error": {"message": outcome.message}},
+                headers=dict(outcome.headers),
+            )
+        return httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aGk="}]})
+
+    return httpx.MockTransport(handler)
+
+
+@dataclass(frozen=True)
+class ProviderSpec:
+    keys: int = 1
+    legs: int = 0
+    triggers: frozenset[str] = frozenset()
+    max_switches: int = 2
+    direct_fallback: bool = True
+    routes_around_model: bool = True
+    retry_attempts: int = 1
+
+
+def _config(provider: str, spec: ProviderSpec) -> ProviderConfig:
+    keys = tuple(f"{provider}-secret-{index}" for index in range(spec.keys))
+    plan = None
+    if spec.legs:
+        plan = ProxyChainPlan(
+            legs=tuple(
+                ProxyLeg(
+                    url=f"http://{provider}-p{index}.test:8080",
+                    label=f"{provider}-p{index}",
+                )
+                for index in range(spec.legs)
+            ),
+            policy="failover",
+            on=spec.triggers,
+            scope="provider",
+            max_switches=spec.max_switches,
+            direct_fallback=spec.direct_fallback,
+        )
+    return ProviderConfig(
+        api_key=keys[0],
+        base_url=f"https://{provider}.test/v1",
+        api_keys=keys,
+        credential_rotation="failover",
+        retry_attempts=spec.retry_attempts,
+        retry_backoff_base_seconds=0.0,
+        retry_backoff_max_seconds=0.0,
+        retry_backoff_jitter_seconds=0.0,
+        routes_around_model=spec.routes_around_model,
+        proxy_chain=plan,
+        # A header-less 429 blocks the leaf for this long (the real default is
+        # 60 s); both stacks read the same config, so only the wait shrinks.
+        rate_limit_cooldown_seconds=0.05,
+    )
+
+
+def _resolved(provider: str, model: str) -> ResolvedModel:
+    return ResolvedModel(
+        original_model="client-model",
+        provider_id=provider,
+        provider_model=model,
+        provider_model_ref=f"{provider}/{model}",
+        reasoning_preference=ReasoningPreference.INHERIT,
+    )
+
+
+def _leaf(
+    script: Script,
+    provider: str,
+    config: ProviderConfig,
+    key: int,
+    leg: str,
+    proxied: bool,
+) -> MediaLeaf:
+    return MediaLeaf(
+        provider_id=provider,
+        config=config,
+        surfaces=(image_generation_surface(),),
+        rate_limiter=_leaf_limiter(config, proxied_leg=proxied),
+        transport=_transport(script, provider, key, leg),
+    )
+
+
+# ---------------------------------------------------------------- chat stack
+
+
+class _ChatLeaf(BaseProvider):
+    """A chat leaf whose HTTP exchange is the media leaf's, spoken as SSE."""
+
+    def __init__(self, config: ProviderConfig, leaf: MediaLeaf, provider: str) -> None:
+        super().__init__(config)
+        self._leaf = leaf
+        self._provider = provider
+
+    def preflight_stream(self, request, *, reasoning=DEFAULT_REASONING_POLICY) -> None:
+        return None
+
+    async def cleanup(self) -> None:
+        await self._leaf.cleanup()
+
+    async def list_model_ids(self) -> frozenset[str]:
+        return frozenset()
+
+    def throttle_remaining(self, model: str | None = None) -> float:
+        return self._leaf.throttle_remaining(model)
+
+    def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+    ) -> AsyncIterator[str]:
+        return self._stream(request, request_id)
+
+    async def _stream(
+        self, request: MessagesRequest, request_id: str | None
+    ) -> AsyncIterator[str]:
+        attempt = MediaAttempt(
+            request=MediaRequest(
+                operation=MEDIA_OPERATION_IMAGE_GENERATE,
+                rail=MediaRail.IMAGE,
+                model=request.model,
+                body={"prompt": "p"},
+            ),
+            resolved=_resolved(self._provider, request.model),
+        )
+        async for _chunk in self._leaf.execute(attempt, request_id=request_id):
+            yield (
+                "event: content_block_delta\ndata: "
+                '{"type":"content_block_delta","index":0,'
+                '"delta":{"type":"text_delta","text":"ok"}}\n\n'
+            )
+
+
+def _chat_node(
+    script: Script, provider: str, config: ProviderConfig, key: int
+) -> BaseProvider:
+    plan = config.proxy_chain
+    if plan is None or len(plan.legs) < 2:
+        return _ChatLeaf(
+            config, _leaf(script, provider, config, key, "-", False), provider
+        )
+    legs = plan.legs
+    labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
+
+    def build(index: int) -> BaseProvider:
+        url = legs[index].url if index < len(legs) else ""
+        leg_config = dataclasses.replace(config, proxy=url, proxy_chain=None)
+        leg = labels[index] if index < len(legs) else DIRECT_PROXY_LABEL
+        return _ChatLeaf(
+            leg_config,
+            _leaf(script, provider, leg_config, key, leg, bool(url)),
+            provider,
+        )
+
+    state = ProxyRotationState(
+        len(legs), plan.policy, labels=labels, provider_id=provider, scope=plan.scope
+    )
+    return ProxyRotatingProvider(
+        config, build, state, labels=labels, plan=plan, provider_id=provider
+    )
+
+
+def _key_state(config: ProviderConfig, count: int) -> CredentialRotationState:
+    return CredentialRotationState(
+        count,
+        config.credential_rotation,
+        rate_limit_seconds=config.rate_limit_cooldown_seconds,
+        lockout_tiers=config.lockout_tiers,
+        model_bench_escalation=config.credential_model_bench_escalation,
+        cooldown=config.rate_limit_cooldown(),
+    )
+
+
+def _per_key(config: ProviderConfig) -> list[ProviderConfig]:
+    return [
+        dataclasses.replace(
+            config, api_key=key, api_keys=(key,), credential_rotation="single"
+        )
+        for key in config.api_keys
+    ]
+
+
+def _chat_provider(script: Script, provider: str, spec: ProviderSpec):
+    config = _config(provider, spec)
+    if len(config.api_keys) <= 1:
+        return _chat_node(script, provider, config, 0), None
+    nodes = [
+        _chat_node(script, provider, sub, index)
+        for index, sub in enumerate(_per_key(config))
+    ]
+    state = _key_state(config, len(nodes))
+    return (
+        RotatingProvider(
+            config,
+            nodes,
+            state,
+            key_labels=tuple(f"k{index}" for index in range(len(nodes))),
+            provider_id=provider,
+            routes_around_model=config.routes_around_model,
+        ),
+        state,
+    )
+
+
+# --------------------------------------------------------------- media stack
+
+
+def _media_node(
+    script: Script, provider: str, config: ProviderConfig, key: int
+) -> MediaNode:
+    plan = config.proxy_chain
+    if plan is None or len(plan.legs) < 2:
+        return _leaf(script, provider, config, key, "-", False)
+    legs = plan.legs
+    labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
+
+    def build(index: int) -> MediaNode:
+        url = legs[index].url if index < len(legs) else ""
+        leg_config = dataclasses.replace(config, proxy=url, proxy_chain=None)
+        leg = labels[index] if index < len(legs) else DIRECT_PROXY_LABEL
+        return _leaf(script, provider, leg_config, key, leg, bool(url))
+
+    state = MediaProxyRotationState(
+        len(legs), plan.policy, labels=labels, provider_id=provider, scope=plan.scope
+    )
+    return MediaProxyPool(build, state, labels=labels, plan=plan, provider_id=provider)
+
+
+def _media_provider(script: Script, provider: str, spec: ProviderSpec):
+    config = _config(provider, spec)
+    if len(config.api_keys) <= 1:
+        return _media_node(script, provider, config, 0), None
+    nodes = [
+        _media_node(script, provider, sub, index)
+        for index, sub in enumerate(_per_key(config))
+    ]
+    state = _key_state(config, len(nodes))
+    return (
+        MediaKeyPool(
+            nodes,
+            state,
+            key_labels=tuple(f"k{index}" for index in range(len(nodes))),
+            provider_id=provider,
+            routes_around_model=config.routes_around_model,
+        ),
+        state,
+    )
+
+
+# ------------------------------------------------------------------ scenario
+
+
+@dataclass
+class Scenario:
+    name: str
+    providers: dict[str, ProviderSpec]
+    chain: tuple[tuple[str, str], ...]
+    script: Script
+    requests: int = 1
+    paused: frozenset[str] = frozenset()
+    probes: dict[str, str] = field(default_factory=dict)
+    retry_first: str = "skip"
+    policy: RouteExecutionPolicy = field(default_factory=RouteExecutionPolicy)
+    health: Callable[[], RouteHealthRegistry] = RouteHealthRegistry
+
+
+def _outcome(exc: BaseException | None) -> tuple[Any, ...]:
+    if exc is None:
+        return ("served",)
+    failure = find_execution_failure(exc)
+    return (
+        type(exc).__name__,
+        failure_kind_name(exc),
+        None if failure is None else failure.status_code,
+        str(exc),
+    )
+
+
+def _ledger(records: list[RouteAttemptRecord]) -> list[tuple[Any, ...]]:
+    return [
+        (
+            r.attempt,
+            r.provider_id,
+            r.model_ref,
+            r.outcome,
+            r.error_kind,
+            r.error_message,
+            r.bench is None,
+        )
+        for r in records
+    ]
+
+
+def _key_books(state: CredentialRotationState | None) -> list[tuple[Any, ...]] | None:
+    if state is None:
+        return None
+    return [
+        (
+            entry["state"],
+            entry["request_count"],
+            entry["failure_count"],
+            entry["auth_failures"],
+            entry["rate_limits"],
+            entry["cooldown_remaining"] > 0,
+            entry["lockout_remaining"] > 0,
+            tuple(bench["model"] for bench in entry["model_benches"]),
+        )
+        for entry in state.get_metrics()
+    ]
+
+
+def _reset_chat_proxy_books() -> None:
+    PROXY_REACHABILITY.clear()
+    PROXY_HEALTH.clear()
+    PROXY_INTERCEPTION.clear()
+
+
+def _run_chat(scenario: Scenario) -> dict[str, Any]:
+    _reset_chat_proxy_books()
+    script = scenario.script.fresh()
+    built = {
+        name: _chat_provider(script, name, spec)
+        for name, spec in scenario.providers.items()
+    }
+
+    def resolver(provider_id: str):
+        return built[provider_id][0]
+
+    health = scenario.health()
+    executor = ProviderExecutor(
+        resolver,
+        policy=scenario.policy,
+        health=health,
+        retry_first=scenario.retry_first,
+        provider_lookup=lambda provider_id: resolver(provider_id).throttle_remaining(),
+    )
+    routed = tuple(
+        RoutedMessagesRequest(
+            request=MessagesRequest(
+                model=model, messages=[Message(role="user", content="p")], stream=False
+            ),
+            resolved=_resolved(provider, model),
+            reasoning=ReasoningPolicy.on(),
+            requested_reasoning=ReasoningPolicy.on(),
+            reasoning_adaptation=ReasoningAdaptation(
+                ReasoningAdaptationKind.UNCHANGED, None
+            ),
+        )
+        for provider, model in scenario.chain
+    )
+    plan = RoutedMessagesPlan(
+        routed,
+        paused_refs=scenario.paused,
+        probe_candidates={p: _resolved(p, m) for p, m in scenario.probes.items()},
+    )
+    outcomes: list[tuple[Any, ...]] = []
+    ledgers: list[list[tuple[Any, ...]]] = []
+
+    async def one() -> None:
+        install_attribution()
+        records: list[RouteAttemptRecord] = []
+        error: BaseException | None = None
+        try:
+            stream = executor.stream(
+                plan,
+                wire_api="messages",
+                raw_log_label="X",
+                raw_log_payload={},
+                request_id="parity",
+                on_attempt_result=records.append,
+            )
+            async for _ in stream:
+                pass
+        except Exception as exc:
+            error = exc
+        outcomes.append(_outcome(error))
+        ledgers.append(_ledger(records))
+
+    async def run() -> None:
+        for _ in range(scenario.requests):
+            await one()
+
+    asyncio.run(run())
+    return {
+        "calls": script.calls,
+        "outcomes": outcomes,
+        "ledgers": ledgers,
+        "benched": {ref: health.is_ejected(ref) for ref in plan.model_refs()},
+        "keys": {name: _key_books(state) for name, (_p, state) in built.items()},
+    }
+
+
+def _run_media(scenario: Scenario) -> dict[str, Any]:
+    _reset_chat_proxy_books()
+    media_proxy_pool.reset_media_proxy_books()
+    script = scenario.script.fresh()
+    built = {
+        name: _media_provider(script, name, spec)
+        for name, spec in scenario.providers.items()
+    }
+    # The probe is a chat question on both sides: a chat stack of its own,
+    # over the same scripted world, answers it.
+    chat_for_probe = {
+        name: _chat_provider(script, name, spec)[0]
+        for name, spec in scenario.providers.items()
+    }
+
+    def resolver(provider_id: str):
+        return built[provider_id][0]
+
+    health = scenario.health()
+    executor = MediaExecutor(
+        resolver,
+        policy=scenario.policy,
+        health=health,
+        retry_first=scenario.retry_first,
+        provider_lookup=lambda provider_id: resolver(provider_id).throttle_remaining(),
+        chat_provider_resolver=lambda provider_id: chat_for_probe[provider_id],
+    )
+    request = MediaRequest(
+        operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        rail=MediaRail.IMAGE,
+        model="client-model",
+        body={"prompt": "p"},
+    )
+    plan = MediaPlan(
+        attempts=tuple(
+            MediaAttempt(request, _resolved(p, m)) for p, m in scenario.chain
+        ),
+        paused_refs=scenario.paused,
+        paused_env_var="MODEL_PAUSED",
+        probe_candidates={p: _resolved(p, m) for p, m in scenario.probes.items()},
+    )
+    outcomes: list[tuple[Any, ...]] = []
+    ledgers: list[list[tuple[Any, ...]]] = []
+
+    async def one() -> None:
+        install_attribution()
+        records: list[RouteAttemptRecord] = []
+        error: BaseException | None = None
+        try:
+            stream = executor.execute(
+                plan, request_id="parity", on_attempt_result=records.append
+            )
+            async for _ in stream:
+                pass
+        except Exception as exc:
+            error = exc
+        outcomes.append(_outcome(error))
+        ledgers.append(_ledger(records))
+
+    async def run() -> None:
+        for _ in range(scenario.requests):
+            await one()
+
+    asyncio.run(run())
+    return {
+        "calls": script.calls,
+        "outcomes": outcomes,
+        "ledgers": ledgers,
+        "benched": {ref: health.is_ejected(ref) for ref in plan.model_refs()},
+        "keys": {name: _key_books(state) for name, (_p, state) in built.items()},
+    }
+
+
+CREDITS = "Insufficient credits: your account balance is too low"
+
+
+def _scenarios() -> list[Scenario]:
+    one = ProviderSpec()
+    two_keys = ProviderSpec(keys=2)
+    return [
+        Scenario(
+            "5xx falls back to the next model",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, None): [status(500)]}),
+        ),
+        Scenario(
+            "retry_once retries the primary once, then falls back",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, None): [status(503)]}),
+            retry_first="retry_once",
+        ),
+        Scenario(
+            "a malformed 400 ends the route",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, None): [status(400, "Malformed request body")]}),
+        ),
+        Scenario(
+            "a plain 400 is about the model and moves on",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script(
+                {("a", None, None, None): [status(400, "model does not support n")]}
+            ),
+        ),
+        Scenario(
+            "auth on one key rotates to the next key",
+            {"a": two_keys, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, 0, None): [status(401, "invalid api key")]}),
+        ),
+        Scenario(
+            "auth on every key exhausts the pool and falls back",
+            {"a": two_keys, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, None): [status(401, "invalid api key")]}),
+        ),
+        Scenario(
+            "429 routes around to the same provider's next model",
+            {"a": two_keys, "b": one},
+            (("a", "m1"), ("b", "x"), ("a", "m2")),
+            Script(
+                {
+                    ("a", "m1", None, None): [
+                        status(429, "slow down", **{"retry-after": "30"})
+                    ]
+                }
+            ),
+        ),
+        Scenario(
+            "429 probe answering 429 escalates and retries the same model",
+            {"a": two_keys, "b": one},
+            (("a", "m1"), ("b", "x")),
+            Script(
+                {
+                    ("a", "m1", 0, None): [status(429, "slow down")],
+                    ("a", "probe", 0, None): [status(429, "slow down")],
+                }
+            ),
+            probes={"a": "probe"},
+        ),
+        Scenario(
+            "429 probe answering 200 moves to the next model",
+            {"a": two_keys, "b": one},
+            (("a", "m1"), ("b", "x")),
+            Script({("a", "m1", None, None): [status(429, "slow down")]}),
+            probes={"a": "probe"},
+        ),
+        Scenario(
+            "a 429 block longer than the probe bound leaves it inconclusive",
+            {"a": two_keys, "b": one},
+            (("a", "m1"), ("b", "x")),
+            Script(
+                {
+                    ("a", "m1", None, None): [
+                        status(429, "slow down", **{"retry-after": "30"})
+                    ]
+                }
+            ),
+            probes={"a": "probe"},
+        ),
+        Scenario(
+            "429 with nowhere to route spends the rate-limit ladder",
+            {"a": one},
+            (("a", "m1"),),
+            Script({("a", None, None, None): [status(429, "slow down")]}),
+            policy=RouteExecutionPolicy(rate_limit_attempts=3),
+        ),
+        Scenario(
+            "a paused model is skipped",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script(),
+            paused=frozenset({"a/m1"}),
+        ),
+        Scenario(
+            "every model paused is an error naming the setting",
+            {"a": one},
+            (("a", "m1"),),
+            Script(),
+            paused=frozenset({"a/m1"}),
+        ),
+        Scenario(
+            "every model out of credits reads as one credits failure",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script(
+                {
+                    ("a", None, None, None): [status(402, CREDITS)],
+                    ("b", None, None, None): [status(402, CREDITS)],
+                }
+            ),
+        ),
+        Scenario(
+            "a dead proxy moves to the next address",
+            {"a": ProviderSpec(legs=2), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, "a-p0"): [CONNECT]}),
+        ),
+        Scenario(
+            "an armed trigger switches address up to max_switches",
+            {
+                "a": ProviderSpec(
+                    legs=3, triggers=frozenset({"upstream"}), max_switches=1
+                ),
+                "b": one,
+            },
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, None): [status(500, "internal error")]}),
+        ),
+        Scenario(
+            "every address dead falls back to the direct leg",
+            {"a": ProviderSpec(legs=2), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script(
+                {
+                    ("a", None, None, "a-p0"): [CONNECT],
+                    ("a", None, None, "a-p1"): [CONNECT],
+                }
+            ),
+        ),
+        Scenario(
+            "consecutive failures bench a model for later requests",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, None): [status(500)]}),
+            requests=4,
+            health=lambda: RouteHealthRegistry(
+                bench_enabled=True,
+                mode="consecutive",
+                eject_after_failures=2,
+                eject_seconds=600,
+            ),
+        ),
+        Scenario(
+            "a reactive 429 block makes the next request step over the provider",
+            {"a": ProviderSpec(routes_around_model=False), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script(
+                {
+                    ("a", None, None, None): [
+                        status(429, "slow down", **{"retry-after": "120"})
+                    ]
+                }
+            ),
+            requests=2,
+        ),
+    ]
+
+
+@pytest.mark.parametrize("scenario", _scenarios(), ids=lambda scenario: scenario.name)
+def test_media_decides_exactly_as_chat(scenario: Scenario) -> None:
+    chat = _run_chat(scenario)
+    media = _run_media(scenario)
+    assert media["calls"] == chat["calls"], "upstream calls diverged"
+    assert media["outcomes"] == chat["outcomes"], "final outcome diverged"
+    assert media["ledgers"] == chat["ledgers"], "ledger verdicts diverged"
+    assert media["benched"] == chat["benched"], "route-health benches diverged"
+    assert media["keys"] == chat["keys"], "key health books diverged"
+
+
+def test_the_scenarios_actually_exercise_the_rules() -> None:
+    """A parity test over scenarios that never fail proves nothing."""
+    chat = {s.name: _run_chat(s) for s in _scenarios()}
+    ends = chat["a malformed 400 ends the route"]
+    assert [call[0] for call in ends["calls"]] == ["a"]
+    assert ends["outcomes"][0][1] == FailureKind.INVALID_REQUEST.value
+    retried = chat["retry_once retries the primary once, then falls back"]
+    assert [call[0] for call in retried["calls"]] == ["a", "a", "b"]
+    around = chat["429 routes around to the same provider's next model"]
+    assert [call[1] for call in around["calls"]] == ["m1", "m2"]
+    blocked = chat["a 429 block longer than the probe bound leaves it inconclusive"]
+    assert [call[1] for call in blocked["calls"]] == ["m1", "x"]
+    escalated = chat["429 probe answering 429 escalates and retries the same model"]
+    assert escalated["calls"] == [
+        ("a", "m1", 0, "-"),
+        ("a", "probe", 0, "-"),
+        ("a", "m1", 1, "-"),
+    ]
+    ladder = chat["429 with nowhere to route spends the rate-limit ladder"]
+    assert len(ladder["calls"]) == 3
+    proxy = chat["a dead proxy moves to the next address"]
+    assert [call[3] for call in proxy["calls"]] == ["a-p0", "a-p1"]
+    switched = chat["an armed trigger switches address up to max_switches"]
+    assert [call[3] for call in switched["calls"]] == ["a-p0", "a-p1", "-"]
+    direct = chat["every address dead falls back to the direct leg"]
+    assert [call[3] for call in direct["calls"]] == ["a-p0", "a-p1", DIRECT_PROXY_LABEL]
+    benched = chat["consecutive failures bench a model for later requests"]
+    assert benched["benched"]["a/m1"] is True
+    stepped = chat["a reactive 429 block makes the next request step over the provider"]
+    assert [call[0] for call in stepped["calls"]] == ["a", "b", "b"]
