@@ -31,6 +31,8 @@ GEMINI_ENDPOINT_PREFIX = "/v1beta/models"
 IMAGES_GENERATIONS_ENDPOINT = "/v1/images/generations"
 IMAGES_EDITS_ENDPOINT = "/v1/images/edits"
 AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
+AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
+AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
 
 WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
@@ -40,6 +42,8 @@ _WIRE_API_BY_PATH: dict[str, WireApi] = {
     IMAGES_GENERATIONS_ENDPOINT: "chat_completions",
     IMAGES_EDITS_ENDPOINT: "chat_completions",
     AUDIO_SPEECH_ENDPOINT: "chat_completions",
+    AUDIO_TRANSCRIPTIONS_ENDPOINT: "chat_completions",
+    AUDIO_TRANSLATIONS_ENDPOINT: "chat_completions",
 }
 
 #: The surfaces whose clients parse OpenAI's ``{"error": {...}}``. Membership

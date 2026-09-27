@@ -215,6 +215,8 @@ const FIELDS = [
     ["MODEL_IMAGE_FALLBACKS", "", "model_chain"],
     ["MODEL_TTS", "p1/t0", "optional_model"],
     ["MODEL_TTS_FALLBACKS", "", "model_chain"],
+    ["MODEL_ASR", "p1/a0", "optional_model"],
+    ["MODEL_ASR_FALLBACKS", "", "model_chain"],
     // The pause lists. Written by the Pause button rather than typed, so they
     // are never rendered as controls -- but they are in the payload, which is
     // where the page reads which rows are switched off.
@@ -227,6 +229,7 @@ const FIELDS = [
     ["MODEL_VISION_PAUSED", "", "text"],
     ["MODEL_IMAGE_PAUSED", "", "text"],
     ["MODEL_TTS_PAUSED", "", "text"],
+    ["MODEL_ASR_PAUSED", "", "text"],
   ].map(([key, value, type]) => ({
     key,
     label: key,
@@ -2828,6 +2831,7 @@ const PAUSE_KEY_BY_MODEL = {
   MODEL_VISION: "MODEL_VISION_PAUSED",
   MODEL_IMAGE: "MODEL_IMAGE_PAUSED",
   MODEL_TTS: "MODEL_TTS_PAUSED",
+  MODEL_ASR: "MODEL_ASR_PAUSED",
 };
 const pausedByKey = new Map();
 const fetchUrls = [];
@@ -8178,6 +8182,9 @@ const imageRail = {};
       "MODEL_TTS",
       "MODEL_TTS_FALLBACKS",
       "MODEL_TTS_PAUSED",
+      "MODEL_ASR",
+      "MODEL_ASR_FALLBACKS",
+      "MODEL_ASR_PAUSED",
     ]
       .filter((key) => doc.querySelector(`.route-layout > .field-grid [data-key='${key}']`));
   }

@@ -24,6 +24,7 @@ class MediaRail(StrEnum):
 
     IMAGE = "image"
     TTS = "tts"
+    ASR = "asr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,15 @@ RAIL_SETTINGS: Mapping[MediaRail, MediaRailSettings] = {
         paused_attr="model_tts_paused",
         paused_env="MODEL_TTS_PAUSED",
     ),
+    MediaRail.ASR: MediaRailSettings(
+        label="Transcription",
+        model_attr="model_asr",
+        model_env="MODEL_ASR",
+        fallbacks_attr="model_asr_fallbacks",
+        fallbacks_env="MODEL_ASR_FALLBACKS",
+        paused_attr="model_asr_paused",
+        paused_env="MODEL_ASR_PAUSED",
+    ),
 }
 
 
@@ -77,6 +87,8 @@ class MediaUpload:
     size: int
     sha256: str
     file: IO[bytes] = field(repr=False, compare=False)
+    #: The length a WAV upload's header states; ``None`` for anything else.
+    audio_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

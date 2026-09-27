@@ -19,17 +19,26 @@ from dataclasses import dataclass
 MEDIA_OPERATION_IMAGE_GENERATE = "image_generate"
 MEDIA_OPERATION_IMAGE_EDIT = "image_edit"
 MEDIA_OPERATION_SPEECH = "speech"
+MEDIA_OPERATION_TRANSCRIBE = "transcribe"
+MEDIA_OPERATION_TRANSLATE = "translate"
 
 #: Wire-shape families: one adapter per family, never per provider.
 MEDIA_SHAPE_OPENAI_IMAGES = "openai_images"
 MEDIA_SHAPE_OPENAI_SPEECH = "openai_speech"
+MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS = "openai_transcriptions"
 
 MEDIA_OPERATIONS: tuple[str, ...] = (
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_SPEECH,
+    MEDIA_OPERATION_TRANSCRIBE,
+    MEDIA_OPERATION_TRANSLATE,
 )
-MEDIA_SHAPES: tuple[str, ...] = (MEDIA_SHAPE_OPENAI_IMAGES, MEDIA_SHAPE_OPENAI_SPEECH)
+MEDIA_SHAPES: tuple[str, ...] = (
+    MEDIA_SHAPE_OPENAI_IMAGES,
+    MEDIA_SHAPE_OPENAI_SPEECH,
+    MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +107,29 @@ def speech_surface(
         shape=MEDIA_SHAPE_OPENAI_SPEECH,
         path=path,
         formats=formats,
+    )
+
+
+def transcription_surface(
+    path: str = "audio/transcriptions", *, stream: bool = False
+) -> MediaSurface:
+    """The OpenAI ``POST /audio/transcriptions`` shape (multipart upload)."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_TRANSCRIBE,
+        shape=MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
+        path=path,
+        stream=stream,
+    )
+
+
+def translation_surface(path: str = "audio/translations") -> MediaSurface:
+    """The OpenAI ``POST /audio/translations`` shape: speech in, English text out."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_TRANSLATE,
+        shape=MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
+        path=path,
     )
 
 

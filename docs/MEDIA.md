@@ -1,7 +1,7 @@
 # Media routing
 
-My Claude Code routes **media requests** -- image generation and editing and speech today, with
-transcription and video arriving one release at a time -- over **media rails** on Model
+My Claude Code routes **media requests** -- image generation and editing, speech and
+transcription today, with video arriving in a later release -- over **media rails** on Model
 Config, the way it routes chat over tiers. A client that speaks the OpenAI media API points
 its base URL at the proxy and keeps its own code.
 
@@ -12,6 +12,7 @@ its base URL at the proxy and keeps its own code.
 | `POST /v1/images/generations` | 7.60.0 | Image | `MODEL_IMAGE`, `MODEL_IMAGE_FALLBACKS`, `MODEL_IMAGE_PAUSED` |
 | `POST /v1/images/edits` | 7.61.0 | Image | the same rail |
 | `POST /v1/audio/speech` | 7.62.0 | Speech | `MODEL_TTS`, `MODEL_TTS_FALLBACKS`, `MODEL_TTS_PAUSED` |
+| `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | 7.63.0 | Transcription | `MODEL_ASR`, `MODEL_ASR_FALLBACKS`, `MODEL_ASR_PAUSED` |
 
 ```python
 from openai import OpenAI
@@ -32,7 +33,8 @@ The proxy token is the same one every other client uses (`Authorization: Bearer`
 ## How a request finds its model
 
 - The **endpoint** picks the rail: `images/generations` and `images/edits` are the Image rail,
-  `audio/speech` the Speech rail.
+  `audio/speech` the Speech rail, `audio/transcriptions` and `audio/translations` the
+  Transcription rail.
 - A `model` written as `provider/model` (for example `xai/grok-2-image`) pins that one model.
 - Any other `model` -- a vendor name such as `gpt-image-2`, or none -- uses the rail:
   `MODEL_IMAGE` first, then `MODEL_IMAGE_FALLBACKS` in order, skipping anything in
@@ -105,6 +107,31 @@ answers `400`. A plain request is answered once the whole audio has arrived -- a
 before that falls back invisibly -- and the OpenAI SDK's streaming helpers still work, they
 simply receive the complete file.
 
+## Transcription and translation (speech to text)
+
+`POST /v1/audio/transcriptions` and `POST /v1/audio/translations` route on the
+**Transcription rail** (`MODEL_ASR`, `MODEL_ASR_FALLBACKS`, `MODEL_ASR_PAUSED`). The upload
+(`file`, plus `language`, `prompt`, `response_format` and the rest) is forwarded as multipart,
+streamed from the server's spooled copy and re-sent whole to each model tried. The answer --
+JSON, text, SRT, VTT -- comes back exactly as the provider wrote it.
+
+```python
+text = client.audio.transcriptions.create(model="whisper-1", file=open("clip.wav", "rb"))
+```
+
+| Provider | Transcription | Translation |
+|---|---|---|
+| Groq | `audio/transcriptions` | `audio/translations` |
+| DeepInfra | `audio/transcriptions` | `audio/translations` |
+| Together | `audio/transcriptions` | -- |
+| SiliconFlow | `audio/transcriptions` | -- |
+| Mistral | `audio/transcriptions` (streams) | -- |
+| OpenRouter | `audio/transcriptions` | -- |
+
+A translation skips every model whose provider declares transcription only, uncharged.
+`stream=true` is routed only to a surface that streams (Mistral); its `transcript.text.delta`
+events are forwarded as they arrive.
+
 ## Retry, fallback, keys, 429s and proxies
 
 The Image rail follows the same rules as a chat chain, applied by a separate copy of the chat
@@ -136,13 +163,15 @@ with the chain's attempts, plus:
 
 | Column | Meaning |
 |---|---|
-| `media_operation` | `image_generate`, `image_edit` or `speech` |
+| `media_operation` | `image_generate`, `image_edit`, `speech`, `transcribe` or `translate` |
 | `input_image_count` | images uploaded to an edit |
 | `output_image_count` | items the host returned |
 | `media_bytes_out` | decoded size of the base64 images (empty for a URL-only answer: not measured) |
 | `media_sha_out` | SHA-256 of the first image, or of the audio |
+| `input_audio_seconds` | audio a transcription heard: the provider's own figure, else a WAV upload's header; empty otherwise |
 | `output_audio_seconds` | length of the audio, when its container states it (WAV); empty for MP3/Opus/AAC: not measured |
 
+A transcript is the row's output text (`output_text`, `output_chars`), like a chat answer.
 Token usage, when the host reports it, fills the usual `tokens_in` / `tokens_out`. An edit's
 uploaded files are always recorded by SHA-256, size and type (never their bytes); with
 `MEDIA_STORE_ENABLED` on, each uploaded image also gets the request log's usual thumbnail
@@ -158,5 +187,5 @@ cleared; turning the setting off stops new copies and leaves existing files alon
 
 ## Not yet
 
-Transcription, video, Gemini-native media requests, media pricing and the
+Video, Gemini-native media requests, media pricing and the
 Analytics media block each arrive in their own release.

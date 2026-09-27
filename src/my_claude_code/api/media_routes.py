@@ -51,6 +51,8 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_SPEECH,
+    MEDIA_OPERATION_TRANSCRIBE,
+    MEDIA_OPERATION_TRANSLATE,
 )
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import (
@@ -69,6 +71,11 @@ from my_claude_code.core.openai_images import (
     parse_images_stream,
 )
 from my_claude_code.core.openai_speech import parse_speech_response
+from my_claude_code.core.openai_transcriptions import (
+    parse_transcription_response,
+    parse_transcription_stream,
+    wav_file_seconds,
+)
 
 from .dependencies import get_services, require_proxy_auth, resolve_provider
 from .media_capture import MediaCapture
@@ -77,6 +84,8 @@ from .request_ids import get_request_id
 from .response_streams import ManagedStreamingResponse, bind_response_lifetime
 from .wire_surfaces import (
     AUDIO_SPEECH_ENDPOINT,
+    AUDIO_TRANSCRIPTIONS_ENDPOINT,
+    AUDIO_TRANSLATIONS_ENDPOINT,
     IMAGES_EDITS_ENDPOINT,
     IMAGES_GENERATIONS_ENDPOINT,
 )
@@ -177,8 +186,8 @@ async def _read_json_object(request: Request) -> Mapping[str, Any] | None:
     return {str(key): value for key, value in payload.items()}
 
 
-def _measure(file: IO[bytes]) -> tuple[str, int]:
-    """Runs in a worker thread: SHA-256 and size of one spooled upload."""
+def _measure(file: IO[bytes]) -> tuple[str, int, float | None]:
+    """Runs in a worker thread: SHA-256, size and WAV length of one upload."""
     digest = hashlib.sha256()
     size = 0
     file.seek(0)
@@ -186,7 +195,9 @@ def _measure(file: IO[bytes]) -> tuple[str, int]:
         digest.update(chunk)
         size += len(chunk)
     file.seek(0)
-    return digest.hexdigest(), size
+    header = file.read(_HASH_CHUNK_BYTES)
+    file.seek(0)
+    return digest.hexdigest(), size, wav_file_seconds(header)
 
 
 async def _uploads_from_form(
@@ -197,7 +208,7 @@ async def _uploads_from_form(
     uploads: list[MediaUpload] = []
     for name, value in form.multi_items():
         if isinstance(value, UploadFile):
-            sha256, size = await asyncio.to_thread(_measure, value.file)
+            sha256, size, seconds = await asyncio.to_thread(_measure, value.file)
             uploads.append(
                 MediaUpload(
                     field=name,
@@ -206,6 +217,7 @@ async def _uploads_from_form(
                     size=size,
                     sha256=sha256,
                     file=value.file,
+                    audio_seconds=seconds,
                 )
             )
             continue
@@ -299,7 +311,10 @@ async def _serve(
         finally:
             await cleanup()
     response = ManagedStreamingResponse(
-        _stream_body(first, stream, capture, cleanup), media_type="text/event-stream"
+        _stream_body(
+            first, stream, capture, cleanup, _stream_parser_for(media_request)
+        ),
+        media_type="text/event-stream",
     )
     bound = await bind_response_lifetime(response, lease.release)
     assert isinstance(bound, Response)
@@ -398,6 +413,10 @@ def _parse_images(response: MediaResponse) -> MediaOutputs:
     return parse_images_response(response.body)
 
 
+def _parse_transcription(response: MediaResponse) -> MediaOutputs:
+    return parse_transcription_response(response.body, response.content_type)
+
+
 def _parse_speech(response: MediaResponse) -> MediaOutputs:
     return parse_speech_response(response.body, response.content_type)
 
@@ -406,7 +425,21 @@ def _parser_for(media_request: MediaRequest) -> Callable[[MediaResponse], MediaO
     """How a buffered answer is measured, by the operation's wire shape."""
     if media_request.operation == MEDIA_OPERATION_SPEECH:
         return _parse_speech
+    if media_request.operation in (
+        MEDIA_OPERATION_TRANSCRIBE,
+        MEDIA_OPERATION_TRANSLATE,
+    ):
+        return _parse_transcription
     return _parse_images
+
+
+def _stream_parser_for(media_request: MediaRequest) -> Callable[[bytes], MediaOutputs]:
+    if media_request.operation in (
+        MEDIA_OPERATION_TRANSCRIBE,
+        MEDIA_OPERATION_TRANSLATE,
+    ):
+        return parse_transcription_stream
+    return parse_images_stream
 
 
 @router.post(AUDIO_SPEECH_ENDPOINT)
@@ -436,6 +469,60 @@ async def create_speech(
     return await _serve(
         request, services, media_request, endpoint=AUDIO_SPEECH_ENDPOINT
     )
+
+
+def _audio_route(operation: str, endpoint: str):
+    async def handle(
+        request: Request,
+        services: ApiServices = Depends(get_services),
+        _auth=Depends(require_proxy_auth),
+    ):
+        if not request.headers.get("content-type", "").startswith(
+            "multipart/form-data"
+        ):
+            return _invalid(
+                "The request body must be multipart/form-data with a 'file'."
+            )
+        form = await request.form()
+
+        async def close_form() -> None:
+            await form.close()
+
+        try:
+            fields, uploads = await _uploads_from_form(form)
+        except BaseException:
+            await close_form()
+            raise
+        if not any(upload.field == "file" for upload in uploads):
+            await close_form()
+            return _invalid("A 'file' with the audio is required.")
+        media_request = MediaRequest(
+            operation=operation,
+            rail=MediaRail.ASR,
+            model=str(fields.get("model") or ""),
+            body={key: value for key, value in fields.items() if key != "model"},
+            stream=_stream_flag(fields.get("stream")),
+            uploads=uploads,
+        )
+        return await _serve(
+            request, services, media_request, endpoint=endpoint, cleanup=close_form
+        )
+
+    return handle
+
+
+router.add_api_route(
+    AUDIO_TRANSCRIPTIONS_ENDPOINT,
+    _audio_route(MEDIA_OPERATION_TRANSCRIBE, AUDIO_TRANSCRIPTIONS_ENDPOINT),
+    methods=["POST"],
+    summary="Transcribe audio through the Transcription rail",
+)
+router.add_api_route(
+    AUDIO_TRANSLATIONS_ENDPOINT,
+    _audio_route(MEDIA_OPERATION_TRANSLATE, AUDIO_TRANSLATIONS_ENDPOINT),
+    methods=["POST"],
+    summary="Translate audio to English text through the Transcription rail",
+)
 
 
 async def _complete_response(
@@ -472,6 +559,7 @@ async def _stream_body(
     stream: AsyncIterator[MediaChunk],
     capture: MediaCapture,
     cleanup: Cleanup,
+    parse_stream: Callable[[bytes], MediaOutputs],
 ) -> AsyncIterator[bytes]:
     """Forward SSE frames; measure the completed images once the stream ends.
 
@@ -500,7 +588,7 @@ async def _stream_body(
         if status == "success" and b"event: error" in seen:
             status = "error"
         asyncio.ensure_future(
-            _finish_stream(capture, status, error, bytes(seen), cleanup)
+            _finish_stream(capture, status, error, bytes(seen), cleanup, parse_stream)
         )
 
 
@@ -510,9 +598,10 @@ async def _finish_stream(
     error: BaseException | None,
     seen: bytes,
     cleanup: Cleanup,
+    parse_stream: Callable[[bytes], MediaOutputs],
 ) -> None:
     try:
-        outputs = await asyncio.to_thread(parse_images_stream, seen)
+        outputs = await asyncio.to_thread(parse_stream, seen)
         if status == "success":
             await capture.finish("success", outputs=outputs)
         elif status == "cancelled":
@@ -525,6 +614,16 @@ async def _finish_stream(
 
 @router.api_route(IMAGES_GENERATIONS_ENDPOINT, methods=["HEAD", "OPTIONS"])
 async def probe_images_generations(_auth=Depends(require_proxy_auth)):
+    return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
+
+
+@router.api_route(AUDIO_TRANSCRIPTIONS_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_audio_transcriptions(_auth=Depends(require_proxy_auth)):
+    return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
+
+
+@router.api_route(AUDIO_TRANSLATIONS_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_audio_translations(_auth=Depends(require_proxy_auth)):
     return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
 
 
