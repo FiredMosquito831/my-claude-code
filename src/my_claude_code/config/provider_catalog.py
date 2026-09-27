@@ -7,12 +7,14 @@ provider implementation imports (see contract tests).
 from dataclasses import dataclass
 
 from .media_surfaces import (
+    MEDIA_ENCODING_JSON,
     MediaSurface,
     image_edit_surface,
     image_generation_surface,
     speech_surface,
     transcription_surface,
     translation_surface,
+    video_surfaces,
 )
 
 # Default upstream base URLs are owned here with the provider catalog.
@@ -321,6 +323,14 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         media_surfaces=(
             speech_surface(formats=("mp3", "pcm")),
             transcription_surface(),
+            # Video create is JSON only (202 {id, polling_url}); ``duration``
+            # is its name for OpenAI's ``seconds``; the file is served at
+            # videos/{id}/content with the key.
+            *video_surfaces(
+                content="videos/{id}/content",
+                encoding=MEDIA_ENCODING_JSON,
+                renames=(("seconds", "duration"),),
+            ),
         ),
         display_name="OpenRouter",
         credential_env="OPENROUTER_API_KEY",
@@ -333,7 +343,10 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "gemini": ProviderDescriptor(
         image_token_family="gemini",
         provider_id="gemini",
-        media_surfaces=(image_generation_surface(),),
+        # Video: the OpenAI-compatible layer takes the SDK's multipart create
+        # and serves the finished video at the ``url`` its retrieve answer
+        # carries (no content endpoint, no delete).
+        media_surfaces=(image_generation_surface(), *video_surfaces()),
         display_name="Gemini",
         credential_env="GEMINI_API_KEY",
         credential_url="https://aistudio.google.com/apikey",
@@ -775,6 +788,13 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             image_generation_surface(),
             transcription_surface(),
             translation_surface(),
+            # Video create is JSON only (``seconds`` an integer); the file is
+            # served at videos/{id}/content, which takes ``variant``.
+            *video_surfaces(
+                content="videos/{id}/content",
+                encoding=MEDIA_ENCODING_JSON,
+                content_query=("variant",),
+            ),
         ),
         display_name="DeepInfra",
         credential_env="DEEPINFRA_API_KEY",

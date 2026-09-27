@@ -5426,6 +5426,7 @@ const ROUTE_PAUSE_KEY = new Map([
   ["MODEL_IMAGE", "MODEL_IMAGE_PAUSED"],
   ["MODEL_TTS", "MODEL_TTS_PAUSED"],
   ["MODEL_ASR", "MODEL_ASR_PAUSED"],
+  ["MODEL_VIDEO", "MODEL_VIDEO_PAUSED"],
 ]);
 
 /* The media rails (7.60.0+), drawn after the vision adapter: one entry per
@@ -5463,6 +5464,17 @@ const MEDIA_RAILS = [
       "to text). Only providers that declare the endpoint can answer it; a " +
       "translation skips providers that only transcribe. The uploaded audio is " +
       "re-sent whole to each model tried.",
+  },
+  {
+    modelKey: "MODEL_VIDEO",
+    chainKey: "MODEL_VIDEO_FALLBACKS",
+    tier: "video",
+    title: "Video rail",
+    note:
+      "Serves POST /v1/videos (a video is a job: submit, then poll). The rail is " +
+      "walked only until a provider accepts the job; after that, status checks, " +
+      "the download and delete go to that provider with the same key, and a job " +
+      "that later fails is never resubmitted elsewhere, so it is never billed twice.",
   },
 ];
 

@@ -12,6 +12,7 @@ Leaf module: ``config`` imports nothing first-party.
 """
 
 from dataclasses import dataclass
+from urllib.parse import quote
 
 #: The media operations MCC routes. Only image generation ships in 7.60.0;
 #: the rest arrive one release each and are named here so the vocabulary is
@@ -21,11 +22,22 @@ MEDIA_OPERATION_IMAGE_EDIT = "image_edit"
 MEDIA_OPERATION_SPEECH = "speech"
 MEDIA_OPERATION_TRANSCRIBE = "transcribe"
 MEDIA_OPERATION_TRANSLATE = "translate"
+#: 7.64.0: a video is a job. ``video_create`` is the only routed operation
+#: (the rail's chain decides who accepts it); the other three are calls on the
+#: accepted job, pinned to the provider and key that accepted it.
+MEDIA_OPERATION_VIDEO_CREATE = "video_create"
+MEDIA_OPERATION_VIDEO_RETRIEVE = "video_retrieve"
+MEDIA_OPERATION_VIDEO_CONTENT = "video_content"
+MEDIA_OPERATION_VIDEO_DELETE = "video_delete"
 
 #: Wire-shape families: one adapter per family, never per provider.
 MEDIA_SHAPE_OPENAI_IMAGES = "openai_images"
 MEDIA_SHAPE_OPENAI_SPEECH = "openai_speech"
 MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS = "openai_transcriptions"
+MEDIA_SHAPE_OPENAI_VIDEOS = "openai_videos"
+
+#: A surface whose host documents a JSON body only (``MediaSurface.encoding``).
+MEDIA_ENCODING_JSON = "json"
 
 MEDIA_OPERATIONS: tuple[str, ...] = (
     MEDIA_OPERATION_IMAGE_GENERATE,
@@ -33,11 +45,16 @@ MEDIA_OPERATIONS: tuple[str, ...] = (
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
+    MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_OPERATION_VIDEO_RETRIEVE,
+    MEDIA_OPERATION_VIDEO_CONTENT,
+    MEDIA_OPERATION_VIDEO_DELETE,
 )
 MEDIA_SHAPES: tuple[str, ...] = (
     MEDIA_SHAPE_OPENAI_IMAGES,
     MEDIA_SHAPE_OPENAI_SPEECH,
     MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
+    MEDIA_SHAPE_OPENAI_VIDEOS,
 )
 
 
@@ -64,6 +81,17 @@ class MediaSurface:
     #: a format outside a declared list skips this surface uncharged (user
     #: decision 9: no transcoding); with no list the host judges the name.
     formats: tuple[str, ...] | None = None
+    #: ``"json"`` when the host documents a JSON body only: a client's
+    #: multipart form is re-encoded as JSON, and a request carrying a file
+    #: skips this surface uncharged (a file cannot go where only JSON is
+    #: documented). ``None`` forwards the client's own encoding.
+    encoding: str | None = None
+    #: Client field -> host field, where the host names a parameter
+    #: differently (OpenRouter's ``duration`` for OpenAI's ``seconds``).
+    renames: tuple[tuple[str, str], ...] = ()
+    #: The client query parameters forwarded on this surface; any other is
+    #: dropped (DeepInfra's video content takes ``variant``).
+    query: tuple[str, ...] = ()
 
 
 def image_generation_surface(
@@ -131,6 +159,63 @@ def translation_surface(path: str = "audio/translations") -> MediaSurface:
         shape=MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
         path=path,
     )
+
+
+def video_surfaces(
+    *,
+    create: str = "videos",
+    retrieve: str = "videos/{id}",
+    content: str | None = None,
+    delete: str | None = None,
+    encoding: str | None = None,
+    renames: tuple[tuple[str, str], ...] = (),
+    content_query: tuple[str, ...] = (),
+) -> tuple[MediaSurface, ...]:
+    """The OpenAI ``/videos`` job shape: create, then calls on the job.
+
+    ``{id}`` in a path is the upstream job id (``job_path``). A host with no
+    ``content`` path serves the finished video at a URL in its retrieve
+    answer; a host with no ``delete`` path documents no delete.
+    """
+
+    surfaces = [
+        MediaSurface(
+            operation=MEDIA_OPERATION_VIDEO_CREATE,
+            shape=MEDIA_SHAPE_OPENAI_VIDEOS,
+            path=create,
+            encoding=encoding,
+            renames=renames,
+        ),
+        MediaSurface(
+            operation=MEDIA_OPERATION_VIDEO_RETRIEVE,
+            shape=MEDIA_SHAPE_OPENAI_VIDEOS,
+            path=retrieve,
+        ),
+    ]
+    if content is not None:
+        surfaces.append(
+            MediaSurface(
+                operation=MEDIA_OPERATION_VIDEO_CONTENT,
+                shape=MEDIA_SHAPE_OPENAI_VIDEOS,
+                path=content,
+                query=content_query,
+            )
+        )
+    if delete is not None:
+        surfaces.append(
+            MediaSurface(
+                operation=MEDIA_OPERATION_VIDEO_DELETE,
+                shape=MEDIA_SHAPE_OPENAI_VIDEOS,
+                path=delete,
+            )
+        )
+    return tuple(surfaces)
+
+
+def job_path(path: str, job_id: str) -> str:
+    """``path`` with ``{id}`` replaced by the URL-quoted upstream job id."""
+
+    return path.replace("{id}", quote(job_id, safe=""))
 
 
 def surface_for(

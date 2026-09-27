@@ -11,6 +11,11 @@ next request -- and are rebuilt, with fresh books, when the provider's resolved
 configuration changes, the way a chain save rebuilds the chat provider. A
 replaced stack is closed at shutdown rather than immediately, so a request
 still holding it finishes on the client it started with.
+
+An accepted video job is read through the same stacks (``job_client``): the
+key that accepted it is found again by its fingerprint -- never by position
+alone, since the operator may have reordered or removed keys since -- and the
+job's calls go out through that key's own leaf.
 """
 
 import dataclasses
@@ -19,12 +24,17 @@ import httpx
 from loguru import logger
 
 from my_claude_code.application.errors import UnknownProviderError
-from my_claude_code.application.media.ports import MediaProviderResolver
+from my_claude_code.application.media.executor import media_route_health_registry
+from my_claude_code.application.media.ports import (
+    MediaJobClient,
+    MediaProviderResolver,
+)
 from my_claude_code.config.constants import (
     PROVIDER_RATE_LIMIT_DEFAULT,
     PROVIDER_RATE_WINDOW_DEFAULT,
     PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
 )
+from my_claude_code.config.credential_names import credential_fingerprint
 from my_claude_code.config.credentials import mask_key_label
 from my_claude_code.config.provider_catalog import ProviderDescriptor
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -36,6 +46,7 @@ from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.runtime.config import build_provider_config
 from my_claude_code.providers.runtime.proxy_leg import ProxiedLegRateLimiter
 
+from .jobs import PinnedMediaClient
 from .key_pool import MediaKeyPool
 from .leaf import MediaLeaf, MediaNode
 from .proxy_pool import MediaProxyPool, MediaProxyRotationState
@@ -66,6 +77,28 @@ def _leaf_limiter(config: ProviderConfig, *, proxied_leg: bool) -> ProviderRateL
     )
 
 
+def _keys(config: ProviderConfig) -> tuple[str, ...]:
+    return tuple(config.api_keys or ((config.api_key,) if config.api_key else ()))
+
+
+def _pinned_key_index(
+    keys: tuple[str, ...], fingerprint: str | None, key_index: int | None
+) -> int | None:
+    """Where the key that accepted a job sits now, or ``None`` if it is gone."""
+
+    if fingerprint is not None:
+        for index, key in enumerate(keys):
+            if credential_fingerprint(key) == fingerprint:
+                return index
+        return None
+    if not keys:
+        # A keyless provider (a local host): its one leaf is the job's.
+        return 0
+    if key_index is not None and 0 <= key_index < len(keys):
+        return key_index
+    return None
+
+
 class MediaRegistry:
     """The process-wide owner of every provider's media stack."""
 
@@ -91,6 +124,43 @@ class MediaRegistry:
             self._retired.append(entry[1])
         self._entries[provider_id] = (config, node)
         return node
+
+    def key_fingerprint(
+        self, settings: Settings, provider_id: str, key_index: int | None
+    ) -> str | None:
+        """The stable id of the key at ``key_index`` (never the key itself)."""
+
+        self.resolve(provider_id, settings)
+        keys = _keys(self._entries[provider_id][0])
+        if key_index is None or not 0 <= key_index < len(keys):
+            return None
+        return credential_fingerprint(keys[key_index])
+
+    def job_client(
+        self,
+        settings: Settings,
+        provider_id: str,
+        *,
+        key_fingerprint: str | None,
+        key_index: int | None,
+        proxy_label: str | None,
+    ) -> MediaJobClient | None:
+        """The pinned client for a job; ``None`` when the key that took it is gone."""
+
+        node = self.resolve(provider_id, settings)
+        keys = _keys(self._entries[provider_id][0])
+        index = _pinned_key_index(keys, key_fingerprint, key_index)
+        if index is None:
+            return None
+        leaf = node.leaf_for(index, proxy_label)
+        if leaf is None:
+            return None
+        return PinnedMediaClient(
+            leaf,
+            key_index=index,
+            state=node.state if isinstance(node, MediaKeyPool) else None,
+            health=media_route_health_registry(settings),
+        )
 
     def node(self, provider_id: str) -> MediaNode | None:
         """The stack currently held for ``provider_id``, if one was built."""

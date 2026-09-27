@@ -3516,12 +3516,19 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Image rail</strong> on <strong>Model Config</strong> (and
                   <code>/v1/audio/speech</code> over the <strong>Speech rail</strong>,
                   <code>/v1/audio/transcriptions</code> and <code>/v1/audio/translations</code>
-                  over the <strong>Transcription rail</strong>), primary first,
+                  over the <strong>Transcription rail</strong>, <code>/v1/videos</code> over the
+                  <strong>Video rail</strong>), primary first,
                   then its fallbacks, with the same retry, key-rotation, 429, pause and proxy
                   rules as a chat chain. A <code>provider/model</code> in the request pins that
                   model; any other name uses the rail. Only providers that declare an image
                   endpoint can serve it (Gemini, xAI, Together, DeepInfra, Agnes, SiliconFlow,
                   ZenMux); any other model on the rail is skipped without being charged.
+                </p>
+                <p>
+                  A video is a job: the Video rail is walked only until a provider accepts it,
+                  and from then on every status check and the download go to that provider
+                  with the same key; a job that later fails is never resubmitted elsewhere.
+                  Video is served by Gemini, OpenRouter and DeepInfra.
                 </p>
                 <p>
                   The rail keeps health records of its own, so a model or key that fails at

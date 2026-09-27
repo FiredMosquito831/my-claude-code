@@ -26,6 +26,7 @@ proxy books by design, so none is included.
 """
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 from collections.abc import AsyncIterator, Callable
@@ -55,16 +56,21 @@ from my_claude_code.application.routing import (
 )
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_OPERATION_VIDEO_RETRIEVE,
     image_generation_surface,
+    video_surfaces,
 )
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.failures import (
+    ExecutionFailure,
     FailureKind,
     failure_kind_name,
     find_execution_failure,
 )
+from my_claude_code.core.openai_videos import parse_job
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.core.proxy_rotation import (
     PROXY_HEALTH,
@@ -85,6 +91,7 @@ from my_claude_code.providers.base import (
 )
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.media import proxy_pool as media_proxy_pool
+from my_claude_code.providers.media.jobs import PinnedMediaClient
 from my_claude_code.providers.media.key_pool import MediaKeyPool
 from my_claude_code.providers.media.leaf import MediaLeaf, MediaNode
 from my_claude_code.providers.media.proxy_pool import (
@@ -868,3 +875,300 @@ def test_the_scenarios_actually_exercise_the_rules() -> None:
     assert benched["benched"]["a/m1"] is True
     stepped = chat["a reactive 429 block makes the next request step over the provider"]
     assert [call[0] for call in stepped["calls"]] == ["a", "b", "b"]
+
+
+# ------------------------------------------------ video jobs (7.64.0)
+#
+# A video job is chat's commit point in another form: a host that accepted
+# the job holds it, the way a client that saw a stream's first words holds
+# them. Chat never re-sends a committed stream to the next model; media never
+# resubmits an accepted job. And a call on the accepted job goes out on the
+# key that took it, charged the way an attempt on that key is charged.
+
+
+class _CommitsThenFails(BaseProvider):
+    """A chat leaf whose stream reaches the client, then dies."""
+
+    def __init__(self, config: ProviderConfig, name: str, calls: list[str]) -> None:
+        super().__init__(config)
+        self._name = name
+        self._calls = calls
+
+    def preflight_stream(self, request, *, reasoning=DEFAULT_REASONING_POLICY) -> None:
+        return None
+
+    async def cleanup(self) -> None:
+        return None
+
+    async def list_model_ids(self) -> frozenset[str]:
+        return frozenset()
+
+    def throttle_remaining(self, model: str | None = None) -> float:
+        return 0.0
+
+    def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+    ) -> AsyncIterator[str]:
+        return self._stream()
+
+    async def _stream(self) -> AsyncIterator[str]:
+        self._calls.append(self._name)
+        yield (
+            "event: content_block_delta\ndata: "
+            '{"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":"ok"}}\n\n'
+        )
+        raise ExecutionFailure(
+            kind=FailureKind.UPSTREAM,
+            status_code=500,
+            message="died after the client saw it",
+            retryable=True,
+        )
+
+
+def _video_leaf(
+    provider: str,
+    config: ProviderConfig,
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> MediaLeaf:
+    return MediaLeaf(
+        provider_id=provider,
+        config=config,
+        surfaces=video_surfaces(),
+        rate_limiter=_leaf_limiter(config, proxied_leg=False),
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def _video_attempt(provider: str, model: str) -> MediaAttempt:
+    return MediaAttempt(
+        MediaRequest(
+            operation=MEDIA_OPERATION_VIDEO_CREATE,
+            rail=MediaRail.VIDEO,
+            model="client-model",
+            body={"prompt": "p"},
+        ),
+        _resolved(provider, model),
+    )
+
+
+def test_video_pin_after_accept_matches_chat_commit() -> None:
+    """Accepted is committed: neither engine sends the work to the next model.
+
+    Chat: a streaming answer whose first words reached the client and which
+    then dies is not re-sent to ``b`` (the Messages-only continuation,
+    ``FALLBACK_RESUME_AFTER_COMMIT``, is off: it has no media meaning).
+    Media-only part, stated: the job ``a`` accepted is then read on ``a``
+    alone; its poll reporting ``failed`` -- or failing outright -- is the
+    answer, and ``b`` never receives a create.
+    """
+    chat_calls: list[str] = []
+    chat_nodes = {
+        name: _CommitsThenFails(_config(name, ProviderSpec()), name, chat_calls)
+        for name in ("a", "b")
+    }
+    chat = ProviderExecutor(
+        lambda provider_id: chat_nodes[provider_id],
+        policy=RouteExecutionPolicy(resume_after_commit=False),
+        health=RouteHealthRegistry(),
+    )
+    plan = RoutedMessagesPlan(
+        tuple(
+            RoutedMessagesRequest(
+                request=MessagesRequest(
+                    model=model,
+                    messages=[Message(role="user", content="p")],
+                    stream=True,
+                ),
+                resolved=_resolved(provider, model),
+                reasoning=ReasoningPolicy.on(),
+                requested_reasoning=ReasoningPolicy.on(),
+                reasoning_adaptation=ReasoningAdaptation(
+                    ReasoningAdaptationKind.UNCHANGED, None
+                ),
+            )
+            for provider, model in (("a", "m1"), ("b", "m2"))
+        )
+    )
+
+    creates: list[str] = []
+    polls = iter(
+        [
+            httpx.Response(200, json={"id": "job-a", "status": "failed"}),
+            httpx.Response(500, json={"error": {"message": "still broken"}}),
+        ]
+    )
+
+    def media_handler(name: str) -> Callable[[httpx.Request], httpx.Response]:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                creates.append(name)
+                return httpx.Response(
+                    200, json={"id": f"job-{name}", "status": "processing"}
+                )
+            return next(polls)
+
+        return handler
+
+    leaves = {
+        name: _video_leaf(name, _config(name, ProviderSpec()), media_handler(name))
+        for name in ("a", "b")
+    }
+    media = MediaExecutor(
+        lambda provider_id: leaves[provider_id], health=RouteHealthRegistry()
+    )
+    video_plan = MediaPlan(
+        attempts=(_video_attempt("a", "m1"), _video_attempt("b", "m2"))
+    )
+    statuses: list[str | None] = []
+    poll_errors: list[str | None] = []
+
+    async def run() -> None:
+        install_attribution()
+        # However the committed stream ends (cleanly or raised), it is not re-sent.
+        with contextlib.suppress(Exception):
+            async for _chunk in chat.stream(
+                plan,
+                wire_api="chat_completions",
+                raw_log_label="X",
+                raw_log_payload={},
+                request_id="parity",
+            ):
+                pass
+        install_attribution()
+        async for chunk in media.execute(video_plan, request_id="parity"):
+            assert not isinstance(chunk, bytes)
+            accepted = parse_job(chunk.body)
+            assert accepted is not None
+            assert accepted.id == "job-a"
+        pinned = PinnedMediaClient(
+            leaves["a"], key_index=0, state=None, health=RouteHealthRegistry()
+        )
+        answer = await pinned.call(
+            MEDIA_OPERATION_VIDEO_RETRIEVE, "job-a", model="m1", request_id="parity"
+        )
+        polled = parse_job(answer.body)
+        statuses.append(None if polled is None else polled.status)
+        try:
+            await pinned.call(
+                MEDIA_OPERATION_VIDEO_RETRIEVE,
+                "job-a",
+                model="m1",
+                request_id="parity",
+            )
+        except Exception as exc:
+            poll_errors.append(failure_kind_name(exc))
+        for leaf in leaves.values():
+            await leaf.cleanup()
+
+    asyncio.run(run())
+    assert chat_calls == ["a"]
+    assert creates == ["a"]
+    assert statuses == ["failed"]
+    assert poll_errors == [FailureKind.UPSTREAM.value]
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        status(429, "slow down", **{"retry-after": "30"}),
+        status(401, "invalid api key"),
+    ],
+    ids=["429", "401"],
+)
+def test_pinned_poll_charges_key_books_like_a_chat_attempt(refusal: Outcome) -> None:
+    """The same refusal on key 0 leaves the same record of key 0 on both books.
+
+    Chat: one attempt on key 0 (a 429 benches the (key, model) pair and stops;
+    a 401 locks the key out and the pool moves on to key 1). Media: the job
+    was accepted on key 0 -- one request on that key, as chat's attempt is --
+    and one pinned poll on key 0 is refused the same way. Media-only part,
+    stated: the poll never moves to key 1 (the job exists only on key 0), so
+    after a 401 key 1's record differs from chat's by exactly the request chat
+    sent it, and media makes no second call.
+    """
+    spec = ProviderSpec(keys=2, cooldown=2.0)
+    chat_script = Script({("a", "m1", 0, None): [refusal]})
+    chat_provider, chat_state = _chat_provider(chat_script, "a", spec)
+    assert chat_state is not None
+
+    config = _config("a", spec)
+    media_calls: list[tuple[str, int]] = []
+
+    def media_handler(key: int) -> Callable[[httpx.Request], httpx.Response]:
+        def handler(request: httpx.Request) -> httpx.Response:
+            media_calls.append((request.method, key))
+            if request.method == "POST":
+                return httpx.Response(
+                    200, json={"id": f"job-{key}", "status": "queued"}
+                )
+            return httpx.Response(
+                refusal.status,
+                json={"error": {"message": refusal.message}},
+                headers=dict(refusal.headers),
+            )
+
+        return handler
+
+    media_state = _key_state(config, 2)
+    pool = MediaKeyPool(
+        [
+            _video_leaf("a", sub, media_handler(index))
+            for index, sub in enumerate(_per_key(config))
+        ],
+        media_state,
+        key_labels=("k0", "k1"),
+        provider_id="a",
+        routes_around_model=config.routes_around_model,
+    )
+    books: dict[str, Any] = {}
+
+    async def run() -> None:
+        install_attribution()
+        request = MessagesRequest(
+            model="m1", messages=[Message(role="user", content="p")], stream=False
+        )
+        with contextlib.suppress(Exception):
+            async for _chunk in chat_provider.stream_response(
+                request, request_id="parity"
+            ):
+                pass
+        books["chat"] = _key_books(chat_state)
+
+        install_attribution()
+        async for _chunk in pool.execute(
+            _video_attempt("a", "m1"), request_id="parity"
+        ):
+            pass
+        leaf = pool.leaf_for(0, None)
+        assert leaf is not None
+        pinned = PinnedMediaClient(
+            leaf, key_index=0, state=media_state, health=RouteHealthRegistry()
+        )
+        with pytest.raises(ExecutionFailure):
+            await pinned.call(
+                MEDIA_OPERATION_VIDEO_RETRIEVE, "job-0", model="m1", request_id="parity"
+            )
+        books["media"] = _key_books(media_state)
+        await pool.cleanup()
+        await chat_provider.cleanup()
+
+    asyncio.run(run())
+    chat_books, media_books = books["chat"], books["media"]
+    assert media_books[0] == chat_books[0], "key 0's record diverged"
+    assert media_calls == [("POST", 0), ("GET", 0)], "the pinned poll moved"
+    untouched = _key_books(_key_state(config, 2))
+    assert untouched is not None
+    assert media_books[1] == untouched[1]
+    if refusal.status == 429:
+        assert media_books == chat_books
+        assert chat_books[0][7] == ("m1",)
+        assert [call[2] for call in chat_script.calls] == [0]
+    else:
+        assert chat_books[0][6] is True, "a 401 locks the key out on both books"
+        assert [call[2] for call in chat_script.calls] == [0, 1]

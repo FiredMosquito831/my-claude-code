@@ -11,10 +11,14 @@ chat leaf would have raised for the same answer.
 
 The limiter is a fresh instance, never the chat leaf's: media owns its own
 books (user decision 2026-09-26 03:38 #4).
+
+A video create is accepted only when the host names the job: a 2xx without a
+job id is raised as an upstream failure here, so the executor charges the
+model and falls back exactly as for any other failed attempt.
 """
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Protocol
 
 import httpx
@@ -28,10 +32,14 @@ from my_claude_code.application.media.request import (
 )
 from my_claude_code.config.credentials import mask_key_label
 from my_claude_code.config.media_surfaces import (
+    MEDIA_ENCODING_JSON,
+    MEDIA_OPERATION_VIDEO_CREATE,
     MediaSurface,
     media_url,
     surface_for,
 )
+from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.core.openai_videos import parse_job
 from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
@@ -50,6 +58,14 @@ class MediaNode(MediaProviderPort, Protocol):
     """A media provider the registry can close."""
 
     async def cleanup(self) -> None: ...
+
+    def leaf_for(self, key_index: int, proxy_label: str | None) -> MediaLeaf | None:
+        """The leaf behind key ``key_index`` and proxy leg ``proxy_label``.
+
+        What a pinned call on an accepted job goes out through; ``None`` when
+        this node has no such key.
+        """
+        ...
 
 
 class MediaLeaf:
@@ -87,6 +103,26 @@ class MediaLeaf:
         key = self._config.api_key
         return mask_key_label(key) if key else None
 
+    @property
+    def provider_id(self) -> str:
+        return self._provider_id
+
+    @property
+    def config(self) -> ProviderConfig:
+        return self._config
+
+    @property
+    def surfaces(self) -> tuple[MediaSurface, ...]:
+        return self._surfaces
+
+    @property
+    def rate_limiter(self) -> ProviderRateLimiter:
+        return self._rate_limiter
+
+    def leaf_for(self, key_index: int, proxy_label: str | None) -> MediaLeaf | None:
+        """One key, one address: itself, for the only key it has."""
+        return self if key_index == 0 else None
+
     def throttle_remaining(self, model: str | None = None) -> float:
         return self._rate_limiter.remaining_wait()
 
@@ -98,6 +134,9 @@ class MediaLeaf:
         if surface is None:
             return False
         if request.stream and not surface.stream:
+            return False
+        # A file cannot be sent where the host documents JSON only.
+        if request.uploads and surface.encoding == MEDIA_ENCODING_JSON:
             return False
         # A format the client NAMED and the host does not document is a
         # format this host cannot produce: skipped uncharged, never
@@ -141,7 +180,42 @@ class MediaLeaf:
                 headers=headers,
                 content=json.dumps(body.json or {}).encode(),
             )
-        response = await self._client.send(request, stream=stream)
+        return await self._checked(request, stream)
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        auth: bool,
+        stream: bool,
+        params: Mapping[str, str] | None = None,
+    ) -> httpx.Response:
+        """A body-less call (GET, DELETE) on a job; refusals read like ``_send``'s.
+
+        ``auth`` is decided by the caller: a key is only ever sent to the
+        provider's own host. A GET follows redirects (a finished video's
+        address commonly redirects to storage); httpx drops the
+        ``Authorization`` header when a redirect leaves the origin, so the key
+        still never reaches another host.
+        """
+        headers: dict[str, str] = {}
+        if auth and self._config.api_key:
+            headers["Authorization"] = f"Bearer {self._config.api_key}"
+        request = self._client.build_request(
+            method, url, headers=headers, params=dict(params) if params else None
+        )
+        return await self._checked(
+            request, stream, follow_redirects=method.upper() == "GET"
+        )
+
+    async def _checked(
+        self, request: httpx.Request, stream: bool, *, follow_redirects: bool = False
+    ) -> httpx.Response:
+        """Send; a refusal is read whole and raised as ``HTTPStatusError``."""
+        response = await self._client.send(
+            request, stream=stream, follow_redirects=follow_redirects
+        )
         if response.status_code >= 400:
             error = await read_error_body(response)
             await response.aclose()
@@ -186,6 +260,8 @@ class MediaLeaf:
                     cooldown=self._config.rate_limit_cooldown(),
                     mark_rate_limited_enabled=not self._config.routes_around_model,
                 ) from error
+            if attempt.request.operation == MEDIA_OPERATION_VIDEO_CREATE:
+                self._require_job_id(response)
             if not stream:
                 yield MediaResponse(
                     status_code=response.status_code,
@@ -206,3 +282,22 @@ class MediaLeaf:
                         yield raw
             finally:
                 await response.aclose()
+
+    def _require_job_id(self, response: httpx.Response) -> None:
+        """A video create is accepted only when the answer names the job.
+
+        A 2xx without a string ``id`` is no job anyone can poll: raised as an
+        upstream failure so the model is charged and the chain moves on --
+        it is not acceptance.
+        """
+        job = parse_job(response.content)
+        if job is None or job.id is None:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message=(
+                    f"{self._provider_id} answered the video request without a "
+                    "job id; not accepted"
+                ),
+                retryable=False,
+            )

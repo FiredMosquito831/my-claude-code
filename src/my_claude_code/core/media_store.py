@@ -18,6 +18,7 @@ import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 #: File extension per MIME type. Anything else is stored as ``.bin``.
 _EXTENSIONS: dict[str, str] = {
@@ -92,6 +93,74 @@ def write_media_file(root: Path, sha256: str, mime: str | None, data: bytes) -> 
             os.unlink(temp_name)
         return False
     return True
+
+
+class MediaFileTee:
+    """Hash -- and, when a root is given, store -- a file while it streams past.
+
+    For a video served straight from the host to the client: the bytes are
+    never held whole. Each batch is fed from a worker thread (``feed``), the
+    temporary file sits in the media root, and ``finish`` renames it to its
+    content address once the last byte has passed -- or ``abort`` removes it
+    when the stream did not complete, so no partial file ever gets a name.
+    """
+
+    def __init__(self, root: Path | None) -> None:
+        self._digest = hashlib.sha256()
+        self.size = 0
+        self._root = root
+        self._temp: Path | None = None
+        self._stream: IO[bytes] | None = None
+        if root is not None:
+            root.mkdir(parents=True, exist_ok=True)
+            handle, name = tempfile.mkstemp(dir=root, suffix=".part")
+            self._temp = Path(name)
+            self._stream = os.fdopen(handle, "wb")
+
+    def feed(self, data: bytes) -> None:
+        self._digest.update(data)
+        self.size += len(data)
+        stream = self._stream
+        if stream is not None:
+            try:
+                stream.write(data)
+            except OSError:
+                # Measuring goes on; only the copy is given up.
+                self.abort()
+
+    def finish(self, mime: str | None) -> tuple[str, bool]:
+        """The content address, and whether the file is now stored under it."""
+        sha = self._digest.hexdigest()
+        stream, temp, root = self._stream, self._temp, self._root
+        self._stream = None
+        self._temp = None
+        if stream is None or temp is None or root is None:
+            return sha, False
+        try:
+            stream.close()
+            target = media_file_path(root, sha, mime)
+            if target.exists():
+                temp.unlink()
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(temp, target)
+        except OSError:
+            with contextlib.suppress(OSError):
+                temp.unlink()
+            return sha, False
+        return sha, True
+
+    def abort(self) -> None:
+        """Drop the partial copy, if any. Safe to call more than once."""
+        stream, temp = self._stream, self._temp
+        self._stream = None
+        self._temp = None
+        if stream is not None:
+            with contextlib.suppress(OSError):
+                stream.close()
+        if temp is not None:
+            with contextlib.suppress(OSError):
+                temp.unlink()
 
 
 def delete_media_files(root: Path, shas: Iterable[str]) -> int:

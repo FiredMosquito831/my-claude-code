@@ -40,7 +40,7 @@ from my_claude_code.providers.credential_rotation import (
 )
 from my_claude_code.providers.http import maybe_await_aclose
 
-from .leaf import MediaNode
+from .leaf import MediaLeaf, MediaNode
 
 
 class MediaKeyPool:
@@ -103,6 +103,12 @@ class MediaKeyPool:
 
     def supports(self, request: MediaRequest) -> bool:
         return self._providers[0].supports(request)
+
+    def leaf_for(self, key_index: int, proxy_label: str | None) -> MediaLeaf | None:
+        """Key ``key_index``'s own leaf (on its leg ``proxy_label``), or ``None``."""
+        if not 0 <= key_index < len(self._providers):
+            return None
+        return self._providers[key_index].leaf_for(0, proxy_label)
 
     def preflight(self, attempt: MediaAttempt) -> None:
         self._providers[0].preflight(attempt)

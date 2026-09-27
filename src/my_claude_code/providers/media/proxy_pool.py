@@ -48,7 +48,7 @@ from my_claude_code.providers.base import ProxyChainPlan
 from my_claude_code.providers.http import maybe_await_aclose
 from my_claude_code.providers.runtime.proxy_rotating import proxy_reachability_failure
 
-from .leaf import MediaNode
+from .leaf import MediaLeaf, MediaNode
 
 #: Media's own reachability bench. Same ladder as chat's, separate records.
 MEDIA_PROXY_REACHABILITY = ReachabilityLedger()
@@ -345,6 +345,30 @@ class MediaProxyPool:
 
     def supports(self, request: MediaRequest) -> bool:
         return self._pool.get(0).supports(request)
+
+    def leaf_for(self, key_index: int, proxy_label: str | None) -> MediaLeaf | None:
+        """The leg an accepted job was created through, found by its label.
+
+        The direct label is the direct leg; a label no longer in the chain
+        (the operator edited it) falls back to the first leg, said in a log
+        line -- the job belongs to the key, and the key is still here.
+        """
+        if key_index != 0:
+            return None
+        if proxy_label in self._labels:
+            index = self._labels.index(proxy_label)
+        elif proxy_label == DIRECT_PROXY_LABEL:
+            index = self._direct_index
+        else:
+            if proxy_label is not None:
+                logger.info(
+                    "MEDIA JOB: proxy leg {!r} is no longer in {}'s chain; "
+                    "reading the job through the first leg",
+                    proxy_label,
+                    self._provider_id,
+                )
+            index = 0
+        return self._pool.get(index).leaf_for(0, proxy_label)
 
     def preflight(self, attempt: MediaAttempt) -> None:
         self._pool.get(0).preflight(attempt)
