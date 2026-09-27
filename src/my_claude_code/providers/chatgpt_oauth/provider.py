@@ -4,6 +4,7 @@ import asyncio
 import platform
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -50,26 +51,34 @@ from my_claude_code.providers.http import error_response_headers, read_error_bod
 from my_claude_code.providers.oauth_names import account_name
 from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
+    alias_responses_body_tool_names,
     history_thinking_marker,
+    responses_tool_name_codec,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
+    RUNG_TOOL_NAME_LENGTH,
     RUNG_TOOL_SCHEMA,
     RUNG_TOOLS_COUNT,
     ReasoningStripRecovery,
     RecoveryLadder,
+    RecoveryRung,
     SchemaKeywordRefusal,
     ToolSchemaRefusalRecovery,
     ToolsCountRefusalRecovery,
     apply_learned_tool_schema_refusals,
     apply_tools_max_count,
+    complaint_evidence_snippet,
     effective_tools_max_count,
     learned_fact_store,
     merge_tool_schema_markers,
     merge_tools_trimmed_markers,
     refusal_from_detail,
+    refuses_tool_name_length_unstated,
+    stated_tool_name_max_length,
     tool_schema_recovery,
     tools_count_recovery,
+    upstream_complaint,
 )
 from my_claude_code.providers.runtime.served_models import resolve_served_models
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
@@ -109,6 +118,76 @@ CHATGPT_OAUTH_DEFAULT_BASE = "https://chatgpt.com/backend-api"
 #: backend opinion, so both share one set of facts.
 CHATGPT_OAUTH_PROVIDER_ID = "chatgpt_oauth"
 CHATGPT_OAUTH_PROVIDER_IDS: tuple[str, ...] = (CHATGPT_OAUTH_PROVIDER_ID, "openai")
+
+
+@dataclass(frozen=True, slots=True)
+class ToolNameLengthRecovery:
+    """The tool-name rung on this backend's own ladder (7.59.0).
+
+    This backend declares no tool-name ceiling -- it accepted 76-character
+    names (300 of 300, 7.18.1) -- and it *states* one when it refuses: 42
+    logged 400s on 2026-08-23 read "Invalid 'input[62].name': string too long.
+    Expected a string with maximum length 128, but got a string with length
+    252". So the number comes from the host's own words
+    (:func:`stated_tool_name_max_length`), never from a default: a refusal
+    that states no number is raised exactly as it was, and says so in the
+    log. The rewrite is the 7.23.0 one -- the Responses codec under the stated
+    ceiling, over the request's names, applied to the tools, a forced
+    ``tool_choice`` and every replayed ``function_call`` -- imported, not
+    copied.
+
+    Built per request because the codec is the request's. ``applied_limit``
+    is the ceiling this body was already aliased under (a learned one): the
+    rung then stands aside, because re-aliasing an alias would leave the
+    stream decoding the wrong name.
+    """
+
+    request: MessagesRequest
+    applied_limit: int | None
+    log_tag: str
+    kind: str = RUNG_TOOL_NAME_LENGTH
+
+    def rung(self) -> RecoveryRung:
+        return RecoveryRung(kind=self.kind, apply=self)
+
+    def __call__(
+        self, error: Exception, body: dict[str, Any]
+    ) -> tuple[dict[str, Any], str | None] | None:
+        stated = stated_tool_name_max_length(error)
+        if stated is None:
+            if refuses_tool_name_length_unstated(error):
+                logger.warning(
+                    "{}: the host refused a tool name as too long without stating "
+                    "a limit -- no limit is guessed; the refusal stands ({})",
+                    self.log_tag,
+                    complaint_evidence_snippet(upstream_complaint(error)),
+                )
+            return None
+        if self.applied_limit is not None:
+            logger.warning(
+                "{}: the host states tool names must be at most {} characters, "
+                "but this body is already aliased under the learned {} -- not "
+                "retried; Forget that fact on the Models page to re-learn it",
+                self.log_tag,
+                stated,
+                self.applied_limit,
+            )
+            return None
+        codec = responses_tool_name_codec(self.request, stated)
+        retry = (
+            alias_responses_body_tool_names(body, codec) if codec is not None else None
+        )
+        if retry is None:
+            return None
+        logger.warning(
+            "{}: host states tool names must be at most {} characters -- "
+            "retrying once ({})",
+            self.log_tag,
+            stated,
+            complaint_evidence_snippet(upstream_complaint(error)),
+        )
+        return retry, None
+
 
 #: Last resort, and nothing else: the five ids Codex CLI 0.151.0 publishes with
 #: ``visibility: "list"``. It exists so a brand-new offline install with no
@@ -518,23 +597,8 @@ class ChatGPTOAuthProvider(BaseProvider):
         self._recovery_memory = learned_fact_store().memory_for(
             CHATGPT_OAUTH_PROVIDER_ID
         )
-        # Three rungs, schema first. This backend does not go through
-        # ``ResponsesTransport._send_with_recovery`` -- it has its own client
-        # and this ladder -- so the recovery has to be registered here as well
-        # as there, and one more entry in this tuple is the whole of it. The
-        # order is the ladder's own rule: the schema refusal carries a
-        # machine-readable ``code`` and rewrites nothing the model can see,
-        # while a reasoning strip removes an instruction the request meant.
-        # The tools-count cut sits between them: its ``code`` is as
-        # machine-readable and its number is stated, but it does take tools
-        # the model could have called off the table, so it never goes first.
-        self._recovery_ladder = RecoveryLadder(
-            (
-                ToolSchemaRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
-                ToolsCountRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
-                ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
-            )
-        )
+        # The recovery ladder is built per request (:meth:`_recovery_ladder_for`)
+        # since 7.59.0: its tool-name rung aliases the names of *that* request.
         # What this backend's validator refuses in a tool schema, swept at
         # conversion before the first send so the constructs already known
         # never cost a 400 at all. Held per instance rather than read off the
@@ -706,11 +770,17 @@ class ChatGPTOAuthProvider(BaseProvider):
         # row this request writes -- the swept body is what every attempt
         # sends, so every attempt says so.
         declared_marker: dict[str, str] = {}
+        # A tool-name ceiling this backend has stated before, or ``None`` --
+        # nothing declared, nothing learned -- which builds every byte the
+        # body had before 7.59.0. Read per request so a *Forget* on the Models
+        # page reaches the very next one.
+        name_limit = self._tool_name_max_length()
         body = build_chatgpt_oauth_request_body(
             request,
             reasoning=reasoning,
             tool_schema_dialect=self._tool_schema_dialect,
             wire_notes=declared_marker,
+            tool_name_max_length=name_limit,
         )
         url = f"{self._base_url}/codex/responses"
         headers = _build_headers(credentials, self._session_id)
@@ -740,11 +810,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                 input_tokens,
                 log_raw_events=self._config.log_raw_sse_events,
             )
-            converter = ChatGPTOAuthStreamConverter(
-                ledger,
-                log_raw_events=self._config.log_raw_sse_events,
-                output_reasoning=reasoning.output_enabled,
-            )
+            ladder = self._recovery_ladder_for(request, name_limit)
 
             async with self._rate_limiter.concurrency_slot():
                 try:
@@ -754,6 +820,12 @@ class ChatGPTOAuthProvider(BaseProvider):
                     # Per attempt chain: a rung fires at most once, and the
                     # refusal is only written down once the retry is accepted.
                     used_retry_kinds: set[str] = set()
+                    # The tool-name ceiling the accepted body was aliased
+                    # under, and one this backend stated in this chain --
+                    # written down only once the aliased body was accepted.
+                    accepted_name_limit = name_limit
+                    pending_name_limit: int | None = None
+                    name_evidence = ""
                     stripped_reasoning: str | None = None
                     stripped_evidence = ""
                     # The effort words that same 400 proved refused, if any.
@@ -849,7 +921,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                         except ApplicationUnavailableError:
                             raise
                         except Exception as error:
-                            recovered = self._recovery_ladder.next_body(
+                            recovered = ladder.next_body(
                                 error, attempt_body, used_retry_kinds
                             )
                             if recovered.body is None:
@@ -879,6 +951,15 @@ class ChatGPTOAuthProvider(BaseProvider):
                                     count_marker = merge_tools_trimmed_markers(
                                         count_base, count.marker
                                     )
+                            if recovered.kind == RUNG_TOOL_NAME_LENGTH:
+                                # Recomputed for the same reason as above: the
+                                # number the rung aliased under is the one the
+                                # stream must decode with.
+                                stated = stated_tool_name_max_length(error)
+                                if stated is not None:
+                                    pending_name_limit = stated
+                                    name_evidence = recovered.evidence
+                                    accepted_name_limit = stated
                             # Carried on the *retry* row, so the ladder in the
                             # modal reads "400 ... / 200 (responses_tool_schema)"
                             # and the operator can see which rewrite the second
@@ -897,6 +978,10 @@ class ChatGPTOAuthProvider(BaseProvider):
                         )
                     if pending_count is not None:
                         self._remember_tools_max_count(pending_count, count_evidence)
+                    if pending_name_limit is not None:
+                        self._remember_tool_name_limit(
+                            pending_name_limit, name_evidence
+                        )
                     if stripped_reasoning is not None:
                         self._remember_reasoning_rejection(
                             attempt_body,
@@ -924,6 +1009,18 @@ class ChatGPTOAuthProvider(BaseProvider):
                                 f"ChatGPT OAuth API error {response.status_code}"
                             )
 
+                        # Built once the body is accepted, from the ceiling
+                        # that body was aliased under: decoding has to undo
+                        # exactly the encoding that went out. ``None`` (no
+                        # ceiling) decodes nothing, as before 7.59.0.
+                        converter = ChatGPTOAuthStreamConverter(
+                            ledger,
+                            log_raw_events=self._config.log_raw_sse_events,
+                            output_reasoning=reasoning.output_enabled,
+                            tool_names=responses_tool_name_codec(
+                                request, accepted_name_limit
+                            ),
+                        )
                         yield ledger.message_start()
                         shape = start_response_shape()
                         async for event in iter_chatgpt_oauth_sse_events(
@@ -1002,6 +1099,59 @@ class ChatGPTOAuthProvider(BaseProvider):
         if source == "learned":
             return cap, "learned from this host"
         return cap, ""
+
+    def _recovery_ladder_for(
+        self, request: MessagesRequest, applied_name_limit: int | None
+    ) -> RecoveryLadder:
+        """This request's recovery ladder: four rungs, schema first.
+
+        This backend does not go through ``ResponsesTransport._send_with_recovery``
+        -- it has its own client and this ladder -- so each recovery is
+        registered here as well as there. The order is the ladder's own rule:
+        the schema refusal carries a machine-readable ``code`` and rewrites
+        nothing the model can see, while a reasoning strip removes an
+        instruction the request meant. The tools-count cut comes next (its
+        ``code`` is as machine-readable and its number is stated, but it takes
+        tools off the table), then the tool-name ceiling (a number the host
+        stated; it renames, never removes), and the reasoning strip last.
+        """
+
+        return RecoveryLadder(
+            (
+                ToolSchemaRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+                ToolsCountRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+                ToolNameLengthRecovery(
+                    request,
+                    applied_limit=applied_name_limit,
+                    log_tag="CHATGPT_OAUTH_STREAM",
+                ).rung(),
+                ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+            )
+        )
+
+    def _tool_name_max_length(self) -> int | None:
+        """The longest tool name this backend accepts, or ``None`` for no limit.
+
+        Declared: none. Learned: the number this backend stated in a refusal
+        MCC recovered from (``responses_tool_name_max_length``, provider-wide,
+        30 days). ``None`` -- until the host says otherwise -- sends every
+        name as the client wrote it. Read off the memory per request so a
+        *Forget* reaches the very next one.
+        """
+
+        return self._recovery_memory.responses_tool_name_max_length
+
+    def _remember_tool_name_limit(self, limit: int, evidence: str) -> None:
+        """Write down a tool-name ceiling the aliased body has just proven."""
+
+        learned = self._recovery_memory.learn_responses_tool_name_limit(
+            limit, evidence=evidence
+        )
+        logger.warning(
+            "CHATGPT_OAUTH_STREAM: this host caps tool names at {} -- later "
+            "requests alias from the first try",
+            learned,
+        )
 
     def _remember_tools_max_count(self, limit: int, evidence: str) -> None:
         """Write down a tools-count ceiling the cut catalogue has just proven."""

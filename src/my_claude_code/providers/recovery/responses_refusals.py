@@ -37,6 +37,12 @@ from my_claude_code.core.anthropic.openai_tool_names import (
 
 from .complaint import is_bad_request, upstream_complaint
 
+#: The ladder word for a retry whose body aliased tool names down to the
+#: ceiling the host stated. Shared by ``ResponsesTransport`` and
+#: ``chatgpt_oauth``, which registers the same recovery on its own ladder
+#: (7.59.0): one word for one event, whichever sender paid for it.
+RUNG_TOOL_NAME_LENGTH = "responses_tool_name_length"
+
 #: "at most 64 characters", "maximum length of 64", "64 characters or fewer".
 #: The number is what the host stated; the phrasings are the ones a strict
 #: JSON-schema validator and a hand-written check both produce.
@@ -46,6 +52,12 @@ _NAME_LENGTH_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(\d{1,4}) characters or (?:fewer|less)"),
     re.compile(r"longer than (\d{1,4}) characters"),
     re.compile(r"max(?:imum)?[ _]?length[\"']?\s*[:=]\s*(\d{1,4})"),
+    # 7.59.0: the ChatGPT/Codex backend's own validator (42 logged 400s on
+    # 2026-08-23): "Invalid 'input[62].name': string too long. Expected a
+    # string with maximum length 128, but got a string with length 252
+    # instead." Last, so every wording the patterns above already read is
+    # read exactly as before.
+    re.compile(r"maximum length (\d{1,4})"),
 )
 
 #: The complaint has to be *about* a length. Without this a 400 that named the
@@ -86,6 +98,53 @@ def rejected_tool_name_max_length(error: Exception) -> int | None:
     would trade a visible failure for a tool the model cannot identify.
     """
 
+    complaint = _tool_name_length_complaint(error)
+    if complaint is None:
+        return None
+    stated = _stated_number(complaint)
+    if stated is None:
+        return OPENAI_TOOL_NAME_MAX_LENGTH
+    if stated < MIN_TOOL_NAME_MAX_LENGTH:
+        return None
+    return stated
+
+
+def stated_tool_name_max_length(error: Exception) -> int | None:
+    """The tool-name ceiling this 400 states in its own words, or ``None``.
+
+    The strict half of :func:`rejected_tool_name_max_length`, for a host that
+    declares no ceiling of its own: the number is the host's or there is no
+    number. A length complaint whose number cannot be read is ``None`` here --
+    never the OpenAI 64 -- because a ceiling nobody stated is an invented
+    limit (``chatgpt_oauth`` accepts 76-character names and refused 252).
+    A stated number below :data:`MIN_TOOL_NAME_MAX_LENGTH` is ``None`` for
+    the same reason it is there.
+    """
+
+    complaint = _tool_name_length_complaint(error)
+    if complaint is None:
+        return None
+    stated = _stated_number(complaint)
+    if stated is None or stated < MIN_TOOL_NAME_MAX_LENGTH:
+        return None
+    return stated
+
+
+def refuses_tool_name_length_unstated(error: Exception) -> bool:
+    """Whether this 400 refuses a tool name as too long without saying how long.
+
+    The case :func:`stated_tool_name_max_length` answers ``None`` for and a
+    caller that sets no ceiling of its own still wants to *say*: the refusal
+    is raised as it was, and this lets the log name why nothing was retried.
+    """
+
+    complaint = _tool_name_length_complaint(error)
+    return complaint is not None and _stated_number(complaint) is None
+
+
+def _tool_name_length_complaint(error: Exception) -> str | None:
+    """The complaint text, when this 400 is about a tool name's length."""
+
     if not is_bad_request(error):
         return None
     complaint = upstream_complaint(error)
@@ -96,15 +155,17 @@ def rejected_tool_name_max_length(error: Exception) -> int | None:
         # ``name`` of its own, so a length complaint about it is not a
         # statement about the tool catalogue.
         return None
+    return complaint
+
+
+def _stated_number(complaint: str) -> int | None:
+    """The first ceiling a known wording states, or ``None`` if none is read."""
+
     for pattern in _NAME_LENGTH_PATTERNS:
         match = pattern.search(complaint)
-        if match is None:
-            continue
-        stated = int(match.group(1))
-        if stated < MIN_TOOL_NAME_MAX_LENGTH:
-            return None
-        return stated
-    return OPENAI_TOOL_NAME_MAX_LENGTH
+        if match is not None:
+            return int(match.group(1))
+    return None
 
 
 def is_tool_choice_auto_only(error: Exception) -> bool:

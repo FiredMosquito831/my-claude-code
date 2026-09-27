@@ -62,6 +62,7 @@ from my_claude_code.providers.openai_responses import (
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
+    RUNG_TOOL_NAME_LENGTH,
     RUNG_TOOL_SCHEMA,
     RUNG_TOOLS_COUNT,
     RecoveryMemory,
@@ -99,7 +100,7 @@ PROBE_PROMPT = "hi"
 
 #: The three rungs this surface adds, named once so the ladder row, the log
 #: line and the learning all agree on the word the operator reads.
-_RUNG_TOOL_NAME_LENGTH = "responses_tool_name_length"
+_RUNG_TOOL_NAME_LENGTH = RUNG_TOOL_NAME_LENGTH
 _RUNG_TOOL_CHOICE = "responses_tool_choice"
 #: Shared with ``chatgpt_oauth``, which registers the same recovery on its own
 #: ladder: one word for one event, whichever of the two senders paid for it.
