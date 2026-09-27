@@ -17,10 +17,27 @@ RecordToolExtraContent = Callable[[str, dict[str, Any]], None]
 
 
 def iter_heuristic_tool_use_sse(
-    ledger: AnthropicStreamLedger, tool_use: dict[str, Any]
+    ledger: AnthropicStreamLedger,
+    tool_use: dict[str, Any],
+    *,
+    tool_names: OpenAIToolNameCodec | None = None,
 ) -> Iterator[str]:
-    """Emit SSE for one heuristic tool_use block."""
-    if tool_use.get("name") == "Task" and isinstance(tool_use.get("input"), dict):
+    """Emit SSE for one heuristic tool_use block.
+
+    ``tool_names`` is the codec the request body was encoded with -- the very
+    object :class:`OpenAIToolCallAssembler` decodes structured ``tool_calls``
+    with. A model that writes its call as text (``● <function=read>``) names
+    the tool by the only spelling it was shown, the wire one, so the name is
+    decoded here exactly as a structured call's is: an alias or a catalogue
+    spelling comes back as the client's own name, and a name the codec did
+    not generate -- a stand-in, or one nobody declared -- passes through
+    unchanged. Only the name: the parameters are the model's, keyed as the
+    client's schema keys them, and are emitted as parsed.
+    """
+    name = tool_use["name"]
+    if tool_names is not None and isinstance(name, str):
+        name = tool_names.decode(name)
+    if name == "Task" and isinstance(tool_use.get("input"), dict):
         task_input = tool_use["input"]
         if task_input.get("run_in_background") is not False:
             task_input["run_in_background"] = False
@@ -30,7 +47,7 @@ def iter_heuristic_tool_use_sse(
         block_idx,
         "tool_use",
         id=tool_use["id"],
-        name=tool_use["name"],
+        name=name,
     )
     yield ledger.content_block_delta(
         block_idx,
@@ -112,6 +129,16 @@ class OpenAIToolCallAssembler:
         #: keyed by the names the *client* wrote. One decode at the door keeps
         #: every reader of that state honest.
         self._tool_names = tool_names
+
+    @property
+    def tool_names(self) -> OpenAIToolNameCodec | None:
+        """The codec structured calls are decoded with, for the text path.
+
+        A call the model wrote as text must come back under the same name a
+        structured one would, so the heuristic path is handed this object
+        rather than building a second codec that could disagree.
+        """
+        return self._tool_names
 
     def process_tool_call(
         self,

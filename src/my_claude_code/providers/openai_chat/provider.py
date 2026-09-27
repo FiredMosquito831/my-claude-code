@@ -1340,7 +1340,9 @@ class _OpenAIChatStreamRunner:
 
                                     for tool_use in detected_tools:
                                         for event in iter_heuristic_tool_use_sse(
-                                            ledger, tool_use
+                                            ledger,
+                                            tool_use,
+                                            tool_names=self._tool_calls.tool_names,
                                         ):
                                             for out_event in hold_event(event):
                                                 yield out_event
@@ -1508,7 +1510,9 @@ class _OpenAIChatStreamRunner:
                     yield event
 
         for tool_use in heuristic_parser.flush():
-            for event in iter_heuristic_tool_use_sse(ledger, tool_use):
+            for event in iter_heuristic_tool_use_sse(
+                ledger, tool_use, tool_names=self._tool_calls.tool_names
+            ):
                 for out_event in hold_event(event):
                     yield out_event
 
