@@ -5424,7 +5424,36 @@ const ROUTE_PAUSE_KEY = new Map([
   ["MODEL_HAIKU", "MODEL_HAIKU_PAUSED"],
   ["MODEL_VISION", "MODEL_VISION_PAUSED"],
   ["MODEL_IMAGE", "MODEL_IMAGE_PAUSED"],
+  ["MODEL_TTS", "MODEL_TTS_PAUSED"],
 ]);
+
+/* The media rails (7.60.0+), drawn after the vision adapter: one entry per
+   rail, so a rail added later is one line here and its settings. */
+const MEDIA_RAILS = [
+  {
+    modelKey: "MODEL_IMAGE",
+    chainKey: "MODEL_IMAGE_FALLBACKS",
+    tier: "image",
+    title: "Image rail",
+    note:
+      "Serves POST /v1/images/generations and /v1/images/edits. Only providers " +
+      "that declare the endpoint can answer it; a model on any other provider is skipped " +
+      "without being charged. None answers the endpoint with 'no model " +
+      "configured' instead of borrowing a chat model.",
+  },
+  {
+    modelKey: "MODEL_TTS",
+    chainKey: "MODEL_TTS_FALLBACKS",
+    tier: "tts",
+    title: "Speech rail",
+    note:
+      "Serves POST /v1/audio/speech (text to speech). Only providers that declare " +
+      "a speech endpoint can answer it; a client that names a format a provider " +
+      "does not document skips that provider -- audio is never transcoded. The " +
+      "answer is the provider's own audio, with its own content type.",
+  },
+];
+
 
 /** Put the harness alias for a route beside its heading, if it has one.
  *
@@ -5461,7 +5490,8 @@ function appendTierAlias(heading, modelKey) {
 function routeLabelFor(modelKey) {
   const tier = ROUTE_TIERS.find((candidate) => candidate.modelKey === modelKey);
   if (tier) return tier.label;
-  if (modelKey === "MODEL_IMAGE") return "Image";
+  const media = MEDIA_RAILS.find((spec) => spec.modelKey === modelKey);
+  if (media) return media.title.replace(/ rail$/, "");
   return modelKey === "MODEL_VISION" ? "Vision" : String(modelKey || "");
 }
 
@@ -6641,40 +6671,37 @@ function renderModelRouting(fields, allFields) {
     wrap.appendChild(vision);
   }
 
-  // Media rails (7.60.0). Not chat tiers: a media endpoint picks its rail by
-  // what it does (images/generations -> Image), never by a model name, and
-  // nothing on these rails is offered to a coding agent. Same rail editor,
-  // same Pause button, same fallback semantics as every route above.
-  const imageField = fieldByKey.get("MODEL_IMAGE");
-  if (imageField) {
+  // Media rails (7.60.0+). Not chat tiers: a media endpoint picks its rail by
+  // what it does (images/* -> Image, audio/speech -> Speech), never by a model
+  // name, and nothing on these rails is offered to a coding agent. Same rail
+  // editor, same Pause button, same fallback semantics as every route above.
+  MEDIA_RAILS.forEach((spec) => {
+    const modelField = fieldByKey.get(spec.modelKey);
+    if (!modelField) return;
     const media = document.createElement("article");
     media.className = "route-card route-media";
-    media.dataset.tier = "image";
-    media.dataset.key = imageField.key;
+    media.dataset.tier = spec.tier;
+    media.dataset.key = modelField.key;
 
     const head = document.createElement("header");
     head.className = "route-card-head";
     const name = document.createElement("h4");
     name.className = "route-tier";
-    name.textContent = "Image rail";
+    name.textContent = spec.title;
     head.appendChild(name);
     media.appendChild(head);
 
     const note = document.createElement("p");
     note.className = "route-note";
-    note.textContent =
-      "Serves POST /v1/images/generations and /v1/images/edits. Only providers " +
-      "that declare the endpoint can answer it; a model on any other provider is skipped " +
-      "without being charged. None answers the endpoint with 'no model " +
-      "configured' instead of borrowing a chat model.";
+    note.textContent = spec.note;
     media.appendChild(note);
 
     const rail = document.createElement("div");
     rail.className = "field route-rail route-media-control";
-    appendRouteRail(rail, imageField, fieldByKey.get("MODEL_IMAGE_FALLBACKS"));
+    appendRouteRail(rail, modelField, fieldByKey.get(spec.chainKey));
     media.appendChild(rail);
     wrap.appendChild(media);
-  }
+  });
 
   // Anything the manifest adds to this section later still has to appear.
   const claimed = new Set([
@@ -6683,9 +6710,8 @@ function renderModelRouting(fields, allFields) {
     // Rendered inside the vision card above; leaving it unclaimed would draw
     // it a second time in the leftovers grid.
     "VISION_ADAPTER_MODE",
-    // Drawn in the Image rail card above.
-    "MODEL_IMAGE",
-    "MODEL_IMAGE_FALLBACKS",
+    // Drawn in the media rail cards above.
+    ...MEDIA_RAILS.flatMap((spec) => [spec.modelKey, spec.chainKey]),
     ...ROUTE_TIERS.flatMap((tier) => [tier.modelKey, tier.chainKey]),
     // The pause lists are written by the Pause button beside the ref they
     // name, never typed. Leaving them unclaimed would render six bare text

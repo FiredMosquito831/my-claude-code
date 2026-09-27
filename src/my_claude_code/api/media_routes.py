@@ -50,6 +50,7 @@ from my_claude_code.application.ports import RequestRuntimeLease
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_SPEECH,
 )
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import (
@@ -58,23 +59,27 @@ from my_claude_code.core.failures import (
     failure_kind,
     find_execution_failure,
 )
+from my_claude_code.core.media_outputs import MediaOutputs, sse_error_frame
 from my_claude_code.core.openai_common.errors import (
     openai_error_payload,
     openai_error_type_for_failure,
 )
 from my_claude_code.core.openai_images import (
-    ImageOutputs,
-    images_error_frame,
     parse_images_response,
     parse_images_stream,
 )
+from my_claude_code.core.openai_speech import parse_speech_response
 
 from .dependencies import get_services, require_proxy_auth, resolve_provider
 from .media_capture import MediaCapture
 from .ports import ApiServices
 from .request_ids import get_request_id
 from .response_streams import ManagedStreamingResponse, bind_response_lifetime
-from .wire_surfaces import IMAGES_EDITS_ENDPOINT, IMAGES_GENERATIONS_ENDPOINT
+from .wire_surfaces import (
+    AUDIO_SPEECH_ENDPOINT,
+    IMAGES_EDITS_ENDPOINT,
+    IMAGES_GENERATIONS_ENDPOINT,
+)
 
 router = APIRouter()
 
@@ -130,7 +135,7 @@ def _commit_error_frames(exc: BaseException) -> Sequence[bytes]:
         else (failure_kind(exc) or FailureKind.UPSTREAM)
     )
     return (
-        images_error_frame(
+        sse_error_frame(
             safe_exception_message(exc), openai_error_type_for_failure(kind)
         ),
     )
@@ -288,7 +293,9 @@ async def _serve(
 
     if not media_request.stream:
         try:
-            return await _complete_response(first, stream, lease, capture)
+            return await _complete_response(
+                first, stream, lease, capture, _parser_for(media_request)
+            )
         finally:
             await cleanup()
     response = ManagedStreamingResponse(
@@ -387,11 +394,56 @@ async def edit_image(
     )
 
 
+def _parse_images(response: MediaResponse) -> MediaOutputs:
+    return parse_images_response(response.body)
+
+
+def _parse_speech(response: MediaResponse) -> MediaOutputs:
+    return parse_speech_response(response.body, response.content_type)
+
+
+def _parser_for(media_request: MediaRequest) -> Callable[[MediaResponse], MediaOutputs]:
+    """How a buffered answer is measured, by the operation's wire shape."""
+    if media_request.operation == MEDIA_OPERATION_SPEECH:
+        return _parse_speech
+    return _parse_images
+
+
+@router.post(AUDIO_SPEECH_ENDPOINT)
+async def create_speech(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    """Synthesize speech through the Speech rail (OpenAI ``audio.speech``).
+
+    The answer is the audio itself, returned with the host's own Content-Type.
+    ``stream_format: "sse"`` is routed only to a surface that declares it.
+    """
+    payload = await _read_json_object(request)
+    if payload is None:
+        return _invalid("The request body must be a JSON object.")
+    text = payload.get("input")
+    if not isinstance(text, str) or not text.strip():
+        return _invalid("'input' is required and must be a string.")
+    media_request = MediaRequest(
+        operation=MEDIA_OPERATION_SPEECH,
+        rail=MediaRail.TTS,
+        model=str(payload.get("model") or ""),
+        body={key: value for key, value in payload.items() if key != "model"},
+        stream=payload.get("stream_format") == "sse",
+    )
+    return await _serve(
+        request, services, media_request, endpoint=AUDIO_SPEECH_ENDPOINT
+    )
+
+
 async def _complete_response(
     first: MediaChunk,
     stream: AsyncIterator[MediaChunk],
     lease: RequestRuntimeLease,
     capture: MediaCapture,
+    parse: Callable[[MediaResponse], MediaOutputs],
 ) -> Response:
     """Serve a buffered answer; the lease is released before returning."""
     try:
@@ -406,7 +458,7 @@ async def _complete_response(
             "The provider streamed an answer that was not asked for.",
             FailureKind.UPSTREAM,
         )
-    outputs: ImageOutputs = await asyncio.to_thread(parse_images_response, first.body)
+    outputs: MediaOutputs = await asyncio.to_thread(parse, first)
     await capture.finish("success", outputs=outputs)
     return Response(
         content=first.body,
@@ -473,6 +525,11 @@ async def _finish_stream(
 
 @router.api_route(IMAGES_GENERATIONS_ENDPOINT, methods=["HEAD", "OPTIONS"])
 async def probe_images_generations(_auth=Depends(require_proxy_auth)):
+    return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
+
+
+@router.api_route(AUDIO_SPEECH_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_audio_speech(_auth=Depends(require_proxy_auth)):
     return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
 
 

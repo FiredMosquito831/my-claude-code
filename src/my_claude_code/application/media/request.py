@@ -23,6 +23,7 @@ class MediaRail(StrEnum):
     """
 
     IMAGE = "image"
+    TTS = "tts"
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,15 @@ RAIL_SETTINGS: Mapping[MediaRail, MediaRailSettings] = {
         fallbacks_env="MODEL_IMAGE_FALLBACKS",
         paused_attr="model_image_paused",
         paused_env="MODEL_IMAGE_PAUSED",
+    ),
+    MediaRail.TTS: MediaRailSettings(
+        label="Speech",
+        model_attr="model_tts",
+        model_env="MODEL_TTS",
+        fallbacks_attr="model_tts_fallbacks",
+        fallbacks_env="MODEL_TTS_FALLBACKS",
+        paused_attr="model_tts_paused",
+        paused_env="MODEL_TTS_PAUSED",
     ),
 }
 
@@ -91,8 +101,12 @@ class MediaRequest:
 
     @property
     def prompt(self) -> str | None:
-        value = self.body.get("prompt")
-        return value if isinstance(value, str) else None
+        """The request's text: an image ``prompt``, or the ``input`` to speak."""
+        for key in ("prompt", "input"):
+            value = self.body.get(key)
+            if isinstance(value, str):
+                return value
+        return None
 
 
 @dataclass(frozen=True, slots=True)

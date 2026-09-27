@@ -1522,6 +1522,12 @@ _ADDED_COLUMNS = (
     ),
     ("media_bytes_out", "ALTER TABLE requests ADD COLUMN media_bytes_out INTEGER"),
     ("media_sha_out", "ALTER TABLE requests ADD COLUMN media_sha_out TEXT"),
+    # 7.62.0: seconds of audio a speech answer carried, when its container
+    # states it (WAV); NULL for MP3/Opus/AAC -- not measured, never 0.
+    (
+        "output_audio_seconds",
+        "ALTER TABLE requests ADD COLUMN output_audio_seconds REAL",
+    ),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1671,6 +1677,7 @@ _REQUEST_INSERT_COLUMNS = (
     "output_image_count",
     "media_bytes_out",
     "media_sha_out",
+    "output_audio_seconds",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -2295,6 +2302,7 @@ class RequestRecord:
     output_image_count: int | None = None
     media_bytes_out: int | None = None
     media_sha_out: str | None = None
+    output_audio_seconds: float | None = None
     #: Generated outputs to link in ``request_media`` (sha256, mime, bytes,
     #: stored). Written by the writer thread with the row.
     media_outputs: tuple[MediaOutputRecord, ...] = ()
@@ -5055,6 +5063,7 @@ class RequestLogStore:
             record.output_image_count,
             record.media_bytes_out,
             record.media_sha_out,
+            record.output_audio_seconds,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose

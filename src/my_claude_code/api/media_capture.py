@@ -32,12 +32,12 @@ from my_claude_code.core.client_fingerprint import (
 from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name
+from my_claude_code.core.media_outputs import MediaOutputs
 from my_claude_code.core.media_store import (
     MediaOutputRecord,
     media_root,
     write_media_file,
 )
-from my_claude_code.core.openai_images import ImageOutputs
 from my_claude_code.core.proxy_attribution import install_proxy_attribution
 from my_claude_code.core.request_headers import capture_headers
 from my_claude_code.core.request_images import CapturedImage, capture_upload
@@ -129,7 +129,7 @@ class MediaCapture:
         params = {
             str(key): value
             for key, value in self._request.body.items()
-            if key not in {"prompt", "stream"}
+            if key not in {"prompt", "input", "stream"}
         }
         media: dict[str, Any] = {"operation": self._request.operation}
         if self._request.uploads:
@@ -176,11 +176,11 @@ class MediaCapture:
             )
         return tuple(captured)
 
-    def _write_files(self, outputs: ImageOutputs) -> tuple[MediaOutputRecord, ...]:
+    def _write_files(self, outputs: MediaOutputs) -> tuple[MediaOutputRecord, ...]:
         """Runs in a worker thread: store each image when the store is on."""
         root = None if self._store is None else media_root(self._store.db_path)
         records: list[MediaOutputRecord] = []
-        for position, image in enumerate(outputs.images):
+        for position, image in enumerate(outputs.items):
             stored = False
             if self._store_bytes and root is not None:
                 try:
@@ -207,14 +207,14 @@ class MediaCapture:
         status: Literal["success", "error", "cancelled"],
         *,
         error: BaseException | None = None,
-        outputs: ImageOutputs | None = None,
+        outputs: MediaOutputs | None = None,
     ) -> None:
         """Write the row. Idempotent: the first call wins."""
         if self._finished or self._store is None:
             return
         self._finished = True
         media_outputs: tuple[MediaOutputRecord, ...] = self._input_records()
-        if outputs is not None and outputs.images:
+        if outputs is not None and outputs.items:
             media_outputs += await asyncio.to_thread(self._write_files, outputs)
         thumbnails: tuple[CapturedImage, ...] = ()
         if self._thumb_pixels > 0 and self._request.uploads:
@@ -257,7 +257,12 @@ class MediaCapture:
             media_operation=self._request.operation,
             input_image_count=image_inputs if self._request.uploads else None,
             images=thumbnails,
-            output_image_count=None if outputs is None else outputs.count,
+            output_image_count=(
+                None
+                if outputs is None or not self._request.operation.startswith("image")
+                else outputs.count
+            ),
+            output_audio_seconds=None if outputs is None else outputs.audio_seconds,
             media_bytes_out=None if outputs is None else outputs.bytes_total,
             media_sha_out=None if outputs is None else outputs.first_sha,
             media_outputs=media_outputs,

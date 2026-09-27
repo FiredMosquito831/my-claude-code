@@ -97,7 +97,15 @@ class MediaLeaf:
         surface = self._surface(request)
         if surface is None:
             return False
-        return surface.stream or not request.stream
+        if request.stream and not surface.stream:
+            return False
+        # A format the client NAMED and the host does not document is a
+        # format this host cannot produce: skipped uncharged, never
+        # transcoded (user decision 9). No list = the host judges.
+        named = request.body.get("response_format")
+        if surface.formats is not None and isinstance(named, str) and named:
+            return named in surface.formats
+        return True
 
     def preflight(self, attempt: MediaAttempt) -> None:
         """Nothing to validate before sending; the upstream judges the body."""

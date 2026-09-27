@@ -10,6 +10,7 @@ from .media_surfaces import (
     MediaSurface,
     image_edit_surface,
     image_generation_surface,
+    speech_surface,
 )
 
 # Default upstream base URLs are owned here with the provider catalog.
@@ -315,6 +316,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "open_router": ProviderDescriptor(
         provider_id="open_router",
+        media_surfaces=(speech_surface(formats=("mp3", "pcm")),),
         display_name="OpenRouter",
         credential_env="OPENROUTER_API_KEY",
         credential_url="https://openrouter.ai/keys",
@@ -522,6 +524,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "groq": ProviderDescriptor(
         provider_id="groq",
+        media_surfaces=(speech_surface(),),
         display_name="Groq",
         credential_env="GROQ_API_KEY",
         credential_url="https://console.groq.com/keys",
@@ -655,7 +658,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "zenmux": ProviderDescriptor(
         provider_id="zenmux",
-        media_surfaces=(image_generation_surface(),),
+        media_surfaces=(image_generation_surface(), speech_surface()),
         display_name="ZenMux",
         credential_env="ZENMUX_API_KEY",
         credential_url="https://zenmux.ai/platform/pay-as-you-go",
@@ -742,7 +745,10 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "together": ProviderDescriptor(
         provider_id="together",
-        media_surfaces=(image_generation_surface(),),
+        media_surfaces=(
+            image_generation_surface(),
+            speech_surface(formats=("mp3", "wav", "raw")),
+        ),
         display_name="Together AI",
         credential_env="TOGETHER_API_KEY",
         credential_url="https://api.together.ai/settings/api-keys",
@@ -764,7 +770,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "siliconflow": ProviderDescriptor(
         provider_id="siliconflow",
-        media_surfaces=(image_generation_surface(),),
+        media_surfaces=(image_generation_surface(), speech_surface()),
         display_name="SiliconFlow",
         credential_env="SILICONFLOW_API_KEY",
         credential_url="https://cloud.siliconflow.com/account/ak",
