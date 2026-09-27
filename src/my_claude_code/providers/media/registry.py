@@ -36,6 +36,7 @@ from my_claude_code.config.constants import (
 )
 from my_claude_code.config.credential_names import credential_fingerprint
 from my_claude_code.config.credentials import mask_key_label
+from my_claude_code.config.media_surfaces import MediaSurface
 from my_claude_code.config.provider_catalog import ProviderDescriptor
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
@@ -105,6 +106,11 @@ class MediaRegistry:
     def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._transport = transport
         self._entries: dict[str, tuple[ProviderConfig, MediaNode]] = {}
+        # What each held stack was built to serve. Part of "has this provider
+        # changed" beside its config, because a custom provider's declared
+        # media endpoints (7.67.0) live on its descriptor, not in the config a
+        # stack is keyed on; a static provider's never change.
+        self._declared: dict[str, tuple[MediaSurface, ...]] = {}
         self._retired: list[MediaNode] = []
 
     def resolver(self, settings: Settings) -> MediaProviderResolver:
@@ -117,12 +123,17 @@ class MediaRegistry:
             raise UnknownProviderError.for_provider(provider_id, descriptors)
         config = build_provider_config(descriptor, settings)
         entry = self._entries.get(provider_id)
-        if entry is not None and entry[0] == config:
+        if (
+            entry is not None
+            and entry[0] == config
+            and self._declared.get(provider_id) == descriptor.media_surfaces
+        ):
             return entry[1]
         node = self._build(descriptor, config, settings)
         if entry is not None:
             self._retired.append(entry[1])
         self._entries[provider_id] = (config, node)
+        self._declared[provider_id] = descriptor.media_surfaces
         return node
 
     def key_fingerprint(
@@ -172,11 +183,13 @@ class MediaRegistry:
         """Drop every stack without closing it. For the test suite only."""
 
         self._entries.clear()
+        self._declared.clear()
         self._retired = []
 
     async def close(self) -> None:
         nodes = [node for _config, node in self._entries.values()] + self._retired
         self._entries.clear()
+        self._declared.clear()
         self._retired = []
         for node in nodes:
             try:

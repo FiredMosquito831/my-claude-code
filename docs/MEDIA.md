@@ -277,6 +277,26 @@ proxy address benched by a media request is benched for media only; the chat eng
 sees it, and the other way round. A non-streaming request is answered only once a model has
 produced the whole answer, so a failure before that falls back without the client noticing.
 
+## Where to see it on the dashboard (7.67.0)
+
+- **Models page -> Media models.** One row per model on a media rail: which rail(s), its place
+  (primary or fallback N) and whether it is paused, the operations its provider declares, a warning
+  when the provider declares nothing for that rail (such a model is skipped, uncharged), the output
+  modalities models.dev lists for it (advisory; "unknown" when models.dev has no entry), whether the
+  media engine has benched it (media's own records, never chat's) and whether its provider has a
+  key. A second table lists every provider -- built-in or custom -- that declares media endpoints.
+- **Analytics -> Media.** A card of its own for the selected time window, per rail and then per
+  provider and model: requests, succeeded, failed, cancelled, images out, audio seconds in and out,
+  video jobs and video seconds, bytes out and durations, plus the video jobs' current states. A total
+  no row measured shows as a dash ("not measured"), never 0. Media rows are ordinary request-log rows,
+  so the existing chat totals and charts on Analytics count them too, as they have since 7.60.0; the
+  Media card is the media-only view.
+- **Custom providers** can declare media endpoints: the **Media endpoints** checkboxes on the custom
+  provider form (image generation, image edits, speech, transcription, translation, video). Each
+  ticked operation is served at the OpenAI path relative to the provider's base URL
+  (`images/generations`, `images/edits`, `audio/speech`, `audio/transcriptions`,
+  `audio/translations`, `videos`). Nothing ticked means none, as before.
+
 ## What is recorded
 
 Every request writes an ordinary request-log row (its endpoint, e.g. `/v1/images/generations`)
@@ -315,7 +335,7 @@ cleared; turning the setting off stops new copies and leaves existing files alon
 
 ## Not yet
 
-Media pricing and the Analytics media block each arrive in their own release. Gemini's
+Media pricing arrives in its own release. Gemini's
 Interactions API (and the transcription model offered only there) is not used. Video on ZenMux, Agnes AI, xAI, Together, SiliconFlow, MiniMax and Alibaba
 is not routed: each documents its own job API rather than the OpenAI shape, and each would be
 its own small release. OpenAI's own video API (Sora) was shut down on 2026-09-24.

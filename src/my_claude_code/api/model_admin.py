@@ -74,6 +74,7 @@ from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
     model_context_length_tiered,
     model_output_limit_tiered,
+    model_output_modalities_tiered,
     model_prices_tiered,
     model_reasoning_capability_tiered,
     model_tool_call_tiered,
@@ -506,6 +507,23 @@ def models_dev_cache_mark() -> str:
     except OSError:
         return "absent"
     return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def media_output_modalities(provider_id: str, model_id: str) -> dict[str, Any]:
+    """What models.dev catalogues a media model as producing (7.67.0).
+
+    Advisory, for the Models page's media rows: ``output`` is ``None`` when
+    the cache does not describe the model (unknown, never "text only"), and
+    ``tier`` names the rung the answer came from. Read here because this module
+    owns the page's models.dev edge; disk cache only, never a network call.
+    """
+
+    output, tier = model_output_modalities_tiered(provider_id, model_id)
+    return {
+        "output": None if output is None else list(output),
+        "tier": None if tier is None else TIER_LABELS.get(tier, tier.name),
+        "approximate": bool(tier is not None and tier.is_approximate),
+    }
 
 
 #: Host-wide fact kinds that shape an outbound request and therefore belong on

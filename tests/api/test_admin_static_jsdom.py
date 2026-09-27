@@ -6796,3 +6796,240 @@ def test_the_image_rail_is_its_own_card(rendered) -> None:
         "Video rail",
     ]
     assert rail["speechPrimaryInCard"] is True
+
+
+# ------------------------------------------------------ 7.67.0 media dashboard
+
+_ADMIN_CSS = (STATIC_DIR / "admin.css").read_text(encoding="utf-8")
+
+
+def _css_rule(selector: str) -> str:
+    match = re.search(rf"(?m)^{re.escape(selector)} \{{([^}}]*)\}}", _ADMIN_CSS)
+    assert match, f"admin.css has no rule for {selector}"
+    return match.group(1)
+
+
+def test_the_models_page_lists_media_models_in_their_own_section(rendered) -> None:
+    media = rendered["mediaDashboard"]
+
+    assert media["modelsHeaders"] == [
+        "Model",
+        "Rails",
+        "Provider declares",
+        "models.dev output",
+        "Health",
+        "Key",
+    ]
+    assert media["modelRefs"] == [
+        "together/flux-schnell",
+        "groq/not-an-image-model",
+        "groq/playai-tts",
+        "deepinfra/whisper-large-v3",
+    ]
+    assert media["statusHidden"] is True
+    # Never merged into the chat tree above it.
+    assert media["treeHasMediaRef"] is False
+
+
+def test_a_media_row_says_rail_position_pause_and_what_is_declared(rendered) -> None:
+    chips = rendered["mediaDashboard"]["modelChips"]
+    texts = [[[chip["text"] for chip in cell] for cell in row] for row in chips]
+
+    flux, groq_image, groq_tts, whisper = texts
+    assert flux[0] == ["Image · primary"]
+    assert flux[1] == ["image generate", "speech mp3/wav/raw"]
+    assert flux[2] == ["image"]
+    assert groq_tts[0] == ["Speech · primary", "Speech: paused"]
+    # models.dev's list is advice: an approximate rung is marked as such.
+    assert groq_tts[2] == ["≈ audio"]
+    assert whisper[0] == ["Transcription · primary"]
+    # The declared endpoint's path rides in the tooltip.
+    assert chips[0][1][0]["title"] == "images/generations"
+    assert groq_image[1] == ["speech", "transcribe"]
+
+
+def test_a_provider_that_declares_nothing_for_the_rail_is_flagged(rendered) -> None:
+    chips = rendered["mediaDashboard"]["modelChips"]
+    rails = chips[1][0]
+
+    assert [chip["text"] for chip in rails] == [
+        "Image · fallback 1",
+        "Image: not served — skipped uncharged",
+    ]
+    assert "media-chip-warn" in rails[1]["className"]
+    assert "without charging it a failure" in rails[1]["title"]
+
+
+def test_unknown_modalities_say_unknown_never_text(rendered) -> None:
+    chips = rendered["mediaDashboard"]["modelChips"]
+
+    (unknown,) = chips[1][2]
+    assert unknown["text"] == "unknown"
+    assert "does not describe" in unknown["title"]
+
+
+def test_the_media_bench_and_a_missing_key_are_shown(rendered) -> None:
+    chips = rendered["mediaDashboard"]["modelChips"]
+
+    (benched,) = chips[2][3]
+    assert benched["text"] == "benched (media)"
+    assert benched["title"].startswith("benched: 3 consecutive failures")
+    assert [chip["text"] for chip in chips[0][3]] == ["not benched"]
+    (missing,) = chips[3][4]
+    assert missing["text"] == "Missing key"
+    assert "media-chip-warn" in missing["className"]
+    assert [chip["text"] for chip in chips[0][4]] == ["Configured · 2 keys"]
+
+
+def test_the_models_page_lists_providers_with_media_endpoints(rendered) -> None:
+    media = rendered["mediaDashboard"]
+
+    assert media["providersHeaders"] == [
+        "Provider",
+        "Can serve",
+        "Declared endpoints",
+        "Key",
+    ]
+    together, acme = media["providerRows"]
+    assert together[0] == "Together AI"
+    assert together[1] == "ImageSpeechTranscription"
+    assert acme[0] == "Acmecustom"
+    assert acme[1] == "Speech"
+
+
+def test_an_install_with_no_media_rail_says_so(rendered) -> None:
+    media = rendered["mediaDashboard"]
+
+    assert media["emptyModelsText"].startswith("No model is on a media rail.")
+    assert "MODEL_IMAGE" in media["emptyModelsText"]
+    assert media["emptyProvidersText"] == "No provider declares a media endpoint."
+
+
+def test_the_analytics_media_card_is_sent_the_window_only(rendered) -> None:
+    media = rendered["mediaDashboard"]
+
+    assert media["analyticsUrls"], media
+    for url in media["analyticsUrls"]:
+        assert "since=" in url
+        assert "provider" not in url
+        assert "local" not in url
+    # Its caption names the window and does not claim the page's filter.
+    assert media["caption"] == "Window: last 24h"
+    assert media["otherCaption"] == "Window: last 24h, filtered"
+    assert media["headingCount"] == 1
+
+
+def test_the_analytics_media_card_renders_per_rail_and_per_model(rendered) -> None:
+    media = rendered["mediaDashboard"]
+
+    assert media["railHeaders"] == [
+        "Rail",
+        "Requests",
+        "Succeeded",
+        "Failed",
+        "Cancelled",
+        "Output",
+        "Bytes out",
+        "Median",
+        "Average",
+    ]
+    image, speech, asr, video = media["railRows"]
+    assert image == [
+        "Image",
+        "3",
+        "2",
+        "1",
+        "0",
+        "3 images",
+        "1.46 KB",
+        "400 ms",
+        "500 ms",
+    ]
+    # Speech: bytes measured, seconds not -- a dash, never "0 s".
+    assert speech[5] == "—"
+    assert speech[6] == "2.00 KB"
+    # Transcription had no traffic: counted 0, every measure a dash.
+    assert asr[1:5] == ["0", "0", "0", "0"]
+    assert asr[5:] == ["—", "—", "—", "—"]
+    assert video[5] == "1 job · 8 s"
+    assert video[6] == "—"
+    assert media["modelHeaders"][:2] == ["Rail", "Provider / model"]
+    assert [row[:2] for row in media["modelRows"]] == [
+        ["Image", "Together AI / flux"],
+        ["Video", "OpenRouter / veo"],
+    ]
+    assert media["noteHidden"] is True
+
+
+def test_not_measured_is_a_dash_that_says_so(rendered) -> None:
+    media = rendered["mediaDashboard"]
+
+    assert media["dashes"]
+    assert all(dash == ["—", "not measured"] for dash in media["dashes"])
+    cells = [cell for row in media["railRows"] for cell in row]
+    assert "0 s" not in cells
+
+
+def test_video_job_states_are_their_own_table(rendered) -> None:
+    media = rendered["mediaDashboard"]
+
+    assert media["jobHeaders"] == [
+        "Provider / model",
+        "Queued",
+        "In progress",
+        "Completed",
+        "Failed",
+        "Other",
+    ]
+    assert media["jobRows"] == [["OpenRouter / veo", "0", "1", "1", "0", "1"]]
+    assert media["jobOtherTitle"] == "unknown: 1"
+
+
+def test_an_empty_window_and_a_disabled_log_say_so(rendered) -> None:
+    media = rendered["mediaDashboard"]
+
+    assert media["emptyNote"] == "No media requests in this window."
+    assert media["emptyTables"] == 0
+    assert media["disabledNote"] == "Request log disabled (REQUEST_LOG_ENABLED=false)."
+
+
+def test_media_tables_scroll_inside_their_card_at_420px(rendered) -> None:
+    """jsdom has no box model: the claim is the class contract it rests on."""
+
+    media = rendered["mediaDashboard"]
+
+    assert "table-scroll" in media["modelsScrollClass"].split()
+    assert "table-scroll" in media["providersScrollClass"].split()
+    assert all(
+        "table-scroll" in cls.split() for cls in media["analyticsScrollClasses"]
+    ), media["analyticsScrollClasses"]
+    assert "overflow-x: auto" in _css_rule(".table-scroll")
+    assert "flex-wrap: wrap" in _css_rule(".media-chip-row")
+    assert "overflow-wrap: anywhere" in _css_rule(".media-ref")
+
+
+def test_the_custom_card_offers_media_endpoints_beside_the_wire_apis(
+    rendered,
+) -> None:
+    card = rendered["customProviders"]
+
+    assert card["mediaLabels"] == [
+        "Image generation (/images/generations)",
+        "Image edits (/images/edits)",
+        "Speech (/audio/speech)",
+        "Transcription (/audio/transcriptions)",
+        "Translation (/audio/translations)",
+        "Video jobs (/videos, /videos/{id})",
+    ]
+    assert card["mediaChecked"] == ["speech"]
+    assert "skips a provider that declares nothing" in (card["mediaHelp"] or "")
+    assert " · media speech" in card["detailsBefore"]
+
+
+def test_ticking_a_media_endpoint_submits_it_and_a_create_sends_none(
+    rendered,
+) -> None:
+    card = rendered["customProviders"]
+
+    assert card["patchedMedia"] == ["speech", "transcribe"]
+    assert card["createdMedia"] == []

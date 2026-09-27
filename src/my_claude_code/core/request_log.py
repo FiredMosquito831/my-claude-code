@@ -2279,6 +2279,27 @@ _MEDIA_JOB_UPDATABLE = frozenset(
 #: prune waits this long before calling a job without one an orphan.
 _MEDIA_JOB_ORPHAN_GRACE_SECONDS = 3600.0
 
+#: What ``media_stats`` sums per group: ``(payload name, requests column)``.
+#: Every one is NULL on a row that did not measure it, so each is summed
+#: beside a count of the rows that did.
+_MEDIA_STAT_MEASURES: tuple[tuple[str, str], ...] = (
+    ("images_out", "output_image_count"),
+    ("audio_seconds_out", "output_audio_seconds"),
+    ("audio_seconds_in", "input_audio_seconds"),
+    ("video_seconds", "output_video_seconds"),
+    ("bytes_out", "media_bytes_out"),
+)
+#: The counters ``media_stats`` adds up, a group's total being the sum of its
+#: provider/model rows'.
+_MEDIA_STAT_COUNTERS: tuple[str, ...] = (
+    "requests",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "video_jobs",
+    "duration_count",
+)
+
 
 @dataclass(slots=True)
 class RequestRecord:
@@ -8310,20 +8331,7 @@ class RequestLogStore:
                 args,
             ).fetchall()
         ]
-        if not values:
-            return dict.fromkeys(fractions)
-
-        count = len(values)
-        results: dict[float, float | None] = {}
-        for fraction in fractions:
-            position = min(count - 1, max(0.0, fraction * (count - 1)))
-            lower_index = int(position)
-            upper_index = min(count - 1, lower_index + 1)
-            weight = position - lower_index
-            lower_val = values[lower_index]
-            upper_val = values[upper_index]
-            results[fraction] = lower_val + (upper_val - lower_val) * weight
-        return results
+        return _interpolated_percentiles(values, fractions)
 
     @staticmethod
     def _series(
@@ -8643,6 +8651,152 @@ class RequestLogStore:
                 (request_id, output.direction, output.idx, output.sha256),
             )
 
+    # ---------------------------------------------------------- media stats ---
+
+    def media_stats(
+        self,
+        *,
+        since: float | None = None,
+        until: float | None = None,
+        groups: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Media requests over a window, per group and per provider/model (7.67.0).
+
+        Reads only the rows a media endpoint wrote (``media_operation IS NOT
+        NULL``). ``stats()``, its rollups and the permanent totals are not
+        touched by this and go on counting every row, media included. The
+        window is the inclusive ``ts_epoch`` pair ``_where`` applies, first in
+        the predicate so a windowed read is a range seek on ``idx_requests_ts``.
+
+        ``groups`` maps an operation to the group -- the rail -- it is counted
+        under. ``core`` does not own that vocabulary, so the caller hands it in;
+        an operation it does not name is a group of its own, never dropped.
+
+        A SUM over a column no row of a group measured is ``None`` (SQLite's
+        SUM over only NULLs is NULL), so "not measured" never reads as 0;
+        ``<name>_measured`` counts the rows that did measure it. The average
+        duration is SUM/COUNT of the non-NULL ``duration_ms`` and the median is
+        the interpolated p50 the stats row path computes.
+
+        Video job states come from ``media_jobs`` for jobs *created* in the
+        window, by the status a poll last recorded (``unknown`` when none).
+        """
+
+        mapping = dict(groups or {})
+        if mapping:
+            group_sql = (
+                "CASE media_operation"
+                + " WHEN ? THEN ?" * len(mapping)
+                + " ELSE media_operation END"
+            )
+            group_args: list[Any] = [part for pair in mapping.items() for part in pair]
+        else:
+            group_sql = "media_operation"
+            group_args = []
+        clauses: list[str] = []
+        window_args: list[Any] = []
+        job_clauses: list[str] = []
+        if since is not None:
+            clauses.append("ts_epoch >= ?")
+            job_clauses.append("created_at >= ?")
+            window_args.append(since)
+        if until is not None:
+            clauses.append("ts_epoch <= ?")
+            job_clauses.append("created_at <= ?")
+            window_args.append(until)
+        clauses.append("media_operation IS NOT NULL")
+        where = f" WHERE {' AND '.join(clauses)}"
+        job_where = f" WHERE {' AND '.join(job_clauses)}" if job_clauses else ""
+        measures_sql = "".join(
+            f", SUM({column}) AS {name}, COUNT({column}) AS {name}_measured"
+            for name, column in _MEDIA_STAT_MEASURES
+        )
+        with self._connection() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    f"SELECT {group_sql} AS grp, provider,"
+                    " resolved_model AS model, COUNT(*) AS requests,"
+                    " SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)"
+                    " AS succeeded,"
+                    " SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS failed,"
+                    " SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END)"
+                    " AS cancelled,"
+                    " COUNT(media_job_id) AS video_jobs,"
+                    " SUM(duration_ms) AS duration_sum,"
+                    f" COUNT(duration_ms) AS duration_count{measures_sql}"
+                    f" FROM requests{where}"
+                    " GROUP BY grp, provider, resolved_model"
+                    " ORDER BY requests DESC, provider, resolved_model",
+                    [*group_args, *window_args],
+                ).fetchall()
+            ]
+            durations: dict[tuple[Any, ...], list[float]] = {}
+            for grp, provider, model, duration in conn.execute(
+                f"SELECT {group_sql} AS grp, provider, resolved_model, duration_ms"
+                f" FROM requests{where} AND duration_ms IS NOT NULL"
+                " ORDER BY duration_ms",
+                [*group_args, *window_args],
+            ).fetchall():
+                # One ordered fetch: each list is filled in ascending order,
+                # so every one of them is already sorted.
+                durations.setdefault((grp, provider, model), []).append(duration)
+                durations.setdefault((grp,), []).append(duration)
+            job_rows = conn.execute(
+                "SELECT provider, model, COALESCE(NULLIF(status, ''), 'unknown')"
+                f" AS state, COUNT(*) AS jobs FROM media_jobs{job_where}"
+                " GROUP BY provider, model, state ORDER BY provider, model, state",
+                window_args,
+            ).fetchall()
+
+        def finished(entry: dict[str, Any], key: tuple[Any, ...]) -> dict[str, Any]:
+            median = _interpolated_percentiles(durations.get(key, []), (0.5,))[0.5]
+            total = entry.pop("duration_sum")
+            entry["avg_duration_ms"] = _rounded(_mean(total, entry["duration_count"]))
+            entry["median_duration_ms"] = _rounded(median)
+            return entry
+
+        folded: dict[Any, dict[str, Any]] = {}
+        models: list[dict[str, Any]] = []
+        for row in rows:
+            group = row["grp"]
+            total = folded.get(group)
+            if total is None:
+                total: dict[str, Any] = {"group": group, "duration_sum": None}
+                total.update(dict.fromkeys(_MEDIA_STAT_COUNTERS, 0))
+                for name, _column in _MEDIA_STAT_MEASURES:
+                    total[name] = None
+                    total[f"{name}_measured"] = 0
+                folded[group] = total
+            for name in _MEDIA_STAT_COUNTERS:
+                total[name] += row[name] or 0
+            for name in ("duration_sum", *(name for name, _ in _MEDIA_STAT_MEASURES)):
+                if row[name] is not None:
+                    total[name] = (total[name] or 0) + row[name]
+            for name, _column in _MEDIA_STAT_MEASURES:
+                total[f"{name}_measured"] += row[f"{name}_measured"] or 0
+            entry = {"group": group, **{k: v for k, v in row.items() if k != "grp"}}
+            models.append(finished(entry, (group, row["provider"], row["model"])))
+
+        jobs: dict[tuple[Any, Any], dict[str, Any]] = {}
+        job_states: dict[str, int] = {}
+        for job in job_rows:
+            key = (job["provider"], job["model"])
+            bucket = jobs.setdefault(
+                key,
+                {"provider": key[0], "model": key[1], "states": {}, "total": 0},
+            )
+            bucket["states"][job["state"]] = job["jobs"]
+            bucket["total"] += job["jobs"]
+            job_states[job["state"]] = job_states.get(job["state"], 0) + job["jobs"]
+        return {
+            "total": sum(row["requests"] for row in rows),
+            "groups": [finished(total, (group,)) for group, total in folded.items()],
+            "models": models,
+            "jobs": list(jobs.values()),
+            "job_states": job_states,
+        }
+
     # ------------------------------------------------- image descriptions ---
 
     def image_descriptions(
@@ -8941,6 +9095,32 @@ class RequestLogStore:
 
 def _rounded(value: float | None) -> float | None:
     return round(value, 2) if value is not None else None
+
+
+def _interpolated_percentiles(
+    values: Sequence[float], fractions: tuple[float, ...]
+) -> dict[float, float | None]:
+    """Linear-interpolated percentiles of an already-sorted list.
+
+    The arithmetic ``RequestLogStore._percentiles`` has always applied to its
+    one ordered fetch, lifted out unchanged so the media block's median is the
+    same number the stats row path would compute. ``None`` per fraction when
+    the list is empty.
+    """
+    if not values:
+        return dict.fromkeys(fractions)
+
+    count = len(values)
+    results: dict[float, float | None] = {}
+    for fraction in fractions:
+        position = min(count - 1, max(0.0, fraction * (count - 1)))
+        lower_index = int(position)
+        upper_index = min(count - 1, lower_index + 1)
+        weight = position - lower_index
+        lower_val = values[lower_index]
+        upper_val = values[upper_index]
+        results[fraction] = lower_val + (upper_val - lower_val) * weight
+    return results
 
 
 def _percentile(ordered: list[float], fraction: float) -> float | None:

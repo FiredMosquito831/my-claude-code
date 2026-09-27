@@ -529,6 +529,8 @@ function setActiveView(viewId, { scroll = false } = {}) {
 
   if (activeView.id === "models") {
     loadModelsView().catch((error) => showMessage(error.message, "error"));
+    // Its own request, so a failure here leaves the chat tree intact.
+    loadMediaModels().catch((error) => showMessage(error.message, "error"));
   }
 
   if (activeView.id === "coding_agents") {
@@ -12899,6 +12901,7 @@ function customProviderDetailsText(provider) {
     // count is the clause that moves when a refresh lands, and a reader --
     // like the test that watches it -- follows it at the end of the line.
     customProviderSurfacesText(provider) +
+    customProviderMediaText(provider) +
     ` · ${provider.model_count} models` +
     (provider.proxy ? ` · proxy ${provider.proxy}` : "")
   );
@@ -12966,6 +12969,62 @@ function customProviderSurfacesValue() {
     .filter((box) => box.checked)
     .map((box) => box.value);
   return ticked.length ? ticked : ["chat_completions"];
+}
+
+/* 7.67.0: the media endpoints this host serves, on the card only when it
+   declares some -- a chat-only provider is every custom provider that existed
+   before the group did, and its line reads exactly as it always has. */
+function customProviderMediaText(provider) {
+  const media = Array.isArray(provider.media_operations) ? provider.media_operations : [];
+  if (!media.length) return "";
+  return ` · media ${media.join(", ")}`;
+}
+
+/* The media checkbox group, beside the chat doors and built the same way:
+   from the vocabulary the server sends. Unlike the doors, nothing ticked is a
+   real answer -- a chat-only host -- and is submitted as one. */
+function renderCustomProviderMediaOperations(provider) {
+  const host = byId("cpMediaOperations");
+  if (!host) return;
+  host.textContent = "";
+  const available =
+    (provider && Array.isArray(provider.available_media_operations)
+      ? provider.available_media_operations
+      : null) || CUSTOM_PROVIDER_MEDIA_FALLBACK;
+  const declared =
+    provider && Array.isArray(provider.media_operations) ? provider.media_operations : [];
+  available.forEach((operation) => {
+    const row = document.createElement("label");
+    row.className = "cp-surface";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = operation.value;
+    box.checked = declared.indexOf(operation.value) !== -1;
+    box.dataset.cpMediaOperation = operation.value;
+    const text = document.createElement("span");
+    text.textContent = operation.label;
+    row.append(box, text);
+    host.appendChild(row);
+  });
+}
+
+/* Only reached by the Add form before any provider exists; the server sends
+   the same six with every entry. */
+const CUSTOM_PROVIDER_MEDIA_FALLBACK = [
+  { value: "image_generate", label: "Image generation (/images/generations)" },
+  { value: "image_edit", label: "Image edits (/images/edits)" },
+  { value: "speech", label: "Speech (/audio/speech)" },
+  { value: "transcribe", label: "Transcription (/audio/transcriptions)" },
+  { value: "translate", label: "Translation (/audio/translations)" },
+  { value: "video", label: "Video jobs (/videos, /videos/{id})" },
+];
+
+function customProviderMediaOperationsValue() {
+  const host = byId("cpMediaOperations");
+  if (!host) return [];
+  return Array.from(host.querySelectorAll("input[type=checkbox]"))
+    .filter((box) => box.checked)
+    .map((box) => box.value);
 }
 
 function customProviderCard(provider) {
@@ -13482,6 +13541,7 @@ function openCustomProviderForm(provider) {
   byId("cpRotation").value = provider ? provider.credential_rotation : "failover";
   byId("cpProxy").value = provider && provider.proxy ? provider.proxy : "";
   renderCustomProviderSurfaces(provider);
+  renderCustomProviderMediaOperations(provider);
   byId("cpSubmitButton").textContent = provider ? "Save changes" : "Add provider";
   byId("customProviderForm").hidden = false;
   byId("cpDisplayName").focus();
@@ -13508,6 +13568,7 @@ async function submitCustomProviderForm(event) {
           credential_rotation: byId("cpRotation").value,
           proxy: byId("cpProxy").value,
           surfaces: customProviderSurfacesValue(),
+          media_operations: customProviderMediaOperationsValue(),
         }),
       });
       showMessage(`Updated ${editingId}.`, "ok");
@@ -13521,6 +13582,7 @@ async function submitCustomProviderForm(event) {
           credential_rotation: byId("cpRotation").value,
           proxy: byId("cpProxy").value,
           surfaces: customProviderSurfacesValue(),
+          media_operations: customProviderMediaOperationsValue(),
         }),
       });
       const discovery = result.discovery || {};
@@ -16960,13 +17022,15 @@ function reqFilters() {
    and the route widgets also name when the settings were last saved. */
 const ANALYTICS_CONFIG_BOUNDARY = new Set(["Failover", "Vision adapter", "Provider performance"]);
 
-function analyticsWindowText() {
+function analyticsWindowText(windowOnly = false) {
   const select = byId("reqFilterWindow");
   const option = select ? select.options[select.selectedIndex] : null;
   const label = option && option.value ? option.textContent.trim() : "all stored rows";
-  const filtered = Array.from(reqFilters().keys()).some(
-    (key) => key !== "since" && key !== "local",
-  );
+  // The Media card is sent the window and nothing else, so its caption must
+  // not claim the page's filters narrowed it.
+  const filtered =
+    !windowOnly &&
+    Array.from(reqFilters().keys()).some((key) => key !== "since" && key !== "local");
   return `Window: ${label}${filtered ? ", filtered" : ""}`;
 }
 
@@ -17002,6 +17066,10 @@ function paintAnalyticsWindowCaptions() {
         anchor.after(caption);
       }
       const title = heading.textContent.trim();
+      if (heading.closest("#reqMediaPanel")) {
+        caption.textContent = analyticsWindowText(true);
+        return;
+      }
       caption.textContent =
         changedText && ANALYTICS_CONFIG_BOUNDARY.has(title)
           ? `${windowText} · ${changedText}`
@@ -17042,6 +17110,9 @@ async function loadRequestsView() {
   // is a rollup dimension, so these two tables are a row query, and the
   // rollup-served stats the cards are drawn from stay exactly as they were.
   loadRequestOriginPanel(loadId, params);
+  // 7.67.0: the Media card, off the paint path like the panels above. It
+  // reads only rows a media endpoint wrote, and only the window applies.
+  loadRequestMediaPanel(loadId, params);
   // A free-text search is the one filter whose *counting* queries cannot use
   // an index: the predicate is substring matching over stored bodies, so the
   // count and the filtered stats both decompress a body per row. Measured on a
@@ -17739,6 +17810,192 @@ function renderRequestNoAnswerBreakdown(breakdown) {
       breakdown && breakdown.error
         ? "Could not count them right now."
         : "No successful requests in this range.",
+    ),
+  );
+}
+
+/* ------------------------------------------------------ media (7.67.0)
+   The Media card: requests to the media endpoints over the page's window, per
+   rail and per provider/model, from their own route. Only `since`/`until` go
+   out -- the page's other filters describe chat traffic, and a media request
+   has no harness, session or tokens to filter by. A measure that no request in
+   a group reported is a dash ("not measured"), never 0. */
+async function loadRequestMediaPanel(loadId, params) {
+  const query = new URLSearchParams();
+  ["since", "until"].forEach((name) => {
+    const value = params.get(name);
+    if (value !== null && value !== "") query.set(name, value);
+  });
+  const suffix = query.toString();
+  let media;
+  try {
+    media = await api(`/admin/api/analytics/media${suffix ? `?${suffix}` : ""}`);
+  } catch (error) {
+    if (loadId !== reqState.loadId) return;
+    // Not rethrown, for the TTFT panel's reason: this card says it failed
+    // and leaves the rest of the page alone.
+    media = { error: error.message };
+  }
+  if (loadId !== reqState.loadId) return;
+  renderRequestMedia(media);
+}
+
+/** A dash that says what it means: nothing in this group measured it. */
+function mediaNotMeasured() {
+  const dash = document.createElement("span");
+  dash.className = "media-not-measured";
+  dash.textContent = NOT_MEASURED;
+  dash.title = "not measured";
+  return dash;
+}
+
+/** `format(value)`, or the not-measured dash for a null -- never a 0. */
+function mediaMeasure(value, format) {
+  if (value === null || value === undefined) return mediaNotMeasured();
+  return format(Number(value));
+}
+
+function mediaSeconds(value) {
+  return `${formatAnalyticsNumber(value, 1)} s`;
+}
+
+function mediaBytes(value) {
+  return value === 0 ? "0 B" : formatLogBytes(value);
+}
+
+function mediaMilliseconds(value) {
+  return `${formatAnalyticsNumber(Math.round(value))} ms`;
+}
+
+/* What a rail produced, in its own unit. A video's jobs are a count (0 is a
+   real 0) and its seconds a measurement (unmeasured until a poll reads a
+   finished job with a stated length). */
+function mediaOutputCell(entry) {
+  const rail = entry.rail;
+  if (rail === "image") {
+    return mediaMeasure(entry.images_out, (n) => `${formatAnalyticsNumber(n)} images`);
+  }
+  if (rail === "tts") return mediaMeasure(entry.audio_seconds_out, mediaSeconds);
+  if (rail === "asr") {
+    return mediaMeasure(entry.audio_seconds_in, (s) => `${mediaSeconds(s)} heard`);
+  }
+  if (rail === "video") {
+    const cell = document.createElement("span");
+    const jobs = Number(entry.video_jobs || 0);
+    cell.append(`${formatAnalyticsNumber(jobs)} ${jobs === 1 ? "job" : "jobs"} · `);
+    cell.append(mediaMeasure(entry.video_seconds, mediaSeconds));
+    return cell;
+  }
+  return mediaNotMeasured();
+}
+
+function mediaMeasureCells(entry) {
+  return [
+    formatAnalyticsNumber(entry.requests),
+    formatAnalyticsNumber(entry.succeeded),
+    formatAnalyticsNumber(entry.failed),
+    formatAnalyticsNumber(entry.cancelled),
+    mediaOutputCell(entry),
+    mediaMeasure(entry.bytes_out, mediaBytes),
+    mediaMeasure(entry.median_duration_ms, mediaMilliseconds),
+    mediaMeasure(entry.avg_duration_ms, mediaMilliseconds),
+  ];
+}
+
+const MEDIA_MEASURE_HEADERS = [
+  "Requests",
+  "Succeeded",
+  "Failed",
+  "Cancelled",
+  "Output",
+  "Bytes out",
+  "Median",
+  "Average",
+];
+
+/* The four job states the page names, then everything else a host said. */
+const MEDIA_JOB_STATES = ["queued", "in_progress", "completed", "failed"];
+
+function mediaJobCells(states) {
+  const known = MEDIA_JOB_STATES.map((state) => Number((states || {})[state] || 0));
+  const other = Object.entries(states || {})
+    .filter(([state]) => MEDIA_JOB_STATES.indexOf(state) === -1)
+    .map(([state, count]) => [state, Number(count || 0)]);
+  const otherCell = document.createElement("span");
+  otherCell.textContent = formatAnalyticsNumber(
+    other.reduce((sum, [, count]) => sum + count, 0),
+  );
+  if (other.length) {
+    otherCell.title = other.map(([state, count]) => `${state}: ${count}`).join(", ");
+  }
+  return [...known.map((count) => formatAnalyticsNumber(count)), otherCell];
+}
+
+/** Why the Media card has no tables, or null when it has some. */
+function mediaPanelMessage(media) {
+  if (!media) return "Not loaded.";
+  if (media.enabled === false) return "Request log disabled (REQUEST_LOG_ENABLED=false).";
+  if (media.error) return `Could not count media requests: ${media.error}`;
+  const jobs = Array.isArray(media.jobs) ? media.jobs : [];
+  if (!Number(media.total || 0) && !jobs.length) return "No media requests in this window.";
+  return null;
+}
+
+function renderRequestMedia(media) {
+  const rails = byId("reqMediaRails");
+  const models = byId("reqMediaModels");
+  const jobs = byId("reqMediaJobs");
+  const note = byId("reqMediaNote");
+  if (!rails || !models || !jobs || !note) return;
+  rails.textContent = "";
+  models.textContent = "";
+  jobs.textContent = "";
+  const message = mediaPanelMessage(media);
+  note.textContent = message || "";
+  note.hidden = !message;
+  if (message) return;
+  const jobRows = Array.isArray(media.jobs) ? media.jobs : [];
+  const railRows = (Array.isArray(media.rails) ? media.rails : []).map((entry) => [
+    entry.label || entry.rail,
+    ...mediaMeasureCells(entry),
+  ]);
+  rails.appendChild(
+    analyticsBlock(
+      "By rail",
+      analyticsTable(["Rail", ...MEDIA_MEASURE_HEADERS], railRows, "No media requests."),
+    ),
+  );
+  const modelRows = (Array.isArray(media.models) ? media.models : []).map((row) => [
+    row.label || row.rail,
+    `${row.provider_name || row.provider || "?"} / ${row.model || NOT_MEASURED}`,
+    ...mediaMeasureCells(row),
+  ]);
+  models.appendChild(
+    analyticsBlock(
+      "By provider and model",
+      analyticsTable(
+        ["Rail", "Provider / model", ...MEDIA_MEASURE_HEADERS],
+        modelRows,
+        "No media requests.",
+      ),
+    ),
+  );
+  if (!jobRows.length) return;
+  const stateRows = jobRows.map((job) => [
+    `${job.provider_name || job.provider} / ${job.model}`,
+    ...mediaJobCells(job.states),
+  ]);
+  if (jobRows.length > 1) {
+    stateRows.push(["All video jobs", ...mediaJobCells(media.job_states)]);
+  }
+  jobs.appendChild(
+    analyticsBlock(
+      "Video jobs created in this window",
+      analyticsTable(
+        ["Provider / model", "Queued", "In progress", "Completed", "Failed", "Other"],
+        stateRows,
+        "No video jobs.",
+      ),
     ),
   );
 }
@@ -23879,6 +24136,230 @@ function setModelsVisibilityStatus(text, kind = "") {
   status.className = `models-status${kind ? ` ${kind}` : ""}`;
 }
 
+/* ------------------------------------------------------ media models (7.67.0)
+   The refs on the four media rails, in their own section below the chat tree
+   and never inside it: a media model is not a chat model, is never listed on
+   /v1/models, and what matters about it is different -- which rail it sits on
+   and where, what its provider DECLARES it serves, the media bench (kept apart
+   from the chat bench) and whether its provider has a key. models.dev's
+   output list is shown as advice; the router never reads it. */
+const mediaModelsState = { data: null, loading: false };
+
+async function loadMediaModels(force = false) {
+  if (mediaModelsState.loading) return;
+  if (mediaModelsState.data && !force) return;
+  mediaModelsState.loading = true;
+  setMediaModelsStatus("Loading media models...");
+  try {
+    mediaModelsState.data = await api("/admin/api/media/models");
+    renderMediaModels(mediaModelsState.data);
+    setMediaModelsStatus("");
+  } catch (error) {
+    setMediaModelsStatus(`Could not load media models: ${error.message}`, "error");
+  } finally {
+    mediaModelsState.loading = false;
+  }
+}
+
+function setMediaModelsStatus(text, kind = "") {
+  const status = byId("mediaModelsStatus");
+  if (!status) return;
+  status.textContent = text || "";
+  status.className = `models-status${kind ? ` ${kind}` : ""}`;
+  status.hidden = !text;
+}
+
+function mediaChip(text, variant = "", title = "") {
+  const chip = document.createElement("span");
+  chip.className = variant ? `media-chip media-chip-${variant}` : "media-chip";
+  chip.textContent = text;
+  if (title) chip.title = title;
+  return chip;
+}
+
+function mediaChipRow(chips) {
+  const row = document.createElement("div");
+  row.className = "media-chip-row";
+  chips.forEach((chip) => row.appendChild(chip));
+  return row;
+}
+
+/* One chip per declared endpoint; speech carries the formats its host
+   documents, and the path rides in the tooltip. */
+function mediaDeclaredChips(declared) {
+  if (!Array.isArray(declared) || !declared.length) {
+    return [mediaChip("declares no media endpoint", "warn")];
+  }
+  return declared.map((entry) => {
+    const formats = Array.isArray(entry.formats) && entry.formats.length
+      ? ` ${entry.formats.join("/")}`
+      : "";
+    return mediaChip(`${entry.label}${formats}`, "", entry.path || "");
+  });
+}
+
+function mediaPlacementChips(row) {
+  const chips = [];
+  (row.placements || []).forEach((placement) => {
+    chips.push(mediaChip(`${placement.label} · ${placement.position}`, "rail"));
+    if (placement.paused) chips.push(mediaChip(`${placement.label}: paused`, "paused"));
+    if (!placement.served) {
+      chips.push(
+        mediaChip(
+          `${placement.label}: not served — skipped uncharged`,
+          "warn",
+          `${row.provider_name} declares no ${placement.label} endpoint, so this rail steps over it without charging it a failure.`,
+        ),
+      );
+    }
+  });
+  return chips;
+}
+
+function mediaModalityChips(modalities) {
+  const output = modalities && Array.isArray(modalities.output) ? modalities.output : null;
+  if (!output) return [mediaChip("unknown", "muted", "models.dev does not describe this model")];
+  const tier = modalities.tier ? `models.dev: ${modalities.tier}` : "models.dev";
+  return output.map((name) =>
+    mediaChip(modalities.approximate ? `≈ ${name}` : name, "", tier),
+  );
+}
+
+function mediaHealthChips(row) {
+  const chips = [];
+  if (row.provider_state === "unknown") {
+    chips.push(mediaChip("unknown provider — skipped", "warn"));
+  } else if (row.provider_state === "disabled") {
+    chips.push(mediaChip("provider disabled", "warn"));
+  }
+  const health = row.health || {};
+  if (health.benched) {
+    chips.push(mediaChip("benched (media)", "warn", health.reason || ""));
+  } else {
+    chips.push(mediaChip("not benched", "ok"));
+  }
+  return chips;
+}
+
+function mediaKeyChip(key) {
+  const state = (key && key.status) || "unknown";
+  const label = (key && key.label) || "Unknown";
+  if (state === "configured") {
+    const count = key.key_count;
+    const keys = count === null || count === undefined
+      ? ""
+      : ` · ${count} ${count === 1 ? "key" : "keys"}`;
+    return mediaChip(`${label}${keys}`, "ok");
+  }
+  return mediaChip(label, "warn");
+}
+
+function mediaModelRefCell(row) {
+  const cell = document.createElement("div");
+  const ref = document.createElement("code");
+  ref.className = "media-ref";
+  ref.textContent = row.model_ref;
+  const provider = document.createElement("div");
+  provider.className = "media-provider-name";
+  provider.textContent = row.custom ? `${row.provider_name} (custom)` : row.provider_name;
+  cell.append(ref, provider);
+  return cell;
+}
+
+function mediaTable(headers, rows) {
+  const table = document.createElement("table");
+  table.className = "media-models-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headers.forEach((header) => {
+    const th = document.createElement("th");
+    th.textContent = header;
+    headRow.appendChild(th);
+  });
+  head.appendChild(headRow);
+  const body = document.createElement("tbody");
+  rows.forEach((cells) => {
+    const tr = document.createElement("tr");
+    cells.forEach((cell) => {
+      const td = document.createElement("td");
+      if (cell instanceof Node) td.appendChild(cell);
+      else td.textContent = cell;
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  table.append(head, body);
+  // Scrolls inside its own card: at 420 px six columns of chips are wider
+  // than the page, and a wide table must never widen the page with it.
+  const scroll = document.createElement("div");
+  scroll.className = "table-scroll media-models-scroll";
+  scroll.appendChild(table);
+  return scroll;
+}
+
+function mediaEmpty(text) {
+  const empty = document.createElement("p");
+  empty.className = "media-models-empty";
+  empty.textContent = text;
+  return empty;
+}
+
+function renderMediaModels(data) {
+  const modelsHost = byId("mediaModelsTable");
+  const providersHost = byId("mediaProvidersTable");
+  if (!modelsHost || !providersHost) return;
+  modelsHost.textContent = "";
+  providersHost.textContent = "";
+  const rows = Array.isArray(data && data.models) ? data.models : [];
+  if (!rows.length) {
+    modelsHost.appendChild(
+      mediaEmpty(
+        "No model is on a media rail. Set MODEL_IMAGE, MODEL_TTS, MODEL_ASR or MODEL_VIDEO on Model Config.",
+      ),
+    );
+  } else {
+    modelsHost.appendChild(
+      mediaTable(
+        ["Model", "Rails", "Provider declares", "models.dev output", "Health", "Key"],
+        rows.map((row) => [
+          mediaModelRefCell(row),
+          mediaChipRow(mediaPlacementChips(row)),
+          mediaChipRow(mediaDeclaredChips(row.declared)),
+          mediaChipRow(mediaModalityChips(row.modalities)),
+          mediaChipRow(mediaHealthChips(row)),
+          mediaChipRow([mediaKeyChip(row.key)]),
+        ]),
+      ),
+    );
+  }
+  const providers = Array.isArray(data && data.providers) ? data.providers : [];
+  if (!providers.length) {
+    providersHost.appendChild(mediaEmpty("No provider declares a media endpoint."));
+    return;
+  }
+  providersHost.appendChild(
+    mediaTable(
+      ["Provider", "Can serve", "Declared endpoints", "Key"],
+      providers.map((provider) => {
+        const name = document.createElement("div");
+        name.className = "media-provider-name";
+        name.textContent = provider.display_name;
+        const badges = [];
+        if (provider.custom) badges.push(mediaChip("custom", "rail"));
+        if (provider.enabled === false) badges.push(mediaChip("disabled", "warn"));
+        const cell = document.createElement("div");
+        cell.append(name, mediaChipRow(badges));
+        return [
+          cell,
+          mediaChipRow((provider.rails || []).map((rail) => mediaChip(rail, "rail"))),
+          mediaChipRow(mediaDeclaredChips(provider.declared)),
+          mediaChipRow([mediaKeyChip(provider.key)]),
+        ];
+      }),
+    ),
+  );
+}
+
 function renderModelsPage() {
   const data = modelsState.data;
   if (!data) return;
@@ -26583,6 +27064,7 @@ function initModelsView() {
     reload.addEventListener("click", () => {
       clearModelsSelection();
       loadModelsView(true).catch((error) => showMessage(error.message, "error"));
+      loadMediaModels(true).catch((error) => showMessage(error.message, "error"));
     });
   }
 
