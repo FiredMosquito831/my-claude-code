@@ -426,6 +426,13 @@ async def serve_media_generate(
     else:
         operation = MEDIA_OPERATION_SPEECH
         rail = MediaRail.TTS
+    # MEDIA_FALLBACK_ON_UNDOWNLOADABLE (7.68.0): a picture the host answered
+    # with a link to is fetched inside the attempt, so a fetch that fails
+    # falls back to the next model. Off, it is fetched after the commit, in
+    # ``_image_parts``, and a failure is the client's error.
+    inline_urls = (
+        image and services.requests.current_settings().media_fallback_on_undownloadable
+    )
     media_request = MediaRequest(
         operation=operation,
         rail=rail,
@@ -434,6 +441,7 @@ async def serve_media_generate(
         stream=False,
         uploads=uploads,
         not_forwarded=ask.not_forwarded,
+        inline_urls=inline_urls,
     )
     media = services.media
     return await _serve(

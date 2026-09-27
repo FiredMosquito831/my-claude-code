@@ -7,11 +7,17 @@ server, and nothing changes. One test per hop, from `Settings` to the object
 that reads the value.
 """
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
+from fastapi import Response
+from fastapi.testclient import TestClient
 
+from my_claude_code.api import gemini_media_routes
+from my_claude_code.api.media_capture import MediaCapture
 from my_claude_code.application.execution import route_execution_policy
+from my_claude_code.application.media.request import MediaRail, MediaRequest
 from my_claude_code.cli.harnesses.catalogue_client import fetch_catalogue_models
 from my_claude_code.config.limits import range_for
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
@@ -22,14 +28,17 @@ from my_claude_code.config.settings import (
 )
 from my_claude_code.core.credential_rotation import PROVIDER_TUNING
 from my_claude_code.core.failures import FailureKind
+from my_claude_code.core.media_outputs import MediaOutputs
 from my_claude_code.core.rate_limit import (
     MAX_HOST_STATED_COOLDOWN_SECONDS,
     MAX_RATE_LIMIT_COOLDOWN_SECONDS,
 )
+from my_claude_code.core.request_log import RequestLogStore, RequestRecord
 from my_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from my_claude_code.providers.runtime.config import build_provider_config
 from my_claude_code.providers.runtime.factory import create_provider
 from my_claude_code.providers.runtime.rotating import RotatingProvider
+from tests.api.support import create_test_app
 
 
 def _settings(**overrides) -> Settings:
@@ -890,3 +899,55 @@ def test_the_resort_interval_reaches_the_speed_order_writer() -> None:
     assert "lambda: self.settings" in inspect.getsource(
         runtime_application.ApplicationRuntime.__init__
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("value", "held"), [("0", 0), ("5", 5 * 1024 * 1024)])
+async def test_the_media_store_cap_reaches_the_row_the_writer_trims_by(
+    monkeypatch, value: str, held: int
+) -> None:
+    """7.68.0's MEDIA_STORE_MAX_MB: the capture hands it to the writer, in bytes."""
+
+    written: list[RequestRecord] = []
+    monkeypatch.setattr(RequestLogStore, "enqueue", lambda _store, r: written.append(r))
+    settings = Settings.model_validate({"MEDIA_STORE_MAX_MB": value})
+    capture = MediaCapture(
+        settings,
+        request_id="req-cap",
+        endpoint="/v1/images/generations",
+        request=MediaRequest(
+            operation="image_generate", rail=MediaRail.IMAGE, model=""
+        ),
+        headers={},
+    )
+    await capture.finish("success", outputs=MediaOutputs())
+    (record,) = written
+    assert record.media_store_max_bytes == held
+
+
+@pytest.mark.parametrize(("value", "inline"), [(None, False), ("true", True)])
+def test_the_undownloadable_switch_reaches_the_gemini_image_request(
+    monkeypatch, value: str | None, inline: bool
+) -> None:
+    """7.68.0's MEDIA_FALLBACK_ON_UNDOWNLOADABLE: read per request by the IMAGE branch."""
+
+    built: list[MediaRequest] = []
+
+    async def serve(_request: Any, _services: Any, media_request: MediaRequest, **_):
+        built.append(media_request)
+        return Response(status_code=204)
+
+    monkeypatch.setattr(gemini_media_routes, "_serve", serve)
+    values = {} if value is None else {"MEDIA_FALLBACK_ON_UNDOWNLOADABLE": value}
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": "a kite"}]}],
+        "generationConfig": {"responseModalities": ["IMAGE"]},
+    }
+    with TestClient(create_test_app(Settings.model_validate(values))) as client:
+        image = client.post("/v1beta/models/m:generateContent", json=body)
+        speech = client.post(
+            "/v1beta/models/m:generateContent",
+            json={**body, "generationConfig": {"responseModalities": ["AUDIO"]}},
+        )
+    assert (image.status_code, speech.status_code) == (204, 204)
+    assert [request.inline_urls for request in built] == [inline, False]

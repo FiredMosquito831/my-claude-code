@@ -1514,6 +1514,7 @@
                 <div id="reqDetailRoute" class="route-trace" hidden></div>
                 <dl id="reqDetailMeta" class="requests-detail-meta"></dl>
                 <div id="reqDetailImages" class="req-images" hidden></div>
+                <div id="reqDetailMedia" class="req-media" hidden></div>
                 <div id="reqDetailChain" class="req-chain" hidden></div>
                 <div id="reqDetailWire" class="req-wire" hidden></div>
 
@@ -3591,6 +3592,8 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Models</strong> page lists every media-rail model and what its provider
                   declares; <strong>Analytics</strong> has a separate <em>Media</em> card; a custom
                   provider declares media endpoints with the <em>Media endpoints</em> checkboxes.
+                  A request's detail shows its media, with a preview for stored files;
+                  <code>MEDIA_STORE_MAX_MB</code> caps what is kept.
                 </p>
                 <p>
                   The rail keeps health records of its own, so a model or key that fails at

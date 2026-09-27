@@ -232,6 +232,13 @@ operation = client.operations.get(operation)  # ask again until operation.done
   skipped for it, uncharged). A failed job answers `done: true` with `error.code` 13 and the
   provider's message.
 - Errors use Google's error envelope. `:predict` (the Imagen shape) is not served.
+- **`MEDIA_FALLBACK_ON_UNDOWNLOADABLE`** (7.68.0, default off; Limits & Resilience). A provider
+  that answers an image request with a URL has already generated -- and usually billed -- the
+  image. Off: if MCC cannot download it, the client gets the error, as before. On: the download
+  happens inside the attempt, so a download failure counts as that model's failure and the Image
+  rail moves on to the next model (the first image may still be billed). It applies to
+  Gemini-shaped image requests, the only answers MCC must download itself; OpenAI clients get
+  the URL as the provider sent it, and an accepted video job is never resubmitted.
 
 **Gemini on the Speech and Transcription rails (7.66.0).** Gemini's OpenAI-compatible layer has no
 speech or transcription endpoint, so a Gemini model on these rails is called through Gemini's own
@@ -332,6 +339,19 @@ in the `media` folder beside the request log (`~/.mcc/logs/media/`). The same im
 once. A file is deleted when the last request row that references it is pruned or the log is
 cleared; turning the setting off stops new copies and leaves existing files alone. It lives on
 **Analytics -> Request log**.
+
+**`MEDIA_STORE_MAX_MB`** (7.68.0, default `0`, 0 to 10,000,000) caps the stored files. `0` keeps
+every file until its request row is pruned. Above `0`, once the stored files together pass that
+many megabytes, the oldest are deleted first; the request rows and their metadata (hash, type,
+size) stay, and the row simply shows the file as no longer stored. The cap is applied whenever a
+new media file is written, so lowering it takes effect with the next stored file.
+
+**Previews.** The request detail (click a row on Analytics) has a **Media** section: every input
+and output the request carried -- direction, type, size, a short hash -- and, only for files that
+are stored, a preview (image, audio player or video player) loaded on demand from
+`GET /admin/api/media/<sha256>`. That route answers only on the loopback address, serves image,
+audio and video types as themselves (anything else, SVG included, as a download) and is never
+used by list views.
 
 ## Not yet
 

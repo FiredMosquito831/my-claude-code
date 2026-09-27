@@ -77,7 +77,7 @@ from my_claude_code.core.request_log import (
 )
 
 from .dependencies import get_services, require_proxy_auth
-from .media_capture import MediaCapture
+from .media_capture import MediaCapture, media_store_cap_bytes
 from .media_routes import (
     OPENAI_WIRE,
     Complete,
@@ -744,6 +744,8 @@ async def _content(
             logger.warning("MEDIA STORE: cannot keep the video: {}", exc)
             tee = await asyncio.to_thread(MediaFileTee, None)
 
+    cap = media_store_cap_bytes(settings)
+
     async def finished(done: MediaFileTee) -> None:
         sha256, stored = await asyncio.to_thread(done.finish, mime)
         record = MediaOutputRecord(
@@ -756,6 +758,8 @@ async def _content(
             record,
             at=time.time(),
         )
+        if stored and cap > 0:
+            await asyncio.to_thread(store.trim_media_store, cap)
 
     return ManagedStreamingResponse(
         _content_body(download, tee, finished), media_type=download.content_type

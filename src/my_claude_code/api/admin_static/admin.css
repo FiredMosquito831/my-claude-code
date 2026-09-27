@@ -3681,6 +3681,67 @@ details.turn-pane > summary:focus-visible {
   word-break: break-word;
 }
 
+/* What a media endpoint took in or produced (7.68.0). The facts always; a
+   picture or a player only for a file the media store kept. */
+.req-media {
+  margin: 12px 0 4px;
+}
+
+.req-media h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.req-media-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.req-media-item {
+  margin: 0;
+  max-width: 320px;
+}
+
+.req-media-preview {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+}
+
+img.req-media-preview {
+  height: auto;
+}
+
+audio.req-media-preview {
+  width: 300px;
+  max-width: 100%;
+}
+
+.req-media-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 160px;
+  height: 60px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.req-media-item figcaption {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-word;
+}
+
 @media (prefers-reduced-motion: reduce) {
   details.turn-pane > summary h4::before {
     transition: none;

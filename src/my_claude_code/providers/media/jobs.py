@@ -42,24 +42,13 @@ from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import maybe_await_aclose
 
-from .leaf import MediaLeaf
+from .leaf import MediaLeaf, same_host
 
 #: Upstream response headers carried onto a buffered answer (never auth).
 _KEPT_HEADERS = ("content-type", "x-request-id", "request-id")
 
 #: What a finished file is served as when the host names no type.
 DEFAULT_VIDEO_TYPE = "video/mp4"
-
-
-def _host(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower()
-
-
-def same_host(url: str, base_url: str) -> bool:
-    """Whether ``url`` is on the provider's own host (the only one given a key)."""
-
-    host = _host(url)
-    return bool(host) and host == _host(base_url)
 
 
 class PinnedMediaClient:
