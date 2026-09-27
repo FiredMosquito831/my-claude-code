@@ -1904,6 +1904,7 @@
                 <a href="#guide-openai-clients">Connect any OpenAI-compatible client</a>
                 <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
+                <a href="#guide-media">Generate images through the proxy</a>
                 <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
@@ -3505,6 +3506,24 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   dashboard at all. If you would rather see the short form, each card has a
                   <em>Collapse advanced</em> control; it starts expanded and remembers your
                   choice in this browser.
+                </p>
+
+                <h3 id="guide-media">Generate images through the proxy</h3>
+                <p>
+                  Any client that speaks the OpenAI images API can point its base URL at this
+                  proxy: <code>POST /v1/images/generations</code> is routed over the
+                  <strong>Image rail</strong> on <strong>Model Config</strong>, primary first,
+                  then its fallbacks, with the same retry, key-rotation, 429, pause and proxy
+                  rules as a chat chain. A <code>provider/model</code> in the request pins that
+                  model; any other name uses the rail. Only providers that declare an image
+                  endpoint can serve it (Gemini, xAI, Together, DeepInfra, Agnes, SiliconFlow,
+                  ZenMux); any other model on the rail is skipped without being charged.
+                </p>
+                <p>
+                  The rail keeps health records of its own, so a model or key that fails at
+                  images is not benched for chat. Every request is logged with how many images
+                  came back and their size; turn on <em>Store generated media</em> on
+                  <strong>Analytics</strong> to keep the files too.
                 </p>
 
                 <h3 id="guide-images">Images, and what they cost</h3>

@@ -9,6 +9,7 @@ The [README](../README.md) is the map: what My Claude Code is, how to install it
 | [OAuth providers](./OAUTH-PROVIDERS.md) | Sign-in-based providers: a Claude subscription, ChatGPT, Kimi For Coding. |
 | [Messaging](./MESSAGING.md) | Running sessions over Discord or Telegram, with voice-note transcription. |
 | [Routing reference](./ROUTING-REFERENCE.md) | Key rotation, fallback chains, output budgets, limits and resilience, and the token optimizer, as reference rather than tutorial. |
+| [Media routing](./MEDIA.md) | Image generation (and, one release at a time, edits, speech, transcription and video) routed over media rails with the chat engine's retry, key and proxy rules. |
 | [Web search](./WEB-SEARCH.md) | The `web_search` server tool, fulfilled at the proxy by 14 search providers instead of by Anthropic. |
 | [Claude Code config](./CLAUDE-CODE-CONFIG.md) | Pointing Claude Code at this proxy, per session or permanently. |
 | [Anthropic subscription](./ANTHROPIC-SUBSCRIPTION.md) | What signing in with a Claude subscription costs you, and why Anthropic does not permit it. |

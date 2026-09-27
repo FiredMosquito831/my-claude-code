@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "7.59.0"
+version = "7.60.0"
 description = "Local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents: 57 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -154,6 +154,7 @@ packages = ["src/my_claude_code"]
 "docs/MESSAGING.md" = "my_claude_code/docs_bundle/MESSAGING.md"
 "docs/ROUTING-REFERENCE.md" = "my_claude_code/docs_bundle/ROUTING-REFERENCE.md"
 "docs/WEB-SEARCH.md" = "my_claude_code/docs_bundle/WEB-SEARCH.md"
+"docs/MEDIA.md" = "my_claude_code/docs_bundle/MEDIA.md"
 "docs/CLAUDE-CODE-CONFIG.md" = "my_claude_code/docs_bundle/CLAUDE-CODE-CONFIG.md"
 "docs/ANTHROPIC-SUBSCRIPTION.md" = "my_claude_code/docs_bundle/ANTHROPIC-SUBSCRIPTION.md"
 

@@ -3097,6 +3097,9 @@ Unlike everything else on this page, a pause is written the moment you click it:
 | `MODEL_SONNET_PAUSED` | paused entries on Sonnet |
 | `MODEL_HAIKU_PAUSED` | paused entries on Haiku |
 | `MODEL_VISION_PAUSED` | paused entries on the vision adapter |
+| `MODEL_IMAGE` | the Image rail's model: `POST /v1/images/generations` routes here ([Media routing](MEDIA.md)) |
+| `MODEL_IMAGE_FALLBACKS` | the Image rail's fallback chain |
+| `MODEL_IMAGE_PAUSED` | paused entries on the Image rail |
 | `VISION_ADAPTER_MODE` | what the vision adapter does with an image: `route` (default, divert the whole request) or `describe` (describe the image, keep the model) |
 | `TOOL_RESULT_IMAGE_DELIVERY` | how an image a *tool* returned reaches a non-Anthropic model: `auto` (default), `attach`, `strip` |
 | `IMAGE_MAX_LONG_EDGE` | longest edge, in px, an outbound image may have. `1568` (default), `0` to send images untouched |
@@ -4051,6 +4054,7 @@ REQUEST_LOG_CAPTURE_SESSION=true   # the conversation and subagent ids it sent
 REQUEST_LOG_TEXT_MAX_CHARS=10000000 # longer text is truncated before storage
 REQUEST_LOG_WIRE_BODY_MAX_CHARS=8000  # bounds stored message/tool structure only
 REQUEST_LOG_COMPRESSION_LEVEL=9    # 1-22; 19 measured 4.9% smaller at 9x the time
+MEDIA_STORE_ENABLED=false          # also keep generated images, as files beside the log
 ```
 
 All of these are editable in **Admin UI → Analytics** without touching the file — they are the **Request log storage** card at the bottom of the same page whose contents they govern. Leaving one blank means "use the default" rather than "invalid", so clearing a field can never stop the server starting, and a value outside its range is refused by the form and clamped (with a warning) if it was edited into the file by hand.

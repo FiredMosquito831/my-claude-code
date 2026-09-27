@@ -98,6 +98,10 @@ ROUTE_PAUSE_KEYS: tuple[tuple[str, str, str], ...] = (
     ("MODEL_SONNET", "MODEL_SONNET_FALLBACKS", "MODEL_SONNET_PAUSED"),
     ("MODEL_HAIKU", "MODEL_HAIKU_FALLBACKS", "MODEL_HAIKU_PAUSED"),
     ("MODEL_VISION", "MODEL_VISION_FALLBACKS", "MODEL_VISION_PAUSED"),
+    # A media rail (7.60.0). Every consumer of this table is route-generic:
+    # the Pause button, pruning a stale pause, and a custom provider being
+    # deleted or disabled all mean the same thing on a media rail.
+    ("MODEL_IMAGE", "MODEL_IMAGE_FALLBACKS", "MODEL_IMAGE_PAUSED"),
 )
 
 PAUSE_KEY_FOR_ROUTE: dict[str, str] = {

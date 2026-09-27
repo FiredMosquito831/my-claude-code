@@ -778,6 +778,50 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         affects_providers=False,
     ),
     ConfigFieldSpec(
+        "MODEL_IMAGE",
+        "Image Rail",
+        "models",
+        "optional_model",
+        settings_attr="model_image",
+        description=(
+            "Model that serves POST /v1/images/generations (the OpenAI images API). "
+            "A media rail, never a chat tier: it is not offered to coding agents and "
+            "is never reached from /v1/messages. A client that names a provider/model "
+            "ref pins that model; any other model name uses this rail. None answers "
+            "the endpoint with 'no model configured' instead of borrowing a chat model. "
+            "Only providers that declare an image endpoint can serve it."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_IMAGE_FALLBACKS",
+        "Image Fallback Chain",
+        "models",
+        "model_chain",
+        settings_attr="model_image_fallbacks",
+        description=(
+            "Ordered provider/model refs tried after MODEL_IMAGE fails, is paused or "
+            "is benched -- the same retry, key-rotation, 429, bench and proxy rules "
+            "as a chat chain, with health records of their own, so a model that "
+            "fails at images is not benched for chat."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_IMAGE_PAUSED",
+        "Image Paused Models",
+        "models",
+        "text",
+        settings_attr="model_image_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on the Image rail that are "
+            "switched off. A paused model is never tried and costs no "
+            "attempt, but it keeps its place in the chain and appears in the "
+            "request log as skipped. When every model on the rail is paused "
+            "the endpoint answers an error naming this setting."
+        ),
+        affects_providers=False,
+    ),
+    ConfigFieldSpec(
         "MODEL_VISIBILITY_ALLOW",
         "Only list these models",
         "models",
@@ -3450,6 +3494,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "carried, so the request detail can show what the model was "
             "looking at. The count is recorded either way."
         ),
+    ),
+    ConfigFieldSpec(
+        "MEDIA_STORE_ENABLED",
+        "Store generated media",
+        "request_log",
+        "boolean",
+        settings_attr="media_store_enabled",
+        default="false",
+        description=(
+            "Keeps a copy of every image a media endpoint generated, as a file "
+            "named by its SHA-256 in the media folder beside the request log. "
+            "Off by default: the hash, size, type and count are recorded either "
+            "way. A file is deleted when the last request row that references it "
+            "is pruned or the log is cleared; turning this off stops new copies "
+            "and leaves existing ones in place."
+        ),
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "REQUEST_LOG_IMAGE_MAX_PIXELS",

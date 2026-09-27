@@ -137,6 +137,15 @@ DOCUMENTS: tuple[Document, ...] = (
         repo_path="docs/WEB-SEARCH.md",
     ),
     Document(
+        slug="media",
+        title="Media Routing",
+        summary=(
+            "Image generation routed over media rails, with the chat engine's "
+            "retry, key and proxy rules and health records of its own."
+        ),
+        repo_path="docs/MEDIA.md",
+    ),
+    Document(
         slug="claude-code-config",
         title="Claude Code Config",
         summary="Pointing Claude Code at this proxy, per session or permanently.",

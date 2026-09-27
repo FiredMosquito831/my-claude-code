@@ -2151,7 +2151,9 @@ def test_admin_static_reorders_a_route_rail_as_one_list():
     assert script.count("routeNode(") == 2, (
         "a route primary is built outside appendRouteRail"
     )
-    assert script.count("appendRouteRail(") == 4, (
+    # Five since 7.60.0: the Image rail card is a rail like any other and
+    # goes through the same builder.
+    assert script.count("appendRouteRail(") == 5, (
         "a rail is filled outside appendRouteRail"
     )
 

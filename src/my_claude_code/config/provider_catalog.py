@@ -6,6 +6,8 @@ provider implementation imports (see contract tests).
 
 from dataclasses import dataclass
 
+from .media_surfaces import MediaSurface, image_generation_surface
+
 # Default upstream base URLs are owned here with the provider catalog.
 # Anthropic Messages API root. ``/messages`` and ``/models`` hang off this.
 ANTHROPIC_DEFAULT_BASE = "https://api.anthropic.com/v1"
@@ -231,6 +233,11 @@ class ProviderDescriptor:
     # host with no published formula ships as ``unknown``; guessing one would
     # produce a confident number nobody could audit.
     image_token_family: str = "unknown"
+    # The media endpoints this host serves (``config/media_surfaces.py``).
+    # Empty is "none declared": the media router skips the provider for every
+    # media operation without charging it a failure. Filled only from the
+    # host's own API reference, never inferred from a model name.
+    media_surfaces: tuple[MediaSurface, ...] = ()
 
     def configuration_attrs(self) -> tuple[str, ...]:
         """Return settings fields whose non-empty values configure this provider."""
@@ -315,6 +322,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "gemini": ProviderDescriptor(
         image_token_family="gemini",
         provider_id="gemini",
+        media_surfaces=(image_generation_surface(),),
         display_name="Gemini",
         credential_env="GEMINI_API_KEY",
         credential_url="https://aistudio.google.com/apikey",
@@ -631,6 +639,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "agnes": ProviderDescriptor(
         provider_id="agnes",
+        media_surfaces=(image_generation_surface(),),
         display_name="Agnes AI",
         credential_env="AGNES_API_KEY",
         credential_url="https://agnes-ai.com/",
@@ -642,6 +651,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "zenmux": ProviderDescriptor(
         provider_id="zenmux",
+        media_surfaces=(image_generation_surface(),),
         display_name="ZenMux",
         credential_env="ZENMUX_API_KEY",
         credential_url="https://zenmux.ai/platform/pay-as-you-go",
@@ -717,6 +727,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "xai": ProviderDescriptor(
         provider_id="xai",
+        media_surfaces=(image_generation_surface(),),
         display_name="xAI (Grok)",
         credential_env="XAI_API_KEY",
         credential_url="https://console.x.ai/team/default/api-keys",
@@ -727,6 +738,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "together": ProviderDescriptor(
         provider_id="together",
+        media_surfaces=(image_generation_surface(),),
         display_name="Together AI",
         credential_env="TOGETHER_API_KEY",
         credential_url="https://api.together.ai/settings/api-keys",
@@ -737,6 +749,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "deepinfra": ProviderDescriptor(
         provider_id="deepinfra",
+        media_surfaces=(image_generation_surface(),),
         display_name="DeepInfra",
         credential_env="DEEPINFRA_API_KEY",
         credential_url="https://deepinfra.com/dash/api_keys",
@@ -747,6 +760,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "siliconflow": ProviderDescriptor(
         provider_id="siliconflow",
+        media_surfaces=(image_generation_surface(),),
         display_name="SiliconFlow",
         credential_env="SILICONFLOW_API_KEY",
         credential_url="https://cloud.siliconflow.com/account/ak",

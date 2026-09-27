@@ -32,6 +32,11 @@ from my_claude_code.core.cancelled_reasons import (
     sub_label_case_sql,
 )
 from my_claude_code.core.client_fingerprint import harness_from_headers
+from my_claude_code.core.media_store import (
+    MediaOutputRecord,
+    delete_media_files,
+    media_root,
+)
 from my_claude_code.core.request_images import CapturedImage
 from my_claude_code.core.request_origin import (
     BACKFILL_SIGNAL,
@@ -1018,6 +1023,24 @@ CREATE TABLE IF NOT EXISTS request_images (
     sha TEXT NOT NULL,
     PRIMARY KEY (request_id, position)
 );
+-- Media a media endpoint generated (7.60.0), content-addressed. The bytes
+-- live in files beside this database (core/media_store.py) and only when
+-- MEDIA_STORE_ENABLED is on; ``stored`` says whether a file was written.
+-- The hash, type and size are recorded either way.
+CREATE TABLE IF NOT EXISTS media_blobs (
+    sha256 TEXT PRIMARY KEY,
+    mime TEXT,
+    bytes INTEGER,
+    created_at REAL,
+    stored INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS request_media (
+    request_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    PRIMARY KEY (request_id, direction, idx)
+);
 -- One row per model the chain reached, or deliberately did not reach.
 --
 -- ``requests`` holds one row per request, so it can only ever name the model
@@ -1486,6 +1509,19 @@ _ADDED_COLUMNS = (
     # non-stream request, the log's own older rows -- and 0 is "it ran and was
     # never needed". Not backfillable: nothing recorded them before.
     ("keepalive_frames", "ALTER TABLE requests ADD COLUMN keepalive_frames INTEGER"),
+    # 7.60.0: media endpoints (images, later speech/transcription/video).
+    # ``media_operation`` names what the row did (``image_generate``);
+    # NULL is "not a media request". The three output facts are NULL for
+    # "not measured" (a URL-only answer has no bytes here) and never a
+    # guessed zero. ``endpoint`` stays the modality dimension, so the
+    # rollup needs no rebuild.
+    ("media_operation", "ALTER TABLE requests ADD COLUMN media_operation TEXT"),
+    (
+        "output_image_count",
+        "ALTER TABLE requests ADD COLUMN output_image_count INTEGER",
+    ),
+    ("media_bytes_out", "ALTER TABLE requests ADD COLUMN media_bytes_out INTEGER"),
+    ("media_sha_out", "ALTER TABLE requests ADD COLUMN media_sha_out TEXT"),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1631,6 +1667,10 @@ _REQUEST_INSERT_COLUMNS = (
     "project_dir",
     "origin_source",
     "keepalive_frames",
+    "media_operation",
+    "output_image_count",
+    "media_bytes_out",
+    "media_sha_out",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -2250,6 +2290,14 @@ class RequestRecord:
     # Empty-delta keepalive frames sent (7.47.0). None unless
     # STREAM_KEEPALIVE_MODE=frames ran on this stream.
     keepalive_frames: int | None = None
+    # Media endpoints (7.60.0). None on every chat row.
+    media_operation: str | None = None
+    output_image_count: int | None = None
+    media_bytes_out: int | None = None
+    media_sha_out: str | None = None
+    #: Generated outputs to link in ``request_media`` (sha256, mime, bytes,
+    #: stored). Written by the writer thread with the row.
+    media_outputs: tuple[MediaOutputRecord, ...] = ()
 
     @property
     def ts_iso(self) -> str:
@@ -4437,6 +4485,42 @@ class RequestLogStore:
         )
 
     @staticmethod
+    def _store_media(conn: sqlite3.Connection, batch: list[RequestRecord]) -> None:
+        """Link each record's generated media to its content address.
+
+        ``stored`` only ever rises: a later request that kept the file makes
+        the address stored even if an earlier one recorded metadata only.
+        """
+        blobs: list[tuple[str, str | None, int, float, int]] = []
+        links: list[tuple[str, str, int, str]] = []
+        for record in batch:
+            for output in record.media_outputs:
+                blobs.append(
+                    (
+                        output.sha256,
+                        output.mime,
+                        output.bytes,
+                        record.ts_epoch,
+                        1 if output.stored else 0,
+                    )
+                )
+                links.append((record.id, output.direction, output.idx, output.sha256))
+        if not links:
+            return
+        conn.executemany(
+            "INSERT INTO media_blobs (sha256, mime, bytes, created_at, stored)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(sha256) DO UPDATE SET"
+            " stored = MAX(media_blobs.stored, excluded.stored)",
+            blobs,
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO request_media (request_id, direction, idx, sha256)"
+            " VALUES (?, ?, ?, ?)",
+            links,
+        )
+
+    @staticmethod
     def _store_attempts(conn: sqlite3.Connection, batch: list[RequestRecord]) -> None:
         """Persist each record's route attempts.
 
@@ -4871,6 +4955,7 @@ class RequestLogStore:
                 conn.executemany(_REQUEST_INSERT_SQL, rows)
                 self._store_bodies(conn, packed)
                 self._store_images(conn, batch)
+                self._store_media(conn, batch)
                 self._store_attempts(conn, batch)
                 # One list, computed once and shared, so the two aggregates
                 # provably fold in the same set of records.
@@ -4966,6 +5051,10 @@ class RequestLogStore:
             record.project_dir,
             record.origin_source,
             record.keepalive_frames,
+            record.media_operation,
+            record.output_image_count,
+            record.media_bytes_out,
+            record.media_sha_out,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -8177,6 +8266,29 @@ class RequestLogStore:
                     " SELECT 1 FROM request_images WHERE request_images.sha ="
                     " image_blobs.sha)"
                 )
+                # Generated media follow the same rule, and a stored file goes
+                # with its last row. The files are deleted here, on the
+                # writer thread, never on the event loop.
+                conn.execute(
+                    "DELETE FROM request_media WHERE NOT EXISTS ("
+                    " SELECT 1 FROM requests WHERE requests.id ="
+                    " request_media.request_id)"
+                )
+                orphaned_media = [
+                    str(row[0])
+                    for row in conn.execute(
+                        "SELECT sha256 FROM media_blobs WHERE stored = 1"
+                        " AND NOT EXISTS (SELECT 1 FROM request_media"
+                        " WHERE request_media.sha256 = media_blobs.sha256)"
+                    )
+                ]
+                conn.execute(
+                    "DELETE FROM media_blobs WHERE NOT EXISTS ("
+                    " SELECT 1 FROM request_media WHERE request_media.sha256 ="
+                    " media_blobs.sha256)"
+                )
+                if orphaned_media:
+                    delete_media_files(media_root(self._db_path), orphaned_media)
                 now = time.monotonic()
                 if removed and (
                     self._last_tool_sweep is None
@@ -8244,10 +8356,21 @@ class RequestLogStore:
             conn.execute("DELETE FROM body_blobs")
             conn.execute("DELETE FROM request_images")
             conn.execute("DELETE FROM image_blobs")
+            stored_media = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT sha256 FROM media_blobs WHERE stored = 1"
+                )
+            ]
+            conn.execute("DELETE FROM request_media")
+            conn.execute("DELETE FROM media_blobs")
             conn.execute("DELETE FROM request_attempts")
             conn.execute("DELETE FROM tool_catalogues")
             conn.execute("DELETE FROM tool_schemas")
-            return cursor.rowcount
+            removed = cursor.rowcount
+        if stored_media:
+            delete_media_files(media_root(self._db_path), stored_media)
+        return removed
 
     # ------------------------------------------------- image descriptions ---
 

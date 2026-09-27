@@ -5423,6 +5423,7 @@ const ROUTE_PAUSE_KEY = new Map([
   ["MODEL_SONNET", "MODEL_SONNET_PAUSED"],
   ["MODEL_HAIKU", "MODEL_HAIKU_PAUSED"],
   ["MODEL_VISION", "MODEL_VISION_PAUSED"],
+  ["MODEL_IMAGE", "MODEL_IMAGE_PAUSED"],
 ]);
 
 /** Put the harness alias for a route beside its heading, if it has one.
@@ -5460,6 +5461,7 @@ function appendTierAlias(heading, modelKey) {
 function routeLabelFor(modelKey) {
   const tier = ROUTE_TIERS.find((candidate) => candidate.modelKey === modelKey);
   if (tier) return tier.label;
+  if (modelKey === "MODEL_IMAGE") return "Image";
   return modelKey === "MODEL_VISION" ? "Vision" : String(modelKey || "");
 }
 
@@ -5666,7 +5668,7 @@ function startRouteDrag(id, event) {
   const ids = routeRailIds(editor).filter((entry) => state.routeSelection.has(entry));
   state.routeDrag = { ids, sourceChainKey: editor.chainKey, target: null };
   document
-    .querySelectorAll(".route-grid, .route-vision")
+    .querySelectorAll(".route-grid, .route-vision, .route-media")
     .forEach((node) => node.classList.add("is-dragging"));
 }
 
@@ -5698,7 +5700,7 @@ function endRouteDrag(event) {
   state.routeDrag = null;
   clearRouteDropIndicator();
   document
-    .querySelectorAll(".route-grid, .route-vision")
+    .querySelectorAll(".route-grid, .route-vision, .route-media")
     .forEach((node) => node.classList.remove("is-dragging"));
   if (!drag || !drag.target) return;
   const source = routeRailFor(drag.sourceChainKey);
@@ -6639,6 +6641,41 @@ function renderModelRouting(fields, allFields) {
     wrap.appendChild(vision);
   }
 
+  // Media rails (7.60.0). Not chat tiers: a media endpoint picks its rail by
+  // what it does (images/generations -> Image), never by a model name, and
+  // nothing on these rails is offered to a coding agent. Same rail editor,
+  // same Pause button, same fallback semantics as every route above.
+  const imageField = fieldByKey.get("MODEL_IMAGE");
+  if (imageField) {
+    const media = document.createElement("article");
+    media.className = "route-card route-media";
+    media.dataset.tier = "image";
+    media.dataset.key = imageField.key;
+
+    const head = document.createElement("header");
+    head.className = "route-card-head";
+    const name = document.createElement("h4");
+    name.className = "route-tier";
+    name.textContent = "Image rail";
+    head.appendChild(name);
+    media.appendChild(head);
+
+    const note = document.createElement("p");
+    note.className = "route-note";
+    note.textContent =
+      "Serves POST /v1/images/generations. Only providers that declare an " +
+      "image endpoint can answer it; a model on any other provider is skipped " +
+      "without being charged. None answers the endpoint with 'no model " +
+      "configured' instead of borrowing a chat model.";
+    media.appendChild(note);
+
+    const rail = document.createElement("div");
+    rail.className = "field route-rail route-media-control";
+    appendRouteRail(rail, imageField, fieldByKey.get("MODEL_IMAGE_FALLBACKS"));
+    media.appendChild(rail);
+    wrap.appendChild(media);
+  }
+
   // Anything the manifest adds to this section later still has to appear.
   const claimed = new Set([
     "MODEL_VISION",
@@ -6646,6 +6683,9 @@ function renderModelRouting(fields, allFields) {
     // Rendered inside the vision card above; leaving it unclaimed would draw
     // it a second time in the leftovers grid.
     "VISION_ADAPTER_MODE",
+    // Drawn in the Image rail card above.
+    "MODEL_IMAGE",
+    "MODEL_IMAGE_FALLBACKS",
     ...ROUTE_TIERS.flatMap((tier) => [tier.modelKey, tier.chainKey]),
     // The pause lists are written by the Pause button beside the ref they
     // name, never typed. Leaving them unclaimed would render six bare text
@@ -26588,7 +26628,7 @@ function initRouteRails() {
       state.routeDrag = null;
       clearRouteDropIndicator();
       document
-        .querySelectorAll(".route-grid, .route-vision")
+        .querySelectorAll(".route-grid, .route-vision, .route-media")
         .forEach((node) => node.classList.remove("is-dragging"));
       return;
     }

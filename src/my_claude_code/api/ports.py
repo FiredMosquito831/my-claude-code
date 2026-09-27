@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from my_claude_code.application.media.ports import MediaRuntimePort
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.ports import RequestRuntimePort, TaskController
 from my_claude_code.config.settings import Settings
@@ -67,3 +68,6 @@ class ApiServices:
     requests: RequestRuntimePort
     admin: AdminRuntimePort
     tasks: TaskController
+    # The media stacks (7.60.0). ``None`` answers every media endpoint 503,
+    # which is what an app built without a runtime (a unit test) gets.
+    media: MediaRuntimePort | None = None
