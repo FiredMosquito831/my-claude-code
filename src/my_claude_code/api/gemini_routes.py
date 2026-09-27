@@ -33,11 +33,14 @@ from my_claude_code.core.anthropic import MessagesRequest, get_token_count
 from my_claude_code.core.gemini_api import (
     COUNT_TOKENS,
     GENERATE_CONTENT,
+    PREDICT_LONG_RUNNING,
     STREAM_GENERATE_CONTENT,
     GeminiApiAdapter,
+    GeminiConversionError,
     GeminiGenerateContentRequest,
     gemini_count_tokens_payload,
     gemini_error_payload,
+    media_output,
     parse_model_method_path,
     strip_models_prefix,
 )
@@ -49,6 +52,7 @@ from .dependencies import (
     require_proxy_auth,
     resolve_provider,
 )
+from .gemini_media_routes import serve_media_generate, serve_predict_long_running
 from .gemini_model_catalog import build_gemini_models_payload, find_gemini_model_entry
 from .handlers import GeminiHandler
 from .ports import ApiServices
@@ -171,6 +175,12 @@ async def gemini_generate_content(
     one that asks for ``:generateContent`` with it still wants a single JSON
     body. Reading the method rather than the query is the only reading that is
     right for both.
+
+    Media (7.65.0) branches off before the chat path: ``:predictLongRunning``
+    (Veo) goes to the Video rail, and a ``generateContent`` whose
+    ``responseModalities`` name ``IMAGE`` or ``AUDIO`` to the Image or Speech
+    rail. Anything else -- no modalities, or ``TEXT`` only -- is the chat
+    path exactly as before.
     """
 
     parsed = parse_model_method_path(model_method)
@@ -181,10 +191,28 @@ async def gemini_generate_content(
         )
     if parsed.method == COUNT_TOKENS:
         return _count_tokens(request_data.with_model(parsed.model), settings=settings)
+    if parsed.method == PREDICT_LONG_RUNNING:
+        return await serve_predict_long_running(
+            request, services, request_data.with_model(parsed.model)
+        )
     if parsed.method not in {GENERATE_CONTENT, STREAM_GENERATE_CONTENT}:
         return _not_found(
             f"Unsupported method: {parsed.method}. MCC serves generateContent, "
-            "streamGenerateContent and countTokens."
+            "streamGenerateContent, countTokens and predictLongRunning."
+        )
+    try:
+        output = media_output(request_data)
+    except GeminiConversionError as exc:
+        return JSONResponse(
+            status_code=400, content=gemini_error_payload(message=str(exc), code=400)
+        )
+    if output is not None:
+        return await serve_media_generate(
+            request,
+            services,
+            request_data.with_model(parsed.model),
+            output=output,
+            method=parsed.method,
         )
 
     return await _create_gemini_response(

@@ -26,6 +26,12 @@ CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 #: :generateContent`` -- so membership is decided by prefix where the other
 #: three are decided by an exact match.
 GEMINI_ENDPOINT_PREFIX = "/v1beta/models"
+#: A Veo job's own paths (7.65.0): ``GET /v1beta/operations/{id}`` polls a
+#: ``:predictLongRunning`` job and ``GET /v1beta/files/{id}:download`` fetches
+#: its video -- what ``google-genai`` builds from the operation's ``name`` and
+#: the video's ``uri``. Google-shaped like the models paths.
+GEMINI_OPERATIONS_PREFIX = "/v1beta/operations"
+GEMINI_FILES_PREFIX = "/v1beta/files"
 # Media endpoints (7.60.0) answer in the OpenAI error envelope, the shape
 # every OpenAI SDK client reads.
 IMAGES_GENERATIONS_ENDPOINT = "/v1/images/generations"
@@ -65,7 +71,9 @@ def wire_api_for_path(path: str) -> WireApi:
     somehow reaches an error boundary is better served an Anthropic body than
     no body at all.
     """
-    if path.startswith(GEMINI_ENDPOINT_PREFIX):
+    if path.startswith(
+        (GEMINI_ENDPOINT_PREFIX, GEMINI_OPERATIONS_PREFIX, GEMINI_FILES_PREFIX)
+    ):
         return "gemini"
     if path.startswith(VIDEOS_ENDPOINT + "/"):
         # A video job's own paths (``/v1/videos/{id}``, ``.../content``) are

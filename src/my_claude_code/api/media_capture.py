@@ -48,7 +48,8 @@ from my_claude_code.core.request_log import (
     store_from_settings,
 )
 
-_PROTOCOL = "openai_images"
+#: The ``protocol`` a media row is logged under when the client spoke OpenAI.
+MEDIA_PROTOCOL_OPENAI = "openai_images"
 
 
 def _usage_int(usage: Mapping[str, Any] | None, key: str) -> int | None:
@@ -69,8 +70,10 @@ class MediaCapture:
         endpoint: str,
         request: MediaRequest,
         headers: Mapping[str, str] | None,
+        protocol: str = MEDIA_PROTOCOL_OPENAI,
     ) -> None:
         self._store = store_from_settings(settings)
+        self._protocol = protocol
         self._store_bytes = bool(getattr(settings, "media_store_enabled", False))
         # Uploaded inputs: metadata always; a thumbnail only when media
         # storage is on (user decision 7) and image thumbnails are too.
@@ -162,6 +165,8 @@ class MediaCapture:
                 }
                 for upload in self._request.uploads
             ]
+        if self._request.not_forwarded:
+            media["not_forwarded"] = list(self._request.not_forwarded)
         params["media"] = media
         return params
 
@@ -261,7 +266,7 @@ class MediaCapture:
         record = RequestRecord(
             id=self._request_id,
             endpoint=self._endpoint,
-            protocol=_PROTOCOL,
+            protocol=self._protocol,
             ts_epoch=self._ts,
             requested_model=self._request.model or None,
             provider=None if routed is None else routed.resolved.provider_id,

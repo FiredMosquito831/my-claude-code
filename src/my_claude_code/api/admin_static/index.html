@@ -3528,7 +3528,9 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   A video is a job: the Video rail is walked only until a provider accepts it,
                   and from then on every status check and the download go to that provider
                   with the same key; a job that later fails is never resubmitted elsewhere.
-                  Video is served by Gemini, OpenRouter and DeepInfra.
+                  Video is served by Gemini, OpenRouter and DeepInfra. Clients that speak
+                  Google's Gemini API reach the same rails: a <code>generateContent</code> asking
+                  for image or audio output, and <code>:predictLongRunning</code> for video.
                 </p>
                 <p>
                   The rail keeps health records of its own, so a model or key that fails at

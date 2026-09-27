@@ -64,7 +64,6 @@ from my_claude_code.core.media_store import (
     media_file_path,
     media_root,
 )
-from my_claude_code.core.openai_common.errors import openai_error_payload
 from my_claude_code.core.openai_videos import (
     STATUS_COMPLETED,
     UpstreamJob,
@@ -80,8 +79,9 @@ from my_claude_code.core.request_log import (
 from .dependencies import get_services, require_proxy_auth
 from .media_capture import MediaCapture
 from .media_routes import (
+    OPENAI_WIRE,
     Complete,
-    _error_response,
+    MediaWire,
     _failure_response,
     _invalid,
     _nothing_to_clean,
@@ -106,9 +106,9 @@ _DEFAULT_VIDEO_TYPE = "video/mp4"
 # ------------------------------------------------------------------ answers
 
 
-def _not_found(video_id: str) -> JSONResponse:
+def _not_found(video_id: str, wire: MediaWire = OPENAI_WIRE) -> JSONResponse:
     message = f"No video found with id '{video_id}'."
-    return _error_response(
+    return wire.error(
         404,
         message,
         ExecutionFailure(
@@ -120,35 +120,35 @@ def _not_found(video_id: str) -> JSONResponse:
     )
 
 
-def _conflict(message: str) -> JSONResponse:
-    return _error_response(409, message, FailureKind.INVALID_REQUEST)
+def _conflict(message: str, wire: MediaWire = OPENAI_WIRE) -> JSONResponse:
+    return wire.error(409, message, FailureKind.INVALID_REQUEST)
 
 
-def _unavailable(message: str) -> JSONResponse:
-    return _error_response(503, message, FailureKind.UNAVAILABLE)
+def _unavailable(message: str, wire: MediaWire = OPENAI_WIRE) -> JSONResponse:
+    return wire.error(503, message, FailureKind.UNAVAILABLE)
 
 
-def _no_media() -> JSONResponse:
-    return _unavailable("Media routing is not available in this server.")
+def _no_media(wire: MediaWire = OPENAI_WIRE) -> JSONResponse:
+    return _unavailable("Media routing is not available in this server.", wire)
 
 
-def _no_store() -> JSONResponse:
+def _no_store(
+    wire: MediaWire = OPENAI_WIRE, endpoint: str = VIDEOS_ENDPOINT
+) -> JSONResponse:
     return _unavailable(
         "Video jobs are kept in the request log, and REQUEST_LOG_ENABLED is "
         "off: a job could be created but never read back. Turn the request "
-        "log on to use /v1/videos."
+        f"log on to use {endpoint}.",
+        wire,
     )
 
 
-def _expired(video_id: str, provider: str) -> JSONResponse:
-    payload = openai_error_payload(
-        message=(
-            f"The provider no longer holds this video ({video_id} on {provider})."
-        ),
-        error_type="not_found_error",
+def _expired(
+    video_id: str, provider: str, wire: MediaWire = OPENAI_WIRE
+) -> JSONResponse:
+    return wire.expired(
+        f"The provider no longer holds this video ({video_id} on {provider})."
     )
-    payload["error"]["code"] = "video_expired"
-    return JSONResponse(status_code=404, content=payload)
 
 
 def _declared(provider_id: str, operation: str) -> MediaSurface | None:
@@ -175,8 +175,44 @@ def _job_row(record: MediaJobRecord) -> dict[str, Any]:
     return row
 
 
-def _video_complete(media: MediaRuntimePort, media_request: MediaRequest) -> Complete:
-    """Answer an accepted create: record the job, then show it to the client."""
+def _answering_key(
+    media: MediaRuntimePort, settings: Settings, provider_id: str
+) -> tuple[int | None, str | None, str | None]:
+    """The key that answered this request: ``(index, label, fingerprint)``.
+
+    Read from the credential attribution the capture installed; the
+    fingerprint (never the key) is what finds the key again after a reorder.
+    """
+    key_index, key_label = current_credential()
+    fingerprint = (
+        media.key_fingerprint(settings, provider_id, key_index)
+        if key_index is not None and key_index >= 0
+        else None
+    )
+    return key_index, key_label, fingerprint
+
+
+#: How an accepted, recorded job is shown to the client: ``(job row, host's answer)``.
+JobAnswer = Callable[[Mapping[str, Any], UpstreamJob], Response]
+
+
+def _video_answer(row: Mapping[str, Any], upstream: UpstreamJob) -> Response:
+    """The OpenAI ``Video`` object (``POST /v1/videos``)."""
+    return JSONResponse(video_object(row, upstream))
+
+
+def _video_complete(
+    media: MediaRuntimePort,
+    media_request: MediaRequest,
+    *,
+    wire: MediaWire = OPENAI_WIRE,
+    answer: JobAnswer = _video_answer,
+) -> Complete:
+    """Answer an accepted create: record the job, then show it to the client.
+
+    ``answer`` shapes the reply (OpenAI's ``Video`` by default; the Gemini
+    surface answers with an ``Operation``) and ``wire`` words its failures.
+    """
 
     async def complete(
         first: MediaChunk,
@@ -193,7 +229,7 @@ def _video_complete(media: MediaRuntimePort, media_request: MediaRequest) -> Com
             await lease.release()
         if not isinstance(first, MediaResponse):
             await capture.finish("error", error=RuntimeError("unexpected stream frame"))
-            return _error_response(
+            return wire.error(
                 502,
                 "The provider streamed an answer that was not asked for.",
                 FailureKind.UPSTREAM,
@@ -206,14 +242,9 @@ def _video_complete(media: MediaRuntimePort, media_request: MediaRequest) -> Com
             # reachable if the log was switched off mid-request.
             error = RuntimeError("the accepted video job could not be recorded")
             await capture.finish("error", error=error)
-            return _error_response(502, str(error), FailureKind.UPSTREAM)
+            return wire.error(502, str(error), FailureKind.UPSTREAM)
         provider_id = routed.resolved.provider_id
-        key_index, key_label = current_credential()
-        fingerprint = (
-            media.key_fingerprint(settings, provider_id, key_index)
-            if key_index is not None and key_index >= 0
-            else None
-        )
+        key_index, key_label, fingerprint = _answering_key(media, settings, provider_id)
         now = time.time()
         size = upstream.size or media_request.body.get("size")
         record = MediaJobRecord(
@@ -248,7 +279,7 @@ def _video_complete(media: MediaRuntimePort, media_request: MediaRequest) -> Com
                 type(exc).__name__,
             )
             await capture.finish("error", error=exc)
-            return _error_response(
+            return wire.error(
                 500,
                 f"{provider_id} accepted the video job, but MCC could not record "
                 f"it ({type(exc).__name__}), so it cannot be read back.",
@@ -256,7 +287,7 @@ def _video_complete(media: MediaRuntimePort, media_request: MediaRequest) -> Com
             )
         capture.set_job(record.job_id)
         await capture.finish("success", outputs=MediaOutputs())
-        return JSONResponse(video_object(_job_row(record), upstream))
+        return answer(_job_row(record), upstream)
 
     return complete
 
@@ -335,13 +366,17 @@ async def create_video(
 
 
 def _client_for(
-    settings: Settings, media: MediaRuntimePort, job: Mapping[str, Any]
+    settings: Settings,
+    media: MediaRuntimePort,
+    job: Mapping[str, Any],
+    wire: MediaWire = OPENAI_WIRE,
 ) -> MediaJobClient | JSONResponse:
     provider = str(job["provider"])
     gone = _conflict(
         f"The API key that created video {job['job_id']} on {provider} is no "
         "longer configured; a video job can only be read with the key that "
-        "created it."
+        "created it.",
+        wire,
     )
     try:
         client = media.job_client(
@@ -427,14 +462,14 @@ async def _poll(
 
 
 async def _load(
-    settings: Settings, video_id: str
+    settings: Settings, video_id: str, wire: MediaWire = OPENAI_WIRE
 ) -> tuple[RequestLogStore, dict[str, Any]] | JSONResponse:
     store = store_from_settings(settings)
     if store is None:
-        return _no_store()
+        return _no_store(wire)
     job = await asyncio.to_thread(store.media_job, video_id)
     if job is None:
-        return _not_found(video_id)
+        return _not_found(video_id, wire)
     return store, job
 
 
@@ -612,6 +647,7 @@ async def _open_download(
     variant: str,
     query: Mapping[str, str],
     request_id: str,
+    wire: MediaWire = OPENAI_WIRE,
 ) -> MediaDownload | JSONResponse:
     """Open the job's file on its own key: declared content path, else its URL."""
     video_id = str(job["job_id"])
@@ -625,17 +661,18 @@ async def _open_download(
         try:
             current, upstream = await _poll(store, client, job, request_id)
         except Exception as exc:
-            return _failure_response(exc)
+            return wire.failure(exc)
     status = current.get("status")
     if status != STATUS_COMPLETED:
         return _conflict(
-            f"Video {video_id} is not ready (status: {status or 'unknown'})."
+            f"Video {video_id} is not ready (status: {status or 'unknown'}).", wire
         )
     url = None if upstream is None else upstream.result_url
     if content is None and not url:
         return _conflict(
             f"Video {video_id} is not ready (status: {status}; {provider} gave "
-            "no address for the file yet)."
+            "no address for the file yet).",
+            wire,
         )
     try:
         return await client.download(
@@ -649,8 +686,8 @@ async def _open_download(
     except Exception as exc:
         failure = find_execution_failure(exc)
         if failure is not None and failure.status_code in {404, 410}:
-            return _expired(video_id, provider)
-        return _failure_response(exc)
+            return _expired(video_id, provider, wire)
+        return wire.failure(exc)
 
 
 async def _content(
@@ -659,18 +696,21 @@ async def _content(
     video_id: str,
     query: Mapping[str, str],
     request_id: str,
+    wire: MediaWire = OPENAI_WIRE,
 ) -> Response:
     settings = lease.settings
     variant = query.get("variant") or "video"
-    loaded = await _load(settings, video_id)
+    loaded = await _load(settings, video_id, wire)
     if isinstance(loaded, JSONResponse):
         return loaded
     store, job = loaded
     provider = str(job["provider"])
     content = _declared(provider, MEDIA_OPERATION_VIDEO_CONTENT)
     if variant != "video" and (content is None or "variant" not in content.query):
-        return _invalid(
-            f"{provider} serves only the video (variant 'video'), not '{variant}'."
+        return wire.error(
+            400,
+            f"{provider} serves only the video (variant 'video'), not '{variant}'.",
+            FailureKind.INVALID_REQUEST,
         )
     sha = job.get("content_sha")
     if variant == "video" and isinstance(sha, str) and sha:
@@ -678,11 +718,17 @@ async def _content(
         path = media_file_path(media_root(store.db_path), sha, mime)
         if await asyncio.to_thread(path.is_file):
             return FileResponse(path, media_type=mime)
-    client = _client_for(settings, media, job)
+    client = _client_for(settings, media, job, wire)
     if isinstance(client, JSONResponse):
         return client
     opened = await _open_download(
-        store, client, job, variant=variant, query=query, request_id=request_id
+        store,
+        client,
+        job,
+        variant=variant,
+        query=query,
+        request_id=request_id,
+        wire=wire,
     )
     if isinstance(opened, JSONResponse):
         return opened

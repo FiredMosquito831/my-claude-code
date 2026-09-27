@@ -19,6 +19,10 @@ from dataclasses import dataclass
 GENERATE_CONTENT = "generateContent"
 STREAM_GENERATE_CONTENT = "streamGenerateContent"
 COUNT_TOKENS = "countTokens"
+#: Veo's video job (7.65.0), served on the Video rail rather than the chat
+#: path -- which is why it is not in ``SUPPORTED_METHODS``: that set, and the
+#: listing below, describe what a *generation* model offers a chat client.
+PREDICT_LONG_RUNNING = "predictLongRunning"
 
 SUPPORTED_METHODS: frozenset[str] = frozenset(
     {GENERATE_CONTENT, STREAM_GENERATE_CONTENT, COUNT_TOKENS}
