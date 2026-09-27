@@ -3511,7 +3511,8 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 <h3 id="guide-media">Generate images through the proxy</h3>
                 <p>
                   Any client that speaks the OpenAI images API can point its base URL at this
-                  proxy: <code>POST /v1/images/generations</code> is routed over the
+                  proxy: <code>POST /v1/images/generations</code> and
+                  <code>/v1/images/edits</code> are routed over the
                   <strong>Image rail</strong> on <strong>Model Config</strong>, primary first,
                   then its fallbacks, with the same retry, key-rotation, 429, pause and proxy
                   rules as a chat chain. A <code>provider/model</code> in the request pins that

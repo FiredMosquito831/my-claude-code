@@ -6663,8 +6663,8 @@ function renderModelRouting(fields, allFields) {
     const note = document.createElement("p");
     note.className = "route-note";
     note.textContent =
-      "Serves POST /v1/images/generations. Only providers that declare an " +
-      "image endpoint can answer it; a model on any other provider is skipped " +
+      "Serves POST /v1/images/generations and /v1/images/edits. Only providers " +
+      "that declare the endpoint can answer it; a model on any other provider is skipped " +
       "without being charged. None answers the endpoint with 'no model " +
       "configured' instead of borrowing a chat model.";
     media.appendChild(note);

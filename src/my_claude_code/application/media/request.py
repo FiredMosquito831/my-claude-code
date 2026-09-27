@@ -9,7 +9,7 @@ provider surface (``config/media_surfaces.py``) an attempt goes out through.
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import IO, Any
 
 from my_claude_code.application.routing import ResolvedModel
 
@@ -52,6 +52,24 @@ RAIL_SETTINGS: Mapping[MediaRail, MediaRailSettings] = {
 
 
 @dataclass(frozen=True, slots=True)
+class MediaUpload:
+    """One file a client uploaded (an image to edit, a mask, later audio).
+
+    ``file`` is the server's spooled copy -- in memory below the multipart
+    library's own threshold, on disk above it -- and is re-read from the
+    start for every attempt, off the event loop, never loaded whole.
+    ``sha256`` and ``size`` were measured off the loop when it arrived.
+    """
+
+    field: str
+    filename: str
+    content_type: str
+    size: int
+    sha256: str
+    file: IO[bytes] = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class MediaRequest:
     """One media request, independent of the wire it arrived on.
 
@@ -67,6 +85,9 @@ class MediaRequest:
     model: str
     body: Mapping[str, Any] = field(default_factory=dict)
     stream: bool = False
+    #: Uploaded files, in the order the client sent them. Present only when
+    #: the client used multipart; ``body`` then holds its text fields.
+    uploads: tuple[MediaUpload, ...] = ()
 
     @property
     def prompt(self) -> str | None:

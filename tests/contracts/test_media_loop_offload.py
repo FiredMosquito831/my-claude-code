@@ -64,3 +64,27 @@ def test_parsing_hashing_and_storing_run_off_the_loop(monkeypatch, tmp_path) -> 
         response = client.post("/v1/images/generations", json={"prompt": "p"})
     assert response.status_code == 200
     assert calls == ["parse", "store"]
+
+
+def test_upload_hashing_runs_off_the_loop(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        media_routes, "_measure", _off_loop("measure", calls, media_routes._measure)
+    )
+    settings = Settings.model_validate(
+        {"XAI_API_KEY": "xai-" + "a" * 40, "MODEL_IMAGE": "xai/grok-2-image"}
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": []})
+
+    registry = MediaRegistry(transport=httpx.MockTransport(handler))
+    with TestClient(create_test_app(settings, media=registry)) as client:
+        response = client.post(
+            "/v1/images/edits",
+            data={"prompt": "p"},
+            files=[("image", ("a.png", PNG, "image/png"))],
+        )
+    assert response.status_code == 200
+    assert calls == ["measure"]

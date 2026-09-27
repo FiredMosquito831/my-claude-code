@@ -14,8 +14,8 @@ books (user decision 2026-09-26 03:38 #4).
 """
 
 import json
-from collections.abc import AsyncIterator, Mapping
-from typing import Any, Protocol
+from collections.abc import AsyncIterator
+from typing import Protocol
 
 import httpx
 
@@ -39,7 +39,7 @@ from my_claude_code.providers.http import error_response_headers, read_error_bod
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
-from .adapters import build_request_body
+from .adapters import WireBody, build_request_body
 
 #: Upstream response headers carried onto a buffered media response. Only what
 #: the client or the log can use; never anything that could carry a secret.
@@ -110,20 +110,29 @@ class MediaLeaf:
     ) -> AsyncIterator[MediaChunk]:
         return self._execute(attempt, request_id=request_id)
 
-    async def _send(
-        self, url: str, body: Mapping[str, Any], stream: bool
-    ) -> httpx.Response:
+    async def _send(self, url: str, body: WireBody, stream: bool) -> httpx.Response:
         """POST one body; a refusal is read whole and raised as HTTPStatusError.
 
         The same shape the Responses transport uses, so ``classify_provider_failure``
         and every error matcher read the host's own words and real status.
         """
-        headers = {"Content-Type": "application/json"}
+        headers: dict[str, str] = {}
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
-        request = self._client.build_request(
-            "POST", url, headers=headers, content=json.dumps(dict(body)).encode()
-        )
+        if body.multipart is not None:
+            headers["Content-Type"] = body.multipart.content_type
+            headers["Content-Length"] = str(body.multipart.content_length)
+            request = self._client.build_request(
+                "POST", url, headers=headers, content=body.multipart.stream()
+            )
+        else:
+            headers["Content-Type"] = "application/json"
+            request = self._client.build_request(
+                "POST",
+                url,
+                headers=headers,
+                content=json.dumps(body.json or {}).encode(),
+            )
         response = await self._client.send(request, stream=stream)
         if response.status_code >= 400:
             error = await read_error_body(response)

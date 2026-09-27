@@ -40,6 +40,7 @@ from my_claude_code.core.media_store import (
 from my_claude_code.core.openai_images import ImageOutputs
 from my_claude_code.core.proxy_attribution import install_proxy_attribution
 from my_claude_code.core.request_headers import capture_headers
+from my_claude_code.core.request_images import CapturedImage, capture_upload
 from my_claude_code.core.request_log import (
     RequestRecord,
     RouteAttempt,
@@ -71,6 +72,14 @@ class MediaCapture:
     ) -> None:
         self._store = store_from_settings(settings)
         self._store_bytes = bool(getattr(settings, "media_store_enabled", False))
+        # Uploaded inputs: metadata always; a thumbnail only when media
+        # storage is on (user decision 7) and image thumbnails are too.
+        self._thumb_pixels = (
+            int(getattr(settings, "request_log_image_max_pixels", 0) or 0)
+            if self._store_bytes
+            and bool(getattr(settings, "request_log_capture_images", True))
+            else 0
+        )
         self._request_id = request_id
         self._endpoint = endpoint
         self._request = request
@@ -122,8 +131,50 @@ class MediaCapture:
             for key, value in self._request.body.items()
             if key not in {"prompt", "stream"}
         }
-        params["media"] = {"operation": self._request.operation}
+        media: dict[str, Any] = {"operation": self._request.operation}
+        if self._request.uploads:
+            media["uploads"] = [
+                {
+                    "field": upload.field,
+                    "filename": upload.filename,
+                    "content_type": upload.content_type,
+                    "bytes": upload.size,
+                    "sha256": upload.sha256,
+                }
+                for upload in self._request.uploads
+            ]
+        params["media"] = media
         return params
+
+    def _input_records(self) -> tuple[MediaOutputRecord, ...]:
+        return tuple(
+            MediaOutputRecord(
+                sha256=upload.sha256,
+                mime=upload.content_type or None,
+                bytes=upload.size,
+                stored=False,
+                idx=position,
+                direction="in",
+            )
+            for position, upload in enumerate(self._request.uploads)
+        )
+
+    def _input_thumbnails(self) -> tuple[CapturedImage, ...]:
+        """Runs in a worker thread: thumbnail each uploaded image."""
+        captured: list[CapturedImage] = []
+        for upload in self._request.uploads:
+            if not (upload.content_type or "").startswith("image/"):
+                continue
+            upload.file.seek(0)
+            captured.append(
+                capture_upload(
+                    upload.file.read(),
+                    sha256=upload.sha256,
+                    media_type=upload.content_type,
+                    max_pixels=self._thumb_pixels,
+                )
+            )
+        return tuple(captured)
 
     def _write_files(self, outputs: ImageOutputs) -> tuple[MediaOutputRecord, ...]:
         """Runs in a worker thread: store each image when the store is on."""
@@ -162,9 +213,17 @@ class MediaCapture:
         if self._finished or self._store is None:
             return
         self._finished = True
-        media_outputs: tuple[MediaOutputRecord, ...] = ()
+        media_outputs: tuple[MediaOutputRecord, ...] = self._input_records()
         if outputs is not None and outputs.images:
-            media_outputs = await asyncio.to_thread(self._write_files, outputs)
+            media_outputs += await asyncio.to_thread(self._write_files, outputs)
+        thumbnails: tuple[CapturedImage, ...] = ()
+        if self._thumb_pixels > 0 and self._request.uploads:
+            thumbnails = await asyncio.to_thread(self._input_thumbnails)
+        image_inputs = sum(
+            1
+            for upload in self._request.uploads
+            if (upload.content_type or "").startswith("image/")
+        )
         routed = self._routed
         prompt = self._request.prompt
         usage = None if outputs is None else outputs.usage
@@ -196,6 +255,8 @@ class MediaCapture:
             harness=self._harness,
             attempts=tuple(self._attempts),
             media_operation=self._request.operation,
+            input_image_count=image_inputs if self._request.uploads else None,
+            images=thumbnails,
             output_image_count=None if outputs is None else outputs.count,
             media_bytes_out=None if outputs is None else outputs.bytes_total,
             media_sha_out=None if outputs is None else outputs.first_sha,

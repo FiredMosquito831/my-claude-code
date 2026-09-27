@@ -1,11 +1,14 @@
 """Translate a canonical media request into one wire-shape family's body.
 
 One function per shape FAMILY, chosen by the provider's declared surface --
-never by provider id or model name. Only the OpenAI Images shape ships in
-7.60.0; the client already spoke it, so the body is the client's own fields
-with ``model`` set to the provider's model id.
+never by provider id or model name. The OpenAI Images shape needs no
+translation: the client already spoke it, so the body is the client's own
+fields with ``model`` set to the provider's model id, in the client's own
+encoding -- JSON stays JSON, and a multipart upload goes out as multipart,
+streamed from the spooled files (``multipart.py``).
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from my_claude_code.application.media.request import MediaAttempt
@@ -13,6 +16,16 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_OPENAI_IMAGES,
     MediaSurface,
 )
+
+from .multipart import MultipartBody
+
+
+@dataclass(frozen=True, slots=True)
+class WireBody:
+    """What one attempt sends: a JSON object, or a streamed multipart form."""
+
+    json: dict[str, Any] | None = None
+    multipart: MultipartBody | None = None
 
 
 def _openai_images_body(attempt: MediaAttempt) -> dict[str, Any]:
@@ -25,9 +38,29 @@ def _openai_images_body(attempt: MediaAttempt) -> dict[str, Any]:
     return body
 
 
-def build_request_body(surface: MediaSurface, attempt: MediaAttempt) -> dict[str, Any]:
-    """The JSON body for ``attempt`` on ``surface``'s wire shape."""
+def _form_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _openai_images_multipart(attempt: MediaAttempt) -> MultipartBody:
+    fields: list[tuple[str, str]] = [("model", attempt.resolved.provider_model)]
+    for name, value in attempt.request.body.items():
+        if name in {"model", "stream"}:
+            continue
+        values = value if isinstance(value, list) else [value]
+        fields.extend((name, _form_value(item)) for item in values)
+    if attempt.request.stream:
+        fields.append(("stream", "true"))
+    return MultipartBody.build(fields, attempt.request.uploads)
+
+
+def build_request_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody:
+    """The body for ``attempt`` on ``surface``'s wire shape."""
 
     if surface.shape == MEDIA_SHAPE_OPENAI_IMAGES:
-        return _openai_images_body(attempt)
+        if attempt.request.uploads:
+            return WireBody(multipart=_openai_images_multipart(attempt))
+        return WireBody(json=_openai_images_body(attempt))
     raise ValueError(f"unknown media shape {surface.shape!r}")

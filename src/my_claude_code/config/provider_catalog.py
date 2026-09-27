@@ -6,7 +6,11 @@ provider implementation imports (see contract tests).
 
 from dataclasses import dataclass
 
-from .media_surfaces import MediaSurface, image_generation_surface
+from .media_surfaces import (
+    MediaSurface,
+    image_edit_surface,
+    image_generation_surface,
+)
 
 # Default upstream base URLs are owned here with the provider catalog.
 # Anthropic Messages API root. ``/messages`` and ``/models`` hang off this.
@@ -727,7 +731,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "xai": ProviderDescriptor(
         provider_id="xai",
-        media_surfaces=(image_generation_surface(),),
+        media_surfaces=(image_generation_surface(), image_edit_surface()),
         display_name="xAI (Grok)",
         credential_env="XAI_API_KEY",
         credential_url="https://console.x.ai/team/default/api-keys",
