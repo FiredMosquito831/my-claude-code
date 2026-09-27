@@ -213,6 +213,8 @@ const FIELDS = [
     // The Image rail (7.60.0): a media rail drawn as its own card.
     ["MODEL_IMAGE", "p1/i0", "optional_model"],
     ["MODEL_IMAGE_FALLBACKS", "", "model_chain"],
+    ["MODEL_TTS", "p1/t0", "optional_model"],
+    ["MODEL_TTS_FALLBACKS", "", "model_chain"],
     // The pause lists. Written by the Pause button rather than typed, so they
     // are never rendered as controls -- but they are in the payload, which is
     // where the page reads which rows are switched off.
@@ -224,6 +226,7 @@ const FIELDS = [
     ["MODEL_HAIKU_PAUSED", "", "text"],
     ["MODEL_VISION_PAUSED", "", "text"],
     ["MODEL_IMAGE_PAUSED", "", "text"],
+    ["MODEL_TTS_PAUSED", "", "text"],
   ].map(([key, value, type]) => ({
     key,
     label: key,
@@ -2824,6 +2827,7 @@ const PAUSE_KEY_BY_MODEL = {
   MODEL_HAIKU: "MODEL_HAIKU_PAUSED",
   MODEL_VISION: "MODEL_VISION_PAUSED",
   MODEL_IMAGE: "MODEL_IMAGE_PAUSED",
+  MODEL_TTS: "MODEL_TTS_PAUSED",
 };
 const pausedByKey = new Map();
 const fetchUrls = [];
@@ -8161,7 +8165,20 @@ const imageRail = {};
     imageRail.primaryInCard = Boolean(
       card && card.querySelector("[data-model-key='MODEL_IMAGE']"),
     );
-    imageRail.inTheLeftovers = ["MODEL_IMAGE", "MODEL_IMAGE_FALLBACKS", "MODEL_IMAGE_PAUSED"]
+    imageRail.headings = Array.from(doc.querySelectorAll(".route-media h4")).map(
+      (heading) => heading.textContent,
+    );
+    imageRail.speechPrimaryInCard = Boolean(
+      doc.querySelector(".route-media [data-model-key='MODEL_TTS']"),
+    );
+    imageRail.inTheLeftovers = [
+      "MODEL_IMAGE",
+      "MODEL_IMAGE_FALLBACKS",
+      "MODEL_IMAGE_PAUSED",
+      "MODEL_TTS",
+      "MODEL_TTS_FALLBACKS",
+      "MODEL_TTS_PAUSED",
+    ]
       .filter((key) => doc.querySelector(`.route-layout > .field-grid [data-key='${key}']`));
   }
 }

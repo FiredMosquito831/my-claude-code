@@ -823,6 +823,48 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         affects_providers=False,
     ),
     ConfigFieldSpec(
+        "MODEL_TTS",
+        "Speech Rail",
+        "models",
+        "optional_model",
+        settings_attr="model_tts",
+        description=(
+            "Model that serves POST /v1/audio/speech (the OpenAI text-to-speech "
+            "API). A media rail, never a chat tier. A client that names a "
+            "provider/model ref pins that model; any other model name uses this "
+            "rail. Only providers that declare a speech endpoint can serve it; a "
+            "client that names a response_format a provider does not document "
+            "skips that provider (MCC never transcodes audio)."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_TTS_FALLBACKS",
+        "Speech Fallback Chain",
+        "models",
+        "model_chain",
+        settings_attr="model_tts_fallbacks",
+        description=(
+            "Ordered provider/model refs tried after MODEL_TTS fails, is paused or "
+            "is benched -- the chat engine's retry, key-rotation, 429, bench and "
+            "proxy rules, with health records of their own."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_TTS_PAUSED",
+        "Speech Paused Models",
+        "models",
+        "text",
+        settings_attr="model_tts_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on the Speech rail that are "
+            "switched off. A paused model is never tried and costs no attempt, "
+            "but keeps its place and appears in the request log as skipped. When "
+            "every model on the rail is paused the endpoint names this setting."
+        ),
+        affects_providers=False,
+    ),
+    ConfigFieldSpec(
         "MODEL_VISIBILITY_ALLOW",
         "Only list these models",
         "models",

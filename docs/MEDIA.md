@@ -1,6 +1,6 @@
 # Media routing
 
-My Claude Code routes **media requests** -- image generation and editing today, with speech,
+My Claude Code routes **media requests** -- image generation and editing and speech today, with
 transcription and video arriving one release at a time -- over **media rails** on Model
 Config, the way it routes chat over tiers. A client that speaks the OpenAI media API points
 its base URL at the proxy and keeps its own code.
@@ -11,6 +11,7 @@ its base URL at the proxy and keeps its own code.
 |---|---|---|---|
 | `POST /v1/images/generations` | 7.60.0 | Image | `MODEL_IMAGE`, `MODEL_IMAGE_FALLBACKS`, `MODEL_IMAGE_PAUSED` |
 | `POST /v1/images/edits` | 7.61.0 | Image | the same rail |
+| `POST /v1/audio/speech` | 7.62.0 | Speech | `MODEL_TTS`, `MODEL_TTS_FALLBACKS`, `MODEL_TTS_PAUSED` |
 
 ```python
 from openai import OpenAI
@@ -30,7 +31,8 @@ The proxy token is the same one every other client uses (`Authorization: Bearer`
 
 ## How a request finds its model
 
-- The **endpoint** picks the rail: `images/generations` and `images/edits` are the Image rail.
+- The **endpoint** picks the rail: `images/generations` and `images/edits` are the Image rail,
+  `audio/speech` the Speech rail.
 - A `model` written as `provider/model` (for example `xai/grok-2-image`) pins that one model.
 - Any other `model` -- a vendor name such as `gpt-image-2`, or none -- uses the rail:
   `MODEL_IMAGE` first, then `MODEL_IMAGE_FALLBACKS` in order, skipping anything in
@@ -76,6 +78,33 @@ ordinary failure.
 surface documented to stream it. None of the providers above documents it yet, so a streaming
 request answers `400` rather than being sent somewhere that would reject it.
 
+## Speech (text to speech)
+
+`POST /v1/audio/speech` routes on the **Speech rail** (`MODEL_TTS`, `MODEL_TTS_FALLBACKS`,
+`MODEL_TTS_PAUSED`) under the same rules as the Image rail. The answer is the audio itself,
+returned with the provider's own `Content-Type`.
+
+```python
+audio = client.audio.speech.create(model="gpt-4o-mini-tts", voice="alloy", input="Hello there")
+```
+
+| Provider | Speech endpoint (relative to its base URL) | Formats it documents |
+|---|---|---|
+| Together | `audio/speech` | mp3, wav, raw |
+| OpenRouter | `audio/speech` | mp3, pcm |
+| Groq | `audio/speech` | not listed (the host judges) |
+| SiliconFlow | `audio/speech` | not listed (the host judges) |
+| ZenMux | `audio/speech` | not listed (the host judges) |
+
+**Formats are never converted.** A client that names a `response_format` a provider does not
+document skips that provider without charging it, and the rail moves on; a client that names
+none gets the provider's own container. MCC ships no audio encoder.
+
+`stream_format: "sse"` is routed only to a surface that declares it (none does yet), so it
+answers `400`. A plain request is answered once the whole audio has arrived -- a failure
+before that falls back invisibly -- and the OpenAI SDK's streaming helpers still work, they
+simply receive the complete file.
+
 ## Retry, fallback, keys, 429s and proxies
 
 The Image rail follows the same rules as a chat chain, applied by a separate copy of the chat
@@ -107,11 +136,12 @@ with the chain's attempts, plus:
 
 | Column | Meaning |
 |---|---|
-| `media_operation` | `image_generate` or `image_edit` |
+| `media_operation` | `image_generate`, `image_edit` or `speech` |
 | `input_image_count` | images uploaded to an edit |
 | `output_image_count` | items the host returned |
 | `media_bytes_out` | decoded size of the base64 images (empty for a URL-only answer: not measured) |
-| `media_sha_out` | SHA-256 of the first image |
+| `media_sha_out` | SHA-256 of the first image, or of the audio |
+| `output_audio_seconds` | length of the audio, when its container states it (WAV); empty for MP3/Opus/AAC: not measured |
 
 Token usage, when the host reports it, fills the usual `tokens_in` / `tokens_out`. An edit's
 uploaded files are always recorded by SHA-256, size and type (never their bytes); with
@@ -128,5 +158,5 @@ cleared; turning the setting off stops new copies and leaves existing files alon
 
 ## Not yet
 
-Speech, transcription, video, Gemini-native media requests, media pricing and the
+Transcription, video, Gemini-native media requests, media pricing and the
 Analytics media block each arrive in their own release.

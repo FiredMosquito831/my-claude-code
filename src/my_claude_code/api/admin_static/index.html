@@ -3513,7 +3513,8 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Any client that speaks the OpenAI images API can point its base URL at this
                   proxy: <code>POST /v1/images/generations</code> and
                   <code>/v1/images/edits</code> are routed over the
-                  <strong>Image rail</strong> on <strong>Model Config</strong>, primary first,
+                  <strong>Image rail</strong> on <strong>Model Config</strong> (and
+                  <code>/v1/audio/speech</code> over the <strong>Speech rail</strong>), primary first,
                   then its fallbacks, with the same retry, key-rotation, 429, pause and proxy
                   rules as a chat chain. A <code>provider/model</code> in the request pins that
                   model; any other name uses the rail. Only providers that declare an image

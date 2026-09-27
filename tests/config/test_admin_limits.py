@@ -441,6 +441,10 @@ MODELS_KEYS = (
     "MODEL_IMAGE",
     "MODEL_IMAGE_FALLBACKS",
     "MODEL_IMAGE_PAUSED",
+    # The Speech rail (7.62.0), drawn in the same media card group.
+    "MODEL_TTS",
+    "MODEL_TTS_FALLBACKS",
+    "MODEL_TTS_PAUSED",
     "MODEL_VISIBILITY_ALLOW",
     "MODEL_VISIBILITY_DENY",
     "HARNESS_TIER_ALIASES",

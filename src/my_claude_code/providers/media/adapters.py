@@ -14,6 +14,7 @@ from typing import Any
 from my_claude_code.application.media.request import MediaAttempt
 from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_OPENAI_IMAGES,
+    MEDIA_SHAPE_OPENAI_SPEECH,
     MediaSurface,
 )
 
@@ -63,4 +64,10 @@ def build_request_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody
         if attempt.request.uploads:
             return WireBody(multipart=_openai_images_multipart(attempt))
         return WireBody(json=_openai_images_body(attempt))
+    if surface.shape == MEDIA_SHAPE_OPENAI_SPEECH:
+        # The client spoke this shape too: its fields (``stream_format``
+        # included), the rail's model.
+        body = dict(attempt.request.body)
+        body["model"] = attempt.resolved.provider_model
+        return WireBody(json=body)
     raise ValueError(f"unknown media shape {surface.shape!r}")

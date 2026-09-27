@@ -185,6 +185,8 @@ class ProviderSpec:
     direct_fallback: bool = True
     routes_around_model: bool = True
     retry_attempts: int = 1
+    #: A header-less 429's bench, in seconds (the shipped default is 60).
+    cooldown: float = 0.05
 
 
 def _config(provider: str, spec: ProviderSpec) -> ProviderConfig:
@@ -218,7 +220,7 @@ def _config(provider: str, spec: ProviderSpec) -> ProviderConfig:
         proxy_chain=plan,
         # A header-less 429 blocks the leaf for this long (the real default is
         # 60 s); both stacks read the same config, so only the wait shrinks.
-        rate_limit_cooldown_seconds=0.05,
+        rate_limit_cooldown_seconds=spec.cooldown,
     )
 
 
@@ -547,9 +549,14 @@ def _run_chat(scenario: Scenario) -> dict[str, Any]:
         outcomes.append(_outcome(error))
         ledgers.append(_ledger(records))
 
+    books: dict[str, Any] = {}
+
     async def run() -> None:
         for _ in range(scenario.requests):
             await one()
+        # Read at once, inside the loop: a short bench must not expire
+        # between the run and the reading on a loaded machine.
+        books.update({name: _key_books(state) for name, (_p, state) in built.items()})
 
     asyncio.run(run())
     return {
@@ -557,7 +564,7 @@ def _run_chat(scenario: Scenario) -> dict[str, Any]:
         "outcomes": outcomes,
         "ledgers": ledgers,
         "benched": {ref: health.is_ejected(ref) for ref in plan.model_refs()},
-        "keys": {name: _key_books(state) for name, (_p, state) in built.items()},
+        "keys": books,
     }
 
 
@@ -620,9 +627,14 @@ def _run_media(scenario: Scenario) -> dict[str, Any]:
         outcomes.append(_outcome(error))
         ledgers.append(_ledger(records))
 
+    books: dict[str, Any] = {}
+
     async def run() -> None:
         for _ in range(scenario.requests):
             await one()
+        # Read at once, inside the loop: a short bench must not expire
+        # between the run and the reading on a loaded machine.
+        books.update({name: _key_books(state) for name, (_p, state) in built.items()})
 
     asyncio.run(run())
     return {
@@ -630,7 +642,7 @@ def _run_media(scenario: Scenario) -> dict[str, Any]:
         "outcomes": outcomes,
         "ledgers": ledgers,
         "benched": {ref: health.is_ejected(ref) for ref in plan.model_refs()},
-        "keys": {name: _key_books(state) for name, (_p, state) in built.items()},
+        "keys": books,
     }
 
 
@@ -694,7 +706,9 @@ def _scenarios() -> list[Scenario]:
         ),
         Scenario(
             "429 probe answering 429 escalates and retries the same model",
-            {"a": two_keys, "b": one},
+            # A 2 s bench: long enough to still be on the books when they are
+            # compared, short enough that the probe (5 s bound) waits it out.
+            {"a": ProviderSpec(keys=2, cooldown=2.0), "b": one},
             (("a", "m1"), ("b", "x")),
             Script(
                 {

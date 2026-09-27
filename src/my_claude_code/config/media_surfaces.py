@@ -18,15 +18,18 @@ from dataclasses import dataclass
 #: one list.
 MEDIA_OPERATION_IMAGE_GENERATE = "image_generate"
 MEDIA_OPERATION_IMAGE_EDIT = "image_edit"
+MEDIA_OPERATION_SPEECH = "speech"
 
 #: Wire-shape families: one adapter per family, never per provider.
 MEDIA_SHAPE_OPENAI_IMAGES = "openai_images"
+MEDIA_SHAPE_OPENAI_SPEECH = "openai_speech"
 
 MEDIA_OPERATIONS: tuple[str, ...] = (
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_EDIT,
+    MEDIA_OPERATION_SPEECH,
 )
-MEDIA_SHAPES: tuple[str, ...] = (MEDIA_SHAPE_OPENAI_IMAGES,)
+MEDIA_SHAPES: tuple[str, ...] = (MEDIA_SHAPE_OPENAI_IMAGES, MEDIA_SHAPE_OPENAI_SPEECH)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +50,11 @@ class MediaSurface:
     shape: str
     path: str
     stream: bool = False
+    #: The output formats the host documents (``response_format``), or
+    #: ``None`` when its reference does not list them. A client that NAMES
+    #: a format outside a declared list skips this surface uncharged (user
+    #: decision 9: no transcoding); with no list the host judges the name.
+    formats: tuple[str, ...] | None = None
 
 
 def image_generation_surface(
@@ -77,6 +85,19 @@ def image_edit_surface(
         shape=MEDIA_SHAPE_OPENAI_IMAGES,
         path=path,
         stream=stream,
+    )
+
+
+def speech_surface(
+    path: str = "audio/speech", *, formats: tuple[str, ...] | None = None
+) -> MediaSurface:
+    """The OpenAI ``POST /audio/speech`` shape: the answer is the audio itself."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_SPEECH,
+        shape=MEDIA_SHAPE_OPENAI_SPEECH,
+        path=path,
+        formats=formats,
     )
 
 

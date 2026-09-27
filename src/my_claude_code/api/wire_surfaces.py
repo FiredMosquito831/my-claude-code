@@ -30,6 +30,7 @@ GEMINI_ENDPOINT_PREFIX = "/v1beta/models"
 # every OpenAI SDK client reads.
 IMAGES_GENERATIONS_ENDPOINT = "/v1/images/generations"
 IMAGES_EDITS_ENDPOINT = "/v1/images/edits"
+AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
 
 WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
@@ -38,6 +39,7 @@ _WIRE_API_BY_PATH: dict[str, WireApi] = {
     CHAT_COMPLETIONS_ENDPOINT: "chat_completions",
     IMAGES_GENERATIONS_ENDPOINT: "chat_completions",
     IMAGES_EDITS_ENDPOINT: "chat_completions",
+    AUDIO_SPEECH_ENDPOINT: "chat_completions",
 }
 
 #: The surfaces whose clients parse OpenAI's ``{"error": {...}}``. Membership

@@ -120,7 +120,7 @@ def _unsupported_failure(operation: str) -> ExecutionFailure:
         kind=FailureKind.INVALID_REQUEST,
         status_code=400,
         message=(
-            f"No model on this rail is served by a provider that declares an "
+            f"No model on this rail is served by a provider that declares the "
             f"{operation} endpoint (or one that streams, if a stream was asked "
             "for). Choose a model on a provider that serves it on Model Config."
         ),

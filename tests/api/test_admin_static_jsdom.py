@@ -6788,3 +6788,6 @@ def test_the_image_rail_is_its_own_card(rendered) -> None:
     assert rail["heading"] == "Image rail"
     assert rail["primaryInCard"] is True
     assert rail["inTheLeftovers"] == []
+    # 7.62.0: the Speech rail is the second media card, same editor.
+    assert rail["headings"] == ["Image rail", "Speech rail"]
+    assert rail["speechPrimaryInCard"] is True

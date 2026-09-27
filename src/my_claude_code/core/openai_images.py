@@ -1,4 +1,4 @@
-"""The OpenAI Images wire shape: what a generation answer carries, and its errors.
+"""The OpenAI Images wire shape: what a generation or edit answer carries.
 
 Reading an answer means decoding base64 and hashing multi-megabyte images, so
 every parser here is synchronous and is only ever called through
@@ -8,44 +8,10 @@ every parser here is synchronous and is only ever called through
 import base64
 import binascii
 import json
-from dataclasses import dataclass, field
 from typing import Any
 
+from my_claude_code.core.media_outputs import GeneratedMedia, MediaOutputs
 from my_claude_code.core.media_store import sha256_hex
-
-
-@dataclass(frozen=True, slots=True)
-class GeneratedImage:
-    """One image an answer carried, decoded only to be measured (and stored)."""
-
-    sha256: str
-    mime: str | None
-    data: bytes = field(repr=False)
-
-
-@dataclass(frozen=True, slots=True)
-class ImageOutputs:
-    """What one images answer produced, for the request log.
-
-    ``count`` is every item in ``data`` (URL-only items included); ``images``
-    holds only the base64 ones, the only ones whose bytes MCC ever sees. A
-    URL-only answer therefore has a count and no bytes -- "not measured", not
-    zero.
-    """
-
-    count: int = 0
-    images: tuple[GeneratedImage, ...] = ()
-    usage: dict[str, Any] | None = None
-
-    @property
-    def bytes_total(self) -> int | None:
-        if not self.images:
-            return None
-        return sum(len(image.data) for image in self.images)
-
-    @property
-    def first_sha(self) -> str | None:
-        return self.images[0].sha256 if self.images else None
 
 
 def sniff_image_mime(data: bytes) -> str | None:
@@ -62,7 +28,7 @@ def sniff_image_mime(data: bytes) -> str | None:
     return None
 
 
-def _decode(item: Any) -> GeneratedImage | None:
+def _decode(item: Any) -> GeneratedMedia | None:
     if not isinstance(item, dict):
         return None
     encoded = item.get("b64_json")
@@ -72,7 +38,7 @@ def _decode(item: Any) -> GeneratedImage | None:
         data = base64.b64decode(encoded, validate=False)
     except binascii.Error, ValueError:
         return None
-    return GeneratedImage(
+    return GeneratedMedia(
         sha256=sha256_hex(data), mime=sniff_image_mime(data), data=data
     )
 
@@ -86,30 +52,30 @@ def _usage(payload: dict[str, Any]) -> dict[str, Any] | None:
     )
 
 
-def parse_images_response(body: bytes) -> ImageOutputs:
+def parse_images_response(body: bytes) -> MediaOutputs:
     """Measure a non-streaming ``{created, data: [...], usage}`` answer."""
 
     try:
         payload = json.loads(body)
     except ValueError, UnicodeDecodeError:
-        return ImageOutputs()
+        return MediaOutputs()
     if not isinstance(payload, dict):
-        return ImageOutputs()
+        return MediaOutputs()
     items = payload.get("data")
     if not isinstance(items, list):
-        return ImageOutputs(usage=_usage(payload))
+        return MediaOutputs(usage=_usage(payload))
     images = tuple(image for image in (_decode(item) for item in items) if image)
-    return ImageOutputs(count=len(items), images=images, usage=_usage(payload))
+    return MediaOutputs(count=len(items), items=images, usage=_usage(payload))
 
 
-def parse_images_stream(frames: bytes) -> ImageOutputs:
+def parse_images_stream(frames: bytes) -> MediaOutputs:
     """Measure a streamed answer from its ``*.completed`` events.
 
     Partial images are previews of the same picture and are not counted; the
     completed event carries the final image and the usage.
     """
 
-    images: list[GeneratedImage] = []
+    images: list[GeneratedMedia] = []
     count = 0
     usage: dict[str, Any] | None = None
     for line in frames.splitlines():
@@ -129,11 +95,4 @@ def parse_images_stream(frames: bytes) -> ImageOutputs:
         if image is not None:
             images.append(image)
         usage = _usage(event) or usage
-    return ImageOutputs(count=count, images=tuple(images), usage=usage)
-
-
-def images_error_frame(message: str, error_type: str) -> bytes:
-    """The SSE ``error`` event that ends a committed images stream."""
-
-    payload = {"type": "error", "error": {"message": message, "type": error_type}}
-    return f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
+    return MediaOutputs(count=count, items=tuple(images), usage=usage)
