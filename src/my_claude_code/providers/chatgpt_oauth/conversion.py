@@ -58,11 +58,17 @@ def build_chatgpt_oauth_request_body(
     default_max_tokens: int | None = None,
     tool_schema_dialect: ToolSchemaDialect = CHATGPT_OAUTH_TOOL_SCHEMA_DIALECT,
     wire_notes: dict[str, str] | None = None,
+    tool_name_max_length: int | None = None,
 ) -> dict[str, Any]:
     """Build a ChatGPT Responses API request body from an Anthropic request.
 
     ``wire_notes`` receives what the declared schema dialect took out of the
     client's tools, for the sender to record beside the body.
+
+    ``tool_name_max_length`` is the ceiling this backend has *stated* in a
+    rejection and MCC learned (7.59.0); ``None`` -- nothing declared, nothing
+    learned -- sends every name exactly as the client wrote it, which is
+    every byte this function built before.
     """
     if request.extra_body:
         raise InvalidRequestError(
@@ -82,6 +88,7 @@ def build_chatgpt_oauth_request_body(
         max_output_tokens=None,
         prompt_cache_key=None,
         include_encrypted_reasoning=True,
+        tool_name_max_length=tool_name_max_length,
         tool_schema_dialect=tool_schema_dialect,
         wire_notes=wire_notes,
     )
