@@ -63,6 +63,12 @@ from typing import Any
 
 import pytest
 
+from tests.support.token_host_block import (
+    HermeticityViolation,
+    install_token_host_block,
+    refused_hosts,
+)
+
 __all__ = [
     "REAL_HOME",
     "HermeticityViolation",
@@ -76,14 +82,8 @@ __all__ = [
 ]
 
 
-class HermeticityViolation(BaseException):
-    """A test tried to touch the real machine.
-
-    Derived from ``BaseException`` so that no ``except Exception`` in the
-    application -- and there are many, including the one wrapped around the
-    harness-catalogue write that damaged the developer's ``~/.fcc`` -- can
-    swallow it into a warning and leave the test green.
-    """
+# ``HermeticityViolation`` lives in the standard-library-only token-host block
+# module so a child process can raise the same class without importing pytest.
 
 
 # --------------------------------------------------------------- real machine
@@ -831,10 +831,26 @@ def pytest_configure(config: pytest.Config) -> None:
         "binds_reserved_port: the test may bind My Claude Code's default port",
     )
     _install_interceptors()
+    # 7.69.1: no test may reach an OAuth token host. Below httpx, so mocked
+    # transports keep working; see ``tests/support/token_host_block.py``.
+    install_token_host_block()
+
+
+#: A proxy moves the name lookup off this machine, past the token-host block.
+_PROXY_VARIABLES = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 
 @pytest.fixture(autouse=True)
-def isolate_the_machine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def isolate_the_machine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+):
     """Give every test its own home, so nothing resolves to the real one.
 
     ``MCC_CONFIG_DIR`` is deliberately *unset* rather than pointed at a shared
@@ -865,7 +881,22 @@ def isolate_the_machine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.delenv("FCC_CONFIG_DIR", raising=False)
     monkeypatch.delenv("FCC_ENV_FILE", raising=False)
     monkeypatch.delenv("MCC_ENV_FILE", raising=False)
+    for variable in _PROXY_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    refused_before = len(refused_hosts())
     yield home
+    # A refusal swallowed by application code (``gather(return_exceptions=
+    # True)`` captures even a BaseException) must still fail the test that
+    # tried to reach a token host. Only the block's own self-test may.
+    if len(refused_hosts()) > refused_before and (
+        "test_no_live_token_hosts" not in request.node.nodeid
+    ):
+        pytest.fail(
+            "HERMETICITY VIOLATION: this test tried to reach an OAuth token "
+            f"host ({', '.join(refused_hosts()[refused_before:])}). Mock the "
+            "token exchange instead. See tests/support/token_host_block.py.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)

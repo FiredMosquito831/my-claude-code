@@ -204,6 +204,9 @@ from my_claude_code.core.stuck_requests import (
 )
 from my_claude_code.core.success_reasons import REQUEST_STATUS_FILTER_VALUES
 from my_claude_code.core.tier_refs import tier_alias_by_route_env_var
+from my_claude_code.providers.anthropic_oauth.auth import (
+    AnthropicOAuthAuth,
+)
 from my_claude_code.providers.anthropic_oauth.constants import (
     INFERENCE_SCOPE as ANTHROPIC_INFERENCE_SCOPE,
 )
@@ -221,6 +224,9 @@ from my_claude_code.providers.anthropic_oauth.credentials import (
 )
 from my_claude_code.providers.anthropic_oauth.credentials import (
     add_or_update_account as add_anthropic_oauth_account,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
+    is_shared_credential as is_shared_anthropic_credential,
 )
 from my_claude_code.providers.anthropic_oauth.credentials import (
     load_accounts as load_anthropic_oauth_accounts,
@@ -260,6 +266,12 @@ from my_claude_code.providers.anthropic_oauth.oauth_login import (
 from my_claude_code.providers.anthropic_oauth.rate_limit_headers import (
     OBSERVER as ANTHROPIC_RATE_LIMIT_OBSERVER,
 )
+from my_claude_code.providers.anthropic_oauth.shared import (
+    FALLBACK_SLOT as ANTHROPIC_FALLBACK_SLOT,
+)
+from my_claude_code.providers.anthropic_oauth.shared import (
+    current_platform as anthropic_shared_platform,
+)
 from my_claude_code.providers.chatgpt_oauth.browser_login import (
     ChatGPTOAuthBrowserUnavailableError,
     browser_login_status,
@@ -273,6 +285,7 @@ from my_claude_code.providers.chatgpt_oauth.credentials import (
     DEFINITIVE_REFRESH_STATUSES as CHATGPT_DEFINITIVE_REFRESH_STATUSES,
 )
 from my_claude_code.providers.chatgpt_oauth.credentials import (
+    ChatGPTAccountRecord,
     ChatGPTOAuthError,
     ChatGPTOAuthRefreshError,
     chatgpt_write_back_enabled,
@@ -302,6 +315,18 @@ from my_claude_code.providers.chatgpt_oauth.response_headers import (
 from my_claude_code.providers.oauth_account_store import ORIGIN_CLAUDE_CODE
 from my_claude_code.providers.oauth_names import (
     account_name as oauth_account_name,
+)
+from my_claude_code.providers.oauth_ownership import (
+    MODE_NATIVE as OAUTH_MODE_NATIVE,
+)
+from my_claude_code.providers.oauth_ownership import (
+    MODE_SHARED as OAUTH_MODE_SHARED,
+)
+from my_claude_code.providers.oauth_ownership import (
+    last_decision as oauth_last_decision,
+)
+from my_claude_code.providers.oauth_ownership import (
+    read_only_reason as oauth_read_only_reason,
 )
 from my_claude_code.websearch.errors import WebSearchError
 from my_claude_code.websearch.registry import search_with_logging
@@ -2774,7 +2799,10 @@ async def chatgpt_oauth_import_codex(request: Request):
         status="complete",
         credential_reference=CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
         account_id=credentials.account_id,
-        message="Copied renewable Codex credentials into MCC's private store.",
+        message=(
+            "Imported Codex's credential as a shared account. MCC follows "
+            "Codex's own auth.json and renews it only once it has expired."
+        ),
     )
 
 
@@ -2799,6 +2827,18 @@ class _AnthropicOAuthSourceInfo(BaseModel):
     scopes: list[str] = []
     has_inference_scope: bool = False
     source: str = ""
+    #: 7.69.1. ``shared`` -- Claude Code's file is the truth and MCC only
+    #: steps in once the token has expired -- or ``native`` -- MCC signed it
+    #: in and owns it. Empty when there is no credential.
+    mode: str = ""
+    #: Why MCC may not renew a shared credential itself (``write-back-off``,
+    #: ``macos``, ``not-writable``, ``no-file``); empty when it may.
+    read_only_reason: str = ""
+    #: The last ownership decision's stable code and when it was made.
+    last_decision: str = ""
+    last_decision_at: float | None = None
+    #: A token MCC rotated whose write-back has not landed yet (amber).
+    pending_write_back: bool = False
 
 
 class _AnthropicOAuthWindows(BaseModel):
@@ -2875,9 +2915,20 @@ def _anthropic_oauth_account_info(
     record: AnthropicAccountRecord,
 ) -> _AnthropicOAuthAccountInfo:
     """One account row. Never a token, never a raw email field."""
-    base = _anthropic_oauth_source_info(record.tokens)
+    base = _anthropic_oauth_source_info(record.tokens).model_dump()
+    # The ownership fields live on the base model too (the fallback row carries
+    # them), so they replace the base's empty defaults rather than repeat them.
+    base.update(
+        _anthropic_oauth_ownership(
+            shared=record.is_shared,
+            slot=record.id,
+            target=Path(record.origin_path) if record.origin_path else None,
+            account_write_back=record.write_back,
+            pending=record.pending_write_back,
+        )
+    )
     return _AnthropicOAuthAccountInfo(
-        **base.model_dump(),
+        **base,
         account_id=record.id,
         # The operator's own word for this account. Defaulted from the email
         # the token response carries, which is why it is a *name* in
@@ -2895,6 +2946,35 @@ def _anthropic_oauth_account_info(
         ordinal=record.ordinal,
         windows=_anthropic_oauth_windows(account_id=record.id),
     )
+
+
+def _anthropic_oauth_ownership(
+    *,
+    shared: bool,
+    slot: str,
+    target: Path | None,
+    account_write_back: bool,
+    pending: bool,
+) -> dict[str, Any]:
+    """The four ownership fields one card row carries (7.69.1)."""
+    decision = oauth_last_decision("anthropic_oauth", slot)
+    return {
+        "mode": OAUTH_MODE_SHARED if shared else OAUTH_MODE_NATIVE,
+        "read_only_reason": (
+            oauth_read_only_reason(
+                target=target,
+                write_back_on=anthropic_write_back_enabled(),
+                account_write_back=account_write_back,
+                platform=anthropic_shared_platform(),
+            )
+            or ""
+        )
+        if shared
+        else "",
+        "last_decision": decision[0] if decision else "",
+        "last_decision_at": decision[1] if decision else None,
+        "pending_write_back": pending,
+    }
 
 
 def _anthropic_oauth_windows(account_id: str = "") -> _AnthropicOAuthWindows:
@@ -2932,8 +3012,20 @@ async def anthropic_oauth_sources(request: Request):
     claude_code_tokens = await asyncio.to_thread(load_claude_code_tokens)
     records = await asyncio.to_thread(load_anthropic_oauth_accounts)
     accounts = [_anthropic_oauth_account_info(record) for record in records]
+    claude_code = _anthropic_oauth_source_info(claude_code_tokens)
+    if claude_code.available:
+        # The automatic fallback is SHARED even though it has no record.
+        claude_code = claude_code.model_copy(
+            update=_anthropic_oauth_ownership(
+                shared=True,
+                slot=ANTHROPIC_FALLBACK_SLOT,
+                target=claude_credentials_path(),
+                account_write_back=True,
+                pending=False,
+            )
+        )
     return _AnthropicOAuthSourcesResponse(
-        claude_code=_anthropic_oauth_source_info(claude_code_tokens),
+        claude_code=claude_code,
         mcc=(
             _anthropic_oauth_source_info(records[0].tokens)
             if records
@@ -3000,6 +3092,12 @@ class _ChatGPTOAuthAccountInfo(BaseModel):
     ordinal: int = 1
     expires_at: int | None = None
     windows: _ChatGPTOAuthWindows = _ChatGPTOAuthWindows()
+    #: 7.69.1: see ``_AnthropicOAuthSourceInfo``.
+    mode: str = ""
+    read_only_reason: str = ""
+    last_decision: str = ""
+    last_decision_at: float | None = None
+    pending_write_back: bool = False
 
 
 class _ChatGPTOAuthAccountActionResponse(BaseModel):
@@ -3037,9 +3135,34 @@ def _chatgpt_oauth_accounts() -> list[_ChatGPTOAuthAccountInfo]:
             ordinal=record.ordinal,
             expires_at=record.tokens.get("expires_at"),
             windows=_chatgpt_oauth_windows(account_id=record.id),
+            **_chatgpt_oauth_ownership(record.id, record.is_shared, record),
         )
         for record in load_chatgpt_oauth_accounts(migrate=False)
     ]
+
+
+def _chatgpt_oauth_ownership(
+    slot: str, shared: bool, record: ChatGPTAccountRecord
+) -> dict[str, Any]:
+    """The ownership fields of one ChatGPT row (7.69.1)."""
+    decision = oauth_last_decision("chatgpt_oauth", slot)
+    return {
+        "mode": OAUTH_MODE_SHARED if shared else OAUTH_MODE_NATIVE,
+        "read_only_reason": (
+            oauth_read_only_reason(
+                target=Path(record.origin_path),
+                write_back_on=chatgpt_write_back_enabled(),
+                account_write_back=record.write_back,
+                platform="codex",
+            )
+            or ""
+        )
+        if shared
+        else "",
+        "last_decision": decision[0] if decision else "",
+        "last_decision_at": decision[1] if decision else None,
+        "pending_write_back": record.pending_write_back,
+    }
 
 
 def _chatgpt_oauth_windows(account_id: str = "") -> _ChatGPTOAuthWindows:
@@ -3157,6 +3280,7 @@ async def anthropic_oauth_import_claude_code(request: Request):
             origin_path=str(claude_credentials_path()),
             write_back=True,
             default_email=email,
+            adopt_origin=True,
         )
     )
     return _AnthropicOAuthImportResponse(
@@ -3164,9 +3288,10 @@ async def anthropic_oauth_import_claude_code(request: Request):
         credential_reference=ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
         subscription_type=tokens.subscription_type,
         message=(
-            "Copied Claude Code's credential into MCC's private store as "
-            f"account {record.id}. Refreshes of it are written back to "
-            "Claude Code's own file."
+            "Imported Claude Code's credential as shared account "
+            f"{record.id}. MCC follows Claude Code's own file, leaves "
+            "renewing it to Claude Code, and steps in only once it has "
+            "expired -- writing the new token back for both."
         ),
     )
 
@@ -3284,6 +3409,52 @@ class _AnthropicOAuthRefreshResponse(BaseModel):
     message: str = ""
 
 
+def _anthropic_tokens_or_none(account_id: str) -> OAuthTokens | None:
+    """The credential a shared row holds right now, or ``None``."""
+    if account_id:
+        return load_anthropic_tokens_for(account_id)
+    try:
+        return load_tokens()
+    except AnthropicOAuthUnavailableError:
+        return None
+
+
+async def _reread_shared_anthropic(account_id: str) -> _AnthropicOAuthRefreshResponse:
+    """Rule 12: "Re-read from Claude Code" on a shared row.
+
+    Re-reads and adopts Claude Code's file. Only when the token has expired
+    and the file is unchanged does it take the locked refresh, as
+    ``purpose="operator"``. It never POSTs while the token is valid.
+    """
+    auth = AnthropicOAuthAuth(account_id=account_id)
+    try:
+        before = await asyncio.to_thread(_anthropic_tokens_or_none, account_id)
+        served = await auth.current_tokens(purpose="operator")
+    except AnthropicOAuthRefreshError as exc:
+        raise HTTPException(
+            status_code=401 if exc.definitive else 503,
+            detail=str(exc),
+        ) from exc
+    except AnthropicOAuthUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _AnthropicOAuthRefreshResponse(
+        status="complete",
+        credential_reference=ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+        expires_at=served.expires_at,
+        subscription_type=served.subscription_type,
+        message=(
+            "Renewed the expired credential under Claude Code's lock and "
+            "wrote it back to Claude Code's file."
+            if before is not None
+            and served.refresh_token != before.refresh_token
+            and served.access_token != before.access_token
+            and before.is_expired()
+            else "Re-read the credential from Claude Code. MCC renews a "
+            "shared credential only once it has expired."
+        ),
+    )
+
+
 @router.post("/admin/api/anthropic-oauth/refresh")
 async def anthropic_oauth_refresh(request: Request):
     """Refresh the stored Claude subscription credential, now, on demand.
@@ -3302,6 +3473,8 @@ async def anthropic_oauth_refresh(request: Request):
         tokens = await asyncio.to_thread(load_tokens)
     except AnthropicOAuthUnavailableError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if await asyncio.to_thread(is_shared_anthropic_credential, tokens, ""):
+        return await _reread_shared_anthropic("")
     if not tokens.has_refresh_token:
         raise HTTPException(
             status_code=400,
@@ -3403,6 +3576,8 @@ async def anthropic_oauth_account_refresh(account_id: str, request: Request):
         raise HTTPException(
             status_code=404, detail=f"No stored Claude account {account_id}."
         )
+    if await asyncio.to_thread(is_shared_anthropic_credential, tokens, account_id):
+        return await _reread_shared_anthropic(account_id)
     if not tokens.has_refresh_token:
         raise HTTPException(
             status_code=400,
@@ -3482,8 +3657,10 @@ async def chatgpt_oauth_account_refresh(account_id: str, request: Request):
     """
     require_loopback_admin(request)
     try:
+        # "Re-read from Codex" on a shared row: re-reads first, POSTs only
+        # once the token has expired (rule 12). A native row refreshes now.
         credentials = await asyncio.to_thread(
-            force_refresh_chatgpt_oauth_credentials, account_id
+            force_refresh_chatgpt_oauth_credentials, account_id, purpose="operator"
         )
     except ChatGPTOAuthRefreshError as exc:
         raise HTTPException(

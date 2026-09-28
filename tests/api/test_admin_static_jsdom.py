@@ -2763,6 +2763,133 @@ def test_sign_in_becomes_sign_in_another_account_once_one_is_stored(
     assert labels["stored"]["managedEnabled"] is True
 
 
+def test_the_shared_row_explains_why_it_is_read_only() -> None:
+    """7.69.1: a shared row says who owns it and why MCC will not renew it.
+
+    Rendered by its own small harness (``admin_oauth_ownership_jsdom_harness
+    .mjs``) from the payload below, the one source of truth: the renderer is
+    a pure function of ``/sources``, so this needs no page start-up.
+    """
+
+    node = shutil.which("node")
+    if node is None:
+        _missing("node is not on PATH")
+    far = 4_102_444_800
+    common = {
+        "available": True,
+        "subscription_type": "max",
+        "source": "mcc",
+        "expires_at": far,
+        "scopes": ["user:inference"],
+        "has_inference_scope": True,
+        "windows": {"observed": False},
+    }
+    sources = {
+        "claude_code": {"available": False},
+        "mcc": {"available": False},
+        "accounts": [
+            {
+                **common,
+                "account_id": "uuid-read-only",
+                "name": "shared@example.test",
+                "origin": "claude-code",
+                "origin_path": "C:/Users/someone/.claude/.credentials.json",
+                "write_back": True,
+                "write_back_effective": False,
+                "mode": "shared",
+                "read_only_reason": "write-back-off",
+                "last_decision": "",
+                "last_decision_at": None,
+                "pending_write_back": False,
+            },
+            {
+                **common,
+                "account_id": "uuid-pending",
+                "name": "pending@example.test",
+                "origin": "claude-code",
+                "origin_path": "C:/Users/someone/.claude/.credentials.json",
+                "write_back": True,
+                "write_back_effective": True,
+                "mode": "shared",
+                "read_only_reason": "",
+                "last_decision": "shared:writeback-pending",
+                "last_decision_at": 1_790_000_000,
+                "pending_write_back": True,
+            },
+            {
+                **common,
+                "account_id": "uuid-native",
+                "name": "native@example.test",
+                "origin": "mcc",
+                "mode": "native",
+                "read_only_reason": "",
+                "last_decision": "",
+                "last_decision_at": None,
+                "pending_write_back": False,
+            },
+        ],
+        "windows": {"observed": False},
+    }
+    result = subprocess.run(
+        [
+            node,
+            str(HARNESS.with_name("admin_oauth_ownership_jsdom_harness.mjs")),
+            str(STATIC_DIR),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=TIMEOUT_SECONDS,
+        env={**os.environ, "OAUTH_SOURCES_JSON": json.dumps(sources)},
+    )
+    if result.returncode != 0:
+        if "Cannot find package 'jsdom'" in result.stderr:
+            _missing("jsdom is not installed")
+        pytest.fail(f"harness failed: {result.stderr[-2000:]}")
+    card = json.loads(result.stdout)
+    assert card["fatal"] is None
+    assert card["scriptErrors"] == []
+    rows = {row["accountId"]: row for row in card["rows"]}
+    assert list(rows) == ["uuid-read-only", "uuid-pending", "uuid-native"]
+
+    def terms(row: dict) -> dict[str, dict]:
+        return {entry["term"]: entry for entry in row["terms"]}
+
+    # The read-only shared row: its button re-reads, and it says why MCC will
+    # never renew it, flagged rather than merely printed.
+    read_only = rows["uuid-read-only"]
+    assert read_only["refresh"] == "Re-read from Claude Code"
+    details = terms(read_only)
+    assert details["Owner"]["value"].startswith("Claude Code (shared)")
+    assert "Read-only" in details
+    assert "write-back is off" in details["Read-only"]["value"]
+    assert "never refresh this shared credential" in details["Read-only"]["value"]
+    assert details["Read-only"]["className"] == "value-expired"
+    assert "Write-back pending" not in details
+    assert read_only["pending"] == []
+
+    # A token MCC rotated but has not written back yet: amber, and the same
+    # re-read button.
+    pending = rows["uuid-pending"]
+    assert pending["refresh"] == "Re-read from Claude Code"
+    details = terms(pending)
+    assert "Read-only" not in details
+    assert details["Write-back pending"]["className"] == "value-pending"
+    assert "not yet written it back" in details["Write-back pending"]["value"]
+    assert details["Last decision"]["value"].startswith("shared:writeback-pending")
+    assert details["Last decision"]["className"] == "value-pending"
+    assert pending["pending"]
+
+    # A native row keeps today's button and claims nothing about any file.
+    native = rows["uuid-native"]
+    assert native["refresh"] == "Refresh now"
+    details = terms(native)
+    assert details["Owner"]["value"].startswith("MCC (signed in here)")
+    assert "Read-only" not in details
+    assert "Write-back pending" not in details
+    assert native["pending"] == []
+
+
 # --------------------------------------------------------------- agent tiers
 #
 # The Tiers section of each Coding agents card. jsdom proves what a gesture did

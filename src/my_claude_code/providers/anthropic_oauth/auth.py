@@ -69,9 +69,15 @@ from my_claude_code.core.client_fingerprint import (
     ClientFingerprint,
     current_fingerprint,
 )
+from my_claude_code.core.credential_refresh_scope import (
+    RefreshPurpose,
+    current_purpose,
+)
 from my_claude_code.providers.anthropic_messages import ANTHROPIC_API_VERSION
 from my_claude_code.providers.oauth_names import account_name
+from my_claude_code.providers.oauth_ownership import file_stamp
 
+from . import shared
 from .betas import merge_betas
 from .constants import (
     ANTHROPIC_OAUTH_ACCEPT,
@@ -80,10 +86,12 @@ from .constants import (
 )
 from .credentials import (
     PROVIDER_ID,
+    AccountRecord,
     AnthropicOAuthUnavailableError,
     OAuthTokens,
+    account_for,
+    load_accounts,
     load_tokens,
-    load_tokens_for,
     managed_store_path,
     refresh_tokens,
 )
@@ -137,22 +145,51 @@ class AnthropicOAuthAuth:
         # attributable to any file.
         self._stamp: tuple[int, int] | None = None
         self._stamp_read = tokens is None
+        # 7.69.1: set while the credential in hand is SHARED with Claude Code
+        # -- read from its file by an Import or by the fallback. Its file is
+        # the truth, and its own stamp is watched beside the store's.
+        self._shared: shared.SharedSlot | None = None
 
     @property
     def tokens(self) -> OAuthTokens | None:
         return self._tokens
 
-    async def current_tokens(self) -> OAuthTokens:
+    @property
+    def mode(self) -> str:
+        """``shared`` or ``native`` for the credential last resolved."""
+        return "shared" if self._shared is not None else "native"
+
+    def _source_moved(self) -> bool:
+        slot = self._shared
+        return slot is not None and file_stamp(slot.path) != slot.stamp
+
+    async def current_tokens(
+        self, *, purpose: RefreshPurpose | None = None
+    ) -> OAuthTokens:
+        await shared.migrate_once()
+        effective = purpose or current_purpose()
         async with self._lock:
             stamp = _store_stamp()
-            if self._tokens is None or (self._stamp_read and stamp != self._stamp):
+            if self._tokens is None or (
+                self._stamp_read and (stamp != self._stamp or self._source_moved())
+            ):
                 # Re-resolve rather than merely re-read: the managed store may
                 # have appeared, changed, or been quarantined since last time,
-                # and any of those can change *which source* wins.
+                # and any of those can change *which source* wins. For a
+                # SHARED credential, Claude Code's own file moving is the
+                # same signal (rule 2).
                 self._tokens = self._resolve()
-                self._stamp = stamp
+                self._stamp = _store_stamp()
                 self._stamp_read = True
             tokens = self._tokens
+            slot = self._shared
+        if slot is not None:
+            # SHARED: never early, never in the background (rules 3, 4, 7).
+            served = await shared.use(slot, effective)
+            async with self._lock:
+                self._tokens = served
+                self._stamp = _store_stamp()
+            return served
         if not tokens.needs_refresh() or not tokens.has_refresh_token:
             return tokens
         if tokens.is_expired():
@@ -173,6 +210,9 @@ class AnthropicOAuthAuth:
                 self._stamp = _store_stamp()
                 self._stamp_read = True
             tokens = self._tokens
+            slot = self._shared
+        if slot is not None:
+            return await self._shared_after_401(slot, tokens)
         if not tokens.has_refresh_token:
             return None
         try:
@@ -180,6 +220,38 @@ class AnthropicOAuthAuth:
         except Exception as error:
             logger.warning("Claude subscription refresh after a 401 failed: {}", error)
             return None
+
+    async def _shared_after_401(
+        self, slot: shared.SharedSlot, tokens: OAuthTokens
+    ) -> OAuthTokens | None:
+        """S15: a 401 on a shared credential re-reads before anything else.
+
+        Changed file: adopt it and retry once. Unchanged and within 120 s of
+        expiry, for a real request: the locked refresh. Otherwise no POST --
+        the 401 stands and maps exactly as it always has.
+        """
+        if file_stamp(slot.path) != slot.stamp:
+            async with self._lock:
+                self._tokens = self._resolve()
+                self._stamp = _store_stamp()
+                adopted = self._tokens
+            if adopted.access_token != tokens.access_token:
+                return adopted
+        if current_purpose() != "request":
+            return None
+        try:
+            served = await shared.use(slot, "request", after_401=True)
+        except Exception as error:
+            logger.warning(
+                "Shared Claude subscription credential after a 401: {}", error
+            )
+            return None
+        if served.access_token == tokens.access_token:
+            return None
+        async with self._lock:
+            self._tokens = served
+            self._stamp = _store_stamp()
+        return served
 
     def _resolve(self) -> OAuthTokens:
         """This instance's credential: its own account's, or the primary.
@@ -191,15 +263,44 @@ class AnthropicOAuthAuth:
         account's token would serve a request on a credential the pool did not
         choose, and charge the failure to the wrong slot.
         """
+        previous = self._shared
         if not self._account_id:
-            return load_tokens()
-        tokens = load_tokens_for(self._account_id)
-        if tokens is None:
+            if self._tokens is not None and shared.fallback_is_mid_write(previous):
+                # S4: Claude Code is mid-write. Keep the cached token for
+                # this call; the stamp still differs, so the next use looks
+                # again. Never read as a logout.
+                return self._tokens
+            tokens = load_tokens()
+            if tokens.source == "claude-code":
+                self._shared = shared.resolve_fallback(tokens, previous)
+                return self._shared.seen
+            records = load_accounts(migrate=False)
+            primary = records[0] if records else None
+            if primary is None or not primary.is_shared:
+                self._shared = None
+                return tokens
+            return self._resolve_shared_record(primary, previous)
+        record = account_for(self._account_id)
+        if record is None:
             raise AnthropicOAuthUnavailableError(
                 f"The Claude subscription account {self._account_id} is no "
                 "longer stored. Sign in again from the dashboard."
             )
-        return tokens
+        if not record.is_shared:
+            self._shared = None
+            return record.tokens
+        return self._resolve_shared_record(record, previous)
+
+    def _resolve_shared_record(
+        self, record: AccountRecord, previous: shared.SharedSlot | None
+    ) -> OAuthTokens:
+        slot = shared.resolve_record(record, previous)
+        if slot.record is not None and not slot.record.is_shared:
+            # An account switch landed on an account MCC holds natively.
+            self._shared = None
+            return slot.seen
+        self._shared = slot
+        return slot.seen
 
     async def _refresh_now(self, tokens: OAuthTokens) -> OAuthTokens:
         refreshed = await refresh_tokens(tokens, account_id=self._account_id)

@@ -246,5 +246,5 @@ async def exchange_code_for_account(
     tokens = _tokens_from_payload(response.json(), source="mcc")
     if tokens is None:
         raise AnthropicOAuthLoginError(200, "response carried no access token")
-    record = add_or_update_account(tokens, origin=ORIGIN_MCC)
+    record = add_or_update_account(tokens, origin=ORIGIN_MCC, adopt_origin=True)
     return record, tokens

@@ -74,6 +74,24 @@ def _reset_stop_deadline():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_oauth_ownership_state():
+    """7.69.1: the shared-credential module keeps two process-wide flags.
+
+    The one-time migration is switched OFF by default -- a test that is about
+    the migration turns it back on with ``reset_migration_flag()`` -- and the
+    once-per-token decision cache starts empty, so no test inherits another's
+    "already said that".
+    """
+    from my_claude_code.providers.anthropic_oauth import shared as oauth_shared
+
+    oauth_shared._MIGRATION_DONE = True
+    oauth_shared.reset_once_cache()
+    yield
+    oauth_shared._MIGRATION_DONE = True
+    oauth_shared.reset_once_cache()
+
+
+@pytest.fixture(autouse=True)
 def _reset_request_task_registry():
     """No test may inherit another test's in-flight requests.
 

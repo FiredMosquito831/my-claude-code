@@ -346,17 +346,23 @@ async def test_a_403_without_an_oauth_error_body_is_transient(
 async def test_a_rejected_claude_code_credential_never_quarantines_anything(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Claude Code's own file is read-only to MCC, in every direction."""
+    """Claude Code's own file is read-only to MCC, in every direction.
+
+    7.69.1 changed the call shape only: a Claude Code credential is SHARED,
+    so ``refresh_tokens`` refuses it outright and the one path that may POST
+    it is the locked refresh a real request takes once it has expired.
+    """
     managed, claude = _redirect_stores(monkeypatch, tmp_path)
-    _write_claude_code(claude)
+    _write_claude_code(claude, expiresAt=(int(time.time()) - 60) * 1000)
     before = claude.read_text(encoding="utf-8")
+    monkeypatch.setattr(creds, "write_back_enabled", lambda: True)
 
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": "invalid_grant"})
 
     _mock_token_endpoint(monkeypatch, handler)
 
-    with pytest.raises(AnthropicOAuthRefreshRejected):
+    with pytest.raises(creds.SharedCredentialRefused):
         await creds.refresh_tokens(
             OAuthTokens(
                 access_token=_CLAUDE_TOKEN,
@@ -364,6 +370,8 @@ async def test_a_rejected_claude_code_credential_never_quarantines_anything(
                 source="claude-code",
             )
         )
+    with pytest.raises(AnthropicOAuthRefreshRejected):
+        await AnthropicOAuthAuth().current_tokens(purpose="request")
 
     assert claude.read_text(encoding="utf-8") == before
     assert list(managed.parent.glob("*.dead-*")) == []

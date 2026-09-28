@@ -1582,6 +1582,10 @@ _ADDED_COLUMNS = (
         "output_video_seconds",
         "ALTER TABLE requests ADD COLUMN output_video_seconds REAL",
     ),
+    # 7.69.1: the OAuth credential decision this request triggered -- one
+    # stable code (``shared:adopted``, ``shared:refreshed+wrote-back``,
+    # ``native:refreshed``, ...). NULL = a plain use, nothing decided.
+    ("credential_event", "ALTER TABLE requests ADD COLUMN credential_event TEXT"),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1735,6 +1739,7 @@ _REQUEST_INSERT_COLUMNS = (
     "input_audio_seconds",
     "media_job_id",
     "output_video_seconds",
+    "credential_event",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -2486,6 +2491,9 @@ class RequestRecord:
     input_audio_seconds: float | None = None
     media_job_id: str | None = None
     output_video_seconds: float | None = None
+    #: The OAuth credential decision this request triggered (7.69.1), or
+    #: ``None`` for a plain use.
+    credential_event: str | None = None
     #: Generated outputs to link in ``request_media`` (sha256, mime, bytes,
     #: stored). Written by the writer thread with the row.
     media_outputs: tuple[MediaOutputRecord, ...] = ()
@@ -5304,6 +5312,7 @@ class RequestLogStore:
             record.input_audio_seconds,
             record.media_job_id,
             record.output_video_seconds,
+            record.credential_event,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose

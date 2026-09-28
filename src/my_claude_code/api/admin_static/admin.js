@@ -10349,7 +10349,82 @@ function appendOAuthDetail(list, term, value, options) {
   const dd = document.createElement("dd");
   dd.textContent = value;
   if (options && options.warn) dd.className = "value-expired";
+  if (options && options.amber) dd.className = "value-pending";
   list.append(dt, dd);
+}
+
+// 7.69.1: who owns a credential, in the operator's words. A SHARED credential
+// was read from the official client's own file (Import, or the automatic
+// fallback): that file is the truth, and MCC only steps in once the token has
+// expired. A NATIVE one MCC signed in itself.
+const OAUTH_READ_ONLY_REASONS = {
+  "write-back-off":
+    "write-back is off, so MCC will never refresh this shared credential -- " +
+    "it serves the token while it is valid and then waits for the client",
+  macos:
+    "on macOS Claude Code keeps its credential in the login keychain, which " +
+    "MCC cannot write, so MCC will never refresh this shared credential",
+  "not-writable":
+    "the client's credential file is not writable by MCC, so MCC will never " +
+    "refresh this shared credential",
+  "no-file":
+    "the client's credential file is gone; MCC serves its copy only while it " +
+    "is valid and never refreshes it",
+};
+const OAUTH_DECISION_RED = new Set(["shared:sign-in-again", "shared:rejected"]);
+
+function oauthClientName(provider) {
+  return provider === "chatgpt" ? "Codex" : "Claude Code";
+}
+
+function oauthReRead(provider) {
+  return `Re-read from ${oauthClientName(provider)}`;
+}
+
+function appendOAuthOwnership(list, row, provider) {
+  if (!row || !row.mode) return;
+  const client = oauthClientName(provider);
+  appendOAuthDetail(
+    list,
+    "Owner",
+    row.mode === "shared"
+      ? `${client} (shared) -- MCC follows ${client}'s own file and renews ` +
+          "the token only once it has expired and a real request needs it"
+      : "MCC (signed in here) -- MCC renews it itself",
+  );
+  if (row.read_only_reason) {
+    appendOAuthDetail(
+      list,
+      "Read-only",
+      OAUTH_READ_ONLY_REASONS[row.read_only_reason] || row.read_only_reason,
+      { warn: true },
+    );
+  }
+  if (row.pending_write_back) {
+    appendOAuthDetail(
+      list,
+      "Write-back pending",
+      `MCC renewed this token but has not yet written it back to ${client}'s ` +
+        "file; it retries on every use without renewing again",
+      { amber: true },
+    );
+  }
+  if (row.last_decision) {
+    const when = row.last_decision_at
+      ? ` at ${new Date(row.last_decision_at * 1000).toLocaleString()}`
+      : "";
+    const code = row.last_decision;
+    const signIn =
+      code === "shared:sign-in-again" || code === "shared:rejected"
+        ? provider === "chatgpt"
+          ? " -- sign in again in Codex (codex login)"
+          : " -- sign in again in Claude Code (claude /login)"
+        : "";
+    appendOAuthDetail(list, "Last decision", `${code}${when}${signIn}`, {
+      warn: OAUTH_DECISION_RED.has(code),
+      amber: code === "shared:writeback-pending",
+    });
+  }
 }
 
 // Never invents a window. Every figure below is either a string Anthropic sent
@@ -10370,6 +10445,7 @@ function renderAnthropicOAuthDetails(details, sources, buttons) {
     const list = document.createElement("dl");
     list.className = "anthropic-oauth-details";
     details.appendChild(list);
+    appendOAuthOwnership(list, tokens, "claude");
     renderAnthropicOAuthTokenDetails(list, tokens, sources.windows || {});
     return;
   }
@@ -10392,7 +10468,8 @@ function renderAnthropicOAuthDetails(details, sources, buttons) {
     const refreshRow = document.createElement("button");
     refreshRow.type = "button";
     refreshRow.className = "secondary-button oauth-account-refresh";
-    refreshRow.textContent = "Refresh now";
+    refreshRow.textContent =
+      account.mode === "shared" ? oauthReRead("claude") : "Refresh now";
     refreshRow.addEventListener("click", () => {
       refreshAnthropicOAuthAccount(account.account_id, refreshRow, buttons);
     });
@@ -10417,13 +10494,15 @@ function renderAnthropicOAuthDetails(details, sources, buttons) {
     row.appendChild(list);
     appendOAuthDetail(list, "Account", account.account_id || "unknown");
     appendOAuthDetail(list, "Added from", account.origin || "mcc");
+    appendOAuthOwnership(list, account, "claude");
     if (account.origin_path) {
       appendOAuthDetail(
         list,
         "Write-back",
         account.write_back_effective
-          ? `on -- refreshes are written to ${account.origin_path}`
-          : "off -- refreshes stay in MCC's own store",
+          ? "on -- once the token has expired MCC renews it under Claude " +
+              `Code's own lock and writes it back to ${account.origin_path}`
+          : "off -- MCC will never refresh this shared credential",
       );
     }
     renderAnthropicOAuthTokenDetails(list, account, account.windows || {});
@@ -10529,6 +10608,20 @@ async function refreshAnthropicOAuthSources(
     // removed from here. With accounts stored the per-row buttons are the
     // real controls and these two act on the primary account.
     setAnthropicOAuthManagedButtons(buttons, accounts.length > 0);
+    // 7.69.1: on a SHARED primary -- or the fallback, which is always
+    // shared -- the card's refresh button re-reads Claude Code's file
+    // instead; it never renews a token that is still valid.
+    const primary = accounts.length ? accounts[0] : sources.claude_code;
+    const refreshAll = Array.isArray(buttons) ? buttons[2] : null;
+    if (refreshAll) {
+      const sharedPrimary = Boolean(primary && primary.mode === "shared");
+      refreshAll.textContent = sharedPrimary
+        ? oauthReRead("claude")
+        : "Refresh now";
+      if (!accounts.length && sources.claude_code && sources.claude_code.available) {
+        refreshAll.disabled = false;
+      }
+    }
     // Once any account is stored, signing in ADDS one. Saying so on the
     // button is the whole difference between "this will replace what I have"
     // and "this will give me a second account".
@@ -10931,7 +11024,8 @@ async function refreshChatGPTOAuthStatus(details) {
     const refreshRow = document.createElement("button");
     refreshRow.type = "button";
     refreshRow.className = "secondary-button oauth-account-refresh";
-    refreshRow.textContent = "Refresh now";
+    refreshRow.textContent =
+      account.mode === "shared" ? oauthReRead("chatgpt") : "Refresh now";
     refreshRow.addEventListener("click", () => {
       chatgptOAuthAccountAction(account.account_id, "refresh", refreshRow, details);
     });
@@ -10957,13 +11051,15 @@ async function refreshChatGPTOAuthStatus(details) {
     appendOAuthDetail(list, "Account", account.account_id || "unknown");
     appendOAuthDetail(list, "Plan", account.plan_type || "unknown");
     appendOAuthDetail(list, "Added from", account.origin || "mcc");
+    appendOAuthOwnership(list, account, "chatgpt");
     if (account.origin_path) {
       appendOAuthDetail(
         list,
         "Write-back",
         account.write_back_effective
-          ? `on -- refreshes are written to ${account.origin_path}`
-          : "off -- refreshes stay in MCC's own store",
+          ? "on -- once the token has expired MCC renews it and writes it " +
+              `back to ${account.origin_path} (compare-and-swap; Codex has no lock)`
+          : "off -- MCC will never refresh this shared credential",
       );
     }
     details.appendChild(list);

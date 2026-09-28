@@ -59,6 +59,7 @@ from my_claude_code.core.anthropic.tool_result_media import (
     media_block_contexts,
     replace_request_media_with_text,
 )
+from my_claude_code.core.credential_refresh_scope import background_scope
 from my_claude_code.core.reported_cost import paused_reported_cost
 from my_claude_code.core.request_images import capture_images
 from my_claude_code.core.request_log import RequestLogStore, paused_recovery_trace
@@ -374,11 +375,17 @@ class VisionDescribeAdapter:
             # body, its upstream tries and its retries under the client's own
             # attempt 0 -- which is how the first live proof of this feature
             # showed the vision model's API key on the primary's row.
+            #
+            # ``background_scope`` (7.69.1): a description is not the client's
+            # request, so it never refreshes an OAuth credential MCC shares
+            # with Claude Code or Codex -- the nested ``stream_response``
+            # cannot elevate itself inside it.
             with (
                 paused_wire_trace(),
                 paused_ladder(),
                 paused_recovery_trace(),
                 paused_reported_cost(),
+                background_scope(),
             ):
                 stream = self._executor.stream(
                     plan,

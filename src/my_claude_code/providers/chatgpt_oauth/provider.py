@@ -22,6 +22,10 @@ from my_claude_code.application.model_metadata import (
 from my_claude_code.config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+from my_claude_code.core.credential_refresh_scope import (
+    claimed_scope,
+    stream_purpose,
+)
 from my_claude_code.core.diagnostics import (
     exception_cause_types,
     redacted_exception_traceback,
@@ -756,12 +760,16 @@ class ChatGPTOAuthProvider(BaseProvider):
         req_tag = f" request_id={request_id}" if request_id else ""
         logger.debug("{}_STREAM: starting{}", tag, req_tag)
 
+        # 7.69.1 (rule 7): a client request may refresh a credential shared
+        # with Codex; the describe side call's background scope may not.
+        purpose = stream_purpose()
         try:
-            credentials = load_chatgpt_oauth_credentials(
-                access_token=self._api_key or None,
-                account_id=self._account_id or None,
-                pinned_account_id=self._pinned_account_id or None,
-            )
+            with claimed_scope(purpose):
+                credentials = load_chatgpt_oauth_credentials(
+                    access_token=self._api_key or None,
+                    account_id=self._account_id or None,
+                    pinned_account_id=self._pinned_account_id or None,
+                )
         except ChatGPTOAuthError as exc:
             logger.error("{}_ERROR:{} {}", tag, req_tag, exc)
             raise ApplicationUnavailableError(str(exc)) from exc
@@ -897,12 +905,15 @@ class ChatGPTOAuthProvider(BaseProvider):
                                     # Per slot: the 401 refreshes the account
                                     # that served *this* request and spends no
                                     # other account's refresh token.
-                                    active_credentials = await asyncio.to_thread(
-                                        force_refresh_managed_chatgpt_oauth_credentials,
-                                        self._pinned_account_id
-                                        or active_credentials.account_id
-                                        or None,
-                                    )
+                                    # ``to_thread`` copies this context, so
+                                    # the claimed purpose reaches the refresh.
+                                    with claimed_scope(purpose):
+                                        active_credentials = await asyncio.to_thread(
+                                            force_refresh_managed_chatgpt_oauth_credentials,
+                                            self._pinned_account_id
+                                            or active_credentials.account_id
+                                            or None,
+                                        )
                                 except ChatGPTOAuthError as exc:
                                     raise ApplicationUnavailableError(str(exc)) from exc
                                 active_headers = _build_headers(

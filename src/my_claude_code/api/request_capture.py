@@ -1547,6 +1547,8 @@ class RequestCapture:
             return
         record.key_index = self._credential.index
         record.key_label = self._credential.label
+        # The OAuth credential decision this request triggered, if any.
+        record.credential_event = self._credential.event
         self._attribute_winner(record)
         record.attempts = tuple(self._attempts)
         store.enqueue(record)
