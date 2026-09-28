@@ -65,6 +65,7 @@ REQUEST_FIELD_IDS: tuple[str, ...] = (
     "tokens_out",
     "turns_with_tools",
     "cost",
+    "media",
     "ladder",
     "tool_catalogue",
     "origin",
@@ -84,6 +85,7 @@ REQUEST_FIELD_LABELS: dict[str, str] = {
     "tokens_out": "Tokens out",
     "turns_with_tools": "Turns with tools",
     "cost": "Cost",
+    "media": "Media",
     "ladder": "Upstream retry ladder",
     "tool_catalogue": "Tool catalogue",
     "origin": "Request origin",
@@ -314,6 +316,20 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     # a number a reader may act on, and a source with no amount is the record
     # of an attempt to price, not a price.
     "cost": ("cost_usd", "cost_source"),
+    # What a media endpoint did and measured (7.69.0), exactly as stored: the
+    # operation, the images it returned, the seconds of audio it heard or
+    # produced, the seconds of video, and MCC's own job id. Opt-in and absent
+    # from the defaults, so an export that does not ask for it is
+    # byte-identical to before. Empty on every chat row and on units a row
+    # did not measure -- never 0.
+    "media": (
+        "media_operation",
+        "output_image_count",
+        "input_audio_seconds",
+        "output_audio_seconds",
+        "output_video_seconds",
+        "media_job_id",
+    ),
     "input": ("input_text", "input_chars"),
     "output": ("output_text", "output_chars"),
     "tool_calls": ("tool_calls", "tool_call_count"),
@@ -422,6 +438,12 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "thinking_chars",
     "tool_call_count",
     "input_image_count",
+    "media_operation",
+    "output_image_count",
+    "input_audio_seconds",
+    "output_audio_seconds",
+    "output_video_seconds",
+    "media_job_id",
     "ttft_ms",
     "ttft_winner_ms",
     "ttft_lost_to_fallbacks_ms",
@@ -484,6 +506,12 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "thinking_chars": "Thinking chars",
     "tool_call_count": "Tool calls",
     "input_image_count": "Images in",
+    "media_operation": "Media operation",
+    "output_image_count": "Images out",
+    "input_audio_seconds": "Audio in (s)",
+    "output_audio_seconds": "Audio out (s)",
+    "output_video_seconds": "Video (s)",
+    "media_job_id": "Video job",
     "ttft_ms": "TTFT (ms)",
     "ttft_winner_ms": "Winner TTFT (ms)",
     "ttft_lost_to_fallbacks_ms": "Lost to fallbacks (ms)",

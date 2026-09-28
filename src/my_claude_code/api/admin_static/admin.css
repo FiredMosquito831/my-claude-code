@@ -9930,3 +9930,18 @@ audio.req-media-preview {
 .media-not-measured {
   color: var(--muted);
 }
+
+/* The Media card's Cost cell (7.69.0): reported and estimated amounts and the
+   unpriced count, each on its own, wrapping inside a narrow table cell. */
+.media-cost {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 4px;
+}
+
+/* Requests nothing priced: a muted count, never an amount. */
+.media-unpriced {
+  color: var(--muted);
+  white-space: nowrap;
+}

@@ -94,6 +94,10 @@ CostBackfillPricer = Callable[
 
 _cost_backfill_pricer: CostBackfillPricer | None = None
 
+#: What prices one new row on the writer thread (7.69.0): a zero-argument
+#: callable answering ``(cost_usd, cost_source)``. See ``RequestRecord.pricer``.
+RowPricer = Callable[[], tuple[float | None, str | None]]
+
 
 def _utc_day(ts_epoch: float) -> str:
     """The UTC calendar day one timestamp falls in, as ``YYYY-MM-DD``.
@@ -2289,15 +2293,24 @@ _MEDIA_JOB_UPDATABLE = frozenset(
 #: prune waits this long before calling a job without one an orphan.
 _MEDIA_JOB_ORPHAN_GRACE_SECONDS = 3600.0
 
-#: What ``media_stats`` sums per group: ``(payload name, requests column)``.
-#: Every one is NULL on a row that did not measure it, so each is summed
-#: beside a count of the rows that did.
+#: What ``media_stats`` sums per group: ``(payload name, requests column or
+#: expression)``. Every one is NULL on a row that did not measure it, so each
+#: is summed beside a count of the rows that did.
+#:
+#: The cost three (7.69.0) follow the cost card's rules: a bare ``SUM`` so a
+#: group nothing priced sums to NULL, never to 0; reported and estimated
+#: summed apart, never added into one another by a reader; and
+#: ``cost_usd_measured`` is the count of priced rows -- the rest of the group's
+#: requests are unpriced, and are counted as such rather than as $0.
 _MEDIA_STAT_MEASURES: tuple[tuple[str, str], ...] = (
     ("images_out", "output_image_count"),
     ("audio_seconds_out", "output_audio_seconds"),
     ("audio_seconds_in", "input_audio_seconds"),
     ("video_seconds", "output_video_seconds"),
     ("bytes_out", "media_bytes_out"),
+    ("cost_usd", "cost_usd"),
+    ("cost_reported_usd", "CASE WHEN cost_source = 'provider' THEN cost_usd END"),
+    ("cost_estimated_usd", "CASE WHEN cost_source <> 'provider' THEN cost_usd END"),
 )
 #: The counters ``media_stats`` adds up, a group's total being the sum of its
 #: provider/model rows'.
@@ -2480,6 +2493,14 @@ class RequestRecord:
     #: served (7.68.0). When the row stored a file, the writer trims the media
     #: store to it once the batch is committed. 0 sets no cap. Never a column.
     media_store_max_bytes: int = 0
+    #: Prices this row on the writer thread just before it is written (7.69.0,
+    #: media rows): ``() -> (cost_usd, cost_source)``. ``core`` holds no
+    #: pricing ladder, so the callable is the caller's, closed over what the
+    #: request measured. Catalogue lookups are milliseconds no request should
+    #: wait for -- the reason the tool catalogue is fingerprinted here too --
+    #: and a streamed answer's row is finished from a fire-and-forget task
+    #: that must not gain a thread hop. Used once, then dropped. Never a column.
+    pricer: RowPricer | None = field(default=None, repr=False, compare=False)
 
     @property
     def ts_iso(self) -> str:
@@ -5132,6 +5153,7 @@ class RequestLogStore:
                     )
                 except Exception as exc:
                     logger.debug("Tool catalogue fingerprint skipped: {}", exc)
+            self._price_record(record)
         rows = [self._record_to_row(record) for record in batch]
         packed: dict[str, tuple[bytes | None, bytes | None]] = {}
         if self._compress_bodies:
@@ -5180,6 +5202,25 @@ class RequestLogStore:
             # Cheap no-op once a dictionary exists; this lets a fresh install
             # start compressing properly without waiting for a restart.
             self._maybe_train_dictionary(conn)
+
+    @staticmethod
+    def _price_record(record: RequestRecord) -> None:
+        """Run a row's own pricer, once, on this (the writer) thread.
+
+        A row that already carries a price or a source keeps it. A pricer
+        that fails leaves the row unpriced rather than unwritten: a request
+        already answered is never lost to arithmetic about it.
+        """
+        pricer = record.pricer
+        if pricer is None:
+            return
+        record.pricer = None
+        if record.cost_usd is not None or record.cost_source is not None:
+            return
+        try:
+            record.cost_usd, record.cost_source = pricer()
+        except Exception as exc:
+            logger.debug("Request cost skipped: {}", exc)
 
     def _record_to_row(self, record: RequestRecord) -> tuple[Any, ...]:
         # With compression on, the text lives in ``request_bodies`` and these
@@ -8758,17 +8799,40 @@ class RequestLogStore:
             cursor = conn.execute("DELETE FROM media_jobs WHERE job_id = ?", (job_id,))
         return cursor.rowcount > 0
 
-    def set_request_video_seconds(self, request_id: str, seconds: float) -> bool:
+    def set_request_video_seconds(
+        self,
+        request_id: str,
+        seconds: float,
+        *,
+        cost: tuple[float, str] | None = None,
+    ) -> bool:
         """Put a finished video's length on its create row; ``True`` once written.
 
         ``False`` while the writer has not flushed that row yet -- the caller
         tries again on the next poll.
+
+        ``cost`` (7.69.0) is ``(cost_usd, cost_source)`` for the video now that
+        its length is known. It fills only a row with no amount yet -- one the
+        create stored as ``unpriced`` or not at all -- so a figure the host
+        reported at create time is never replaced by an estimate.
         """
         with self._connection() as conn:
-            cursor = conn.execute(
-                "UPDATE requests SET output_video_seconds = ? WHERE id = ?",
-                (seconds, request_id),
-            )
+            if cost is None:
+                cursor = conn.execute(
+                    "UPDATE requests SET output_video_seconds = ? WHERE id = ?",
+                    (seconds, request_id),
+                )
+            else:
+                # Every SET expression reads the row as it was, so both CASEs
+                # test the old ``cost_usd``.
+                cursor = conn.execute(
+                    "UPDATE requests SET output_video_seconds = ?,"
+                    " cost_usd = CASE WHEN cost_usd IS NULL THEN ? ELSE cost_usd END,"
+                    " cost_source = CASE WHEN cost_usd IS NULL THEN ?"
+                    " ELSE cost_source END"
+                    " WHERE id = ?",
+                    (seconds, cost[0], cost[1], request_id),
+                )
         return cursor.rowcount > 0
 
     def record_media_job_content(
@@ -8900,6 +8964,11 @@ class RequestLogStore:
             total = entry.pop("duration_sum")
             entry["avg_duration_ms"] = _rounded(_mean(total, entry["duration_count"]))
             entry["median_duration_ms"] = _rounded(median)
+            # Requests nothing priced: a count, so a partly priced sum reads
+            # as partial rather than as a cheap window.
+            entry["cost_unpriced"] = (entry["requests"] or 0) - (
+                entry["cost_usd_measured"] or 0
+            )
             return entry
 
         folded: dict[Any, dict[str, Any]] = {}

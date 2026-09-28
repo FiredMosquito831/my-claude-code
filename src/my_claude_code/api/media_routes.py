@@ -72,7 +72,10 @@ from my_claude_code.core.openai_images import (
     parse_images_response,
     parse_images_stream,
 )
-from my_claude_code.core.openai_speech import parse_speech_response
+from my_claude_code.core.openai_speech import (
+    parse_speech_response,
+    parse_speech_stream,
+)
 from my_claude_code.core.openai_transcriptions import (
     parse_transcription_response,
     parse_transcription_stream,
@@ -478,8 +481,14 @@ def _with_leaf_measures(outputs: MediaOutputs, response: MediaResponse) -> Media
     answer comes back unchanged.
     """
     changes: dict[str, Any] = {}
-    if outputs.usage is None and response.usage is not None:
-        changes["usage"] = {str(key): value for key, value in response.usage.items()}
+    if response.usage is not None:
+        # The leaf's usage is the whole measurement; a transcript's body may
+        # carry only its three counters (7.69.0: the leaf adds the audio part
+        # the host itemised, which the client's answer never shows).
+        measured = {str(key): value for key, value in response.usage.items()}
+        merged = {**(outputs.usage or {}), **measured}
+        if merged != outputs.usage:
+            changes["usage"] = merged
     if outputs.audio_seconds is None and response.audio_seconds is not None:
         changes["audio_seconds"] = response.audio_seconds
     if response.not_forwarded:
@@ -517,6 +526,8 @@ def _stream_parser_for(media_request: MediaRequest) -> Callable[[bytes], MediaOu
         MEDIA_OPERATION_TRANSLATE,
     ):
         return parse_transcription_stream
+    if media_request.operation == MEDIA_OPERATION_SPEECH:
+        return parse_speech_stream
     return parse_images_stream
 
 

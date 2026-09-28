@@ -17889,6 +17889,50 @@ function mediaOutputCell(entry) {
   return mediaNotMeasured();
 }
 
+/* What a group's media requests cost (7.69.0), under the cost card's rules:
+   the host's reported figure and MCC's estimate are two numbers, never added
+   into one, and the requests nothing priced are a count -- never $0. A group
+   with no requests has nothing to price, so it shows the not-measured dash. */
+function mediaCostCell(entry) {
+  const requests = entry.requests == null ? 0 : Number(entry.requests);
+  if (!requests) return mediaNotMeasured();
+  const priced = entry.cost_usd_measured == null ? 0 : Number(entry.cost_usd_measured);
+  const unpriced =
+    entry.cost_unpriced == null ? requests - priced : Number(entry.cost_unpriced);
+  const parts = [];
+  if (entry.cost_reported_usd != null) {
+    const reported = document.createElement("span");
+    reported.className = "cost-amount";
+    reported.textContent = formatCostAmount(entry.cost_reported_usd);
+    reported.title = `reported by ${COST_SOURCE_LABELS.provider}`;
+    parts.push([reported]);
+  }
+  if (entry.cost_estimated_usd != null) {
+    const estimated = document.createElement("span");
+    estimated.className = "cost-amount";
+    estimated.textContent = formatCostAmount(entry.cost_estimated_usd);
+    estimated.title = "estimated from a published price";
+    const badge = document.createElement("span");
+    badge.className = "cost-badge";
+    badge.textContent = "est.";
+    parts.push([estimated, badge]);
+  }
+  if (unpriced > 0) {
+    const none = document.createElement("span");
+    none.className = "media-unpriced";
+    none.textContent = `${formatAnalyticsNumber(unpriced)} unpriced`;
+    none.title = "no source published a rate for these requests; they are not counted as $0";
+    parts.push([none]);
+  }
+  const cell = document.createElement("span");
+  cell.className = "media-cost";
+  parts.forEach((nodes, index) => {
+    if (index) cell.append(" · ");
+    cell.append(...nodes);
+  });
+  return cell;
+}
+
 function mediaMeasureCells(entry) {
   return [
     formatAnalyticsNumber(entry.requests),
@@ -17899,6 +17943,7 @@ function mediaMeasureCells(entry) {
     mediaMeasure(entry.bytes_out, mediaBytes),
     mediaMeasure(entry.median_duration_ms, mediaMilliseconds),
     mediaMeasure(entry.avg_duration_ms, mediaMilliseconds),
+    mediaCostCell(entry),
   ];
 }
 
@@ -17911,6 +17956,7 @@ const MEDIA_MEASURE_HEADERS = [
   "Bytes out",
   "Median",
   "Average",
+  "Cost",
 ];
 
 /* The four job states the page names, then everything else a host said. */
@@ -21776,6 +21822,10 @@ const EXPORT_FIELDS = {
     { id: "input_uncached", label: "Input uncached" },
     { id: "tokens_out", label: "Tokens out" },
     { id: "turns_with_tools", label: "Turns with tools" },
+    // Opt-in, like the three below: an export that does not ask for them is
+    // byte-identical to one made before 7.69.0. Mirrors core/export.py.
+    { id: "cost", label: "Cost" },
+    { id: "media", label: "Media" },
     { id: "ladder", label: "Upstream retry ladder" },
     { id: "tool_catalogue", label: "Tool catalogue" },
     { id: "origin", label: "Request origin" },

@@ -5299,6 +5299,17 @@ def test_jsdom_request_modal_media_is_never_inlined_or_listed(rendered) -> None:
     assert media["chatRowChildren"] == 0
 
 
+def test_jsdom_a_priced_media_row_shows_its_cost_like_a_chat_row(rendered) -> None:
+    """7.69.0: the modal's Cost line, the est. badge and the rung that priced it."""
+
+    cost = rendered["requestMedia"]["cost"]
+    assert cost == {
+        "amount": "$0.0400",
+        "badge": "est.",
+        "note": "estimated from LiteLLM",
+    }
+
+
 def test_jsdom_the_old_hiding_class_is_applied_nowhere(rendered) -> None:
     advanced = rendered["advancedFields"]
     assert advanced["showAdvancedInScript"] is False
@@ -6990,6 +7001,7 @@ def test_the_analytics_media_card_renders_per_rail_and_per_model(rendered) -> No
         "Bytes out",
         "Median",
         "Average",
+        "Cost",
     ]
     image, speech, asr, video = media["railRows"]
     assert image == [
@@ -7002,13 +7014,14 @@ def test_the_analytics_media_card_renders_per_rail_and_per_model(rendered) -> No
         "1.46 KB",
         "400 ms",
         "500 ms",
+        "$0.0400 · $0.0800est. · 1 unpriced",
     ]
     # Speech: bytes measured, seconds not -- a dash, never "0 s".
     assert speech[5] == "—"
     assert speech[6] == "2.00 KB"
     # Transcription had no traffic: counted 0, every measure a dash.
     assert asr[1:5] == ["0", "0", "0", "0"]
-    assert asr[5:] == ["—", "—", "—", "—"]
+    assert asr[5:] == ["—", "—", "—", "—", "—"]
     assert video[5] == "1 job · 8 s"
     assert video[6] == "—"
     assert media["modelHeaders"][:2] == ["Rail", "Provider / model"]
@@ -7026,6 +7039,45 @@ def test_not_measured_is_a_dash_that_says_so(rendered) -> None:
     assert all(dash == ["—", "not measured"] for dash in media["dashes"])
     cells = [cell for row in media["railRows"] for cell in row]
     assert "0 s" not in cells
+
+
+_UNPRICED_TITLE = (
+    "no source published a rate for these requests; they are not counted as $0"
+)
+
+
+def test_the_media_cost_column_keeps_reported_estimated_and_unpriced_apart(
+    rendered,
+) -> None:
+    """7.69.0: never one merged total, and an unpriced request is a count, not $0."""
+
+    media = rendered["mediaDashboard"]
+    image_rail = media["costCells"][0]
+    assert image_rail["amounts"] == ["$0.0400", "$0.0800"]
+    assert image_rail["badges"] == 1
+    # The speech rail priced nothing: a count with its reason, no amount.
+    assert media["railRows"][1][-1] == "2 unpriced"
+    assert ["2 unpriced", _UNPRICED_TITLE] in media["unpriced"]
+    # The video rail's payload named no unpriced count: requests minus priced.
+    assert media["railRows"][3][-1] == "2 unpriced"
+    # A model row priced whole: one estimate, nothing unpriced.
+    assert media["modelRows"][0][-1] == "$0.0800est."
+    cells = [cell for row in media["railRows"] for cell in row]
+    assert "$0.00" not in cells
+    assert "color: var(--muted)" in _css_rule(".media-unpriced")
+    assert "flex-wrap: wrap" in _css_rule(".media-cost")
+
+
+def test_the_export_window_offers_cost_and_media_opt_in() -> None:
+    """7.69.0: both offered, neither a default, so a default export is unchanged."""
+
+    source = (STATIC_DIR / "admin.js").read_text(encoding="utf-8")
+    requests_fields = source.split("const EXPORT_FIELDS = {", 1)[1].split("],", 1)[0]
+    assert '{ id: "cost", label: "Cost" }' in requests_fields
+    assert '{ id: "media", label: "Media" }' in requests_fields
+    defaults = source.split("const EXPORT_DEFAULT_FIELDS = {", 1)[1].split("]),", 1)[0]
+    assert '"cost"' not in defaults
+    assert '"media"' not in defaults
 
 
 def test_video_job_states_are_their_own_table(rendered) -> None:
