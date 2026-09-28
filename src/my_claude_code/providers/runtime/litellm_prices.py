@@ -39,7 +39,7 @@ import asyncio
 import json
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +49,7 @@ import httpx
 from loguru import logger
 
 from my_claude_code.application.cost import SOURCE_LITELLM, RateCard
+from my_claude_code.application.media_cost import MediaRateCard
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.settings import get_settings
 from my_claude_code.core.model_ids import bare_model_id, candidate_ladder
@@ -377,20 +378,16 @@ def _rate_card(key: str, entry: Mapping[str, Any], label: str) -> RateCard | Non
     return None if card.is_empty else card
 
 
-def litellm_rate_card(
-    provider_id: str, model_id: str, path: Path | None = None
-) -> RateCard | None:
-    """Return LiteLLM's rates for one routed (provider, model), or ``None``.
+def _candidate_entries(
+    index: Mapping[str, Any], provider_id: str, model_id: str
+) -> Iterator[tuple[str, Mapping[str, Any], str]]:
+    """Every entry that may price this route, as ``(key, entry, label)``, in order.
 
-    Prefixed keys are tried first -- 3,220 of the 3,850 keys are prefixed, so
-    prefix-first is the higher-hit-rate order, and a key that names the provider
-    needs no further agreement check. Only then are the bare rungs tried, and a
-    bare key must agree with the routed provider before its price is accepted.
+    Prefixed keys first -- 3,220 of the 3,850 keys are prefixed, so
+    prefix-first is the higher-hit-rate order, and a key that names the
+    provider needs no further agreement check. Then the bare rungs, each only
+    when its own ``litellm_provider`` agrees with the routed provider.
     """
-    cache = read_litellm_cache(path)
-    if cache is None:
-        return None
-    index = cache.index
     routed = provider_id.strip().lower()
     bare = bare_model_id(model_id)
     normalized = _normalize_provider(routed)
@@ -401,9 +398,7 @@ def litellm_rate_card(
         for name in dict.fromkeys((model_id.strip().lower(), bare)):
             entry = index.get(f"{prefix}/{name}")
             if isinstance(entry, Mapping):
-                card = _rate_card(f"{prefix}/{name}", entry, "prefixed key")
-                if card is not None:
-                    return card
+                yield f"{prefix}/{name}", entry, "prefixed key"
 
     for tier, candidate in candidate_ladder(model_id):
         if candidate in _NON_MODEL_KEYS:
@@ -416,7 +411,75 @@ def litellm_rate_card(
             # another seller is a different deployment at a different price,
             # and accepting it here would launder it into this provider's bill.
             continue
-        card = _rate_card(candidate, entry, tier.name.lower())
+        yield candidate, entry, tier.name.lower()
+
+
+def litellm_rate_card(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> RateCard | None:
+    """Return LiteLLM's rates for one routed (provider, model), or ``None``.
+
+    Walks :func:`_candidate_entries` and answers with the first entry that
+    states a token rate; a bare key must agree with the routed provider before
+    its price is accepted.
+    """
+    cache = read_litellm_cache(path)
+    if cache is None:
+        return None
+    for key, entry, label in _candidate_entries(cache.index, provider_id, model_id):
+        card = _rate_card(key, entry, label)
+        if card is not None:
+            return card
+    return None
+
+
+#: 7.69.0, media pricing: LiteLLM keys that price a media unit, and the
+#: :class:`MediaRateCard` field each fills. Every value is used exactly as
+#: published -- USD per image, per character, per second, or per audio token
+#: -- and each unit rate is read by ``application.media_cost`` only for the
+#: operation that unit measures. Names as LiteLLM's own cost map and docs
+#: spell them (see the M9 research notes); nothing here converts a unit.
+_MEDIA_RATE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("output_cost_per_image", "per_image"),
+    ("input_cost_per_character", "per_character"),
+    ("input_cost_per_second", "per_input_second"),
+    ("output_cost_per_second", "per_output_second"),
+    ("input_cost_per_audio_token", "input_audio_price"),
+    ("output_cost_per_audio_token", "output_audio_price"),
+)
+
+
+def _media_card(key: str, entry: Mapping[str, Any], label: str) -> MediaRateCard | None:
+    """A media rate card from one LiteLLM entry: its token card plus unit rates."""
+    rates: dict[str, float | None] = {}
+    for source_field, card_field in _MEDIA_RATE_FIELDS:
+        value = entry.get(source_field)
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            rates[card_field] = None
+            continue
+        rates[card_field] = float(value)
+    card = MediaRateCard(
+        source=SOURCE_LITELLM,
+        tokens=_rate_card(key, entry, label),
+        tier_label=f"{label} ({key})",
+        **rates,
+    )
+    return None if card.is_empty else card
+
+
+def litellm_media_card(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> MediaRateCard | None:
+    """LiteLLM's media rates for one routed (provider, model), or ``None``.
+
+    The same candidate walk as :func:`litellm_rate_card`; the first entry that
+    states any token or unit rate answers.
+    """
+    cache = read_litellm_cache(path)
+    if cache is None:
+        return None
+    for key, entry, label in _candidate_entries(cache.index, provider_id, model_id):
+        card = _media_card(key, entry, label)
         if card is not None:
             return card
     return None
@@ -430,6 +493,7 @@ __all__ = [
     "LITELLM_PRICES_URL",
     "LiteLLMPriceCache",
     "litellm_cache_path",
+    "litellm_media_card",
     "litellm_rate_card",
     "payload_passes_integrity",
     "read_litellm_cache",

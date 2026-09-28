@@ -86,7 +86,7 @@ from my_claude_code.core.media_store import sha256_hex
 from my_claude_code.core.request_log import store_from_settings
 
 from .dependencies import get_services, require_proxy_auth
-from .media_capture import MediaCapture
+from .media_capture import MediaCapture, media_pricing
 from .media_routes import Cleanup, Complete, MediaWire, _serve
 from .media_video_routes import (
     _answering_key,
@@ -557,7 +557,11 @@ async def get_operation(
             return client
         try:
             updated, _upstream = await _poll(
-                store, client, job, get_request_id(request)
+                store,
+                client,
+                job,
+                get_request_id(request),
+                pricing=media_pricing(lease.settings),
             )
         except Exception as exc:
             return _gemini_failure(exc)

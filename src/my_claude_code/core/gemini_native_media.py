@@ -183,6 +183,52 @@ def token_usage(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     return usage
 
 
+def _modality_tokens(metadata: Mapping[str, Any], *names: str) -> int | None:
+    """The ``AUDIO`` tokens one ``*TokensDetails`` list states, or None."""
+
+    details = _pick(metadata, *names)
+    if not isinstance(details, list):
+        return None
+    found: int | None = None
+    for item in details:
+        entry = _mapping(item)
+        if entry is None or str(entry.get("modality") or "").upper() != "AUDIO":
+            continue
+        count = _count(_pick(entry, "tokenCount", "token_count"))
+        if count is not None:
+            found = (found or 0) + count
+    return found
+
+
+def measured_usage(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """:func:`token_usage` plus the audio part Gemini itemised (7.69.0).
+
+    For the request log and its price only, never for a client: an OpenAI
+    transcription answer keeps exactly the three counters :func:`token_usage`
+    gives it. ``promptTokensDetails`` / ``candidatesTokensDetails`` state
+    tokens per modality; the ``AUDIO`` ones are written the way OpenAI's own
+    transcription usage spells them (``input_token_details.audio_tokens``,
+    and ``output_token_details.audio_tokens`` for speech), so one reader
+    prices both hosts. Counts the host stated; nothing is derived from seconds.
+    """
+
+    usage = token_usage(payload)
+    metadata = _mapping(_pick(payload, "usageMetadata", "usage_metadata"))
+    if usage is None or metadata is None:
+        return usage
+    audio_in = _modality_tokens(
+        metadata, "promptTokensDetails", "prompt_tokens_details"
+    )
+    audio_out = _modality_tokens(
+        metadata, "candidatesTokensDetails", "candidates_tokens_details"
+    )
+    if audio_in is not None:
+        usage["input_token_details"] = {"audio_tokens": audio_in}
+    if audio_out is not None:
+        usage["output_token_details"] = {"audio_tokens": audio_out}
+    return usage
+
+
 def _media_type(mime: str) -> tuple[str, dict[str, str]]:
     """``audio/L16;codec=pcm;rate=24000`` -> ``("audio/l16", {codec, rate})``."""
 
@@ -276,7 +322,8 @@ def speech_answer(raw: bytes, named: str | None) -> GeminiMediaAnswer:
     """
 
     payload = _payload(raw)
-    usage = token_usage(payload)
+    # The body is the audio itself, so this usage reaches only the log.
+    usage = measured_usage(payload)
     audio = _first_audio(_parts(payload))
     if audio is None:
         raise GeminiAnswerError("without audio")
@@ -331,6 +378,7 @@ def transcript_answer(raw: bytes, named: str | None) -> GeminiMediaAnswer:
 
     payload = _payload(raw)
     usage = token_usage(payload)
+    measured = measured_usage(payload)
     texts = [
         part["text"]
         for part in _parts(payload)
@@ -343,7 +391,7 @@ def transcript_answer(raw: bytes, named: str | None) -> GeminiMediaAnswer:
         return GeminiMediaAnswer(
             body=text.encode("utf-8"),
             content_type="text/plain; charset=utf-8",
-            usage=usage,
+            usage=measured,
         )
     answer: dict[str, Any] = {"text": text}
     if usage is not None:
@@ -351,5 +399,5 @@ def transcript_answer(raw: bytes, named: str | None) -> GeminiMediaAnswer:
     return GeminiMediaAnswer(
         body=json.dumps(answer, ensure_ascii=False).encode("utf-8"),
         content_type="application/json",
-        usage=usage,
+        usage=measured,
     )

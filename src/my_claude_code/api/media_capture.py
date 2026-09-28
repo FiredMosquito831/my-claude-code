@@ -10,21 +10,33 @@ came back, their size and the first one's content address -- and, only when
 Hashing and file writes happen in ``asyncio.to_thread``; the row goes to the
 request log's own writer thread, which also trims the store to
 ``MEDIA_STORE_MAX_MB`` once a row that stored a file is committed.
+
+Since 7.69.0 the row is also priced, once, from the same ladder a chat row
+walks (``application.media_cost``): the host's own ``usage.cost``, then
+models.dev, then LiteLLM when the operator turned it on, then nothing -- stored
+as ``unpriced`` with no amount, never as a zero. The lookup runs on the writer
+thread (``RequestRecord.pricer``), so no request waits for it.
 """
 
 import asyncio
+import functools
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from loguru import logger
 
+from my_claude_code.api.request_pricing import price_media
+from my_claude_code.application.cost import MODE_AUTO
 from my_claude_code.application.execution import RouteAttemptRecord
 from my_claude_code.application.media.request import (
     MediaAttempt,
     MediaPlan,
     MediaRequest,
 )
+from my_claude_code.application.media_cost import MediaUsage, reported_audio_tokens
+from my_claude_code.config.media_surfaces import MEDIA_OPERATION_SPEECH
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.client_fingerprint import (
     harness_from_headers,
@@ -40,12 +52,14 @@ from my_claude_code.core.media_store import (
     write_media_file,
 )
 from my_claude_code.core.proxy_attribution import install_proxy_attribution
+from my_claude_code.core.reported_cost import reported_cost_from_usage
 from my_claude_code.core.request_headers import capture_headers
 from my_claude_code.core.request_images import CapturedImage, capture_upload
 from my_claude_code.core.request_log import (
     RequestRecord,
     RouteAttempt,
     RouteAttemptOutcome,
+    RowPricer,
     store_from_settings,
 )
 
@@ -66,6 +80,67 @@ def _usage_int(usage: Mapping[str, Any] | None, key: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+@dataclass(frozen=True, slots=True)
+class MediaPricing:
+    """How a media row may be priced: chat's three cost settings, read once."""
+
+    enabled: bool
+    mode: str
+    litellm_enabled: bool
+
+
+def media_pricing(settings: Settings) -> MediaPricing:
+    """``COST_ESTIMATION_ENABLED`` / ``_MODE`` / ``COST_SOURCE_LITELLM_ENABLED``.
+
+    The same three settings, with the same defaults, a chat request is priced
+    under: a LiteLLM source switched off for chat is off for media too.
+    """
+    return MediaPricing(
+        enabled=bool(getattr(settings, "cost_estimation_enabled", True)),
+        mode=str(getattr(settings, "cost_estimation_mode", MODE_AUTO)),
+        litellm_enabled=bool(getattr(settings, "cost_source_litellm_enabled", False)),
+    )
+
+
+def reported_usd(usage: Mapping[str, Any] | None) -> float | None:
+    """The host's own figure for this request from its usage block, or None.
+
+    Read by the chat rules (``core.reported_cost``), BYOK decision included.
+    """
+    if usage is None:
+        return None
+    return reported_cost_from_usage(usage).total_usd
+
+
+def price_media_row(
+    pricing: MediaPricing,
+    provider: str | None,
+    model: str | None,
+    usage: MediaUsage,
+    reported: float | None,
+) -> tuple[float | None, str | None]:
+    """``(cost_usd, cost_source)`` for one media row. Synchronous; never raises.
+
+    ``(None, None)`` when cost estimation is off -- nothing was attempted, as
+    for chat -- and when pricing itself failed: a request already answered is
+    never recorded differently because arithmetic about it went wrong.
+    """
+    if not pricing.enabled:
+        return None, None
+    try:
+        return price_media(
+            provider,
+            model,
+            usage,
+            reported_usd=reported,
+            mode=pricing.mode,
+            litellm_enabled=pricing.litellm_enabled,
+        )
+    except Exception as exc:
+        logger.debug("Media cost skipped: {}", exc)
+        return None, None
+
+
 class MediaCapture:
     """Collects one media request's story and writes it once, at the end."""
 
@@ -81,6 +156,7 @@ class MediaCapture:
     ) -> None:
         self._store = store_from_settings(settings)
         self._protocol = protocol
+        self._pricing = media_pricing(settings)
         self._store_bytes = bool(getattr(settings, "media_store_enabled", False))
         self._store_cap = media_store_cap_bytes(settings)
         # Uploaded inputs: metadata always; a thumbnail only when media
@@ -194,6 +270,69 @@ class MediaCapture:
         ]
         return sum(stated) if stated else None
 
+    def _pricer(
+        self,
+        status: str,
+        outputs: MediaOutputs | None,
+        provider: str | None,
+        model: str | None,
+    ) -> RowPricer | None:
+        """What prices this row on the request log's writer thread, or None.
+
+        Everything the price depends on is measured here, on the loop, where
+        it is a few dictionary reads; the catalogue lookups run later on the
+        writer thread, so no request -- and no streamed answer's
+        fire-and-forget finish -- waits for them. ``None`` when cost
+        estimation is off: nothing is attempted, as for chat.
+        """
+        if not self._pricing.enabled:
+            return None
+        return functools.partial(
+            price_media_row,
+            self._pricing,
+            provider,
+            model,
+            self._media_usage(status, outputs),
+            reported_usd(None if outputs is None else outputs.usage),
+        )
+
+    def _media_usage(self, status: str, outputs: MediaOutputs | None) -> MediaUsage:
+        """What this request measured, in every unit a price may be stated in.
+
+        The unit quantities are taken only from a request that succeeded: a
+        failed speech request still knows how many characters it was asked to
+        speak, and pricing those would bill a request nobody was charged for.
+        The token counters and the audio part of them are the host's own.
+        """
+        usage = None if outputs is None else outputs.usage
+        audio_in, audio_out = reported_audio_tokens(usage)
+        operation = self._request.operation
+        succeeded = status == "success" and outputs is not None
+        prompt = self._request.prompt
+        return MediaUsage(
+            operation=operation,
+            tokens_in=_usage_int(usage, "input_tokens"),
+            tokens_out=_usage_int(usage, "output_tokens"),
+            input_audio_tokens=audio_in,
+            output_audio_tokens=audio_out,
+            images_out=(
+                outputs.count
+                if succeeded and outputs is not None and operation.startswith("image")
+                else None
+            ),
+            input_chars=(
+                len(prompt)
+                if succeeded and operation == MEDIA_OPERATION_SPEECH and prompt
+                else None
+            ),
+            input_audio_seconds=self._input_audio_seconds(outputs)
+            if succeeded
+            else None,
+            output_audio_seconds=(
+                outputs.audio_seconds if succeeded and outputs is not None else None
+            ),
+        )
+
     def _input_records(self) -> tuple[MediaOutputRecord, ...]:
         return tuple(
             MediaOutputRecord(
@@ -276,14 +415,16 @@ class MediaCapture:
         prompt = self._request.prompt
         usage = None if outputs is None else outputs.usage
         refs = () if self._plan is None else self._plan.model_refs()
+        provider = None if routed is None else routed.resolved.provider_id
+        resolved_model = None if routed is None else routed.resolved.provider_model
         record = RequestRecord(
             id=self._request_id,
             endpoint=self._endpoint,
             protocol=self._protocol,
             ts_epoch=self._ts,
             requested_model=self._request.model or None,
-            provider=None if routed is None else routed.resolved.provider_id,
-            resolved_model=None if routed is None else routed.resolved.provider_model,
+            provider=provider,
+            resolved_model=resolved_model,
             route_attempt=self._route_index,
             route_primary_model=refs[0] if refs else None,
             route_chain=",".join(refs) if len(refs) > 1 else None,
@@ -321,5 +462,10 @@ class MediaCapture:
             media_sha_out=None if outputs is None else outputs.first_sha,
             media_outputs=media_outputs,
             media_store_max_bytes=self._store_cap,
+            # Priced on the writer thread from the cached catalogues. A video
+            # create is ``unpriced`` there -- its length is not known yet --
+            # and priced again by the poll that reads the finished job's
+            # seconds (``media_video_routes._poll``).
+            pricer=self._pricer(status, outputs, provider, resolved_model),
         )
         self._store.enqueue(record)

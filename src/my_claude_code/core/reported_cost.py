@@ -167,6 +167,26 @@ def record_reported_usage(usage_info: Any) -> None:
     slot = _REPORTED_COST.get()
     if slot is None or usage_info is None:
         return
+    _fold_usage(slot, usage_info)
+
+
+def reported_cost_from_usage(usage_info: Any) -> ReportedCost:
+    """What one usage block says its request cost, read without a collector.
+
+    7.69.0, for the media rails: a media answer is measured once, at the end,
+    from the usage block it carried, so there is no stream for a collector to
+    sit in. The block is read by exactly the rules :func:`record_reported_usage`
+    applies -- the same keys and the same BYOK decision -- so a media row's
+    ``provider`` rung means what a chat row's does.
+    """
+    slot = ReportedCost()
+    if usage_info is not None:
+        _fold_usage(slot, usage_info)
+    return slot
+
+
+def _fold_usage(slot: ReportedCost, usage_info: Any) -> None:
+    """Read one host usage block into ``slot``."""
     cost = _as_float(_lookup(usage_info, COST_KEY))
     if cost is not None:
         slot.cost_usd = cost
@@ -196,4 +216,5 @@ __all__ = [
     "paused_reported_cost",
     "record_reported_usage",
     "reported_cost",
+    "reported_cost_from_usage",
 ]

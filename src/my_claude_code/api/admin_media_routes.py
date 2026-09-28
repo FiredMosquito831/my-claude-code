@@ -320,6 +320,13 @@ def _empty_group(group: str) -> dict[str, Any]:
         "video_seconds_measured": 0,
         "bytes_out": None,
         "bytes_out_measured": 0,
+        "cost_usd": None,
+        "cost_usd_measured": 0,
+        "cost_reported_usd": None,
+        "cost_reported_usd_measured": 0,
+        "cost_estimated_usd": None,
+        "cost_estimated_usd_measured": 0,
+        "cost_unpriced": 0,
         "avg_duration_ms": None,
         "median_duration_ms": None,
     }

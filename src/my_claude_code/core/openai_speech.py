@@ -8,7 +8,9 @@ came back -- SHA-256, size, type, and the length when the container states it
 """
 
 import io
+import json
 import wave
+from typing import Any
 
 from my_claude_code.core.media_outputs import GeneratedMedia, MediaOutputs
 from my_claude_code.core.media_store import sha256_hex
@@ -51,3 +53,31 @@ def parse_speech_response(body: bytes, content_type: str | None) -> MediaOutputs
         items=(GeneratedMedia(sha256=sha256_hex(body), mime=mime, data=body),),
         audio_seconds=seconds,
     )
+
+
+def parse_speech_stream(frames: bytes) -> MediaOutputs:
+    """Measure a ``stream_format: "sse"`` answer from its ``*.done`` event (7.69.0).
+
+    The audio arrives as base64 deltas, which are passed through and not
+    decoded here; the done event carries the host's token ``usage``, the one
+    thing the request log (and its price) reads from a streamed speech answer.
+    """
+
+    usage: dict[str, Any] | None = None
+    done = False
+    for line in frames.splitlines():
+        if not line.startswith(b"data:"):
+            continue
+        try:
+            event = json.loads(line[5:].strip())
+        except ValueError, UnicodeDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if not str(event.get("type") or "").endswith(".done"):
+            continue
+        done = True
+        found = event.get("usage")
+        if isinstance(found, dict):
+            usage = {str(key): value for key, value in found.items()}
+    return MediaOutputs(count=1 if done else 0, usage=usage)

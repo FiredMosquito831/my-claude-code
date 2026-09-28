@@ -1950,6 +1950,24 @@ PRICE_FIELDS: tuple[_LadderField[float], ...] = tuple(
     )
 )
 
+#: 7.69.0, media pricing: the two audio-token rates models.dev publishes
+#: (``cost.input_audio`` on 134 models and ``cost.output_audio`` on 18 in the
+#: 2026-09 catalogue), USD per million tokens like the rest. Kept apart from
+#: :data:`PRICE_FIELDS` so the chat lookup, its memo and its start-up prewarm
+#: are exactly what they were; only a media row asks for these.
+AUDIO_PRICE_FIELDS: tuple[_LadderField[float], ...] = tuple(
+    _LadderField(
+        name=name,
+        reader=_models_dev_price(key),
+        tie_break=lambda value: -value,
+        minimum=MIN_APPROXIMATE_NUMERIC_REPORTERS,
+    )
+    for name, key in (
+        ("input_audio_price", "input_audio"),
+        ("output_audio_price", "output_audio"),
+    )
+)
+
 
 def _build_field_index[T](
     index: Mapping[str, Any], reader: _MetadataReader[T]
@@ -2250,6 +2268,21 @@ def model_prices_tiered(
     return {
         field.name: _model_field_tiered(field, provider_id, model_id, path)
         for field in PRICE_FIELDS
+    }
+
+
+def model_audio_prices_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> dict[str, tuple[float | None, ResolutionTier | None]]:
+    """The two audio-token rates for one model, each with its own rung (7.69.0).
+
+    The same per-field ladder :func:`model_prices_tiered` walks, over
+    :data:`AUDIO_PRICE_FIELDS`. Read from the on-disk cache only.
+    """
+
+    return {
+        field.name: _model_field_tiered(field, provider_id, model_id, path)
+        for field in AUDIO_PRICE_FIELDS
     }
 
 

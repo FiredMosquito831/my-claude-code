@@ -304,6 +304,30 @@ produced the whole answer, so a failure before that falls back without the clien
   (`images/generations`, `images/edits`, `audio/speech`, `audio/transcriptions`,
   `audio/translations`, `videos`). Nothing ticked means none, as before.
 
+## What it costs (7.69.0)
+
+A media request is priced the way a chat request is, from published sources only -- never a
+price typed into MCC -- in the same order:
+
+1. **The provider's own figure** when the answer reports one (OpenRouter's `usage.cost`).
+2. **models.dev token prices**, when the host reported token usage (the gpt-image family, token-billed
+   speech and transcription, Gemini's `usageMetadata`), including models.dev's audio-token prices
+   (`input_audio`, `output_audio`) for the audio tokens a host reports.
+3. **LiteLLM**, only if you turned it on (`COST_SOURCE_LITELLM_ENABLED`), in the unit it publishes for
+   that operation: `output_cost_per_image` x images, `input_cost_per_character` x characters spoken
+   (else `output_cost_per_second` x seconds of speech), `input_cost_per_second` x seconds of audio
+   transcribed, `output_cost_per_second` x seconds of video, plus the audio-token prices.
+4. Otherwise the row is **unpriced** -- shown as "unpriced", never as $0. models.dev publishes no
+   per-image, per-second or per-character prices, so without a provider figure or LiteLLM most
+   image, speech and video requests stay unpriced. A computed $0 is treated as unpriced; a $0
+   the provider itself reported is kept.
+
+A video is priced when a status check first sees the finished job with its length. The cost shows
+in the request list and detail, in a **Cost** column of the Analytics **Media** card (priced amounts,
+plus a count of unpriced requests -- they are never added as zero) and, when you tick them, in the
+**Cost** and **Media** fields of an export. Media costs are part of the Analytics cost totals, like
+their request counts. Requests logged before 7.69.0 are not priced retroactively.
+
 ## What is recorded
 
 Every request writes an ordinary request-log row (its endpoint, e.g. `/v1/images/generations`)
@@ -355,7 +379,6 @@ used by list views.
 
 ## Not yet
 
-Media pricing arrives in its own release. Gemini's
-Interactions API (and the transcription model offered only there) is not used. Video on ZenMux, Agnes AI, xAI, Together, SiliconFlow, MiniMax and Alibaba
+Gemini's Interactions API (and the transcription model offered only there) is not used. Video on ZenMux, Agnes AI, xAI, Together, SiliconFlow, MiniMax and Alibaba
 is not routed: each documents its own job API rather than the OpenAI shape, and each would be
 its own small release. OpenAI's own video API (Sora) was shut down on 2026-09-24.

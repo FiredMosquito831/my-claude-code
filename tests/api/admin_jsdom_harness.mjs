@@ -907,6 +907,12 @@ const MEDIA_UNMEASURED = {
   video_seconds_measured: 0,
   bytes_out: null,
   bytes_out_measured: 0,
+  cost_usd: null,
+  cost_usd_measured: 0,
+  cost_reported_usd: null,
+  cost_reported_usd_measured: 0,
+  cost_estimated_usd: null,
+  cost_estimated_usd_measured: 0,
   avg_duration_ms: null,
   median_duration_ms: null,
 };
@@ -939,6 +945,14 @@ const MEDIA_ANALYTICS = {
       bytes_out_measured: 2,
       avg_duration_ms: 500,
       median_duration_ms: 400,
+      /* 7.69.0: one row the host priced, one MCC estimated, one unpriced. */
+      cost_usd: 0.12,
+      cost_usd_measured: 2,
+      cost_reported_usd: 0.04,
+      cost_reported_usd_measured: 1,
+      cost_estimated_usd: 0.08,
+      cost_estimated_usd_measured: 1,
+      cost_unpriced: 1,
     },
     {
       ...MEDIA_COUNTS_ZERO,
@@ -954,6 +968,7 @@ const MEDIA_ANALYTICS = {
       bytes_out_measured: 1,
       avg_duration_ms: 300,
       median_duration_ms: 300,
+      cost_unpriced: 2,
     },
     { ...MEDIA_COUNTS_ZERO, ...MEDIA_UNMEASURED, rail: "asr", group: "asr", label: "Transcription" },
     {
@@ -991,6 +1006,11 @@ const MEDIA_ANALYTICS = {
       bytes_out: 1000,
       median_duration_ms: 250,
       avg_duration_ms: 250,
+      cost_usd: 0.08,
+      cost_usd_measured: 2,
+      cost_estimated_usd: 0.08,
+      cost_estimated_usd_measured: 2,
+      cost_unpriced: 0,
     },
     {
       ...MEDIA_COUNTS_ZERO,
@@ -9750,6 +9770,9 @@ const requestMedia = {};
     status: "success",
     duration_ms: 3100,
     media_operation: "image_edit",
+    /* 7.69.0: a media row priced like a chat row, from LiteLLM's per-image rate. */
+    cost_usd: 0.04,
+    cost_source: "litellm",
     media: [
       { direction: "in", idx: 0, sha256: shaOf("a1"), mime: "image/png", bytes: 2048, stored: false },
       { direction: "out", idx: 0, sha256: shaOf("b2"), mime: "image/png", bytes: 0, stored: true },
@@ -9783,6 +9806,14 @@ const requestMedia = {};
     : [];
   requestMedia.dataUris = container ? (container.innerHTML.match(/data:/g) || []).length : null;
   requestMedia.fetched = fetchUrls.slice(before);
+  const costDetail = doc.querySelector("#reqDetailMeta .cost-detail");
+  requestMedia.cost = costDetail
+    ? {
+        amount: textOf(costDetail, ".cost-amount"),
+        badge: textOf(costDetail, ".cost-badge"),
+        note: textOf(costDetail, ".cost-note"),
+      }
+    : null;
   window.eval("closeRequestDetail()");
   requestMedia.afterClose = container
     ? { hidden: container.hidden, children: container.children.length }
@@ -10727,6 +10758,18 @@ const mediaDashboard = {};
     : "";
   mediaDashboard.dashes = Array.from(panel.querySelectorAll(".media-not-measured")).map(
     (el) => [el.textContent, el.title],
+  );
+  /* 7.69.0: the Cost column's pieces, so the unpriced count and the est.
+     badge are asserted as elements rather than as one string. */
+  mediaDashboard.unpriced = Array.from(panel.querySelectorAll(".media-unpriced")).map(
+    (el) => [el.textContent, el.title],
+  );
+  mediaDashboard.costCells = Array.from(panel.querySelectorAll(".media-cost")).map(
+    (el) => ({
+      text: flat(el),
+      amounts: Array.from(el.querySelectorAll(".cost-amount")).map((a) => a.textContent),
+      badges: el.querySelectorAll(".cost-badge").length,
+    }),
   );
   mediaDashboard.analyticsScrollClasses = [railTable, modelTable, jobTable].map((table) =>
     table ? table.parentElement.className : "",

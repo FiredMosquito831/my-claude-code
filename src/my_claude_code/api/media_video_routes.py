@@ -40,6 +40,7 @@ from my_claude_code.application.media.request import (
     MediaResponse,
     MediaUpload,
 )
+from my_claude_code.application.media_cost import MediaUsage
 from my_claude_code.application.ports import RequestRuntimeLease
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_VIDEO_CONTENT,
@@ -77,7 +78,14 @@ from my_claude_code.core.request_log import (
 )
 
 from .dependencies import get_services, require_proxy_auth
-from .media_capture import MediaCapture, media_store_cap_bytes
+from .media_capture import (
+    MediaCapture,
+    MediaPricing,
+    media_pricing,
+    media_store_cap_bytes,
+    price_media_row,
+    reported_usd,
+)
 from .media_routes import (
     OPENAI_WIRE,
     Complete,
@@ -415,13 +423,58 @@ def _changes(job: Mapping[str, Any], upstream: UpstreamJob) -> dict[str, Any]:
     return changes
 
 
+def _job_usage(job: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The usage block a poll last recorded on the job, or None."""
+    raw = job.get("usage_json")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        usage = json.loads(raw)
+    except ValueError:
+        return None
+    return usage if isinstance(usage, dict) else None
+
+
+async def _video_cost(
+    pricing: MediaPricing | None, job: Mapping[str, Any], seconds: float
+) -> tuple[float, str] | None:
+    """The finished video's price, now that its length is known (7.69.0).
+
+    The same ladder the create walked: the host's own ``usage.cost`` from the
+    job, else a per-second rate for the seconds the host stated. ``None`` when
+    pricing is off or nothing priced it -- the create row then keeps the
+    ``unpriced`` it was written with.
+    """
+    if pricing is None:
+        return None
+    cost_usd, cost_source = await asyncio.to_thread(
+        price_media_row,
+        pricing,
+        str(job["provider"]),
+        str(job["model"]),
+        MediaUsage(
+            operation=MEDIA_OPERATION_VIDEO_CREATE, output_video_seconds=seconds
+        ),
+        reported_usd(_job_usage(job)),
+    )
+    if cost_usd is None or cost_source is None:
+        return None
+    return cost_usd, cost_source
+
+
 async def _poll(
     store: RequestLogStore,
     client: MediaJobClient,
     job: Mapping[str, Any],
     request_id: str,
+    *,
+    pricing: MediaPricing | None = None,
 ) -> tuple[dict[str, Any], UpstreamJob]:
-    """One retrieve on the job's own key; the stored job brought up to date."""
+    """One retrieve on the job's own key; the stored job brought up to date.
+
+    The poll that first reads a finished job's length writes it on the create
+    row, and -- with ``pricing`` -- the video's price beside it.
+    """
     answer = await client.call(
         MEDIA_OPERATION_VIDEO_RETRIEVE,
         str(job["upstream_id"]),
@@ -450,8 +503,12 @@ async def _poll(
         and not updated.get("row_seconds_written")
     ):
         # The create row may not be flushed yet: then the next poll retries.
+        cost = await _video_cost(pricing, updated, float(seconds))
         written = await asyncio.to_thread(
-            store.set_request_video_seconds, str(job["request_id"]), float(seconds)
+            store.set_request_video_seconds,
+            str(job["request_id"]),
+            float(seconds),
+            cost=cost,
         )
         if written:
             await asyncio.to_thread(
@@ -541,7 +598,13 @@ async def retrieve_video(
         if isinstance(client, JSONResponse):
             return client
         try:
-            updated, upstream = await _poll(store, client, job, get_request_id(request))
+            updated, upstream = await _poll(
+                store,
+                client,
+                job,
+                get_request_id(request),
+                pricing=media_pricing(lease.settings),
+            )
         except Exception as exc:
             return _failure_response(exc)
         return JSONResponse(video_object(updated, upstream))
@@ -648,6 +711,7 @@ async def _open_download(
     query: Mapping[str, str],
     request_id: str,
     wire: MediaWire = OPENAI_WIRE,
+    pricing: MediaPricing | None = None,
 ) -> MediaDownload | JSONResponse:
     """Open the job's file on its own key: declared content path, else its URL."""
     video_id = str(job["job_id"])
@@ -659,7 +723,9 @@ async def _open_download(
         # Not known finished, or the file lives at a URL only a fresh
         # retrieve answer carries: one retrieve first.
         try:
-            current, upstream = await _poll(store, client, job, request_id)
+            current, upstream = await _poll(
+                store, client, job, request_id, pricing=pricing
+            )
         except Exception as exc:
             return wire.failure(exc)
     status = current.get("status")
@@ -729,6 +795,7 @@ async def _content(
         query=query,
         request_id=request_id,
         wire=wire,
+        pricing=media_pricing(settings),
     )
     if isinstance(opened, JSONResponse):
         return opened
