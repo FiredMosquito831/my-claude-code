@@ -122,6 +122,32 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.anthropic_oauth.auth",
+    ): (
+        "Owner: admin dashboard Anthropic OAuth card (7.69.1). "
+        "Reason: Re-read from Claude Code on a shared row must take exactly "
+        "the path a request takes -- re-read, adopt, and only when expired the "
+        "locked refresh -- so it drives the provider's own auth object rather "
+        "than a second implementation of the ownership rules."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.anthropic_oauth.shared",
+    ): (
+        "Owner: admin dashboard Anthropic OAuth card (7.69.1). "
+        "Reason: the fallback row's decision slot name and the read-only "
+        "platform seam belong to the module that makes those decisions."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.oauth_ownership",
+    ): (
+        "Owner: admin dashboard OAuth cards (7.69.1). "
+        "Reason: each row shows its mode, read-only reason and last decision, "
+        "which the ownership module records; a mirror here would drift."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
         "my_claude_code.providers.oauth_account_store",
     ): (
         "Owner: admin dashboard multi-account OAuth card. "

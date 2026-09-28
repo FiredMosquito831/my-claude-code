@@ -190,7 +190,9 @@ def _write_managed_auth_file(
     """Persist a complete renewable bundle to FCC's private credential store."""
 
     try:
-        return store_managed_chatgpt_oauth_tokens(tokens, auth_path=auth_path)
+        return store_managed_chatgpt_oauth_tokens(
+            tokens, auth_path=auth_path, adopt_origin=True
+        )
     except ChatGPTOAuthError as exc:
         raise ChatGPTOAuthLoginError(str(exc)) from exc
 

@@ -9,11 +9,14 @@ Two sources, in precedence order:
 2. **Claude Code's own credential file** (``~/.claude/.credentials.json``,
    ``claudeAiOauth`` object), used whenever the managed store is not viable.
 
-Reading source 2 is deliberately read-only and never refreshed in place: that
-file belongs to Claude Code, a refresh rotates the token, and racing its owner
-would log the user out of their real client. When a token read from there is
-close to expiry, MCC refreshes into *its own* store and leaves the original
-alone.
+A credential from source 2 -- or imported from it -- is **shared** (7.69.1):
+that file belongs to Claude Code, a refresh rotates its single-use refresh
+token, and racing its owner logs the user out of their real client. Before
+7.69.1 MCC refreshed such a token into *its own* store and left Claude Code
+holding a spent one. Now it never refreshes it early, and renews it only once
+it has expired and a real request needs it, under Claude Code's own lock,
+writing the result back (:mod:`.shared`). :func:`refresh_tokens` below is for
+**native** credentials -- the ones MCC signed in itself -- only.
 
 Selection is **viability-based**, not existence-based
 -----------------------------------------------------
@@ -45,6 +48,7 @@ import asyncio
 import contextlib
 import json
 import os
+import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -72,11 +76,17 @@ from my_claude_code.providers.oauth_account_store import (
     storage_write_lock,
     synthetic_account_id,
 )
+from my_claude_code.providers.oauth_file_lock import (
+    REFRESH_LOCK_TIMING,
+    LockBusy,
+    hold,
+)
 from my_claude_code.providers.oauth_names import (
     forget_account_name,
     move_name,
     seed_default_name,
 )
+from my_claude_code.providers.oauth_ownership import record_decision
 
 from .constants import (
     CLAUDE_CODE_CLIENT_ID,
@@ -579,18 +589,40 @@ def quarantine_managed_store(*, now: float | None = None) -> Path | None:
 def _atomic_write_private_json(path: Path, payload: dict[str, Any]) -> None:
     """Write JSON 0600, atomically, so a token is never world-readable."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(f"{path.suffix}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # A temp name of its own per writer (7.69.1): several MCC servers now
+    # mirror one shared credential into the same store, and a fixed
+    # ``<store>.tmp`` let two of them truncate and rename each other's file.
+    descriptor, name = tempfile.mkstemp(
+        dir=path.parent, prefix=f"{path.name}.", suffix=".tmp"
+    )
+    temporary = Path(name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
+        _replace_with_retry(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
-    os.replace(temporary, path)
     # Windows inherits the profile directory's ACL; chmod is a no-op there.
     with contextlib.suppress(OSError):
         os.chmod(path, 0o600)
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    """``os.replace``, retried briefly while another process has ``target`` open.
+
+    Windows refuses to replace a file another process is reading at that
+    instant (``PermissionError``); the reader is a JSON load that takes
+    microseconds, so three short tries are enough and never a real wait.
+    """
+    for attempt in range(3):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == 2:
+                raise
+            time.sleep(0.01 * (attempt + 1))
 
 
 def _token_document(tokens: OAuthTokens) -> dict[str, Any]:
@@ -659,10 +691,37 @@ class AccountRecord:
     write_back: bool = False
     added_at: str = ""
     ordinal: int = 1
+    #: 7.69.1. A token MCC rotated whose write-back into Claude Code's file
+    #: has not landed yet (rule 11). Retried on every later use, never POSTed
+    #: again, and dropped only when the file changes.
+    pending_write_back: bool = False
+    #: ``sha256[:16]`` of the refresh token that pending write-back replaces
+    #: -- the one still in Claude Code's file. The compare-and-swap target;
+    #: never the token itself.
+    pending_posted_fp: str = ""
+    #: ``(mtime_ns, size)`` of the source file when MCC last read or wrote it.
+    #: ``None`` for a record stored before 7.69.1: no baseline yet.
+    source_stamp: tuple[int, int] | None = None
 
     @property
     def owns_a_source_file(self) -> bool:
         return self.origin == ORIGIN_CLAUDE_CODE and bool(self.origin_path)
+
+    @property
+    def is_shared(self) -> bool:
+        """Whether Claude Code's file, not MCC, owns this credential."""
+        return self.origin == ORIGIN_CLAUDE_CODE
+
+
+def _stamp_from(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, list) or len(value) != 2:
+        return None
+    first, second = value[0], value[1]
+    if isinstance(first, bool) or isinstance(second, bool):
+        return None
+    if isinstance(first, int) and isinstance(second, int):
+        return first, second
+    return None
 
 
 def _account_from_entry(entry: dict[Any, Any], *, index: int) -> AccountRecord | None:
@@ -679,6 +738,9 @@ def _account_from_entry(entry: dict[Any, Any], *, index: int) -> AccountRecord |
         write_back=fields["write_back"],
         added_at=fields["added_at"] or now_iso(),
         ordinal=fields["ordinal"] if fields["ordinal"] > 1 else index + 1,
+        pending_write_back=bool(entry.get("pendingWriteBack", False)),
+        pending_posted_fp=str(entry.get("pendingPostedRefreshFingerprint") or ""),
+        source_stamp=_stamp_from(entry.get("sourceStamp")),
     )
 
 
@@ -694,6 +756,11 @@ def _entry_from_account(record: AccountRecord) -> dict[str, Any]:
             "ordinal": record.ordinal,
         }
     )
+    if record.pending_write_back:
+        entry["pendingWriteBack"] = True
+        entry["pendingPostedRefreshFingerprint"] = record.pending_posted_fp
+    if record.source_stamp is not None:
+        entry["sourceStamp"] = list(record.source_stamp)
     return entry
 
 
@@ -806,8 +873,14 @@ def add_or_update_account(
     default_email: str | None = None,
     account_id: str | None = None,
     match: OAuthTokens | None = None,
+    adopt_origin: bool = False,
 ) -> AccountRecord:
     """Add an account, or update the one these tokens already belong to.
+
+    ``adopt_origin`` is the operator's explicit action (7.69.1, rule 1): an
+    MCC sign-in to an account held as shared turns it native, and an Import
+    turns it back to shared. A refresh never passes it, so a refresh never
+    changes who owns a credential.
 
     Signing a **second** account in appends. Signing in an account that is
     already stored updates it in place -- tokens, expiry, plan, tier -- and
@@ -868,15 +941,33 @@ def add_or_update_account(
             # the scratch proof for 7.30.0, where exactly that happened.
             new_id = tokens.account_uuid
             move_name(PROVIDER_ID, previous.id, new_id)
-        record = AccountRecord(
-            id=new_id,
-            tokens=tokens,
-            origin=previous.origin,
-            origin_path=previous.origin_path,
-            write_back=previous.write_back,
-            added_at=previous.added_at,
-            ordinal=previous.ordinal,
-        )
+        if adopt_origin:
+            record = AccountRecord(
+                id=new_id,
+                tokens=tokens,
+                origin=origin,
+                origin_path=origin_path or "",
+                write_back=(
+                    write_back
+                    if write_back is not None
+                    else origin in (ORIGIN_CLAUDE_CODE, ORIGIN_CODEX)
+                ),
+                added_at=previous.added_at,
+                ordinal=previous.ordinal,
+            )
+        else:
+            record = AccountRecord(
+                id=new_id,
+                tokens=tokens,
+                origin=previous.origin,
+                origin_path=previous.origin_path,
+                write_back=previous.write_back,
+                added_at=previous.added_at,
+                ordinal=previous.ordinal,
+                pending_write_back=previous.pending_write_back,
+                pending_posted_fp=previous.pending_posted_fp,
+                source_stamp=previous.source_stamp,
+            )
         records[index] = record
     save_accounts(records)
     seed_default_name(
@@ -889,7 +980,19 @@ def add_or_update_account(
     return record
 
 
-def remove_account(account_id: str) -> AccountRecord | None:
+def update_account_record(account_id: str, **changes: Any) -> AccountRecord | None:
+    """Replace fields of one stored record in place. ``None`` when it is gone."""
+    records = list(load_accounts())
+    for index, record in enumerate(records):
+        if record.id == account_id:
+            updated = replace(record, **changes)
+            records[index] = updated
+            save_accounts(records)
+            return updated
+    return None
+
+
+def remove_account(account_id: str, *, keep_name: bool = False) -> AccountRecord | None:
     """Disconnect one account. The others keep serving.
 
     The removed record is written to ``anthropic_oauth.json.dead-<epoch>``
@@ -909,7 +1012,8 @@ def remove_account(account_id: str) -> AccountRecord | None:
     except OSError as error:  # pragma: no cover - defensive
         logger.warning("Could not set aside the disconnected account: {}", error)
     save_accounts(remaining)
-    forget_account_name(PROVIDER_ID, account_id)
+    if not keep_name:
+        forget_account_name(PROVIDER_ID, account_id)
     logger.info(
         "Disconnected Claude subscription account {}; {} account(s) still stored.",
         account_id,
@@ -961,8 +1065,18 @@ def write_back_enabled() -> bool:
         return raw not in ("0", "false", "no", "off")
 
 
-def write_back_if_owned(record: AccountRecord, refreshed: OAuthTokens) -> bool:
+def write_back_if_owned(
+    record: AccountRecord,
+    refreshed: OAuthTokens,
+    *,
+    posted_refresh_token: str | None = None,
+) -> bool:
     """Write a refreshed token back into the file the account came from.
+
+    ``posted_refresh_token`` turns on Claude Code's own compare-and-swap
+    (7.69.1, F2): the write lands only while the file still holds that refresh
+    token (or none). It is stricter than the monotonicity guard below, which
+    still applies after it.
 
     Returns whether the file was written. Every "no" is a *correct* no, and
     each one is a separate case the card has to be able to explain:
@@ -1003,7 +1117,9 @@ def write_back_if_owned(record: AccountRecord, refreshed: OAuthTokens) -> bool:
         return False
     try:
         with storage_write_lock(target.parent):
-            return _write_back_locked(record, refreshed, target)
+            return _write_back_locked(
+                record, refreshed, target, posted_refresh_token=posted_refresh_token
+            )
     except OAuthStorageLockUnavailable:
         logger.warning(
             "Claude subscription write-back skipped for account {}: could not "
@@ -1015,12 +1131,26 @@ def write_back_if_owned(record: AccountRecord, refreshed: OAuthTokens) -> bool:
 
 
 def _write_back_locked(
-    record: AccountRecord, refreshed: OAuthTokens, target: Path
+    record: AccountRecord,
+    refreshed: OAuthTokens,
+    target: Path,
+    *,
+    posted_refresh_token: str | None = None,
 ) -> bool:
     """The write itself, with the target re-read inside the lock."""
     document = _load_json(target)
     existing = document.get(CLAUDE_OAUTH_KEY)
     existing = existing if isinstance(existing, dict) else {}
+    if posted_refresh_token is not None and not refresh_token_unchanged(
+        existing, posted_refresh_token
+    ):
+        logger.info(
+            "Claude subscription write-back skipped for account {}: {} no longer "
+            "holds the refresh token MCC posted (compare-and-swap).",
+            record.id,
+            target.name,
+        )
+        return False
     if not monotonic_write_allowed(
         target_expires_at=normalise_epoch_seconds(existing.get("expiresAt")),
         target_refresh_expires_at=normalise_epoch_seconds(
@@ -1036,6 +1166,29 @@ def _write_back_locked(
             target.name,
         )
         return False
+    write_claude_block(document, existing, refreshed, target)
+    logger.info(
+        "Wrote the refreshed Claude subscription token back to {} for account {}.",
+        target.name,
+        record.id,
+    )
+    return True
+
+
+def refresh_token_unchanged(block: dict[str, Any], posted: str) -> bool:
+    """Claude Code's own save rule (F2): the file still holds ``posted`` or ``""``."""
+    current = block.get("refreshToken")
+    current = current.strip() if isinstance(current, str) else ""
+    return current in ("", posted)
+
+
+def write_claude_block(
+    document: dict[str, Any],
+    existing: dict[str, Any],
+    refreshed: OAuthTokens,
+    target: Path,
+) -> None:
+    """Replace ``claudeAiOauth`` only, back the file up once, write atomically."""
     backup_once(target)
     # Replace the one key, keep the rest of the document exactly as found --
     # including every key this build has never heard of.
@@ -1061,12 +1214,6 @@ def _write_back_locked(
     )
     document[CLAUDE_OAUTH_KEY] = block
     _atomic_write_private_json(target, document)
-    logger.info(
-        "Wrote the refreshed Claude subscription token back to {} for account {}.",
-        target.name,
-        record.id,
-    )
-    return True
 
 
 def claude_config_path() -> Path:
@@ -1080,8 +1227,10 @@ def claude_config_path() -> Path:
 def claude_code_oauth_account() -> dict[str, str]:
     """The ``oauthAccount`` block of ``~/.claude.json``, or ``{}``.
 
-    Read **only** at import, and only to give an imported account a name
-    before its first refresh can bring the real ``account`` object back.
+    Read at import, to give an imported account a name before its first
+    refresh can bring the real ``account`` object back, and -- since 7.69.1
+    (user decision Q1) -- whenever Claude Code's credential file changes, to
+    tell a rotation from an account switch.
     Claude Code's *credential* file carries no identity at all (measured), so
     without this an imported account is called "Claude account 2" until it
     happens to refresh. Strictly read-only: MCC never writes this file.
@@ -1232,8 +1381,45 @@ async def _post_refresh(refresh_token: str) -> httpx.Response:
         ) from error
 
 
+#: 7.69.1 (rule 8): the cross-process lock beside MCC's own store. The same
+#: ``proper-lockfile`` directory convention, heartbeat and waiting budget as
+#: Claude Code's refresh lock, so several MCC servers holding one NATIVE
+#: account spend its single-use refresh token once between them.
+NATIVE_REFRESH_LOCK_SUFFIX = ".refresh.lock"
+
+
+def native_refresh_lock_path() -> Path:
+    """``anthropic_oauth.json.refresh.lock`` beside MCC's own store."""
+    path = managed_store_path()
+    return path.with_name(path.name + NATIVE_REFRESH_LOCK_SUFFIX)
+
+
+class SharedCredentialRefused(AnthropicOAuthUnavailableError):
+    """``refresh_tokens`` was handed a credential Claude Code owns.
+
+    A shared credential is refreshed only through
+    :mod:`.shared`, under Claude Code's own lock, for a real request. This
+    is the default-deny backstop for any other caller.
+    """
+
+
+def is_shared_credential(tokens: OAuthTokens, account_id: str = "") -> bool:
+    """Whether Claude Code's file, not MCC, owns this credential."""
+    if tokens.source == "claude-code":
+        return True
+    records = load_accounts(migrate=False)
+    if account_id:
+        return any(r.id == account_id and r.is_shared for r in records)
+    index = _match_index(records, tokens)
+    return index is not None and records[index].is_shared
+
+
 async def refresh_tokens(tokens: OAuthTokens, *, account_id: str = "") -> OAuthTokens:
     """Exchange a refresh token for a fresh credential and store it.
+
+    **NATIVE credentials only** since 7.69.1. A credential shared with Claude
+    Code (read from its file by an Import or by the fallback) is refused here
+    without a POST: :mod:`.shared` owns that path.
 
     The result is always written to MCC's own store. It is written **back** to
     the file the account was imported from only when that account's persisted
@@ -1248,57 +1434,84 @@ async def refresh_tokens(tokens: OAuthTokens, *, account_id: str = "") -> OAuthT
     than spending the refresh token a second time. Two *different* accounts
     never wait on each other.
     """
+    if is_shared_credential(tokens, account_id):
+        raise SharedCredentialRefused(
+            "This Claude subscription credential is shared with Claude Code; "
+            "MCC refreshes it only for a real request, under Claude Code's own "
+            "lock, once it has expired."
+        )
     if not tokens.has_refresh_token:
         raise AnthropicOAuthRefreshRejected(400)
     assert tokens.refresh_token is not None
 
     async with _refresh_lock(account_id):
-        stored = load_tokens_for(account_id) if account_id else load_managed_tokens()
-        if (
-            stored is not None
-            and stored.has_access_token
-            and not stored.needs_refresh()
-            and stored.access_token != tokens.access_token
-        ):
-            # Somebody else already did this while this caller waited.
-            return stored
+        try:
+            async with hold(native_refresh_lock_path(), REFRESH_LOCK_TIMING) as held:
+                return await _refresh_native_locked(
+                    tokens, account_id=account_id, waited=held.waited
+                )
+        except LockBusy as error:
+            record_decision(PROVIDER_ID, account_id or "mcc", "native:lock-busy")
+            raise AnthropicOAuthRefreshUnavailable(
+                503, detail="another MCC server is refreshing this credential"
+            ) from error
 
-        response = await _post_refresh(tokens.refresh_token)
-        if response.status_code >= 400:
-            failure = classify_refresh_failure(response)
-            logger.warning(
-                "Claude subscription refresh failed: status={} definitive={} source={}",
-                failure.status_code,
-                failure.definitive,
-                tokens.source,
-            )
-            if failure.definitive and tokens.source == "mcc":
-                # Only a definitive rejection may retire a store, and only the
-                # one MCC owns -- Claude Code's file is never touched. With
-                # more than one account stored, retire **that account only**:
-                # the others are unaffected by this one's rejection and must
-                # keep serving.
-                if account_id and len(load_accounts()) > 1:
-                    remove_account(account_id)
-                else:
-                    quarantine_managed_store()
-            raise failure
 
-        refreshed = _tokens_from_refresh(response.json(), previous=tokens)
-        # Always into MCC's own store, whatever the credential was read from.
-        # This is also what upgrades a pre-6.36.0 store to the current shape
-        # (millisecond ``expiresAt``, ``refreshTokenExpiresAt``,
-        # ``rateLimitTier``) on the first successful refresh.
-        record = add_or_update_account(
-            refreshed,
-            origin=ORIGIN_MCC,
-            account_id=account_id or None,
-            match=tokens,
+async def _refresh_native_locked(
+    tokens: OAuthTokens, *, account_id: str, waited: bool
+) -> OAuthTokens:
+    """The NATIVE refresh, inside both the in-process and the file lock."""
+    assert tokens.refresh_token is not None
+    # Re-read under the file lock: another MCC server may have refreshed
+    # this account while this one waited (rule 8).
+    stored = load_tokens_for(account_id) if account_id else load_managed_tokens()
+    if (
+        stored is not None
+        and stored.has_access_token
+        and not stored.needs_refresh()
+        and stored.access_token != tokens.access_token
+    ):
+        # Somebody else already did this while this caller waited.
+        if waited:
+            record_decision(PROVIDER_ID, account_id or "mcc", "native:waited")
+        return stored
+
+    response = await _post_refresh(tokens.refresh_token)
+    if response.status_code >= 400:
+        failure = classify_refresh_failure(response)
+        logger.warning(
+            "Claude subscription refresh failed: status={} definitive={} source={}",
+            failure.status_code,
+            failure.definitive,
+            tokens.source,
         )
-        # ...and, for an account MCC does *not* own, back to the file it came
-        # from. Inside this account's refresh lock, so no other MCC caller is
-        # mid-refresh on the same credential while the target is re-read.
-        write_back_if_owned(record, refreshed)
+        if failure.definitive and tokens.source == "mcc":
+            # Only a definitive rejection may retire a store, and only the
+            # one MCC owns -- Claude Code's file is never touched. With
+            # more than one account stored, retire **that account only**:
+            # the others are unaffected by this one's rejection and must
+            # keep serving.
+            if account_id and len(load_accounts()) > 1:
+                remove_account(account_id)
+            else:
+                quarantine_managed_store()
+        raise failure
+
+    refreshed = _tokens_from_refresh(response.json(), previous=tokens)
+    # Always into MCC's own store, whatever the credential was read from.
+    # This is also what upgrades a pre-6.36.0 store to the current shape
+    # (millisecond ``expiresAt``, ``refreshTokenExpiresAt``,
+    # ``rateLimitTier``) on the first successful refresh.
+    record = add_or_update_account(
+        refreshed,
+        origin=ORIGIN_MCC,
+        account_id=account_id or None,
+        match=tokens,
+    )
+    # A NATIVE credential never writes back (7.69.1): it has no source
+    # file. ``write_back_if_owned`` is still the single gate, and says no.
+    write_back_if_owned(record, refreshed)
+    record_decision(PROVIDER_ID, record.id, "native:refreshed")
 
     logger.info(
         "Refreshed Claude subscription OAuth credential (source={} expires_at={})",

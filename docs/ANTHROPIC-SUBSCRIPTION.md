@@ -188,7 +188,10 @@ If you have read the above and still want it:
 
 ```bash
 # Option A: use the credential Claude Code already stored (nothing to do --
-# MCC discovers ~/.claude/.credentials.json read-only and never rotates it)
+# MCC finds ~/.claude/.credentials.json and SHARES it: Claude Code's file stays
+# the truth, MCC never renews it early, and renews it only once it has expired
+# and a real request needs it, under Claude Code's own lock, writing the new
+# token back for both -- see "Shared and native credentials" below)
 
 # Option B: sign in with a credential MCC owns and can refresh itself
 mcc-anthropic-oauth-login
@@ -273,8 +276,13 @@ With one account, MCC can see up to two credentials, and picks between them
    usable*: either the access token has not expired, or it has expired but the
    refresh token is not itself past a stated expiry.
 2. **Claude Code's own file** (`~/.claude/.credentials.json`) — used whenever
-   the first is not viable. Still read-only. If it needs refreshing, the result
-   is written to *MCC's* store; Claude Code's file is never rotated.
+   the first is not viable. This credential is **shared** with Claude Code
+   (7.69.1): MCC re-reads the file whenever its `(mtime, size)` moves, never
+   renews it early, and renews it only once it has expired and a real request
+   needs it — under Claude Code's own lock, writing the result back into that
+   file. Before 7.69.1 MCC refreshed it into its *own* store and left Claude
+   Code holding a spent refresh token, which is what kept logging Claude Code
+   out.
 
 If it falls back, it says so once, in `server.log`, naming both the source it
 chose and the one it skipped:
@@ -328,39 +336,136 @@ own rate-limit windows. Each row has two controls, both local-only:
 
 - **Refresh now** renews **that account's** credential immediately and reports
   the new expiry. If Anthropic is rate-limiting, it says so and leaves the
-  credential alone; it does not tell you to sign in again.
+  credential alone; it does not tell you to sign in again. On a **shared** row
+  the button reads **Re-read from Claude Code**: it re-reads Claude Code's file
+  and adopts what it finds. It renews only when the token has expired and the
+  file has not changed, and it never renews a token that is still valid.
 - **Disconnect** removes **that account** and writes its record aside as
   `anthropic_oauth.json.dead-<epoch>`. The other accounts keep serving. Your
   Claude Code login is untouched, so if that credential is healthy MCC simply
   falls back to it once the last account is gone. Nothing needs restarting.
 
-Neither button can renew or remove Claude Code's own file — except through
-write-back, below, which is explicitly opt-out and never rotates a token away.
+Neither button can remove Claude Code's own file, and neither renews a shared
+credential that is still valid.
 
-### Writing a refreshed token back to Claude Code
+### Shared and native credentials
 
-When MCC refreshes an account it **imported** from Claude Code, it writes the
-new token back into `~/.claude/.credentials.json` by default, so your real
-Claude Code session keeps working instead of finding its refresh token rotated
-away. This is `ANTHROPIC_OAUTH_WRITE_BACK` on the dashboard; set it to `false`
-to keep every refresh to MCC alone.
+Since 7.69.1 every Claude account MCC serves is in one of two modes, shown on
+its card row as **Owner**:
 
-It applies **only** to an imported account. An account MCC signed in itself has
-no source file to own, and MCC never claims one.
+- **Shared** — the credential was read from Claude Code's
+  `~/.claude/.credentials.json`, by **Use Claude Code credentials** (Import) or
+  by the automatic fallback. Claude Code's file is the truth; MCC's copy is only
+  a cache.
+- **Native** — MCC signed the account in itself (loopback, paste, device or
+  browser). MCC owns it and renews it as it always has.
+
+The last explicit action wins: signing in with MCC to an account held as shared
+makes it native, and an Import makes it shared again.
+
+**For a shared credential MCC:**
+
+1. Re-reads Claude Code's file on every use when its `(mtime, size)` has
+   changed — Claude Code's own rule — and adopts the token it finds
+   (`shared:adopted`). A half-written file keeps the cached token for that call
+   and is never read as a logout.
+2. Never renews it early: no 120-second head start, no background refresh, no
+   refresh from discovery, probes, model listing, image descriptions or the
+   dashboard while the token is valid. Claude Code renews its own token about
+   five minutes before it expires; MCC leaves that to it.
+3. Renews it only when **all** of these hold: the access token has expired (or
+   a real request got a 401 within two minutes of expiry); the file still holds
+   the token MCC last read; a real client request needs it now; write-back is
+   possible (the file exists and is writable, the OS is not macOS,
+   `ANTHROPIC_OAUTH_WRITE_BACK` is on and the account's own write-back is on);
+   and the refresh token is neither past its stated expiry nor one Anthropic
+   already refused. Otherwise the credential is **read-only**: MCC serves it
+   while it is valid and then the request moves down your existing chain, and
+   the card says why (`Read-only`).
+4. Never posts a refresh token twice once Anthropic has refused it: MCC keeps
+   the token's `sha256[:16]` fingerprint (never the token) on a known-dead list
+   until the file changes, and the card says *Sign in again in Claude Code
+   (`claude /login`)*.
+5. Never drops a token it renewed: if the write-back cannot land, the token is
+   kept as a shared record marked **Write-back pending** (amber on the card),
+   and every later use retries the write — same locks, same compare-and-swap,
+   no second refresh — until it lands or Claude Code's file changes.
+6. Follows an account switch: when the file changes, MCC checks
+   `~/.claude.json` `oauthAccount.accountUuid`. A different account means you
+   logged in again or switched in Claude Code; MCC adopts the new account, drops
+   the old shared record (its name stays in `credential_names.json`) and never
+   renews the old identity.
+
+**How a shared renewal joins Claude Code's own protocol** (Claude Code 2.1.283):
+
+- Take `<claude dir>/.oauth_refresh.lock`, then the legacy
+  `<realpath(claude dir)>.lock` — both `proper-lockfile` directories, both
+  heartbeated every 5 s while held. The directory is
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR` when set, else Claude Code's config home.
+  A lock is broken only when its heartbeat is more than 60 s old; a live lock
+  is waited on (five tries one to two seconds apart, then a 7.5 s liveness
+  window) and otherwise the attempt fails as transient, into your existing
+  chain. MCC never writes Claude Code's `.oauth_refresh.lock.owner` record.
+- Re-read the file under the lock. If the access token changed, Claude Code (or
+  another MCC server) already renewed it: adopt it, no refresh
+  (`shared:waited`).
+- Refresh once.
+- Take `.storage-write.lock` and **compare-and-swap**: write only if the file
+  still holds the refresh token MCC sent (or none), up to three tries. Only
+  `claudeAiOauth` is replaced — every other key, `mcpOAuth` included, is kept —
+  and the file is backed up once to `.credentials.json.bak-<epoch>`. If the
+  file changed in the meantime, its token wins and MCC's is discarded
+  (`shared:superseded`).
+- Release the locks — only after the write.
+
+Every one of these decisions is logged once, with the request id, as a stable
+code — `shared:adopted`, `shared:refreshed+wrote-back`, `shared:waited`,
+`shared:lock-busy`, `shared:read-only:<reason>`, `shared:sign-in-again`,
+`native:refreshed`, `native:waited` and so on — on `server.log`, on the
+account's card row (**Last decision**) and in the triggering request's row
+(the request log's `credential_event` column).
+
+**Native credentials** behave as before — two-minute head start, a 401 renews
+once and retries once, a definitive refusal retires that account — with one
+addition: a renewal takes a lock beside MCC's own store
+(`anthropic_oauth.json.refresh.lock`, same heartbeat and waiting rules), so
+several MCC servers holding the same account spend its single-use refresh
+token once between them; the others adopt the winner's token
+(`native:waited`).
+
+**Upgrading.** The first start of 7.69.1 runs a one-time check and writes a
+marker. If MCC's own store holds an MCC-signed token for the *same* account as
+Claude Code, Claude Code's token has expired, Claude Code has not written its
+file since, and MCC's token expires later, MCC writes its token into Claude
+Code's file under all three locks (compare-and-swap, backup first) and the
+account becomes shared. In every other case it writes nothing, and it never
+reads the `.dead-*` copies.
+
+### Writing a renewed token back to Claude Code
+
+When MCC renews a **shared** credential (imported, or found automatically),
+it writes the new token back into `~/.claude/.credentials.json` before it
+releases Claude Code's lock, so your real Claude Code session keeps working.
+This is `ANTHROPIC_OAUTH_WRITE_BACK` on the dashboard (default on). Set it to
+`false` and MCC will **never** renew a shared credential: it serves the token
+while it is valid and then waits for Claude Code.
+
+It never applies to a native account: an account MCC signed in itself has no
+source file to own, and MCC never claims one.
 
 How it is done safely:
 
-- **The lock.** Claude Code takes a `proper-lockfile` write lock on
-  `~/.claude/.storage-write` around its own credential writes (retries 10,
-  100–1000 ms backoff, 15 s stale). MCC takes the same lock, with the same
-  parameters, before it touches the file. A lock MCC cannot acquire inside that
-  budget is a **skipped write**, never a forced one. A lock older than the
-  stale window is broken — its owner's own rule.
-- **The monotonicity guard.** Inside that lock the target is re-read
-  immediately before the write. If its stored expiry is **greater than or equal
-  to** ours, the write is skipped: your real client refreshed more recently and
-  its token is the live one. Ties break on the refresh token's expiry. MCC can
-  never write an older token over a newer one.
+- **The locks.** The renewal already holds Claude Code's refresh locks (above).
+  The write itself takes the `proper-lockfile` lock Claude Code uses around its
+  own credential writes, `~/.claude/.storage-write` (retries 10, 100–1000 ms
+  backoff, 15 s stale), with the same parameters. A lock MCC cannot acquire
+  inside that budget is not a forced write: the token is kept as **Write-back
+  pending** and retried.
+- **Compare-and-swap, then the monotonicity guard.** Inside that lock the file
+  is re-read. MCC writes only if it still holds the refresh token MCC sent —
+  Claude Code's own save rule — and only if its stored expiry is older than
+  ours. MCC can never write an older token, or somebody else's, over a newer
+  one.
 - **Only `claudeAiOauth` is replaced.** Every other key in that file is
   preserved byte-for-byte, including the `mcpOAuth` block that holds your MCP
   server logins. The file is backed up once, to
@@ -375,11 +480,16 @@ backend is the same. MCC detects this by the file simply not being there, does
 nothing, and the card says so rather than reporting a success that did not
 happen.
 
-The Codex side (`CHATGPT_OAUTH_WRITE_BACK`) works the same way with one
-difference: Codex publishes no filesystem lock on its `auth.json`, so the
-monotonicity guard is the entire protection there. MCC leaves the `account_id`
-in that file exactly as found, so Codex's own account-id-guarded reload still
-matches.
+The Codex side (`CHATGPT_OAUTH_WRITE_BACK`) follows the same shared/native
+rules with one weaker guarantee, stated plainly: Codex publishes no filesystem
+lock on its `auth.json`, so there is nothing to join. MCC re-reads the file
+immediately before the refresh and again immediately before the write, and
+writes only if the file still holds the refresh token MCC sent **and** the same
+`account_id` (left exactly as found); otherwise it adopts Codex's token. If
+Codex starts its own refresh inside MCC's refresh window (about one round
+trip), one of the two refreshes fails and that client has to sign in again.
+MCC acts only after the token has actually expired, and Codex normally renews
+before that. Importing from Codex no longer refreshes anything.
 
 ### Changes take effect without a restart
 
@@ -400,7 +510,10 @@ thing Claude Code does with its own credential file.
 Claude Code on macOS usually keeps its credential in the **login keychain**
 rather than in `~/.claude/.credentials.json`. MCC cannot read the keychain, so
 "Use Claude Code credentials" will report that no credential was found, and
-that is expected rather than a bug. Sign in directly instead.
+that is expected rather than a bug. Sign in directly instead. If a shared
+credential is present on macOS anyway, it is **read-only** there: MCC serves it
+while it is valid and never renews it (`shared:read-only:macos`), because a
+write to the file would not reach the keychain Claude Code reads.
 
 ### Settings
 

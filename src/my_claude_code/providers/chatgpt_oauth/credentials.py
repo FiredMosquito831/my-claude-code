@@ -17,6 +17,10 @@ from my_claude_code.config.constants import (
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
 )
 from my_claude_code.config.paths import chatgpt_oauth_auth_path
+from my_claude_code.core.credential_refresh_scope import (
+    RefreshPurpose,
+    current_purpose,
+)
 from my_claude_code.providers.oauth_account_store import (
     ORIGIN_CODEX,
     ORIGIN_MCC,
@@ -27,9 +31,23 @@ from my_claude_code.providers.oauth_account_store import (
     now_iso,
     synthetic_account_id,
 )
+from my_claude_code.providers.oauth_file_lock import (
+    REFRESH_LOCK_TIMING,
+    LockBusy,
+    hold_sync,
+)
 from my_claude_code.providers.oauth_names import (
     forget_account_name,
     seed_default_name,
+)
+from my_claude_code.providers.oauth_ownership import (
+    clear_known_dead,
+    file_stamp,
+    fingerprint,
+    is_known_dead,
+    mark_known_dead,
+    read_only_reason,
+    record_decision,
 )
 
 CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -210,7 +228,15 @@ def _reload_source(source: _TokenSource) -> _TokenSource:
 
 
 def _load_sources(account_id: str | None = None) -> list[_TokenSource]:
-    return [_load_managed_source(account_id=account_id)]
+    source = _load_managed_source(account_id=account_id)
+    record = _shared_record_for(source)
+    if record is not None:
+        followed = _follow_codex_file(source.path, record)
+        if followed.id != record.id or followed.tokens != record.tokens:
+            source = _load_managed_source(
+                account_id=followed.id if account_id else None
+            )
+    return [source]
 
 
 def _decode_jwt_claims(token: str | None) -> dict[str, Any]:
@@ -371,10 +397,33 @@ class ChatGPTAccountRecord:
     write_back: bool = False
     added_at: str = ""
     ordinal: int = 1
+    #: 7.69.1, rule 11: a token MCC rotated whose write-back into Codex's
+    #: ``auth.json`` has not landed yet, and the ``sha256[:16]`` of the
+    #: refresh token still in that file (the compare-and-swap target).
+    pending_write_back: bool = False
+    pending_posted_fp: str = ""
+    #: ``(mtime_ns, size)`` of Codex's file when MCC last read or wrote it.
+    source_stamp: tuple[int, int] | None = None
 
     @property
     def owns_a_source_file(self) -> bool:
         return self.origin == ORIGIN_CODEX and bool(self.origin_path)
+
+    @property
+    def is_shared(self) -> bool:
+        """Whether Codex's own ``auth.json``, not MCC, owns this credential."""
+        return self.origin == ORIGIN_CODEX and bool(self.origin_path)
+
+
+def _stamp_from(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, list) or len(value) != 2:
+        return None
+    first, second = value[0], value[1]
+    if isinstance(first, bool) or isinstance(second, bool):
+        return None
+    if isinstance(first, int) and isinstance(second, int):
+        return first, second
+    return None
 
 
 def _entry_has_access_token(entry: dict[Any, Any]) -> bool:
@@ -400,11 +449,14 @@ def _record_from_entry(entry: dict[Any, Any], *, index: int) -> ChatGPTAccountRe
         write_back=fields["write_back"],
         added_at=fields["added_at"] or now_iso(),
         ordinal=fields["ordinal"] if fields["ordinal"] > 1 else index + 1,
+        pending_write_back=bool(entry.get("pending_write_back", False)),
+        pending_posted_fp=str(entry.get("pending_posted_refresh_fingerprint") or ""),
+        source_stamp=_stamp_from(entry.get("source_stamp")),
     )
 
 
 def _entry_from_record(record: ChatGPTAccountRecord) -> dict[str, Any]:
-    return {
+    entry: dict[str, Any] = {
         "id": record.id,
         "tokens": dict(record.tokens),
         "origin": record.origin,
@@ -413,6 +465,12 @@ def _entry_from_record(record: ChatGPTAccountRecord) -> dict[str, Any]:
         "added_at": record.added_at,
         "ordinal": record.ordinal,
     }
+    if record.pending_write_back:
+        entry["pending_write_back"] = True
+        entry["pending_posted_refresh_fingerprint"] = record.pending_posted_fp
+    if record.source_stamp is not None:
+        entry["source_stamp"] = list(record.source_stamp)
+    return entry
 
 
 def load_chatgpt_accounts(
@@ -523,8 +581,13 @@ def add_or_update_chatgpt_account(
     origin_path: str = "",
     write_back: bool | None = None,
     auth_path: Path | None = None,
+    adopt_origin: bool = False,
 ) -> ChatGPTAccountRecord:
     """Add an account, or update in place the one with the same account id.
+
+    ``adopt_origin`` is the operator's explicit action (7.69.1, rule 1): a
+    ChatGPT sign-in turns the account native, an Import from Codex turns it
+    shared. A refresh never passes it.
 
     The ChatGPT account id is preserved across refresh by OpenAI itself, so
     unlike the Anthropic side there is never any doubt about which record a
@@ -552,7 +615,21 @@ def add_or_update_chatgpt_account(
         records.append(record)
     else:
         previous = records[index]
-        record = dataclasses.replace(previous, tokens=dict(tokens))
+        if adopt_origin:
+            record = dataclasses.replace(
+                previous,
+                tokens=dict(tokens),
+                origin=origin,
+                origin_path=origin_path,
+                write_back=(
+                    write_back if write_back is not None else origin == ORIGIN_CODEX
+                ),
+                pending_write_back=False,
+                pending_posted_fp="",
+                source_stamp=None,
+            )
+        else:
+            record = dataclasses.replace(previous, tokens=dict(tokens))
         records[index] = record
     save_chatgpt_accounts(records, auth_path=path)
     seed_default_name(
@@ -604,7 +681,11 @@ def chatgpt_write_back_enabled() -> bool:
 
 
 def chatgpt_write_back_if_owned(
-    record: ChatGPTAccountRecord, tokens: dict[str, Any]
+    record: ChatGPTAccountRecord,
+    tokens: dict[str, Any],
+    *,
+    posted_refresh_token: str | None = None,
+    expected_account_id: str | None = None,
 ) -> bool:
     """Write a refreshed token back into the Codex ``auth.json`` it came from.
 
@@ -632,7 +713,25 @@ def chatgpt_write_back_if_owned(
         return False
     existing = document.get("tokens")
     existing = dict(existing) if isinstance(existing, dict) else {}
-    if not monotonic_write_allowed(
+    # 7.69.1 (rule 6): Codex has no lock to join, so the compare-and-swap is
+    # the protection -- write only while the file still holds the refresh
+    # token MCC posted, for the same account. Stricter than the guard below,
+    # which still applies after it.
+    if posted_refresh_token is not None and (
+        existing.get("refresh_token") != posted_refresh_token
+    ):
+        return False
+    if expected_account_id is not None and (
+        str(existing.get("account_id") or "") not in ("", expected_account_id)
+    ):
+        return False
+    # With the compare-and-swap satisfied the file provably still holds the
+    # token MCC just replaced, so the expiry guard has nothing left to decide
+    # -- and on Codex's file it cannot: ``auth.json`` states no access-token
+    # expiry, so the guard falls back to the id_token's ``exp``, which says
+    # nothing about the access token being replaced.
+    cas_holds = posted_refresh_token is not None
+    if not cas_holds and not monotonic_write_allowed(
         target_expires_at=_expiry_for_guard(existing),
         target_refresh_expires_at=None,
         ours_expires_at=_expiry_for_guard(tokens),
@@ -669,6 +768,7 @@ def store_managed_chatgpt_oauth_tokens(
     origin: str = ORIGIN_MCC,
     origin_path: str = "",
     write_back: bool | None = None,
+    adopt_origin: bool = False,
 ) -> Path:
     """Validate and atomically persist FCC-owned renewable OAuth credentials.
 
@@ -710,6 +810,7 @@ def store_managed_chatgpt_oauth_tokens(
         origin_path=origin_path,
         write_back=write_back,
         auth_path=path,
+        adopt_origin=adopt_origin,
     )
     return path
 
@@ -775,6 +876,357 @@ def _persist_refreshed_tokens(
     chatgpt_write_back_if_owned(record, bundle)
 
 
+# ---------------------------------------------------------------------------
+# SHARED Codex accounts (7.69.1)
+# ---------------------------------------------------------------------------
+#
+# An account imported from Codex is SHARED: Codex's ``auth.json`` is the
+# truth. Every use compares the file's ``(mtime_ns, size)`` with the stamp MCC
+# last read it at and adopts the file's token when it moved; an account-id
+# mismatch is an account switch (rule 9). MCC never refreshes it early, and
+# refreshes it only when it has expired and a real request needs it -- with
+# a compare-and-swap on the refresh token, because Codex has no lock to join
+# (rule 6). The weaker guarantee is stated plainly in the docs: a Codex
+# refresh that starts inside MCC's POST window costs one of the two clients a
+# sign-in.
+
+SHARED_401_WINDOW_SECONDS = 120.0
+NATIVE_REFRESH_LOCK_SUFFIX = ".refresh.lock"
+
+
+def native_refresh_lock_path(path: Path | None = None) -> Path:
+    """``auth/chatgpt-oauth.json.refresh.lock`` beside MCC's own store."""
+    store = path or chatgpt_oauth_auth_path()
+    return store.with_name(store.name + NATIVE_REFRESH_LOCK_SUFFIX)
+
+
+def _read_codex_tokens(path: Path) -> tuple[str, dict[str, Any]]:
+    """``("ok", tokens)`` / ``("absent", {})`` / ``("unreadable", {})``."""
+    if file_stamp(path) is None:
+        return "absent", {}
+    try:
+        payload = _load_json(path)
+    except ChatGPTOAuthError:
+        return "unreadable", {}
+    tokens = payload.get("tokens")
+    if not isinstance(tokens, dict) or not tokens.get("access_token"):
+        return "absent", {}
+    return "ok", dict(tokens)
+
+
+def _same_codex_tokens(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    return a.get("access_token") == b.get("access_token") and a.get(
+        "refresh_token"
+    ) == b.get("refresh_token")
+
+
+def _codex_file_is_newer(file_tokens: dict[str, Any], mirror: dict[str, Any]) -> bool:
+    return monotonic_write_allowed(
+        target_expires_at=_expiry_for_guard(mirror),
+        target_refresh_expires_at=None,
+        ours_expires_at=_expiry_for_guard(file_tokens),
+        ours_refresh_expires_at=None,
+    )
+
+
+def _update_chatgpt_record(
+    path: Path, account_id: str, **changes: Any
+) -> ChatGPTAccountRecord | None:
+    records = list(load_chatgpt_accounts(auth_path=path))
+    for index, record in enumerate(records):
+        if record.id == account_id:
+            updated = dataclasses.replace(record, **changes)
+            records[index] = updated
+            save_chatgpt_accounts(records, auth_path=path)
+            return updated
+    return None
+
+
+def _adopt_codex_file(
+    store: Path,
+    record: ChatGPTAccountRecord,
+    file_tokens: dict[str, Any],
+    stamp: tuple[int, int] | None,
+    code: str,
+) -> ChatGPTAccountRecord:
+    """S2 / S3 for Codex: the file moved under a shared record."""
+    file_account = str(file_tokens.get("account_id") or "") or (
+        extract_account_id_from_tokens(
+            access_token=file_tokens.get("access_token"),
+            id_token=file_tokens.get("id_token"),
+        )
+    )
+    if file_account and file_account != record.id:
+        # Rule 9: an account switch in Codex. The old identity is never
+        # refreshed again; its name stays in credential_names.json.
+        records = [
+            r for r in load_chatgpt_accounts(auth_path=store) if r.id != record.id
+        ]
+        save_chatgpt_accounts(records, auth_path=store)
+        record_decision(
+            PROVIDER_ID,
+            record.id,
+            "shared:identity-changed",
+            detail=f"now {file_account}",
+        )
+        native = next((r for r in records if r.id == file_account), None)
+        if native is not None and not native.is_shared:
+            return native
+        added = add_or_update_chatgpt_account(
+            {
+                **file_tokens,
+                "account_id": file_account,
+                "expires_at": _token_expiry(file_tokens),
+            },
+            origin=ORIGIN_CODEX,
+            origin_path=record.origin_path,
+            write_back=record.write_back,
+            auth_path=store,
+        )
+        return _update_chatgpt_record(store, added.id, source_stamp=stamp) or added
+    clear_known_dead(PROVIDER_ID, str(record.tokens.get("refresh_token") or ""))
+    merged = {**record.tokens, **file_tokens}
+    merged["account_id"] = record.id
+    # Codex's auth.json states no ``expires_at``: the adopted token's own
+    # expiry replaces the old one rather than surviving the merge.
+    merged["expires_at"] = _token_expiry(file_tokens)
+    updated = _update_chatgpt_record(
+        store,
+        record.id,
+        tokens=merged,
+        pending_write_back=False,
+        pending_posted_fp="",
+        source_stamp=stamp,
+    )
+    record_decision(PROVIDER_ID, record.id, code)
+    return updated or record
+
+
+def _follow_codex_file(
+    store: Path, record: ChatGPTAccountRecord
+) -> ChatGPTAccountRecord:
+    """Rule 2 for Codex: re-read ``auth.json`` when its stamp moved."""
+    source = Path(record.origin_path)
+    stamp = file_stamp(source)
+    if stamp is not None and stamp == record.source_stamp:
+        return record
+    state, file_tokens = _read_codex_tokens(source)
+    if state != "ok":
+        # Absent: serve the mirror while it is valid (S14). Unreadable: keep
+        # the cached token for this call (S4) -- never read as a logout.
+        return record
+    mirror = record.tokens
+    if _same_codex_tokens(file_tokens, mirror):
+        return _update_chatgpt_record(store, record.id, source_stamp=stamp) or record
+    if (
+        record.pending_write_back
+        and fingerprint(str(file_tokens.get("refresh_token") or ""))
+        == record.pending_posted_fp
+    ):
+        return record
+    if record.source_stamp is None and not _codex_file_is_newer(file_tokens, mirror):
+        # Stored before 7.69.1: no baseline. Keep MCC's copy, watch from here.
+        return _update_chatgpt_record(store, record.id, source_stamp=stamp) or record
+    return _adopt_codex_file(store, record, file_tokens, stamp, "shared:adopted")
+
+
+def _shared_record_for(source: _TokenSource) -> ChatGPTAccountRecord | None:
+    if source.name != "fcc-managed":
+        return None
+    for record in load_chatgpt_accounts(auth_path=source.path, migrate=False):
+        if record.id == (source.account_id or "") and record.is_shared:
+            return record
+    return None
+
+
+def _shared_read_only(record: ChatGPTAccountRecord) -> str | None:
+    # Codex keeps ``auth.json`` on every platform when it uses the file, so
+    # the macOS rule (Claude's keychain) does not apply here.
+    return read_only_reason(
+        target=Path(record.origin_path),
+        write_back_on=chatgpt_write_back_enabled(),
+        account_write_back=record.write_back,
+        platform="codex",
+    )
+
+
+def _refresh_shared_codex(
+    source: _TokenSource, record: ChatGPTAccountRecord, *, after_401: bool = False
+) -> _TokenSource:
+    """C2: re-read, POST, re-read, compare-and-swap write -- or adopt."""
+    target = Path(record.origin_path)
+    try:
+        with hold_sync(native_refresh_lock_path(source.path), REFRESH_LOCK_TIMING):
+            record = _follow_codex_file(source.path, record)
+            current = _reload_source(dataclasses.replace(source, account_id=record.id))
+            state, before = _read_codex_tokens(target)
+            if state == "ok" and not _same_codex_tokens(before, record.tokens):
+                # Changed immediately before the POST: adopt, no POST.
+                record = _adopt_codex_file(
+                    source.path,
+                    record,
+                    before,
+                    file_stamp(target),
+                    "shared:waited:codex",
+                )
+                return _reload_source(dataclasses.replace(source, account_id=record.id))
+            remaining = (
+                _access_token_seconds_remaining(current.access_token)
+                if current.access_token
+                else None
+            )
+            fresh_enough = remaining is not None and (
+                remaining > (SHARED_401_WINDOW_SECONDS if after_401 else 0)
+            )
+            if fresh_enough:
+                return current
+            posted = current.refresh_token or ""
+            if not posted or is_known_dead(PROVIDER_ID, posted):
+                record_decision(PROVIDER_ID, record.id, "shared:sign-in-again")
+                raise ChatGPTOAuthError(
+                    "The ChatGPT credential MCC shares with Codex cannot be "
+                    "renewed. Sign in again in Codex (`codex login`)."
+                )
+            try:
+                new_access, new_refresh, expires_at, new_id_token = (
+                    _refresh_access_token(posted)
+                )
+            except ChatGPTOAuthRefreshError as exc:
+                if exc.status_code in DEFINITIVE_REFRESH_STATUSES:
+                    mark_known_dead(PROVIDER_ID, posted)
+                    record_decision(PROVIDER_ID, record.id, "shared:rejected")
+                    raise ChatGPTOAuthError(
+                        "OpenAI will not renew the ChatGPT credential MCC shares "
+                        "with Codex. Sign in again in Codex (`codex login`)."
+                    ) from exc
+                raise
+            bundle = {
+                "access_token": new_access,
+                "refresh_token": new_refresh or posted,
+                "id_token": new_id_token or current.id_token,
+                "account_id": record.id,
+                "expires_at": expires_at,
+            }
+            state, before_write = _read_codex_tokens(target)
+            if state == "ok" and (
+                before_write.get("refresh_token") != posted
+                or str(before_write.get("account_id") or record.id) != record.id
+            ):
+                # Codex moved inside our POST window: its token wins.
+                record = _adopt_codex_file(
+                    source.path,
+                    record,
+                    before_write,
+                    file_stamp(target),
+                    "shared:superseded:codex",
+                )
+                return _reload_source(dataclasses.replace(source, account_id=record.id))
+            try:
+                wrote = chatgpt_write_back_if_owned(
+                    record,
+                    bundle,
+                    posted_refresh_token=posted,
+                    expected_account_id=record.id,
+                )
+            except OSError:
+                wrote = False
+            if wrote:
+                _update_chatgpt_record(
+                    source.path,
+                    record.id,
+                    tokens={**record.tokens, **bundle},
+                    pending_write_back=False,
+                    pending_posted_fp="",
+                    source_stamp=file_stamp(target),
+                )
+                record_decision(
+                    PROVIDER_ID, record.id, "shared:refreshed+wrote-back:codex"
+                )
+            else:
+                _update_chatgpt_record(
+                    source.path,
+                    record.id,
+                    tokens={**record.tokens, **bundle},
+                    pending_write_back=True,
+                    pending_posted_fp=fingerprint(posted),
+                    source_stamp=file_stamp(target),
+                )
+                record_decision(PROVIDER_ID, record.id, "shared:writeback-pending")
+            return _reload_source(dataclasses.replace(source, account_id=record.id))
+    except LockBusy as exc:
+        record_decision(PROVIDER_ID, record.id, "shared:lock-busy")
+        raise ChatGPTOAuthError(
+            "Another MCC server is refreshing this ChatGPT credential (lock-busy)."
+        ) from exc
+
+
+def _retry_codex_pending(source: _TokenSource, record: ChatGPTAccountRecord) -> None:
+    """S9 on a later use: retry the write-back, no POST."""
+    target = Path(record.origin_path)
+    state, file_tokens = _read_codex_tokens(target)
+    if state != "ok":
+        return
+    posted_fp = fingerprint(str(file_tokens.get("refresh_token") or ""))
+    if posted_fp != record.pending_posted_fp:
+        return
+    wrote = False
+    try:
+        wrote = chatgpt_write_back_if_owned(
+            record,
+            dict(record.tokens),
+            posted_refresh_token=str(file_tokens.get("refresh_token") or ""),
+            expected_account_id=record.id,
+        )
+    except OSError:
+        wrote = False
+    if wrote:
+        _update_chatgpt_record(
+            source.path,
+            record.id,
+            pending_write_back=False,
+            pending_posted_fp="",
+            source_stamp=file_stamp(target),
+        )
+        record_decision(PROVIDER_ID, record.id, "shared:refreshed+wrote-back:codex")
+
+
+def _use_shared_codex(
+    source: _TokenSource,
+    record: ChatGPTAccountRecord,
+    purpose: RefreshPurpose,
+) -> _TokenSource:
+    """Rules 3, 4, 7 for a shared Codex account."""
+    if record.pending_write_back:
+        _retry_codex_pending(source, record)
+    remaining = (
+        _access_token_seconds_remaining(source.access_token)
+        if source.access_token
+        else None
+    )
+    if remaining is None or remaining > 0:
+        return source
+    if not source.has_refresh_token or is_known_dead(PROVIDER_ID, source.refresh_token):
+        record_decision(PROVIDER_ID, record.id, "shared:sign-in-again")
+        raise ChatGPTOAuthError(
+            "The ChatGPT credential MCC shares with Codex cannot be renewed. "
+            "Sign in again in Codex (`codex login`)."
+        )
+    if purpose == "background":
+        record_decision(PROVIDER_ID, record.id, "shared:expired-waiting")
+        raise ChatGPTOAuthError(
+            "The ChatGPT credential MCC shares with Codex has expired; waiting "
+            "for Codex to renew it."
+        )
+    reason = _shared_read_only(record)
+    if reason is not None:
+        record_decision(PROVIDER_ID, record.id, f"shared:read-only:{reason}")
+        raise ChatGPTOAuthError(
+            "The ChatGPT credential MCC shares with Codex has expired and MCC "
+            f"may not renew it ({reason})."
+        )
+    return _refresh_shared_codex(source, record)
+
+
 #: One lock per ``(store path, account id)``. This was a single global
 #: ``threading.Lock``, which was right while there was one credential and
 #: wrong the moment there were two: a second account's refresh would queue
@@ -793,7 +1245,12 @@ def _refresh_lock(path: Path, account_id: str | None) -> threading.Lock:
         return lock
 
 
-def _ensure_fresh_source(source: _TokenSource) -> _TokenSource:
+def _ensure_fresh_source(
+    source: _TokenSource, *, purpose: RefreshPurpose = "background"
+) -> _TokenSource:
+    record = _shared_record_for(source)
+    if record is not None:
+        return _use_shared_codex(source, record, purpose)
     remaining = (
         _access_token_seconds_remaining(source.access_token)
         if source.access_token
@@ -806,20 +1263,28 @@ def _ensure_fresh_source(source: _TokenSource) -> _TokenSource:
         # upstream request fail with a clear 401 if expired.
         return source
 
-    with _refresh_lock(source.path, source.account_id):
-        # Another thread may have refreshed while we waited on the lock.
+    with (
+        _refresh_lock(source.path, source.account_id),
+        _native_file_lock(source.path, source.account_id) as waited,
+    ):
+        # Another thread -- or, since 7.69.1, another MCC server -- may have
+        # refreshed while we waited on the lock.
         current = _reload_source(source)
         current_access_token = current.access_token
         if current.has_access_token and current_access_token is not None:
             remaining = _access_token_seconds_remaining(current_access_token)
             if remaining is not None and remaining > REFRESH_LEEWAY_SECONDS:
+                if waited:
+                    record_decision(
+                        PROVIDER_ID, source.account_id or "", "native:waited"
+                    )
                 return current
         if not current.has_refresh_token or current.refresh_token is None:
             return source
-
         new_access, new_refresh, expires_at, new_id_token = _refresh_access_token(
             current.refresh_token
         )
+        record_decision(PROVIDER_ID, source.account_id or "", "native:refreshed")
         _persist_refreshed_tokens(
             current,
             access_token=new_access,
@@ -843,12 +1308,44 @@ def _ensure_fresh_source(source: _TokenSource) -> _TokenSource:
         )
 
 
-def _choose_runtime_source(sources: list[_TokenSource]) -> _TokenSource:
+def _native_file_lock(path: Path, account_id: str | None) -> Any:
+    """Rule 8: the cross-process lock for a NATIVE refresh.
+
+    Yields whether acquiring it meant waiting behind another MCC server.
+    """
+    return _NativeLock(path)
+
+
+class _NativeLock:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._context: Any = None
+
+    def __enter__(self) -> bool:
+        self._context = hold_sync(
+            native_refresh_lock_path(self._path), REFRESH_LOCK_TIMING
+        )
+        try:
+            held = self._context.__enter__()
+        except LockBusy as exc:
+            raise ChatGPTOAuthError(
+                "Another MCC server is refreshing this ChatGPT credential (lock-busy)."
+            ) from exc
+        return bool(held.waited)
+
+    def __exit__(self, *exc: object) -> None:
+        if self._context is not None:
+            self._context.__exit__(None, None, None)
+
+
+def _choose_runtime_source(
+    sources: list[_TokenSource], *, purpose: RefreshPurpose = "background"
+) -> _TokenSource:
     refresh_errors: list[str] = []
     for item in sources:
         if item.has_access_token:
             try:
-                return _ensure_fresh_source(item)
+                return _ensure_fresh_source(item, purpose=purpose)
             except ChatGPTOAuthError as exc:
                 refresh_errors.append(f"{item.name}: {exc}")
     suffix = f" Refresh failures: {'; '.join(refresh_errors)}" if refresh_errors else ""
@@ -863,8 +1360,13 @@ def load_chatgpt_oauth_credentials(
     access_token: str | None = None,
     account_id: str | None = None,
     pinned_account_id: str | None = None,
+    purpose: RefreshPurpose | None = None,
 ) -> ChatGPTOAuthCredentials:
     """Resolve OAuth credentials from explicit values or auth files.
+
+    ``purpose`` (7.69.1) is ``request`` only when a real client request is
+    being served; a credential shared with Codex is never refreshed for
+    anything else.
 
     Priority:
       1. Explicit access_token / account_id.
@@ -888,7 +1390,9 @@ def load_chatgpt_oauth_credentials(
             account_id=resolved_account_id,
         )
 
-    source = _choose_runtime_source(_load_sources(pinned_account_id))
+    source = _choose_runtime_source(
+        _load_sources(pinned_account_id), purpose=purpose or current_purpose()
+    )
     resolved_account_id = (
         (account_id or "").strip()
         or (source.account_id or "").strip()
@@ -906,8 +1410,60 @@ def load_chatgpt_oauth_credentials(
     )
 
 
+def _credentials_from_source(source: _TokenSource) -> ChatGPTOAuthCredentials:
+    return ChatGPTOAuthCredentials(
+        access_token=source.access_token or "",
+        account_id=(source.account_id or "")
+        or extract_account_id_from_tokens(
+            access_token=source.access_token,
+            id_token=source.id_token,
+        ),
+        refresh_token=source.refresh_token,
+        expires_at=source.expires_at,
+        source_name=source.name,
+    )
+
+
+def _force_refresh_shared(
+    source: _TokenSource, record: ChatGPTAccountRecord, purpose: RefreshPurpose
+) -> ChatGPTOAuthCredentials:
+    """S15 / rule 12 for Codex: re-read first; POST only when expired."""
+    followed = _follow_codex_file(source.path, record)
+    reread = _load_managed_source(source.path, account_id=followed.id)
+    if reread.access_token != source.access_token:
+        return _credentials_from_source(reread)
+    if purpose == "background":
+        raise ChatGPTOAuthError(
+            "The ChatGPT credential MCC shares with Codex is refreshed only for "
+            "a real request."
+        )
+    remaining = (
+        _access_token_seconds_remaining(reread.access_token)
+        if reread.access_token
+        else None
+    )
+    window = SHARED_401_WINDOW_SECONDS if purpose == "request" else 0.0
+    if remaining is not None and remaining > window:
+        if purpose == "operator":
+            # "Re-read from Codex": nothing to renew while the token is valid.
+            return _credentials_from_source(reread)
+        raise ChatGPTOAuthError(
+            "OpenAI refused a ChatGPT token MCC shares with Codex that has not "
+            "expired; MCC does not refresh it early. Re-read from Codex."
+        )
+    if _shared_read_only(followed) is not None:
+        raise ChatGPTOAuthError(
+            "The ChatGPT credential MCC shares with Codex has expired and MCC "
+            "may not renew it; waiting for Codex."
+        )
+    refreshed = _refresh_shared_codex(reread, followed, after_401=purpose == "request")
+    return _credentials_from_source(refreshed)
+
+
 def force_refresh_managed_chatgpt_oauth_credentials(
     account_id: str | None = None,
+    *,
+    purpose: RefreshPurpose | None = None,
 ) -> ChatGPTOAuthCredentials:
     """Refresh FCC-owned credentials after an upstream unauthorized response.
 
@@ -916,7 +1472,16 @@ def force_refresh_managed_chatgpt_oauth_credentials(
     others -- and their refresh tokens -- untouched.
     """
 
-    with _refresh_lock(chatgpt_oauth_auth_path(), account_id):
+    shared_source = _load_managed_source(account_id=account_id)
+    shared_record = _shared_record_for(shared_source)
+    if shared_record is not None:
+        return _force_refresh_shared(
+            shared_source, shared_record, purpose or current_purpose()
+        )
+    with (
+        _refresh_lock(chatgpt_oauth_auth_path(), account_id),
+        _native_file_lock(chatgpt_oauth_auth_path(), account_id),
+    ):
         source = _load_managed_source(account_id=account_id)
         if not source.has_refresh_token or source.refresh_token is None:
             raise ChatGPTOAuthError(
@@ -942,6 +1507,7 @@ def force_refresh_managed_chatgpt_oauth_credentials(
                 ) from exc
             raise
         resolved_id_token = id_token or source.id_token
+        record_decision(PROVIDER_ID, source.account_id or "", "native:refreshed")
         _persist_refreshed_tokens(
             source,
             access_token=access,
@@ -999,8 +1565,14 @@ def import_codex_cli_tokens() -> ChatGPTOAuthCredentials:
         origin=ORIGIN_CODEX,
         origin_path=str(source.path),
         write_back=True,
+        adopt_origin=True,
     )
-    managed = _ensure_fresh_source(_load_managed_source(account_id=source.account_id))
+    # 7.69.1 (F4): an Import never refreshes anything. The imported account is
+    # SHARED -- Codex's file stays the truth -- and it is served as found.
+    managed = _load_managed_source(account_id=source.account_id)
+    _update_chatgpt_record(
+        managed.path, managed.account_id or "", source_stamp=file_stamp(source.path)
+    )
     return ChatGPTOAuthCredentials(
         access_token=managed.access_token or "",
         account_id=(managed.account_id or "")

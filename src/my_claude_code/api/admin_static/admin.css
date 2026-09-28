@@ -7673,6 +7673,15 @@ audio.req-media-preview {
   margin-top: var(--space-2);
 }
 
+/* Each ChatGPT account is a heading plus its own <dl>, appended into the
+   card's two-column grid. Both span the full width, so an account's facts sit
+   under its name instead of beside it -- at 420 px the side-by-side layout
+   left a column of empty space and overflowed the viewport. */
+.chatgpt-oauth-details > .oauth-account-heading,
+.chatgpt-oauth-details > dl {
+  grid-column: 1 / -1;
+}
+
 /* Why the row exists at all, drawn like the dialect panel rather than like
    the capability table: it is a record of which source answered, not a vote
    between sources, so it gets prose and no tier badges. */
@@ -8332,6 +8341,13 @@ audio.req-media-preview {
   color: var(--error);
 }
 
+/* 7.69.1: a token MCC renewed whose write-back into the official client's
+   file has not landed yet. Amber, not red: nothing is broken, MCC retries on
+   every use without renewing again. */
+.anthropic-oauth-details dd.value-pending {
+  color: var(--warn, #d29922);
+}
+
 /* One account per row, with its own Refresh now and Disconnect. The heading
    is what tells two subscriptions apart at a glance, so it carries the name
    and the controls and the facts sit under it. */
@@ -8339,6 +8355,10 @@ audio.req-media-preview {
   border-top: 1px solid var(--border, #333);
   padding-top: 8px;
   margin-top: 8px;
+  /* The rows sit inside the card's two-column <dl> grid; without this each
+     row took one grid column, so a second account was squeezed beside the
+     first instead of below it. */
+  grid-column: 1 / -1;
 }
 
 .oauth-account-row:first-child {

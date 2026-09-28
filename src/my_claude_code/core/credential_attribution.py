@@ -25,6 +25,10 @@ class CredentialAttribution:
 
     index: int | None = None
     label: str | None = None
+    #: The OAuth credential decision this request triggered, if any -- one
+    #: stable code (``shared:adopted``, ``shared:refreshed+wrote-back``, ...).
+    #: A plain use records nothing, which reads downstream as NULL.
+    event: str | None = None
 
 
 # The pool had nothing to offer: every credential was benched before one was
@@ -71,3 +75,22 @@ def current_credential() -> tuple[int | None, str | None]:
     if slot is None:
         return None, None
     return slot.index, slot.label
+
+
+def record_credential_event(code: str) -> None:
+    """Record an OAuth credential decision against the current request.
+
+    One stable code per decision (``shared:adopted``, ``native:refreshed``,
+    ...). A no-op outside a tracked request -- discovery, probes and the
+    startup check have no request-log row to carry it. The last decision of
+    the request wins, the same rule :func:`record_credential` follows.
+    """
+    slot = _CURRENT.get()
+    if slot is not None:
+        slot.event = code
+
+
+def current_credential_event() -> str | None:
+    """The last credential decision recorded for the current request."""
+    slot = _CURRENT.get()
+    return None if slot is None else slot.event

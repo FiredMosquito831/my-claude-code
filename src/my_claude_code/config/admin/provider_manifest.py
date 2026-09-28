@@ -767,16 +767,16 @@ def _chatgpt_oauth_account_field_specs() -> tuple[dict[str, Any], ...]:
             "default": "true",
             "settings_attr": "chatgpt_oauth_write_back",
             "description": (
-                "When MCC refreshes an account it IMPORTED from Codex, write "
-                "the new token back into that Codex auth.json so your real "
-                "Codex CLI keeps working instead of finding its refresh token "
-                "rotated away. Never applies to an account MCC signed in "
-                "itself -- that one has no source file. The target is re-read "
-                "immediately before the write and the write is skipped when "
-                "it already holds a token at least as new, so MCC can never "
-                "put an older token over a newer one. Codex publishes no lock "
-                "on that file, so that guard is the whole protection. Turn "
-                "this off to keep every refresh to MCC alone."
+                "An account IMPORTED from Codex is shared: Codex's auth.json "
+                "is the truth, MCC re-reads it whenever it changes and never "
+                "refreshes the token early. Only once the token has expired "
+                "and a real request needs it does MCC renew it -- re-reading "
+                "the file right before the POST and again right before the "
+                "write, and writing only if the file still holds the refresh "
+                "token MCC sent, for the same account (Codex has no lock to "
+                "join). OFF means MCC will never refresh a shared credential: "
+                "it serves the token while valid, then waits for Codex. "
+                "Accounts MCC signed in itself are never written back."
             ),
         },
         {
@@ -788,17 +788,18 @@ def _chatgpt_oauth_account_field_specs() -> tuple[dict[str, Any], ...]:
             "default": "true",
             "settings_attr": "anthropic_oauth_write_back",
             "description": (
-                "When MCC refreshes an account it IMPORTED from Claude Code, "
-                "write the new token back into ~/.claude/.credentials.json so "
-                "your real Claude Code session keeps working. MCC takes Claude "
-                "Code's own .storage-write lock first and skips the write "
-                "rather than forcing it if it cannot; it re-reads the file "
-                "inside that lock and skips again if it already holds a token "
-                "at least as new. Only claudeAiOauth is replaced -- every "
-                "other key, mcpOAuth included, is preserved. No effect on "
-                "macOS or on a windows-credman install, where Claude Code "
-                "keeps the credential outside that file and there is nothing "
-                "to write. Never applies to an account MCC signed in itself."
+                "A Claude credential read from Claude Code (imported, or found "
+                "automatically) is shared: its file is the truth, MCC re-reads "
+                "it whenever it changes and never refreshes the token early. "
+                "Only once the token has expired and a real request needs it "
+                "does MCC renew it -- under Claude Code's own .oauth_refresh "
+                "lock, writing the new token back into "
+                "~/.claude/.credentials.json (only claudeAiOauth; mcpOAuth and "
+                "every other key kept) before letting go, and only if the file "
+                "still holds the refresh token MCC sent. OFF means MCC will "
+                "never refresh a shared credential: it serves the token while "
+                "valid, then waits for Claude Code. macOS keeps the credential "
+                "in the keychain, so there MCC never refreshes a shared one."
             ),
         },
     )
@@ -816,7 +817,8 @@ def _chatgpt_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
                 "Experimental/unsanctioned: device-code login works across WSL and "
                 "remote environments. Browser login is available only when the browser "
                 "and MCC share the same localhost. Renewable credentials are saved in "
-                "MCC's private auth store; Codex CLI credentials are not modified. "
+                "MCC's private auth store. A sign-in here is MCC's own (native); "
+                "an imported Codex login stays Codex's (shared, see below). "
                 "Use at your own risk; this is not an official OpenAI API product."
             ),
         },
@@ -828,8 +830,11 @@ def _chatgpt_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
             "field_type": "oauth_login",
             "description": (
                 "Experimental/unsanctioned: if you have already run 'codex login', "
-                "copy its renewable credentials into MCC's private auth store. "
-                "The Codex CLI file remains unchanged."
+                "import it as a SHARED account. Importing never refreshes "
+                "anything; Codex's auth.json stays the truth, MCC re-reads it "
+                "when it changes and renews the token only once it has expired "
+                "and a real request needs it (compare-and-swap write-back; see "
+                "the write-back setting)."
             ),
         },
     )
@@ -846,13 +851,15 @@ def _anthropic_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
             "description": (
                 "Anthropic does not permit this: read "
                 "docs/ANTHROPIC-SUBSCRIPTION.md before using either option. "
-                "Import the credential Claude Code already has, or sign in "
-                "directly; either way MCC stores its own renewable copy. Sign "
-                "in again to ADD a second account -- each one is its own pool "
-                "slot with its own name, expiry and controls. A refresh of an "
-                "IMPORTED account is written back to the file it came from "
-                "(see the write-back setting above); an account MCC signed in "
-                "itself has no source file and none is ever written."
+                "Import the credential Claude Code already has (SHARED: "
+                "Claude Code's file stays the truth, MCC renews it only once "
+                "it has expired and a real request needs it, under Claude "
+                "Code's lock, and writes it back -- see the write-back setting "
+                "above), or sign in directly (NATIVE: MCC owns and renews it). "
+                "Sign in again to ADD a second account -- each one is its own "
+                "pool slot with its own name, expiry and controls. Each row "
+                "shows its owner, any read-only reason and the last decision; "
+                "on a shared row Refresh now becomes Re-read from Claude Code."
             ),
         },
         {

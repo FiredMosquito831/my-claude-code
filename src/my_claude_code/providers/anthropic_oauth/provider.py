@@ -26,6 +26,7 @@ from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.config.constants import ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.client_fingerprint import current_fingerprint
+from my_claude_code.core.credential_refresh_scope import request_scoped_stream
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.anthropic import AnthropicProvider
@@ -344,11 +345,18 @@ class AnthropicOAuthProvider(AnthropicProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> AsyncIterator[str]:
         self._enforce_entrypoint(request)
-        return super().stream_response(
-            request,
-            input_tokens=input_tokens,
-            request_id=request_id,
-            reasoning=reasoning,
+        # 7.69.1 (rule 7): the one place a shared credential may be refreshed
+        # is a real client request, and this is it. The purpose travels by
+        # context to ``auth.headers()`` inside the shared transport, whose
+        # bytes do not change. Inside the describe side call's background
+        # scope this grants nothing.
+        return request_scoped_stream(
+            super().stream_response(
+                request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                reasoning=reasoning,
+            )
         )
 
     # -- model listing -----------------------------------------------------
