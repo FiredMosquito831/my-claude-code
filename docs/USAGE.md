@@ -5146,6 +5146,11 @@ Since 6.72.2 it tells you *who*. When a launcher or the tool environment cannot 
 **Windows: the installer says a command is missing.**
 That means a command the release publishes is genuinely absent, not merely stale. Close the `mcc-claude` window(s) and the tray, then re-run the install command. The installer exits non-zero in that case — it never reports "verified" for a command that does not exist.
 
+**The server printed "lost its listening socket … exit code 75" and stopped.**
+Since 7.69.2 that line means the server noticed it could no longer accept new connections and shut itself down rather than sit there unreachable. Before 7.69.2 the same situation was silent: on Windows, a client that resets a connection the server has not accepted yet — typically while the server is busy for a few seconds, for example shrinking large screenshots — made Python close the server's listening socket for good (a known CPython bug, python/cpython#93821). The process kept running and kept answering anyone already connected, so `/health` could still say 200, but nothing new could reach it; on 2026-10-01 one stayed like that for over seven hours.
+
+7.69.2 does two things. On Windows it keeps the listening socket open through those resets; `server.log` gets at most one `WARNING` a minute, "A client dropped its connection before the server accepted it", and there is nothing to do. And if the listening socket is lost anyway, for any reason, the server prints one timestamped line on its console, writes the same at `CRITICAL` to `server.log`, marks its session in the request log as not listening, lets the requests already in flight finish within `SERVER_GRACEFUL_SHUTDOWN_SECONDS`, and exits with code **75** (distinct from 1, a refused start, and 3, a stop that overran its budget). The desktop app starts a fresh server on its own; if you started `mcc-server` in a terminal, run it again.
+
 **Two configs on Windows.**
 If you installed under both PowerShell and WSL you have `C:\Users\<you>\.mcc` *and* `~/.mcc` inside WSL. The server prints which config directory it is using at startup — check that against the one you've been editing.
 

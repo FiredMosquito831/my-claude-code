@@ -781,6 +781,16 @@ SERVER_STALE_SERVER_ACTION_CHOICES = ("report", "stop")
 # requests matter more than a fast restart; the range is 1s to 600s.
 SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT = 20.0
 
+# The exit status of a server that lost its listening socket while running
+# (runtime/listener_guard.py): it said so on the console and in server.log,
+# finished the requests it already had within the stop budget above, and
+# exited so that whoever starts it -- the desktop app, a terminal, a service
+# manager -- can start a fresh one. 75 is sysexits.h's EX_TEMPFAIL, "a
+# temporary failure; try again", which is exactly what it means; it is distinct
+# from 1 (refused to start, or a failed bind) and from 3 (the stop watchdog's
+# hard exit, core/stop_deadline.HARD_EXIT_STATUS).
+LISTENER_LOST_EXIT_CODE = 75
+
 # Dashboard reconnect budget (seconds) the admin UI waits for the server to come
 # back after a self-triggered update. Composed from the real phases of the handoff
 # rather than a bare number: the install (uv tool install --force, up to 900s), the

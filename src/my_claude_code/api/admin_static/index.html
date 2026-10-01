@@ -5248,6 +5248,16 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                     <a href="#guide-models">model id</a>, not the key.</li>
                   <li><strong>Desktop test buttons fail</strong> &mdash; the server must be
                     running; they make real calls.</li>
+                  <li><strong>The server printed &ldquo;lost its listening socket&rdquo; and
+                    exited with code 75</strong> &mdash; from 7.69.2 a server that can no
+                    longer accept new connections says so on its console and in
+                    <code>logs/server.log</code>, finishes the requests already in flight
+                    within <code>SERVER_GRACEFUL_SHUTDOWN_SECONDS</code>, and exits instead
+                    of sitting there unreachable while <code>/health</code> still answers
+                    on old connections. The desktop app starts a fresh one by itself; from
+                    a terminal, run <code>mcc-server</code> again. On Windows the usual cause,
+                    a client resetting a connection while the server is busy, no longer
+                    closes the socket at all.</li>
                   <li><strong>Two configs on Windows</strong> &mdash; installing under both
                     PowerShell and WSL gives separate <code>.mcc</code> directories. The
                     startup log prints which one is in use.</li>

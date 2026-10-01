@@ -27,6 +27,7 @@ from my_claude_code.cli.port_diagnostics import (
 )
 from my_claude_code.cli.port_takeover import take_port
 from my_claude_code.cli.process_registry import kill_all_best_effort
+from my_claude_code.config.constants import LISTENER_LOST_EXIT_CODE
 from my_claude_code.config.env_migrations import (
     explicit_env_file_migration_warning,
     migrate_owned_env_files,
@@ -472,6 +473,12 @@ def _run_supervised_server(
     # first, ending it is this supervisor's job -- and it has to be ended,
     # because the alternative is a socket that answers "starting" for ever.
     startup_failed = False
+    # Whether the listener guard found the listening socket closed under a
+    # running server (runtime/listener_guard.py). Such a process drains like any
+    # stop and then exits with LISTENER_LOST_EXIT_CODE, so whoever started it
+    # can start a fresh one instead of it sitting unreachable.
+    listener_lost = False
+    listener: dict[str, socket.socket] = {}
     # When the stop clock started, for the "drain finished" line below. ``None``
     # means no stop has been requested yet.
     stop_started_at: float | None = None
@@ -545,6 +552,11 @@ def _run_supervised_server(
         server = server_holder.get("server")
         return bool(server is not None and server.started)
 
+    def report_listener_lost() -> None:
+        nonlocal listener_lost
+        listener_lost = True
+        request(ServerExitAction.STOP)
+
     startup_state().mark("application")
     asgi_app = build_asgi_app(
         settings,
@@ -552,6 +564,8 @@ def _run_supervised_server(
         process_restart_callback=request_process_restart,
         startup_failed_callback=report_startup_failure,
         serving_predicate=listener_is_serving,
+        listener_lost_callback=report_listener_lost,
+        listening_socket=lambda: listener.get("socket"),
     )
     config = uvicorn.Config(
         asgi_app,
@@ -619,6 +633,7 @@ def _run_supervised_server(
     except OSError as exc:
         _log_bind_failure(settings, exc)
         raise SystemExit(1) from exc
+    listener["socket"] = listening_socket
     # The session row in the request log was opened while this process was
     # still starting, before there was an address to record. Publishing it here
     # is what lets the NEXT server -- and an installer -- tell "a server that
@@ -675,6 +690,9 @@ def _run_supervised_server(
             elapsed=time.monotonic() - stop_started_at,
             budget=clamp_stop_budget(settings.server_graceful_shutdown_seconds),
         )
+    if listener_lost:
+        deadline.clear()
+        raise SystemExit(LISTENER_LOST_EXIT_CODE)
     # Past this point the socket is closed and no request can arrive, so the
     # gate has nothing left to guard; clearing keeps the next generation (and,
     # in-process, the next test) from inheriting a stop that already happened.

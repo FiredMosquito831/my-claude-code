@@ -163,6 +163,9 @@ _WRITER_BATCH_SIZE = 50
 _WRITER_POLL_SECONDS = 0.25
 _QUEUE_MAX_SIZE = 10_000
 _STOP = object()
+# "Write the session row now" -- for a fact the next heartbeat is too late for,
+# such as the listener having gone. See ``touch_server_sessions``.
+_TOUCH = object()
 # Shutdown budget for draining the queue. Compressing a full batch is real CPU
 # work, so this is a floor that grows with whatever is still queued.
 _CLOSE_TIMEOUT_SECONDS = 10.0
@@ -629,7 +632,8 @@ CREATE TABLE IF NOT EXISTS server_sessions (
     last_seen_at REAL NOT NULL,
     pid INTEGER,
     host TEXT,
-    port INTEGER
+    port INTEGER,
+    listening INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_server_sessions_started
     ON server_sessions(started_at);
@@ -1236,9 +1240,16 @@ _SESSION_HISTORY_LIMIT = 1_000
 # now belongs to somebody else" -- the only safe evidence that a server has
 # been superseded -- was not a question the log could answer. Same guarded
 # ALTER rule as every other post-release column.
+#
+# ``listening`` was added in 7.69.2, when a server that had lost its listening
+# socket kept heartbeating for 7 h 12 min and every reader called it live: 1 =
+# the listener was open at the last heartbeat, 0 = this server lost its
+# listening socket and is draining to exit, NULL = not measured (every row
+# written before 7.69.2, and a session whose listener was never watched).
 _SESSION_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("host", "ALTER TABLE server_sessions ADD COLUMN host TEXT"),
     ("port", "ALTER TABLE server_sessions ADD COLUMN port INTEGER"),
+    ("listening", "ALTER TABLE server_sessions ADD COLUMN listening INTEGER"),
 )
 
 # The address the server in THIS process is bound to, published by the
@@ -1269,6 +1280,37 @@ def server_bind_address() -> tuple[str, int] | None:
 
     with _bind_lock:
         return _bind_address
+
+
+# Whether this process's listening socket is still open, published by the
+# listener guard (``runtime/listener_guard.py``). ``None`` until it has looked.
+_listening: bool | None = None
+
+
+def set_server_listening(listening: bool | None) -> None:
+    """Record whether this process's listening socket is open, for its session row.
+
+    ``True`` once the listener guard is watching an open socket, ``False`` the
+    moment it finds the socket closed by anything other than a requested stop.
+    The heartbeat writes it as the row's ``listening`` column; see
+    :func:`touch_server_sessions` for writing it without waiting for one.
+    """
+
+    global _listening
+    with _bind_lock:
+        _listening = listening
+
+
+def server_listening() -> bool | None:
+    """Whether this process's listener is open; ``None`` if nobody has looked."""
+
+    with _bind_lock:
+        return _listening
+
+
+def _listening_column() -> int | None:
+    listening = server_listening()
+    return None if listening is None else int(listening)
 
 
 @dataclass(frozen=True, slots=True)
@@ -4211,14 +4253,15 @@ class RequestLogStore:
             with conn:
                 cursor = conn.execute(
                     "INSERT INTO server_sessions"
-                    " (started_at, last_seen_at, pid, host, port)"
-                    " VALUES (?, ?, ?, ?, ?)",
+                    " (started_at, last_seen_at, pid, host, port, listening)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         now,
                         now,
                         os.getpid(),
                         address[0] if address else None,
                         address[1] if address else None,
+                        _listening_column(),
                     ),
                 )
                 conn.execute(
@@ -4246,11 +4289,13 @@ class RequestLogStore:
         with contextlib.suppress(sqlite3.Error), conn:
             conn.execute(
                 "UPDATE server_sessions"
-                " SET last_seen_at = ?, host = ?, port = ? WHERE id = ?",
+                " SET last_seen_at = ?, host = ?, port = ?, listening = ?"
+                " WHERE id = ?",
                 (
                     now,
                     address[0] if address else None,
                     address[1] if address else None,
+                    _listening_column(),
                     session_id,
                 ),
             )
@@ -4271,6 +4316,17 @@ class RequestLogStore:
             self._queue.put_nowait(record)
         except queue.Full:
             logger.warning("Request log queue full; dropping record {}", record.id)
+
+    def touch_session_soon(self) -> None:
+        """Ask the writer to rewrite this session's row now, not at the next beat.
+
+        Never blocks. A full queue skips it: the next heartbeat, and the final
+        one at shutdown, write the same facts.
+        """
+        if self._closed.is_set():
+            return
+        with contextlib.suppress(queue.Full):
+            self._queue.put_nowait(_TOUCH)
 
     def _writer_loop(self) -> None:
         pending: list[RequestRecord] = []
@@ -4339,6 +4395,9 @@ class RequestLogStore:
                     continue
                 if item is _STOP:
                     stopping = True
+                elif item is _TOUCH:
+                    self._touch_session(conn, session_id, time.time())
+                    continue
                 else:
                     pending.append(item)
                 if len(pending) >= _WRITER_BATCH_SIZE:
@@ -4350,7 +4409,7 @@ class RequestLogStore:
                     item = self._queue.get_nowait()
                 except queue.Empty:
                     break
-                if item is not None and item is not _STOP:
+                if item is not None and item is not _STOP and item is not _TOUCH:
                     pending.append(item)
             if pending:
                 self._flush(pending, conn)
@@ -9405,6 +9464,14 @@ def get_request_log_store(
             )
             _stores[path] = store
         return store
+
+
+def touch_server_sessions() -> None:
+    """Write every open store's session row now (address and ``listening``)."""
+    with _store_lock:
+        stores = list(_stores.values())
+    for store in stores:
+        store.touch_session_soon()
 
 
 def reset_request_log_stores() -> None:
