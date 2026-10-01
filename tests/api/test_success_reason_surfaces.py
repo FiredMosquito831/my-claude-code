@@ -116,6 +116,9 @@ class TestTheApiSurfaces:
         self, client, success_store
     ) -> None:
         body = client.get("/admin/api/requests/no-answer").json()
+        # 7.69.4: answered from a minute-long cache, and saying when it was
+        # computed -- the one field this payload gained.
+        assert isinstance(body.pop("computed_at"), float)
         assert body == {
             "enabled": True,
             "successes": 5,

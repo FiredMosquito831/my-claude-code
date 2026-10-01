@@ -21,6 +21,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
 )
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,12 +58,14 @@ from my_claude_code.api.models_page_cache import (
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
 from my_claude_code.api.route_status import config_changed_at, credential_problems
 from my_claude_code.application.derived_payloads import (
+    ANALYTICS_MAX_AGE_SECONDS,
     LATENCY_ALL_TIME_ENTRY,
     LATENCY_DEFAULT_ENTRY,
     cached_payload,
     cost_breakdown_cache_key,
     cost_breakdown_entry_name,
     latency_by_model_cache_key,
+    recent_analytics,
 )
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.release_updates import (
@@ -181,6 +184,11 @@ from my_claude_code.core.async_stacks import (
 )
 from my_claude_code.core.client_fingerprint import (
     NON_REGISTRY_HARNESS_LABELS,
+)
+from my_claude_code.core.loop_health import (
+    BUSY_MARKER_HEADER,
+    BUSY_MARKER_VALUE,
+    loop_health,
 )
 from my_claude_code.core.model_visibility import ModelVisibility
 from my_claude_code.core.optimization_discovery import (
@@ -3931,20 +3939,22 @@ async def request_log_ttft(
         return {"enabled": False}
     _validate_request_log_status(status)
     _validate_request_log_local(local)
-    result = await asyncio.to_thread(
-        store.ttft_percentiles,
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since,
-        until=until,
-        q=q,
-        local=local,
-        harness=harness,
-        session=session,
-        folder=folder,
+    filters: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "endpoint": endpoint,
+        "key": key,
+        "since": since,
+        "until": until,
+        "q": q,
+        "local": local,
+        "harness": harness,
+        "session": session,
+        "folder": folder,
+    }
+    result = await _recent_analytics_answer(
+        store, "ttft", filters, lambda: store.ttft_percentiles(**filters)
     )
     return {"enabled": True, **result}
 
@@ -3981,20 +3991,22 @@ async def request_log_no_answer(
         return {"enabled": False}
     _validate_request_log_status(status)
     _validate_request_log_local(local)
-    result = await asyncio.to_thread(
-        store.no_answer_breakdown,
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since,
-        until=until,
-        q=q,
-        local=local,
-        harness=harness,
-        session=session,
-        folder=folder,
+    filters: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "endpoint": endpoint,
+        "key": key,
+        "since": since,
+        "until": until,
+        "q": q,
+        "local": local,
+        "harness": harness,
+        "session": session,
+        "folder": folder,
+    }
+    result = await _recent_analytics_answer(
+        store, "no-answer", filters, lambda: store.no_answer_breakdown(**filters)
     )
     return {"enabled": True, **result}
 
@@ -4033,20 +4045,22 @@ async def request_log_origin(
         return {"enabled": False}
     _validate_request_log_status(status)
     _validate_request_log_local(local)
-    result = await asyncio.to_thread(
-        store.origin_breakdown,
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since,
-        until=until,
-        q=q,
-        local=local,
-        harness=harness,
-        session=session,
-        folder=folder,
+    filters: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "endpoint": endpoint,
+        "key": key,
+        "since": since,
+        "until": until,
+        "q": q,
+        "local": local,
+        "harness": harness,
+        "session": session,
+        "folder": folder,
+    }
+    result = await _recent_analytics_answer(
+        store, "origin", filters, lambda: store.origin_breakdown(**filters)
     )
     return {"enabled": True, **result}
 
@@ -4083,21 +4097,35 @@ async def request_log_stats(
         return {"enabled": False}
     _validate_request_log_status(status)
     _validate_request_log_local(local)
-    result = await asyncio.to_thread(
-        store.stats,
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since,
-        until=until,
-        q=q,
-        local=local,
-        harness=harness,
-        session=session,
-        folder=folder,
-    )
+    filters: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "endpoint": endpoint,
+        "key": key,
+        "since": since,
+        "until": until,
+        "q": q,
+        "local": local,
+        "harness": harness,
+        "session": session,
+        "folder": folder,
+    }
+
+    def compute() -> dict[str, Any]:
+        answer = store.stats(**filters)
+        # Uptime over the same window, so a flat stretch in the series can be
+        # read as "no traffic" or "no server" instead of being ambiguous.
+        answer["coverage"] = store.coverage(since=since, until=until)
+        # Beside the Cancelled counter rather than inside it: ``stats()``'s own
+        # payload is answered by the rollup whenever it can be, and a cancelled
+        # sub-label is deliberately not a rollup dimension. Decorating the
+        # result here keeps every existing key of the stats answer exactly as
+        # it was and adds one.
+        answer["cancelled_breakdown"] = store.cancelled_breakdown(**filters)
+        return answer
+
+    result = await _recent_analytics_answer(store, "stats", filters, compute)
     result["enabled"] = True
     result["capture_bodies"] = bool(settings.request_log_capture_bodies)
     # Resolved here and shipped with the numbers, because the store cannot do
@@ -4114,32 +4142,26 @@ async def request_log_stats(
     # Lets the dashboard say "these totals have stopped rising" when the table
     # is at its cap, instead of leaving the plateau unexplained.
     result["retained_rows_max"] = int(settings.request_log_max_rows)
-    # Uptime over the same window, so a flat stretch in the series can be read
-    # as "no traffic" or "no server" instead of being ambiguous.
-    result["coverage"] = await asyncio.to_thread(
-        store.coverage, since=since, until=until
-    )
-    # Beside the Cancelled counter rather than inside it: ``stats()``'s own
-    # payload is answered by the rollup whenever it can be, and a cancelled
-    # sub-label is deliberately not a rollup dimension. Decorating the result
-    # here keeps every existing key of the stats answer exactly as it was
-    # and adds one.
-    result["cancelled_breakdown"] = await asyncio.to_thread(
-        store.cancelled_breakdown,
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since,
-        until=until,
-        q=q,
-        local=local,
-        harness=harness,
-        session=session,
-        folder=folder,
-    )
     return result
+
+
+async def _recent_analytics_answer(
+    store: RequestLogStore,
+    name: str,
+    filters: dict[str, Any],
+    compute: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    """One Analytics answer, at most ``ANALYTICS_MAX_AGE_SECONDS`` old.
+
+    The page asked for these on every reload, and every reload of every tab
+    ran the scans again: 0.5 to 3.2 s of SQLite each on a 10 GB log. Served from
+    memory for up to a minute (the user's limit, 2026-10-01) with the
+    ``computed_at`` they were computed at, which the page shows as "as of". On
+    a worker thread, like every query here.
+    """
+
+    key = (name, *(filters[field] for field in sorted(filters)))
+    return await asyncio.to_thread(recent_analytics().answer, store, key, compute)
 
 
 @router.get("/admin/api/requests/cost")
@@ -4210,8 +4232,15 @@ async def request_log_cost(
         key_for_entry = await asyncio.to_thread(
             cost_breakdown_cache_key, store, **filters
         )
+        # The key moves on every insert, so without a minimum age a busy log
+        # kept one thread recomputing these thirteen seconds of scans back to
+        # back. Now at most once a minute, and the answer says how old it is.
         result = await asyncio.to_thread(
-            cached_payload, entry_name, key=key_for_entry, compute=compute
+            cached_payload,
+            entry_name,
+            key=key_for_entry,
+            compute=compute,
+            min_age_seconds=ANALYTICS_MAX_AGE_SECONDS,
         )
     result["enabled"] = True
     # Whether costing is on at all, and under which rules. A page showing an
@@ -4372,9 +4401,23 @@ async def request_log_discover_optimizations(
     return result
 
 
+def _poll_busy_headers() -> dict[str, str]:
+    """``x-mcc-busy: 1`` while the event loop is late, for the dashboard's polls.
+
+    The same marker ``/health`` carries, on the two routes the page polls on a
+    timer. The page waits twice as long before its next poll while it is
+    present. Additive: a reader that does not know it sees the same answer.
+    """
+
+    if loop_health().snapshot().busy:
+        return {BUSY_MARKER_HEADER: BUSY_MARKER_VALUE}
+    return {}
+
+
 @router.get("/admin/api/requests/pulse")
 async def request_log_pulse(
     request: Request,
+    response: Response,
     provider: str | None = None,
     model: str | None = None,
     status: str | None = None,
@@ -4422,6 +4465,7 @@ async def request_log_pulse(
     # page's change detection compares ``total`` and ``last_ts`` only, so a
     # moving count never triggers a table refresh on its own.
     result["in_flight"] = inflight_count()
+    response.headers.update(_poll_busy_headers())
     return result
 
 
@@ -4445,7 +4489,7 @@ async def request_log_in_flight(request: Request):
     # ``JSONResponse`` directly, as ``/admin/api/tasks/stacks`` does: the
     # report is already nothing but JSON-native values, and FastAPI's encoder
     # pass would be the most expensive thing this route did.
-    return JSONResponse(inflight_report(limit=limit))
+    return JSONResponse(inflight_report(limit=limit), headers=_poll_busy_headers())
 
 
 def _latency_window(days: int, since: float | None) -> tuple[float | None, str | None]:
@@ -4692,6 +4736,8 @@ async def clear_request_log(
     )
     store = _request_log_store_or_none(settings)
     cleared = await asyncio.to_thread(store.clear) if store is not None else 0
+    # The minute-old Analytics answers describe rows that no longer exist.
+    recent_analytics().clear()
     return {"cleared": cleared}
 
 

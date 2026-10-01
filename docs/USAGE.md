@@ -3084,6 +3084,8 @@ A route's own model is a drag source like any row, but it is never *moved* out o
 
 **Pausing one entry.** Every row, the route's own model included, has a **Pause** button. A paused model keeps its place and stays fully visible with its whole ref, but the router never tries it: **no attempt is spent on it and no deadline is consumed**, and the request log still lists it under *not tried* with the reason `paused`, so a paused route is still debuggable. **Pause is per route.** Pausing an entry on one route does not pause the same model on other routes: a ref that appears in the Opus chain and the Haiku chain is two entries, and pausing the first leaves the second live. Pause it on every route you want it off. The panel names the route it just wrote, which is the route it applies to.
 
+**The button always shows the real state (7.69.4).** Before 7.69.4, after a **Save**, a page load or a key change, every row read **Pause** and every *Paused* chip was hidden until the Coding agents cards had loaded (about 5 s, longer under load, and never if one of those calls failed). A click on a paused row in that window sent a **Resume**, so the model really served traffic until it was paused again. Now each row is drawn with its real state as the rails are rebuilt. A click sends the opposite of what its button showed. If the button was showing an older state than the saved one, nothing is sent: the row is redrawn and the panel says so. A pause on a coding agent's own tier rail, clicked in that same window, also keeps that rail's fallbacks and earlier pauses (it used to post an empty list).
+
 Unlike everything else on this page, a pause is written the moment you click it: there is no Apply, and an unsaved drag elsewhere on the page is left exactly as it was. The status panel offers an Undo. **Since 6.35.1 the click is immediate** — a pause used to rebuild every provider client and re-query every provider's `/models` before it answered, which cost seconds and could briefly stall the proxy; a routing-only write now skips both, because neither can change what a pause does. If a pause fails, the same panel says so and the row goes back to the state it was really in. Pausing every model on a route is allowed and makes that route fail with an error naming the setting, rather than quietly re-routing somewhere you did not ask for.
 
 **Pausing is not hiding.** Hiding a model on the **Models** page only removes it from `/v1/models` and the admin pickers and never changes routing. Pausing only changes routing and never changes listings. They are separate switches on purpose.
@@ -4332,16 +4334,59 @@ answers `{"enabled": false}`. It is independent of `REQUEST_LOG_ENABLED`.
   request ends, so the current attempt is listed as *in progress*. When the request finishes, the
   detail says so and offers **Open the finished request**.
 - **Handover**: a request that finishes stays one more reading, greyed and marked *Finished*, then
-  leaves; its row appears in the Requests table on the table's own refresh (the panel nudges that
-  refresh when auto-refresh is on, and never writes into the table itself).
+  leaves; its row appears in the Requests table on the table's own refresh. **From 7.69.4 a finish no
+  longer triggers that refresh.** Until then every reading that saw a finish reloaded the whole
+  Analytics view, up to every 3 s, instead of at the interval chosen beside the table (see
+  [How often the page asks the server](#how-often-the-page-asks-the-server-7694)).
 - **Many at once**: 50 rows at a time, the oldest first, with *…and 70 more — showing the 50 oldest*
   and Prev / Next to page through the rest (the server describes at most 1,000).
 - **Accessibility**: the count line (*3 requests in flight*) is the page's one polite status region
   and changes only when the count does; the rows are a plain table with a caption.
 - **Sidebar**: the count also shows beside **Analytics** on every page. Off Analytics it is read with
-  `?limit=1`.
+  `?limit=1`, **every 10 s** (7.69.4; the panel's own interval if that is longer). On Analytics the
+  panel keeps the interval you chose.
 - **Hide** collapses the panel to its one-line summary. The panel's interval and collapsed state are
   remembered in the browser.
+
+### How often the page asks the server (7.69.4)
+
+Measured on 2026-09-28 with Analytics open: **153 requests a minute** reached the server, and about
+**89 % of them were the dashboard itself**. Each 3 s in-flight reading that saw a request finish fired
+the pulse and **nine analytics queries**. Every open tab did the same on its own. Since 7.69.4:
+
+- **The table follows the interval you chose** beside **Auto-refresh** (5, 15, 30 or 60 s). On each
+  tick it checks the pulse and, if anything changed, re-reads the table and the *All time* counters. A
+  request finishing never triggers a refresh by itself.
+- **The heavy totals are re-read at most once a minute** by auto-refresh: the stat cards, the charts,
+  the breakdowns, Cost, Model latency, TTFT, Successful requests with no answer, Requests by folder,
+  Requests by session, and Media. Every panel caption ends with **as of hh:mm:ss**, the time its numbers were computed, and
+  the line beside **Refresh** reads *Updated … · totals as of …*. Anything you do yourself reads
+  everything at once, as before: opening the view, changing a filter or the window, paging, or
+  pressing **Refresh**.
+- **The server keeps the same answers for up to a minute.** TTFT, no-answer, origin and the stats
+  cards are kept in memory per filter and say when they were computed (`computed_at`), so a second
+  tab or a reload inside the minute costs no query. The all-time cost breakdown is recomputed at most
+  once a minute. Its key changes with every new row, so it used to recompute back to back while
+  requests flowed. Its note says *As of …, refreshing.* only while a recomputation is actually
+  running. **Clear log** forgets the kept answers.
+- **The in-flight badge** off Analytics reads every 10 s. The panel on Analytics keeps your interval.
+- **One tab per browser polls.** Open tabs agree on one over a `BroadcastChannel`: the tab you
+  opened, showed or focused last. The others paint its in-flight readings and tell it what their panel
+  shows, so it asks for enough rows. A tab that is hidden or closed hands over at once, and one that
+  stops answering is taken over within about 8 s. A tab other than the polling one keeps its table as
+  it was until you press **Refresh** or switch to it. A browser without `BroadcastChannel` polls from
+  every tab, as before. A hidden tab never polls.
+- **A poll never overlaps itself.** The next one is scheduled only after the previous answer. It gives
+  up after twice its interval (at least 5 s). After an error, no answer, or an answer carrying
+  `x-mcc-busy: 1` (sent on `/admin/api/requests/in-flight` and `/admin/api/requests/pulse` while the
+  server's event loop is late), it waits twice as long, up to 60 s. The first clean answer puts it back
+  on its interval.
+- **Opening the page no longer validates the config.** That call ran a full settings prepare on the
+  server's event loop and its answer was never shown. **Validate** and **Save** validate exactly as
+  before.
+
+Open tabs keep the script they loaded. After an update, reload any dashboard tab that was already
+open (the browser may also keep the old script until a reload).
 
 ### The Token Optimizer page
 

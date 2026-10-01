@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+from itertools import pairwise
 from pathlib import Path
 from typing import NoReturn
 
@@ -6804,6 +6805,19 @@ def test_a_status_reload_clears_the_hints(rendered) -> None:
     assert rendered["credHints"]["afterHealthyReload"] == 0
 
 
+#: "hh:mm:ss" in the reader's locale: "14:02:40", or "2:02:40 PM" (the space
+#: before the AM/PM is a narrow no-break space in current ICU builds).
+AS_OF_CLOCK = r"\d{1,2}:\d\d:\d\d(?:\s?[AP]M)?"
+
+
+def _window_part(caption: str) -> str:
+    """A caption without its "· as of hh:mm:ss" (7.69.4), checked as a whole."""
+
+    window, _, as_of = caption.partition(" · as of ")
+    assert not as_of or re.fullmatch(AS_OF_CLOCK, as_of), caption
+    return window
+
+
 def test_every_analytics_aggregate_names_its_window(rendered) -> None:
     hints = rendered["credHints"]
     all_time = dict(hints["captionsAllTime"])
@@ -6817,8 +6831,10 @@ def test_every_analytics_aggregate_names_its_window(rendered) -> None:
         "Top errors",
         "Upstream statuses",
     ):
-        assert all_time[heading] == "Window: all stored rows", heading
-        assert last_day[heading] == "Window: last 24h", heading
+        # 7.69.4: once its numbers land, a caption also says when they were
+        # computed ("· as of hh:mm:ss"); the window it names is unchanged.
+        assert _window_part(all_time[heading]) == "Window: all stored rows", heading
+        assert _window_part(last_day[heading]) == "Window: last 24h", heading
     # The lifetime counters and the in-flight panel are not history windows.
     assert hints["lifetimeCaptions"] == 0
     # One caption for the Cost panel, none on each of its four tables.
@@ -7110,8 +7126,8 @@ def test_the_analytics_media_card_is_sent_the_window_only(rendered) -> None:
         assert "provider" not in url
         assert "local" not in url
     # Its caption names the window and does not claim the page's filter.
-    assert media["caption"] == "Window: last 24h"
-    assert media["otherCaption"] == "Window: last 24h, filtered"
+    assert _window_part(media["caption"]) == "Window: last 24h"
+    assert _window_part(media["otherCaption"]) == "Window: last 24h, filtered"
     assert media["headingCount"] == 1
 
 
@@ -7270,3 +7286,260 @@ def test_ticking_a_media_endpoint_submits_it_and_a_create_sends_none(
 
     assert card["patchedMedia"] == ["speech", "transcribe"]
     assert card["createdMedia"] == []
+
+
+# ------------------------------------- 7.69.4 pause buttons and the poll diet
+#
+# One run of admin_jsdom_pause_polls.mjs (MCC_JSDOM_SCENARIO=pause_polls): the
+# real admin.js on a manual clock, a server emulated for the routes under test,
+# and a second tab. The fixture has the rows every guard walks: a Fable rail
+# whose top two rows are paused (p1/f0-sol, p1/f1-muse) above a live
+# p1/f2-bunny, and Codex's own Sonnet-tier rail (p1/a0 paused, a1, a2 live).
+
+FABLE_PAUSED = {"p1/f0-sol", "p1/f1-muse"}
+AGENT_PAUSED = {"p1/a0"}
+INFLIGHT_PATH = "GET /admin/api/requests/in-flight"
+HEAVY_ANALYTICS = (
+    "GET /admin/api/requests/cost",
+    "GET /admin/api/requests/latency",
+    "GET /admin/api/requests/ttft",
+    "GET /admin/api/requests/no-answer",
+    "GET /admin/api/requests/origin",
+    "GET /admin/api/analytics/media",
+    "GET /admin/api/requests/stats",
+)
+
+
+@pytest.fixture(scope="module")
+def pause_polls() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="pause_polls")
+
+
+def _gaps(starts: list[int]) -> list[int]:
+    return [later - earlier for earlier, later in pairwise(starts)]
+
+
+def _assert_rows_tell_the_truth(
+    rows: list[dict], paused: set[str], moment: str
+) -> None:
+    assert rows, f"{moment}: no rows to check -- the guard would be vacuous"
+    for row in rows:
+        want = row["ref"] in paused
+        assert row["label"] == ("Resume" if want else "Pause"), (moment, row)
+        assert row["chipShown"] is want, (moment, row)
+        assert row["pressed"] == ("true" if want else "false"), (moment, row)
+
+
+def test_the_pause_scenario_runs_clean(pause_polls) -> None:
+    assert pause_polls["fatal"] is None
+    assert pause_polls["scriptErrors"] == []
+    assert pause_polls["clockErrors"] == []
+    assert pause_polls["tab2Errors"] == []
+    assert pause_polls["consoleErrors"] == []
+
+
+def test_a_paused_row_reads_resume_from_the_moment_the_page_loads(pause_polls) -> None:
+    _assert_rows_tell_the_truth(pause_polls["A0"]["fable"], FABLE_PAUSED, "A0")
+    _assert_rows_tell_the_truth(pause_polls["A0"]["agent"], AGENT_PAUSED, "A0")
+
+
+def test_a_paused_row_still_reads_resume_while_a_save_is_loading(pause_polls) -> None:
+    """A1: the config is re-read and every rail rebuilt; the Coding agents
+    calls behind it are still out. Before 7.69.4 every row read "Pause" here,
+    for five seconds on the live server and forever if a call failed."""
+
+    a1 = pause_polls["A1"]
+    _assert_rows_tell_the_truth(a1["fable"], FABLE_PAUSED, "A1")
+    _assert_rows_tell_the_truth(a1["agent"], AGENT_PAUSED, "A1")
+    assert all(row["inDocument"] for row in a1["fable"] + a1["agent"])
+
+
+def test_a_click_sends_the_opposite_of_what_the_button_said(pause_polls) -> None:
+    """Never `{"paused": false}` from a button that read "Pause", and never
+    `{"paused": true}` from one that read "Resume"."""
+
+    clicks = [pause_polls["A2"], *pause_polls["staleClicks"]]
+    sent_any = False
+    for click in clicks:
+        for body in click["sent"]:
+            sent_any = True
+            expected = "Pause" if body["paused"] else "Resume"
+            assert click["labelAtClick"] == expected, click
+    assert sent_any, "no click sent anything -- the check above would be vacuous"
+    # A2 read "Resume" on a paused row, so its Resume is the reader's own.
+    assert pause_polls["A2"]["labelAtClick"] == "Resume"
+    assert pause_polls["A2"]["sent"] == [
+        {"model_key": "MODEL_FABLE", "model_ref": "p1/f0-sol", "paused": False}
+    ]
+
+
+def test_a_stale_label_sends_nothing_and_is_repainted(pause_polls) -> None:
+    stale = {click["ref"]: click for click in pause_polls["staleClicks"]}
+
+    assert set(stale) == {"p1/f0-sol", "p1/f2-bunny"}
+    for ref, click in stale.items():
+        assert click["sent"] == [], click
+        assert click["after"]["label"] == ("Resume" if ref in FABLE_PAUSED else "Pause")
+        assert "nothing was sent" in click["status"], click
+
+
+def test_an_agent_tier_click_during_a_save_keeps_its_rail(pause_polls) -> None:
+    """The settings reload used to drop the agent rail's editor and its pause
+    list: a Pause clicked there posted no fallbacks and lost the paused ref."""
+
+    agent = pause_polls["A2agent"]
+    assert agent["labelAtClick"] == "Pause"
+    assert agent["sent"] == [
+        {
+            "harness": "codex",
+            "tier": "medium",
+            "override": True,
+            "model": "p1/a0",
+            "fallbacks": ["p1/a1", "p1/a2"],
+            "paused": ["p1/a0", "p1/a1"],
+        }
+    ]
+
+
+def test_a_failed_call_during_a_save_leaves_the_chips_true(pause_polls) -> None:
+    """B1: a Save whose local-status call fails. The repaint used to come only
+    after it, so it never came."""
+
+    b1 = pause_polls["B1"]
+    assert b1["applyError"] == "simulated timeout under load"
+    _assert_rows_tell_the_truth(b1["fable"], FABLE_PAUSED, "B1")
+    _assert_rows_tell_the_truth(b1["agent"], AGENT_PAUSED | {"p1/a1"}, "B1")
+
+
+def test_a_failed_pause_write_leaves_the_chips_true(pause_polls) -> None:
+    rows = pause_polls["failedPauseWrite"]
+    _assert_rows_tell_the_truth(rows["fable"], FABLE_PAUSED, "failed write")
+
+
+def test_a_page_load_makes_no_validate_call(pause_polls) -> None:
+    """Its answer was discarded, and it cost a full settings prepare on the
+    server's event loop. Seven loads happen in this run; none validates."""
+
+    urls = pause_polls["loadUrls"]
+    assert "GET /admin/api/config" in urls
+    assert not [url for url in urls if "/config/validate" in url]
+    assert pause_polls["validateCalls"] == 0
+
+
+def test_a_finished_request_does_not_reload_the_analytics(pause_polls) -> None:
+    """61 s on the Requests view with a request finishing every second.
+
+    Before 7.69.4 every 3 s in-flight tick that saw a finish fired the pulse
+    and nine analytics queries: 260 requests in this minute, 24 of each heavy
+    query. Now the table follows the 15 s interval and the heavy totals come
+    once, at the minute."""
+
+    ticks = pause_polls["finishTicks"]
+    counts = ticks["counts"]
+    assert ticks["seconds"] == 61
+    assert 19 <= counts[INFLIGHT_PATH] <= 21
+    assert counts["GET /admin/api/requests/pulse"] == 4
+    assert counts["GET /admin/api/requests"] == 4
+    assert counts["GET /admin/api/requests/lifetime"] == 4
+    for path in HEAVY_ANALYTICS:
+        assert counts.get(path, 0) == 1, path
+    assert ticks["requests"] <= 45
+
+
+def test_the_chosen_interval_drives_the_table(pause_polls) -> None:
+    counts = pause_polls["chosenInterval"]["counts"]
+
+    # 20 s at the 5 s interval: four table refreshes, no heavy query.
+    assert counts["GET /admin/api/requests/pulse"] == 4
+    assert counts["GET /admin/api/requests"] == 4
+    for path in HEAVY_ANALYTICS:
+        assert path not in counts, path
+
+
+def test_the_totals_say_when_they_were_computed(pause_polls) -> None:
+    as_of = pause_polls["asOf"]
+
+    assert re.fullmatch(
+        rf"Updated {AS_OF_CLOCK} · totals as of {AS_OF_CLOCK}", as_of["lastUpdated"]
+    ), as_of["lastUpdated"]
+    assert as_of["captions"]
+    for caption in as_of["captions"]:
+        assert re.search(rf"· as of {AS_OF_CLOCK}$", caption), caption
+
+
+def test_the_badge_off_the_requests_view_reads_every_ten_seconds(pause_polls) -> None:
+    badge = pause_polls["badgeOffView"]
+    starts = [entry["t"] for entry in badge["urls"]]
+
+    assert badge["count"] == 6
+    assert set(_gaps(starts)) == {10_000}
+    assert {entry["url"] for entry in badge["urls"]} == {
+        "/admin/api/requests/in-flight?limit=1"
+    }
+
+    panel = pause_polls["panelOnView"]
+    assert panel["count"] == 3
+    assert set(_gaps([entry["t"] for entry in panel["urls"]])) == {3_000}
+    assert {entry["url"] for entry in panel["urls"]} == {
+        "/admin/api/requests/in-flight?limit=50"
+    }
+
+
+def test_a_busy_answer_backs_the_poll_off_and_a_clean_one_resets_it(
+    pause_polls,
+) -> None:
+    backoff = pause_polls["busyBackoff"]
+    busy = _gaps(backoff["busyStarts"])
+    calm = _gaps(backoff["calmStarts"])
+
+    # x-mcc-busy on every answer for 60 s: 3 s doubles to 6, 12, 24.
+    assert busy == [6_000, 12_000, 24_000]
+    # The first clean answer puts it back on the chosen 3 s.
+    assert calm and set(calm) == {3_000}
+
+
+def test_an_error_backs_the_poll_off_up_to_the_cap(pause_polls) -> None:
+    # The pulse at 15 s, failing: 30 s, then the 60 s cap.
+    assert _gaps(pause_polls["errorBackoff"]["pulseStarts"]) == [30_000, 60_000]
+
+
+def test_a_held_poll_is_never_doubled_and_gives_up(pause_polls) -> None:
+    held = pause_polls["heldPoll"]
+
+    assert held["maxConcurrent"] == 1
+    assert held["urls"], "no poll went out -- the check above would be vacuous"
+    for entry in held["urls"]:
+        assert entry["outcome"] == "aborted", entry
+        # Twice the 3 s interval, floored at 5 s.
+        assert entry["end"] - entry["t"] == 6_000, entry
+
+
+def test_only_one_tab_polls_and_the_other_paints_its_readings(pause_polls) -> None:
+    tabs = pause_polls["twoTabs"]
+
+    assert tabs["tab1Polls"] == 0
+    assert tabs["tab2Polls"] >= 9
+    # The polling tab asks for what the listening tab shows: its open panel.
+    assert set(tabs["tab2InflightUrls"]) == {"/admin/api/requests/in-flight?limit=50"}
+    assert tabs["tab1Badge"] == f"{tabs['serverRows']} in flight"
+    assert tabs["tab1PanelRows"] == tabs["serverRows"]
+    assert {"claim", "beat", "inflight", "need"} <= set(pause_polls["channel"]["types"])
+
+
+def test_a_hidden_polling_tab_hands_over_at_once(pause_polls) -> None:
+    hidden = pause_polls["hiddenLeader"]
+
+    assert hidden["tab2Polls"] == 0
+    assert hidden["tab1Polls"] >= 5
+    # A resign on hiding, not on the next 2 s beat: the same instant here.
+    assert hidden["tab1FirstPollAfter"] - hidden["hiddenAt"] <= 50
+
+
+def test_a_dead_polling_tab_is_taken_over_within_the_lease(pause_polls) -> None:
+    dead = pause_polls["deadLeader"]
+
+    assert dead["tab2Polls"] == 0
+    assert dead["tab1Polls"] >= 8
+    # The 6 s lease, checked on the 2 s beat.
+    assert dead["takeoverMs"] is not None
+    assert dead["takeoverMs"] <= 8_000
