@@ -415,6 +415,24 @@ def _reset_image_geometry_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_image_downscale_cache():
+    """Forget memoised image shrinks, and their byte bound, between tests.
+
+    ``core.anthropic.image_downscale`` keeps each finished shrink for the life
+    of the process, so the second rung of a fallback chain -- and the next turn
+    of a conversation -- reuses the first one's bytes instead of resizing the
+    same screenshot again. That memo and the bound it has learned are a
+    process-wide singleton: a test asserting on its counters, or on how much
+    work a chain did, would otherwise read an earlier test's entries.
+    """
+    from my_claude_code.core.anthropic import image_downscale
+
+    image_downscale.reset_image_downscale_cache()
+    yield
+    image_downscale.reset_image_downscale_cache()
+
+
+@pytest.fixture(autouse=True)
 def _reset_process_settings_cache():
     """Forget the process-wide ``Settings`` between tests.
 
