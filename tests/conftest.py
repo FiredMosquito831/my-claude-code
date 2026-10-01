@@ -74,6 +74,25 @@ def _reset_stop_deadline():
 
 
 @pytest.fixture(autouse=True)
+def _reset_listener_state():
+    """7.69.2: two process-wide facts about the listening socket.
+
+    The composition root replaces ``IocpProactor.accept`` on Windows, class-wide,
+    and the listener guard publishes whether the socket is open for the session
+    row. No test may inherit either: a test of CPython's own accept loop must
+    see CPython's, and a session row must not report another test's listener.
+    """
+    from my_claude_code.core.request_log import set_server_listening
+    from my_claude_code.runtime.windows_accept import uninstall_keep_accepting
+
+    uninstall_keep_accepting()
+    set_server_listening(None)
+    yield
+    uninstall_keep_accepting()
+    set_server_listening(None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_oauth_ownership_state():
     """7.69.1: the shared-credential module keeps two process-wide flags.
 

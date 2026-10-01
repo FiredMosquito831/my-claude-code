@@ -17,7 +17,9 @@ from my_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
 from .application import ApplicationRuntime, RestartCallback
 from .asgi import RuntimeASGIApp
 from .harness_catalogues import HarnessCatalogueFanoutPublisher
+from .listener_guard import ListeningSocket
 from .provider_manager import ProviderRuntimeManager
+from .windows_accept import install_keep_accepting
 
 
 def build_asgi_app(
@@ -26,6 +28,8 @@ def build_asgi_app(
     process_restart_callback: RestartCallback | None = None,
     startup_failed_callback: Callable[[], None] | None = None,
     serving_predicate: Callable[[], bool] | None = None,
+    listener_lost_callback: Callable[[], None] | None = None,
+    listening_socket: ListeningSocket | None = None,
 ) -> RuntimeASGIApp:
     """Construct the complete server application and its resource owner."""
     log_path = Path(os.getenv("LOG_FILE", server_log_path()))
@@ -35,6 +39,10 @@ def build_asgi_app(
         verbose_third_party=settings.log_raw_api_payloads,
         retain_files=settings.server_log_retain_files,
     )
+    # After logging, so its one line lands in server.log; before uvicorn makes
+    # its event loop, which is all the Windows accept fix needs. A no-op on
+    # every other platform. See runtime/windows_accept.py.
+    install_keep_accepting()
     provider_manager = ProviderRuntimeManager(
         settings,
         model_catalog_publisher=HarnessCatalogueFanoutPublisher(),
@@ -56,6 +64,8 @@ def build_asgi_app(
         runtime,
         startup_failed_callback=startup_failed_callback,
         serving_predicate=serving_predicate,
+        listener_lost_callback=listener_lost_callback,
+        listening_socket=listening_socket,
     )
 
 

@@ -26,6 +26,7 @@ from my_claude_code.core.stop_deadline import (
 )
 
 from .application import ApplicationRuntime, startup_failure_message
+from .listener_guard import ListenerGuard, ListeningSocket
 from .loop_heartbeat import busy_health_answer, cached_health_answer
 from .warmup import start_request_path_warmup
 
@@ -329,6 +330,8 @@ class RuntimeASGIApp:
         runtime: ApplicationRuntime,
         startup_failed_callback: Callable[[], None] | None = None,
         serving_predicate: Callable[[], bool] | None = None,
+        listener_lost_callback: Callable[[], None] | None = None,
+        listening_socket: ListeningSocket | None = None,
     ) -> None:
         self.app = app
         self.runtime = runtime
@@ -339,6 +342,20 @@ class RuntimeASGIApp:
         # supervisor that owns the uvicorn Server. See ``_run_startup``.
         self._serving_predicate = serving_predicate
         self._startup_task: asyncio.Task[None] | None = None
+        # Watches the socket the supervisor bound, and hands a lost one back to
+        # the supervisor's stop (``runtime/listener_guard.py``). Only a server
+        # that has a socket of its own has anything to watch.
+        self._listener_guard = (
+            ListenerGuard(listening_socket, listener_lost_callback)
+            if listening_socket is not None
+            else None
+        )
+
+    @property
+    def listener_guard(self) -> ListenerGuard | None:
+        """The guard over the supervisor's listening socket, if it has one."""
+
+        return self._listener_guard
 
     @property
     def startup_task(self) -> asyncio.Task[None] | None:
@@ -516,10 +533,14 @@ class RuntimeASGIApp:
                 # this object owns instead of a call this coroutine awaits.
                 self._startup_task = asyncio.create_task(self._run_startup())
                 started = True
+                if self._listener_guard is not None:
+                    self._listener_guard.start()
                 await send({"type": "lifespan.startup.complete"})
                 continue
 
             if message["type"] == "lifespan.shutdown":
+                if self._listener_guard is not None:
+                    await self._listener_guard.close()
                 await self._await_startup_task()
                 if started:
                     try:
