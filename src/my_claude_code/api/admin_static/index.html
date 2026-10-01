@@ -2494,7 +2494,11 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <em>paused</em> &mdash; so a paused route is still readable. A pause
                   takes effect immediately, with no <em>Apply</em>, and the panel at the
                   top of this page offers an <em>Undo</em>. If it fails, that same panel
-                  says so and the row returns to the state it was really in.
+                  says so and the row returns to the state it was really in. After a
+                  <em>Save</em> or a reload, every row shows its real state straight
+                  away, and a click always sends the opposite of what its button showed;
+                  if the button was showing an older state, nothing is sent and the row
+                  is redrawn.
                   <strong>Pausing an entry on one route does not pause the same model on
                   other routes.</strong> A ref that appears in two chains is two entries;
                   pause it on each route you want it off.
@@ -3737,6 +3741,20 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   ignores this filter as it ignores every other one. Every filter applies
                   itself &mdash; selects on change, typing after a short pause &mdash; so
                   <strong>Apply</strong> is now only there when you want it.
+                </p>
+                <p class="guide-note">
+                  <strong>How often this page asks the server.</strong> With
+                  <em>Auto-refresh</em> on, the table follows the interval chosen beside
+                  it; a request finishing no longer reloads the whole page. The heavy
+                  totals &mdash; the cards, the charts, the breakdowns, cost, latency
+                  and TTFT &mdash; are re-read at most once a minute, and each panel's
+                  caption ends with <em>as of hh:mm:ss</em>, the time its numbers were
+                  computed. Opening the page, changing a filter, paging or pressing
+                  <em>Refresh</em> still reads everything at once. The in-flight count
+                  beside <em>Analytics</em> on other pages reads every 10 s, only one tab
+                  per browser polls (the others show what it reads), and a busy or
+                  silent server makes the polls wait longer instead of piling up. After
+                  an update, reload any dashboard tab that was already open.
                 </p>
                 <p>Input tokens are reported in parts, because they bill differently:</p>
                 <table class="guide-table">

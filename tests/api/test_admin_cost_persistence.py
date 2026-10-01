@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.api import admin_routes
 from my_claude_code.application import derived_payloads
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.request_log import RequestRecord, get_request_log_store
@@ -106,8 +107,11 @@ def test_a_cached_answer_equals_a_fresh_one(client, seeded, config_home) -> None
 
 
 def test_a_new_request_makes_the_stored_answer_stale_without_a_wait(
-    client, seeded, config_home, tmp_path
+    client, seeded, config_home, tmp_path, monkeypatch
 ) -> None:
+    # The stale-then-refresh path itself, with the minute-long minimum age
+    # (7.69.4) out of the way; the next test holds the minimum age.
+    monkeypatch.setattr(admin_routes, "ANALYTICS_MAX_AGE_SECONDS", 0.0)
     client.get(f"{ENDPOINT}?local=hide")
 
     store = get_request_log_store(tmp_path / "requests.db")
@@ -118,7 +122,60 @@ def test_a_new_request_makes_the_stored_answer_stale_without_a_wait(
     stale = client.get(f"{ENDPOINT}?local=hide").json()
     # Answered from what was stored, and honest about it.
     assert stale["stale"] is True
+    assert stale["refreshing"] is True
     assert stale["totals"]["priced"] == 4
+    _settle()
+
+    refreshed = client.get(f"{ENDPOINT}?local=hide").json()
+    assert refreshed["stale"] is False
+    assert refreshed["totals"]["priced"] == 5
+
+
+def test_a_new_request_recomputes_at_most_once_a_minute(
+    client, seeded, config_home, tmp_path, monkeypatch
+) -> None:
+    """The key moves on every insert; the recomputation may not.
+
+    Measured 2026-09-28: with requests flowing, a 13.7 s all-time recomputation
+    ran back to back because every insert made the stored answer stale. Under
+    a minute old, a stale answer is served as it is, says it is not being
+    refreshed, and starts nothing; past the minute, the next ask refreshes it.
+    """
+
+    client.get(f"{ENDPOINT}?local=hide")
+    store = get_request_log_store(tmp_path / "requests.db")
+    assert store is not None
+    store.enqueue(_record(99))
+    store.close()
+
+    started: list[str] = []
+    real_start = derived_payloads._start_refresh
+
+    def counting_start(name: str, *args: Any, **kwargs: Any) -> None:
+        started.append(name)
+        real_start(name, *args, **kwargs)
+
+    monkeypatch.setattr(derived_payloads, "_start_refresh", counting_start)
+    young = client.get(f"{ENDPOINT}?local=hide").json()
+    assert young["stale"] is True
+    assert young["refreshing"] is False
+    assert young["totals"]["priced"] == 4
+    assert started == []
+
+    # The same stored answer, computed 61 s ago instead of just now.
+    cache = derived_payloads.derived_cache()
+    entry = cache.read("cost-breakdown-local-hide")
+    assert entry is not None
+    assert cache.write(
+        "cost-breakdown-local-hide",
+        key=entry.key,
+        payload=entry.payload,
+        computed_at=time.time() - 61.0,
+    )
+    old = client.get(f"{ENDPOINT}?local=hide").json()
+    assert old["stale"] is True
+    assert old["refreshing"] is True
+    assert started == ["cost-breakdown-local-hide"]
     _settle()
 
     refreshed = client.get(f"{ENDPOINT}?local=hide").json()

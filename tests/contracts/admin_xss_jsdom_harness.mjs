@@ -247,3 +247,7 @@ console.log(
     2,
   ),
 );
+// The answer is printed. The page keeps its in-flight poll on a timer from
+// the moment a view is shown (7.69.4), and a jsdom window's timers keep Node's
+// event loop alive, so this run has to end itself, as the main harness does.
+process.exit(0);

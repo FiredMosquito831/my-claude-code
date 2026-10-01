@@ -31,7 +31,9 @@ because ``core`` may not import ``config``.
 
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
@@ -45,6 +47,20 @@ from my_claude_code.core.request_log import RequestLogStore
 #: derived things already kept on disk.
 DERIVED_CACHE_DIRNAME = "cache"
 DERIVED_CACHE_SUBDIR = "derived"
+
+#: How old the Analytics totals may be, in seconds. The user's decision of
+#: 2026-10-01: the all-time cards may lag by up to a minute, and every one of
+#: them says when it was computed. It is one number for both caches below.
+#:
+#: Without it the cost breakdown never stopped: its key is the log's data mark,
+#: which moves on every insert, so while requests flowed one worker thread
+#: recomputed thirteen seconds of scans back to back, all day.
+ANALYTICS_MAX_AGE_SECONDS = 60.0
+
+#: The most filter combinations the in-memory answers keep. The same bound the
+#: store's own five-second cache uses, for the same reason: a reader trying
+#: filters must not grow a dictionary for the life of the process.
+RECENT_ANSWERS_MAX_ENTRIES = 64
 
 _refresh_lock = threading.Lock()
 _refreshing: set[str] = set()
@@ -122,12 +138,14 @@ def cached_payload(
     cache: DerivedCache | None = None,
     compact: bool = False,
     serve_stale: bool = True,
+    min_age_seconds: float = 0.0,
 ) -> dict[str, Any]:
     """Answer from the stored payload where possible, never by waiting.
 
-    Returns a payload carrying two extra fields, and only those two: ``stale``
-    and ``computed_at``. Everything else is exactly what ``compute`` produced,
-    on this call or on an earlier one under the same key.
+    Returns a payload carrying two extra fields: ``stale`` and ``computed_at``
+    (a stale answer also says whether a recomputation is ``refreshing`` it).
+    Everything else is exactly what ``compute`` produced, on this call or on
+    an earlier one under the same key.
 
     ``serve_stale=False`` for a payload that must never lag its inputs. The
     cost breakdown may show figures from a minute ago and say so; a page that
@@ -135,6 +153,11 @@ def cached_payload(
     would look like the write failed. Such an entry still skips the whole
     computation whenever the key matches -- which is the restart case this
     exists for -- and simply recomputes when it does not.
+
+    ``min_age_seconds`` is how old a stale answer must be before a changed key
+    starts a recomputation. Zero is every release before 7.69.4: a key that
+    moves on every insert recomputed back to back for as long as requests
+    flowed. A younger stale answer is served as it is, saying so.
     """
 
     store = derived_cache() if cache is None else cache
@@ -146,8 +169,13 @@ def cached_payload(
         # true at ``computed_at`` -- and the page says so rather than making
         # the reader wait twelve seconds for a number that moved by one
         # request.
+        payload = _mark_stale(dict(entry.payload), entry)
+        if time.time() - entry.computed_at < min_age_seconds:
+            payload["refreshing"] = False
+            return payload
         _start_refresh(name, key, compute, store, compact)
-        return _mark_stale(dict(entry.payload), entry)
+        payload["refreshing"] = True
+        return payload
     payload = compute()
     computed_at = time.time()
     store.write(
@@ -229,3 +257,100 @@ def latency_by_model_cache_key(store: RequestLogStore, *, since: float | None) -
 
     window = "" if since is None else str(int(since))
     return "|".join([store.data_mark(), f"since={window}", "shape=v2-interrupted"])
+
+
+@dataclass(frozen=True)
+class _RecentAnswer:
+    payload: dict[str, Any]
+    computed_at: float
+    monotonic_at: float
+    # Held so the ``id()`` in the key cannot be reused by a later store while
+    # this entry is alive.
+    owner: object
+
+
+class RecentAnswers:
+    """Analytics answers kept in memory for up to ``max_age_seconds``.
+
+    For the four Analytics queries that had no cache beyond the store's five
+    seconds -- TTFT, no-answer, origin and the stats cards -- which the page
+    asked for on every reload: 0.5 to 3.2 s of SQLite each, per reload, per
+    tab. A key is the query and its filters; an answer younger than the limit is
+    served as it is, with the ``computed_at`` it was computed at, so the page
+    can say "as of". Never longer than the limit, and never across a store
+    replaced under it (the store is part of the key).
+
+    One computation per key at a time: a second caller for the same key waits
+    for the first answer instead of running the same scans beside it. Called
+    on a worker thread (``asyncio.to_thread``), never on the event loop.
+    """
+
+    def __init__(
+        self,
+        max_age_seconds: float = ANALYTICS_MAX_AGE_SECONDS,
+        max_entries: int = RECENT_ANSWERS_MAX_ENTRIES,
+    ) -> None:
+        self._max_age = max_age_seconds
+        self._max_entries = max_entries
+        self._lock = threading.Lock()
+        self._entries: OrderedDict[tuple[Any, ...], _RecentAnswer] = OrderedDict()
+        self._computing: dict[tuple[Any, ...], threading.Event] = {}
+
+    def answer(
+        self,
+        owner: object,
+        key: tuple[Any, ...],
+        compute: Callable[[], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """The answer for ``key``: a recent one, or a fresh one computed now."""
+
+        full_key = (id(owner), *key)
+        while True:
+            with self._lock:
+                entry = self._entries.get(full_key)
+                if (
+                    entry is not None
+                    and time.monotonic() - entry.monotonic_at < self._max_age
+                ):
+                    self._entries.move_to_end(full_key)
+                    return {**entry.payload, "computed_at": entry.computed_at}
+                running = self._computing.get(full_key)
+                if running is None:
+                    running = threading.Event()
+                    self._computing[full_key] = running
+                    break
+            # Someone else is computing this very answer: wait for theirs.
+            running.wait()
+        try:
+            payload = compute()
+            computed_at = time.time()
+            with self._lock:
+                self._entries[full_key] = _RecentAnswer(
+                    payload=dict(payload),
+                    computed_at=computed_at,
+                    monotonic_at=time.monotonic(),
+                    owner=owner,
+                )
+                self._entries.move_to_end(full_key)
+                while len(self._entries) > self._max_entries:
+                    self._entries.popitem(last=False)
+            return {**payload, "computed_at": computed_at}
+        finally:
+            with self._lock:
+                self._computing.pop(full_key, None)
+            running.set()
+
+    def clear(self) -> None:
+        """Forget every answer: the log they were computed from was cleared."""
+
+        with self._lock:
+            self._entries.clear()
+
+
+_recent_answers = RecentAnswers()
+
+
+def recent_analytics() -> RecentAnswers:
+    """The process's in-memory Analytics answers (see ``RecentAnswers``)."""
+
+    return _recent_answers

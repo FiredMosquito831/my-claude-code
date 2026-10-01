@@ -224,15 +224,18 @@ def _reset_derived_refresh_state():
     currently being recomputed, so that a page polling three times does not
     start three twelve-second recomputations of the same answer. It is a
     singleton, and the house rule for a singleton is that a test never inherits
-    another test's copy of it.
+    another test's copy of it. The minute-long in-memory Analytics answers
+    (7.69.4) are the same kind of singleton and are forgotten the same way.
     """
     from my_claude_code.application import derived_payloads
 
     with derived_payloads._refresh_lock:
         derived_payloads._refreshing.clear()
+    derived_payloads.recent_analytics().clear()
     yield
     with derived_payloads._refresh_lock:
         derived_payloads._refreshing.clear()
+    derived_payloads.recent_analytics().clear()
 
 
 @pytest.fixture(autouse=True)

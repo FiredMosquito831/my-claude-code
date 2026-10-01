@@ -3748,6 +3748,16 @@ window.fetch = async (url, options = {}) => {
   };
 };
 
+/* MCC_JSDOM_SCENARIO=pause_polls runs the pause-button and polling scenario
+   (admin_jsdom_pause_polls.mjs) instead of the capture below: same payload,
+   same stub, but every timer on a manual clock. Prepared here, before the
+   script is evaluated, because the clock has to own every timer it arms. */
+let scenario = null;
+if (process.env.MCC_JSDOM_SCENARIO === "pause_polls") {
+  const { preparePausePollScenario } = await import("./admin_jsdom_pause_polls.mjs");
+  scenario = preparePausePollScenario({ window, html, script, ROUTES });
+}
+
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
 window.addEventListener("unhandledrejection", (event) =>
@@ -3766,6 +3776,14 @@ try {
 window.document.dispatchEvent(
   new window.Event("DOMContentLoaded", { bubbles: true }),
 );
+
+if (scenario) {
+  const result = await scenario.run({ scriptErrors, consoleErrors });
+  result.fatal = null;
+  result.harnessWallMs = Date.now() - startedAt;
+  console.log(JSON.stringify(result));
+  process.exit(0);
+}
 
 await new Promise((resolve) => setTimeout(resolve, 900));
 

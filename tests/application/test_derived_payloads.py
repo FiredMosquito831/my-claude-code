@@ -267,3 +267,149 @@ def test_the_cache_root_follows_the_config_directory() -> None:
     root = derived_cache().root
     assert root == config_dir_path() / "cache" / "derived"
     assert root.parent.parent == config_dir_path()
+
+
+# ------------------------------------------------- the minute-long limits (7.69.4)
+
+
+def test_a_young_stale_answer_starts_no_recomputation(tmp_path: Path) -> None:
+    """Under the minimum age a changed key is served as it stands, and says so.
+
+    The cost key is the log's data mark, which moves on every insert; without
+    this, a busy log recomputed thirteen seconds of scans back to back.
+    """
+
+    cache = DerivedCache(tmp_path / "derived")
+    cached_payload("thing", key="k1", compute=lambda: {"total": 1}, cache=cache)
+    started: list[int] = []
+
+    def counted() -> dict[str, Any]:
+        started.append(1)
+        return {"total": 2}
+
+    answer = cached_payload(
+        "thing", key="k2", compute=counted, cache=cache, min_age_seconds=60.0
+    )
+
+    assert answer["total"] == 1
+    assert answer["stale"] is True
+    assert answer["refreshing"] is False
+    assert started == []
+    with derived_payloads._refresh_lock:
+        assert "thing" not in derived_payloads._refreshing
+
+
+def test_an_old_stale_answer_is_refreshed_as_before(tmp_path: Path) -> None:
+    cache = DerivedCache(tmp_path / "derived")
+    cache.write("thing", key="k1", payload={"total": 1}, computed_at=time.time() - 61)
+
+    answer = cached_payload(
+        "thing",
+        key="k2",
+        compute=lambda: {"total": 2},
+        cache=cache,
+        min_age_seconds=60.0,
+    )
+    assert answer["total"] == 1
+    assert answer["refreshing"] is True
+    _settle("thing")
+
+    fresh = cached_payload(
+        "thing",
+        key="k2",
+        compute=lambda: {"total": 3},
+        cache=cache,
+        min_age_seconds=60.0,
+    )
+    assert fresh["total"] == 2
+    assert fresh["stale"] is False
+
+
+def test_a_recent_answer_is_served_until_it_is_a_minute_old(monkeypatch) -> None:
+    answers = derived_payloads.RecentAnswers(max_age_seconds=60.0)
+    owner = object()
+    runs: list[int] = []
+
+    def compute() -> dict[str, Any]:
+        runs.append(1)
+        return {"total": len(runs)}
+
+    first = answers.answer(owner, ("stats", None), compute)
+    second = answers.answer(owner, ("stats", None), compute)
+    assert first == second
+    assert first["total"] == 1
+    assert isinstance(first["computed_at"], float)
+
+    real = time.monotonic
+    monkeypatch.setattr(derived_payloads.time, "monotonic", lambda: real() + 61.0)
+    third = answers.answer(owner, ("stats", None), compute)
+    assert third["total"] == 2
+    assert runs == [1, 1]
+
+
+def test_recent_answers_are_kept_per_store_and_per_question() -> None:
+    answers = derived_payloads.RecentAnswers(max_age_seconds=60.0)
+    one, two = object(), object()
+
+    assert answers.answer(one, ("q", 1), lambda: {"v": "a"})["v"] == "a"
+    assert answers.answer(two, ("q", 1), lambda: {"v": "b"})["v"] == "b"
+    assert answers.answer(one, ("q", 2), lambda: {"v": "c"})["v"] == "c"
+    assert answers.answer(one, ("q", 1), lambda: {"v": "z"})["v"] == "a"
+
+    answers.clear()
+    assert answers.answer(one, ("q", 1), lambda: {"v": "d"})["v"] == "d"
+
+
+def test_one_computation_per_question_at_a_time() -> None:
+    answers = derived_payloads.RecentAnswers(max_age_seconds=60.0)
+    owner = object()
+    release = threading.Event()
+    runs: list[int] = []
+
+    def slow() -> dict[str, Any]:
+        runs.append(1)
+        release.wait(10.0)
+        return {"total": 7}
+
+    results: list[dict[str, Any]] = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(answers.answer(owner, ("ttft",), slow))
+        )
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.2)
+    release.set()
+    for thread in threads:
+        thread.join(10.0)
+
+    assert runs == [1]
+    assert [result["total"] for result in results] == [7, 7, 7, 7]
+    assert len({result["computed_at"] for result in results}) == 1
+
+
+def test_a_failed_computation_is_not_kept() -> None:
+    answers = derived_payloads.RecentAnswers(max_age_seconds=60.0)
+    owner = object()
+
+    def explode() -> dict[str, Any]:
+        raise RuntimeError("the log went away")
+
+    try:
+        answers.answer(owner, ("origin",), explode)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("the failure was swallowed")
+    assert answers.answer(owner, ("origin",), lambda: {"ok": True})["ok"] is True
+
+
+def test_the_recent_answers_keep_a_bounded_number_of_questions() -> None:
+    answers = derived_payloads.RecentAnswers(max_age_seconds=60.0, max_entries=3)
+    owner = object()
+    for index in range(5):
+        answers.answer(owner, ("q", index), lambda index=index: {"v": index})
+
+    assert len(answers._entries) == 3

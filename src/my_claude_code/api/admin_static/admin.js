@@ -341,6 +341,297 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+/* ------------------------------------------------------- dashboard polls --
+   What this page asks the server for on its own, without a click. Measured on
+   2026-09-28 with the Requests view open: 153 requests a minute, 89 % of them
+   the dashboard talking to itself -- every 3 s in-flight tick that saw a
+   request finish set off a pulse plus nine analytics queries, and every open
+   tab did the same on its own. The rules (the user's, 2026-10-01):
+
+   - the Requests view refreshes at the interval chosen beside it, never just
+     because a request finished;
+   - the heavy totals refresh at most once a minute and say when they were
+     computed;
+   - the in-flight badge on any other view reads every 10 s;
+   - one tab per browser polls, and the others paint what it shares;
+   - a poll never overlaps itself, gives up after twice its interval, and
+     waits twice as long (capped) after a busy answer, an error or no answer,
+     until a clean answer puts it back on its interval. */
+const POLL_BUSY_HEADER = "x-mcc-busy";
+// Doubling stops here, unless the chosen interval is already longer.
+const POLL_BACKOFF_CAP_MS = 60000;
+// The shortest time a poll waits for its answer before giving up on it.
+const POLL_TIMEOUT_FLOOR_MS = 5000;
+// The badge on every view but Requests needs a count, not a live picture.
+const INFLIGHT_BADGE_MIN_MS = 10000;
+// How old the heavy Analytics totals may be before an auto-refresh asks again.
+const REQUESTS_TOTALS_MAX_AGE_MS = 60000;
+// Tab coordination: the polling tab says it is alive this often, and one not
+// heard from for the lease is taken over by the next visible tab.
+const POLL_CHANNEL_NAME = "mcc-admin-polls";
+const POLL_BEAT_MS = 2000;
+const POLL_LEASE_MS = 6000;
+
+/** Fetch one polling endpoint: its JSON, and whether the server said it is busy.
+ *
+ * `api()` has no timeout, so one held request held the poll for as long as the
+ * server held it. Same request otherwise, `no-store` included. */
+async function pollApi(path, timeoutMs) {
+  const controller =
+    typeof AbortController === "function" && timeoutMs > 0 ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    let response;
+    try {
+      response = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+    } catch (error) {
+      if (controller && controller.signal.aborted) {
+        throw new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`);
+      }
+      throw error;
+    }
+    const busy = Boolean(
+      response.headers &&
+        typeof response.headers.get === "function" &&
+        response.headers.get(POLL_BUSY_HEADER) === "1",
+    );
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const data = await response.json();
+        detail = typeof data.detail === "string" ? data.detail : "";
+      } catch {
+        // Non-JSON error body; fall back to the status line.
+      }
+      throw new Error(detail || `${response.status} ${response.statusText}`);
+    }
+    return { data: await response.json(), busy };
+  } finally {
+    if (timer != null) window.clearTimeout(timer);
+  }
+}
+
+function pollBackoffDelay(base, failures) {
+  if (failures <= 0) return base;
+  return Math.min(Math.max(POLL_BACKOFF_CAP_MS, base), base * 2 ** Math.min(failures, 16));
+}
+
+/** A poll that schedules its next tick only after its answer.
+ *
+ * `intervalMs()` is read on every tick (0 means off); `run(timeoutMs)` makes
+ * one poll and resolves `{ clean }`. Scheduling from the answer rather than on
+ * a fixed clock is what makes overlap impossible: a server that holds a request
+ * for twenty seconds used to collect six more from each tab, all answered in
+ * the same second. A busy answer, an error or a timeout doubles the wait. */
+function createPoller(intervalMs, run) {
+  const poller = { timer: null, pending: false, failures: 0, delay: 0 };
+  const schedule = (delay) => {
+    if (poller.timer != null) window.clearTimeout(poller.timer);
+    poller.delay = delay;
+    poller.timer = window.setTimeout(tick, delay);
+  };
+  async function tick() {
+    poller.timer = null;
+    const base = intervalMs();
+    if (base <= 0) return;
+    // A hidden tab, a tab another tab polls for, or the last poll still out:
+    // no request this time, and the same cadence.
+    if (document.visibilityState === "hidden" || !pollLeadership.leading() || poller.pending) {
+      schedule(base);
+      return;
+    }
+    poller.pending = true;
+    let clean = false;
+    try {
+      const outcome = await run(Math.max(POLL_TIMEOUT_FLOOR_MS, 2 * base));
+      clean = Boolean(outcome && outcome.clean);
+    } catch (_) {
+      clean = false;
+    } finally {
+      poller.pending = false;
+    }
+    poller.failures = clean ? 0 : poller.failures + 1;
+    // Re-armed while this one was out (a new interval, a new view): that
+    // schedule stands.
+    if (poller.timer != null) return;
+    const next = intervalMs();
+    if (next > 0) schedule(pollBackoffDelay(next, poller.failures));
+  }
+  /** Back on the interval as it is now: a new setting, view or leader. */
+  poller.restart = () => {
+    if (poller.timer != null) window.clearTimeout(poller.timer);
+    poller.timer = null;
+    poller.failures = 0;
+    const base = intervalMs();
+    if (base > 0) schedule(base);
+  };
+  /** Poll now instead of at the next tick, unless a poll is already out. */
+  poller.now = () => {
+    if (poller.pending) return;
+    if (poller.timer != null) window.clearTimeout(poller.timer);
+    poller.timer = null;
+    tick();
+  };
+  return poller;
+}
+
+/** One polling tab per browser.
+ *
+ * Tabs agree over a BroadcastChannel. The leader is the visible tab that
+ * claimed last -- opening, showing or focusing a tab claims -- and it beats
+ * every 2 s. Only the leader's pollers make requests; it shares each in-flight
+ * reading and the other tabs paint it, and they tell it what they show so it
+ * asks for enough rows often enough. A leader that is hidden or closed hands
+ * over at once; one that stops beating is taken over after the lease. Without
+ * BroadcastChannel every tab leads itself, which is how every tab behaved. */
+const pollLeadership = (() => {
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  let channel = null;
+  try {
+    if (typeof BroadcastChannel === "function") {
+      channel = new BroadcastChannel(POLL_CHANNEL_NAME);
+    }
+  } catch (_) {
+    channel = null;
+  }
+  const lead = { id: channel ? null : id, at: 0, seen: 0 };
+  // What the other visible tabs show: id -> { limit, ms, seen }.
+  const wants = new Map();
+  const visible = () => document.visibilityState !== "hidden";
+  const leading = () => !channel || lead.id === id;
+  const post = (message) => {
+    try {
+      channel.postMessage({ ...message, id });
+    } catch (_) {
+      // A closed channel has nobody left to tell.
+    }
+  };
+  const outranks = (at, who) => at > lead.at || (at === lead.at && who > String(lead.id));
+  const forget = () => {
+    lead.id = null;
+    lead.at = 0;
+    lead.seen = 0;
+  };
+  function claim({ kick = true } = {}) {
+    if (!channel || !visible()) return;
+    const was = leading();
+    lead.id = id;
+    lead.at = Math.max(Date.now(), lead.at + 1);
+    lead.seen = Date.now();
+    post({ type: "claim", at: lead.at });
+    if (kick && !was) kickDashboardPollers();
+  }
+  function resign() {
+    if (!channel || !leading()) return;
+    post({ type: "resign" });
+    forget();
+    wants.clear();
+  }
+  function announceNeed() {
+    if (!channel || leading() || !visible()) return;
+    post({ type: "need", limit: inflightFetchLimit(), ms: inflightOwnPollMs() });
+  }
+  function shared() {
+    const now = Date.now();
+    let limit = 0;
+    let ms = 0;
+    wants.forEach((want, who) => {
+      if (now - want.seen > POLL_LEASE_MS) {
+        wants.delete(who);
+        return;
+      }
+      limit = Math.max(limit, want.limit);
+      if (want.ms > 0) ms = ms > 0 ? Math.min(ms, want.ms) : want.ms;
+    });
+    return { limit, ms };
+  }
+  if (channel) {
+    channel.onmessage = (event) => {
+      const message = event && event.data;
+      if (!message || typeof message !== "object" || message.id === id) return;
+      if (message.type === "claim" || message.type === "beat") {
+        const at = Number(message.at) || 0;
+        if (message.id === lead.id) {
+          lead.seen = Date.now();
+          lead.at = Math.max(lead.at, at);
+          return;
+        }
+        if (lead.id === null || outranks(at, message.id) || Date.now() - lead.seen > POLL_LEASE_MS) {
+          const was = leading();
+          lead.id = message.id;
+          lead.at = at;
+          lead.seen = Date.now();
+          wants.clear();
+          if (was) announceNeed();
+          return;
+        }
+        // Two tabs claimed together and this one outranks the other: say so.
+        if (leading()) post({ type: "beat", at: lead.at });
+        return;
+      }
+      if (message.type === "resign" && message.id === lead.id) {
+        forget();
+        claim();
+        return;
+      }
+      if (message.type === "need" && leading()) {
+        const before = shared().ms;
+        wants.set(message.id, {
+          limit: Math.max(0, Number(message.limit) || 0),
+          ms: Math.max(0, Number(message.ms) || 0),
+          seen: Date.now(),
+        });
+        // A tab that shows the live panel cannot wait out a badge's interval.
+        if (shared().ms !== before) inflightPoller.restart();
+        return;
+      }
+      if (message.type === "inflight" && message.id === lead.id && !leading()) {
+        adoptSharedInflight(message);
+      }
+    };
+    window.setInterval(() => {
+      if (leading()) {
+        if (visible()) post({ type: "beat", at: lead.at });
+        else resign();
+        return;
+      }
+      if (!visible()) return;
+      if (lead.id === null || Date.now() - lead.seen > POLL_LEASE_MS) claim();
+      else announceNeed();
+    }, POLL_BEAT_MS);
+    document.addEventListener("visibilitychange", () => {
+      if (visible()) claim();
+      else resign();
+    });
+    window.addEventListener("pagehide", resign);
+    window.addEventListener("focus", () => claim());
+    claim({ kick: false });
+  }
+  return {
+    leading,
+    announceNeed,
+    shared,
+    share(type, payload) {
+      if (channel && leading()) post({ type, ...payload });
+    },
+  };
+})();
+
+const inflightPoller = createPoller(inflightPollMs, (timeoutMs) => pollInflight({ timeoutMs }));
+const requestsPoller = createPoller(requestsAutoRefreshMs, (timeoutMs) =>
+  pollRequestPulse({ timeoutMs }),
+);
+
+/** A tab that has just become the polling tab catches up at once. */
+function kickDashboardPollers() {
+  inflightPoller.now();
+  requestsPoller.now();
+}
+
 async function load() {
   showMessage("Loading admin config");
   state.loading = true;
@@ -395,7 +686,7 @@ async function loadDashboardState() {
   }
   const config = await api("/admin/api/config");
   state.config = config;
-  state.fields = new Map(config.fields.map((field) => [field.key, field]));
+  state.fields = adoptConfigFields(config.fields);
   state.credentialEnvs = new Set(
     (config.provider_status || [])
       .map((provider) => provider.credential_env)
@@ -404,12 +695,20 @@ async function loadDashboardState() {
   renderNav();
   mountGuideLinks();
   renderSections(config.sections, config.fields);
+  // The rails were just rebuilt and are in the document now. Paint every pause
+  // control from the settings that arrived with them, before the first await:
+  // the next repaint used to come only with the Coding agents cards, five
+  // seconds and eight calls later (never, if one of those calls failed), and
+  // until then every paused row read "Pause" -- one click on it was a Resume.
+  syncRoutePauseUi();
   renderMessagingAuthNotice(config.messaging_auth_open);
   renderWebSearchProviders();
   await loadCustomProviders();
   byId("configPath").textContent = config.paths.managed;
   await hydrateModelOptions();
-  await validate(false);
+  // No `validate(false)` here: its answer was discarded, and it cost a full
+  // settings prepare on the server's event loop on every page load. Validate
+  // and Save still validate exactly as before.
   await refreshLocalStatus();
   updateDirtyState();
   showMessage("");
@@ -426,6 +725,26 @@ async function loadDashboardState() {
   // The in-flight panel polls on its own interval, table auto-refresh or not.
   updateInflightTimer();
   pollInflight();
+}
+
+/** The settings map for a freshly fetched config payload.
+ *
+ * The per-agent tier rails keep their pause lists as fields of their own,
+ * keyed `harnessTierKey(...)`, which the config payload never carries: they
+ * come from `harness_tiers.json`. Rebuilding the map from the payload alone
+ * dropped them, and until the Coding agents cards were drawn again every
+ * paused agent row read "Pause" and a click there posted a pause list without
+ * the refs that were paused. Those rails are not rebuilt by a settings reload,
+ * so their fields are carried over until `renderHarnesses` replaces them.
+ */
+function adoptConfigFields(fields) {
+  const next = new Map(fields.map((field) => [field.key, field]));
+  if (state.fields) {
+    state.fields.forEach((field, key) => {
+      if (parseHarnessTierKey(key) && !next.has(key)) next.set(key, field);
+    });
+  }
+  return next;
 }
 
 function renderNav() {
@@ -515,8 +834,15 @@ function setActiveView(viewId, { scroll = false } = {}) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // The in-flight reading is every 10 s away from the panel and at the chosen
+  // interval beside it, so a change of view re-arms it on the new cadence.
+  inflightPoller.restart();
+  pollLeadership.announceNeed();
+
   if (activeView.id === "requests") {
     loadRequestsView().catch((error) => showMessage(error.message, "error"));
+    // The view was just read in full; the next auto-refresh is an interval on.
+    requestsPoller.restart();
     pollInflight();
     loadOriginBackfillStatus().catch(() => {
       // An older server has no backfill route; the card keeps its button.
@@ -5995,29 +6321,58 @@ function isRoutePaused(modelKey, ref) {
 }
 
 /** Repaint every pause control from state. Rows carry no pause state of their
- *  own, so a rebuilt rail cannot disagree with the settings payload. */
-function syncRoutePauseUi() {
-  document.querySelectorAll("[data-route-id]").forEach((node) => {
-    const button = node.querySelector(".route-pause-toggle");
-    if (!button) return;
-    const modelKey = node.dataset.modelKey || "";
-    const input = node.querySelector("input");
-    const ref = input ? input.value.trim() : "";
-    const paused = isRoutePaused(modelKey, ref);
-    // A paused row stays fully visible with its complete ref: hiding it would
-    // be the one thing the Models page is documented never to do to routing.
-    node.classList.toggle("is-paused", paused);
-    button.textContent = paused ? "Resume" : "Pause";
-    button.setAttribute("aria-pressed", paused ? "true" : "false");
-    button.setAttribute(
-      "aria-label",
-      `${paused ? "Resume" : "Pause"} ${ref || "this entry"} on the ${routeLabelFor(modelKey)} route`,
-    );
-    button.disabled = !modelKey || !ref;
-    const chip = node.querySelector(".route-pause-chip");
-    if (chip) chip.hidden = !paused;
-  });
-  syncRouteCredentialHints();
+ *  own, so a rebuilt rail cannot disagree with the settings payload.
+ *
+ *  `root` is the document by default. A rail still being built is not in the
+ *  document yet, so it is painted by passing the rail itself: a row is never
+ *  attached showing the "Pause" it was born with. */
+function syncRoutePauseUi(root = document) {
+  root.querySelectorAll("[data-route-id]").forEach(paintRoutePause);
+  if (root === document) syncRouteCredentialHints();
+}
+
+function paintRoutePause(node) {
+  const button = node.querySelector(".route-pause-toggle");
+  if (!button) return;
+  const modelKey = node.dataset.modelKey || "";
+  const input = node.querySelector("input");
+  const ref = input ? input.value.trim() : "";
+  const paused = isRoutePaused(modelKey, ref);
+  // A paused row stays fully visible with its complete ref: hiding it would
+  // be the one thing the Models page is documented never to do to routing.
+  node.classList.toggle("is-paused", paused);
+  button.textContent = paused ? "Resume" : "Pause";
+  button.setAttribute("aria-pressed", paused ? "true" : "false");
+  // Which ref this label was painted for. A click is answered from the label
+  // the reader saw, and only while it still describes this row's ref.
+  button.dataset.pauseRef = ref;
+  button.setAttribute(
+    "aria-label",
+    `${paused ? "Resume" : "Pause"} ${ref || "this entry"} on the ${routeLabelFor(modelKey)} route`,
+  );
+  button.disabled = !modelKey || !ref;
+  const chip = node.querySelector(".route-pause-chip");
+  if (chip) chip.hidden = !paused;
+}
+
+/** What one click on a row's Pause/Resume button should send, or null.
+ *
+ *  The request is the opposite of what the button *says*, never of whatever
+ *  the settings say at the moment of the click. If the two disagree -- the
+ *  label was painted before the settings changed, or for a ref the row no
+ *  longer holds -- the row is repainted and nothing is sent: a button that
+ *  read "Pause" must not resume a model, and one that read "Resume" must not
+ *  pause it. */
+function routePauseClickIntent(node, button) {
+  const modelKey = node.dataset.modelKey || "";
+  const input = node.querySelector("input");
+  const ref = input ? input.value.trim() : "";
+  const shownPaused = button.getAttribute("aria-pressed") === "true";
+  const paintedFor = button.dataset.pauseRef;
+  if (paintedFor !== ref || shownPaused !== isRoutePaused(modelKey, ref)) {
+    return { modelKey, ref, stale: true, paused: isRoutePaused(modelKey, ref) };
+  }
+  return { modelKey, ref, stale: false, paused: !shownPaused };
 }
 
 /* ------------------------------------------------- rail credential hints
@@ -6267,10 +6622,18 @@ function routeNodeControls(node, id, label) {
   pause.textContent = "Pause";
   pause.setAttribute("aria-pressed", "false");
   pause.addEventListener("click", () => {
-    const modelKey = node.dataset.modelKey || "";
-    const input = node.querySelector("input");
-    const ref = input ? input.value.trim() : "";
-    toggleRoutePause(modelKey, ref, !isRoutePaused(modelKey, ref), pause);
+    const intent = routePauseClickIntent(node, pause);
+    if (intent.stale) {
+      syncRoutePauseUi();
+      announceRoute(
+        `${intent.ref || "This entry"} on the ${routeLabelFor(intent.modelKey)} route is ` +
+          `${intent.paused ? "paused" : "not paused"}; the button was showing an older state, ` +
+          "so nothing was sent. It shows the current state now.",
+        null,
+      );
+      return;
+    }
+    toggleRoutePause(intent.modelKey, intent.ref, intent.paused, pause);
   });
 
   cell.append(chip, pause);
@@ -6313,6 +6676,9 @@ function appendRouteRail(rail, modelField, chainField) {
   node.insertBefore(primaryControls.grip, node.firstChild);
   node.appendChild(primaryControls.cell);
   rail.appendChild(node);
+  // Born painted from the saved state, so no rebuild has a window in which a
+  // paused primary reads "Pause". The chain rows get the same below.
+  paintRoutePause(node);
   if (!chainField) return;
 
   const { control: chainControl, editor } = buildFieldControl(chainField);
@@ -6353,7 +6719,9 @@ function appendRouteRail(rail, modelField, chainField) {
   // reachable from a DOM node, and until now every editor was reachable only
   // through the closure that built it.
   state.routeRails.set(chainField.key, editor);
-  syncRoutePauseUi();
+  // The rail itself, not the document: it is usually not attached yet, and a
+  // document-wide repaint would walk past every row this call just built.
+  syncRoutePauseUi(rail);
 }
 
 function renderRouteCard(tier, fieldByKey) {
@@ -7683,8 +8051,13 @@ function attachAdvancedCollapse(container, scopeKey, host) {
 function renderSections(sections, fields) {
   state.modelComboboxes.clear();
   // Rebuilt rails mean stale editors and stale ids; the drag's whole state is
-  // view state and must not survive a re-render.
-  state.routeRails.clear();
+  // view state and must not survive a re-render. The Coding agents cards'
+  // tier rails are not rebuilt here (`renderHarnesses` owns them), so their
+  // editors stay: a Pause clicked there before those cards were redrawn read
+  // its fallbacks from a missing editor and posted an empty list.
+  Array.from(state.routeRails.keys()).forEach((key) => {
+    if (!parseHarnessTierKey(key)) state.routeRails.delete(key);
+  });
   state.routeSelection.clear();
   state.routeAnchorId = null;
   state.routeArrowRange = [];
@@ -11754,7 +12127,7 @@ function updateWebSearchCardsFromState() {
 async function refreshConfigState() {
   const config = await api("/admin/api/config");
   state.config = config;
-  state.fields = new Map(config.fields.map((field) => [field.key, field]));
+  state.fields = adoptConfigFields(config.fields);
   config.fields.forEach((field) => {
     const input = document.querySelector(`[data-key="${field.key}"]`);
     if (input && input.dataset) {
@@ -11762,6 +12135,8 @@ async function refreshConfigState() {
     }
   });
   updateWebSearchCardsFromState();
+  // The pause lists came with it; a row must not keep showing the old ones.
+  syncRoutePauseUi();
   // state.fields is the calculator's fallback when a control has not been
   // touched, so a refresh that repopulates it must repaint the readout.
   updateDeadlineCalculator();
@@ -17031,7 +17406,21 @@ const reqState = {
   limit: 25,
   total: 0,
   loadId: 0,
-  autoRefreshTimer: null,
+  // The table-only refresh an auto-refresh tick makes between two full ones
+  // (see `loadRequestsView`), and how many full loads are still out: a
+  // table-only refresh never races one.
+  listLoadId: 0,
+  fullLoadsPending: 0,
+  listUpdatedAt: 0,
+  // When the heavy totals were last asked for, and under which filters (the
+  // window by its select value: `since` moves every second). `totalsOwed` is
+  // set by a pulse that saw a change and cleared by the next full load.
+  totalsAt: 0,
+  totalsSignature: null,
+  totalsOwed: false,
+  // When each group of panels was computed, as the server reports it (the
+  // time it was asked for when the server does not say), for "as of".
+  asOf: { totals: null, cost: null, latency: null, media: null },
   detailReturnFocus: null,
   providerOptions: new Set(),
   modelOptions: new Set(),
@@ -17163,19 +17552,121 @@ function paintAnalyticsWindowCaptions() {
       }
       const title = heading.textContent.trim();
       if (heading.closest("#reqMediaPanel")) {
-        caption.textContent = analyticsWindowText(true);
+        caption.textContent = withAsOf(analyticsWindowText(true), reqState.asOf.media);
         return;
       }
-      caption.textContent =
+      const group =
+        heading.id === "reqCostHeading"
+          ? "cost"
+          : heading.parentElement.querySelector("#reqModelLatency")
+            ? "latency"
+            : "totals";
+      caption.textContent = withAsOf(
         changedText && ANALYTICS_CONFIG_BOUNDARY.has(title)
           ? `${windowText} · ${changedText}`
-          : windowText;
+          : windowText,
+        reqState.asOf[group],
+      );
     });
 }
 
-async function loadRequestsView() {
-  const loadId = ++reqState.loadId;
+/* "as of hh:mm:ss": the totals are refreshed at most once a minute, so every
+   panel drawn from them says when its numbers were computed. In the reader's
+   own time format, the one "Updated" and the cost note already use, so one
+   line never mixes a 12-hour clock with a 24-hour one. */
+function asOfClock(epochMs) {
+  return new Date(epochMs).toLocaleTimeString();
+}
+
+function withAsOf(text, epochMs) {
+  return epochMs ? `${text} · as of ${asOfClock(epochMs)}` : text;
+}
+
+/** Record when a panel's numbers were computed and repaint the captions.
+ *
+ * `computed_at` (epoch seconds) is what a cached answer carries; without it
+ * the numbers are as fresh as the request that fetched them. The totals group
+ * keeps the oldest of its panels, so its caption never claims more than the
+ * stalest number under it. */
+function noteAnalyticsAsOf(group, payload, requestedAt) {
+  const computed = payload ? Number(payload.computed_at) : 0;
+  const at = computed > 0 ? computed * 1000 : requestedAt;
+  const before = reqState.asOf[group];
+  reqState.asOf[group] = group === "totals" && before ? Math.min(before, at) : at;
+  paintAnalyticsWindowCaptions();
+  paintRequestsUpdated();
+}
+
+/** "Updated hh:mm:ss" for the table, and how old the totals above it are. */
+function paintRequestsUpdated() {
+  const target = byId("reqLastUpdated");
+  if (!target || !reqState.listUpdatedAt) return;
+  const totals = reqState.asOf.totals;
+  target.textContent =
+    `Updated ${new Date(reqState.listUpdatedAt).toLocaleTimeString()}` +
+    (totals ? ` · totals as of ${asOfClock(totals)}` : "");
+}
+
+/** Which question the heavy totals answer: the filters, with the window named
+ *  by its select value rather than by a `since` that moves every second. */
+function requestTotalsSignature() {
   const params = reqFilters();
+  params.delete("since");
+  params.set("window", String(reqWindowSeconds()));
+  return params.toString();
+}
+
+function requestTotalsDue() {
+  return (
+    reqState.totalsSignature !== requestTotalsSignature() ||
+    Date.now() - reqState.totalsAt >= REQUESTS_TOTALS_MAX_AGE_MS
+  );
+}
+
+/** The table and the all-time counters only: what an auto-refresh tick
+ *  re-reads while the heavy totals are less than a minute old. */
+async function loadRequestsTable(params) {
+  const listId = ++reqState.listLoadId;
+  const [list, lifetime] = await Promise.all([
+    api(`/admin/api/requests?limit=${reqState.limit}&offset=${reqState.offset}&${params}`),
+    api("/admin/api/requests/lifetime"),
+  ]);
+  if (listId !== reqState.listLoadId || reqState.fullLoadsPending > 0) return;
+  if (list.enabled === false) return;
+  if (list.key_names) adoptKeyNames(list.key_names);
+  renderRequestLifetime(lifetime);
+  // A deferred count (a free-text search) was counted by the last full load
+  // for these same filters; "deferred" here is not news, so it stays.
+  if (!list.total_deferred) {
+    reqState.total = list.total || 0;
+    reqState.countDeferred = false;
+  }
+  reqState.hasMore = Boolean(list.has_more);
+  reqState.pageRows = (list.rows || []).length;
+  reqState.lastCaptureBodies = list.capture_bodies;
+  renderRequestsTable(list.rows || []);
+  renderReqPager();
+  reqState.listUpdatedAt = Date.now();
+  paintRequestsUpdated();
+}
+
+async function loadRequestsView({ auto = false } = {}) {
+  const params = reqFilters();
+  // An auto-refresh tick re-reads the table every interval and the heavy
+  // totals at most once a minute. Anything a reader does -- open the view,
+  // change a filter, page, press Refresh -- reads everything, as it always did.
+  if (auto && !requestTotalsDue()) {
+    if (reqState.fullLoadsPending > 0) return;
+    await loadRequestsTable(params);
+    return;
+  }
+  const loadId = ++reqState.loadId;
+  ++reqState.listLoadId;
+  const requestedAt = Date.now();
+  reqState.totalsAt = requestedAt;
+  reqState.totalsSignature = requestTotalsSignature();
+  reqState.totalsOwed = false;
+  reqState.asOf = { totals: null, cost: null, latency: null, media: null };
   paintAnalyticsWindowCaptions();
   let stats;
   let list;
@@ -17224,6 +17715,7 @@ async function loadRequestsView() {
     loadRequestSearchCount(loadId, params);
     loadRequestDeferredStats(loadId, params);
   }
+  reqState.fullLoadsPending += 1;
   try {
     [stats, list, lifetime] = await Promise.all([
       deferring
@@ -17237,6 +17729,8 @@ async function loadRequestsView() {
   } catch (error) {
     if (loadId !== reqState.loadId) return;
     throw error;
+  } finally {
+    reqState.fullLoadsPending -= 1;
   }
   if (loadId !== reqState.loadId) return;
   // The placeholder is the oldest answer this load has. If the real stats for
@@ -17311,7 +17805,8 @@ async function loadRequestsView() {
   reqState.lastCaptureBodies = list.capture_bodies;
   renderRequestsTable(list.rows || []);
   renderReqPager();
-  byId("reqLastUpdated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  reqState.listUpdatedAt = Date.now();
+  noteAnalyticsAsOf("totals", stats, requestedAt);
 }
 
 /** The shape `renderRequestStatsCards` and friends read, with nothing in it.
@@ -17806,10 +18301,12 @@ function ttftPercentileText(field) {
  */
 async function loadRequestTtftPanel(loadId, params) {
   reqState.ttft = null;
+  const requestedAt = Date.now();
   try {
     const panel = await api(`/admin/api/requests/ttft?${params}`);
     if (loadId !== reqState.loadId) return;
     reqState.ttft = panel;
+    noteAnalyticsAsOf("totals", panel, requestedAt);
   } catch (error) {
     if (loadId !== reqState.loadId) return;
     // Not rethrown: this promise is not on the paint path, and an unhandled
@@ -17828,6 +18325,7 @@ async function loadRequestTtftPanel(loadId, params) {
  */
 async function loadRequestNoAnswerPanel(loadId, params) {
   reqState.noAnswer = null;
+  const requestedAt = Date.now();
   let panel;
   try {
     panel = await api(`/admin/api/requests/no-answer?${params}`);
@@ -17838,6 +18336,7 @@ async function loadRequestNoAnswerPanel(loadId, params) {
     panel = { error: error.message };
   }
   if (loadId !== reqState.loadId) return;
+  if (!panel.error) noteAnalyticsAsOf("totals", panel, requestedAt);
   reqState.noAnswer = panel;
   renderRequestNoAnswerBreakdown(panel);
   if (reqState.lastStats) renderRequestStatsCards(reqState.lastStats);
@@ -17923,6 +18422,7 @@ async function loadRequestMediaPanel(loadId, params) {
     if (value !== null && value !== "") query.set(name, value);
   });
   const suffix = query.toString();
+  const requestedAt = Date.now();
   let media;
   try {
     media = await api(`/admin/api/analytics/media${suffix ? `?${suffix}` : ""}`);
@@ -17934,6 +18434,7 @@ async function loadRequestMediaPanel(loadId, params) {
   }
   if (loadId !== reqState.loadId) return;
   renderRequestMedia(media);
+  if (!media.error) noteAnalyticsAsOf("media", media, requestedAt);
 }
 
 /** A dash that says what it means: nothing in this group measured it. */
@@ -18153,6 +18654,7 @@ async function loadRequestCostPanel(loadId, params) {
   // answer on the floor, the same rule the rest of this view follows.
   const note = byId("reqCostNote");
   note.textContent = "Working out what this traffic cost...";
+  const requestedAt = Date.now();
   let cost;
   try {
     cost = await api(`/admin/api/requests/cost?${params}`);
@@ -18166,6 +18668,7 @@ async function loadRequestCostPanel(loadId, params) {
   }
   if (loadId !== reqState.loadId) return;
   renderRequestCost(cost);
+  noteAnalyticsAsOf("cost", cost, requestedAt);
 }
 
 function renderRequestCost(cost) {
@@ -18264,7 +18767,9 @@ function costAsOfNote(cost) {
   const when = new Date(Number(cost.computed_at) * 1000);
   if (Number.isNaN(when.getTime())) return "";
   const clock = when.toLocaleTimeString();
-  return cost.stale
+  // `refreshing: false` (7.69.4): newer rows exist, but the stored answer is
+  // under a minute old, so no recomputation was started for them yet.
+  return cost.stale && cost.refreshing !== false
     ? ` As of ${clock}, refreshing.`
     : ` As of ${clock}.`;
 }
@@ -18458,6 +18963,7 @@ async function loadRequestLatencyPanel(loadId, params) {
   const since = params.get("since");
   if (since) query.set("since", since);
   else query.set("days", "0");
+  const requestedAt = Date.now();
   let latency;
   try {
     latency = await api(`/admin/api/requests/latency?${query}`);
@@ -18471,6 +18977,7 @@ async function loadRequestLatencyPanel(loadId, params) {
   }
   if (loadId !== reqState.loadId) return;
   renderRequestModelLatency(latency);
+  noteAnalyticsAsOf("latency", latency, requestedAt);
 }
 
 /** p50 as the headline with p95 in the title: one 120 s stall moves a mean by
@@ -18691,6 +19198,7 @@ function renderRequestHarnessBreakdown(rows) {
 async function loadRequestOriginPanel(loadId, params) {
   byId("reqFolderBreakdownNote").textContent = "Counting folders...";
   byId("reqSessionBreakdownNote").textContent = "Counting sessions...";
+  const requestedAt = Date.now();
   let origin;
   try {
     origin = await api(`/admin/api/requests/origin?${params}`);
@@ -18703,6 +19211,7 @@ async function loadRequestOriginPanel(loadId, params) {
   }
   if (loadId !== reqState.loadId) return;
   renderRequestOriginBreakdowns(origin);
+  noteAnalyticsAsOf("totals", origin, requestedAt);
 }
 
 /* A breakdown key as a button that filters the page to it. The full value
@@ -22211,22 +22720,24 @@ function requestAutoRefreshEnabled() {
  * through to `loadRequestsView()`, so an idle dashboard stops running the
  * aggregate queries (percentiles, breakdowns, series) on every tick.
  */
-async function pollRequestPulse() {
-  if (!requestAutoRefreshEnabled()) return;
-  if (state.activeView !== "requests") return;
+async function pollRequestPulse({ timeoutMs = 0 } = {}) {
+  if (!requestAutoRefreshEnabled()) return { clean: true };
+  if (state.activeView !== "requests") return { clean: true };
   // A hidden tab must not poll at all, not just skip the expensive call.
-  if (document.visibilityState === "hidden") return;
+  if (document.visibilityState === "hidden") return { clean: true };
   const params = reqFilters();
-  let pulse;
+  let answer;
   try {
-    pulse = await api(`/admin/api/requests/pulse?${params}`);
+    answer = await pollApi(`/admin/api/requests/pulse?${params}`, timeoutMs);
   } catch (error) {
     showMessage(error.message, "error");
-    return;
+    return { clean: false };
   }
+  const pulse = answer.data;
+  const clean = !answer.busy;
   // The in-flight count rides along (7.44.0): one `len`, no query.
   if (typeof pulse.in_flight === "number") setInflightBadge(pulse.in_flight);
-  if (pulse.enabled === false) return;
+  if (pulse.enabled === false) return { clean };
   const signature = params.toString();
   const first =
     reqState.lastPulseTotal === null || signature !== reqState.lastPulseFilters;
@@ -22236,26 +22747,35 @@ async function pollRequestPulse() {
   reqState.lastPulseTotal = pulse.total;
   reqState.lastPulseTs = pulse.last_ts;
   // The first tick only establishes the baseline; the view was just loaded.
-  if (first || !changed) return;
-  loadRequestsView().catch((error) => showMessage(error.message, "error"));
+  if (first) return { clean };
+  // The totals owe a refresh for every change since they were computed, even
+  // one that only the table has shown so far.
+  if (changed) reqState.totalsOwed = true;
+  if (!changed && !(reqState.totalsOwed && requestTotalsDue())) return { clean };
+  try {
+    // Awaited, so the next tick waits for this reload instead of piling on it.
+    await loadRequestsView({ auto: true });
+  } catch (error) {
+    showMessage(error.message, "error");
+    return { clean: false };
+  }
+  return { clean };
+}
+
+/** The table's auto-refresh interval, or 0 when it is off. */
+function requestsAutoRefreshMs() {
+  if (!requestAutoRefreshEnabled()) return 0;
+  return Number(byId("reqAutoRefreshInterval").value) || 15000;
 }
 
 function updateRequestAutoRefresh() {
-  if (reqState.autoRefreshTimer != null) {
-    window.clearInterval(reqState.autoRefreshTimer);
-    reqState.autoRefreshTimer = null;
-  }
-  if (!requestAutoRefreshEnabled()) return;
-  const intervalMs = Number(byId("reqAutoRefreshInterval").value) || 15000;
-  reqState.autoRefreshTimer = window.setInterval(() => {
-    pollRequestPulse();
-  }, intervalMs);
+  requestsPoller.restart();
 }
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && requestAutoRefreshEnabled()) {
     // Catch up immediately instead of waiting out the rest of the interval.
-    pollRequestPulse();
+    requestsPoller.now();
   }
 });
 
@@ -22366,7 +22886,7 @@ byId("reqRefreshButton").addEventListener("click", () =>
 );
 byId("reqAutoRefresh").addEventListener("change", () => {
   updateRequestAutoRefresh();
-  if (requestAutoRefreshEnabled()) pollRequestPulse();
+  if (requestAutoRefreshEnabled()) requestsPoller.now();
   persistDashboardState();
 });
 byId("reqAutoRefreshInterval").addEventListener("change", () => {
@@ -22449,7 +22969,6 @@ const INFLIGHT_PRE_BYTE_PHASES = new Set([
 ]);
 
 const inflightState = {
-  timer: null,
   ticker: null,
   loadId: 0,
   page: 0,
@@ -22849,10 +23368,8 @@ function applyInflightReport(report) {
     Array.from(inflightState.rows.keys()).slice(start, start + INFLIGHT_PAGE_SIZE),
   );
   const finishing = new Map();
-  let anyFinished = false;
   inflightState.rows.forEach((row, id) => {
     if (incoming.has(id)) return;
-    anyFinished = true;
     if (shownBefore.has(id) || id === inflightState.detailId) finishing.set(id, row);
   });
   inflightState.previous = previous;
@@ -22866,34 +23383,81 @@ function applyInflightReport(report) {
     Math.ceil(Math.min(inflightState.total, INFLIGHT_MAX_ROWS) / INFLIGHT_PAGE_SIZE),
   );
   if (inflightState.page > pages - 1) inflightState.page = pages - 1;
-  if (anyFinished) {
-    // Hand the finished request to the table: its own pulse finds the new
-    // row. A no-op when the table's auto-refresh is off, as it always was.
-    pollRequestPulse().catch(() => {});
-  }
+  // A request that finished is NOT handed to the table any more. It used to
+  // set off the pulse and, behind it, the whole Analytics reload -- up to
+  // every 3 s instead of at the interval chosen beside the table, which was
+  // most of what this page cost the server. The table refreshes on its own
+  // interval; this panel shows the finish as it always did.
 }
 
+/** How many in-flight rows this tab shows. */
 function inflightFetchLimit() {
   if (state.activeView !== "requests" || inflightState.collapsed) return 1;
   return Math.min(INFLIGHT_MAX_ROWS, (inflightState.page + 1) * INFLIGHT_PAGE_SIZE);
 }
 
-async function pollInflight() {
-  if (document.visibilityState === "hidden") return;
-  const limit = inflightFetchLimit();
+/** How often this tab needs an in-flight reading: the chosen interval on the
+ *  Requests view, where the panel is, and no faster than 10 s anywhere else,
+ *  where only the badge is. Off is off everywhere. */
+function inflightOwnPollMs() {
+  const select = byId("reqInflightInterval");
+  const chosen = select ? Number(select.value) || 0 : 0;
+  if (chosen <= 0) return 0;
+  if (state.activeView === "requests") return chosen;
+  return Math.max(chosen, INFLIGHT_BADGE_MIN_MS);
+}
+
+/** The polling tab's interval: its own, or a listening tab's if that is shorter. */
+function inflightPollMs() {
+  const own = inflightOwnPollMs();
+  const others = pollLeadership.shared().ms;
+  if (own <= 0) return others;
+  return others > 0 ? Math.min(own, others) : own;
+}
+
+async function pollInflight({ timeoutMs = 0 } = {}) {
+  if (document.visibilityState === "hidden") return { clean: true };
+  const ownLimit = inflightFetchLimit();
+  // Enough rows for every tab that paints this reading, not only this one.
+  const limit = Math.max(ownLimit, pollLeadership.shared().limit);
   const loadId = ++inflightState.loadId;
-  let report;
+  let answer;
   try {
-    report = await api(`/admin/api/requests/in-flight?limit=${limit}`);
+    answer = await pollApi(`/admin/api/requests/in-flight?limit=${limit}`, timeoutMs);
   } catch (error) {
-    if (loadId !== inflightState.loadId || state.activeView !== "requests") return;
+    if (loadId !== inflightState.loadId || state.activeView !== "requests") {
+      return { clean: false };
+    }
     setInflightStatus("In-flight list unavailable");
     const note = byId("reqInflightNote");
     note.hidden = false;
     note.textContent = `Could not read the in-flight list: ${error.message}`;
+    return { clean: false };
+  }
+  if (loadId !== inflightState.loadId) return { clean: !answer.busy };
+  pollLeadership.share("inflight", { report: answer.data, limit });
+  adoptInflightReport(answer.data, ownLimit);
+  return { clean: !answer.busy };
+}
+
+/** Another tab's reading, painted here as if this tab had asked for it. */
+function adoptSharedInflight(message) {
+  if (document.visibilityState === "hidden") return;
+  const report = message.report;
+  const needs = inflightFetchLimit();
+  if ((Number(message.limit) || 0) >= needs) {
+    // Newer than anything this tab still has out.
+    ++inflightState.loadId;
+    adoptInflightReport(report, needs);
     return;
   }
-  if (loadId !== inflightState.loadId) return;
+  // Fewer rows than this tab shows (its need has not reached the polling tab
+  // yet): the count is still right.
+  const enabled = report && report.enabled === true;
+  setInflightBadge(enabled ? Number(report.total) || 0 : null);
+}
+
+function adoptInflightReport(report, limit) {
   const enabled = report && report.enabled === true;
   setInflightBadge(enabled ? Number(report.total) || 0 : null);
   if (state.activeView !== "requests") return;
@@ -22951,12 +23515,11 @@ function tickInflightTimers() {
 }
 
 function updateInflightTimer() {
-  if (inflightState.timer != null) {
-    window.clearInterval(inflightState.timer);
-    inflightState.timer = null;
-  }
+  // One self-scheduling poll (see createPoller), re-armed on the interval as
+  // it is now; `inflightPollMs` reads the setting and the view on every tick.
+  inflightPoller.restart();
+  pollLeadership.announceNeed();
   const ms = Number(byId("reqInflightInterval").value) || 0;
-  if (ms > 0) inflightState.timer = window.setInterval(pollInflight, ms);
   // Off means a still picture: the timers stop with the polling, so nothing
   // on the panel keeps moving away from the last reading it actually took.
   if (ms <= 0 && inflightState.ticker != null) {
@@ -23158,7 +23721,9 @@ byId("reqInflightNext").addEventListener("click", () => {
   pollInflight();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") pollInflight();
+  // Through the poller, so a catch-up never overlaps a poll still out and a
+  // tab another tab polls for stays quiet.
+  if (document.visibilityState === "visible") inflightPoller.now();
 });
 // Must match ``REQUEST_LOG_CLEAR_CONFIRMATION`` in api/admin_routes.py;
 // ``tests/contracts/test_config_dir_is_single_sourced.py`` pins the two.

@@ -465,9 +465,12 @@ class TestEveryStatsCallerPassesFullFilterArity:
                 )
                 checked += 1
         # 13 in the store (12 ``_where`` callers and ``stats`` into the row
-        # scan), 7 routes, 3 export helpers. The cost route forwards
-        # ``**filters``, whose keys the next test but one pins.
-        assert checked >= 23
+        # scan), the routes that still spell their filters out, 3 export
+        # helpers. The cost route forwards ``**filters``, and so, from 7.69.4,
+        # do the stats, TTFT, no-answer and origin routes (their minute-long
+        # in-memory answers are keyed on the same dict); the next test but one
+        # pins every one of those dicts to the whole set.
+        assert checked >= 20
 
     def test_every_route_that_takes_a_filter_takes_all_of_them(self) -> None:
         for module in (admin_routes, admin_export_routes):
@@ -480,13 +483,25 @@ class TestEveryStatsCallerPassesFullFilterArity:
                 missing = {"session", "folder"} - parameters
                 assert not missing, f"{module.__name__}.{name} lacks {missing}"
 
-    def test_the_cost_route_keys_its_stored_breakdown_on_every_filter(self) -> None:
+    @pytest.mark.parametrize(
+        "route_name",
+        [
+            "request_log_cost",
+            # 7.69.4: kept in memory for a minute, keyed on this same dict.
+            "request_log_stats",
+            "request_log_ttft",
+            "request_log_no_answer",
+            "request_log_origin",
+        ],
+    )
+    def test_the_cost_route_keys_its_stored_breakdown_on_every_filter(
+        self, route_name
+    ) -> None:
         tree = ast.parse(Path(inspect.getfile(admin_routes)).read_text("utf-8"))
         (route,) = [
             node
             for node in ast.walk(tree)
-            if isinstance(node, ast.AsyncFunctionDef)
-            and node.name == "request_log_cost"
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == route_name
         ]
         (filters,) = [
             node.value
