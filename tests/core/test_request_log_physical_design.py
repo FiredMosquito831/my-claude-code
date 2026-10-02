@@ -251,6 +251,34 @@ def test_optimization_stats_uses_the_partial_index(tmp_path) -> None:
         store.close()
 
 
+def test_the_rule_filter_without_web_tools_still_uses_the_partial_index(
+    tmp_path,
+) -> None:
+    """7.69.5 leaves MCC's own web tools out of the optimizer; the index stays."""
+    store = _seeded(tmp_path / "requests.db")
+    try:
+        store.close()
+        _wait_for_indexes(store.db_path)
+        conn = store._connect()
+        try:
+            plan = " | ".join(
+                str(row[3])
+                for row in conn.execute(
+                    "EXPLAIN QUERY PLAN"
+                    " SELECT optimization AS rule, COUNT(*) AS requests,"
+                    " COALESCE(SUM(optimization_tokens_saved), 0) AS tokens_saved,"
+                    " MIN(ts_epoch) AS first_ts, MAX(ts_epoch) AS last_ts"
+                    f" FROM requests WHERE {request_log_module._OPTIMIZATION_RULE_SQL}"
+                    " GROUP BY rule ORDER BY requests DESC"
+                )
+            )
+        finally:
+            conn.close()
+        assert "idx_requests_optimization_v1" in plan, plan
+    finally:
+        store.close()
+
+
 def test_the_optimization_totals_are_unchanged_by_the_index(tmp_path) -> None:
     """Equality oracle for the panel the index serves."""
     store = _seeded(tmp_path / "requests.db")

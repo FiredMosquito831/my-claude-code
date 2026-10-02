@@ -3731,6 +3731,18 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <a href="#guide-optimizer">the Token Optimizer page</a>.
                 </p>
                 <p class="guide-note">
+                  <strong>Web searches are local answers too.</strong> Claude Code sends
+                  each web search and web fetch as its own small request, and MCC answers
+                  it with its own search. Since 7.69.5 those rows read
+                  <code>answered locally &middot; web search</code> (or
+                  <code>&middot; web fetch</code>): no provider, no model, not priced,
+                  and hidden while <strong>Local answers</strong> is on Hide. Before,
+                  they carried the first model of the chain &mdash; even a paused one
+                  that was never called &mdash; and were priced as if it had answered.
+                  Rows written before 7.69.5 keep that old name. A request that reached
+                  a model always keeps the model's name and its attempt rows.
+                </p>
+                <p class="guide-note">
                   <strong>Local answers is set to Hide.</strong> On a busy install those
                   rows outnumber the upstream ones, so the table, the cards, the charts
                   and the breakdowns default to real upstream traffic. Switch the

@@ -426,7 +426,9 @@ class ResponsesStreamConverter:
             yield from self._ledger.ensure_text_block()
             yield self._ledger.emit_text_delta(" ")
         yield from self._ledger.close_content_blocks()
-        reason = stop_reason or "end_turn"
+        # A turn that carried a tool call ends for the call, as the Chat door
+        # and Anthropic itself say; any other turn still ends ``end_turn``.
+        reason = stop_reason or self._ledger.final_stop_reason("end_turn")
         yield self._ledger.message_delta(
             reason,
             self._usage.get("output_tokens", 0),
