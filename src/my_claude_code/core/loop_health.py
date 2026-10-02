@@ -62,6 +62,28 @@ DEFAULT_BUSY_REASON = "a long operation"
 #: record is a fixed-size object for the life of the process.
 GESTURE_HISTORY = 20
 
+#: How late the loop has to have been, in seconds, before the hold is worth an
+#: INFO line in server.log rather than only a DEBUG line nobody enables. 2.0 s
+#: is the user-approved threshold (INVESTIGATION-REQUEST-DEADLOCK.md fix F4 /
+#: decision 8): well above ordinary scheduling jitter and well below "the
+#: window declared the server gone", so a line at this level means something
+#: actually worth an operator's attention happened.
+FREEZE_LOG_THRESHOLD_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class ClosedFreeze:
+    """A busy window that just ended, worth logging once at INFO.
+
+    ``started_at`` and ``duration_seconds`` answer "when did it start" and
+    "how long", and ``reason`` is the busy-gesture name if one was running --
+    exactly the three facts decision 8 asks the freeze line to carry.
+    """
+
+    reason: str
+    started_at: str
+    duration_seconds: float
+
 
 @dataclass(frozen=True)
 class GestureLag:
@@ -141,6 +163,11 @@ class LoopHealth:
         self._frames: list[_Frame] = []
         self._gestures: deque[GestureLag] = deque(maxlen=GESTURE_HISTORY)
         self._last_reason = ""
+        # Set the instant a busy window of at least FREEZE_LOG_THRESHOLD_SECONDS
+        # closes, and cleared by whoever logs it (runtime/loop_heartbeat.py).
+        # A plain attribute, not a queue: at most one window can be open at a
+        # time, so at most one can be closing.
+        self._pending_freeze: ClosedFreeze | None = None
         # Whether anything is actually beating. A record nobody is measuring
         # must never claim the loop is late: without this, a process that never
         # started the monitor -- a test, a tool importing the app, the window
@@ -180,6 +207,7 @@ class LoopHealth:
             self._frames = []
             self._gestures.clear()
             self._last_reason = ""
+            self._pending_freeze = None
             self._armed = False
 
     def disarm(self) -> None:
@@ -286,9 +314,31 @@ class LoopHealth:
                     time.time() - lag, tz=UTC
                 ).isoformat(timespec="milliseconds")
             return
+        if self._busy_since_monotonic is not None:
+            duration = now - self._busy_since_monotonic
+            if duration >= FREEZE_LOG_THRESHOLD_SECONDS:
+                self._pending_freeze = ClosedFreeze(
+                    reason=self._reason_locked(),
+                    started_at=self._busy_since_wall,
+                    duration_seconds=duration,
+                )
         self._busy_since_monotonic = None
         self._busy_since_wall = ""
         self._last_reason = ""
+
+    def take_closed_freeze(self) -> ClosedFreeze | None:
+        """Return and forget the most recent hold of >= the freeze threshold.
+
+        Called by the beat task after every :meth:`beat`, so the one INFO line
+        decision 8 asks for is logged exactly once per hold, from
+        ``runtime/loop_heartbeat.py`` where loguru is already imported --
+        this module stays dependency-free.
+        """
+
+        with self._lock:
+            pending = self._pending_freeze
+            self._pending_freeze = None
+            return pending
 
     @contextmanager
     def working(self, reason: str) -> Iterator[None]:
@@ -351,7 +401,9 @@ __all__ = [
     "DEFAULT_BEAT_INTERVAL_SECONDS",
     "DEFAULT_BUSY_LAG_SECONDS",
     "DEFAULT_BUSY_REASON",
+    "FREEZE_LOG_THRESHOLD_SECONDS",
     "GESTURE_HISTORY",
+    "ClosedFreeze",
     "GestureLag",
     "LoopHealth",
     "LoopHealthSnapshot",

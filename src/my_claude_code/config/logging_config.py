@@ -29,6 +29,7 @@ _current_path: Path | None = None
 _current_level = "INFO"
 _current_verbose: bool | None = None
 _sink_id: int | None = None
+_active_sink: _ServerLogSink | None = None
 # Default number of rotated ``server.*.log`` files to keep. ``0`` keeps them
 # all. Applied both when loguru rotates and by the startup sweep below.
 _default_retain_files = 10
@@ -164,21 +165,144 @@ def set_third_party_verbosity(verbose: bool) -> bool:
     return True
 
 
-def _add_file_sink(log_file: str | Path, level: str, retain_files: int) -> int:
+#: Loguru's own size-rotation ("50 MB") renames the current file to make room
+#: for a new one. When that rename fails because another process holds the
+#: file (INVESTIGATION-SELF-INFLICTED-LOAD.md §6), loguru's file sink is left
+#: broken: every later record raises the same error, which loguru's default
+#: handler prints as a traceback to stderr once *per record*, forever, while
+#: the record itself is dropped. ``_ServerLogSink`` below does its own size
+#: check and its own rename so it can fall back instead of breaking.
+_MAX_LOG_BYTES = 50 * 1024 * 1024
+
+
+def _open_for_append(path: Path):
+    """Open a log file for append. A tiny wrapper so a long-lived handle held
+    on ``self`` for the life of the sink is one obviously-intentional call
+    site rather than three places that look like a forgotten ``with``."""
+
+    return path.open("a", encoding="utf-8")
+
+
+def _per_process_log_path(log_path: Path) -> Path:
+    """Where THIS process logs when ``log_path`` cannot be rotated aside.
+
+    Named by pid rather than by timestamp so two servers sharing one config
+    directory never collide, and so the file is identifiable from a directory
+    listing alone without opening it.
+    """
+
+    return log_path.with_name(f"{log_path.stem}.{os.getpid()}{log_path.suffix}")
+
+
+def _manual_log_line(level: str, message: str) -> str:
+    """One line in the same JSON shape ``_serialize_with_context`` writes.
+
+    Used only from inside :meth:`_ServerLogSink._switch_to_fallback`, where
+    calling back into ``logger`` while loguru is in the middle of calling this
+    very sink's ``write`` is the kind of reentrancy that is worth avoiding
+    rather than reasoning carefully about.
+    """
+
+    payload = {
+        "time": datetime.now().astimezone().isoformat(),
+        "level": level,
+        "message": message,
+        "module": "my_claude_code.config.logging_config",
+        "function": "_switch_to_fallback",
+        "line": 0,
+    }
+    return json.dumps(payload, default=str) + "\n"
+
+
+class _ServerLogSink:
+    """A loguru sink that falls back instead of breaking.
+
+    Behaves like loguru's own file sink with ``rotation="50 MB"`` -- append,
+    rotate the old file aside past the size cap -- except that when the
+    rotation rename fails because another process holds ``log_path`` (Windows
+    ``WinError 32``), this process switches its own writes to
+    ``server.<pid>.log`` beside it and keeps going, rather than dropping every
+    subsequent record. ``SERVER_LOG_RETAIN_FILES`` still bounds these through
+    :func:`_sweep_rotated_logs`, which globs the same ``{stem}.*{suffix}``
+    pattern loguru's own rotated files use.
+    """
+
+    def __init__(self, initial_path: Path, *, nominal_path: Path | None = None) -> None:
+        # The *nominal* path is always ``server.log``, even when
+        # ``initial_path`` is already a per-process fallback (a startup
+        # rotation that lost the race) -- so a later size rotation that also
+        # falls back names the file ``server.<pid>.log`` once, not twice.
+        self._nominal_path = nominal_path if nominal_path is not None else initial_path
+        self._active_path = initial_path
+        self._fallback = initial_path != self._nominal_path
+        self._fh = _open_for_append(Path(initial_path))
+        self._size = self._fh.tell()
+
+    @property
+    def active_path(self) -> Path:
+        return self._active_path
+
+    def write(self, message: object) -> None:
+        data = str(message)
+        encoded_len = len(data.encode("utf-8"))
+        if not self._fallback and self._size + encoded_len > _MAX_LOG_BYTES:
+            self._rotate()
+        self._fh.write(data)
+        self._fh.flush()
+        self._size += encoded_len
+
+    def _rotate(self) -> None:
+        current_path = self._active_path
+        self._fh.close()
+        target = _rotated_name(current_path)
+        try:
+            os.replace(current_path, target)
+        except OSError:
+            self._switch_to_fallback()
+            return
+        self._fh = _open_for_append(Path(current_path))
+        self._size = 0
+
+    def _switch_to_fallback(self) -> None:
+        fallback_path = _per_process_log_path(self._nominal_path)
+        self._fh = _open_for_append(fallback_path)
+        self._size = self._fh.tell()
+        self._active_path = fallback_path
+        self._fallback = True
+        notice = (
+            f"{self._nominal_path.name} passed {_MAX_LOG_BYTES // (1024 * 1024)} MB "
+            f"and could not be rotated aside (another process holds it); this "
+            f"process is now logging to {fallback_path.name} instead."
+        )
+        print(f"[mcc] {notice}")
+        self._fh.write(_manual_log_line("WARNING", notice))
+        self._fh.flush()
+
+    def flush(self) -> None:
+        with suppress(OSError):
+            self._fh.flush()
+
+    def stop(self) -> None:
+        with suppress(OSError):
+            self._fh.close()
+
+
+def _add_file_sink(
+    log_file: str | Path,
+    level: str,
+    retain_files: int,
+    *,
+    nominal_path: Path | None = None,
+) -> tuple[int, _ServerLogSink]:
     log_path = Path(log_file)
-    # ``retain_files`` is the number of rotated ``server.*.log`` files to keep.
-    # ``0`` means keep them all, which loguru expresses as ``retention=None``.
-    retention: int | None = retain_files if retain_files > 0 else None
-    return logger.add(
-        log_path,
+    sink = _ServerLogSink(log_path, nominal_path=nominal_path)
+    sink_id = logger.add(
+        sink,
         level=level,
         format=_serialize_with_context,
-        encoding="utf-8",
-        mode="a",
-        rotation="50 MB",
-        retention=retention,
         enqueue=True,
     )
+    return sink_id, sink
 
 
 def append_to_server_log(log_file: str | Path, level: str, message: str) -> bool:
@@ -223,30 +347,14 @@ def append_to_server_log(log_file: str | Path, level: str, message: str) -> bool
     return True
 
 
-def _rotate_current_log(log_path: Path) -> Path | None:
-    """Move an existing ``server.log`` aside so the new run starts a fresh one.
+def _rotated_name(log_path: Path) -> Path:
+    """A ``{stem}.<timestamp>{suffix}`` name that does not exist yet.
 
-    Until 6.58.1 the line here was ``log_path.write_text("")``: every server
-    start destroyed the previous run's log. That is why a report of "the app
-    hung and I restarted it" could only ever be reconstructed from database
-    rows and file mtimes -- the one file that would have said what happened had
-    been emptied by the very restart being investigated.
-
-    The rotated name matches the ``{stem}.*{suffix}`` glob loguru's own
-    rotation uses, so the startup sweep below caps these and loguru's rotations
-    together under one ``SERVER_LOG_RETAIN_FILES``.
-
-    Returns the rotated path, or ``None`` when there was nothing to rotate.
-    Truncating is the fallback and not an error: on Windows a log another
-    process still holds cannot be renamed, and a start that refused to proceed
-    because of that would be a worse bug than a lost log.
+    Matches the ``{stem}.*{suffix}`` glob loguru's own rotation uses, so the
+    startup sweep caps these and loguru-style rotations together under one
+    ``SERVER_LOG_RETAIN_FILES``.
     """
 
-    try:
-        if not log_path.is_file() or log_path.stat().st_size == 0:
-            return None
-    except OSError:
-        return None
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     target = log_path.with_name(f"{log_path.stem}.{stamp}{log_path.suffix}")
     # A second start inside the same microsecond is not a thing, but a clock
@@ -257,24 +365,64 @@ def _rotate_current_log(log_path: Path) -> Path | None:
             f"{log_path.stem}.{stamp}-{counter}{log_path.suffix}"
         )
         counter += 1
-    try:
-        os.replace(log_path, target)
-    except OSError:
-        with suppress(OSError):
-            log_path.write_text("")
-        return None
     return target
 
 
-def _sweep_rotated_logs(log_path: Path, retain_files: int) -> None:
+#: What :func:`_rotate_current_log` found.
+ROTATE_EMPTY = "empty"  #: nothing to rotate (no file, or a zero-byte one).
+ROTATE_OK = "rotated"  #: the previous log was moved aside successfully.
+ROTATE_HELD = "held"  #: another process holds it; the rename failed.
+
+
+def _rotate_current_log(log_path: Path) -> tuple[str, Path | None]:
+    """Move an existing ``server.log`` aside so the new run starts a fresh one.
+
+    Until 6.58.1 the line here was ``log_path.write_text("")``: every server
+    start destroyed the previous run's log. That is why a report of "the app
+    hung and I restarted it" could only ever be reconstructed from database
+    rows and file mtimes -- the one file that would have said what happened had
+    been emptied by the very restart being investigated.
+
+    Returns ``(ROTATE_OK, target)`` on success, ``(ROTATE_EMPTY, None)`` when
+    there was nothing to rotate, or ``(ROTATE_HELD, None)`` when the rename
+    failed because another process holds ``log_path`` (Windows ``WinError
+    32``). The ``ROTATE_HELD`` case used to fall back to
+    ``log_path.write_text("")`` -- silently emptying the very log a reader
+    would go looking for (INVESTIGATION-HEALTH-PING-UNDER-LOAD.md §4). It no
+    longer touches ``log_path`` at all; the caller switches this process to a
+    per-process file instead.
+    """
+
+    try:
+        if not log_path.is_file() or log_path.stat().st_size == 0:
+            return ROTATE_EMPTY, None
+    except OSError:
+        return ROTATE_EMPTY, None
+    target = _rotated_name(log_path)
+    try:
+        os.replace(log_path, target)
+    except OSError:
+        return ROTATE_HELD, None
+    return ROTATE_OK, target
+
+
+def _sweep_rotated_logs(
+    log_path: Path, retain_files: int, *, exclude: Path | None = None
+) -> None:
     """Delete rotated ``server.*.log`` files beyond ``retain_files``.
 
-    The current log file (``log_path`` itself) is never touched, and ``retain_files``
-    of the newest rotated files are kept; only older ones are removed. Loguru's
-    own ``retention`` only prunes as it rotates, so a directory that already holds
-    more files than the cap (an earlier install left ~340 rotated files) keeps
-    them until each one is rotated past again -- the sweep fixes that on the
-    next startup. Logs each deletion so the cap is observable.
+    The current log file (``log_path`` itself) is never touched -- it never
+    matches the ``{stem}.*{suffix}`` glob below, which requires an extra
+    ``.``-separated segment -- and neither does ``exclude``, which is this
+    process's own active file when a startup or size rotation fell back to a
+    per-process ``server.<pid>.log`` (that per-process name DOES match the
+    glob, so without this it would be a candidate for deletion by its own
+    writer). ``retain_files`` of the newest remaining files are kept; only
+    older ones are removed. Loguru's own ``retention`` only prunes as it
+    rotates, so a directory that already holds more files than the cap (an
+    earlier install left ~340 rotated files) keeps them until each one is
+    rotated past again -- the sweep fixes that on the next startup. Logs each
+    deletion so the cap is observable.
     """
 
     if retain_files <= 0:
@@ -283,7 +431,11 @@ def _sweep_rotated_logs(log_path: Path, retain_files: int) -> None:
     suffix = log_path.suffix
     try:
         rotated = sorted(
-            log_path.parent.glob(f"{stem}.*{suffix}"),
+            (
+                candidate
+                for candidate in log_path.parent.glob(f"{stem}.*{suffix}")
+                if exclude is None or candidate != exclude
+            ),
             key=lambda candidate: candidate.stat().st_mtime,
         )
     except OSError as exc:
@@ -344,6 +496,7 @@ def configure_logging(
     capped at WARNING unless explicitly configured otherwise.
     """
     global _configured, _current_path, _current_level, _current_verbose, _sink_id
+    global _active_sink
 
     retain_files = max(0, int(retain_files))
     log_path = Path(log_file).expanduser().resolve()
@@ -363,14 +516,31 @@ def configure_logging(
 
         logger.remove()
 
-        rotated = _rotate_current_log(log_path)
+        outcome, rotated = _rotate_current_log(log_path)
 
-        _sink_id = _add_file_sink(log_path, level, retain_files)
+        if outcome == ROTATE_HELD:
+            # Do NOT truncate (INVESTIGATION-HEALTH-PING-UNDER-LOAD.md §4):
+            # the existing content stays exactly where it is, and THIS
+            # process writes its own run to a sibling file instead.
+            initial_path = _per_process_log_path(log_path)
+            held_notice = (
+                f"{log_path.name} is held by another process; this process "
+                f"is logging to {initial_path.name} instead."
+            )
+            print(f"[mcc] {held_notice}")
+        else:
+            initial_path = log_path
 
-        if rotated is not None:
+        _sink_id, _active_sink = _add_file_sink(
+            initial_path, level, retain_files, nominal_path=log_path
+        )
+
+        if outcome == ROTATE_OK:
             # Said in the new log, because the whole point of keeping the old
             # one is that somebody will go looking for it later.
             logger.info("Previous server log rotated to {}.", rotated)
+        elif outcome == ROTATE_HELD:
+            logger.warning(held_notice)
 
         intercept = InterceptHandler()
         logging.root.handlers = [intercept]
@@ -380,14 +550,29 @@ def configure_logging(
     elif log_path != _current_path or level != _current_level:
         if _sink_id is not None:
             logger.remove(_sink_id)
-        _sink_id = _add_file_sink(log_path, level, retain_files)
+        _sink_id, _active_sink = _add_file_sink(log_path, level, retain_files)
         if verbose_third_party != _current_verbose:
             _set_third_party_levels(verbose_third_party)
     else:
         _set_third_party_levels(verbose_third_party)
 
-    _sweep_rotated_logs(log_path, retain_files)
+    active_path = _active_sink.active_path if _active_sink is not None else log_path
+    _sweep_rotated_logs(log_path, retain_files, exclude=active_path)
 
     _current_path = log_path
     _current_level = level
     _current_verbose = verbose_third_party
+
+
+def current_active_log_path() -> Path | None:
+    """The file this process is actually writing to right now.
+
+    Usually the same as the nominal ``server.log`` path; differs only while a
+    startup or size-based rotation fell back to a per-process
+    ``server.<pid>.log`` beside it. ``None`` before ``configure_logging`` has
+    run.
+    """
+
+    if _active_sink is not None:
+        return _active_sink.active_path
+    return _current_path

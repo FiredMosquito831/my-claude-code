@@ -173,6 +173,20 @@ class LoopHeartbeat:
                     self._interval * 1000.0,
                     record.snapshot().busy_reason or "no gesture named itself",
                 )
+            # Below FREEZE_LOG_THRESHOLD_SECONDS stays DEBUG above; a hold that
+            # reached it is worth an INFO line in server.log even when nobody
+            # enabled DEBUG (INVESTIGATION-REQUEST-DEADLOCK.md fix F4 /
+            # decision 8).
+            closed = record.take_closed_freeze()
+            if closed is not None:
+                worst = 0.0
+                logger.info(
+                    "LOOP FREEZE: the event loop was held for {:.1f} s, "
+                    "starting at {} ({}).",
+                    closed.duration_seconds,
+                    closed.started_at,
+                    closed.reason,
+                )
 
 
 __all__ = [
