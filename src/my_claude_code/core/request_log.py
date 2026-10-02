@@ -329,6 +329,20 @@ _HOUR_SECONDS = 3_600
 LOCAL_PROVIDER_PREFIX = "local:"
 UNKNOWN_PROVIDER_KEY = "(unknown)"
 
+#: ``optimization`` values that name MCC's own web tools rather than a rule.
+#: Since 7.69.5 a web search or web fetch that MCC answers itself is recorded
+#: as a local answer under the tool's name (``local:web_search``), because no
+#: model was asked. It is not an optimization -- it does real work and avoids
+#: no tokens -- so the Token Optimizer leaves these out, as it always did.
+LOCAL_WEB_TOOL_ANSWERS: tuple[str, ...] = ("web_search", "web_fetch")
+
+#: ``optimization`` set by a rule that answered locally, web tools excluded.
+_OPTIMIZATION_RULE_SQL = (
+    "(optimization IS NOT NULL AND optimization NOT IN ("
+    + ", ".join(f"'{name}'" for name in LOCAL_WEB_TOOL_ANSWERS)
+    + "))"
+)
+
 #: SQL matching a request MCC answered itself: no provider was called and a
 #: rule named the answer. ``provider IS NULL AND optimization IS NULL`` is the
 #: ``(unknown)`` case instead -- traffic whose provider we genuinely do not
@@ -8127,6 +8141,9 @@ class RequestLogStore:
         reassuring zero over the gap. Rules that exist but have never fired are
         not invented here: the store reports what is in the log, and the caller
         that knows the rule registry merges the rest in.
+
+        MCC's own web tools (``LOCAL_WEB_TOOL_ANSWERS``) are local answers but
+        not rules, and are left out of every figure here.
         """
         days = max(1, days)
         where, args = self._where(since=since, until=until)
@@ -8134,7 +8151,9 @@ class RequestLogStore:
         with self._connection() as conn:
             totals = conn.execute(
                 f"SELECT COUNT(*),"
-                " SUM(CASE WHEN optimization IS NOT NULL THEN 1 ELSE 0 END),"
+                f" SUM(CASE WHEN {_OPTIMIZATION_RULE_SQL} THEN 1 ELSE 0 END),"
+                # A web-tool row never carries a saving (NULL), so this sum
+                # needs no exclusion of its own.
                 " COALESCE(SUM(optimization_tokens_saved), 0)"
                 f" FROM requests{where}",
                 args,
@@ -8145,7 +8164,7 @@ class RequestLogStore:
                 " SUM(CASE WHEN optimization_tokens_saved IS NOT NULL THEN 1 ELSE 0 END)"
                 " AS tokens_reported,"
                 " MIN(ts_epoch) AS first_ts, MAX(ts_epoch) AS last_ts"
-                f" FROM requests{where}{connector} optimization IS NOT NULL"
+                f" FROM requests{where}{connector} {_OPTIMIZATION_RULE_SQL}"
                 " GROUP BY rule ORDER BY requests DESC",
                 args,
             ).fetchall()
@@ -8154,7 +8173,7 @@ class RequestLogStore:
                 " strftime('%Y-%m-%d', ts_epoch, 'unixepoch') AS bucket,"
                 " COUNT(*) AS requests,"
                 " COALESCE(SUM(optimization_tokens_saved), 0) AS tokens_saved"
-                f" FROM requests{where}{connector} optimization IS NOT NULL"
+                f" FROM requests{where}{connector} {_OPTIMIZATION_RULE_SQL}"
                 " GROUP BY rule, bucket ORDER BY bucket DESC",
                 args,
             ).fetchall()

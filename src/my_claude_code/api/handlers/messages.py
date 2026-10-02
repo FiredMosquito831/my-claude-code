@@ -36,6 +36,7 @@ from my_claude_code.api.web_tools.egress import (
 )
 from my_claude_code.api.web_tools.request import (
     is_web_server_tool_request,
+    selected_server_tool_name,
     unsupported_server_tool_error,
 )
 from my_claude_code.application.errors import ApplicationError, InvalidRequestError
@@ -107,14 +108,19 @@ def _with_delivery(
 @dataclass(frozen=True)
 class _MessagesStreamResult:
     body: AsyncIterator[str]
+    # Set only when MCC's own web tool answers this request instead of a model:
+    # the tool's name (``web_search`` / ``web_fetch``). The row is then recorded
+    # as a local answer with no provider and no model, because the route's
+    # first model -- paused or not -- was never asked.
+    local_web_tool: str | None = None
 
 
 @dataclass(frozen=True)
 class _MessagesCompleteResult:
     response: object
     # Set only when a local rule produced this response rather than a provider.
-    # The web-server-tool intercept also completes without a provider, but it
-    # does real work and is not an optimization, so it leaves these None.
+    # The web-server-tool intercept also answers without a provider, but it
+    # streams and avoids no tokens, so it says so on ``_MessagesStreamResult``.
     optimization: str | None = None
     tokens_saved: int = 0
 
@@ -247,6 +253,8 @@ class MessagesHandler:
                     )
                 )
             if isinstance(result, _MessagesStreamResult):
+                if result.local_web_tool is not None:
+                    capture.set_local_web_tool(result.local_web_tool)
                 result = _MessagesStreamResult(capture.wrap(result.body))
             else:
                 if result.optimization is not None:
@@ -571,6 +579,7 @@ class MessagesHandler:
             return None
         if not is_web_server_tool_request(routed.request):
             return None
+        tool = selected_server_tool_name(routed.request)
 
         input_tokens = self._token_counter(
             routed.request.messages, routed.request.system, routed.request.tools
@@ -601,6 +610,7 @@ class MessagesHandler:
                 web_fetch_egress=egress,
                 verbose_client_errors=self._settings.log_api_error_tracebacks,
             ),
+            local_web_tool=tool,
         )
 
     def _intercept_local_optimization(

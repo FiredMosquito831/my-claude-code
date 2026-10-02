@@ -3776,6 +3776,8 @@ A 400 that names a **sampling** parameter — `top_p`, `temperature`, `seed` —
 
 Claude Code's `web_search` is an Anthropic **server tool**: normally Anthropic executes the search and bills you for it. MCC intercepts and fulfils it locally against a provider you choose, so **no Anthropic search credits are used**, and it works with any model provider.
 
+No model answers that request, so Analytics records it as a local answer: since 7.69.5 the row reads **answered locally · web search** (or **· web fetch**), with no provider, no model and no price. Before 7.69.5 it carried the first model of the route — even a paused one that was never called — and was priced as that model; those older rows keep their old name.
+
 <div align="center">
   <img src="../assets/admin-websearch.png" alt="Web search configuration and analytics" width="860">
 </div>
@@ -4118,7 +4120,7 @@ The detail dialog answers the question "what did MCC actually put on the wire, a
 
 **1. Open Analytics and find the request.** Filter or search (search reaches the reasoning text and tool arguments too), then press **View** on the row. Since 6.13.0 every filter applies itself — the selects the moment you change one, the text boxes a short pause after you stop typing, and **Clear filters** puts everything back including the default below. **Apply** is still there for when you would rather press it.
 
-**Local answers** defaults to **Hide**, so the table, the cards, the charts and the breakdowns show requests that actually went to a provider. Requests MCC answered itself — title-generation skips, probe replies, suggestion-mode skips — are hidden until you switch it to **Show** (everything, as before 6.13.0) or **Only** (nothing else). The choice is remembered across refreshes. Rows whose provider is genuinely unknown are not local answers and stay visible under Hide, and the **All time** rollup ignores this filter. Exports honour it: since 6.54.0 `/admin/api/export` accepts `local` and `harness`, so a download matches the table it was taken from.
+**Local answers** defaults to **Hide**, so the table, the cards, the charts and the breakdowns show requests that actually went to a provider. Requests MCC answered itself — title-generation skips, probe replies, suggestion-mode skips, and since 7.69.5 the web searches and web fetches MCC runs for Claude Code (**answered locally · web search**) — are hidden until you switch it to **Show** (everything, as before 6.13.0) or **Only** (nothing else). A web search logged before 7.69.5 still names the route's first model, so across that release the per-model counts for your top model drop by the searches it never answered. The choice is remembered across refreshes. Rows whose provider is genuinely unknown are not local answers and stay visible under Hide, and the **All time** rollup ignores this filter. Exports honour it: since 6.54.0 `/admin/api/export` accepts `local` and `harness`, so a download matches the table it was taken from.
 
 **Harness** names the coding agent that sent the request. Since 6.37.0 every row records it, the
 table shows it as a chip, the detail dialog spells it out, there is a **Harness** filter beside
@@ -4394,6 +4396,8 @@ open (the browser may also keep the old script until a reload).
 
 Some requests are answered inside the proxy by a **local rule** — MCC replies and no provider is ever contacted. Those requests show in the request table as **answered locally · <rule>**, not as provider `(unknown)` the way they read before 5.48.0, and you can filter the table by that value to see only them — or use the **Local answers** filter on Analytics, which hides them all by default and shows only them on **Only**. Because no provider served them, they record no provider, and the tokens they saved are counted from the real request rather than assumed.
 
+MCC's own web searches and web fetches are local answers as well (**answered locally · web search**, since 7.69.5), but they are not rules: they do real work and avoid no tokens, so this page does not count them, and its figures are what they were before 7.69.5.
+
 The page has four panels:
 
 - **Ledger** — "Tokens never sent": prompt tokens no provider ever received. This is not a bill estimate. What a provider would have charged for the reply cannot be known, and MCC does not guess at it.
@@ -4494,6 +4498,8 @@ Controls live on this page under **Cost estimation**: the master toggle (on by d
 The other half of an image's cost is tokens, not rates: check the `billed/est` chip on the provider row on the **Models** page and the `Estimated input` line in the request detail. If billed is far above estimated on a model that only ever sees screenshots, `IMAGE_MAX_LONG_EDGE` is the setting to look at.
 
 **"What does 'not priced' mean?"** Exactly what it says: no source published a rate for that model. It is a dash and never `$0.00`, because `$0.00` is a claim the request was free and only a source that publishes a zero — a `:free` model's own catalogue entry — may make it. Two things make a dash more likely: a model nothing but its own gateway has ever listed, and `COST_ESTIMATION_MODE=reported_only`, which stores a host's own figure or nothing at all. Turning on `COST_SOURCE_LITELLM_ENABLED` buys back most of the misses.
+
+**"Why does a web search have no price?"** Because no model answered it. MCC ran the search itself, so since 7.69.5 the row has no provider and no model and is not priced (a dash, never `$0.00`). Before 7.69.5 those rows were priced as the first model of the route, which put cost on models that were never called — $14.38 on a paused gpt-6-sol on one log. Those older rows are left as they were.
 
 **Nothing is backfilled.** A request logged before 6.54.0 stays unpriced forever. Pricing it at today's rates would produce a confident number that was never anybody's bill.
 

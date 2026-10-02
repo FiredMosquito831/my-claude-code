@@ -198,6 +198,8 @@ class RequestCapture:
         # verdict is never worth a database round trip while a client is
         # still waiting for tokens.
         self._attempts: list[RouteAttempt] = []
+        #: Set by :meth:`set_local_web_tool`; applied, or not, at finalize.
+        self._local_web_tool: str | None = None
         #: Set by :meth:`wrap`; see there.
         self._discard_after_terminal = False
         # The client's own ``max_tokens`` for any attempt whose allowance was
@@ -854,6 +856,43 @@ class RequestCapture:
         self._record.provider = None
         self._record.resolved_model = None
 
+    def set_local_web_tool(self, tool: str) -> None:
+        """Say that MCC's own web tool, not a model, is answering this request.
+
+        Claude Code sends each web search and web fetch as its own one-tool side
+        request, and MCC answers it with its own search or fetch -- no model,
+        no key, no attempt. ``set_routing`` has named the route's first model
+        by then, and before 7.69.5 the row kept that name: 697 rows named a
+        paused chain head that was never called, and $14.38 was priced on
+        gpt-6-sol for answers it never gave.
+
+        Only remembered here; :meth:`_apply_local_web_tool` decides at finalize,
+        once every attempt this request made is known. ``optimization`` names
+        the tool, so the row is a local answer exactly as a local rule's is
+        (``is_local`` 1, ``local:web_search`` in every breakdown, priced by
+        nobody). ``optimization_tokens_saved`` stays NULL: a search avoided no
+        tokens, it did real work.
+        """
+        self._local_web_tool = tool
+
+    def _apply_local_web_tool(self, record: RequestRecord) -> None:
+        """Record the web tool as the answer -- only if no model was asked.
+
+        The guard is the whole safety argument for the relabel: it keys on the
+        one fact that makes a row local, zero attempts of any kind. A request
+        that reached a model -- even one that also carried a web tool, even a
+        paused model named directly -- has an attempt here and keeps the name
+        of the model that answered, with its attempt row.
+        """
+        tool = self._local_web_tool
+        if tool is None:
+            return
+        if self._attempts:
+            return
+        record.optimization = tool
+        record.provider = None
+        record.resolved_model = None
+
     def finish_error(self, exc: BaseException) -> None:
         """Finalize for an error raised before the stream wrapper takes over."""
         failure = find_execution_failure(exc)
@@ -1408,6 +1447,9 @@ class RequestCapture:
         self._finalized = True
         record = self._record
         self._merge_provider_reasoning_adaptations()
+        # Before the price: a row the web tool answered has no provider and no
+        # model, so the pricing ladder finds no card and stores NULL.
+        self._apply_local_web_tool(record)
         record.status = status
         record.duration_ms = (time.perf_counter() - self._start) * 1000
         record.ttft_ms = self._ttft_ms
