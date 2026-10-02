@@ -38,13 +38,13 @@ from my_claude_code.config.admin.persistence import (
     prepare_admin_update,
 )
 from my_claude_code.config.admin.status import provider_config_status
-from my_claude_code.config.admin.values import load_value_state
+from my_claude_code.config.admin.values import ROUTE_PAUSE_KEYS, load_value_state
 from my_claude_code.config.env_files import (
     ANTHROPIC_AUTH_TOKEN_ENV,
     process_env_key_is_effective,
 )
 from my_claude_code.config.logging_config import set_third_party_verbosity
-from my_claude_code.config.model_refs import parse_provider_type
+from my_claude_code.config.model_refs import parse_model_ref_list, parse_provider_type
 from my_claude_code.config.paths import messaging_state_dir_path
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.proxy_chains import (
@@ -229,6 +229,37 @@ def _config_gesture(updates: Mapping[str, Any]) -> str:
     if len(keys) == 1:
         return f"the setting {keys[0]} is being applied"
     return f"{len(keys)} settings are being applied"
+
+
+def _log_pause_changes(previous: Settings, current: Settings, gesture: str) -> None:
+    """Log one INFO line per rail whose pause list actually changed.
+
+    A pause, a resume, a chain save that drops or adds a paused entry, and a
+    tier-rail change all funnel through here -- this is the one place every
+    ``ROUTE_PAUSE_KEYS`` rail's committed value is compared against what it
+    was a moment ago. Nothing is logged when a rail's pause list is unchanged,
+    which is the common case: most admin applies touch no pause list at all.
+
+    Model refs are not secrets (fix F3 / decision 5), so they are logged in
+    full; nothing else about the update is.
+    """
+
+    pid = os.getpid()
+    for model_key, _chain_key, paused_key in ROUTE_PAUSE_KEYS:
+        before = set(parse_model_ref_list(getattr(previous, paused_key.lower(), "")))
+        after = set(parse_model_ref_list(getattr(current, paused_key.lower(), "")))
+        if before == after:
+            continue
+        added = sorted(after - before)
+        removed = sorted(before - after)
+        logger.info(
+            "PAUSE: rail {} changed (added={}, removed={}) pid={} via {}.",
+            model_key,
+            added,
+            removed,
+            pid,
+            gesture,
+        )
 
 
 class ApplicationRuntime:
@@ -544,9 +575,12 @@ class ApplicationRuntime:
         if not prepared.valid:
             return prepared.applied_response()
         assert prepared.settings is not None
+        gesture = _config_gesture(updates)
 
         if prepared.pending_fields:
+            previous = self.settings
             result = self._commit_admin_update(prepared)
+            _log_pause_changes(previous, prepared.settings, gesture)
             restart = self._restart_metadata(
                 prepared.pending_fields,
                 prepared.settings,
@@ -575,6 +609,7 @@ class ApplicationRuntime:
             background_refresh=update_affects_providers(updates),
         )
         await self._apply_live_settings(previous, prepared.settings)
+        _log_pause_changes(previous, prepared.settings, gesture)
         self._pending_fields = []
         result["restart"] = self._restart_metadata((), prepared.settings)
         return result

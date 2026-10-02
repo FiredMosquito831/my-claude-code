@@ -59,6 +59,16 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.cli.commands",
+        "my_claude_code.runtime.console_logging",
+    ): (
+        "Owner: installed server command's uvicorn.Config call. "
+        "Reason: `cli/` is frozen, so console timestamps and the quiet-poll "
+        "access filter (7.69.6 items 2-3) are built in this non-frozen "
+        "module and handed to uvicorn as one `log_config=` argument -- the "
+        "minimal hook the command itself needs."
+    ),
+    (
+        "my_claude_code.cli.commands",
         "my_claude_code.providers.chatgpt_oauth",
     ): (
         "Owner: installed ChatGPT OAuth login command. "

@@ -130,6 +130,24 @@ def _reset_request_task_registry():
 
 
 @pytest.fixture(autouse=True)
+def _reset_rejected_client_tracker():
+    """No test may inherit another test's rejected-401-client memory.
+
+    ``RejectedClientTracker`` is process-wide for the same reason
+    ``core.request_tasks`` is above: a test that rejects a client with a bad
+    proxy token must not have that client already "seen" because an earlier
+    test in the same worker rejected one that happens to hash the same way,
+    and must not leave its own clients behind for the next test either.
+    """
+
+    from my_claude_code.api.rejected_client_log import rejected_client_tracker
+
+    rejected_client_tracker().reset()
+    yield
+    rejected_client_tracker().reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_opencode_client_version():
     """No test may inherit another test's reading of the machine.
 

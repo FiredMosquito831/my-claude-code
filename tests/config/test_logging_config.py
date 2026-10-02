@@ -136,26 +136,47 @@ def test_configure_logging_defaults_to_info(tmp_path) -> None:
     assert "info message" in text
 
 
-def test_file_sink_bounds_rotated_log_retention(tmp_path) -> None:
-    """Rotation bounds the active file; retain_files bounds the archives."""
+def test_file_sink_is_a_server_log_sink_not_loguru_rotation(tmp_path) -> None:
+    """7.69.6: loguru's own ``rotation``/``retention`` are gone from this call.
+
+    They used to bound the active file and the archives (``rotation="50 MB"``,
+    ``retention=retain_files``), but loguru's own rotation has no hook for "the
+    rename failed because another process holds the file, keep going anyway"
+    (INVESTIGATION-SELF-INFLICTED-LOAD.md §6: it instead drops every record
+    and prints a traceback per record to stderr). ``_ServerLogSink`` does its
+    own size check and its own rename with that fallback, and
+    ``_sweep_rotated_logs`` -- unrelated to this call -- is the only thing
+    that still reads ``retain_files``.
+    """
     log_file = tmp_path / "bounded.log"
 
     with patch.object(logging_config.logger, "add", return_value=1) as add:
-        logging_config._add_file_sink(log_file, "INFO", retain_files=10)
+        sink_id, sink = logging_config._add_file_sink(log_file, "INFO", retain_files=10)
 
-    assert add.call_args.kwargs["rotation"] == "50 MB"
-    # A positive retain_files is passed straight through as the retention count.
-    assert add.call_args.kwargs["retention"] == 10
+    assert sink_id == 1
+    assert isinstance(sink, logging_config._ServerLogSink)
+    assert add.call_args.args[0] is sink
+    assert "rotation" not in add.call_args.kwargs
+    assert "retention" not in add.call_args.kwargs
+    assert add.call_args.kwargs["enqueue"] is True
+    sink.stop()
 
 
-def test_file_sink_retain_files_zero_keeps_every_rotated_file(tmp_path) -> None:
-    """``retain_files=0`` means keep all rotated files (retention=None)."""
+def test_file_sink_retain_files_zero_still_builds_a_sink(tmp_path) -> None:
+    """``retain_files=0`` (keep every rotated file) builds the same sink.
+
+    The value is no longer read here at all -- ``_sweep_rotated_logs`` is
+    where ``0`` means "keep them all" -- so this call succeeds identically
+    either way.
+    """
     log_file = tmp_path / "unbounded.log"
 
-    with patch.object(logging_config.logger, "add", return_value=1) as add:
-        logging_config._add_file_sink(log_file, "INFO", retain_files=0)
+    with patch.object(logging_config.logger, "add", return_value=1):
+        sink_id, sink = logging_config._add_file_sink(log_file, "INFO", retain_files=0)
 
-    assert add.call_args.kwargs["retention"] is None
+    assert sink_id == 1
+    assert isinstance(sink, logging_config._ServerLogSink)
+    sink.stop()
 
 
 def test_configure_logging_handles_level_change_on_restart(tmp_path) -> None:

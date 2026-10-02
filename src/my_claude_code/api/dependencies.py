@@ -11,6 +11,7 @@ from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings
 
 from .ports import ApiServices
+from .rejected_client_log import describe_rejected_client, rejected_client_tracker
 
 
 def get_services(request: Request) -> ApiServices:
@@ -81,6 +82,7 @@ def require_proxy_auth(
 
     token = _presented_proxy_token(request)
     if token is None:
+        rejected_client_tracker().note_rejection(describe_rejected_client(request))
         raise HTTPException(
             status_code=401,
             detail="Missing proxy authentication token",
@@ -90,6 +92,7 @@ def require_proxy_auth(
         token.encode("utf-8"),
         anthropic_auth_token.encode("utf-8"),
     ):
+        rejected_client_tracker().note_rejection(describe_rejected_client(request))
         raise HTTPException(
             status_code=401,
             detail="Invalid proxy authentication token",

@@ -567,6 +567,40 @@ runs at startup as well as on each rotation, so lowering the number cleans up a
 backlog on the next restart. `logs/requests.db` is the request-analytics
 database and is never touched by log rotation.
 
+**`server.<pid>.log` appeared next to `server.log`.**
+Since 7.69.6, if the startup rotation or the 50 MB size rotation cannot rename
+`server.log` aside — another My Claude Code process on this machine already
+has it open, which happens when two servers share one config directory —
+this process does **not** touch `server.log`'s existing content. It logs one
+line to the console and one to the log it can still reach, and from that
+point writes its own run to `server.<pid>.log` beside it. `SERVER_LOG_RETAIN_FILES`
+still bounds how many of these are kept, the same way it bounds ordinary
+rotated files. The fix: run one server per config directory, or point the
+second one at a different `MCC_CONFIG_DIR`.
+
+**Console lines now start with a timestamp, and `/health` / poll lines stopped printing.**
+Since 7.69.6 every console line — uvicorn's own and MCC's — carries a local
+timestamp. A successful (2xx) `GET /health`, the dashboard pulse
+(`/admin/api/requests/pulse`), the in-flight poll
+(`/admin/api/requests/in-flight`) and the proxy-chain ingest poll no longer
+print to the console at all; a *failing* answer on any of those paths still
+does, and nothing else changed — `/v1/*` traffic, admin writes, page loads
+and 401s are exactly as visible as before. `server.log` is unaffected either
+way; this is a console-only filter.
+
+**The server held the event loop for seconds and nothing said so.**
+Since 7.69.6, a hold of **2.0 seconds or more** gets one `INFO` line in
+`server.log` — how long, when it started, and the busy gesture if one was
+running — even when `LOG_LEVEL` is at its default and DEBUG lines are not
+being kept. A shorter hold is still only a DEBUG line, as before.
+
+**A pause, resume, or chain edit changed what's paused and nothing recorded it.**
+Since 7.69.6, every admin write that changes a rail's pause list — the Pause
+button, Resume, a chain save that adds or drops a paused entry, a tier-rail
+change — logs one `INFO` line naming the rail, the model refs added and
+removed, the process id, and what triggered it. A save that leaves every
+rail's pause list unchanged logs nothing.
+
 ### The two addresses that matter
 
 | What | Default | Who uses it |
@@ -5210,6 +5244,17 @@ If you installed under both PowerShell and WSL you have `C:\Users\<you>\.mcc` *a
 
 **401 from the proxy.**
 Your agent's `ANTHROPIC_AUTH_TOKEN` doesn't match the server's. Compare the value in `~/.claude/settings.json` — or the Desktop gateway API key — against the server's setting.
+
+**`server.log` has a `REJECTED CLIENT` warning.**
+Since 7.69.6, the first `/v1/*` 401 from a client the server has not seen in
+the last minute logs one `WARNING` naming its user agent, which auth header
+names it presented, and its remote address (no port) — never the token, any
+part of it, a hash of it, or any other header's value. Repeats from the same
+client in that minute are counted, not re-logged; `REJECTED CLIENT SUMMARY`
+says how many every minute while it keeps happening. This is almost always
+the same stale-or-wrong `ANTHROPIC_AUTH_TOKEN` as the plain 401 above — the
+new line just makes a client retrying once a second visible instead of
+silent.
 
 **Provider validation fails with 404.**
 Usually the model id, not the key. Check the exact id against the provider's model list.

@@ -63,6 +63,7 @@ from my_claude_code.core.stop_deadline import (
     stop_deadline,
 )
 from my_claude_code.runtime.bootstrap import build_asgi_app
+from my_claude_code.runtime.console_logging import build_uvicorn_log_config
 
 _WINDOWS = os.name == "nt"
 
@@ -573,6 +574,10 @@ def _run_supervised_server(
         port=settings.port,
         log_level="debug",
         timeout_graceful_shutdown=round(settings.server_graceful_shutdown_seconds),
+        # Timestamps on every console line and a quiet console for a poller
+        # talking to itself (items 2 and 3); built in a non-frozen module so
+        # this one line is the whole of this file's change for both.
+        log_config=build_uvicorn_log_config(),
     )
     server = uvicorn.Server(config)
     _start_stop_clock_on_signal(server, start_the_stop_clock_for_a_signal)
