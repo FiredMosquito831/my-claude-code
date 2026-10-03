@@ -22,7 +22,7 @@ from typing import Any, Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from my_claude_code.cli.desktop_window import DesktopWindow, create_window
+from my_claude_code.cli.desktop_window import DesktopWindow, ShellWindow, create_window
 from my_claude_code.cli.launchers.common import (
     PreflightResult,
     preflight_proxy,
@@ -35,6 +35,7 @@ from my_claude_code.cli.port_diagnostics import (
 )
 from my_claude_code.cli.tool_paths import resolve_installed_command
 from my_claude_code.config.claude_discovery import native_origin
+from my_claude_code.config.constants import DESKTOP_HEALTH_RETRY_SECONDS
 from my_claude_code.config.desktop import (
     SKIP_AUTOSTART_ENV,
     DesktopState,
@@ -48,11 +49,28 @@ from my_claude_code.config.desktop_shell import (
     desktop_shell_enabled,
     ensure_desktop_shell,
 )
-from my_claude_code.config.paths import DESKTOP_LOCK_FILENAME, config_dir_path
+from my_claude_code.config.logging_config import write_server_log_line
+from my_claude_code.config.paths import (
+    DESKTOP_LOCK_FILENAME,
+    config_dir_path,
+    server_log_path,
+)
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 from my_claude_code.config.update_progress import active_update
+from my_claude_code.core.console_notice import console_available, write_console_line
 from my_claude_code.core.interprocess_lock import InterprocessFileLock
+from my_claude_code.core.mcc_processes import process_is_alive
+from my_claude_code.core.server_pid import pid_from_headers
+from my_claude_code.core.server_watch import (
+    NotificationRoute,
+    PortFacts,
+    ServerWatch,
+    WatchStep,
+    dead_message,
+    notification_route,
+    recovered_message,
+)
 from my_claude_code.core.startup_state import (
     STARTING_MARKER_HEADER,
     STARTING_MARKER_VALUE,
@@ -170,13 +188,6 @@ def server_stop_wait_seconds(settings: Any) -> float:
         getattr(settings, "server_graceful_shutdown_seconds", 0.0)
     )
     return budget + STOP_TEARDOWN_MARGIN_SECONDS + HARD_EXIT_GRACE_SECONDS
-
-
-SERVER_DOWN_NOTIFICATION = (
-    "The MCC server stopped answering. Choose Restart Server in this menu, "
-    "or run mcc-server in a terminal to see why it exited."
-)
-SERVER_RECOVERED_NOTIFICATION = "The MCC server is answering again."
 
 
 def is_draining_response(result: PreflightResult) -> bool:
@@ -333,11 +344,22 @@ class PortHolder:
     kind: HolderKind
     pid: int | None = None
     image: str | None = None
+    #: Whether ``kind`` is a fact rather than a fallback (7.70.0, rescue spec
+    #: fact M). False only for a holder that could not be identified -- the
+    #: lookup failed or timed out -- which is still reported as ``foreign`` so
+    #: a reader that predates this key behaves exactly as before, while a new
+    #: reader can treat "could not tell" as "alive, be patient" instead.
+    identified: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         """The shape ``--print-status`` emits."""
 
-        return {"kind": self.kind, "pid": self.pid, "image": self.image}
+        return {
+            "kind": self.kind,
+            "pid": self.pid,
+            "image": self.image,
+            "identified": self.identified,
+        }
 
 
 def classify_port_holder(settings: Any, state: ServerState) -> PortHolder:
@@ -377,9 +399,15 @@ def classify_port_holder(settings: Any, state: ServerState) -> PortHolder:
             "foreign",
             pid=owner.pid if owner else None,
             image=owner.name if owner else None,
+            identified=False,
         )
     kind: HolderKind = "ours_stale" if identity.is_mcc else "foreign"
-    return PortHolder(kind, pid=identity.pid, image=identity.image)
+    return PortHolder(
+        kind,
+        pid=identity.pid,
+        image=identity.image,
+        identified=bool(identity.is_mcc or identity.image or identity.command),
+    )
 
 
 def _identified(host: str, port: int, kind: HolderKind) -> PortHolder:
@@ -432,7 +460,7 @@ def stale_server_message(settings: Any) -> str:
     return (
         f"A My Claude Code server is holding port {settings.port} but is not "
         f"answering. It is starting, busy, or wedged. Starting the server "
-        f"again takes the port back from it."
+        f"again replaces it only if it still does not answer."
     )
 
 
@@ -500,42 +528,36 @@ def port_conflict_message(settings: Any) -> str:
     )
 
 
-class HealthTracker:
-    """Debounce health probes so a self-update restart is not read as death.
+def server_watch_for(
+    settings: Any,
+    *,
+    interval: float | None = None,
+    threshold: int | None = None,
+) -> ServerWatch:
+    """The host's :class:`ServerWatch`, built from settings that already exist.
 
-    The server can replace its own process during an update, and the dashboard
-    already has its own reconnect state machine. A single failed probe
-    therefore means nothing: only ``threshold`` consecutive failures raise a
-    notification, and only one notification is raised per outage.
+    Every number is a setting the desktop already has, or the fixed retry
+    cadence: probes every ``DESKTOP_HEALTH_POLL_SECONDS`` (30 s) while the
+    server answers and every ``DESKTOP_HEALTH_RETRY_SECONDS`` (5 s) otherwise;
+    ``DESKTOP_HEALTH_FAILURE_THRESHOLD`` failures before the OS is asked; a lost
+    listener confirmed over that many observations spanning that many
+    ``DESKTOP_TICK_SECONDS``; and the OS re-asked about a slow server at most
+    every ``DESKTOP_RECONNECT_RESTATUS_SECONDS``.
     """
 
-    def __init__(self, threshold: int | None = None) -> None:
-        resolved = (
-            threshold
-            if threshold is not None
-            else get_settings().desktop_health_failure_threshold
-        )
-        self._threshold = max(1, resolved)
-        self._failures = 0
-        self._notified = False
-
-    def record(self, healthy: bool) -> bool:
-        """Record one probe; return True exactly when an outage begins."""
-
-        if healthy:
-            self._failures = 0
-            self._notified = False
-            return False
-        self._failures += 1
-        if self._failures < self._threshold or self._notified:
-            return False
-        self._notified = True
-        return True
-
-    def record_recovery(self, healthy: bool) -> bool:
-        """Return True when a probe ends an outage we already reported."""
-
-        return healthy and self._notified
+    healthy = float(
+        settings.desktop_health_poll_seconds if interval is None else interval
+    )
+    count = int(
+        settings.desktop_health_failure_threshold if threshold is None else threshold
+    )
+    return ServerWatch(
+        threshold=count,
+        healthy_interval=healthy,
+        failing_interval=min(DESKTOP_HEALTH_RETRY_SECONDS, healthy),
+        confirm_seconds=max(1, count) * float(settings.desktop_tick_seconds),
+        recheck_seconds=float(settings.desktop_reconnect_restatus_seconds),
+    )
 
 
 class ActivationSignal:
@@ -887,31 +909,28 @@ class DesktopController:
 
     def start_health_monitor(
         self,
-        on_unhealthy: Callable[[], None],
+        on_unhealthy: Callable[[str], None],
         *,
-        on_recovered: Callable[[], None] | None = None,
+        on_recovered: Callable[[str], None] | None = None,
         interval: float | None = None,
         threshold: int | None = None,
     ) -> None:
-        """Poll the server on a daemon thread and report an outage once.
+        """Poll the server on a daemon thread and report a dead server once.
 
         This only *reports*. It never respawns: in ``attach``/``off`` mode the
         server is not ours, and in ``spawn`` mode a silent respawn would race
-        the server's own self-update restart.
+        the server's own self-update restart. Both callbacks receive the
+        sentence to show; ``core/server_watch.py`` decides when there is one.
         """
 
         if self._health_stop is not None:
             return
-        settings = get_settings()
-        if interval is None:
-            interval = settings.desktop_health_poll_seconds
-        if threshold is None:
-            threshold = settings.desktop_health_failure_threshold
+        watch = server_watch_for(get_settings(), interval=interval, threshold=threshold)
         stop = threading.Event()
         self._health_stop = stop
         threading.Thread(
             target=self._health_loop,
-            args=(on_unhealthy, on_recovered, interval, threshold, stop),
+            args=(on_unhealthy, on_recovered, watch, stop),
             name="mcc-desktop-health",
             daemon=True,
         ).start()
@@ -924,23 +943,92 @@ class DesktopController:
 
     def _health_loop(
         self,
-        on_unhealthy: Callable[[], None],
-        on_recovered: Callable[[], None] | None,
-        interval: float,
-        threshold: int,
+        on_unhealthy: Callable[[str], None],
+        on_recovered: Callable[[str], None] | None,
+        watch: ServerWatch,
         stop: threading.Event,
     ) -> None:
-        tracker = HealthTracker(threshold)
-        root_url = local_proxy_root_url(get_settings())
-        while not stop.wait(interval):
-            healthy = preflight_proxy(root_url) is None
-            recovered = tracker.record_recovery(healthy)
-            if tracker.record(healthy):
+        settings = get_settings()
+        while not stop.wait(watch.next_interval()):
+            self.health_tick(watch, settings, on_unhealthy, on_recovered)
+
+    def health_tick(
+        self,
+        watch: ServerWatch,
+        settings: Any,
+        on_unhealthy: Callable[[str], None],
+        on_recovered: Callable[[str], None] | None,
+    ) -> None:
+        """One probe, and -- past the threshold -- one look at the OS facts.
+
+        Public so a test can drive the monitor tick by tick without a thread.
+        """
+
+        result = preflight_result(local_proxy_root_url(settings))
+        # Any answer that names its process -- healthy, starting, draining --
+        # is the server to watch from now on (``x-mcc-pid``, 7.70.0).
+        watch.note_pid(pid_from_headers(result.headers))
+        step = watch.record_probe(result.ok)
+        port = int(settings.port)
+        if step is WatchStep.RECOVERED:
+            if on_recovered is not None:
                 with suppress(Exception):
-                    on_unhealthy()
-            elif recovered and on_recovered is not None:
-                with suppress(Exception):
-                    on_recovered()
+                    on_recovered(recovered_message(port=port))
+            return
+        if step is not WatchStep.CHECK:
+            return
+        facts = self._outage_facts(settings, watch.known_pid or self._child_pid())
+        verdict = watch.record_facts(facts)
+        if verdict is None:
+            return
+        with suppress(Exception):
+            on_unhealthy(dead_message(verdict, facts, port=port, since=watch.since))
+
+    def _child_pid(self) -> int | None:
+        process = self._process
+        return process.pid if process is not None else None
+
+    @staticmethod
+    def _outage_facts(settings: Any, known_pid: int | None) -> PortFacts:
+        """Ask the OS about the port and the known server process. Never signals.
+
+        The bind test first, because it is the cheap question and the one that
+        separates "slow" from "dead": a process that still holds the socket is
+        slow, whatever its probe said. ``netstat`` and the process lookup are
+        paid only when something holds the port.
+        """
+
+        host = (settings.host or "127.0.0.1").strip()
+        port = int(settings.port)
+        updating = active_update() is not None
+        if probe_port_available(host, port):
+            alive = process_is_alive(known_pid) if known_pid is not None else None
+            return PortFacts(
+                port_free=True,
+                known_pid=known_pid,
+                known_alive=alive,
+                updating=updating,
+            )
+        from my_claude_code.cli.port_takeover import identity_for_owner
+
+        owner = diagnose_port_owner(host, port)
+        identity = identity_for_owner(owner)
+        if identity is None:
+            return PortFacts(
+                port_free=False,
+                holder_pid=owner.pid if owner is not None else None,
+                known_pid=known_pid,
+                updating=updating,
+            )
+        known = bool(identity.is_mcc or identity.image or identity.command)
+        return PortFacts(
+            port_free=False,
+            holder_pid=identity.pid,
+            holder_is_mcc=identity.is_mcc if known else None,
+            holder_image=identity.image,
+            known_pid=known_pid,
+            updating=updating,
+        )
 
     # -- menu actions ------------------------------------------------------
 
@@ -1183,7 +1271,7 @@ def launch_desktop(
         lock=instance_lock, window=window_factory(state.window)
     )
     tray = tray_factory(controller)
-    notify = _tray_notifier(tray)
+    notify = _tray_notifier(tray, controller)
     stop_watching = threading.Event()
     watcher = threading.Thread(
         target=_watch_activation,
@@ -1201,10 +1289,7 @@ def launch_desktop(
         controller.ensure_server()
         if state.window_open:
             controller.show_window()
-        controller.start_health_monitor(
-            lambda: notify(SERVER_DOWN_NOTIFICATION),
-            on_recovered=lambda: notify(SERVER_RECOVERED_NOTIFICATION),
-        )
+        controller.start_health_monitor(notify, on_recovered=notify)
         watcher.start()
         close_watcher.start()
         tray.run()
@@ -1214,16 +1299,56 @@ def launch_desktop(
         signal.clear()
 
 
-def _tray_notifier(tray: Any) -> Callable[[str], None]:
-    """Return a notifier that tolerates a tray adapter without notifications."""
+def desktop_app_is_running(controller: DesktopController | None) -> bool:
+    """Whether this host's desktop app (the shell window) is running right now.
+
+    The shell is a child of this host; ``is_open`` is "that child is alive",
+    which stays true while its window is closed to the app's own tray. Any
+    other window provider is a browser window, not the app.
+    """
+
+    window = controller.window if controller is not None else None
+    return isinstance(window, ShellWindow) and window.is_open
+
+
+def _tray_notifier(
+    tray: Any, controller: DesktopController | None = None
+) -> Callable[[str], None]:
+    """Return the host's notifier: log every sentence, show it where it belongs.
+
+    Until 7.70.0 a tray adapter without ``notify`` -- the window-only stand-in
+    every Windows machine with the desktop app runs -- turned every message
+    into a no-op, so a 7-hour outage reached nobody. Now (user answer 1,
+    2026-10-01): the sentence always goes to ``server.log``; the host's own
+    tray icon shows it when there is one; while the desktop app runs it is the
+    app's to show (from the app's next release -- never as a toast under
+    another program's name); otherwise it is one stamped line on the console
+    this host runs in, and nothing at all on a windowless host.
+    """
 
     notify = getattr(tray, "notify", None)
-    if not callable(notify):
-        return lambda _message: None
+    tray_can_notify = callable(notify)
 
     def _notify(message: str) -> None:
-        with suppress(Exception):
-            notify(message)
+        write_server_log_line(
+            os.getenv("LOG_FILE", str(server_log_path())),
+            "WARNING",
+            message,
+            module=__name__,
+            function="notify",
+        )
+        route = notification_route(
+            tray_can_notify=tray_can_notify,
+            desktop_app_running=desktop_app_is_running(controller),
+            console_available=console_available(),
+        )
+        if route is NotificationRoute.TRAY and callable(notify):
+            with suppress(Exception):
+                notify(message)
+        elif route is NotificationRoute.CONSOLE:
+            write_console_line(f"My Claude Code: {message}")
+        else:
+            logger.info("Notification (%s): %s", route.value, message)
 
     return _notify
 

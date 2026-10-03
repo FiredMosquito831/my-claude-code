@@ -424,15 +424,39 @@ measured it before, and the cost had roughly tripled since 6.41.2 unnoticed.
 #### If something else is on the port
 
 `SERVER_PORT_TAKEOVER` on **Limits & Resilience** decides. The default,
-`always`, stops the holder and takes the port — because the holder is almost
-always MCC's own previous process, one that overran its drain or that the
-desktop app started twice, and refusing to start because of one of those is
-refusing to recover. A holder that is *not* MCC is named in one `WARNING` line
-in the server log before it is stopped. Set it to **mcc-only** to limit that to
-processes this install can identify as its own, or **never** for the behaviour of
-6.58.4 and earlier (name the holder, refuse to start). The holder is identified
-by its **process** — image name and command line — never by what it answers on
-the port, because a server that is still starting answers nothing at all.
+`always`, **replaces a holder that is not answering** — because the holder is
+almost always MCC's own previous process, one that overran its drain, and
+refusing to start because of one of those is refusing to recover. A holder that
+is *not* MCC is named in one `WARNING` line in the server log before it is
+stopped. Set it to **mcc-only** to limit that to processes this install can
+identify as its own, or **never** for the behaviour of 6.58.4 and earlier (name
+the holder, refuse to start).
+
+**A My Claude Code server that is answering is never stopped (7.70.0).** Before
+anything is stopped, the new start asks the holder's `GET /health`, with the
+desktop app's own patience — the `DESKTOP_HEALTH_PROBE_TIMEOUTS` ladder (5, 10,
+15 s) for `DESKTOP_HEALTH_FAILURE_THRESHOLD` (3) tries, 30 s at most, stopping
+at the first answer. If My Claude Code answers — healthy, busy, or still
+starting — the new start prints one line in its console and in the log, and
+exits with code 1 having stopped nothing:
+
+```text
+[2026-10-04 12:00:00] My Claude Code: Port 8082 is already served by My Claude Code (pid 81440; it answered /health in 0.0 s). This start was abandoned and nothing was stopped. To replace that server, stop it first -- Ctrl+C in the window it runs in, Quit in the desktop app that started it, or end process 81440 in Task Manager -- then start mcc-server again.
+```
+
+So **to replace a running server, stop it first**; starting a second one no
+longer does it for you. A holder that answers that it is *shutting down* is
+waited for — up to `SERVER_GRACEFUL_SHUTDOWN_SECONDS` plus four seconds, the
+time its own watchdog allows — and never stopped while it says so. A holder that
+does not answer at all, or that is not My Claude Code, is handled exactly as
+before. This is user decision R5: on 2026-09-28 a new server stopped a working
+one because that one answered a single `/health` late. Whether a holder is
+stopped is still decided by its **process** — image name and command line;
+what it answers on the port can only ever make a start stop *nothing*.
+`never` asks nothing and is unchanged. Every `/health` answer now carries the
+answering server's process id as `x-mcc-pid`, which is how the line above
+names it (a server older than 7.70.0 is named from the operating system's port
+table instead).
 
 <div align="center">
   <img src="../assets/admin-page.png" alt="Admin dashboard overview" width="860">
@@ -1203,7 +1227,7 @@ Nineteen settings live under **Admin → Providers → Desktop**, beside the liv
 
 | Setting | Default | Range |
 | --- | --- | --- |
-| `DESKTOP_HEALTH_POLL_SECONDS` | 5 | 0.5–3600 |
+| `DESKTOP_HEALTH_POLL_SECONDS` | 30 | 0.5–3600 |
 | `DESKTOP_HEALTH_FAILURE_THRESHOLD` | 3 | 1–1000 |
 | `DESKTOP_ACTIVATION_POLL_SECONDS` | 1 | 0.1–3600 |
 | `DESKTOP_RECONNECT_RESTATUS_SECONDS` | 30 | 5–3600 |
@@ -1244,6 +1268,38 @@ on a machine where antivirus scanning makes a cold start take longer than that.
 `DESKTOP_SHELL_AUTO_UPDATE` is the server's one-shot desktop-app update described
 above.
 
+<a id="when-mcc-desktop-finds-the-server-dead"></a>
+
+#### When `mcc-desktop` finds the server dead (7.70.0)
+
+`mcc-desktop` probes `/health` every `DESKTOP_HEALTH_POLL_SECONDS` — **30 s since
+7.70.0** (it was 5 s) while the server answers — and every 5 s once a probe has
+failed, exactly as fast as before. After `DESKTOP_HEALTH_FAILURE_THRESHOLD` (3)
+failed probes it asks the **operating system**, not another timeout, what
+happened:
+
+| What the OS says | What you are told |
+| --- | --- |
+| The server's process (the pid it named in `x-mcc-pid`) has **exited** | at once: *"…process 58620 has exited. Start it again with mcc-server."* |
+| The process is **alive but no longer holds the port** (a lost listener), or nothing listens and no pid is known | once that has held for 3 looks over 30 s (`DESKTOP_HEALTH_FAILURE_THRESHOLD` × `DESKTOP_TICK_SECONDS`), so an in-process reload that re-binds its own port is never announced |
+| A program that is **not** My Claude Code now holds the port | at once, naming it; nothing is stopped |
+| My Claude Code **still holds the port** (busy), or the lookup failed, or an update is installing | nothing, however long it lasts — a busy server is never called dead |
+
+It says so **once per outage**, and *"…is answering again."* when an announced
+outage ends. It never restarts anything itself.
+
+**Where the sentence goes.** Always into `server.log`. Then: with the Python tray
+icon (macOS, or Windows without the desktop app), as that icon's notification;
+**while the desktop app is running, nothing else is shown** — the notification
+belongs to the app, under its own name, and comes with the app's next release
+(this release never shows one under another program's name, such as Windows
+PowerShell); with no desktop app, one stamped line on the console `mcc-desktop`
+runs in (`[2026-10-04 07:02:11] My Claude Code: The My Claude Code server on port
+8082 is not answering (since 07:01): process 58620 has exited. …`). On Windows
+`mcc-desktop` normally runs windowless, so there the `server.log` line is the
+record. A server that loses its own port already says so in *its* console (7.69.2)
+and exits with code 75.
+
 <a id="a-busy-server-is-not-an-absent-one"></a>
 
 #### A busy server is not an absent one (7.26.0)
@@ -1278,9 +1334,11 @@ it gone.
 **What does not change.** A server whose process has actually exited, or a port
 nothing is listening on, is started again immediately, on exactly the same check
 it always was — none of the three settings above applies to a server the app has
-never seen answer. `SERVER_PORT_TAKEOVER=always` still means what it has always
-meant for a server you start yourself from a terminal: it takes the port. And
-nothing about updating or installing changes.
+never seen answer. Nothing about updating or installing changes. (Since 7.70.0
+`SERVER_PORT_TAKEOVER=always` takes the port only from a holder that is not
+answering: a server you start yourself from a terminal while another My Claude
+Code answers on the port says so and exits — see
+[If something else is on the port](#if-something-else-is-on-the-port).)
 
 <a id="and-now-the-server-says-so-itself"></a>
 
@@ -5342,7 +5400,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `OPENCODE_FREE_TIER_CREDENTIAL` | `public` | **New in 7.34.0.** Which credential free OpenCode Zen models are fetched with. The free-usage limit is metered per credential, not per address. `public` uses OpenCode's shared anonymous credential exactly as the OpenCode CLI does when no key is configured, so your own key's free allowance is not spent — and neither are the hourly model-discovery sweep or the **Test** button. `key` uses your key for everything, as 7.33.0 did. Paid Zen models always use your key; OpenCode Go is never affected; the shared credential is shared. Same scope as `OPENCODE_FREE_TIER_MODELS`. See [The free tier is metered per key](#the-free-tier-is-metered-per-key-so-free-models-use-opencodes-own). |
 | `SERVER_STALE_SERVER_ACTION` | `report` | **New in 6.72.2.** What the server does about other My Claude Code servers it finds at start. `report` names each one in the server log — pid, session, recorded port, start time, last heartbeat, and the files it holds open — and stops nothing. `stop` also stops the ones this install can prove are finished: a heartbeat silent past `SERVER_STALE_SESSION_SECONDS` whose recorded port is now served by a different MCC, or a launcher whose server process is gone. A server is never stopped merely for owning no listening socket. |
 | `SERVER_STALE_SESSION_SECONDS` | `900` | **New in 6.72.2.** How long another server's heartbeat must be silent before the word "stale" is available for it. A running server checks in every 30 s, so the default is thirty missed beats. Silence alone never stops anything. Range 60–86400. |
-| `SERVER_PORT_TAKEOVER` | `always` | **New in 6.59.0.** What happens when the server starts and its port is already held. `always` stops the holder and takes the port; a holder that is not MCC is named in one `WARNING` line first. Setting it to mcc-only stops only processes this install can identify as its own; never is the pre-6.59.0 behaviour — name the holder and refuse to start. Identification is by process, never by the HTTP answer. |
+| `SERVER_PORT_TAKEOVER` | `always` | **New in 6.59.0; narrowed in 7.70.0.** What happens when the server starts and its port is already held. `always` replaces a holder that is not answering; a holder that is not MCC is named in one `WARNING` line first. A My Claude Code server that answers `/health` (healthy, busy or starting, within 30 s) is never stopped: the new start names it and exits with code 1 — stop it first to replace it. Setting it to mcc-only replaces only processes this install can identify as its own; never is the pre-6.59.0 behaviour — name the holder and refuse to start. Whether a holder is stopped is decided by its process; its answer can only make a start stop nothing. |
 | `SERVER_GRACEFUL_SHUTDOWN_SECONDS` | `20` | **Changed in 6.41.0** — was `300`, and it used to bound only uvicorn's connection wait while the response cleanup, the provider drain and the ASGI lifespan had no bound at all (a request against a silent upstream meant a server that never exited). It is now one deadline for the whole stop, new requests are refused with `503` for its duration, and the process exits a few seconds past it. Lower an inherited `300` unless you would rather wait five minutes for a restart than cut a long request. |
 | `CREDENTIAL_CIRCUIT_THRESHOLD` | **removed at 6.0.0** | The circuit breaker it configured no longer exists for provider pools. A stale line is ignored, not fatal — delete it. |
 

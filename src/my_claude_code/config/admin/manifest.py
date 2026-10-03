@@ -2315,27 +2315,36 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="always",
         restart_required=True,
         options=(
-            ConfigOptionSpec("always", "Stop whatever holds the port"),
-            ConfigOptionSpec("mcc-only", "Stop only My Claude Code's own processes"),
+            ConfigOptionSpec("always", "Replace a holder that is not answering"),
+            ConfigOptionSpec(
+                "mcc-only",
+                "Replace only My Claude Code's own processes that are not answering",
+            ),
             ConfigOptionSpec("never", "Stop nothing; refuse to start"),
         ),
         description=(
             "What happens when this server starts and something is already "
-            "listening on its port. Always -- the default -- stops the holder "
-            "and takes the port, which is what makes a restart or an update "
+            "listening on its port. Always -- the default -- replaces a holder "
+            "that is not answering, which is what makes a restart or an update "
             "come back on its own: the commonest holder by far is My Claude "
-            "Code's own previous process, one that overran its drain or that "
-            "the desktop app started twice. A holder that is not My Claude "
-            "Code is named in one WARNING line in the server log before it is "
-            "stopped. Mcc-only stops only processes this install can identify "
-            "as its own and leaves anything else alone -- pick it if this "
-            "port might legitimately belong to another program. Never is the "
-            "behaviour of 6.58.4 and earlier: the server names the holder and "
-            "refuses to start, and you sort it out by hand. The holder is "
-            "identified by its process, never by what it answers on the port, "
-            "because a server that is still starting answers nothing at all. "
-            "Requires a restart: it is read only by the supervisor, once, when the "
-            "server starts and binds."
+            "Code's own previous process, one that overran its drain. Since "
+            "7.70.0 a My Claude Code server that IS answering (healthy, busy or "
+            "still starting) is never stopped: the new start prints which "
+            "server already has the port (its process id and how to stop it), "
+            "exits with code 1 and stops nothing. To replace a running server, "
+            "stop it first. Before deciding, the new start asks the holder's "
+            "/health with the desktop app's own patience (the "
+            "DESKTOP_HEALTH_PROBE_TIMEOUTS ladder, 30 s at most), and waits "
+            "for one that says it is shutting down. A holder that is not My Claude Code is named in one WARNING "
+            "line in the server log before it is stopped. Mcc-only replaces "
+            "only processes this install can identify as its own and leaves "
+            "anything else alone -- pick it if this port might legitimately "
+            "belong to another program. Never is the behaviour of 6.58.4 and "
+            "earlier: the server names the holder and refuses to start, and you "
+            "sort it out by hand. Whether a holder is stopped is still decided "
+            "by its process; what it answers on the port can only ever make a "
+            "start stop nothing. Requires a restart: it is read only by the "
+            "supervisor, once, when the server starts and binds."
         ),
     ),
     ConfigFieldSpec(
@@ -3802,11 +3811,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "desktop",
         "number",
         settings_attr="desktop_health_poll_seconds",
-        default="5",
+        default="30",
         description=(
-            "How often the running tray probes mcc-server once it is up. "
-            "Applies the next time mcc-desktop starts, not to a tray already "
-            "running."
+            "How often the running tray probes mcc-server while it is "
+            "answering. 30 s since 7.70.0 (it was 5 s): a healthy server needs "
+            "no closer watching, and every probe is a request on its loop. "
+            "After a failed probe it re-checks every 5 s, as before, so an "
+            "outage is noticed just as quickly. Applies the next time "
+            "mcc-desktop starts, not to a tray already running."
         ),
     ),
     ConfigFieldSpec(

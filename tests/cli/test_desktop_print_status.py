@@ -91,6 +91,10 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "start_backoff_seconds": float,
     "foreign_grace_seconds": float,
     "status_wall_seconds": float,
+    # 7.70.0 (rescue, server side): how long a server asked to stop is given
+    # to leave on its own. Tolerated by the v7.26.0 shell (it ignores unknown
+    # keys, C3), required by none until the pin moves (C9).
+    "server_stop_wait_seconds": float,
     # Who holds the port, decided by PROCESS. The whole of BUG-5: the old
     # answer came from a bind test, which cannot tell MCC's own starting
     # python.exe from a stranger -- and told one user to go and stop My

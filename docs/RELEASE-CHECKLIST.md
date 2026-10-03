@@ -134,6 +134,27 @@ The three that are budgets came out of the binary on purpose (audit s5.4):
 probe timeout existed twice -- once in `launchers/common.py` and once in
 `health.rs` -- as two constants that were meant to be one number.
 
+### The rescue keys added in 7.70.0
+
+`server_stop_wait_seconds` (top level: `SERVER_GRACEFUL_SHUTDOWN_SECONDS` + the
+server's fixed teardown margin + its watchdog's beat, 24 at the default) and
+`identified` inside `holder` (`false` only for a holder whose lookup failed; such a
+holder keeps `kind: foreign`, so an old reader behaves exactly as before). The same
+two-release rule: 7.70.0 emits both; the pinned v7.26.0 shell tolerates them (its
+`Status` and `Holder` derive `Deserialize` without `deny_unknown_fields`, and its
+`tolerates_unknown_keys` test pins that); a shell may require them only after the pin
+moves past a release that emits them. The same release stamps `x-mcc-pid` on every
+`/health` answer -- a header, so no reader can be refused for it.
+
+**Notifications while the desktop app runs are the app's (hand-off for the next shell
+release).** From 7.70.0 `mcc-desktop` never shows a notification while its desktop
+app (the shell child) is running: it writes the sentence to `server.log` and leaves
+showing it to the app, under the app's own name (user answer 1, 2026-10-01). The
+shell has no notification code yet; when it gains it, it decides "dead" from its own
+facts (the probe, `x-mcc-pid`, `holder.pid`/`identified`, the OS liveness of that
+pid) rather than relaying the host's sentence, so the two can never both speak. No
+status key carries the host's sentence, by design.
+
 ### Adding a key the *shell* writes back
 
 `shell_installed_tag` was added in 6.60.0 and is the first key that exists so
