@@ -7,9 +7,10 @@ included at top level for easy grep/filter.
 
 Each start rotates the previous ``server.log`` aside as
 ``server.<timestamp>.log`` rather than truncating it, and the startup sweep
-caps those together with loguru's own rotations under
-``SERVER_LOG_RETAIN_FILES``. A restart is the commonest thing anyone needs a
-log to explain, and until 6.58.1 a restart was what destroyed it.
+caps those together with the 50 MB size rotations under
+``SERVER_LOG_RETAIN_FILES`` -- which every size rotation applies again while
+the server runs. A restart is the commonest thing anyone needs a log to
+explain, and until 6.58.1 a restart was what destroyed it.
 """
 
 import contextlib
@@ -31,7 +32,7 @@ _current_verbose: bool | None = None
 _sink_id: int | None = None
 _active_sink: _ServerLogSink | None = None
 # Default number of rotated ``server.*.log`` files to keep. ``0`` keeps them
-# all. Applied both when loguru rotates and by the startup sweep below.
+# all. Applied both when the file sink rotates and by the startup sweep below.
 _default_retain_files = 10
 
 _THIRD_PARTY_LOGGERS = (
@@ -194,13 +195,16 @@ def _per_process_log_path(log_path: Path) -> Path:
     return log_path.with_name(f"{log_path.stem}.{os.getpid()}{log_path.suffix}")
 
 
-def _manual_log_line(level: str, message: str) -> str:
+def _manual_log_line(
+    level: str, message: str, *, function: str = "_switch_to_fallback"
+) -> str:
     """One line in the same JSON shape ``_serialize_with_context`` writes.
 
-    Used only from inside :meth:`_ServerLogSink._switch_to_fallback`, where
-    calling back into ``logger`` while loguru is in the middle of calling this
-    very sink's ``write`` is the kind of reentrancy that is worth avoiding
-    rather than reasoning carefully about.
+    Used only from inside :class:`_ServerLogSink`, where calling back into
+    ``logger`` while loguru is in the middle of calling this very sink's
+    ``write`` is the kind of reentrancy that is worth avoiding rather than
+    reasoning carefully about: with ``enqueue=True`` the writer thread would
+    be putting a record on the very queue only it drains.
     """
 
     payload = {
@@ -208,26 +212,100 @@ def _manual_log_line(level: str, message: str) -> str:
         "level": level,
         "message": message,
         "module": "my_claude_code.config.logging_config",
-        "function": "_switch_to_fallback",
+        "function": function,
         "line": 0,
     }
     return json.dumps(payload, default=str) + "\n"
 
 
+#: A per-process fallback file, ``server.<pid>.log``: the shape
+#: :func:`_per_process_log_path` builds. Its rotated parts are
+#: ``server.<pid>.<timestamp>.log`` and ordinary rotations are
+#: ``server.<timestamp>.log`` -- neither is all digits between the dots.
+_ACTIVE_FALLBACK_NAME = r"{stem}\.\d+{suffix}"
+
+
+def _prune_rotated_logs(
+    log_path: Path, retain_files: int, *, exclude: Path | None = None
+) -> None:
+    """Keep at most ``retain_files`` rotated logs; for the logging thread.
+
+    The runtime twin of :func:`_sweep_rotated_logs`, called by
+    :class:`_ServerLogSink` after each successful size rotation so a server
+    that runs for days stays inside ``SERVER_LOG_RETAIN_FILES`` without
+    waiting for its next start (loguru's own ``retention=`` used to do this
+    until 7.69.6 replaced loguru's rotation). ``0`` keeps everything, exactly
+    as the startup sweep reads it.
+
+    Never deletes an ACTIVE file. ``log_path`` itself never matches the
+    ``{stem}.*{suffix}`` glob; ``exclude`` is whatever this process is writing;
+    and no ``server.<pid>.log`` is ever a candidate here, whoever's pid it
+    carries, because that is the shape of another live server's fallback file
+    and telling a live pid from a dead one would mean probing processes. (On
+    Windows such a file is held open and could not be deleted anyway; on POSIX
+    it could, and its writer would carry on into an invisible inode.) Those
+    files are not counted against the cap either; a dead server's one is left
+    to the next startup sweep, as before.
+
+    Runs inside the sink's ``write``, so it neither raises nor calls
+    ``logger``: a file that cannot be listed, stat'ed or deleted -- held open
+    by another process, already gone -- is skipped silently.
+    """
+
+    if retain_files <= 0:
+        return
+    stem = log_path.stem
+    suffix = log_path.suffix
+    active_shape = re.compile(
+        _ACTIVE_FALLBACK_NAME.format(stem=re.escape(stem), suffix=re.escape(suffix))
+    )
+    try:
+        found = list(log_path.parent.glob(f"{stem}.*{suffix}"))
+    except OSError:
+        return
+    if len(found) >= _MAX_ROTATED_FILES:
+        return
+    dated: list[tuple[float, Path]] = []
+    for candidate in found:
+        if candidate == exclude:
+            continue
+        if active_shape.fullmatch(candidate.name):
+            continue
+        try:
+            dated.append((candidate.stat().st_mtime, candidate))
+        except OSError:
+            continue
+    dated.sort(key=lambda item: item[0])
+    for _mtime, old in dated[: max(0, len(dated) - retain_files)]:
+        with suppress(OSError):
+            old.unlink()
+
+
 class _ServerLogSink:
     """A loguru sink that falls back instead of breaking.
 
-    Behaves like loguru's own file sink with ``rotation="50 MB"`` -- append,
-    rotate the old file aside past the size cap -- except that when the
+    Behaves like loguru's own file sink with ``rotation="50 MB"`` and
+    ``retention=SERVER_LOG_RETAIN_FILES`` -- append, rotate the old file aside
+    past the size cap, prune the oldest rotated files -- except that when the
     rotation rename fails because another process holds ``log_path`` (Windows
     ``WinError 32``), this process switches its own writes to
     ``server.<pid>.log`` beside it and keeps going, rather than dropping every
-    subsequent record. ``SERVER_LOG_RETAIN_FILES`` still bounds these through
-    :func:`_sweep_rotated_logs`, which globs the same ``{stem}.*{suffix}``
-    pattern loguru's own rotated files use.
+    subsequent record.
+
+    That per-process file rotates at the same cap, to
+    ``server.<pid>.<timestamp>.log`` (until 7.69.8 it never rotated, and grew
+    for the life of the process). Every successful rotation, either kind,
+    prunes through :func:`_prune_rotated_logs`, so the cap holds while the
+    server runs and not only at its next start.
     """
 
-    def __init__(self, initial_path: Path, *, nominal_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        initial_path: Path,
+        *,
+        nominal_path: Path | None = None,
+        retain_files: int = _default_retain_files,
+    ) -> None:
         # The *nominal* path is always ``server.log``, even when
         # ``initial_path`` is already a per-process fallback (a startup
         # rotation that lost the race) -- so a later size rotation that also
@@ -235,6 +313,7 @@ class _ServerLogSink:
         self._nominal_path = nominal_path if nominal_path is not None else initial_path
         self._active_path = initial_path
         self._fallback = initial_path != self._nominal_path
+        self._retain_files = max(0, int(retain_files))
         self._fh = _open_for_append(Path(initial_path))
         self._size = self._fh.tell()
 
@@ -245,7 +324,7 @@ class _ServerLogSink:
     def write(self, message: object) -> None:
         data = str(message)
         encoded_len = len(data.encode("utf-8"))
-        if not self._fallback and self._size + encoded_len > _MAX_LOG_BYTES:
+        if self._size + encoded_len > _MAX_LOG_BYTES:
             self._rotate()
         self._fh.write(data)
         self._fh.flush()
@@ -254,14 +333,47 @@ class _ServerLogSink:
     def _rotate(self) -> None:
         current_path = self._active_path
         self._fh.close()
+        # ``server.<stamp>.log`` for server.log; ``server.<pid>.<stamp>.log``
+        # for a fallback file -- its own pid in the name, so it can collide
+        # neither with another process's files nor with this process's next
+        # ``server.<pid>.log``, and it still matches the sweep's glob.
         target = _rotated_name(current_path)
         try:
             os.replace(current_path, target)
-        except OSError:
-            self._switch_to_fallback()
+        except OSError as exc:
+            if self._fallback:
+                self._keep_writing_unrotated(exc)
+            else:
+                self._switch_to_fallback()
             return
         self._fh = _open_for_append(Path(current_path))
         self._size = 0
+        _prune_rotated_logs(
+            self._nominal_path, self._retain_files, exclude=current_path
+        )
+
+    def _keep_writing_unrotated(self, exc: OSError) -> None:
+        """The fallback file itself could not be renamed: keep appending.
+
+        There is nowhere further to fall back to, and dropping records is the
+        one thing this sink exists not to do. Counting starts afresh, so the
+        next attempt is one cap's worth of bytes later -- not one rename, and
+        one notice, per record.
+        """
+
+        self._fh = _open_for_append(Path(self._active_path))
+        self._size = 0
+        self._fh.write(
+            _manual_log_line(
+                "WARNING",
+                f"{self._active_path.name} passed "
+                f"{_MAX_LOG_BYTES // (1024 * 1024)} MB and could not be rotated "
+                f"aside ({exc}); still logging to it, and trying again after "
+                f"another {_MAX_LOG_BYTES // (1024 * 1024)} MB.",
+                function="_keep_writing_unrotated",
+            )
+        )
+        self._fh.flush()
 
     def _switch_to_fallback(self) -> None:
         fallback_path = _per_process_log_path(self._nominal_path)
@@ -295,7 +407,9 @@ def _add_file_sink(
     nominal_path: Path | None = None,
 ) -> tuple[int, _ServerLogSink]:
     log_path = Path(log_file)
-    sink = _ServerLogSink(log_path, nominal_path=nominal_path)
+    sink = _ServerLogSink(
+        log_path, nominal_path=nominal_path, retain_files=retain_files
+    )
     sink_id = logger.add(
         sink,
         level=level,
@@ -487,10 +601,11 @@ def configure_logging(
     restart no longer destroys the evidence of what happened before it.
 
     ``retain_files`` caps the number of rotated ``server.*.log`` files kept;
-    ``0`` keeps them all. The cap is applied both as loguru's rotation retention
-    and by a startup sweep, so a directory that already holds more rotated files
-    than the cap is trimmed on the next start rather than only as each one rotates
-    past. The current log file is never deleted.
+    ``0`` keeps them all. The cap is applied both after every size rotation
+    (by the sink, on loguru's writer thread) and by a startup sweep, so a
+    directory that already holds more rotated files than the cap is trimmed on
+    the next start rather than only as each one rotates past. The current log
+    file is never deleted.
 
     When ``verbose_third_party`` is false, noisy HTTP and Telegram loggers are
     capped at WARNING unless explicitly configured otherwise.
