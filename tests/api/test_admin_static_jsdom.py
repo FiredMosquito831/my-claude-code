@@ -6740,6 +6740,32 @@ def test_the_apply_banner_names_only_the_fields_that_need_a_restart(rendered) ->
     assert banner["hot"] == "Applied"
 
 
+def test_a_refused_save_says_so_and_keeps_the_edit(rendered) -> None:
+    """7.69.7: a save the server refuses (the settings file was busy) is shown.
+
+    The Save button's handler dropped the rejected promise, so a 503 left the
+    page silent. Driven through the real button: the server's sentence is the
+    banner, as an error; the edited control keeps its value and is still the
+    one unsaved change; nothing reloads; and the same click saves once the
+    file is free.
+    """
+
+    refused = rendered["refusedSave"]
+    assert refused["controlFound"] is True
+    assert refused["edited"]
+    assert refused["editTook"] is True
+    assert refused["dirtyBefore"] != refused["dirtyAtStart"]
+    assert refused["message"] == refused["sentence"]
+    assert refused["message"].startswith("Not saved: the settings file was busy")
+    assert refused["messageIsError"] is True
+    assert refused["valueKept"] is True
+    assert refused["dirtyAfter"] == refused["dirtyBefore"]
+    assert "LOG_LEVEL" in refused["submitted"]
+    assert refused["reloads"] == 0
+    assert refused["retryMessage"] == "Applied"
+    assert refused["retryReloads"] == 1
+
+
 # ------------------------------------------------- rail credential hints (7.49.0)
 
 

@@ -17,7 +17,6 @@ of that contract, in the order they matter:
   choice has to survive a later change of that default.
 """
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,8 +25,20 @@ from typing import Any
 from my_claude_code.config.paths import managed_env_path
 from my_claude_code.config.settings import Settings
 
+from .env_io import (
+    keep_previous_copy,
+    note_settings_read,
+    read_settings_bytes,
+    remove_quietly,
+    replace_settings_file,
+)
 from .manifest import FIELD_BY_KEY, FIELDS, SECTIONS, ConfigFieldSpec
-from .sources import dotenv_values_from_file, is_locked_source, repo_env_path
+from .sources import (
+    dotenv_values_from_bytes,
+    dotenv_values_from_file,
+    is_locked_source,
+    repo_env_path,
+)
 from .validation import settings_from_values
 from .values import (
     MASKED_SECRET,
@@ -103,6 +114,8 @@ class PreparedAdminUpdate:
 
 def target_values_with_updates(
     updates: Mapping[str, Any],
+    *,
+    strict: bool = False,
 ) -> tuple[dict[str, str], tuple[str, ...]]:
     """Return the managed env values after applying admin updates, and warnings.
 
@@ -111,10 +124,14 @@ def target_values_with_updates(
     starts from the file rather than from the template because the template
     carries defaults, and a default written into the file is indistinguishable
     from a choice for the rest of the file's life.
+
+    ``strict`` is what a save passes: a file that exists but cannot be read
+    raises ``SettingsFileBusyError`` instead of starting the result from
+    nothing (7.69.7).
     """
 
-    state = load_value_state()
-    managed_values = dotenv_values_from_file(managed_env_path())
+    state = load_value_state(strict=strict)
+    managed_values = dotenv_values_from_file(managed_env_path(), strict=strict)
     values = {
         key: value for key, value in managed_values.items() if key in FIELD_BY_KEY
     }
@@ -127,7 +144,7 @@ def target_values_with_updates(
             if entry["source"] == "repo_env":
                 values[key] = str(entry["value"])
 
-    repo_values = dotenv_values_from_file(repo_env_path())
+    repo_values = dotenv_values_from_file(repo_env_path(), strict=strict)
     warnings: list[str] = []
     for key, value in updates.items():
         field = FIELD_BY_KEY.get(key)
@@ -178,20 +195,25 @@ def _unset_field(
 
 def effective_values_for_validation(
     target_values: Mapping[str, str],
+    *,
+    strict: bool = False,
 ) -> dict[str, str]:
     """Return values validated after preserving locked external sources."""
 
     values = dict(target_values)
-    for key, entry in load_value_state().items():
+    for key, entry in load_value_state(strict=strict).items():
         if is_locked_source(entry["source"]):
             values[key] = str(entry["value"])
     return values
 
 
 def validate_updates(updates: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate partial admin updates and return a masked generated env preview."""
+    """Validate partial admin updates and return a masked generated env preview.
 
-    return prepare_admin_update(updates).validation_response()
+    A preview writes nothing, so it keeps the lenient read.
+    """
+
+    return prepare_admin_update(updates, strict=False).validation_response()
 
 
 def changed_pending_fields(
@@ -199,6 +221,7 @@ def changed_pending_fields(
     *,
     settings: Settings,
     messaging_running: bool = True,
+    strict: bool = False,
 ) -> list[str]:
     """Return changed fields that require manual runtime action.
 
@@ -210,7 +233,7 @@ def changed_pending_fields(
     ask, such as a validation preview.
     """
 
-    state = load_value_state()
+    state = load_value_state(strict=strict)
     pending: list[str] = []
     for key, value in updates.items():
         field = FIELD_BY_KEY.get(key)
@@ -244,16 +267,26 @@ def prepare_admin_update(
     updates: Mapping[str, Any],
     *,
     messaging_running: bool = True,
+    strict: bool = True,
 ) -> PreparedAdminUpdate:
-    """Validate an update and construct its prospective Settings snapshot."""
+    """Validate an update and construct its prospective Settings snapshot.
 
-    target_values, warnings = target_values_with_updates(updates)
-    effective_values = effective_values_for_validation(target_values)
+    Strict by default because a prepared update is what a save commits: every
+    settings file it reads must be read, or the save is refused with
+    ``SettingsFileBusyError`` before anything is built. Only the validation
+    preview, which writes nothing, passes ``strict=False``.
+    """
+
+    target_values, warnings = target_values_with_updates(updates, strict=strict)
+    effective_values = effective_values_for_validation(target_values, strict=strict)
     settings, errors = settings_from_values(effective_values)
     pending_fields = (
         tuple(
             changed_pending_fields(
-                updates, settings=settings, messaging_running=messaging_running
+                updates,
+                settings=settings,
+                messaging_running=messaging_running,
+                strict=strict,
             )
         )
         if settings is not None
@@ -270,7 +303,12 @@ def prepare_admin_update(
 
 
 def commit_prepared_admin_update(prepared: PreparedAdminUpdate) -> dict[str, Any]:
-    """Atomically persist a previously validated Admin update."""
+    """Atomically persist a previously validated Admin update.
+
+    Raises ``SettingsFileBusyError`` -- with the file exactly as it was --
+    when the file cannot be read, its previous copy cannot be kept, or the
+    replace is refused on every attempt (7.69.7).
+    """
 
     if not prepared.valid:
         raise ValueError("Cannot commit an invalid Admin update")
@@ -278,6 +316,12 @@ def commit_prepared_admin_update(prepared: PreparedAdminUpdate) -> dict[str, Any
     path = prepared.path
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
+    # The file as it is now, read once and strictly: the entries no admin field
+    # owns are written back from it, and the same bytes become the previous
+    # copy. A read that fails refuses the save here, before anything is
+    # written; it used to read as "no entries" and drop every one of them.
+    current = read_settings_bytes(path)
+    existing = {} if current is None else dotenv_values_from_bytes(path, current)
     # One walk of the manifest, one read of the unmanaged entries, two texts:
     # the file, and the masked preview the response carries. They were rendered
     # by two separate calls either side of the write until 7.31.0, which read
@@ -286,13 +330,19 @@ def commit_prepared_admin_update(prepared: PreparedAdminUpdate) -> dict[str, Any
     # read before it are the same entries by construction.
     written, preview = render_env_pair(
         prepared.target_values,
-        preserved=unmanaged_env_values(path),
+        preserved=unmanaged_values_from(existing),
     )
     try:
         temp_path.write_text(written, encoding="utf-8")
-        os.replace(temp_path, path)
+        if current is not None and current.strip():
+            # Immediately before the replace, the file as it was is kept
+            # beside it as ``.env.previous`` -- only bytes that were read and
+            # hold settings, so the copy is never an empty or failed read.
+            keep_previous_copy(path, current)
+        replace_settings_file(temp_path, path)
     finally:
-        temp_path.unlink(missing_ok=True)
+        remove_quietly(temp_path)
+    note_settings_read(path, written.encode("utf-8"))
     return prepared.applied_response(preview)
 
 
@@ -391,7 +441,16 @@ def unmanaged_env_values(path: Path | None = None) -> dict[str, str]:
     two lines for one setting, one of which is dead.
     """
 
-    existing = dotenv_values_from_file(path or managed_env_path())
+    return unmanaged_values_from(dotenv_values_from_file(path or managed_env_path()))
+
+
+def unmanaged_values_from(existing: Mapping[str, str]) -> dict[str, str]:
+    """The entries of an already-parsed managed file that no admin field owns.
+
+    :func:`unmanaged_env_values` for values a caller has already read, so a
+    save can take them from the same bytes it keeps as the previous copy.
+    """
+
     managed = {field.key for field in FIELDS}
     aliases = settings_env_aliases()
     superseded = superseded_env_aliases()

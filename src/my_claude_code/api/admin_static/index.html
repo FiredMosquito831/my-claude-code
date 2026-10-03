@@ -5288,6 +5288,22 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                     a terminal, run <code>mcc-server</code> again. On Windows the usual cause,
                     a client resetting a connection while the server is busy, no longer
                     closes the socket at all.</li>
+                  <li><strong>&ldquo;Not saved: the settings file was busy &hellip; nothing
+                    was changed&rdquo;</strong> &mdash; from 7.69.7 a save that cannot read or
+                    replace the settings file (<code>.env</code>) because another program
+                    has it open &mdash; a second My Claude Code server, a sync tool, an
+                    antivirus scan, an editor &mdash; retries for about a third of a second
+                    and then stops instead of guessing. The file is exactly as it was, the
+                    server keeps its settings and the form keeps your edits: press Save
+                    again. Before 7.69.7 that moment could rewrite the file with only the
+                    setting being saved.</li>
+                  <li><strong>The previous copy of your settings</strong> &mdash; from
+                    7.69.7 every save first keeps the file as it was beside it as
+                    <code>.env.previous</code> in the config directory (one copy, replaced
+                    by each save, never by an empty or unreadable read). It holds your
+                    keys like <code>.env</code> does and is never shown here or logged. To
+                    go back one save: stop the server, copy <code>.env.previous</code> over
+                    <code>.env</code>, start it again.</li>
                   <li><strong>Two configs on Windows</strong> &mdash; installing under both
                     PowerShell and WSL gives separate <code>.mcc</code> directories. The
                     startup log prints which one is in use.</li>

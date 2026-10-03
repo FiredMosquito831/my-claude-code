@@ -17321,7 +17321,11 @@ async function clearWebSearchAnalytics() {
 }
 
 byId("validateButton").addEventListener("click", () => validate(true));
-byId("applyButton").addEventListener("click", apply);
+// A refused save (since 7.69.7, a 503 saying the settings file was busy and
+// nothing was changed) used to reject unseen. Say it; the form keeps its edits.
+byId("applyButton").addEventListener("click", () =>
+  apply().catch((error) => showMessage(error.message, "error")),
+);
 byId("webSearchStatsApply").addEventListener("click", () =>
   loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error")),
 );

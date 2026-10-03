@@ -74,6 +74,21 @@ def _reset_stop_deadline():
 
 
 @pytest.fixture(autouse=True)
+def _reset_seen_settings_files():
+    """7.69.7: the settings-save reader remembers which files held settings.
+
+    A file it has seen holding settings that is suddenly missing or empty is
+    retried and refused rather than read as a fresh install, so no test may
+    inherit another test's memory of a path.
+    """
+    from my_claude_code.config.admin.env_io import forget_seen_settings_files
+
+    forget_seen_settings_files()
+    yield
+    forget_seen_settings_files()
+
+
+@pytest.fixture(autouse=True)
 def _reset_listener_state():
     """7.69.2: two process-wide facts about the listening socket.
 

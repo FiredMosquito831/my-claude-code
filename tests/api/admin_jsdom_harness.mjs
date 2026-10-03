@@ -3208,6 +3208,9 @@ function proxyFetchStatePayload(advance) {
 let pauseRefusal = null;
 let pauseHttpFailure = null;
 let pauseGate = null;
+// Apply-route fault injection (7.69.7): the 503 a refused save answers with,
+// carrying the server's sentence in `detail`. Null: the route as normal.
+let applyHttpFailure = null;
 // POST and GET share /admin/api/custom-providers, so the create response is
 // emulated rather than routed. It starts as the failure shape because the
 // contract under test is that a failed discovery cannot render as a healthy
@@ -3693,6 +3696,15 @@ window.fetch = async (url, options = {}) => {
       state.harnesses[sent.harness] = agent;
     }
     body = state;
+  }
+  if (applyHttpFailure && String(url).split("?")[0] === "/admin/api/config/apply") {
+    return {
+      ok: false,
+      status: 503,
+      statusText: "Service Unavailable",
+      json: async () => ({ detail: applyHttpFailure }),
+      text: async () => applyHttpFailure,
+    };
   }
   if (String(url).split("?")[0] === "/admin/api/config/route-pause") {
     // Held open on request, so the in-flight state of the row's own toggle is
@@ -7251,6 +7263,80 @@ const applyBanner = {};
   window.load = realLoad;
   if (applyRoute === undefined) delete ROUTES["/admin/api/config/apply"];
   else ROUTES["/admin/api/config/apply"] = applyRoute;
+}
+
+// ------------------------------------------------- a refused save (7.69.7)
+/* A save the server refuses -- the settings file was busy -- answers 503 with
+   the sentence in `detail`. The Save button's click handler used to drop the
+   rejected promise, so the page said nothing at all. Driven through the real
+   button: the banner must carry the server's sentence as an error, the edited
+   control must keep the reader's value, the page must not reload, and the
+   same click must save once the file is free. */
+const refusedSave = {};
+{
+  const area = doc.getElementById("messageArea");
+  const button = doc.getElementById("applyButton");
+  const control = controlIn("LOG_LEVEL");
+  const realLoad = window.load;
+  let loads = 0;
+  window.load = async () => {
+    loads += 1;
+  };
+  refusedSave.controlFound = Boolean(control);
+  if (control) {
+    // Earlier blocks may leave other edits on the page; the claim is about
+    // this one, so the counts are compared to where the block started.
+    refusedSave.dirtyAtStart = (doc.getElementById("dirtyState") || {}).textContent || null;
+    const original = control.value;
+    // One of the select's own options, so the edit is a value the page holds.
+    const edited = Array.from(control.options || [])
+      .map((option) => option.value)
+      .find((value) => value && value !== original);
+    control.value = edited;
+    control.dispatchEvent(new window.Event("change", { bubbles: true }));
+    refusedSave.edited = edited || null;
+    refusedSave.editTook = control.value === edited;
+    refusedSave.dirtyBefore = (doc.getElementById("dirtyState") || {}).textContent || null;
+
+    const sentence =
+      "Not saved: the settings file was busy (another program was using it), " +
+      "so nothing was changed. Try again. (Settings file: C:\\Users\\you\\.mcc\\.env)";
+    applyHttpFailure = sentence;
+    area.textContent = "";
+    area.className = "message-area";
+    button.disabled = false;
+    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    refusedSave.sentence = sentence;
+    refusedSave.message = area.textContent.trim();
+    refusedSave.messageIsError = area.classList.contains("error");
+    refusedSave.valueKept = control.value === edited;
+    refusedSave.dirtyAfter = (doc.getElementById("dirtyState") || {}).textContent || null;
+    refusedSave.submitted = Object.keys(window.eval("changedValues()"));
+    refusedSave.reloads = loads;
+    applyHttpFailure = null;
+
+    const applyRoute = ROUTES["/admin/api/config/apply"];
+    ROUTES["/admin/api/config/apply"] = {
+      applied: true,
+      valid: true,
+      errors: [],
+      warnings: [],
+      pending_fields: [],
+      restart: { required: false, automatic: false, admin_url: null, fields: [] },
+    };
+    button.disabled = false;
+    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    refusedSave.retryMessage = area.textContent.trim();
+    refusedSave.retryReloads = loads;
+    if (applyRoute === undefined) delete ROUTES["/admin/api/config/apply"];
+    else ROUTES["/admin/api/config/apply"] = applyRoute;
+
+    control.value = original;
+    control.dispatchEvent(new window.Event("change", { bubbles: true }));
+  }
+  window.load = realLoad;
 }
 
 // ------------------------------------------------- harness attribution
@@ -10884,6 +10970,7 @@ console.log(
       costPanel,
       deferredRace,
       applyBanner,
+      refusedSave,
       logReadout,
       harnessAttr,
       optimizer: {

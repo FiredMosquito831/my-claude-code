@@ -13,6 +13,7 @@ from loguru import logger
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from my_claude_code.application.errors import ApplicationError
+from my_claude_code.config.admin.env_io import SettingsFileBusyError
 from my_claude_code.core.anthropic import anthropic_error_payload
 from my_claude_code.core.diagnostics import (
     redacted_exception_traceback,
@@ -125,6 +126,21 @@ def create_app(services: ApiServices) -> FastAPI:
             tool_names=tool_names,
         )
         return await request_validation_exception_handler(request, exc)
+
+    @app.exception_handler(SettingsFileBusyError)
+    async def settings_file_busy_handler(request: Request, exc: SettingsFileBusyError):
+        """A settings save refused before anything was written (7.69.7).
+
+        Every route that saves settings reaches this one answer: 503 with the
+        plain sentence as ``detail`` -- the admin routes' own envelope for a
+        transient failure, and what the dashboard's ``api()`` shows -- rather
+        than an internal error. Registered once here, so no saving route can
+        forget it.
+        """
+
+        return await starlette_http_exception_handler(
+            request, StarletteHTTPException(status_code=503, detail=str(exc))
+        )
 
     @app.exception_handler(ApplicationError)
     async def application_error_handler(request: Request, exc: ApplicationError):

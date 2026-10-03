@@ -36,6 +36,7 @@ from my_claude_code.config.env_files import (
 )
 from my_claude_code.config.env_template import load_env_template_or_empty
 
+from .env_io import note_settings_read, read_settings_bytes
 from .manifest import FIELDS
 
 SourceType = Literal[
@@ -136,9 +137,19 @@ def template_values() -> dict[str, str]:
     return values
 
 
-def dotenv_values_from_file(path: Path) -> dict[str, str]:
-    """Return dotenv values from a file, or an empty mapping when absent."""
+def dotenv_values_from_file(path: Path, *, strict: bool = False) -> dict[str, str]:
+    """Return dotenv values from a file, or an empty mapping when absent.
 
+    ``strict`` is for a read whose answer a save writes back (7.69.7): a file
+    that exists but cannot be read is retried and then refused with
+    ``SettingsFileBusyError`` instead of reading as empty, which is how a
+    one-key save used to rewrite the whole file with that one key. A file that
+    does not exist is still empty. Display paths keep the lenient read.
+    """
+
+    if strict:
+        strict_raw = read_settings_bytes(path)
+        return {} if strict_raw is None else dotenv_values_from_bytes(path, strict_raw)
     if not path.is_file():
         return {}
     try:
@@ -146,8 +157,15 @@ def dotenv_values_from_file(path: Path) -> dict[str, str]:
     except OSError:
         # Unreadable is not the same as absent, but neither is it values: the
         # pre-cache call would have raised out of ``dotenv_values`` here, and
-        # nothing downstream was written to expect that either.
+        # nothing downstream was written to expect that either. Only a display
+        # reads this way; a save reads with ``strict=True``.
         return {}
+    note_settings_read(path, raw)
+    return dotenv_values_from_bytes(path, raw)
+
+
+def dotenv_values_from_bytes(path: Path, raw: bytes) -> dict[str, str]:
+    """Parse ``raw``, the bytes just read from ``path``, through the cache."""
 
     def parse() -> dict[str, str]:
         # Parsed from the bytes that were hashed, not from a second read of the

@@ -987,10 +987,15 @@ def _mask_credential_key(key: str) -> str:
     return f"{key[:6]}…{key[-4:]}"
 
 
-def _credential_entry_or_404(env_key: str) -> dict[str, Any]:
+def _credential_entry_or_404(env_key: str, *, strict: bool = False) -> dict[str, Any]:
     if env_key not in _CREDENTIAL_ENV_KEYS:
         raise HTTPException(status_code=404, detail="Unknown credential env key")
-    return load_value_state().get(env_key, {"value": "", "source": "default"})
+    # ``strict`` for a route that writes the pool it derives from this read: a
+    # busy settings file must refuse the edit, not read as an empty pool and
+    # save one key in place of all of them (7.69.7).
+    return load_value_state(strict=strict).get(
+        env_key, {"value": "", "source": "default"}
+    )
 
 
 def _require_unlocked_credential(entry: dict[str, Any]) -> None:
@@ -1076,7 +1081,7 @@ async def reorder_credential_keys(
     """
 
     require_loopback_admin(request)
-    entry = _credential_entry_or_404(env_key)
+    entry = _credential_entry_or_404(env_key, strict=True)
     _require_unlocked_credential(entry)
 
     keys = list(parse_credential_keys(str(entry["value"])))
@@ -1139,7 +1144,7 @@ async def add_credential_key(
     longer offered, so the capability lives here instead.
     """
     require_loopback_admin(request)
-    entry = _credential_entry_or_404(env_key)
+    entry = _credential_entry_or_404(env_key, strict=True)
     _require_unlocked_credential(entry)
 
     submitted = parse_credential_keys(payload.key)
@@ -1206,7 +1211,7 @@ async def delete_credential_key(
     key the operator never pointed at.
     """
     require_loopback_admin(request)
-    entry = _credential_entry_or_404(env_key)
+    entry = _credential_entry_or_404(env_key, strict=True)
     _require_unlocked_credential(entry)
 
     keys = list(parse_credential_keys(str(entry["value"])))
@@ -2568,9 +2573,15 @@ def _websearch_descriptor_for_env(env_key: str) -> WebSearchDescriptor:
 
 
 def _editable_websearch_keys(env_key: str) -> list[str]:
-    """Current parsed keys, refusing mutation when an external source owns the value."""
+    """Current parsed keys, refusing mutation when an external source owns the value.
 
-    entry = load_value_state().get(env_key, {"value": "", "source": "default"})
+    Only the routes that write the pool call this, so the read is strict: a
+    busy settings file refuses the edit instead of reading as no keys (7.69.7).
+    """
+
+    entry = load_value_state(strict=True).get(
+        env_key, {"value": "", "source": "default"}
+    )
     if is_locked_source(entry["source"]):
         raise HTTPException(
             status_code=409,
