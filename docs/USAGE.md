@@ -575,8 +575,12 @@ this process does **not** touch `server.log`'s existing content. It logs one
 line to the console and one to the log it can still reach, and from that
 point writes its own run to `server.<pid>.log` beside it. `SERVER_LOG_RETAIN_FILES`
 still bounds how many of these are kept, the same way it bounds ordinary
-rotated files. The fix: run one server per config directory, or point the
-second one at a different `MCC_CONFIG_DIR`.
+rotated files. Since 7.69.8 that per-process file also rotates at 50 MB, to
+`server.<pid>.<date>.log`, and every rotation of either file prunes the rotated
+ones back to `SERVER_LOG_RETAIN_FILES` while the server runs, not only at the
+next start — a `server.<pid>.log` itself, which may be another server's live
+file, is left to the startup sweep. The fix: run one server per config
+directory, or point the second one at a different `MCC_CONFIG_DIR`.
 
 **Console lines now start with a timestamp, and `/health` / poll lines stopped printing.**
 Since 7.69.6 every console line — uvicorn's own and MCC's — carries a local
