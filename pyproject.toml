@@ -223,8 +223,22 @@ skip-magic-trailing-comma = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-addopts = "-n auto --dist loadgroup"
+# `--max-worker-restart=0`: a crashed worker ends the run (orderly, with the
+# crash reported as that test's failure) instead of being replaced. Under
+# `--dist loadgroup`, pytest-xdist 3.8 hands a replacement worker the crashed
+# worker's already-finished groups again, one at a time, and with nothing left
+# to run it never asks for more: the run waits forever.
+addopts = "-n auto --dist loadgroup --max-worker-restart=0"
 testpaths = ["tests"]
+# A test still running after this many seconds prints every thread's stack and
+# its process exits; under xdist that reads "worker 'gwN' crashed while running
+# <test>" and the run fails. Without it a hung test said nothing at all: the CI
+# job sat at 99% until its 15-minute limit cancelled it, with no FAILED line
+# and no stack to read. The bound is several times the slowest test in the
+# suite; a job that deliberately runs something longer (the jsdom harness, the
+# real wheel build) passes its own `-o faulthandler_timeout=`.
+faulthandler_timeout = 300
+faulthandler_exit_on_timeout = true
 markers = [
     "live: opt-in local smoke tests that can touch real services",
     "interactive: smoke tests requiring manual user interaction",

@@ -139,7 +139,11 @@ jobs:
         # `-n 0`: the file's two module-scoped fixtures are two node
         # subprocesses, and the harness refuses to run twice at once against
         # the same tree. xdist would buy nothing and the lock would refuse it.
-        run: uv run pytest tests/api/test_admin_static_jsdom.py -n 0 -v --tb=short
+        # The harness's own bound above (600 s per subprocess) stays the one
+        # that fails a slow run; the suite-wide hang dump comes just after it.
+        run: >-
+          uv run pytest tests/api/test_admin_static_jsdom.py -n 0 -v --tb=short
+          -o faulthandler_timeout=660
 
   desktop-shell:
     # The shell is a Rust binary, so nothing above would ever compile it. This
