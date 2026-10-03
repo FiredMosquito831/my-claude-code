@@ -53,5 +53,9 @@ jobs:
         # --no-sync matters: the outer uv must not take the project lock back
         # while the fixture's inner `uv build --wheel` wants it -- that
         # contention is the documented hang. `uv sync` above already prepared
-        # the environment.
-        run: uv run --no-sync pytest -v --tb=short tests/api/test_docs_bundle_wheel.py
+        # the environment. The fixture's own 900 s cap on `uv build --wheel`
+        # stays the bound that fails a slow build; the suite-wide hang dump
+        # (pyproject `faulthandler_timeout`) comes just after it.
+        run: >-
+          uv run --no-sync pytest -v --tb=short tests/api/test_docs_bundle_wheel.py
+          -o faulthandler_timeout=960
