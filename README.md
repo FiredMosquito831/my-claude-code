@@ -13,6 +13,10 @@
 [![PyPI](https://img.shields.io/pypi/v/my-claude-code?style=for-the-badge&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/my-claude-code/)
 [![npm](https://img.shields.io/npm/v/@firedmosquito831/my-claude-code?style=for-the-badge&logo=npm&label=npm)](https://www.npmjs.com/package/@firedmosquito831/my-claude-code)
 
+[![npm downloads, all time](https://img.shields.io/npm/d18m/@firedmosquito831/my-claude-code?style=for-the-badge&logo=npm&label=npm%20downloads&color=cb3837)](https://www.npmjs.com/package/@firedmosquito831/my-claude-code)
+[![npm downloads, last week](https://img.shields.io/npm/dw/@firedmosquito831/my-claude-code?style=for-the-badge&logo=npm&label=npm%20weekly&color=cb3837)](https://www.npmjs.com/package/@firedmosquito831/my-claude-code)
+[![PyPI downloads, all time](https://img.shields.io/pepy/dt/my-claude-code?style=for-the-badge&logo=pypi&logoColor=white&label=PyPI%20downloads&color=3775a9)](https://pepy.tech/projects/my-claude-code)
+
 [Install](#install) · [What is MCC?](#what-is-my-claude-code) · [Capabilities](#capabilities) · [Usage Guide](docs/USAGE.md) · [All docs](docs/README.md)
 
 <img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/pic.png" alt="Claude Code running through the My Claude Code local proxy, with the routing dashboard alongside" width="760">
