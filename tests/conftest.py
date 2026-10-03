@@ -3,12 +3,16 @@ import contextlib
 import logging
 import os
 import threading
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from loguru import logger as loguru_logger
 
+from my_claude_code.config import logging_config
+from my_claude_code.config.logging_config import InterceptHandler
 from my_claude_code.config.settings import Settings
 from tests.providers.support import passthrough_rate_limiter
 
@@ -754,25 +758,188 @@ def incoming_message_factory():
     return _create
 
 
+#: ``logging_config``'s module state, which ``configure_logging`` keeps between
+#: calls to decide whether it is configuring the process or adjusting it.
+_LOGGING_CONFIG_GLOBALS = (
+    "_configured",
+    "_current_path",
+    "_current_level",
+    "_current_verbose",
+    "_sink_id",
+    "_active_sink",
+)
+
+
+class _ProcessLogging:
+    """What ``configure_logging`` takes over, as it was before a test ran.
+
+    ``configure_logging`` is the server's composition-root call. It owns the
+    process's logging from then on: every loguru sink removed, an
+    ``InterceptHandler`` as the root logger's only handler, the root logger at
+    DEBUG, the noisy third-party loggers re-levelled, and a file sink with its
+    own writer thread. Nothing undoes that, because a server never needs it
+    undone -- so a test that runs it (``tests/core/test_trace.py``, the
+    logging-config tests, and ``build_asgi_app`` in
+    ``tests/api/test_app_lifespan_and_errors.py``) handed all of it to every
+    later test in the same xdist worker, which is to say to most of the
+    suite: on CI those tests ran in the job's first two minutes, on every
+    worker.
+
+    That inherited state is half of the deadlock that hung the pytest job at
+    99% (see ``_propagate_loguru_to_caplog``), and it also sent every
+    library's DEBUG record through loguru into a file in a finished test's
+    directory for the rest of the run. Noted before the test's first phase --
+    see ``pytest_runtest_protocol`` below -- so the snapshot holds the
+    session's own handlers and none of pytest's per-phase capture handlers;
+    put back by ``_restore_process_logging``.
+    """
+
+    def __init__(self) -> None:
+        root = logging.getLogger()
+        self.root_handlers = list(root.handlers)
+        self.root_level = root.level
+        self.third_party_levels = {
+            name: logging.getLogger(name).level
+            for name in logging_config._THIRD_PARTY_LOGGERS
+        }
+        self.module_state = {
+            name: getattr(logging_config, name) for name in _LOGGING_CONFIG_GLOBALS
+        }
+
+    def restore(self) -> None:
+        sink_id = logging_config._sink_id
+        if sink_id is not None and sink_id != self.module_state["_sink_id"]:
+            # Stops the sink's writer thread and closes its file. Loguru ids
+            # are never reused, so a different id is a sink this test added.
+            with contextlib.suppress(ValueError):  # the test removed it itself
+                loguru_logger.remove(sink_id)
+        root = logging.getLogger()
+        # pytest's capture handlers for the phase now running (teardown) stay:
+        # pytest takes them off again on its way out of the phase.
+        in_progress = [
+            handler
+            for handler in root.handlers
+            if handler not in self.root_handlers
+            and not isinstance(handler, InterceptHandler)
+        ]
+        wanted = [*self.root_handlers, *in_progress]
+        if root.handlers != wanted:
+            root.handlers = wanted
+        if root.level != self.root_level:
+            root.setLevel(self.root_level)
+        for name, level in self.third_party_levels.items():
+            if logging.getLogger(name).level != level:
+                logging.getLogger(name).setLevel(level)
+        for name, value in self.module_state.items():
+            setattr(logging_config, name, value)
+
+
+_LOGGING_AT_START = pytest.StashKey[_ProcessLogging]()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object]:
+    """Note the process's logging before any phase of the test touches it."""
+    item.stash[_LOGGING_AT_START] = _ProcessLogging()
+    return (yield)
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_logging(request: pytest.FixtureRequest):
+    """No test may inherit another test's ``configure_logging``.
+
+    Restored in teardown rather than after the protocol so that it runs inside
+    the window ``faulthandler_timeout`` watches: removing a file sink joins its
+    writer thread. Defined immediately before ``_propagate_loguru_to_caplog``
+    so it is torn down immediately after it.
+    """
+
+    yield
+    started_with = request.node.stash.get(_LOGGING_AT_START, None)
+    if started_with is not None:
+        started_with.restore()
+
+
+def _hand_to_stdlib_handlers(
+    py_logger: logging.Logger, record: logging.LogRecord
+) -> None:
+    """``Logger.handle`` for a record that came from loguru, minus loguru.
+
+    The one handler skipped is ``InterceptHandler``: it would hand the record
+    straight back to loguru, and it does so holding its own stdlib lock -- the
+    opposite order to this bridge, which runs inside a loguru sink while loguru
+    holds that sink's lock. See ``_propagate_loguru_to_caplog``.
+    """
+
+    if py_logger.disabled:
+        return
+    filtered = py_logger.filter(record)
+    if not filtered:
+        return
+    if isinstance(filtered, logging.LogRecord):
+        record = filtered
+    node: logging.Logger | None = py_logger
+    while node is not None:
+        for handler in node.handlers:
+            if isinstance(handler, InterceptHandler):
+                continue
+            if record.levelno >= handler.level:
+                handler.handle(record)
+        node = node.parent if node.propagate else None
+
+
 @pytest.fixture(autouse=True)
 def _propagate_loguru_to_caplog():
-    """Route loguru logs to stdlib logging so pytest caplog captures them."""
-    from loguru import logger as loguru_logger
+    """Route loguru logs to stdlib logging so pytest caplog captures them.
+
+    The bridge must never write back into loguru. It runs inside a loguru sink,
+    holding that sink's lock, and ``InterceptHandler`` -- which
+    ``configure_logging`` makes the root logger's handler -- takes its own lock
+    and then calls loguru, which needs the bridge's lock. With a thread logging
+    through loguru and another through stdlib at the same moment, each held
+    the lock the other wanted, forever:
+
+    * thread 1: ``logger.debug`` -> this bridge (holds the bridge sink's
+      lock) -> ``logging.Handler.handle`` waits for InterceptHandler's lock;
+    * thread 2: Pillow's ``logging.debug`` -> InterceptHandler (holds its
+      lock) -> ``logger.log`` waits for the bridge sink's lock.
+
+    That is the pytest job that stopped at 99% and was cancelled by its
+    15-minute limit eleven times between 2026-10-01 and 2026-10-02, each time
+    inside ``test_threads_sharing_the_memo_get_the_uncached_bytes``. A record
+    that came from loguru has no business going back into loguru, so the
+    bridge delivers it to every stdlib handler except that one -- which also
+    ends the "Logging error in Loguru Handler" traceback loguru printed for
+    every record while the bridge re-entered itself.
+    """
 
     class _PropagateHandler:
         def write(self, message):
             record = message.record
-            level = record["level"].no
-            stdlib_level = min(level, logging.CRITICAL)
+            level = min(record["level"].no, logging.CRITICAL)
             py_logger = logging.getLogger(record["name"])
-            py_logger.log(stdlib_level, record["message"])
+            if not py_logger.isEnabledFor(level):
+                return
+            _hand_to_stdlib_handlers(
+                py_logger,
+                py_logger.makeRecord(
+                    py_logger.name,
+                    level,
+                    record["file"].path,
+                    record["line"],
+                    record["message"],
+                    (),
+                    None,
+                    record["function"],
+                ),
+            )
 
     handler_id = loguru_logger.add(_PropagateHandler(), format="{message}")
     yield
     with contextlib.suppress(ValueError):
         loguru_logger.remove(
             handler_id
-        )  # Handler already removed (e.g. by test_logging_config)
+        )  # Handler already removed (e.g. by configure_logging)
 
 
 @pytest.fixture(scope="session", autouse=True)
