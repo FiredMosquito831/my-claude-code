@@ -163,14 +163,18 @@ def display_value(field: ConfigFieldSpec, value: str) -> str:
     return value
 
 
-def load_value_state() -> ValueState:
-    """Load effective admin field values and their sources."""
+def load_value_state(*, strict: bool = False) -> ValueState:
+    """Load effective admin field values and their sources.
+
+    ``strict`` when a save derives what it writes from the answer: a file that
+    exists but cannot be read refuses the save instead of reading as empty.
+    """
 
     values = template_values()
     sources = {key: "template" if key in values else "default" for key in FIELD_BY_KEY}
 
     for source, path in configured_env_files():
-        file_values = dotenv_values_from_file(path)
+        file_values = dotenv_values_from_file(path, strict=strict)
         for key, value in file_values.items():
             if key in FIELD_BY_KEY:
                 values[key] = value
