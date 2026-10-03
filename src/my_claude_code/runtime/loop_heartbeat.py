@@ -32,6 +32,7 @@ from my_claude_code.core.loop_health import (
     BUSY_MARKER_VALUE,
     loop_health,
 )
+from my_claude_code.core.server_pid import server_pid_header
 
 #: The body every healthy ``/health`` has returned since the route existed, and
 #: still returns byte for byte. Nothing is removed from it, ever; a busy answer
@@ -50,6 +51,9 @@ def _render(
     headers = [
         (b"content-type", _JSON_CONTENT_TYPE),
         (b"content-length", str(len(body)).encode("ascii")),
+        # Who answered (7.70.0). Beside the body, never in it: the healthy
+        # body stays ``{"status":"healthy"}`` byte for byte.
+        server_pid_header(),
     ]
     if busy:
         headers.append(

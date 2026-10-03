@@ -301,10 +301,27 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
   the listener's pid, image and command line — through `port_takeover.identity_for_owner`,
   the same identification the server's own `SERVER_PORT_TAKEOVER` uses, so the two
   cannot disagree about what "ours" means. It rides in `--print-status` as
-  `holder: {kind, pid, image}` alongside `server_pid`, and the shell holds a `foreign`
+  `holder: {kind, pid, image, identified}` alongside `server_pid` (`identified`, 7.70.0,
+  is `false` for a holder whose lookup failed and which is still reported as `foreign`
+  for an old reader), and the shell holds a `foreign`
   answer against `foreign_grace_seconds` before acting on it. `--print-status` is off
   the tick path entirely: an attached window pays for one `/health` probe per tick and
   the document is re-read only when the controller asks for holder or helper facts.
+- **A start backs off from a server that answers (7.70.0, decision R5).** Before the
+  takeover runs, `cli/commands.py` asks the holder's `/health` through
+  [core/port_holder_answer.py](src/my_claude_code/core/port_holder_answer.py) with the
+  desktop probe ladder (30 s at most); a My Claude Code answer (healthy, busy, starting)
+  ends the start with exit 1 and stops nothing, a draining one is waited out with the
+  server's own stop budget, and only a silent or non-MCC holder reaches
+  `port_takeover.take_port`, unchanged. Every `/health` answer the ASGI gate gives carries
+  `x-mcc-pid` ([core/server_pid.py](src/my_claude_code/core/server_pid.py)).
+- **`mcc-desktop` decides "dead" from the OS (7.70.0).** The Python host's monitor
+  ([core/server_watch.py](src/my_claude_code/core/server_watch.py)) probes every 30 s while
+  healthy and 5 s otherwise, and after the failure threshold asks the OS whether the
+  known pid exited or lost its port; a holder of the port is slow, never dead. The
+  sentence always goes to `server.log`; it is shown by the host's own tray, else left to
+  the desktop app while that runs (the app shows it from its next release), else written
+  as one stamped console line.
 - **The update helper installs and exits when a window is watching (6.61.0).** The shell
   injects `window.__mccShellWatching` into every page it loads; the dashboard's Update
   button sends `no_restart` when it is there; `apply-upgrade.ps1` then skips its

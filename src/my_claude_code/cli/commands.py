@@ -27,7 +27,10 @@ from my_claude_code.cli.port_diagnostics import (
 )
 from my_claude_code.cli.port_takeover import take_port
 from my_claude_code.cli.process_registry import kill_all_best_effort
-from my_claude_code.config.constants import LISTENER_LOST_EXIT_CODE
+from my_claude_code.config.constants import (
+    LISTENER_LOST_EXIT_CODE,
+    PORT_ALREADY_SERVED_EXIT_CODE,
+)
 from my_claude_code.config.env_migrations import (
     explicit_env_file_migration_warning,
     migrate_owned_env_files,
@@ -47,6 +50,20 @@ from my_claude_code.config.paths import (
 from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
+from my_claude_code.core.console_notice import write_console_line
+from my_claude_code.core.port_holder_answer import (
+    HolderProbe,
+    HolderSettlement,
+    PortDecision,
+    back_off_message,
+    drain_wait_message,
+    parse_probe_ladder,
+    probe_holder,
+    probe_timeouts,
+    settle_port_holder,
+    silent_holder_message,
+    stop_wait_seconds,
+)
 from my_claude_code.core.process_handoff import external_upgrade_helper_pending
 from my_claude_code.core.request_log import set_server_bind_address
 from my_claude_code.core.server_inventory import (
@@ -255,6 +272,90 @@ def _log_bind_failure(settings: Settings, exc: OSError) -> None:
         port=settings.port,
         err=exc,
     )
+
+
+def _port_freed_after_asking_the_holder(settings: Settings) -> bool:
+    """Ask the holder before any takeover; back off from a live My Claude Code.
+
+    The whole of decision R5 at the call site; the table itself lives in
+    ``core/port_holder_answer.py``. Returns True when the port came free while
+    asking (a holder that was shutting down has left), False when the existing
+    takeover must decide (silent, or not My Claude Code). A live My Claude Code
+    answering /health -- healthy, busy or starting -- ends this start here with
+    a message naming it, and nothing is stopped. ``never`` is untouched: it
+    stops nothing anyway, so it keeps 6.58.4's wait-and-refuse exactly.
+    """
+
+    if settings.server_port_takeover == "never":
+        return False
+    settlement = _settle_port_holder(settings)
+    if settlement.decision is PortDecision.BACK_OFF:
+        _back_off(settings, settlement)
+    if settlement.decision is PortDecision.FREE:
+        logger.info(
+            "Port {port} came free while its holder was asked.", port=settings.port
+        )
+        return True
+    logger.info(silent_holder_message(port=settings.port, probe=settlement.probe))
+    return False
+
+
+def _settle_port_holder(settings: Settings) -> HolderSettlement:
+    """Ask with the user's own patience: the desktop probe ladder, 30 s at most."""
+
+    root_url = local_proxy_root_url(settings)
+    timeouts = probe_timeouts(
+        parse_probe_ladder(settings.desktop_health_probe_timeouts),
+        tries=settings.desktop_health_failure_threshold,
+        fallback=settings.desktop_health_probe_timeout,
+    )
+
+    def probe() -> HolderProbe:
+        return probe_holder(
+            root_url,
+            timeouts,
+            port_is_free=lambda: probe_port_available(settings.host, settings.port),
+        )
+
+    def wait_for_free(seconds: float, draining: HolderProbe) -> bool:
+        message = drain_wait_message(
+            port=settings.port, pid=draining.pid, seconds=seconds
+        )
+        logger.info(message)
+        write_console_line(f"My Claude Code: {message}")
+        return wait_for_port_free(settings.host, settings.port, timeout=seconds)
+
+    return settle_port_holder(
+        probe=probe,
+        wait_for_free=wait_for_free,
+        drain_wait_seconds=stop_wait_seconds(settings.server_graceful_shutdown_seconds),
+    )
+
+
+def _back_off(settings: Settings, settlement: HolderSettlement) -> None:
+    """Say which server already serves the port, and exit. Stops nothing.
+
+    The message goes to the log *and* to this process's console: the server's
+    log has no console sink, and the person who typed ``mcc-server`` is looking
+    at the console.
+    """
+
+    pid = settlement.probe.pid
+    if pid is None:
+        # A server from before 7.70.0 names no pid on /health; the OS can.
+        owner = diagnose_port_owner(settings.host, settings.port)
+        pid = owner.pid if owner is not None else None
+    message = back_off_message(
+        port=settings.port,
+        settlement=settlement,
+        pid=pid,
+        windows=_WINDOWS,
+        drain_wait_seconds=stop_wait_seconds(settings.server_graceful_shutdown_seconds),
+    )
+    logger.warning(message)
+    logger.complete()
+    write_console_line(f"My Claude Code: {message}")
+    raise SystemExit(PORT_ALREADY_SERVED_EXIT_CODE)
 
 
 _config_dir_banner_emitted = False
@@ -600,6 +701,12 @@ def _run_supervised_server(
         # still what happens, because there nothing else can.
         grace = bind_wait if settings.server_port_takeover == "never" else 2.0
         if wait_for_port_free(settings.host, settings.port, timeout=grace):
+            pass
+        elif _port_freed_after_asking_the_holder(settings):
+            # 7.70.0 (decision R5): a live My Claude Code answering on the port
+            # makes this start back off and exit inside that call; one that was
+            # shutting down has left. Only a silent holder, or one that is not
+            # My Claude Code, reaches the takeover below -- unchanged.
             pass
         else:
             outcome = take_port(

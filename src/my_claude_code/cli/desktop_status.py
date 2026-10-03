@@ -23,9 +23,10 @@ Three rules hold this file together:
 removed or changes type; adding a key does not bump it, because a reader is
 required to tolerate keys it does not know. 6.44.0 added four shell keys,
 6.45.0 added ``autostart_reconcile``, 6.50.0 added
-``reconnect_restatus_seconds``, 6.58.1 added ``server_start_retries`` and
-6.60.0 added ``shell_installed_tag``; the schema stayed at 1 every time, for
-exactly that reason.
+``reconnect_restatus_seconds``, 6.58.1 added ``server_start_retries``,
+6.60.0 added ``shell_installed_tag`` and 7.70.0 added
+``server_stop_wait_seconds`` and ``identified`` inside ``holder``; the schema
+stayed at 1 every time, for exactly that reason.
 
 ``shell_installed_tag`` is the key BUG-0 needed. The document has carried
 ``shell_release_tag`` -- what this *wheel* pins -- since 6.44.0, and nothing
@@ -89,6 +90,7 @@ from my_claude_code.cli.desktop import (
     port_conflict_message,
     probe_server_state,
     server_pid_of,
+    server_stop_wait_seconds,
 )
 from my_claude_code.cli.desktop_window import SHELL_TRAY_ENV
 from my_claude_code.config.constants import (
@@ -109,6 +111,7 @@ from my_claude_code.config.server_urls import (
 )
 from my_claude_code.config.settings import get_settings
 from my_claude_code.config.update_progress import update_report
+from my_claude_code.core.port_holder_answer import parse_probe_ladder
 from my_claude_code.core.server_inventory import read_survey
 from my_claude_code.core.version import package_version
 
@@ -158,6 +161,7 @@ STATUS_KEYS: tuple[str, ...] = (
     "start_backoff_seconds",
     "foreign_grace_seconds",
     "status_wall_seconds",
+    "server_stop_wait_seconds",
     "holder",
     "server_pid",
     "shell_tray",
@@ -181,21 +185,13 @@ def health_probe_timeouts(settings: Any) -> list[float]:
     a server, and a typo in a tunable must never be the reason a window cannot
     be painted. An empty result means "no ladder", and the shell keeps its
     single ``health_probe_timeout_seconds`` for every probe.
+
+    Since 7.70.0 the parsing lives in ``core/port_holder_answer.py``, because a
+    starting server reads the same ladder to decide how long to wait for a
+    holder to answer, and one setting must not have two parsers.
     """
 
-    raw = str(getattr(settings, "desktop_health_probe_timeouts", "") or "")
-    timeouts: list[float] = []
-    for piece in raw.split(","):
-        piece = piece.strip()
-        if not piece:
-            continue
-        try:
-            value = float(piece)
-        except ValueError:
-            continue
-        if value > 0.0:
-            timeouts.append(value)
-    return timeouts
+    return parse_probe_ladder(getattr(settings, "desktop_health_probe_timeouts", ""))
 
 
 def shell_tray_enabled(state: Any) -> bool:
@@ -331,6 +327,14 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
         # binary in 6.61.0 (audit §5.4): it decides whether a slow machine gets
         # a window at all, which is not a property of the binary.
         "status_wall_seconds": float(settings.desktop_status_wall_seconds),
+        # Seconds a server asked to stop is given to finish and exit on its own
+        # before anything may stop it: SERVER_GRACEFUL_SHUTDOWN_SECONDS plus the
+        # server's fixed teardown margin and its watchdog's beat (24 s at the
+        # default 20). The same sum the tray, the installer and a starting
+        # server's port check wait. Added in 7.70.0 for the desktop app's
+        # rescue countdown; TOLERATED THIS RELEASE, NEVER REQUIRED until the
+        # shell pin moves (C9).
+        "server_stop_wait_seconds": float(server_stop_wait_seconds(settings)),
         # Who holds the port, decided by process and never by a bind test.
         # This is the key BUG-5 needed: the old answer could not tell MCC's own
         # starting python.exe from a stranger, and told the user to go and stop

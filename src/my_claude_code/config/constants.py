@@ -735,12 +735,22 @@ PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 0.5
 # Graceful shutdown budget (seconds). Since 6.41.0 this bounds the WHOLE stop,
 # not one wait inside it: at the instant a stop is requested it becomes a single
 # What the server does when its configured port is already held at start.
-# ``always`` stops the holder and takes the port -- the user's rule, and the
-# only one that recovers from MCC's own leftovers without a human. ``mcc-only``
-# limits that to processes this install can positively identify as its own;
-# ``never`` is the pre-6.59.0 behaviour, which was to diagnose and exit.
+# ``always`` replaces a holder that is NOT answering -- the only rule that
+# recovers from MCC's own leftovers without a human -- and, since 7.70.0 (user
+# decision R5), backs off from a My Claude Code server that IS answering
+# /health (healthy, busy or starting) instead of killing it: the start exits
+# with PORT_ALREADY_SERVED_EXIT_CODE and stops nothing. ``mcc-only`` limits the
+# replacing to processes this install can positively identify as its own, with
+# the same back-off; ``never`` is the pre-6.59.0 behaviour, which was to
+# diagnose and exit.
 SERVER_PORT_TAKEOVER_DEFAULT = "always"
 SERVER_PORT_TAKEOVER_CHOICES = ("always", "mcc-only", "never")
+
+# The exit status of a start that found a live My Claude Code server answering
+# on its port and backed off (7.70.0). 1, the same status as every other start
+# that refused to bind: no caller branches on it (the desktop app shows it, the
+# installers wait for /health), and the console line says which refusal it was.
+PORT_ALREADY_SERVED_EXIT_CODE = 1
 
 # How quiet another MCC server's heartbeat must go before this install will
 # even use the word "stale" about it. The request log touches a session row
@@ -849,11 +859,19 @@ DESKTOP_SERVER_START_TIMEOUT_DEFAULT = 20.0
 DESKTOP_SERVER_START_RETRIES_DEFAULT = 2
 DESKTOP_ADMIN_REQUEST_TIMEOUT_DEFAULT = 5.0
 DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT = 1.0
-DESKTOP_HEALTH_POLL_SECONDS_DEFAULT = 5.0
+# How often mcc-desktop probes a server that is answering. 30 s since 7.70.0
+# (decision 5 of the self-inflicted-load investigation): a healthy server needs
+# no more watching than that, and every probe is one more request on its loop.
+DESKTOP_HEALTH_POLL_SECONDS_DEFAULT = 30.0
+# The fixed fast cadence once a probe has failed (or before the first one):
+# the 5 s every probe used to run at, kept so an outage is noticed exactly as
+# quickly as before. A cadence constant, like the desktop app's paint tick --
+# not a setting -- and never slower than DESKTOP_HEALTH_POLL_SECONDS.
+DESKTOP_HEALTH_RETRY_SECONDS = 5.0
 DESKTOP_HEALTH_FAILURE_THRESHOLD_DEFAULT = 3
 # How often a client waiting out a restart re-reads the whole status document
 # instead of only re-probing /health. 30s is roughly every sixth poll at the
-# default 5s health poll: often enough that a server nobody is going to restart
+# 5s retry cadence: often enough that a server nobody is going to restart
 # is noticed in well under a minute, rare enough that a 17-minute reconnect
 # costs about 34 short-lived child processes rather than 200.
 DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT = 30.0

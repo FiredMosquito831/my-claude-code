@@ -461,6 +461,49 @@ def append_to_server_log(log_file: str | Path, level: str, message: str) -> bool
     return True
 
 
+def write_server_log_line(
+    log_file: str | Path,
+    level: str,
+    message: str,
+    *,
+    module: str,
+    function: str = "",
+) -> bool:
+    """Append one JSON line to the server log from a process that is not the server.
+
+    For ``mcc-desktop``'s notifications (7.70.0): the host is a separate
+    process, and what it tells the user has to be in the file the user and the
+    desktop app already read. :func:`append_to_server_log` would do it through
+    loguru, which also hands the record to every other loguru sink in the
+    process -- including loguru's own default stderr sink in a host started from
+    a terminal, which would print the sentence a second time beside the one
+    console line the host prints deliberately. So this writes the line itself,
+    with the same keys the real sink writes (``time``, ``level``, ``message``,
+    ``module``, ``function``, ``line``) and the same redaction, opened and
+    closed per line so it holds nothing the server's own rotation needs.
+
+    Returns whether the line was written; a log that cannot be opened is never
+    a reason for a notification to fail.
+    """
+
+    record = {
+        "time": str(datetime.now().astimezone()),
+        "level": level.upper(),
+        "message": _redact_sensitive_substrings(str(message)),
+        "module": module,
+        "function": function,
+        "line": 0,
+    }
+    try:
+        log_path = Path(log_file).expanduser()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, default=str) + "\n")
+    except OSError, ValueError:
+        return False
+    return True
+
+
 def _rotated_name(log_path: Path) -> Path:
     """A ``{stem}.<timestamp>{suffix}`` name that does not exist yet.
 

@@ -137,6 +137,8 @@ def test_a_holder_that_cannot_be_identified_is_foreign_and_the_shell_waits(
     _identity(monkeypatch, None)
     holder = classify_port_holder(settings, ServerState("foreign"))
     assert holder.kind == "foreign"
+    # 7.70.0: still ``foreign`` for an old reader, and now honest about it.
+    assert holder.identified is False
 
 
 def test_every_kind_is_declared(settings):
@@ -158,10 +160,18 @@ def test_every_kind_is_declared(settings):
 
 
 def test_the_document_shape_is_what_the_shell_parses():
+    # ``identified`` is 7.70.0's addition (the C9 golden changes deliberately);
+    # the three keys the v7.26.0 shell reads are unchanged beside it.
     holder = PortHolder("ours_stale", pid=7, image="python.exe")
-    assert holder.as_dict() == {"kind": "ours_stale", "pid": 7, "image": "python.exe"}
+    assert holder.as_dict() == {
+        "kind": "ours_stale",
+        "pid": 7,
+        "image": "python.exe",
+        "identified": True,
+    }
     assert PortHolder("absent").as_dict() == {
         "kind": "absent",
         "pid": None,
         "image": None,
+        "identified": True,
     }

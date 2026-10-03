@@ -12,6 +12,7 @@ from loguru import logger
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from my_claude_code.core.loop_health import loop_health
+from my_claude_code.core.server_pid import server_pid_header
 from my_claude_code.core.startup_state import (
     STARTING_MARKER_HEADER,
     STARTING_MARKER_VALUE,
@@ -104,6 +105,9 @@ def _starting_payload() -> tuple[bytes, list[tuple[bytes, bytes]]]:
             STARTING_MARKER_HEADER.encode("ascii"),
             STARTING_MARKER_VALUE.encode("ascii"),
         ),
+        # Who is starting (7.70.0): a second start that finds this answer
+        # names the process it is backing off from.
+        server_pid_header(),
     ]
     return body, headers
 
@@ -315,7 +319,9 @@ async def _refuse_during_shutdown(send: Send) -> None:
         {
             "type": "http.response.start",
             "status": 503,
-            "headers": list(_SHUTTING_DOWN_HEADERS),
+            # Who is leaving (7.70.0), stamped per answer rather than baked
+            # into the module constant above, which is built at import.
+            "headers": [*_SHUTTING_DOWN_HEADERS, server_pid_header()],
         }
     )
     await send({"type": "http.response.body", "body": _SHUTTING_DOWN_BODY})

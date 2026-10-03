@@ -13,7 +13,6 @@ from my_claude_code.cli.desktop import (
     ActivationSignal,
     DesktopController,
     DesktopError,
-    HealthTracker,
     headless_refusal_reason,
     launch_desktop,
     probe_server_presence,
@@ -26,6 +25,12 @@ from my_claude_code.config.desktop import (
     desktop_state_path,
     load_desktop_state,
     save_desktop_state,
+)
+from my_claude_code.core.server_watch import (
+    PortFacts,
+    ServerWatch,
+    Verdict,
+    WatchStep,
 )
 from my_claude_code.core.stop_deadline import (
     SHUTDOWN_MARKER_HEADER,
@@ -376,44 +381,70 @@ class TestServerPresenceProbe:
         assert "4321" in str(excinfo.value)
 
 
-class TestHealthTracker:
-    def test_single_failure_does_not_notify(self):
-        tracker = HealthTracker(threshold=3)
+class TestHealthThreshold:
+    """The five properties ``HealthTracker`` pinned, re-pinned on ``ServerWatch``.
 
-        assert tracker.record(False) is False
+    7.70.0 replaced the tracker: the threshold now opens a look at the OS
+    rather than announcing anything by itself (``core/server_watch.py``). The
+    debounce it existed for is unchanged, and so are these properties.
+    """
+
+    @staticmethod
+    def _watch(threshold: int) -> ServerWatch:
+        return ServerWatch(
+            threshold=threshold,
+            healthy_interval=30.0,
+            failing_interval=5.0,
+            confirm_seconds=30.0,
+            recheck_seconds=30.0,
+        )
+
+    def test_single_failure_does_not_notify(self):
+        watch = self._watch(3)
+
+        assert watch.record_probe(False) is WatchStep.NOTHING
 
     def test_notifies_only_after_consecutive_threshold(self):
-        tracker = HealthTracker(threshold=3)
+        watch = self._watch(3)
 
-        results = [tracker.record(False) for _ in range(3)]
+        results = [watch.record_probe(False) for _ in range(3)]
 
-        assert results == [False, False, True]
+        assert results == [WatchStep.NOTHING, WatchStep.NOTHING, WatchStep.CHECK]
 
     def test_a_recovery_resets_the_streak(self):
         """A self-update restart flaps the probe; that must not count as death."""
 
-        tracker = HealthTracker(threshold=3)
-        tracker.record(False)
-        tracker.record(False)
-        tracker.record(True)
+        watch = self._watch(3)
+        watch.record_probe(False)
+        watch.record_probe(False)
+        watch.record_probe(True)
 
-        assert [tracker.record(False) for _ in range(2)] == [False, False]
+        assert [watch.record_probe(False) for _ in range(2)] == [
+            WatchStep.NOTHING,
+            WatchStep.NOTHING,
+        ]
 
     def test_outage_is_reported_once(self):
-        tracker = HealthTracker(threshold=2)
-        tracker.record(False)
-        tracker.record(False)
+        watch = self._watch(2)
+        watch.record_probe(False)
+        watch.record_probe(False)
+        gone = PortFacts(port_free=True, known_pid=7, known_alive=False)
+        assert watch.record_facts(gone) is Verdict.PROCESS_GONE
 
-        assert tracker.record(False) is False
+        assert watch.record_probe(False) is WatchStep.NOTHING
 
     def test_recovery_is_reported_after_a_notified_outage(self):
-        tracker = HealthTracker(threshold=1)
-        tracker.record(False)
+        watch = self._watch(1)
+        watch.record_probe(False)
+        watch.record_facts(PortFacts(port_free=True, known_pid=7, known_alive=False))
 
-        assert tracker.record_recovery(True) is True
+        assert watch.record_probe(True) is WatchStep.RECOVERED
 
     def test_recovery_is_silent_without_a_notified_outage(self):
-        assert HealthTracker(threshold=1).record_recovery(True) is False
+        watch = self._watch(1)
+        watch.record_probe(False)
+
+        assert watch.record_probe(True) is WatchStep.NOTHING
 
 
 class TestActivationSignal:
