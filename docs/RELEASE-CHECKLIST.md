@@ -167,8 +167,9 @@ status key**; the new contract surface is one `mcc-desktop` verb, `--rescue
 --reason R [--known-pid N] [--child-pid N]` (prints one JSON document; an older
 `mcc-desktop` exits 2 with its usage, which the shell reads as "fall back to a plain
 start"), and one `mcc-server` flag, `--no-port-takeover` (an older server ignores
-it). The pin may move to the 7.71.0 shell in 7.71.1 under the usual rule: the wheel
-that emits every key it reads is already published.
+it). The pin moves to the **7.71.1** shell (the 7.71.0 one with its Windows
+notification fixed, below) in 7.71.2, under the usual rule: the wheel that emits
+every key it reads is already published.
 
 **The Windows installer registers one notification identity.** From 7.71.0
 `MyClaudeCode.iss` writes `HKA\Software\Classes\AppUserModelId\com.myclaudecode.desktop`
@@ -176,9 +177,19 @@ that emits every key it reads is already published.
 -- the only way an unpackaged program's Windows toast carries its own name -- and
 `smoke/windows-installer.ps1` asserts it after install and its absence after
 uninstall, and prints what the notification platform says about it. A copy of the
-shell fetched by `mcc-desktop` (path A) has no such key; `notify.rs` asks Windows
-first (`ToastNotifier.Setting`) and shows the sentence in its window instead of a
-toast with another program's name.
+shell fetched by `mcc-desktop` (path A) has no such key; `notify.rs` reads the key
+first (`HKEY_CLASSES_ROOT\AppUserModelId\com.myclaudecode.desktop`, `DisplayName`)
+and shows the sentence in its window instead of a toast with another program's
+name.
+
+**The key is the registration; Windows' `Setting` is not (7.71.1).** Windows keeps
+a per-app notification setting only once an id has notified, so on a fresh install
+`ToastNotifier.Setting` answers "Element not found" -- the 7.71.0 installer smoke
+printed exactly that with the key in place. The 7.71.0 shell required `Enabled`,
+so it never showed its first toast and therefore never any. From 7.71.1 the shell
+shows a toast when the key exists and Windows has not turned the id off, and the
+installer smoke shows one notification under the id and prints what the platform
+answers afterwards.
 
 ### Adding a key the *shell* writes back
 
