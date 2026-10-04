@@ -3723,9 +3723,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="request_log_compression_level",
         default="9",
         advanced=True,
+        restart_required=False,
         description=(
-            "zstd level for stored bodies. Measured on a real log, level 19 "
-            "was 4.9% smaller than 9 at a ninth of the speed."
+            "zstd level for request bodies written from the next write after "
+            "Save. Bodies already stored keep the level they were written "
+            "with and read back the same whatever this is; the compression "
+            "dictionary is unaffected. Through the writer on a real log, 3 "
+            "wrote 3% more bytes than 9 in about the same time, and 15 wrote "
+            "1% fewer at 4.6x the time."
         ),
     ),
     ConfigFieldSpec(

@@ -4310,7 +4310,7 @@ REQUEST_LOG_CAPTURE_FOLDER=true    # the working directory the agent reported
 REQUEST_LOG_CAPTURE_SESSION=true   # the conversation and subagent ids it sent
 REQUEST_LOG_TEXT_MAX_CHARS=10000000 # longer text is truncated before storage
 REQUEST_LOG_WIRE_BODY_MAX_CHARS=8000  # bounds stored message/tool structure only
-REQUEST_LOG_COMPRESSION_LEVEL=9    # 1-22; 19 measured 4.9% smaller at 9x the time
+REQUEST_LOG_COMPRESSION_LEVEL=9    # 1-22, new rows only; 3 wrote 3% more, 15 1% less at 4.6x the time
 MEDIA_STORE_ENABLED=false          # also keep generated images, as files beside the log
 MEDIA_STORE_MAX_MB=0               # 0 = keep until the row is pruned; >0 drops the oldest files first
 ```
