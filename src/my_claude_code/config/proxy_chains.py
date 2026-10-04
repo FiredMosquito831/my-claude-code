@@ -57,6 +57,8 @@ imports it.
 
 import json
 import secrets
+import threading
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -1276,6 +1278,22 @@ def _mint_proxy_id(existing: Mapping[str, ProxyEndpoint]) -> str:
             return proxy_id
 
 
+#: The one lock every write of ``proxy_chains.json`` holds, from its re-read to
+#: its save -- the dashboard's edits, the health flush, the checker's verdicts,
+#: a fetch's offer, an ingest and the startup migration alike. Before 7.72.1
+#: they held three different locks or none, so two of them could each derive a
+#: document from a read the other was about to replace, and the second save
+#: dropped the first one's change. They also shared the one staging file
+#: ``write_json_document_atomically`` writes beside the store, so two saves at
+#: once could rename each other's half-written bytes into place.
+#:
+#: Re-entrant, because :func:`save_proxy_chains` takes it too and is called by
+#: writers already holding it. Taken on worker threads only: every writer runs
+#: through ``asyncio.to_thread``, and a reader -- :func:`current_proxy_chains`,
+#: which the event loop calls while building providers -- never takes it.
+PROXY_CHAINS_WRITE_LOCK = threading.RLock()
+
+
 def load_proxy_chains(path: Path | None = None) -> ProxyChains:
     """Read the store, treating every failure as "no chains".
 
@@ -1287,11 +1305,25 @@ def load_proxy_chains(path: Path | None = None) -> ProxyChains:
 
     resolved_path = path if path is not None else proxy_chains_path()
     try:
-        raw = resolved_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return EMPTY_PROXY_CHAINS
+        return _read_proxy_chains(resolved_path)
     except OSError as exc:
         logger.warning("PROXY CHAINS: cannot read {}: {}", resolved_path, exc)
+        return EMPTY_PROXY_CHAINS
+
+
+def _read_proxy_chains(resolved_path: Path) -> ProxyChains:
+    """The store; raises ``OSError`` when the file is there and unreadable.
+
+    That is not "no chains". On Windows a read that lands while another
+    thread is ``os.replace``-ing the file fails with a sharing violation for
+    the quarter of a millisecond the rename takes; the file is fine and the
+    next read sees it. A missing, blank or unparseable file is a real answer
+    and is :data:`EMPTY_PROXY_CHAINS`.
+    """
+
+    try:
+        raw = resolved_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return EMPTY_PROXY_CHAINS
 
     if not raw.strip():
@@ -1325,10 +1357,11 @@ def migrate_proxy_feeds(path: Path | None = None) -> tuple[str, ...]:
     """
 
     try:
-        store = load_proxy_chains(path)
-        if not store.migrated_feed_ids:
-            return ()
-        save_proxy_chains(store, path)
+        with PROXY_CHAINS_WRITE_LOCK:
+            store = load_proxy_chains(path)
+            if not store.migrated_feed_ids:
+                return ()
+            save_proxy_chains(store, path)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("PROXY FEEDS: could not rewrite the feed list: {}", exc)
         return ()
@@ -1344,45 +1377,107 @@ def migrate_proxy_feeds(path: Path | None = None) -> tuple[str, ...]:
 
 
 def save_proxy_chains(chains: ProxyChains, path: Path | None = None) -> None:
-    """Write the store atomically and drop the cache."""
+    """Write the store atomically, under the writer lock, and mark the cache stale.
+
+    Call it off the event loop: it is file I/O, and it may wait for another
+    writer to finish.
+    """
 
     resolved_path = path if path is not None else proxy_chains_path()
-    write_json_document_atomically(resolved_path, chains.as_document())
-    reset_proxy_chains_cache()
+    with PROXY_CHAINS_WRITE_LOCK:
+        write_json_document_atomically(resolved_path, chains.as_document())
+        _invalidate_proxy_chains_cache()
 
 
-# (path, mtime_ns, size) -> parsed table, keyed on the file's own stat so a
-# dashboard edit is picked up without a restart. The same cache shape
-# ``harness_tiers`` uses, and for the same reason: the admin route writes the
-# file and nothing else has to be told.
-_CACHE_SIGNATURE: tuple[str, int, int] | None = None
-_CACHED_CHAINS: ProxyChains = EMPTY_PROXY_CHAINS
+#: How long :func:`current_proxy_chains` keeps re-reading a store another
+#: thread is replacing before it settles for the table it read before.
+#: Measured on Windows for 7.72.1: the sharing violation of an in-flight
+#: ``os.replace`` cleared in 0.26 ms typically, 0.65 ms at the 99th percentile
+#: and 4.4 ms at worst. A bound on a rare event, not a cost every read pays.
+TRANSIENT_READ_RETRY_SECONDS = 0.005
+
+# (signature, table): the parsed table and the (path, mtime_ns, size) it was
+# read under, keyed on the file's own stat so a dashboard edit is picked up
+# without a restart. The same cache idea ``harness_tiers`` uses, and for the
+# same reason: the admin route writes the file and nothing else has to be told.
+#
+# ONE tuple, replaced whole and read whole into locals. The event loop reads it
+# while building providers and worker threads replace it after every save, so
+# the signature a reader checks and the table it returns must come from the
+# same moment: a save can make a reader read the file again, never hand it a
+# table the file did not hold. Until 7.72.1 they were two globals, and an
+# unreadable instant was cached as EMPTY -- a provider built from that has no
+# chain and routes direct.
+_CACHE: tuple[tuple[str, int, int] | None, ProxyChains] = (None, EMPTY_PROXY_CHAINS)
 
 
 def reset_proxy_chains_cache() -> None:
     """Forget the cached table, so the next read goes back to disk."""
 
-    global _CACHE_SIGNATURE, _CACHED_CHAINS
-    _CACHE_SIGNATURE = None
-    _CACHED_CHAINS = EMPTY_PROXY_CHAINS
+    global _CACHE
+    _CACHE = (None, EMPTY_PROXY_CHAINS)
+
+
+def _invalidate_proxy_chains_cache() -> None:
+    """Make the next read go back to disk, keeping the table as a fallback.
+
+    What a save does. The table stays so a reader whose re-read lands on the
+    next writer's rename has the previous table to stand on, never nothing.
+    """
+
+    global _CACHE
+    _CACHE = (None, _CACHE[1])
+
+
+def _settled_read(resolved_path: Path) -> ProxyChains | None:
+    """Read the store, riding out another thread's rename; ``None`` if it can't."""
+
+    deadline = time.monotonic() + TRANSIENT_READ_RETRY_SECONDS
+    while True:
+        try:
+            return _read_proxy_chains(resolved_path)
+        except OSError as exc:
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "PROXY CHAINS: cannot read {}: {}; keeping the table read "
+                    "before it",
+                    resolved_path,
+                    exc,
+                )
+                return None
 
 
 def current_proxy_chains(path: Path | None = None) -> ProxyChains:
-    """Return the table, re-reading only when the file has changed."""
+    """Return the table, re-reading only when the file has changed.
 
-    global _CACHE_SIGNATURE, _CACHED_CHAINS
+    A reader gets the table it read before or the one on disk now, never
+    :data:`EMPTY_PROXY_CHAINS` because a writer was mid-save: a file that is
+    there but momentarily unreadable is not a file with no chains in it.
+    Called on the event loop; it takes no lock.
+    """
+
+    global _CACHE
     resolved_path = path if path is not None else proxy_chains_path()
     try:
         stat = resolved_path.stat()
-    except OSError:
+    except FileNotFoundError:
         reset_proxy_chains_cache()
         return EMPTY_PROXY_CHAINS
+    except OSError:
+        # There, and not answering this instant: the table read before, and
+        # the next call asks the file again.
+        return _CACHE[1]
 
     signature = (str(resolved_path), stat.st_mtime_ns, stat.st_size)
-    if signature != _CACHE_SIGNATURE:
-        _CACHED_CHAINS = load_proxy_chains(resolved_path)
-        _CACHE_SIGNATURE = signature
-    return _CACHED_CHAINS
+    cached_signature, cached = _CACHE
+    if signature == cached_signature:
+        return cached
+    chains = _settled_read(resolved_path)
+    if chains is None:
+        # Not recorded under this signature, so the next call reads again.
+        return cached
+    _CACHE = (signature, chains)
+    return chains
 
 
 __all__ = [
@@ -1413,6 +1508,7 @@ __all__ = [
     "MAX_SWITCHES_MIN",
     "OAUTH_PROVIDER_IDS",
     "PROXIES_KEY",
+    "PROXY_CHAINS_WRITE_LOCK",
     "PROXY_CHAIN_MAX_ENTRIES_UNLIMITED",
     "PROXY_URL_SCHEMES",
     "REFUSED_TRIGGER_KINDS",
@@ -1423,6 +1519,7 @@ __all__ = [
     "TLS_INTERCEPTED",
     "TLS_STRICT",
     "TLS_UNKNOWN",
+    "TRANSIENT_READ_RETRY_SECONDS",
     "TRIGGER_KIND_ORDER",
     "VERSION_KEY",
     "CustomFeed",

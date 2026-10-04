@@ -34,6 +34,7 @@ from loguru import logger
 
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import (
+    PROXY_CHAINS_WRITE_LOCK,
     ProxyChains,
     ProxyHealthState,
     load_proxy_chains,
@@ -46,7 +47,6 @@ from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY
 #: times in one request is one thing to write, not four.
 _DIRTY: set[str] = set()
 _DIRTY_LOCK = threading.Lock()
-_WRITE_LOCK = threading.Lock()
 
 #: Addresses that have just failed for the first time -- a fresh 0 -> 1 on the
 #: ladder -- and are owed an early confirm (7.53.0). The re-prober takes them
@@ -118,7 +118,11 @@ def flush_health(now: float | None = None) -> int:
         return 0
     wall = time.time() if now is None else now
     stamp = _iso(wall)
-    with _WRITE_LOCK:
+    # The store's own writer lock, the one the dashboard, the checker and a
+    # fetch hold too: a lock of this module's kept two health flushes apart and
+    # nothing else, so a chain edit could land between this read and this save
+    # and be written back out of existence (7.72.1).
+    with PROXY_CHAINS_WRITE_LOCK:
         try:
             store = load_proxy_chains()
         except Exception as exc:  # pragma: no cover - a read failure is logged

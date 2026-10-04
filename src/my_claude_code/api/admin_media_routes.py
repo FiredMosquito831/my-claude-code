@@ -25,6 +25,7 @@ models.dev is read from its disk cache through ``api.model_admin``.
 import asyncio
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -162,6 +163,36 @@ def _health(registry: RouteHealthRegistry, model_ref: str) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class MediaBenchReadout:
+    """The MEDIA bench state of every ref on a rail, and whether benching is on."""
+
+    enabled: bool
+    health: Mapping[str, dict[str, Any]]
+
+
+def media_bench_readout(settings: Settings) -> MediaBenchReadout:
+    """Read the MEDIA bench for every ref on a rail. Call it on the event loop.
+
+    Reading a bench is not read-only: ``RouteHealthRegistry.why`` asks
+    ``is_ejected``, which clears a bench whose time is up, its outcome window
+    included. The media requests that record failures into the same books --
+    and count that window while they do -- run on the event loop, so a
+    readout taken on a worker thread, as it was before 7.72.1, could clear the
+    window under a count in progress. It is one lookup per ref, so the route
+    takes it on the loop and hands only the rest of the page to a worker. The
+    refs are asked in the order the payload has always asked them.
+    """
+
+    registry = media_route_health_registry(settings)
+    health: dict[str, dict[str, Any]] = {}
+    for rail in MediaRail:
+        for ref in rail_refs(settings, rail):
+            if ref not in health:
+                health[ref] = _health(registry, ref)
+    return MediaBenchReadout(enabled=registry.enabled, health=health)
+
+
 def _all_descriptors() -> tuple[dict[str, ProviderDescriptor], set[str]]:
     """Every provider this install knows, disabled custom entries included.
 
@@ -179,13 +210,20 @@ def _all_descriptors() -> tuple[dict[str, ProviderDescriptor], set[str]]:
     return descriptors, disabled
 
 
-def media_models_payload(settings: Settings) -> dict[str, Any]:
+def media_models_payload(
+    settings: Settings, bench: MediaBenchReadout | None = None
+) -> dict[str, Any]:
     """Everything the Models page's media section renders. Synchronous.
 
     Run through ``asyncio.to_thread``: the models.dev ladder may build its
-    index from the 4.9 MB cache on the first call after a refresh.
+    index from the 4.9 MB cache on the first call after a refresh. ``bench``
+    is the readout :func:`media_bench_readout` took on the event loop; without
+    one it is taken here, on the caller's thread, which is right only for a
+    caller that is on the event loop itself.
     """
 
+    if bench is None:
+        bench = media_bench_readout(settings)
     descriptors, disabled = _all_descriptors()
     custom_ids = {
         provider_id
@@ -196,7 +234,6 @@ def media_models_payload(settings: Settings) -> dict[str, Any]:
         str(status.get("provider_id")): status
         for status in provider_config_status(_value_state(settings))
     }
-    health = media_route_health_registry(settings)
 
     rails: list[dict[str, Any]] = []
     rows: dict[str, dict[str, Any]] = {}
@@ -250,7 +287,7 @@ def media_models_payload(settings: Settings) -> dict[str, Any]:
                     "placements": placements[ref],
                     "declared": _declared(descriptor),
                     "modalities": media_output_modalities(provider_id, model_id),
-                    "health": _health(health, ref),
+                    "health": bench.health[ref],
                     "key": _key_state(keys.get(provider_id)),
                 }
             placements[ref].append(
@@ -287,7 +324,7 @@ def media_models_payload(settings: Settings) -> dict[str, Any]:
         "rails": rails,
         "models": list(rows.values()),
         "providers": providers,
-        "bench_enabled": health.enabled,
+        "bench_enabled": bench.enabled,
     }
 
 
@@ -296,7 +333,10 @@ async def media_models(request: Request, settings: Settings = Depends(get_settin
     """The Models page's media rows and the providers that can serve them."""
 
     require_loopback_admin(request)
-    return await asyncio.to_thread(media_models_payload, settings)
+    # The bench here, on the loop; the rest on a worker. See
+    # ``media_bench_readout`` for why the split is where it is.
+    bench = media_bench_readout(settings)
+    return await asyncio.to_thread(media_models_payload, settings, bench)
 
 
 def _empty_group(group: str) -> dict[str, Any]:

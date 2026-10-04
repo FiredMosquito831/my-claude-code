@@ -904,7 +904,7 @@ def media_route_health_registry(settings: Settings) -> RouteHealthRegistry:
     typed_key = cast(_MediaEjectKey, key)
     registry = _MEDIA_REGISTRIES.get(typed_key)
     if registry is None:
-        registry = RouteHealthRegistry(
+        built = RouteHealthRegistry(
             mode=cast(Literal["consecutive", "rate_based"], key[0]),
             eject_after_failures=key[1],
             eject_window=key[2],
@@ -913,7 +913,11 @@ def media_route_health_registry(settings: Settings) -> RouteHealthRegistry:
             eject_seconds=key[5],
             bench_enabled=settings.fallback_bench_enabled,
         )
-        _MEDIA_REGISTRIES[typed_key] = registry
+        # ``setdefault``, not a store: two first callers on two threads each
+        # build one, and a plain store from the second would orphan the first
+        # with whatever a request had already recorded into it. Every caller
+        # gets the one that landed.
+        registry = _MEDIA_REGISTRIES.setdefault(typed_key, built)
     return registry
 
 

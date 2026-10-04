@@ -44,6 +44,7 @@ from loguru import logger
 from my_claude_code.config.constants import PROXY_FEED_TIMEOUT_SECONDS_DEFAULT
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import (
+    PROXY_CHAINS_WRITE_LOCK,
     SOURCE_FEED,
     ProxyChains,
     ProxyEndpoint,
@@ -491,6 +492,13 @@ def enabled_feeds(store: ProxyChains) -> tuple[ProxyFeed, ...]:
     )
 
 
+def _persist_offer(offered: list[tuple[str, ProxyEndpoint]]) -> None:
+    """Store a pass's offer on a fresh read, in one save, under the lock."""
+
+    with PROXY_CHAINS_WRITE_LOCK:
+        save_proxy_chains(load_proxy_chains().with_candidates(offered))
+
+
 async def ingest(
     *,
     timeout: float = FEED_TIMEOUT_SECONDS,
@@ -534,13 +542,14 @@ async def ingest(
     )
 
     if persist:
-        fresh = load_proxy_chains()
         kept = merged[:limit] if limit > 0 else merged
         offered = [
             (candidate_id(item.endpoint.address), _as_endpoint(item, at))
             for item in kept
         ]
-        save_proxy_chains(fresh.with_candidates(offered))
+        # Off the loop and under the store's writer lock, like every other
+        # writer of the file (7.72.1).
+        await asyncio.to_thread(_persist_offer, offered)
 
     logger.info(
         "PROXY FEEDS: {} of {} feed(s) answered; {} address(es) on offer, {} "
