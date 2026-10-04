@@ -17,7 +17,7 @@
 //!
 //! | platform | native notification | when |
 //! |---|---|---|
-//! | Windows | a toast with this app's `AppUserModelID` | only when the Windows installer registered that id under the app's name (`Setting()` is `Enabled`); a copy fetched by `mcc-desktop` (delivery path A) has no registration, and is in-window only rather than a toast labelled with somebody else's name |
+//! | Windows | a toast with this app's `AppUserModelID` | only when the Windows installer registered that id under the app's name (the `AppUserModelId\com.myclaudecode.desktop` key with a `DisplayName`) and Windows has not turned it off; a copy fetched by `mcc-desktop` (delivery path A) has no registration, and is in-window only rather than a toast labelled with somebody else's name |
 //! | Linux | `notify-send --app-name "My Claude Code"` | when `notify-send` is installed |
 //! | macOS | none yet | in-window only: an unsigned bundle cannot be shown to attribute a notification to itself, and nothing on this release's machines could verify one |
 //! | any | none | when `mcc-desktop`'s own tray icon is the one speaking (`MCC_DESKTOP_SHELL_TRAY=0`): it already announces the outage under the app's name, and two notifications for one event is the defect the 7.70.0 host was written to avoid |
@@ -42,10 +42,43 @@ pub const SHELL_TRAY_ENV: &str = "MCC_DESKTOP_SHELL_TRAY";
 pub enum ToastRegistration {
     /// Registered and allowed.
     Enabled,
+    /// Registered by the installer, and Windows keeps no setting for it yet.
+    /// 7.71.1: Windows creates an id's notification setting when the id first
+    /// notifies, so until then `ToastNotifier.Setting` answers "Element not
+    /// found" -- the 7.71.0 installer smoke printed exactly that with the key in
+    /// place. Reading that as "not registered" meant the first toast, and so
+    /// every toast, never happened. The installer's key is the registration.
+    NotYetSeen(String),
     /// Registered, and switched off (by the user, by policy).
     Disabled(String),
     /// Not registered at all: a copy the installer did not put there.
     NotRegistered(String),
+}
+
+/// The registration, from the two facts the platform gives.
+///
+/// `display_name` is the `DisplayName` the installer wrote under
+/// `AppUserModelId\<id>` (read through `HKEY_CLASSES_ROOT`, so a per-user and a
+/// machine install both count), or why it could not be read. `setting` is
+/// `Ok(None)` when Windows says `Enabled`, `Ok(Some(what))` for any other
+/// setting, and `Err(why)` when Windows has no setting for the id at all.
+/// Without the key nothing is ever shown natively, whatever Windows remembers:
+/// a toast then carries the bare id instead of the app's name.
+pub fn registration(
+    display_name: Result<String, String>,
+    setting: Result<Option<String>, String>,
+) -> ToastRegistration {
+    match display_name {
+        Err(why) => ToastRegistration::NotRegistered(why),
+        Ok(name) if name.trim().is_empty() => {
+            ToastRegistration::NotRegistered("the registration has no display name".to_owned())
+        }
+        Ok(_) => match setting {
+            Ok(None) => ToastRegistration::Enabled,
+            Ok(Some(what)) => ToastRegistration::Disabled(what),
+            Err(why) => ToastRegistration::NotYetSeen(why),
+        },
+    }
 }
 
 /// Where one announcement's native half goes.
@@ -103,7 +136,9 @@ pub fn choose(
     }
     match platform {
         Platform::Windows => match toast {
-            Some(ToastRegistration::Enabled) => Route::WindowsToast,
+            Some(ToastRegistration::Enabled | ToastRegistration::NotYetSeen(_)) => {
+                Route::WindowsToast
+            }
             Some(ToastRegistration::Disabled(why)) => Route::InWindowOnly(format!(
                 "notifications for My Claude Code are turned off in Windows ({why})"
             )),
@@ -199,15 +234,58 @@ fn toast_registration() -> ToastRegistration {
     let setting =
         ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_USER_MODEL_ID))
             .and_then(|notifier| notifier.Setting());
-    match setting {
-        Ok(NotificationSetting::Enabled) => ToastRegistration::Enabled,
-        Ok(other) => ToastRegistration::Disabled(format!("setting {}", other.0)),
-        Err(error) => ToastRegistration::NotRegistered(format!(
+    let setting = match setting {
+        Ok(NotificationSetting::Enabled) => Ok(None),
+        Ok(other) => Ok(Some(format!("setting {}", other.0))),
+        Err(error) => Err(format!(
             "{} (0x{:08X})",
             error.message().trim(),
             error.code().0
         )),
+    };
+    registration(registered_display_name(), setting)
+}
+
+/// The `DisplayName` the Windows installer wrote for this app's id, read
+/// through `HKEY_CLASSES_ROOT` (the per-user and the machine-wide classes,
+/// merged). Read-only.
+#[cfg(windows)]
+fn registered_display_name() -> Result<String, String> {
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{HKEY_CLASSES_ROOT, RRF_RT_REG_SZ, RegGetValueW};
+    use windows::core::PCWSTR;
+
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(std::iter::once(0)).collect() };
+    let subkey = wide(&format!("AppUserModelId\\{APP_USER_MODEL_ID}"));
+    let value = wide("DisplayName");
+    let mut buffer = [0u16; 512];
+    let mut size = u32::try_from(std::mem::size_of_val(&buffer)).unwrap_or(0);
+    // SAFETY: `subkey` and `value` are NUL-terminated UTF-16 buffers that live
+    // until the call returns; `buffer` is writable for exactly `size` bytes,
+    // and RegGetValueW writes at most that many (it returns ERROR_MORE_DATA
+    // rather than overrun).
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CLASSES_ROOT,
+            PCWSTR(subkey.as_ptr()),
+            PCWSTR(value.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(format!(
+            "no AppUserModelId\\{APP_USER_MODEL_ID} registration (error {})",
+            status.0
+        ));
     }
+    let end = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(buffer.len());
+    Ok(String::from_utf16_lossy(&buffer[..end]))
 }
 
 #[cfg(not(windows))]
@@ -270,6 +348,73 @@ mod tests {
             false,
         );
         assert!(matches!(off, Route::InWindowOnly(ref why) if why.contains("turned off")));
+    }
+
+    #[test]
+    fn an_installed_app_that_has_never_notified_still_gets_its_first_toast() {
+        // 7.71.0's installer smoke, verbatim in substance: the key was in place
+        // (DisplayName "My Claude Code") and ToastNotifier.Setting answered
+        // "Element not found" -- Windows keeps no setting for an id that has
+        // never notified. 7.71.0 read that as "not registered", so the first
+        // toast, and therefore every toast, never came.
+        let first = registration(
+            Ok("My Claude Code".to_owned()),
+            Err("Element not found. (0x80070490)".to_owned()),
+        );
+        assert!(matches!(first, ToastRegistration::NotYetSeen(_)));
+        assert_eq!(
+            choose(Platform::Windows, false, Some(&first), false),
+            Route::WindowsToast
+        );
+        assert_eq!(
+            registration(Ok("My Claude Code".to_owned()), Ok(None)),
+            ToastRegistration::Enabled
+        );
+    }
+
+    #[test]
+    fn without_the_installers_key_nothing_is_shown_natively_whatever_windows_remembers() {
+        // Path A, or an app whose installer was uninstalled: Windows may still
+        // remember a setting for the id, but a toast would carry the bare id.
+        for setting in [
+            Ok(None),
+            Err("Element not found. (0x80070490)".to_owned()),
+            Ok(Some("setting 1".to_owned())),
+        ] {
+            let registered = registration(Err("no registration (error 2)".to_owned()), setting);
+            assert!(matches!(registered, ToastRegistration::NotRegistered(_)));
+            assert!(matches!(
+                choose(Platform::Windows, false, Some(&registered), false),
+                Route::InWindowOnly(ref why) if why.contains("installer")
+            ));
+        }
+        assert!(matches!(
+            registration(Ok("  ".to_owned()), Ok(None)),
+            ToastRegistration::NotRegistered(_)
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_registration_read_names_the_key_it_looked_for() {
+        // Read-only, against whatever this machine has: an installer-installed
+        // app answers its display name, anything else names the missing key.
+        match registered_display_name() {
+            Ok(name) => assert!(!name.is_empty()),
+            Err(why) => assert!(why.contains(APP_USER_MODEL_ID), "{why}"),
+        }
+    }
+
+    #[test]
+    fn a_registration_windows_turned_off_is_respected() {
+        let off = registration(
+            Ok("My Claude Code".to_owned()),
+            Ok(Some("setting 1".to_owned())),
+        );
+        assert!(matches!(
+            choose(Platform::Windows, false, Some(&off), false),
+            Route::InWindowOnly(ref why) if why.contains("turned off")
+        ));
     }
 
     #[test]

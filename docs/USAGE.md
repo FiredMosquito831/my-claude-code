@@ -1357,9 +1357,10 @@ lost its port (pids 42776, 58620). A new server is starting."* — in three plac
   the outage and the app does not say it twice.
 
 **The desktop app has to be updated to get this.** It is a change to the app, not
-only to the server. The app release is 7.71.0; the server that pins it — and so
-fetches it — is 7.71.1 and later (the pin can only name an app release that
-already exists). Such a server updates the app it pins after it is ready
+only to the server. The app release is 7.71.1 (7.71.0 published it first; 7.71.1
+fixes its Windows notification, which 7.71.0 never showed on a fresh install); the
+server that pins it — and so fetches it — is 7.71.2 and later (the pin can only
+name an app release that already exists). Such a server updates the app it pins after it is ready
 (`DESKTOP_SHELL_AUTO_UPDATE`), and a running app is staged and swapped in the
 next time it starts — so quit the app and start it again once after updating.
 Until then the app you have keeps its old behaviour (it reloads the dashboard

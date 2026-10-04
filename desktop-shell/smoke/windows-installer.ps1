@@ -177,6 +177,25 @@ $setting = & powershell.exe -NoProfile -NonInteractive -Command (
     "try { [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('com.myclaudecode.desktop').get_Setting() } " +
     "catch { 'ERROR ' + `$_.Exception.Message }") 2>&1
 Ok "the notification platform's own answer for com.myclaudecode.desktop: $(($setting | Out-String).Trim())"
+# 7.71.1: Windows keeps no setting for an id until that id first notifies, so on
+# a fresh install the answer above is "Element not found" -- 7.71.0's smoke
+# printed exactly that with the key in place, and 7.71.0's app read it as "not
+# registered" and so never showed its first toast. Show the one notification the
+# app would, under the same id, the way the app does, and ask again.
+$toastScript = @'
+[void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+[void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
+try {
+    $document = [Windows.Data.Xml.Dom.XmlDocument]::new()
+    $document.LoadXml('<toast><visual><binding template="ToastGeneric"><text>My Claude Code</text><text>Installer smoke: the notification identity works.</text></binding></visual></toast>')
+    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('com.myclaudecode.desktop')
+    $notifier.Show([Windows.UI.Notifications.ToastNotification]::new($document))
+    'shown without an error; the platform now answers: ' + $notifier.get_Setting()
+} catch { 'ERROR ' + $_.Exception.Message }
+'@
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($toastScript))
+$shown = & powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1
+Ok "one notification as com.myclaudecode.desktop: $(($shown | Out-String).Trim())"
 
 # -- the WebView2 bootstrapper is really inside this setup ------------------
 # A runner has the runtime, so the installer's WebView2 branch never runs and
