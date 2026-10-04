@@ -3637,6 +3637,17 @@ def test_the_lifetime_panel_says_what_the_log_costs(rendered) -> None:
     assert "2026-08-01 to 2026-09-12" in span
 
 
+def test_the_lifetime_panel_says_how_far_the_history_conversion_is(rendered) -> None:
+    """7.74.0: one line of text while older history is recompressed.
+
+    Read-only, from the storage readout the panel already fetches; no control.
+    """
+
+    span = rendered["logReadout"]["lifetimeSpan"]
+
+    assert "4.19 GB on disk · compressing older history (bodies 42%)" in span
+
+
 def test_the_cost_card_ships_the_denominator_behind_its_totals(rendered) -> None:
     """A window where most models are unpriced must not read as a cheap week."""
 

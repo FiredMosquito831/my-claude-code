@@ -1284,6 +1284,41 @@ _WIRE_SAMPLE_CANDIDATES_PER_SAMPLE = 2
 # bytes passed through.
 _WIRE_ENVELOPE_V1 = 1
 
+# History conversion (7.74.0); see ``_run_history_conversion``. One JSON
+# document in ``request_log_meta``, written in the same transaction as the rows
+# each step changes, so a step either happened with its bookkeeping or not at
+# all. Versioned name per the marker rule.
+_HISTORY_CONVERSION_KEY = "history_conversion_v1"
+# Writer time one step may take before it commits and looks at the queue
+# again: the longest a request's row can wait behind the conversion. Measured
+# on the full-size copy against the writer's idle batch latency; see the PR.
+_HISTORY_STEP_SECONDS = 0.25
+# Rows read per query inside a step. Only bounds a single SELECT; the step
+# itself ends on the time budget above, never on a row count.
+_HISTORY_FETCH_ROWS = 64
+# The longest the conversion keeps the writer's idle branch before handing it
+# back for one poll, so the session heartbeat and dictionary installs run.
+_HISTORY_IDLE_SLICE_SECONDS = 5.0
+# At most one progress line per this many seconds.
+_HISTORY_PROGRESS_LOG_SECONDS = 300.0
+# ``PRAGMA incremental_vacuum(N)`` step bounds. A step adapts N to fit
+# ``_HISTORY_STEP_SECONDS``, at most doubling from one step to the next: the
+# cost of a page varies with where it moves from, and on the full-size copy a
+# 4,096-page step that followed cheap ones took 2.06 s. 1,024 bounds the worst
+# case near the conversion's own step.
+_SPACE_STEP_PAGES_MIN = 16
+_SPACE_STEP_PAGES_START = 256
+_SPACE_STEP_PAGES_MAX = 1_024
+# Chosen by none of the 136 statements the admin read paths issue, nor by the
+# all-time shapes or prune (measured, investigation round 2, s11): 284 MB on
+# the real log. ``idx_request_attempts_ts_v1`` serves every query it could.
+_UNUSED_ATTEMPT_INDEX = "idx_request_attempts_model_v1"
+# Index entries the read-ahead takes per slice before it checks for a close.
+_INDEX_WARM_FETCH_ROWS = 20_000
+# Markers that do not describe the data: the conversion rewrites how values
+# are stored, never what they are, so a derived payload stays right across it.
+_DATA_MARK_IGNORED_KEYS = frozenset({_HISTORY_CONVERSION_KEY})
+
 # Columns a content search covers on rows still stored inline. Reasoning and
 # tool calls are more than half of what a real log contains -- 55% of requests
 # carry thinking text and 78% carry tool calls -- so omitting them made search
@@ -2727,6 +2762,22 @@ class RequestLogStore:
         self._trainer_conn_lock = threading.Lock()
         self._trained: list[tuple[str, bytes, float]] = []
         self._dict_train_failed_at: dict[str, float] = {}
+        # Kinds whose last training found too few samples to learn from. The
+        # history conversion waits for a dictionary unless its kind is here.
+        self._dict_too_few_samples: set[str] = set()
+        # History conversion (7.74.0); writer thread only. See
+        # ``_run_history_conversion``.
+        self._history_done = False
+        self._history_retry_at = 0.0
+        self._history_announced = False
+        self._history_logged_at = 0.0
+        self._history_index_checked = False
+        # The unused index is read ahead of its drop on a thread of its own;
+        # see ``_drop_unused_attempt_index``.
+        self._index_warm = threading.Event()
+        self._index_warmer: threading.Thread | None = None
+        self._history_space_mode: int | None = None
+        self._space_step_pages = _SPACE_STEP_PAGES_START
         # Set once the writer thread has loaded the dictionaries and made its
         # start-up decision about training, so a caller can tell "nothing was
         # due" from "not decided yet".
@@ -2948,21 +2999,29 @@ class RequestLogStore:
         """
         if stored is None or isinstance(stored, str):
             return stored
-        data = bytes(stored)
         try:
-            if not data or data[0] != _WIRE_ENVELOPE_V1:
-                raise ValueError("unknown wire snapshot envelope")
-            dict_id, offset = _read_varint(data, 1)
-            zstd_dict = None
-            if dict_id:
-                zstd_dict = self._wire_dictionary(dict_id)
-                if zstd_dict is None:
-                    raise ValueError(f"wire dictionary {dict_id} is missing")
-            raw = zstd.decompress(data[offset:], zstd_dict=zstd_dict)
-            return raw.decode("utf-8", "surrogatepass")
+            return self._unwrap_wire_envelope(bytes(stored)).decode(
+                "utf-8", "surrogatepass"
+            )
         except (zstd.ZstdError, ValueError) as exc:
             logger.warning("Request log wire snapshot decode failed: {}", exc)
             return None
+
+    def _unwrap_wire_envelope(self, data: bytes) -> bytes:
+        """Return the UTF-8 bytes a ``wire_body`` envelope holds, or raise.
+
+        The one decoder: the reader above and the history conversion's proof
+        both go through it, so what the proof checked is what a reader gets.
+        """
+        if not data or data[0] != _WIRE_ENVELOPE_V1:
+            raise ValueError("unknown wire snapshot envelope")
+        dict_id, offset = _read_varint(data, 1)
+        zstd_dict = None
+        if dict_id:
+            zstd_dict = self._wire_dictionary(dict_id)
+            if zstd_dict is None:
+                raise ValueError(f"wire dictionary {dict_id} is missing")
+        return zstd.decompress(data[offset:], zstd_dict=zstd_dict)
 
     def _decode_bodies(self, payload: Any, dict_id: Any) -> dict[str, Any]:
         if payload is None:
@@ -3181,17 +3240,18 @@ class RequestLogStore:
         ``reasoning_by_model`` groups succeeded attempts by model and reads
         only ``reasoning_emitted`` and ``request_id`` off each one; without
         this the scan walks every attempt row, and an attempt row co-locates
-        its stored wire body. Versioned name per the index rule: changing the
-        column list means ``_v2`` plus an explicit drop of ``_v1``.
+        its stored wire body. Versioned name per the index rule.
+
+        ``idx_request_attempts_model_v1`` (``model_ref, outcome,
+        reasoning_emitted, request_id``) was created here until 7.73.0. No
+        query chose it once the index below existed, so it is no longer
+        created, and the writer drops it in the background
+        (``_drop_unused_attempt_index``) -- never here, on the constructing
+        thread, because dropping 284 MB is seconds of work.
         """
 
         with contextlib.suppress(sqlite3.Error):
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_request_attempts_model_v1"
-                " ON request_attempts(model_ref, outcome, reasoning_emitted,"
-                " request_id)"
-            )
-            # And the same query's *other* shape, once ``ts_epoch`` exists on
+            # The same query's time-windowed shape, once ``ts_epoch`` exists on
             # the attempt: filter by time on the attempt rather than on its
             # parent. Covering on purpose -- it carries every column the
             # attempts side of the query reads. Measured on the real 571,665-row
@@ -3667,6 +3727,616 @@ class RequestLogStore:
                 filled,
                 time.monotonic() - started,
             )
+
+    # ------------------------------------------------------ history conversion
+
+    def _run_history_conversion(self, conn: sqlite3.Connection) -> None:
+        """Writer thread, idle only: make the stored history smaller, losslessly.
+
+        7.73.0 compresses what it writes; this converts what was written
+        before, and hands the freed space back to the filesystem. Four parts,
+        in this order, each step a transaction of its own that carries its
+        bookkeeping (``_HISTORY_CONVERSION_KEY``), so a kill between any two
+        statements leaves the database consistent and the walk resumes where
+        the last committed step ended:
+
+        1. drop ``idx_request_attempts_model_v1``, which nothing reads;
+        2. wire snapshots still stored as TEXT become the 7.73.0 envelope;
+        3. bodies are recompressed with the newest dictionary of their kind;
+        4. the pages 1-3 freed go back to the filesystem, a few at a time.
+
+        A value is replaced only once its new form has been decoded by the
+        reader's own decoder and found byte-identical to the original (and,
+        for a body, hashed back to its address); anything else stays exactly
+        as it was and is counted. Each step stops on a time budget and the
+        whole slice the moment a request is queued, so a request's row waits
+        behind at most one step.
+        """
+        if not self._compress_bodies:
+            return
+        if self._history_done and self._history_index_checked:
+            return
+        now = time.monotonic()
+        if now < self._history_retry_at:
+            return
+        try:
+            # Checked every start, even after the conversion is done: an older
+            # version run in between recreates the index.
+            if not self._history_index_checked and self._drop_unused_attempt_index(
+                conn
+            ):
+                self._history_index_checked = True
+                if not self._queue.empty():
+                    return
+            if self._history_done:
+                return
+            deadline = now + _HISTORY_IDLE_SLICE_SECONDS
+            while self._queue.empty() and time.monotonic() < deadline:
+                if not self._history_step(conn):
+                    break
+        except sqlite3.Error as exc:
+            with contextlib.suppress(sqlite3.Error):
+                conn.rollback()
+            # Another process may hold the write lock for longer than the busy
+            # timeout. Nothing is lost by trying again later.
+            logger.warning("Request log history conversion paused: {}", exc)
+            self._history_retry_at = time.monotonic() + 60.0
+
+    @staticmethod
+    def _new_history_state(conn: sqlite3.Connection) -> dict[str, Any]:
+        page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+        phase = {
+            "through": 0,
+            "end": None,
+            "converted": 0,
+            "kept": 0,
+            "failed": 0,
+            "bytes_before": 0,
+            "bytes_after": 0,
+            "done_at": None,
+        }
+        return {
+            "started_at": time.time(),
+            "page_size": page_size,
+            "bytes_at_start": page_count * page_size,
+            # Pages already free before the conversion freed any: never handed
+            # back by it, because they may hold rows somebody deleted (IV.13).
+            "freelist_at_start": int(
+                conn.execute("PRAGMA freelist_count").fetchone()[0]
+            ),
+            "wire": dict(phase),
+            "bodies": dict(phase),
+            "freed_pages": 0,
+            "returned_pages": 0,
+            "done_at": None,
+            "bytes_at_end": None,
+        }
+
+    def _load_history_state(self, conn: sqlite3.Connection) -> dict[str, Any]:
+        raw = self._meta_get(conn, _HISTORY_CONVERSION_KEY)
+        if raw:
+            with contextlib.suppress(ValueError, TypeError):
+                state = json.loads(raw)
+                if isinstance(state, dict):
+                    return state
+        return self._new_history_state(conn)
+
+    def _save_history_state(
+        self, conn: sqlite3.Connection, state: dict[str, Any]
+    ) -> None:
+        self._meta_set(conn, _HISTORY_CONVERSION_KEY, json.dumps(state, sort_keys=True))
+
+    @staticmethod
+    def _freelist_count(conn: sqlite3.Connection) -> int:
+        return int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+
+    def _drop_unused_attempt_index(self, conn: sqlite3.Connection) -> bool:
+        """Drop ``idx_request_attempts_model_v1`` if it exists; once a process.
+
+        Guarded and idempotent: an older version recreates it at start, and
+        the next start of this one drops it again. The pages it held go on the
+        freelist and are counted as the conversion's own, so step 4 returns
+        them -- they held only copies of columns that are still there.
+
+        The drop is one statement that reads every page of the index. Cold,
+        that measured 23.0 s on the full-size copy against 1.7 s warm, and the
+        writer cannot take a request while it runs. So a thread of its own
+        first reads the index through a connection of its own -- a WAL reader,
+        which never blocks the writer -- and the drop waits for it. True once
+        the index is gone; False while it is still being read.
+        """
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
+            (_UNUSED_ATTEMPT_INDEX,),
+        ).fetchone()
+        if exists is None:
+            return True
+        if not self._index_warm.is_set():
+            if self._index_warmer is None:
+                self._index_warmer = threading.Thread(
+                    target=self._warm_unused_index,
+                    name="mcc-request-log-index-reader",
+                    daemon=True,
+                )
+                self._index_warmer.start()
+            return False
+        started = time.perf_counter()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(conn)
+            before = self._freelist_count(conn)
+            conn.execute(f"DROP INDEX IF EXISTS {_UNUSED_ATTEMPT_INDEX}")
+            freed = max(0, self._freelist_count(conn) - before)
+            state["freed_pages"] = int(state.get("freed_pages", 0)) + freed
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        logger.info(
+            "Request log dropped the unused index {} in {:.1f}s ({} pages freed)",
+            _UNUSED_ATTEMPT_INDEX,
+            time.perf_counter() - started,
+            freed,
+        )
+        return True
+
+    def _warm_unused_index(self) -> None:
+        """Index reader thread: read every entry of the index about to go.
+
+        Only reads, on its own connection, in slices, and stops between two
+        slices when the store closes. The writer drops the index once this has
+        set ``_index_warm``; a failure sets it too, and the drop then simply
+        reads the index itself.
+        """
+        started = time.perf_counter()
+        try:
+            with self._trainer_conn_lock, self._connection() as conn:
+                cursor = conn.execute(
+                    f"SELECT model_ref FROM request_attempts INDEXED BY"
+                    f" {_UNUSED_ATTEMPT_INDEX}"
+                )
+                while not self._closed.is_set():
+                    if not cursor.fetchmany(_INDEX_WARM_FETCH_ROWS):
+                        break
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Request log could not pre-read {}: {}", _UNUSED_ATTEMPT_INDEX, exc
+            )
+        finally:
+            self._index_warm.set()
+        logger.info(
+            "Request log read {} ahead of dropping it in {:.1f}s",
+            _UNUSED_ATTEMPT_INDEX,
+            time.perf_counter() - started,
+        )
+
+    def _history_step(self, conn: sqlite3.Connection) -> bool:
+        """One bounded step of the conversion; False when there is nothing to do now."""
+        state = self._load_history_state(conn)
+        if state.get("done_at") is not None:
+            self._history_done = True
+            return False
+        if not self._history_announced:
+            self._history_announced = True
+            self._history_logged_at = time.monotonic()
+            resumed = bool(state["wire"]["through"] or state["bodies"]["through"])
+            logger.info(
+                "Request log history conversion {}: older wire snapshots and"
+                " bodies are recompressed in the background, each checked"
+                " before it is replaced ({:.2f} GB on disk)",
+                "resumed" if resumed else "started",
+                int(state["bytes_at_start"]) / 1e9,
+            )
+        progressed = False
+        if state["wire"]["done_at"] is None:
+            progressed = self._convert_wire_step(conn)
+        elif state["bodies"]["done_at"] is None:
+            progressed = self._recompress_body_step(conn)
+        if self._queue.empty() and self._return_space_step(conn):
+            progressed = True
+        state = self._load_history_state(conn)
+        converted = (
+            state["wire"]["done_at"] is not None
+            and state["bodies"]["done_at"] is not None
+        )
+        if converted and not self._space_owed(conn, state):
+            self._finish_history(conn)
+            return False
+        self._log_history_progress(state)
+        return progressed
+
+    def _convert_wire_step(self, conn: sqlite3.Connection) -> bool:
+        """Turn the next TEXT wire snapshots into the envelope; one transaction.
+
+        With the newest wire dictionary only: without one the ratio is 4.67x
+        against 37.6x, so the step waits for the trainer -- unless the trainer
+        found too few snapshots to learn from, and then it goes without.
+        """
+        active = self._kind_dicts.get(_DICT_KIND_WIRE)
+        if active is None and _DICT_KIND_WIRE not in self._dict_too_few_samples:
+            return False
+        dict_id = active[0] if active is not None else 0
+        if dict_id and self._wire_dictionary(dict_id) is None:
+            return False
+        level = self._compression_level
+        budget_end = time.perf_counter() + _HISTORY_STEP_SECONDS
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(conn)
+            phase = state["wire"]
+            if phase["end"] is None:
+                phase["end"] = int(
+                    conn.execute(
+                        "SELECT COALESCE(MAX(rowid), 0) FROM request_attempts"
+                    ).fetchone()[0]
+                )
+            freelist_before = self._freelist_count(conn)
+            cursor = int(phase["through"])
+            updates: list[tuple[bytes, int]] = []
+            finished = False
+            while True:
+                rows = conn.execute(
+                    "SELECT rowid, CASE WHEN typeof(wire_body) = 'text'"
+                    " THEN CAST(wire_body AS BLOB) END FROM request_attempts"
+                    " WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                    (cursor, _HISTORY_FETCH_ROWS),
+                ).fetchall()
+                if not rows:
+                    finished = True
+                    break
+                for row in rows:
+                    cursor = int(row[0])
+                    original = row[1]
+                    if original is not None:
+                        original = bytes(original)
+                        envelope = self._proven_wire_envelope(original, level)
+                        if envelope is None:
+                            phase["failed"] += 1
+                        elif envelope is original:
+                            phase["kept"] += 1
+                        else:
+                            updates.append((envelope, cursor))
+                            phase["converted"] += 1
+                            phase["bytes_before"] += len(original)
+                            phase["bytes_after"] += len(envelope)
+                    if time.perf_counter() >= budget_end:
+                        break
+                # At least one row per step, however slow, so the walk always
+                # moves; then the budget decides.
+                if time.perf_counter() >= budget_end:
+                    break
+            if updates:
+                conn.executemany(
+                    "UPDATE request_attempts SET wire_body = ? WHERE rowid = ?",
+                    updates,
+                )
+            phase["through"] = cursor
+            if finished:
+                phase["done_at"] = time.time()
+            state["freed_pages"] = int(state["freed_pages"]) + max(
+                0, self._freelist_count(conn) - freelist_before
+            )
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if finished and phase["failed"]:
+            logger.warning(
+                "Request log history conversion left {} wire snapshots as they"
+                " were: their compressed form did not decode to the same bytes",
+                phase["failed"],
+            )
+        return True
+
+    def _proven_wire_envelope(self, original: bytes, level: int) -> bytes | None:
+        """The envelope for one stored TEXT snapshot, proven to decode back to it.
+
+        Returns ``original`` itself when the envelope would not be smaller (the
+        row stays TEXT, as the writer would store it), and None when the proof
+        fails or anything raises -- the row is then left exactly as it is.
+        """
+        try:
+            text = original.decode("utf-8")
+            stored = self._encode_wire_body(text, level=level, compress=True)
+            if not isinstance(stored, bytes):
+                return original
+            if self._unwrap_wire_envelope(stored) != original:
+                return None
+            if self._decode_wire_body(stored) != text:
+                return None
+            return stored
+        except Exception:  # every failure means "leave the row alone"
+            return None
+
+    def _newest_kind_dictionaries(
+        self, conn: sqlite3.Connection
+    ) -> dict[str, int | None] | None:
+        """The dictionary each body kind is recompressed with, or None to wait.
+
+        Only a dictionary trained for that kind (7.73.0 onward) counts: the
+        legacy one is what most history already uses. A kind with none waits
+        for the trainer, unless the trainer found too few samples to train
+        one, and then its bodies stay as they are.
+        """
+        targets: dict[str, int | None] = {}
+        for kind in (_DICT_KIND_PROMPT, _DICT_KIND_REST):
+            row = conn.execute(
+                "SELECT id FROM body_dictionaries WHERE kind = ?"
+                " ORDER BY id DESC LIMIT 1",
+                (kind,),
+            ).fetchone()
+            if row is not None:
+                targets[kind] = int(row[0])
+            elif kind in self._dict_too_few_samples:
+                targets[kind] = None
+            else:
+                return None
+        return targets
+
+    def _recompress_body_step(self, conn: sqlite3.Connection) -> bool:
+        """Recompress the next bodies with their kind's newest dictionary.
+
+        ``body_blobs.sha`` hashes the uncompressed content, so the address --
+        and every ``request_bodies`` row naming it -- stays as it is. The old
+        dictionary stays too: nothing ever deletes one.
+        """
+        targets = self._newest_kind_dictionaries(conn)
+        if targets is None:
+            return False
+        level = self._compression_level
+        budget_end = time.perf_counter() + _HISTORY_STEP_SECONDS
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(conn)
+            phase = state["bodies"]
+            if phase["end"] is None:
+                phase["end"] = int(
+                    conn.execute(
+                        "SELECT COALESCE(MAX(rowid), 0) FROM body_blobs"
+                    ).fetchone()[0]
+                )
+            freelist_before = self._freelist_count(conn)
+            cursor = int(phase["through"])
+            updates: list[tuple[int, bytes, int]] = []
+            finished = False
+            while True:
+                rows = conn.execute(
+                    "SELECT b.rowid, b.sha, b.dict_id,"
+                    " EXISTS (SELECT 1 FROM request_bodies WHERE input_sha = b.sha),"
+                    " EXISTS (SELECT 1 FROM request_bodies WHERE sha = b.sha)"
+                    " FROM body_blobs b WHERE b.rowid > ? ORDER BY b.rowid LIMIT ?",
+                    (cursor, _HISTORY_FETCH_ROWS),
+                ).fetchall()
+                if not rows:
+                    finished = True
+                    break
+                for row in rows:
+                    cursor = int(row[0])
+                    as_prompt, as_rest = bool(row[3]), bool(row[4])
+                    kind = (
+                        _DICT_KIND_PROMPT
+                        if as_prompt and not as_rest
+                        else _DICT_KIND_REST
+                        if as_rest and not as_prompt
+                        else None
+                    )
+                    target = targets.get(kind) if kind is not None else None
+                    dict_id = None if row[2] is None else int(row[2])
+                    if target is None or dict_id == target:
+                        phase["kept"] += 1
+                    else:
+                        payload = conn.execute(
+                            "SELECT payload FROM body_blobs WHERE rowid = ?", (cursor,)
+                        ).fetchone()
+                        old = bytes(payload[0]) if payload is not None else b""
+                        new = self._proven_body_payload(
+                            old, dict_id, target, str(row[1]), level
+                        )
+                        if new is None:
+                            phase["failed"] += 1
+                        elif new is old:
+                            phase["kept"] += 1
+                        else:
+                            updates.append((target, new, cursor))
+                            phase["converted"] += 1
+                            phase["bytes_before"] += len(old)
+                            phase["bytes_after"] += len(new)
+                    if time.perf_counter() >= budget_end:
+                        break
+                if time.perf_counter() >= budget_end:
+                    break
+            if updates:
+                conn.executemany(
+                    "UPDATE body_blobs SET dict_id = ?, payload = ? WHERE rowid = ?",
+                    updates,
+                )
+            phase["through"] = cursor
+            if finished:
+                phase["done_at"] = time.time()
+            state["freed_pages"] = int(state["freed_pages"]) + max(
+                0, self._freelist_count(conn) - freelist_before
+            )
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if finished and phase["failed"]:
+            logger.warning(
+                "Request log history conversion left {} bodies as they were:"
+                " they did not decode, or did not hash back to their address",
+                phase["failed"],
+            )
+        return True
+
+    def _proven_body_payload(
+        self,
+        old: bytes,
+        dict_id: int | None,
+        target: int,
+        sha: str,
+        level: int,
+    ) -> bytes | None:
+        """One body recompressed with dictionary ``target``, proven lossless.
+
+        The stored payload is decoded with its own dictionary and must hash to
+        its address; the new payload is decoded by the reader's own path and
+        must give the same bytes and the same hash. ``old`` itself comes back
+        when the new form is not smaller, and None when any of it fails.
+        """
+        try:
+            if dict_id is not None and self._dictionary(dict_id) is None:
+                return None
+            raw = zstd.decompress(old, zstd_dict=self._dictionary(dict_id))
+            if hashlib.sha256(raw).hexdigest() != sha:
+                return None
+            zstd_dict = self._dictionary(target)
+            if zstd_dict is None:
+                return None
+            new = zstd.compress(raw, level=level, zstd_dict=zstd_dict)
+            if len(new) >= len(old):
+                return old
+            check = self._raw_payload(new, target)
+            if check is None or check != raw:
+                return None
+            if hashlib.sha256(check).hexdigest() != sha:
+                return None
+            return new
+        except Exception:  # every failure means "leave the body alone"
+            return None
+
+    def _space_owed(self, conn: sqlite3.Connection, state: dict[str, Any]) -> int:
+        """Pages the conversion freed that are not handed back yet.
+
+        Never more than the freelist holds above what it held before the
+        conversion freed anything: a page freed by somebody else may hold a
+        deleted row, and handing it back would destroy it (IV.13). Zero when
+        the database cannot hand pages back without a full rewrite.
+        """
+        if self._history_space_mode is None:
+            self._history_space_mode = int(
+                conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+            )
+            if self._history_space_mode != 2:
+                logger.info(
+                    "Request log auto_vacuum is not incremental: the space the"
+                    " conversion frees stays inside the file for new rows"
+                )
+        if self._history_space_mode != 2:
+            return 0
+        owed = int(state["freed_pages"]) - int(state["returned_pages"])
+        above = self._freelist_count(conn) - int(state["freelist_at_start"])
+        return max(0, min(owed, above))
+
+    def _return_space_step(self, conn: sqlite3.Connection) -> bool:
+        """Hand a few freed pages back to the filesystem; one transaction.
+
+        Starts only once the conversion's own marker counts pages it freed. A
+        step is sized to fit ``_HISTORY_STEP_SECONDS``, adapting to how long
+        the last one took. In WAL mode the file itself shrinks at the next
+        automatic checkpoint; nothing here forces one.
+        """
+        state = self._load_history_state(conn)
+        converting = (
+            state["wire"]["done_at"] is None or state["bodies"]["done_at"] is None
+        )
+        owed = self._space_owed(conn, state)
+        if owed <= 0 or (converting and owed < self._space_step_pages):
+            return False
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Again under the write lock: what was owed a moment ago may have
+            # been handed back by a prune since.
+            state = self._load_history_state(conn)
+            owed = self._space_owed(conn, state)
+            if owed <= 0:
+                conn.commit()
+                return False
+            pages = min(self._space_step_pages, owed)
+            before = self._freelist_count(conn)
+            started = time.perf_counter()
+            conn.execute(f"PRAGMA incremental_vacuum({int(pages)})").fetchall()
+            elapsed = time.perf_counter() - started
+            returned = max(0, before - self._freelist_count(conn))
+            state["returned_pages"] = int(state["returned_pages"]) + returned
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if elapsed > 0:
+            scaled = min(pages * 2, int(pages * _HISTORY_STEP_SECONDS / elapsed))
+            self._space_step_pages = max(
+                _SPACE_STEP_PAGES_MIN, min(_SPACE_STEP_PAGES_MAX, scaled)
+            )
+        return returned > 0
+
+    def _finish_history(self, conn: sqlite3.Connection) -> None:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(conn)
+            page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+            state["bytes_at_end"] = page_count * int(state["page_size"])
+            state["done_at"] = time.time()
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        self._history_done = True
+        wire, bodies = state["wire"], state["bodies"]
+        logger.info(
+            "Request log history conversion done in {:.0f} min: {} wire snapshots"
+            " and {} bodies compressed ({:.2f} GB -> {:.2f} GB), {} left as they"
+            " were, {} failed the check; database {:.2f} GB -> {:.2f} GB,"
+            " {:.2f} GB handed back",
+            (state["done_at"] - float(state["started_at"])) / 60,
+            wire["converted"],
+            bodies["converted"],
+            (wire["bytes_before"] + bodies["bytes_before"]) / 1e9,
+            (wire["bytes_after"] + bodies["bytes_after"]) / 1e9,
+            wire["kept"] + bodies["kept"],
+            wire["failed"] + bodies["failed"],
+            int(state["bytes_at_start"]) / 1e9,
+            int(state["bytes_at_end"]) / 1e9,
+            int(state["returned_pages"]) * int(state["page_size"]) / 1e9,
+        )
+
+    def _log_history_progress(self, state: dict[str, Any]) -> None:
+        now = time.monotonic()
+        if now - self._history_logged_at < _HISTORY_PROGRESS_LOG_SECONDS:
+            return
+        self._history_logged_at = now
+        status = _history_status(state)
+        logger.info(
+            "Request log history conversion: {} {}%, {:.2f} GB handed back so far",
+            status["phase"],
+            status["percent"],
+            status["returned_bytes"] / 1e9,
+        )
+
+    def history_conversion_status(self) -> dict[str, Any]:
+        """Read-only progress of the history conversion, for the dashboard."""
+        idle: dict[str, Any] = {
+            "state": "off",
+            "phase": None,
+            "percent": None,
+            "returned_bytes": 0,
+        }
+        if not self._compress_bodies:
+            return idle
+        try:
+            with self._connection() as conn:
+                raw = self._meta_get(conn, _HISTORY_CONVERSION_KEY)
+            state = json.loads(raw) if raw else None
+        except sqlite3.Error, ValueError:
+            return {**idle, "state": "unknown"}
+        if not isinstance(state, dict):
+            return {**idle, "state": "pending"}
+        return _history_status(state)
 
     # ------------------------------------------------ origin folder backfill
 
@@ -4497,7 +5167,9 @@ class RequestLogStore:
                     self._dict_train_failed_at[kind] = time.time()
                     continue
             if len(samples) < min_samples:
+                self._dict_too_few_samples.add(kind)
                 continue
+            self._dict_too_few_samples.discard(kind)
             size = _WIRE_DICT_SIZE if kind == _DICT_KIND_WIRE else _BODY_DICT_SIZE
             started = time.perf_counter()
             try:
@@ -4820,6 +5492,9 @@ class RequestLogStore:
                     # ``request_origin_backfill``.
                     if self._origin_backfill_requested.is_set():
                         self._run_origin_backfill(conn)
+                    # Last, and with the same yield: one bounded step at a
+                    # time, back to the queue the moment a request arrives.
+                    self._run_history_conversion(conn)
                     continue
                 if item is _STOP:
                     stopping = True
@@ -9854,6 +10529,8 @@ class RequestLogStore:
             "bytes": sum(bytes_by_file.values()),
             "bytes_by_file": bytes_by_file,
             "path": str(self._db_path),
+            # 7.74.0: how far the background history conversion is. Read-only.
+            "history": self.history_conversion_status(),
         }
 
     def data_mark(self) -> str:
@@ -9896,6 +10573,8 @@ class RequestLogStore:
         digest = hashlib.sha256()
         digest.update(f"{int(high_water)}:{int(rows)}".encode())
         for row in markers:
+            if row[0] in _DATA_MARK_IGNORED_KEYS:
+                continue
             digest.update(f"\x00{row[0]}\x00{row[1]}".encode())
         return f"log-{int(high_water)}-{int(rows)}-{digest.hexdigest()[:16]}"
 
@@ -10272,6 +10951,34 @@ def _varint(value: int) -> bytes:
         else:
             out.append(byte)
             return bytes(out)
+
+
+def _history_status(state: Mapping[str, Any]) -> dict[str, Any]:
+    """The dashboard's view of a ``_HISTORY_CONVERSION_KEY`` document."""
+    page_size = int(state.get("page_size") or 0)
+    returned = int(state.get("returned_pages") or 0)
+    status: dict[str, Any] = {
+        "state": "done",
+        "phase": None,
+        "percent": 100,
+        "returned_bytes": returned * page_size,
+    }
+    if state.get("done_at") is not None:
+        return status
+    for name in ("wire", "bodies"):
+        phase = state.get(name) or {}
+        if phase.get("done_at") is None:
+            end = int(phase.get("end") or 0)
+            through = int(phase.get("through") or 0)
+            status["state"] = "converting"
+            status["phase"] = "snapshots" if name == "wire" else "bodies"
+            status["percent"] = min(99, 100 * through // end) if end else 0
+            return status
+    freed = int(state.get("freed_pages") or 0)
+    status["state"] = "returning_space"
+    status["phase"] = "space"
+    status["percent"] = min(99, 100 * returned // freed) if freed else 99
+    return status
 
 
 def _read_varint(data: bytes, offset: int) -> tuple[int, int]:

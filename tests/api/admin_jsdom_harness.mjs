@@ -2633,6 +2633,8 @@ const ROUTES = {
       bytes: 4502450176,
       bytes_by_file: { database: 4501643264, wal: 774144, shm: 32768 },
       path: "/home/user/.mcc/logs/requests.db",
+      // 7.74.0: the background history conversion, part-way through.
+      history: { state: "converting", phase: "bodies", percent: 42, returned_bytes: 0 },
     },
   },
   // 7.43.0: requests by folder and by session. Fake paths and ids; one

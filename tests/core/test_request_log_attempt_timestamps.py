@@ -258,4 +258,5 @@ def test_the_attempt_index_exists_and_is_versioned(tmp_path) -> None:
             )
         }
     assert "idx_request_attempts_ts_v1" in names
-    assert "idx_request_attempts_model_v1" in names
+    # 7.74.0: no longer created, and dropped where an older version left it.
+    assert "idx_request_attempts_model_v1" not in names

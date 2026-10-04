@@ -2241,7 +2241,10 @@ def test_migrates_a_database_created_before_attempt_credentials(tmp_path) -> Non
         finally:
             check.close()
         assert {"key_index", "key_label"} <= columns
-        assert "idx_request_attempts_model_v1" in indexes
+        # 7.74.0: the covering index the per-model readers use; the unused
+        # ``idx_request_attempts_model_v1`` is no longer created.
+        assert "idx_request_attempts_ts_v1" in indexes
+        assert "idx_request_attempts_model_v1" not in indexes
 
         legacy = store.get_request("legacy")
         assert legacy is not None
@@ -2262,7 +2265,10 @@ def test_the_attempt_model_index_exists_after_migration(store: RequestLogStore) 
         indexes = {
             str(row[1]) for row in conn.execute("PRAGMA index_list(request_attempts)")
         }
-    assert "idx_request_attempts_model_v1" in indexes
+    # 7.74.0: ``idx_request_attempts_ts_v1`` serves the per-model readers;
+    # ``idx_request_attempts_model_v1`` is no longer created (nothing chose it).
+    assert "idx_request_attempts_ts_v1" in indexes
+    assert "idx_request_attempts_model_v1" not in indexes
 
 
 def _reasoning_record(request_id: str, *, emitted, thinking_chars: int, **overrides):
