@@ -1033,6 +1033,17 @@ CREATE TABLE IF NOT EXISTS body_dictionaries (
     created_at REAL NOT NULL,
     content BLOB NOT NULL
 );
+-- Dictionaries for compressed ``request_attempts.wire_body`` snapshots
+-- (7.73.0). Their own table, never ``body_dictionaries``: an older version
+-- takes the highest id there as its dictionary for every body, and a wire
+-- dictionary would quietly make its prompts compress worse. AUTOINCREMENT, so
+-- an id is never handed out twice, even after a delete. Rows are never deleted:
+-- every compressed snapshot names the dictionary it needs.
+CREATE TABLE IF NOT EXISTS wire_dictionaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at REAL NOT NULL,
+    content BLOB NOT NULL
+);
 -- Images a request carried, content-addressed on the *source* bytes. Claude
 -- Code re-sends the whole conversation every turn, so one pasted screenshot
 -- reaches the proxy again on every following request; keying on the image
@@ -1234,6 +1245,44 @@ _BODY_DICT_SIZE = 110 * 1024
 # compressed without a dictionary until the log has seen enough.
 _BODY_DICT_MIN_SAMPLES = 256
 _BODY_DICT_TRAINING_SAMPLES = 1_024
+
+# Dictionaries per kind of content (7.73.0). Until then one dictionary was
+# trained once, on whatever blobs were newest, and never again: on a real log
+# it dated from 2026-08-09, and by October last week's prompts compressed 3.9x
+# against it where a fresh prompt-only dictionary gave 1.8-2.0x smaller blobs
+# still. Prompts, replies and wire snapshots share almost nothing, so each kind
+# learns from its own traffic: one mixed dictionary measured 28.0 MB where a
+# prompt-only one wrote 19.7 MB for the same prompts.
+_DICT_KIND_PROMPT = "prompt"
+_DICT_KIND_REST = "rest"
+_DICT_KIND_WIRE = "wire"
+# Wire snapshots first: their dictionary trains in about a second and is worth
+# 37x, where a prompt dictionary is tens of seconds of CPU for about 2x.
+_DICT_KINDS = (_DICT_KIND_WIRE, _DICT_KIND_PROMPT, _DICT_KIND_REST)
+# The refresh rule the user approved: a kind is relearned once its newest
+# dictionary is older than the last 14 days of traffic and at least 1,024
+# samples of that kind arrived in those 14 days. A kind with no dictionary at
+# all needs only ``_BODY_DICT_MIN_SAMPLES``, as the first dictionary always has.
+_DICT_REFRESH_AGE_SECONDS = 14 * 86_400
+_DICT_REFRESH_MIN_SAMPLES = 1_024
+# A training that raised is not retried on every pass: a prompt dictionary is
+# tens of seconds of CPU, and the same samples would fail the same way.
+_DICT_TRAIN_RETRY_SECONDS = 3_600.0
+# Wire snapshots are 5 KB of JSON each; 64 KB measured 31.3x against 32.2x for
+# 110 KB, at two thirds of the encode time (0.95 against 1.49 ms per row).
+_WIRE_DICT_SIZE = 64 * 1024
+# Candidate attempt rows read per wanted wire sample: about one attempt in ten
+# carries a snapshot, almost all of them ``succeeded`` or ``failed`` ones.
+_WIRE_SAMPLE_CANDIDATES_PER_SAMPLE = 2
+# A compressed wire snapshot is a BLOB in the same ``wire_body`` column a plain
+# one is TEXT in, so the storage class says which encoding a row holds: TEXT is
+# the JSON as written, BLOB is this envelope. Byte 0 is the envelope version,
+# then the ``wire_dictionaries`` id as an unsigned LEB128 varint (0 = none),
+# then one zstd frame -- which also carries zstd's own id of the dictionary it
+# needs, so a frame handed the wrong dictionary fails rather than decoding to
+# garbage. A version this code does not know reads as no snapshot, never as
+# bytes passed through.
+_WIRE_ENVELOPE_V1 = 1
 
 # Columns a content search covers on rows still stored inline. Reasoning and
 # tool calls are more than half of what a real log contains -- 55% of requests
@@ -2662,6 +2711,26 @@ class RequestLogStore:
         self._dict_cache: dict[int, Any] = {}
         self._dict_lock = threading.Lock()
         self._active_dict_id: int | None = None
+        # The dictionary each kind of content is written with now, and when it
+        # was trained: ``kind -> (id, created_at)``. Set by the writer thread.
+        self._kind_dicts: dict[str, tuple[int, float]] = {}
+        # ``wire_dictionaries`` ids live in their own table, so their cache is
+        # their own: id 3 there and id 3 in ``body_dictionaries`` differ.
+        self._wire_dict_cache: dict[int, Any] = {}
+        # Background dictionary training (7.73.0); see
+        # ``_maybe_refresh_dictionaries``. The trainer thread only reads and
+        # trains; it hands each result over, and the writer thread inserts it
+        # between two batches. ``_trainer_conn_lock`` is held while the trainer
+        # has the database open, so ``close`` can return with it shut.
+        self._trainer: threading.Thread | None = None
+        self._trainer_lock = threading.Lock()
+        self._trainer_conn_lock = threading.Lock()
+        self._trained: list[tuple[str, bytes, float]] = []
+        self._dict_train_failed_at: dict[str, float] = {}
+        # Set once the writer thread has loaded the dictionaries and made its
+        # start-up decision about training, so a caller can tell "nothing was
+        # due" from "not decided yet".
+        self._dictionaries_checked = threading.Event()
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=self._queue_max_size)
         self._inserts_since_prune = 0
         # Session-level "stop asking": set when the historical cost backfill
@@ -2828,6 +2897,73 @@ class RequestLogStore:
             self._dict_cache[dict_id] = loaded
             return loaded
 
+    def _wire_dictionary(self, dict_id: int) -> Any:
+        """Return the cached ``ZstdDict`` for a ``wire_dictionaries`` id."""
+        cached = self._wire_dict_cache.get(dict_id)
+        if cached is not None:
+            return cached
+        with self._dict_lock:
+            cached = self._wire_dict_cache.get(dict_id)
+            if cached is not None:
+                return cached
+            with self._connection() as conn:
+                row = conn.execute(
+                    "SELECT content FROM wire_dictionaries WHERE id = ?", (dict_id,)
+                ).fetchone()
+            if row is None:
+                return None
+            loaded = zstd.ZstdDict(bytes(row[0]))
+            self._wire_dict_cache[dict_id] = loaded
+            return loaded
+
+    def _encode_wire_body(
+        self, text: str | None, *, level: int, compress: bool
+    ) -> str | bytes | None:
+        """Return what ``request_attempts.wire_body`` stores for ``text``.
+
+        The envelope described at ``_WIRE_ENVELOPE_V1`` when it is smaller than
+        the text, and the text itself otherwise -- an empty or tiny snapshot,
+        or any snapshot while ``REQUEST_LOG_COMPRESS_BODIES`` is off. NULL
+        stays NULL: no snapshot is not an empty one.
+        """
+        if text is None or not compress:
+            return text
+        raw = text.encode("utf-8", "surrogatepass")
+        active = self._kind_dicts.get(_DICT_KIND_WIRE)
+        dict_id = active[0] if active is not None else 0
+        frame = zstd.compress(
+            raw,
+            level=level,
+            zstd_dict=self._wire_dictionary(dict_id) if dict_id else None,
+        )
+        envelope = bytes((_WIRE_ENVELOPE_V1,)) + _varint(dict_id) + frame
+        return envelope if len(envelope) < len(raw) else text
+
+    def _decode_wire_body(self, stored: Any) -> str | None:
+        """Return the JSON text a stored ``wire_body`` holds, in either encoding.
+
+        TEXT is returned as it is; a BLOB is unwrapped from its envelope. A
+        value that cannot be decoded reads as no snapshot, as it did before
+        7.73.0, and says so in the log rather than failing the whole request.
+        """
+        if stored is None or isinstance(stored, str):
+            return stored
+        data = bytes(stored)
+        try:
+            if not data or data[0] != _WIRE_ENVELOPE_V1:
+                raise ValueError("unknown wire snapshot envelope")
+            dict_id, offset = _read_varint(data, 1)
+            zstd_dict = None
+            if dict_id:
+                zstd_dict = self._wire_dictionary(dict_id)
+                if zstd_dict is None:
+                    raise ValueError(f"wire dictionary {dict_id} is missing")
+            raw = zstd.decompress(data[offset:], zstd_dict=zstd_dict)
+            return raw.decode("utf-8", "surrogatepass")
+        except (zstd.ZstdError, ValueError) as exc:
+            logger.warning("Request log wire snapshot decode failed: {}", exc)
+            return None
+
     def _decode_bodies(self, payload: Any, dict_id: Any) -> dict[str, Any]:
         if payload is None:
             return {}
@@ -2968,6 +3104,7 @@ class RequestLogStore:
                 conn.executescript(_BODIES_SCHEMA)
                 self._ensure_added_columns(conn)
                 self._ensure_input_sha_column(conn)
+                self._ensure_dictionary_kind_column(conn)
                 self._ensure_attempt_columns(conn)
                 self._ensure_image_blob_columns(conn)
                 self._ensure_session_columns(conn)
@@ -4005,6 +4142,32 @@ class RequestLogStore:
                 conn.execute("ALTER TABLE request_bodies ADD COLUMN input_sha TEXT")
 
     @staticmethod
+    def _ensure_dictionary_kind_column(conn: sqlite3.Connection) -> None:
+        """Add ``body_dictionaries.kind`` to a table created before 7.73.0.
+
+        ``prompt`` or ``rest``: which blobs a dictionary was trained on and is
+        written with. NULL is every dictionary trained before kinds existed --
+        one dictionary for all blobs -- and stays the fallback of a kind that
+        has none of its own yet. An older version ignores the column and keeps
+        taking the highest id, which decodes everything and is only weaker.
+        """
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(body_dictionaries)")
+        }
+        if "kind" in columns:
+            return
+        try:
+            conn.execute("ALTER TABLE body_dictionaries ADD COLUMN kind TEXT")
+        except sqlite3.OperationalError:
+            # Another process may have won the migration race.
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(body_dictionaries)")
+            }
+            if "kind" not in columns:
+                raise
+
+    @staticmethod
     def _ensure_attempt_columns(conn: sqlite3.Connection) -> None:
         """Add per-attempt columns to a table created before they existed.
 
@@ -4226,56 +4389,249 @@ class RequestLogStore:
             self._active_dict_id = dict_id
 
     def _load_active_dictionary(self, conn: sqlite3.Connection) -> None:
+        """Read which dictionary each kind of content is written with now.
+
+        ``_active_dict_id`` keeps its meaning -- the highest body dictionary id,
+        which is what every version before 7.73.0 wrote with. A kind uses its
+        own newest dictionary, else the newest one trained before kinds
+        existed, else none. A process restart therefore picks up the newest.
+        """
         row = conn.execute(
             "SELECT id FROM body_dictionaries ORDER BY id DESC LIMIT 1"
         ).fetchone()
         self._active_dict_id = int(row[0]) if row is not None else None
+        kinds: dict[str, tuple[int, float]] = {}
+        legacy = conn.execute(
+            "SELECT id, created_at FROM body_dictionaries WHERE kind IS NULL"
+            " ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        for kind in (_DICT_KIND_PROMPT, _DICT_KIND_REST):
+            own = conn.execute(
+                "SELECT id, created_at FROM body_dictionaries WHERE kind = ?"
+                " ORDER BY id DESC LIMIT 1",
+                (kind,),
+            ).fetchone()
+            chosen = own if own is not None else legacy
+            if chosen is not None:
+                kinds[kind] = (int(chosen[0]), float(chosen[1]))
+        wire = conn.execute(
+            "SELECT id, created_at FROM wire_dictionaries ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if wire is not None:
+            kinds[_DICT_KIND_WIRE] = (int(wire[0]), float(wire[1]))
+        self._kind_dicts = kinds
+        # Loaded now, on the writer thread at start, so the first batch that
+        # compresses with them does not open a connection to fetch each one.
+        for kind, (dict_id, _created) in kinds.items():
+            if kind == _DICT_KIND_WIRE:
+                self._wire_dictionary(dict_id)
+            else:
+                self._dictionary(dict_id)
 
-    def _maybe_train_dictionary(self, conn: sqlite3.Connection) -> None:
-        """Train a compression dictionary once there is enough traffic to learn from.
+    def _dictionaries_due(self, now: float) -> list[tuple[str, int]]:
+        """The kinds to relearn now, each with the samples it needs at least.
 
-        A dictionary is what turns 2.7x into 9x, because it can exploit the
-        system prompt and conversation history that repeat almost verbatim
-        between requests -- redundancy that per-row compression cannot see.
-        Until one exists, bodies are still compressed, just less well.
+        A kind is due when its dictionary is older than the last 14 days of
+        traffic, or when it has none. Nothing is due while bodies are stored
+        uncompressed, and a kind whose training failed waits an hour.
         """
-        if not self._compress_bodies or self._active_dict_id is not None:
+        if not self._compress_bodies:
+            return []
+        due: list[tuple[str, int]] = []
+        for kind in _DICT_KINDS:
+            failed_at = self._dict_train_failed_at.get(kind)
+            if failed_at is not None and now - failed_at < _DICT_TRAIN_RETRY_SECONDS:
+                continue
+            active = self._kind_dicts.get(kind)
+            if active is None:
+                due.append((kind, _BODY_DICT_MIN_SAMPLES))
+            elif active[1] < now - _DICT_REFRESH_AGE_SECONDS:
+                due.append((kind, _DICT_REFRESH_MIN_SAMPLES))
+        return due
+
+    def _maybe_refresh_dictionaries(self) -> None:
+        """Writer thread: start the background trainer if a kind is due.
+
+        Called at start and every ``_PRUNE_EVERY_INSERTS`` inserts. Deciding is
+        arithmetic on what is already in memory; counting and reading samples,
+        and training itself, happen on the trainer's own thread -- never here
+        and never on the event loop, because a prompt dictionary is tens of
+        seconds of CPU. ``zstd.train_dict`` releases the GIL while it trains.
+        """
+        due = self._dictionaries_due(time.time())
+        if not due or self._closed.is_set():
             return
-        try:
-            rows = conn.execute(
-                "SELECT dict_id, payload FROM body_blobs ORDER BY rowid DESC LIMIT ?",
-                (_BODY_DICT_TRAINING_SAMPLES,),
-            ).fetchall()
-            if len(rows) < _BODY_DICT_MIN_SAMPLES:
+        with self._trainer_lock:
+            # A trainer still running, or results it left that the writer has
+            # not stored yet: deciding now would train the same kind twice.
+            if self._trained or (
+                self._trainer is not None and self._trainer.is_alive()
+            ):
                 return
-            samples = [
-                packed
-                for packed in (
-                    self._raw_payload(row["payload"], row["dict_id"]) for row in rows
+            self._trainer = threading.Thread(
+                target=self._train_dictionaries,
+                args=(due,),
+                name="mcc-request-log-dictionary-trainer",
+                daemon=True,
+            )
+            self._trainer.start()
+
+    def _train_dictionaries(self, due: list[tuple[str, int]]) -> None:
+        """Trainer thread: learn one dictionary per due kind, and hand it over.
+
+        Reads the samples on a connection of its own and closes it before it
+        trains, so nothing is held open for the length of a training. Writes
+        nothing: the writer thread inserts each result between two batches. A
+        failure, or a store closed meanwhile, leaves everything as it was.
+        """
+        for kind, min_samples in due:
+            with self._trainer_conn_lock:
+                if self._closed.is_set():
+                    return
+                try:
+                    samples = self._dictionary_samples(kind, time.time())
+                except sqlite3.Error as exc:
+                    logger.warning(
+                        "Request log {} dictionary samples unreadable: {}", kind, exc
+                    )
+                    self._dict_train_failed_at[kind] = time.time()
+                    continue
+            if len(samples) < min_samples:
+                continue
+            size = _WIRE_DICT_SIZE if kind == _DICT_KIND_WIRE else _BODY_DICT_SIZE
+            started = time.perf_counter()
+            try:
+                trained = zstd.train_dict(samples, size)
+            except (zstd.ZstdError, ValueError, MemoryError) as exc:
+                logger.warning(
+                    "Request log {} dictionary training failed: {}", kind, exc
                 )
-                if packed
-            ]
-            if len(samples) < _BODY_DICT_MIN_SAMPLES:
+                self._dict_train_failed_at[kind] = time.time()
+                continue
+            logger.info(
+                "Request log {} dictionary trained from {} samples ({} bytes) in {:.1f}s",
+                kind,
+                len(samples),
+                sum(len(sample) for sample in samples),
+                time.perf_counter() - started,
+            )
+            with self._trainer_lock:
+                self._trained.append((kind, trained.dict_content, time.time()))
+            del samples
+
+    def _dictionary_samples(self, kind: str, now: float) -> list[bytes]:
+        """Up to ``_BODY_DICT_TRAINING_SAMPLES`` of one kind from the last 14 days.
+
+        Spread evenly over the window rather than the newest ones: the newest
+        thousand prompts are often a handful of sessions, each turn repeating
+        the last, and a dictionary learned from them knows only those.
+        """
+        since = now - _DICT_REFRESH_AGE_SECONDS
+        wanted = _BODY_DICT_TRAINING_SAMPLES
+        with self._connection() as conn:
+            if kind == _DICT_KIND_WIRE:
+                # ``idx_request_attempts_ts_v1`` leads with ``outcome``; skipped
+                # attempts are nine rows in ten and carry no snapshot.
+                outcomes = [
+                    outcome.value
+                    for outcome in RouteAttemptOutcome
+                    if outcome is not RouteAttemptOutcome.SKIPPED
+                ]
+                rowids = sorted(
+                    int(row[0])
+                    for row in conn.execute(
+                        "SELECT rowid FROM request_attempts"
+                        f" WHERE outcome IN ({', '.join('?' * len(outcomes))})"
+                        " AND ts_epoch >= ?",
+                        (*outcomes, since),
+                    )
+                )
+                picked = _spread(rowids, wanted * _WIRE_SAMPLE_CANDIDATES_PER_SAMPLE)
+                texts: list[bytes] = []
+                for start in range(0, len(picked), _SWEEP_CHUNK):
+                    if self._closed.is_set():
+                        return []
+                    chunk = picked[start : start + _SWEEP_CHUNK]
+                    for row in conn.execute(
+                        "SELECT wire_body FROM request_attempts WHERE rowid IN"
+                        f" ({', '.join('?' * len(chunk))}) AND wire_body IS NOT NULL",
+                        chunk,
+                    ):
+                        text = self._decode_wire_body(row[0])
+                        if text:
+                            texts.append(text.encode("utf-8", "surrogatepass"))
+                return _spread(texts, wanted)
+            column = "rb.input_sha" if kind == _DICT_KIND_PROMPT else "rb.sha"
+            shas = list(
+                dict.fromkeys(
+                    str(row[0])
+                    for row in conn.execute(
+                        f"SELECT {column} FROM requests r"
+                        " JOIN request_bodies rb ON rb.request_id = r.id"
+                        f" WHERE r.ts_epoch >= ? AND {column} IS NOT NULL"
+                        " ORDER BY r.ts_epoch",
+                        (since,),
+                    )
+                )
+            )
+            picked_shas = _spread(shas, wanted)
+            samples: list[bytes] = []
+            for start in range(0, len(picked_shas), _SWEEP_CHUNK):
+                if self._closed.is_set():
+                    return []
+                chunk_shas = picked_shas[start : start + _SWEEP_CHUNK]
+                for row in conn.execute(
+                    "SELECT dict_id, payload FROM body_blobs WHERE sha IN"
+                    f" ({', '.join('?' * len(chunk_shas))})",
+                    chunk_shas,
+                ):
+                    raw = self._raw_payload(row["payload"], row["dict_id"])
+                    if raw:
+                        samples.append(raw)
+            return samples
+
+    def _install_trained_dictionaries(self, conn: sqlite3.Connection) -> None:
+        """Writer thread, between batches: store what the trainer learned.
+
+        Each dictionary is its own small transaction, and the kind switches to
+        it only once that committed, so a failed insert leaves the kind on the
+        dictionary it had. Older dictionaries are never deleted: every blob
+        and every compressed snapshot names the one it needs.
+        """
+        with self._trainer_lock:
+            if not self._trained:
                 return
-            started = time.monotonic()
-            trained = zstd.train_dict(samples, _BODY_DICT_SIZE)
-            with conn:
-                cursor = conn.execute(
-                    "INSERT INTO body_dictionaries (created_at, content) VALUES (?, ?)",
-                    (time.time(), trained.dict_content),
-                )
+            results, self._trained = self._trained, []
+        for kind, content, created_at in results:
+            try:
+                with conn:
+                    if kind == _DICT_KIND_WIRE:
+                        cursor = conn.execute(
+                            "INSERT INTO wire_dictionaries (created_at, content)"
+                            " VALUES (?, ?)",
+                            (created_at, content),
+                        )
+                    else:
+                        cursor = conn.execute(
+                            "INSERT INTO body_dictionaries (created_at, content, kind)"
+                            " VALUES (?, ?, ?)",
+                            (created_at, content, kind),
+                        )
+            except sqlite3.Error as exc:
+                logger.warning("Request log {} dictionary not stored: {}", kind, exc)
+                self._dict_train_failed_at[kind] = time.time()
+                continue
             dict_id = int(cursor.lastrowid or 0)
             if not dict_id:
-                return
-            self._dict_cache[dict_id] = trained
-            self._active_dict_id = dict_id
-            logger.info(
-                "Request log body dictionary trained from {} samples in {:.1f}s",
-                len(samples),
-                time.monotonic() - started,
-            )
-        except (sqlite3.Error, zstd.ZstdError) as exc:
-            logger.warning("Request log dictionary training skipped: {}", exc)
+                continue
+            loaded = zstd.ZstdDict(content)
+            if kind == _DICT_KIND_WIRE:
+                self._wire_dict_cache[dict_id] = loaded
+            else:
+                self._dict_cache[dict_id] = loaded
+                self._active_dict_id = dict_id
+            self._kind_dicts[kind] = (dict_id, created_at)
+            logger.info("Request log {} dictionary {} in use", kind, dict_id)
 
     def _raw_payload(self, payload: Any, dict_id: Any) -> bytes | None:
         if payload is None:
@@ -4428,13 +4784,17 @@ class RequestLogStore:
             # is about to be replaced.
             self._migrate_bodies_to_content_addressing(conn)
             self._load_active_dictionary(conn)
-            self._maybe_train_dictionary(conn)
+            self._maybe_refresh_dictionaries()
+            self._dictionaries_checked.set()
             session_id = self._open_session(conn)
             last_heartbeat = time.monotonic()
             while not stopping:
-                # Between batches, never inside one: see ``retune``.
+                # Between batches, never inside one: see ``retune``. A
+                # dictionary the trainer finished is stored here for the same
+                # reason, so one batch is written with one dictionary per kind.
                 if not pending:
                     self._adopt_pending_tuning()
+                    self._install_trained_dictionaries(conn)
                 now = time.monotonic()
                 if now - last_heartbeat >= _SESSION_HEARTBEAT_SECONDS:
                     last_heartbeat = now
@@ -4764,10 +5124,16 @@ class RequestLogStore:
         )
 
     def _compress_packed(
-        self, packed: bytes, *, level: int | None = None
+        self, packed: bytes, *, level: int | None = None, kind: str | None = None
     ) -> tuple[int | None, bytes]:
+        """Compress one packed body with the dictionary of its ``kind``.
+
+        No kind, or a kind with no dictionary of its own and none from before
+        kinds existed, writes with ``_active_dict_id`` exactly as before 7.73.0.
+        """
         level = self._compression_level if level is None else level
-        dict_id = self._active_dict_id
+        active = self._kind_dicts.get(kind) if kind is not None else None
+        dict_id = active[0] if active is not None else self._active_dict_id
         return dict_id, zstd.compress(
             packed, level=level, zstd_dict=self._dictionary(dict_id)
         )
@@ -4868,13 +5234,20 @@ class RequestLogStore:
             links,
         )
 
-    @staticmethod
-    def _store_attempts(conn: sqlite3.Connection, batch: list[RequestRecord]) -> None:
+    def _store_attempts(
+        self, conn: sqlite3.Connection, batch: list[RequestRecord]
+    ) -> None:
         """Persist each record's route attempts.
 
         ``INSERT OR REPLACE``: an attempt is identified by (request, index), so
         replacing is the correct merge if a record is ever written twice.
+
+        ``wire_body`` is stored compressed when that is smaller (7.73.0; see
+        ``_encode_wire_body``), at the level and with the switch the store
+        holds now, each read once so one batch is written one way.
         """
+        level = self._compression_level
+        compress = self._compress_bodies
         rows = [
             (
                 record.id,
@@ -4886,7 +5259,9 @@ class RequestLogStore:
                 attempt.error_message,
                 attempt.duration_ms,
                 json.dumps(attempt.params) if attempt.params else None,
-                attempt.wire_body,
+                self._encode_wire_body(
+                    attempt.wire_body, level=level, compress=compress
+                ),
                 None
                 if attempt.reasoning_emitted is None
                 else int(attempt.reasoning_emitted),
@@ -4930,11 +5305,14 @@ class RequestLogStore:
             rows,
         )
 
-    @staticmethod
     def _fetch_attempts(
-        conn: sqlite3.Connection, request_id: str
+        self, conn: sqlite3.Connection, request_id: str
     ) -> list[dict[str, Any]]:
-        """Return one request's attempts in the order the chain tried them."""
+        """Return one request's attempts in the order the chain tried them.
+
+        ``wire_body`` comes back as the same parsed JSON whichever encoding the
+        row holds: TEXT as written before 7.73.0, or the compressed envelope.
+        """
         rows = conn.execute(
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
             " error_message, duration_ms, params, wire_body, reasoning_emitted,"
@@ -4955,7 +5333,7 @@ class RequestLogStore:
                 "error_message": row["error_message"],
                 "duration_ms": row["duration_ms"],
                 "params": _loads_or_none(row["params"]),
-                "wire_body": _loads_or_none(row["wire_body"]),
+                "wire_body": _loads_or_none(self._decode_wire_body(row["wire_body"])),
                 "reasoning_emitted": (
                     None
                     if row["reasoning_emitted"] is None
@@ -5127,15 +5505,19 @@ class RequestLogStore:
         if level is None:
             level = self._compression_level
         mapping: list[tuple[str, str | None, str | None]] = []
-        blobs: dict[str, bytes] = {}
+        # sha -> (packed body, the kind of dictionary it is compressed with).
+        blobs: dict[str, tuple[bytes, str]] = {}
         for request_id, (input_blob, rest_blob) in packed.items():
             shas: list[str | None] = []
-            for blob in (rest_blob, input_blob):
+            for blob, kind in (
+                (rest_blob, _DICT_KIND_REST),
+                (input_blob, _DICT_KIND_PROMPT),
+            ):
                 if blob is None:
                     shas.append(None)
                     continue
                 sha = hashlib.sha256(blob).hexdigest()
-                blobs.setdefault(sha, blob)
+                blobs.setdefault(sha, (blob, kind))
                 shas.append(sha)
             mapping.append((request_id, shas[0], shas[1]))
         if blobs:
@@ -5147,14 +5529,18 @@ class RequestLogStore:
                     sorted(blobs),
                 )
             }
-            fresh = [(sha, blob) for sha, blob in blobs.items() if sha not in known]
+            fresh = [
+                (sha, blob, kind)
+                for sha, (blob, kind) in blobs.items()
+                if sha not in known
+            ]
             if fresh:
                 conn.executemany(
                     "INSERT OR IGNORE INTO body_blobs (sha, dict_id, payload)"
                     " VALUES (?, ?, ?)",
                     [
-                        (sha, *self._compress_packed(blob, level=level))
-                        for sha, blob in fresh
+                        (sha, *self._compress_packed(blob, level=level, kind=kind))
+                        for sha, blob, kind in fresh
                     ],
                 )
         conn.executemany(
@@ -5347,9 +5733,10 @@ class RequestLogStore:
         if self._inserts_since_prune >= _PRUNE_EVERY_INSERTS:
             self._inserts_since_prune = 0
             self.prune()
-            # Cheap no-op once a dictionary exists; this lets a fresh install
-            # start compressing properly without waiting for a restart.
-            self._maybe_train_dictionary(conn)
+            # Arithmetic on what is in memory unless a kind is due; this is
+            # what lets a fresh install start compressing properly, and a
+            # dictionary be relearned, without waiting for a restart.
+            self._maybe_refresh_dictionaries()
 
     @staticmethod
     def _price_record(record: RequestRecord) -> None:
@@ -5487,6 +5874,12 @@ class RequestLogStore:
         )
         while self._writer.is_alive() and time.monotonic() < deadline:
             self._writer.join(timeout=0.5)
+        # A dictionary trainer reading samples notices the close between two
+        # chunks and lets go of its connection; once this lock is free it has
+        # none open. A training already under way holds no connection, and a
+        # result that arrives after the writer stopped is never stored.
+        with self._trainer_conn_lock:
+            pass
         remaining = self._queue.qsize()
         if self._writer.is_alive() and remaining:
             logger.warning(
@@ -9864,6 +10257,43 @@ def _loads_or_none(raw: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+def _varint(value: int) -> bytes:
+    """Unsigned LEB128: 7 bits per byte, low bits first, high bit = more."""
+    if value < 0:
+        raise ValueError("varint of a negative number")
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            return bytes(out)
+
+
+def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
+    """Decode a ``_varint`` at ``offset``: ``(value, offset after it)``."""
+    value = 0
+    shift = 0
+    while True:
+        if offset >= len(data) or shift > 63:
+            raise ValueError("truncated varint")
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, offset
+        shift += 7
+
+
+def _spread[T](items: Sequence[T], count: int) -> list[T]:
+    """``count`` items evenly spaced over ``items``, in order; all if fewer."""
+    if len(items) <= count:
+        return list(items)
+    return [items[index * len(items) // count] for index in range(count)]
 
 
 def _vacuum(path: Path) -> bool:

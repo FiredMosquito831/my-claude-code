@@ -4317,7 +4317,14 @@ MEDIA_STORE_MAX_MB=0               # 0 = keep until the row is pruned; >0 drops 
 
 All of these are editable in **Admin UI → Analytics** without touching the file — they are the **Request log storage** card at the bottom of the same page whose contents they govern. Leaving one blank means "use the default" rather than "invalid", so clearing a field can never stop the server starting, and a value outside its range is refused by the form and clamped (with a warning) if it was edited into the file by hand.
 
-Two things not to worry about: the dictionary trains itself once the log has seen a few hundred requests, and each blob records which dictionary compressed it, so retraining never orphans an older row.
+#### What is compressed, and how the dictionaries stay fresh
+
+- **Prompts, replies, thinking and tool calls** are compressed against a dictionary per kind: one learned from prompts, one from everything else in a body. One shared dictionary measured 28.0 MB where a prompt-only one wrote 19.7 MB for the same prompts.
+- **Wire snapshots** — the redacted, text-free copy of what each attempt actually sent upstream, shown in a request's route/wire view — are compressed too since 7.73.0, against a dictionary of their own, whenever that is smaller. On a real 12 GB log they were 1.67 GB of plain JSON and compressed 37× (1,670.6 → 45.2 MB, every one of 319,897 snapshots read back byte-identical). The request detail shows exactly the same snapshot as before.
+- **The dictionaries relearn themselves.** Each kind is retrained in the background once its dictionary is older than the last 14 days of traffic and at least 1,024 samples of that kind arrived in those 14 days; a kind with no dictionary yet starts after a few hundred. Training runs on a thread of its own — never the writer thread, never the event loop — and new rows switch to the new dictionary between two batches. On a real log the one dictionary had been trained once, on 2026-08-09, and never again; a fresh one made new prompts 1.8–2.0× smaller.
+- **Nothing is ever orphaned.** Every stored body and every compressed snapshot names the dictionary it was written with, and dictionaries are never deleted — by retention, by the orphan sweeps or by a refresh — so an older row always stays readable.
+- **New rows only, for now.** Existing rows keep the encoding they were written in, so the file does not shrink yet; it grows more slowly. `REQUEST_LOG_COMPRESSION_LEVEL` sets the level for bodies and snapshots alike, and `REQUEST_LOG_COMPRESS_BODIES=false` stores both as plain text, as before.
+- **Going back to an older version** (7.72.x or earlier) is safe: it reads every row without error, but shows a compressed wire snapshot as "no wire body". Prompts, replies and every other column read normally, nothing is deleted, and updating again shows the snapshots.
 
 #### Compacting a log that predates compression
 
