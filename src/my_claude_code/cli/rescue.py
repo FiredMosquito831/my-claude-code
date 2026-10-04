@@ -38,6 +38,19 @@ desktop app says it (user answer 1).
 It never calls ``os.kill(pid, 0)``: on Windows that is ``TerminateProcess``.
 Liveness here is ``OpenProcess`` + ``GetExitCodeProcess`` on Windows and the
 existing POSIX check elsewhere.
+
+**The same rule at every server's start (7.72.0).** Decision 12 ("on upgrade,
+tell old MCC servers to exit") and answer 4 ("hand-started servers also clear
+dead servers of the same port and config folder") put the same scope and the
+same stop rules into the start of every server that may take its port:
+:func:`plan_old_server_cleanup` picks the candidates with the one scope
+function (:func:`~my_claude_code.core.server_inventory.old_server_scope`), and
+:func:`run_old_server_cleanup` waits the same budget and stops by the same
+exact-pid path as the rescue. The installer starts the new server after an
+update, so this is also what the update does to old servers -- with no change
+to the installer. A server started with ``--no-port-takeover`` (every server the
+desktop app starts) does none of it: there the rescue above is the only thing
+that stops an old server.
 """
 
 import json
@@ -46,6 +59,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from my_claude_code.core.mcc_processes import (
@@ -54,7 +68,12 @@ from my_claude_code.core.mcc_processes import (
     mcc_server_chains,
     process_is_alive,
 )
-from my_claude_code.core.request_log import ServerSession
+from my_claude_code.core.request_log import SESSION_VERSION_SINCE, ServerSession
+from my_claude_code.core.server_inventory import (
+    SCOPE_SELF,
+    SCOPE_SERVING,
+    old_server_scope,
+)
 
 #: The reasons the window may give, as it spells them.
 RESCUE_REASONS = ("process-gone", "listener-lost", "never-bound")
@@ -126,16 +145,8 @@ class _Candidate:
     #: was kept running and is reported under ``left_alone`` instead.
     kept: bool = False
     note: str = ""
-
-
-def _latest_session(
-    chain: ProcessChain, sessions: list[ServerSession]
-) -> ServerSession | None:
-    pids = set(chain.pids)
-    rows = [row for row in sessions if row.pid is not None and row.pid in pids]
-    if not rows:
-        return None
-    return max(rows, key=lambda row: row.last_seen_at)
+    #: Its own row in this configuration folder, when it has one.
+    session: ServerSession | None = None
 
 
 def _pids(chain: ProcessChain) -> list[int]:
@@ -149,7 +160,14 @@ def _scope(
     listening_pids: frozenset[int],
     self_pids: frozenset[int],
 ) -> tuple[list[_Candidate], list[dict[str, Any]]]:
-    """Decision R1 as a function: the candidates, and what was left alone."""
+    """Decision R1 for the window: the candidates, and what was left alone.
+
+    The scope itself is :func:`old_server_scope`, the one function every caller
+    that may stop an old server uses. The window adds exactly two things it
+    alone can know: the exact child it started, and the server it last heard
+    on this port (a 7.69.2+ server that lost its listener stops claiming the
+    port on its row while it closes).
+    """
 
     candidates: list[_Candidate] = []
     left_alone: list[dict[str, Any]] = []
@@ -158,31 +176,27 @@ def _scope(
         if members & self_pids:
             continue
         named = (request.known_pid in members) or (request.child_pid in members)
-        session = _latest_session(chain, sessions)
-        if members & listening_pids:
+        verdict = old_server_scope(
+            chain,
+            port=request.port,
+            sessions=sessions,
+            listening_pids=listening_pids,
+            self_pids=self_pids,
+        )
+        session = verdict.session
+        if verdict.kind == SCOPE_SERVING:
             # Owns a listening socket somewhere: a running server. Never a
             # candidate, whatever else is true of it.
             if named or (session is not None and session.port == request.port):
-                left_alone.append(
-                    {
-                        "pids": _pids(chain),
-                        "why": "it owns a listening socket, so it is a running server",
-                    }
-                )
+                left_alone.append({"pids": _pids(chain), "why": verdict.why})
             continue
         if request.child_pid is not None and request.child_pid in members:
             candidates.append(
                 _Candidate(chain, "the server the desktop app itself started")
             )
             continue
-        if session is not None and session.port == request.port:
-            candidates.append(
-                _Candidate(
-                    chain,
-                    f"a server of this configuration folder that recorded port "
-                    f"{request.port} and holds no listening socket",
-                )
-            )
+        if verdict.is_old:
+            candidates.append(_Candidate(chain, verdict.why, session=session))
             continue
         if (
             session is not None
@@ -195,23 +209,110 @@ def _scope(
                     chain,
                     f"the server the desktop app last heard on port {request.port}, "
                     "of this configuration folder, now closing",
+                    session=session,
                 )
             )
             continue
         if named:
-            where = (
-                f"it recorded port {session.port}"
-                if session is not None and session.port is not None
-                else "it has no record in this configuration folder"
-            )
             left_alone.append(
                 {
                     "pids": _pids(chain),
                     "why": f"not tied to port {request.port} and this "
-                    f"configuration folder ({where})",
+                    f"configuration folder ({verdict.why})",
                 }
             )
     return candidates, left_alone
+
+
+def _wait_for_exits(
+    candidates: list[_Candidate],
+    *,
+    alive: Callable[[int], bool],
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+    budget: float,
+    abort: Callable[[], str | None],
+) -> tuple[list[_Candidate], str | None]:
+    """Give every candidate up to ``budget`` seconds to exit by itself.
+
+    Returns what is still alive, and the sentence ``abort`` gave if it ended
+    the wait early. Bounded by ``budget`` on ``clock`` whatever the candidates
+    do; looks every :data:`POLL_SECONDS`.
+    """
+
+    deadline = clock() + max(0.0, budget)
+    remaining = list(candidates)
+    while True:
+        remaining = [
+            item for item in remaining if any(alive(pid) for pid in item.chain.pids)
+        ]
+        if not remaining:
+            return remaining, None
+        reason = abort()
+        if reason is not None:
+            return remaining, reason
+        if clock() >= deadline:
+            return remaining, None
+        sleep(POLL_SECONDS)
+
+
+def _stop_left_over(
+    remaining: list[_Candidate],
+    fresh_processes: list[ProcessFacts],
+    fresh_endpoints: frozenset[tuple[int, int]],
+    *,
+    stop_chain: Callable[[ProcessChain], bool],
+    announce: Callable[[_Candidate, tuple[ProcessFacts, ...]], None] | None = None,
+    may_continue: Callable[[], bool] = lambda: True,
+) -> None:
+    """Stop, by exact pid and innermost first, what is left and still dead.
+
+    Each candidate is re-derived from a FRESH process table, and only the pids
+    observed at the first look -- with the same start time, so a pid handed to
+    another process since is never one of them -- are stopped. A candidate any
+    of whose processes now owns a listening socket is kept running.
+    """
+
+    fresh_listening = frozenset(pid for _port, pid in fresh_endpoints)
+    fresh_chains = mcc_server_chains(fresh_processes)
+    for item in remaining:
+        observed = {member.pid: member.started_at for member in item.chain.members}
+        fresh = next(
+            (
+                chain
+                for chain in fresh_chains
+                if chain.root.pid == item.chain.root.pid
+                or set(observed) & set(chain.pids)
+            ),
+            None,
+        )
+        if fresh is None:
+            item.exited_by_itself = True
+            item.note = "gone before it had to be stopped"
+            continue
+        # Only pids observed at the start -- never a pid that appeared since,
+        # which may already belong to somebody else.
+        members = tuple(
+            member
+            for member in fresh.members
+            if member.pid in observed and observed[member.pid] == member.started_at
+        )
+        if not members:
+            item.exited_by_itself = True
+            item.note = "gone before it had to be stopped"
+            continue
+        if fresh_listening & {member.pid for member in members}:
+            item.kept = True
+            item.note = "it opened a listening socket again, so it was left running"
+            continue
+        if not may_continue():
+            item.note = "this server began stopping, so it was left running"
+            continue
+        if announce is not None:
+            announce(item, members)
+        item.stopped = stop_chain(ProcessChain(root=members[0], members=members))
+        if not item.stopped:
+            item.note = "some of it could not be stopped"
 
 
 def _holder_of(port: int, endpoints: frozenset[tuple[int, int]]) -> list[int]:
@@ -341,30 +442,24 @@ def run_rescue(request: RescueRequest, world: RescueWorld) -> dict[str, Any]:
 
     # -- 2. let each one finish and exit by itself ---------------------------
     wait_started = world.clock()
-    deadline = wait_started + max(0.0, request.stop_wait_seconds)
-    remaining = list(candidates)
-    while True:
-        remaining = [
-            item
-            for item in remaining
-            if any(world.alive(pid) for pid in item.chain.pids)
-        ]
-        if not remaining:
-            break
-        rebound = _rebound(request, world, candidates)
-        if rebound is not None:
-            timings["wait"] = world.clock() - wait_started
-            return _refused(
-                request,
-                rebound,
-                world,
-                servers=candidates,
-                left_alone=left_alone,
-                timings=timings,
-            )
-        if world.clock() >= deadline:
-            break
-        world.sleep(POLL_SECONDS)
+    remaining, rebound = _wait_for_exits(
+        candidates,
+        alive=world.alive,
+        clock=world.clock,
+        sleep=world.sleep,
+        budget=request.stop_wait_seconds,
+        abort=lambda: _rebound(request, world, candidates),
+    )
+    if rebound is not None:
+        timings["wait"] = world.clock() - wait_started
+        return _refused(
+            request,
+            rebound,
+            world,
+            servers=candidates,
+            left_alone=left_alone,
+            timings=timings,
+        )
     for item in candidates:
         if item not in remaining:
             item.exited_by_itself = True
@@ -402,47 +497,27 @@ def run_rescue(request: RescueRequest, world: RescueWorld) -> dict[str, Any]:
                 left_alone=left_alone,
                 timings=timings,
             )
-        fresh_listening = frozenset(pid for _port, pid in fresh_endpoints)
-        fresh_chains = mcc_server_chains(fresh_processes)
-        for item in remaining:
-            observed = set(item.chain.pids)
-            fresh = next(
-                (
-                    chain
-                    for chain in fresh_chains
-                    if chain.root.pid == item.chain.root.pid
-                    or observed & set(chain.pids)
-                ),
-                None,
-            )
-            if fresh is None:
-                item.exited_by_itself = True
-                item.note = "gone before it had to be stopped"
-                continue
-            # Only pids observed at the start -- never a pid that appeared
-            # since, which may already belong to somebody else.
-            members = tuple(
-                member for member in fresh.members if member.pid in observed
-            )
-            if not members:
-                item.exited_by_itself = True
-                item.note = "gone before it had to be stopped"
-                continue
-            if fresh_listening & {member.pid for member in members}:
-                item.kept = True
-                item.note = "it opened a listening socket again, so it was left running"
-                left_alone.append({"pids": _pids(item.chain), "why": item.note})
-                continue
-            target = ProcessChain(root=members[0], members=members)
+
+        def announce(item: _Candidate, members: tuple[ProcessFacts, ...]) -> None:
             world.log(
                 f"Rescue of port {request.port}: stopping pid "
                 f"{', '.join(str(member.pid) for member in members)} ({item.why}); "
                 f"it was given {request.stop_wait_seconds:.0f} s to finish and exit "
                 f"by itself and did not. Reason: {request.reason}."
             )
-            item.stopped = world.stop_chain(target)
-            if not item.stopped:
-                item.note = "some of it could not be stopped"
+
+        _stop_left_over(
+            remaining,
+            fresh_processes,
+            fresh_endpoints,
+            stop_chain=world.stop_chain,
+            announce=announce,
+        )
+        left_alone.extend(
+            {"pids": _pids(item.chain), "why": item.note}
+            for item in remaining
+            if item.kept
+        )
     timings["stop"] = world.clock() - stop_started
 
     # -- 4. wait for the port -------------------------------------------------
@@ -485,6 +560,371 @@ def _summary(servers: list[_Candidate]) -> str:
         else:
             parts.append(f"pid {pids} could not be fully stopped")
     return "; ".join(parts) + "."
+
+
+# ------------------------------------------------ the same rule at a start
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupRequest:
+    """What a starting server cleans up after, and the bound it is held to."""
+
+    port: int
+    #: Seconds each old server is given to finish and exit by itself: the same
+    #: ``SERVER_GRACEFUL_SHUTDOWN_SECONDS`` + stop margins the rescue waits.
+    stop_wait_seconds: float = 24.0
+    #: This server's own version, for the line that names an old server's.
+    version: str = ""
+
+
+@dataclass(slots=True)
+class CleanupWorld:
+    """Everything the start-time cleanup reads or does to the machine.
+
+    Injectable for the same reason :class:`RescueWorld` is; and the test suite
+    replaces the real one for EVERY test (``tests/conftest.py``), because this
+    is the one path in a server's own start that stops processes.
+    """
+
+    listening: Callable[[], frozenset[tuple[int, int]]]
+    processes: Callable[[], list[ProcessFacts]]
+    sessions: Callable[[], list[ServerSession]]
+    alive: Callable[[int], bool]
+    stop_chain: Callable[[ProcessChain], bool]
+    #: One line to the server log, at INFO and at WARNING.
+    info: Callable[[str], None]
+    warning: Callable[[str], None]
+    #: One line to this process's console, for the person who started it.
+    console: Callable[[str], None]
+    #: Whether this server has been asked to stop; nothing more is stopped then.
+    stopping: Callable[[], bool]
+    clock: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
+
+
+@dataclass(slots=True)
+class CleanupPlan:
+    """The candidates of one start, picked before anything waits or stops."""
+
+    request: CleanupRequest
+    candidates: list[_Candidate] = field(default_factory=list)
+    #: Every OTHER server that owns no listening socket, with why it is not an
+    #: old server of this port and folder: reported, never stopped.
+    left_alone: list[dict[str, Any]] = field(default_factory=list)
+    #: Why nothing was looked at (the OS could not be asked); empty otherwise.
+    skipped: str = ""
+    #: One human description per candidate, by root pid.
+    labels: dict[int, str] = field(default_factory=dict)
+
+    @property
+    def planned_pids(self) -> frozenset[int]:
+        return frozenset(pid for item in self.candidates for pid in item.chain.pids)
+
+
+def _version_tuple(text: str) -> tuple[int, ...] | None:
+    parts = text.split("+", 1)[0].split(".")
+    if not parts or not all(part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def _version_words(session: ServerSession | None, current: str) -> str:
+    """What is known about an old server's version, in words."""
+
+    if session is None:
+        return "version unknown"
+    if session.version is None:
+        return (
+            f"version unknown, older than {SESSION_VERSION_SINCE}, the first "
+            "version that records it"
+        )
+    if current and session.version == current:
+        return f"version {session.version}, the same as this server"
+    theirs = _version_tuple(session.version)
+    ours = _version_tuple(current) if current else None
+    if theirs is not None and ours is not None and theirs < ours:
+        return f"version {session.version}, older than this server's {current}"
+    return f"version {session.version}"
+
+
+def _label(item: _Candidate, *, version: str, now: float) -> str:
+    starts = [m.started_at for m in item.chain.members if m.started_at is not None]
+    parts = [_version_words(item.session, version)]
+    if starts:
+        parts.append(
+            "started " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(min(starts)))
+        )
+    if item.session is not None:
+        age = max(0.0, now - item.session.last_seen_at)
+        parts.append(f"last heartbeat {age:.0f} s ago")
+    pids = ", ".join(map(str, item.chain.pids))
+    return f"pid {pids} ({'; '.join(parts)})"
+
+
+def plan_old_server_cleanup(
+    request: CleanupRequest,
+    *,
+    processes: list[ProcessFacts],
+    endpoints: frozenset[tuple[int, int]],
+    sessions: list[ServerSession],
+    self_pid: int,
+    now: float | None = None,
+) -> CleanupPlan:
+    """Pick the old servers of ``request.port`` and this folder. Stops nothing.
+
+    The scope is :func:`old_server_scope`, unchanged, plus the one fact a
+    starting server alone can add: an old server started BEFORE this one.
+    "Could not look" -- no sockets listed, no process table, no start time for
+    this very server -- is never "nothing there": the plan is then empty and
+    says why.
+    """
+
+    plan = CleanupPlan(request)
+    if not endpoints:
+        plan.skipped = "the listening sockets could not be listed"
+        return plan
+    if not processes:
+        plan.skipped = "the process table could not be read"
+        return plan
+    chains = mcc_server_chains(processes)
+    own_chain = next((chain for chain in chains if self_pid in chain.pids), None)
+    own_members: tuple[ProcessFacts, ...] = (
+        own_chain.members
+        if own_chain is not None
+        else tuple(item for item in processes if item.pid == self_pid)
+    )
+    own_starts = [m.started_at for m in own_members if m.started_at is not None]
+    if not own_starts:
+        plan.skipped = (
+            "this server's own start time could not be read, so no other server "
+            "can be shown to be older"
+        )
+        return plan
+    self_pids = frozenset(m.pid for m in own_members) | {self_pid}
+    listening_pids = frozenset(pid for _port, pid in endpoints)
+    moment = time.time() if now is None else now
+    for chain in chains:
+        verdict = old_server_scope(
+            chain,
+            port=request.port,
+            sessions=sessions,
+            listening_pids=listening_pids,
+            self_pids=self_pids,
+            started_before=min(own_starts),
+        )
+        if verdict.is_old:
+            item = _Candidate(chain, verdict.why, session=verdict.session)
+            plan.candidates.append(item)
+            plan.labels[chain.root.pid] = _label(
+                item, version=request.version, now=moment
+            )
+        elif verdict.kind not in (SCOPE_SELF, SCOPE_SERVING):
+            plan.left_alone.append(
+                {"pids": _pids(chain), "kind": verdict.kind, "why": verdict.why}
+            )
+    return plan
+
+
+def run_old_server_cleanup(plan: CleanupPlan, world: CleanupWorld) -> dict[str, Any]:
+    """Wait for the old servers to exit by themselves, then stop what is left.
+
+    Decision R2, exactly as the rescue does it: up to the stop budget for each
+    to finish and exit by itself; then, from a fresh process table, stop by
+    exact pid and innermost first only what is still there, still owns no
+    listening socket and still has the start time it had. Every outcome is one
+    line in the server log; what was found and what was stopped is also said on
+    this process's console. Returns a report; decides nothing else.
+    """
+
+    request = plan.request
+    port = request.port
+    wait = f"{request.stop_wait_seconds:.0f} s"
+
+    def label(item: _Candidate) -> str:
+        return plan.labels.get(
+            item.chain.root.pid, f"pid {', '.join(map(str, item.chain.pids))}"
+        )
+
+    def say(level: str, text: str, *, console: bool) -> None:
+        (world.warning if level == "warning" else world.info)(text)
+        if console:
+            world.console(text)
+
+    def report(aborted: str = "") -> dict[str, Any]:
+        servers = [
+            {
+                "pids": _pids(item.chain),
+                "description": label(item),
+                "exited_by_itself": item.exited_by_itself,
+                "stopped": item.stopped,
+                "kept": item.kept,
+                "note": item.note,
+            }
+            for item in plan.candidates
+        ]
+        gone = sorted(
+            {
+                pid
+                for item in plan.candidates
+                if item.exited_by_itself or item.stopped
+                for pid in item.chain.pids
+            }
+        )
+        return {
+            "port": port,
+            "skipped": plan.skipped,
+            "aborted": aborted,
+            "servers": servers,
+            "left_alone": list(plan.left_alone),
+            "gone_pids": gone,
+        }
+
+    if plan.skipped:
+        say(
+            "info",
+            f"Old servers of port {port} were not looked for: {plan.skipped}. "
+            "Nothing was stopped.",
+            console=False,
+        )
+        return report()
+    for entry in plan.left_alone:
+        say(
+            "info",
+            f"Left alone: My Claude Code server pid "
+            f"{', '.join(map(str, entry['pids']))} owns no listening socket, but "
+            f"{entry['why']}. Only old servers of port {port} and this "
+            "configuration folder are stopped when a server starts.",
+            console=False,
+        )
+    if not plan.candidates:
+        return report()
+
+    count = len(plan.candidates)
+    say(
+        "info",
+        f"Found {count} old My Claude Code server{'s' if count != 1 else ''} of "
+        f"port {port} and this configuration folder with no listening socket: "
+        f"{'; '.join(label(item) for item in plan.candidates)}. "
+        f"{'Each is' if count != 1 else 'It is'} given up to {wait} to finish "
+        "and exit by itself; whatever is still running then is stopped by "
+        "process id.",
+        console=True,
+    )
+    remaining, aborted = _wait_for_exits(
+        plan.candidates,
+        alive=world.alive,
+        clock=world.clock,
+        sleep=world.sleep,
+        budget=request.stop_wait_seconds,
+        abort=lambda: "this server began stopping" if world.stopping() else None,
+    )
+    for item in plan.candidates:
+        if item not in remaining:
+            item.exited_by_itself = True
+            say(
+                "info",
+                f"Old server {label(item)} of port {port} finished and exited by "
+                "itself; nothing was stopped.",
+                console=True,
+            )
+    if aborted is not None:
+        say(
+            "info",
+            f"Old servers of port {port}: {aborted}, so nothing more was stopped "
+            f"(still running: {'; '.join(label(item) for item in remaining)}).",
+            console=False,
+        )
+        return report(aborted)
+    if not remaining:
+        return report()
+
+    fresh_processes = world.processes()
+    fresh_endpoints = world.listening()
+    if not fresh_processes or not fresh_endpoints:
+        reason = (
+            "the process table or the sockets could not be read again before "
+            "stopping anything"
+        )
+        say(
+            "info",
+            f"Old servers of port {port}: {reason}, so nothing was stopped "
+            f"(still running: {'; '.join(label(item) for item in remaining)}).",
+            console=False,
+        )
+        return report(reason)
+    _stop_left_over(
+        remaining,
+        fresh_processes,
+        fresh_endpoints,
+        stop_chain=world.stop_chain,
+        may_continue=lambda: not world.stopping(),
+    )
+    for item in remaining:
+        if item.stopped:
+            say(
+                "warning",
+                f"Stopped an old My Claude Code server of port {port} and this "
+                f"configuration folder: {label(item)}. It owned no listening "
+                f"socket, so it could not answer anyone on port {port}, and it did "
+                f"not exit by itself within {wait}, so it was stopped by process "
+                "id, innermost first.",
+                console=True,
+            )
+        elif item.kept:
+            say(
+                "info",
+                f"Left running: old server {label(item)} of port {port} opened a "
+                "listening socket again, so it is working and was not stopped.",
+                console=False,
+            )
+        elif item.exited_by_itself:
+            say(
+                "info",
+                f"Old server {label(item)} of port {port} exited by itself before "
+                "it had to be stopped; nothing was stopped.",
+                console=True,
+            )
+        elif item.note == "some of it could not be stopped":
+            say(
+                "warning",
+                f"Could not fully stop the old My Claude Code server {label(item)} "
+                f"of port {port}: stopping it by process id did not end every one "
+                "of its processes.",
+                console=True,
+            )
+        else:
+            say(
+                "info",
+                f"Old server {label(item)} of port {port} was left running: "
+                f"{item.note}.",
+                console=False,
+            )
+    return report()
+
+
+#: Builds the machine the start-time survey and cleanup look at, for one
+#: configuration folder's request log. ``None`` = the real machine. The ONE
+#: seam the test suite uses to put an inert machine in place for every test
+#: (``tests/conftest.py``): a server's own start must never reach the real
+#: process table from a test.
+CleanupWorldFactory = Callable[[Path], CleanupWorld]
+_cleanup_world_factory: CleanupWorldFactory | None = None
+
+
+def set_cleanup_world_factory(factory: CleanupWorldFactory | None) -> None:
+    """Replace (or, with ``None``, restore) the machine the start cleanup uses."""
+
+    global _cleanup_world_factory
+    _cleanup_world_factory = factory
+
+
+def cleanup_world(request_log_path: Path) -> CleanupWorld:
+    """The machine a starting server looks at, for this folder's request log."""
+
+    factory = _cleanup_world_factory
+    if factory is not None:
+        return factory(request_log_path)
+    return real_cleanup_world(request_log_path)
 
 
 # -------------------------------------------------------------- the real world
@@ -559,6 +999,48 @@ def real_world(request: RescueRequest, *, scan_timeout: float) -> RescueWorld:
         updating=lambda: active_update() is not None,
         log=log,
         self_pids=frozenset({os.getpid(), os.getppid()}),
+    )
+
+
+def real_cleanup_world(request_log_path: Path) -> CleanupWorld:
+    """The machine, for a server's own start, through the existing helpers.
+
+    Lines go through the server's own logger (it is running in the server, so
+    ``server.log`` already has its sink) and, for the person who started it, to
+    this process's console. "Stopping" is the server's own stop clock: once a
+    stop or a reload is requested, nothing more is stopped.
+    """
+
+    from loguru import logger
+
+    from my_claude_code.core.console_notice import write_console_line
+    from my_claude_code.core.mcc_processes import (
+        listening_endpoints,
+        scan_processes,
+        stop_chain,
+    )
+    from my_claude_code.core.request_log import read_server_sessions
+    from my_claude_code.core.stop_deadline import stop_deadline
+
+    def info(message: str) -> None:
+        logger.info("{}", message)
+
+    def warning(message: str) -> None:
+        logger.warning("{}", message)
+
+    def console(message: str) -> None:
+        write_console_line(f"My Claude Code: {message}")
+
+    return CleanupWorld(
+        listening=listening_endpoints,
+        processes=scan_processes,
+        sessions=lambda: read_server_sessions(request_log_path),
+        alive=pid_is_alive,
+        stop_chain=stop_chain,
+        info=info,
+        warning=warning,
+        console=console,
+        stopping=lambda: stop_deadline().requested,
     )
 
 

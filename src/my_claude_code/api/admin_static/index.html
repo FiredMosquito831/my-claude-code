@@ -186,8 +186,15 @@
                     Every other <code>mcc-server</code> launch this machine can
                     see, from the process table, the socket table and the
                     session rows in the request log. Nothing here is stopped
-                    automatically: a server is only ever stopped by pid, by you,
-                    after you have been shown what it is.
+                    automatically, with one exception you decided on (7.72.0): a
+                    server that owns no listening socket and whose own record in
+                    this configuration folder names this server's port is an old
+                    server of this port, and a starting server stops it by pid
+                    after giving it time to exit by itself, with a line in the
+                    server log. Any other server is only ever stopped by pid, by
+                    you, after you have been shown what it is. To keep a second
+                    server on purpose, give it its own port or configuration
+                    folder.
                   </p>
                 </div>
                 <div class="observability-actions">
@@ -5186,6 +5193,27 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   &ldquo;cannot tell&rdquo; is never &ldquo;ours&rdquo;.
                   <code>-NoStart</code> / <code>--no-start</code> (or
                   <code>MCC_INSTALL_NO_START=1</code>) starts nothing at all.
+                </p>
+                <p class="guide-note">
+                  <strong>Old servers of this port do not outlive an update or a
+                  start (7.72.0).</strong> The server the installer starts &mdash;
+                  and any <code>mcc-server</code> you start yourself &mdash; looks for
+                  My Claude Code servers that own no listening socket anywhere and
+                  whose own record in this configuration folder says they served
+                  this port: servers from before 7.69.2 that lost their listener
+                  never exit, and kept refreshing stale sign-ins and rewriting agent
+                  files for days. Each gets <code>SERVER_GRACEFUL_SHUTDOWN_SECONDS</code>
+                  + 4 s to exit by itself; what is left is stopped by exact process
+                  id, innermost first, and every outcome is one line in the server
+                  log. A server on another port, of another configuration folder,
+                  one that listens anywhere, or one whose evidence is unclear is
+                  never touched &mdash; it is named in a <em>Left alone</em> line.
+                  To keep a second server on purpose, give it its own
+                  <code>PORT</code> or its own configuration folder. Servers the
+                  desktop app starts stop nothing here; its own rescue does this.
+                  <code>SERVER_STALE_SERVER_ACTION</code> still governs every other
+                  server. The first update <em>to</em> 7.72.0 runs your old
+                  installer; the old servers are stopped when the new server starts.
                 </p>
                 <p class="guide-note">
                   <strong>One update at a time, and the receipt keeps every

@@ -68,6 +68,7 @@ from my_claude_code.core.tool_catalogue import (
     split_member_shas,
 )
 from my_claude_code.core.upstream_ladder import format_status_census
+from my_claude_code.core.version import package_version
 
 # ``core`` must not import ``config`` (import-boundary contract), so the
 # request-log path is not computed here. ``config.paths.request_log_path``
@@ -647,7 +648,8 @@ CREATE TABLE IF NOT EXISTS server_sessions (
     pid INTEGER,
     host TEXT,
     port INTEGER,
-    listening INTEGER
+    listening INTEGER,
+    version TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_server_sessions_started
     ON server_sessions(started_at);
@@ -1260,11 +1262,22 @@ _SESSION_HISTORY_LIMIT = 1_000
 # the listener was open at the last heartbeat, 0 = this server lost its
 # listening socket and is draining to exit, NULL = not measured (every row
 # written before 7.69.2, and a session whose listener was never watched).
+#
+# ``version`` was added in 7.72.0, when a starting server began stopping the old
+# servers of its own port and configuration folder that lost their listener: the
+# line that says it stopped one names the version that server was running.
+# Every server from 7.72.0 on writes it when it opens its row, so NULL means the
+# row was written by a server older than 7.72.0 (SESSION_VERSION_SINCE).
 _SESSION_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("host", "ALTER TABLE server_sessions ADD COLUMN host TEXT"),
     ("port", "ALTER TABLE server_sessions ADD COLUMN port INTEGER"),
     ("listening", "ALTER TABLE server_sessions ADD COLUMN listening INTEGER"),
+    ("version", "ALTER TABLE server_sessions ADD COLUMN version TEXT"),
 )
+
+#: The first release whose session rows record the server's version. A row
+#: without one was written by an older server.
+SESSION_VERSION_SINCE = "7.72.0"
 
 # The address the server in THIS process is bound to, published by the
 # supervisor once it knows. A module-level fact rather than a constructor
@@ -1337,6 +1350,9 @@ class ServerSession:
     last_seen_at: float
     host: str | None = None
     port: int | None = None
+    #: The version the server was running; ``None`` for a row written before
+    #: :data:`SESSION_VERSION_SINCE`, which did not record it.
+    version: str | None = None
 
     def heartbeat_age(self, now: float | None = None) -> float:
         return max(0.0, (time.time() if now is None else now) - self.last_seen_at)
@@ -1371,8 +1387,13 @@ def read_server_sessions(
         # Two literal statements rather than one interpolated column list: a
         # database written before 6.72.2 has no address columns, and a log
         # this old is exactly the one a migration must not be required to
-        # touch before it can be read.
-        if {"host", "port"} <= columns:
+        # touch before it can be read. The same for ``version`` (7.72.0).
+        if {"host", "port", "version"} <= columns:
+            query = (
+                "SELECT id, pid, started_at, last_seen_at, host, port, version"
+                " FROM server_sessions ORDER BY started_at DESC LIMIT ?"
+            )
+        elif {"host", "port"} <= columns:
             query = (
                 "SELECT id, pid, started_at, last_seen_at, host, port"
                 " FROM server_sessions ORDER BY started_at DESC LIMIT ?"
@@ -1399,6 +1420,9 @@ def read_server_sessions(
                 host=row["host"] if "host" in keys else None,
                 port=int(row["port"])
                 if "port" in keys and row["port"] is not None
+                else None,
+                version=str(row["version"])
+                if "version" in keys and row["version"]
                 else None,
             )
         )
@@ -4267,8 +4291,8 @@ class RequestLogStore:
             with conn:
                 cursor = conn.execute(
                     "INSERT INTO server_sessions"
-                    " (started_at, last_seen_at, pid, host, port, listening)"
-                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    " (started_at, last_seen_at, pid, host, port, listening, version)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         now,
                         now,
@@ -4276,6 +4300,7 @@ class RequestLogStore:
                         address[0] if address else None,
                         address[1] if address else None,
                         _listening_column(),
+                        package_version(),
                     ),
                 )
                 conn.execute(

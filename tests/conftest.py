@@ -112,6 +112,42 @@ def _reset_listener_state():
 
 
 @pytest.fixture(autouse=True)
+def _reset_old_server_cleanup_world():
+    """7.72.0: a server's own start stops old servers of its port and folder.
+
+    That start-time cleanup reads the machine through one process-wide seam
+    (``cli.rescue.set_cleanup_world_factory``). No test may reach the real
+    process table, socket table or stop path through it: every test gets an
+    inert machine -- nothing listed, nothing alive -- whose stop raises a
+    ``HermeticityViolation``; a test of the cleanup supplies its own machine.
+    """
+    from my_claude_code.cli import rescue
+    from tests.support.token_host_block import HermeticityViolation
+
+    def refuse(chain: Any) -> bool:
+        raise HermeticityViolation(
+            f"a test reached the real old-server stop path for {chain!r}"
+        )
+
+    def inert(_request_log_path: Path) -> rescue.CleanupWorld:
+        return rescue.CleanupWorld(
+            listening=lambda: frozenset(),
+            processes=lambda: [],
+            sessions=lambda: [],
+            alive=lambda _pid: False,
+            stop_chain=refuse,
+            info=lambda _message: None,
+            warning=lambda _message: None,
+            console=lambda _message: None,
+            stopping=lambda: False,
+        )
+
+    rescue.set_cleanup_world_factory(inert)
+    yield
+    rescue.set_cleanup_world_factory(None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_oauth_ownership_state():
     """7.69.1: the shared-credential module keeps two process-wide flags.
 

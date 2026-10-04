@@ -463,6 +463,68 @@ def test_a_log_written_before_the_address_columns_still_reads(tmp_path: Path) ->
     assert len(sessions) == 1
     assert sessions[0].port is None
     assert sessions[0].host is None
+    assert sessions[0].version is None
+
+
+def _wait_for_rows(db: Path, count: int, timeout: float = 10.0) -> bool:
+    from my_claude_code.core.request_log import read_server_sessions
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if db.exists() and len(read_server_sessions(db)) == count:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_session_row_records_the_version_of_the_server_that_wrote_it(
+    tmp_path: Path,
+) -> None:
+    """7.72.0: the line that stops an old server names the version it ran."""
+
+    from my_claude_code.core.request_log import RequestLogStore, read_server_sessions
+    from my_claude_code.core.version import package_version
+
+    db = tmp_path / "requests.db"
+    store = RequestLogStore(db)
+    try:
+        assert _wait_for_rows(db, 1)
+    finally:
+        store.close()
+    assert read_server_sessions(db)[0].version == package_version()
+
+
+def test_an_older_session_table_gains_the_version_column_with_old_rows_null(
+    tmp_path: Path,
+) -> None:
+    """A row without a version was written by a server older than 7.72.0."""
+
+    from my_claude_code.core.request_log import RequestLogStore, read_server_sessions
+    from my_claude_code.core.version import package_version
+
+    db = tmp_path / "requests.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        "CREATE TABLE server_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " started_at REAL NOT NULL, last_seen_at REAL NOT NULL, pid INTEGER,"
+        " host TEXT, port INTEGER, listening INTEGER);"
+        "INSERT INTO server_sessions (started_at, last_seen_at, pid, host, port)"
+        " VALUES (1.0, 2.0, 42, '127.0.0.1', 8082);"
+    )
+    conn.commit()
+    conn.close()
+
+    store = RequestLogStore(db)
+    try:
+        assert _wait_for_rows(db, 2)
+    finally:
+        store.close()
+
+    by_pid = {row.pid: row for row in read_server_sessions(db)}
+    assert by_pid[42].version is None
+    assert by_pid[42].port == 8082
+    newest = [row for row in by_pid.values() if row.pid != 42]
+    assert [row.version for row in newest] == [package_version()]
 
 
 # ----------------------------------------------------------- the opt-in stop

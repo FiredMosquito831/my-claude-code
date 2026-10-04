@@ -109,6 +109,20 @@ and change the other, and remember what is *not* checked by reading the script:
   key, and the shell's `update_progress::active_helper`) use them to refuse to
   start a second installer. Removing a field breaks all three.
 
+### Old servers at an update live in the server's start, not in the helper (7.72.0)
+
+The update flow is unchanged: stage, verify, `--stop-holder` stops only the
+configured port's holder by exact pid, swap, start `mcc-server`, health-gate,
+roll back. What stops the *other* old servers of that port and configuration
+folder (no listening socket, their own `server_sessions` row names the port) is
+the **new server's own start** (`cli/commands.py` `_survey_other_servers` ->
+`cli/rescue.py` `plan_old_server_cleanup`/`run_old_server_cleanup`). Keep it
+there: an updater cannot fix the updater that is running it -- the first update
+to a version always runs the *previous* version's installer and `--stop-holder`
+-- but the server it starts is always the new one. So do not move this into
+`--stop-holder` or the helper, and do not expect the first update to a release
+that changes it to show the change before the new server starts.
+
 ### Adding a key to `--print-status`
 
 `update` was added in 6.58.3 and the two-release rule applies to it as it did to
