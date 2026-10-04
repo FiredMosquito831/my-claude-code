@@ -4018,6 +4018,17 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   instead, or <code>REQUEST_LOG_CAPTURE_BODIES=false</code> to drop it
                   entirely and give up the drill-down.
                 </p>
+                <p>
+                  Each attempt's wire snapshot &mdash; the structure of what was sent
+                  upstream &mdash; is compressed too, against a dictionary of its own
+                  (37x on a real log), and reads back exactly as it was written.
+                  Prompts, the rest of a body and wire snapshots each relearn their
+                  dictionary in the background once it is older than the last 14 days
+                  of traffic and 1,024 new samples of that kind exist; older
+                  dictionaries are kept, so no row ever becomes unreadable. This
+                  applies to new rows. An older version reads everything but shows a
+                  compressed wire snapshot as empty until you update again.
+                </p>
                 <h4>No traffic, or no server?</h4>
                 <p>
                   A flat stretch in <em>Requests over time</em> means one of two very

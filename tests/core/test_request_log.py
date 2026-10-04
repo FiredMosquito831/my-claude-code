@@ -1466,6 +1466,31 @@ def _chatty(index: int) -> str:
     )
 
 
+def _wait_for_dictionary(store: RequestLogStore, kind: str) -> None:
+    """Until the writer has stored a ``kind`` dictionary the trainer learned.
+
+    Since 7.73.0 training runs on a thread of its own, never on the writer's,
+    so a row enqueued the moment a store opens can be written before it ends.
+    """
+    deadline = time.monotonic() + 120
+    while kind not in store._kind_dicts:
+        assert time.monotonic() < deadline, f"no {kind} dictionary was trained"
+        time.sleep(0.05)
+
+
+def _settle(store: RequestLogStore) -> None:
+    """Wait out a trainer the store started, so its outcome is the whole story."""
+    assert store._dictionaries_checked.wait(60), "the writer never started"
+    trainer = store._trainer
+    if trainer is not None:
+        trainer.join(timeout=120)
+        assert not trainer.is_alive()
+    deadline = time.monotonic() + 30
+    while store._trained:
+        assert time.monotonic() < deadline, "a trained dictionary was never stored"
+        time.sleep(0.05)
+
+
 def test_a_dictionary_is_trained_once_there_is_enough_traffic(tmp_path) -> None:
     """A fresh install must start compressing well without waiting for a restart."""
     path = tmp_path / "requests.db"
@@ -1476,11 +1501,16 @@ def test_a_dictionary_is_trained_once_there_is_enough_traffic(tmp_path) -> None:
     store.enqueue(_record("after", input_text=_chatty(999)))
 
     trained = RequestLogStore(path, max_rows=5000)
+    _wait_for_dictionary(trained, "prompt")
     trained.enqueue(_record("after", input_text=_chatty(999)))
     trained.close()
 
     with sqlite3.connect(path) as conn:
-        dicts = conn.execute("SELECT COUNT(*) FROM body_dictionaries").fetchone()[0]
+        # One per kind with enough distinct samples: every reply here is the
+        # same "world", so only the prompts have anything to learn from.
+        dicts = conn.execute(
+            "SELECT COUNT(*) FROM body_dictionaries WHERE kind = 'prompt'"
+        ).fetchone()[0]
         # The prompt blob is the one that carries the volume worth compressing.
         blob = (
             "SELECT {} FROM request_bodies r"
@@ -1536,11 +1566,19 @@ def test_training_does_not_repeat_on_every_restart(tmp_path) -> None:
         store.enqueue(_record(f"r{index}", input_text=_chatty(index)))
     store.close()
 
+    first = RequestLogStore(path, max_rows=5000)
+    _wait_for_dictionary(first, "prompt")
+    first.close()
+    with sqlite3.connect(path) as conn:
+        trained = conn.execute("SELECT COUNT(*) FROM body_dictionaries").fetchone()[0]
+
     for _ in range(3):
         reopened = RequestLogStore(path, max_rows=5000)
+        _settle(reopened)
         reopened.close()
 
     with sqlite3.connect(path) as conn:
+        assert trained == 1
         assert conn.execute("SELECT COUNT(*) FROM body_dictionaries").fetchone()[0] == 1
 
 

@@ -3639,9 +3639,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="request_log_compress_bodies",
         default="true",
         description=(
-            "Compresses bodies against a dictionary trained on your own "
-            "traffic and stores a repeated prompt once. Applies to new rows; "
-            "run mcc-compact-log to convert existing history."
+            "Compresses bodies and per-attempt wire snapshots against "
+            "dictionaries learned from your own traffic, relearned in the "
+            "background every 14 days, and stores a repeated prompt once. "
+            "Applies to new rows; run mcc-compact-log to convert existing "
+            "body history."
         ),
     ),
     ConfigFieldSpec(
