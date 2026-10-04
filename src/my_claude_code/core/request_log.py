@@ -153,6 +153,29 @@ MAX_TEXT_CHARS = 50_000
 MAX_ERROR_CHARS = 2_000
 LIST_BODY_PREVIEW_CHARS = 4_096
 _PRUNE_EVERY_INSERTS = 100
+# The orphan sweeps ``prune`` runs, in the order it runs them. Each link table
+# points at a request; each blob table is named by exactly one link table.
+_ORPHAN_SWEEP_TABLES = (
+    "request_bodies",
+    "body_blobs",
+    "request_images",
+    "request_attempts",
+    "image_blobs",
+    "request_media",
+    "media_blobs",
+)
+_LINK_BLOB_TABLES = (
+    ("request_bodies", "body_blobs"),
+    ("request_images", "image_blobs"),
+    ("request_media", "media_blobs"),
+)
+# Above this many requests removed by one pass, ``prune`` sweeps whole tables
+# (what every pass did before 7.72.2) rather than following each removed row:
+# both find the same orphans, and a whole-table sweep is the cheaper of the two
+# once most of the table is going anyway.
+_TARGETED_SWEEP_MAX_ROWS = 10_000
+# Values per ``IN (...)`` list, well under SQLite's bound-variable limit.
+_SWEEP_CHUNK = 500
 # How often, at most, ``prune`` sweeps tool catalogues no retained request
 # carries any more. The sweep reads one column of every ``requests`` row, and
 # on a capped log ``prune`` runs every hundred inserts; the tables it cleans are
@@ -2663,6 +2686,12 @@ class RequestLogStore:
         }
         # Monotonic time of the last tool-catalogue sweep; see ``prune``.
         self._last_tool_sweep: float | None = None
+        # The orphan sweeps the next prune pass owes over a whole table; see
+        # ``prune``. All of them to begin with, so the first pass of a process
+        # is exactly the pass every prune ran before 7.72.2. Any thread may
+        # add to it; only ``prune`` takes from it.
+        self._sweep_lock = threading.Lock()
+        self._full_sweeps_owed: set[str] = set(_ORPHAN_SWEEP_TABLES)
         # Used by the writer thread only: it remembers the tools it last
         # hashed, so an unchanged array is recognised rather than re-serialised.
         self._tool_fingerprinter = ToolFingerprinter()
@@ -5085,11 +5114,18 @@ class RequestLogStore:
         conn: sqlite3.Connection,
         packed: dict[str, tuple[bytes | None, bytes | None]],
         *,
-        level: int = _BODY_COMPRESSION_LEVEL,
+        level: int | None = None,
     ) -> None:
-        """Point each request at its blobs, compressing only unseen content."""
+        """Point each request at its blobs, compressing only unseen content.
+
+        ``level`` defaults to ``REQUEST_LOG_COMPRESSION_LEVEL`` as the store
+        holds it now, read once so one batch is written at one level. Until
+        7.72.2 this default was a fixed 9, so the setting changed nothing.
+        """
         if not packed:
             return
+        if level is None:
+            level = self._compression_level
         mapping: list[tuple[str, str | None, str | None]] = []
         blobs: dict[str, bytes] = {}
         for request_id, (input_blob, rest_blob) in packed.items():
@@ -5267,6 +5303,7 @@ class RequestLogStore:
                 blobs = self._pack_record(record)
                 if blobs != (None, None):
                     packed[record.id] = blobs
+        already_stored: set[str] = set()
         try:
             with conn:
                 already_stored = self._existing_ids(
@@ -5289,6 +5326,11 @@ class RequestLogStore:
         except sqlite3.Error as exc:
             logger.warning("Request log write failed: {}", exc)
             return
+        if already_stored or len({record.id for record in batch}) < len(batch):
+            # A request written again replaces its links, so a body, picture
+            # or file its earlier write named may now be named by nothing.
+            # After the commit, so the pass that sweeps for it can see it.
+            self._owe_full_sweeps("body_blobs", "image_blobs", "media_blobs")
         # After the rows are committed, so the files this batch stored are
         # counted -- with the cap of the newest request that stored one.
         cap = next(
@@ -8596,76 +8638,35 @@ class RequestLogStore:
         what lets the analytics page answer "all time" honestly on a capped
         table, and it is also why the rollup and a raw scan legitimately
         disagree once retention has bitten.
+
+        What the deleted requests leave behind goes in the same transaction;
+        see ``_sweep_orphans``. Until 7.72.2 that meant seven whole-table
+        scans on every pass -- about a minute on a 12 GB log, every hundred
+        requests, even when the pass deleted nothing. A pass now follows only
+        the requests it deleted, and sweeps a whole table only when something
+        other than this pass may have left an orphan in it (``_owe_full_sweeps``).
         """
         if self._max_rows <= 0:
             return 0
+        with self._sweep_lock:
+            owed = set(self._full_sweeps_owed)
+            self._full_sweeps_owed.clear()
+        committed = False
         conn = self._connect()
         try:
             with conn:
-                cursor = conn.execute(
-                    "DELETE FROM requests WHERE id IN ("
-                    " SELECT id FROM requests ORDER BY ts_epoch DESC"
-                    " LIMIT -1 OFFSET ?"
-                    ")",
-                    (self._max_rows,),
-                )
-                removed = cursor.rowcount
-                # Bodies are keyed by request id with no cascade configured, so
-                # they would otherwise outlive the rows that reference them and
-                # keep the file growing forever. Blobs go only once the last
-                # request pointing at them is gone -- deduplication means one
-                # blob can serve many requests.
-                conn.execute(
-                    "DELETE FROM request_bodies WHERE NOT EXISTS ("
-                    " SELECT 1 FROM requests WHERE requests.id ="
-                    " request_bodies.request_id)"
-                )
-                conn.execute(
-                    "DELETE FROM body_blobs WHERE NOT EXISTS ("
-                    " SELECT 1 FROM request_bodies WHERE request_bodies.sha ="
-                    " body_blobs.sha OR request_bodies.input_sha = body_blobs.sha)"
-                )
-                # Images follow the same rule as bodies: the link goes when its
-                # request does, and the picture itself only once no surviving
-                # request still points at it.
-                conn.execute(
-                    "DELETE FROM request_images WHERE NOT EXISTS ("
-                    " SELECT 1 FROM requests WHERE requests.id ="
-                    " request_images.request_id)"
-                )
-                conn.execute(
-                    "DELETE FROM request_attempts WHERE NOT EXISTS ("
-                    " SELECT 1 FROM requests WHERE requests.id ="
-                    " request_attempts.request_id)"
-                )
-                conn.execute(
-                    "DELETE FROM image_blobs WHERE NOT EXISTS ("
-                    " SELECT 1 FROM request_images WHERE request_images.sha ="
-                    " image_blobs.sha)"
-                )
-                # Generated media follow the same rule, and a stored file goes
-                # with its last row. The files are deleted here, on the
-                # writer thread, never on the event loop.
-                conn.execute(
-                    "DELETE FROM request_media WHERE NOT EXISTS ("
-                    " SELECT 1 FROM requests WHERE requests.id ="
-                    " request_media.request_id)"
-                )
-                orphaned_media = [
+                removed_ids = [
                     str(row[0])
                     for row in conn.execute(
-                        "SELECT sha256 FROM media_blobs WHERE stored = 1"
-                        " AND NOT EXISTS (SELECT 1 FROM request_media"
-                        " WHERE request_media.sha256 = media_blobs.sha256)"
-                    )
+                        "DELETE FROM requests WHERE id IN ("
+                        " SELECT id FROM requests ORDER BY ts_epoch DESC"
+                        " LIMIT -1 OFFSET ?"
+                        ") RETURNING id",
+                        (self._max_rows,),
+                    ).fetchall()
                 ]
-                conn.execute(
-                    "DELETE FROM media_blobs WHERE NOT EXISTS ("
-                    " SELECT 1 FROM request_media WHERE request_media.sha256 ="
-                    " media_blobs.sha256)"
-                )
-                if orphaned_media:
-                    delete_media_files(media_root(self._db_path), orphaned_media)
+                removed = len(removed_ids)
+                self._sweep_orphans(conn, removed_ids, owed)
                 # A video job goes with its request row, after the grace: the
                 # job is written the moment it is accepted, its row only when
                 # the writer next flushes.
@@ -8682,6 +8683,7 @@ class RequestLogStore:
                 ):
                     self._last_tool_sweep = now
                     self._sweep_tool_catalogues(conn)
+            committed = True
             if removed:
                 # Return the freed pages to the filesystem instead of leaving
                 # them on the freelist, where they would grow the file forever.
@@ -8692,7 +8694,191 @@ class RequestLogStore:
             logger.warning("Request log prune failed: {}", exc)
             return 0
         finally:
+            if not committed:
+                # Rolled back: every sweep this pass owed is still owed.
+                self._owe_full_sweeps(*owed)
             conn.close()
+
+    def _owe_full_sweeps(self, *tables: str) -> None:
+        """Make the next prune pass sweep these tables whole.
+
+        For anything that may leave an orphan other than a pass deleting
+        requests: a request written again (its new links replace the old),
+        a picture described before its request is logged, a video's file
+        linked to a request that may be gone. Called after that write commits,
+        so the pass that pays the debt can see what it has to remove; a write
+        that lands while a pass is starting is swept by the next one.
+        """
+        with self._sweep_lock:
+            self._full_sweeps_owed.update(tables)
+
+    def _sweep_orphans(
+        self, conn: sqlite3.Connection, removed_ids: list[str], owed: set[str]
+    ) -> None:
+        """Remove what the requests a prune pass deleted leave behind.
+
+        Links (bodies, pictures, attempts, media) are keyed by request id with
+        no cascade, so they would otherwise outlive their request and keep the
+        file growing forever. Blobs are shared -- one prompt, picture or file
+        can serve many requests -- so a blob goes only once no surviving link
+        names it.
+
+        A table in ``owed`` is swept whole, by the statements every pass ran
+        before 7.72.2. Any other table follows only ``removed_ids``: their links
+        are deleted by request id, and each blob those links named goes only if
+        no link left names it. The two find the same rows. A table is owed
+        whenever anything but a pass may have left an orphan in it, so a table
+        that is not owed held no orphan before this pass; then its orphans are
+        exactly the links of the removed requests, and the blobs that only those
+        links named.
+        """
+        owed = set(owed)
+        targeted = 0 < len(removed_ids) <= _TARGETED_SWEEP_MAX_ROWS
+        if len(removed_ids) > _TARGETED_SWEEP_MAX_ROWS:
+            owed.update(_ORPHAN_SWEEP_TABLES)
+        # A link table swept whole may drop links whose blobs were never
+        # collected, so its blob table is swept whole with it.
+        for link, blob in _LINK_BLOB_TABLES:
+            if link in owed:
+                owed.add(blob)
+        id_chunks = (
+            [
+                removed_ids[start : start + _SWEEP_CHUNK]
+                for start in range(0, len(removed_ids), _SWEEP_CHUNK)
+            ]
+            if targeted
+            else []
+        )
+
+        def follow(table: str, returning: str = "") -> set[str]:
+            named: set[str] = set()
+            for chunk in id_chunks:
+                rows = conn.execute(
+                    f"DELETE FROM {table} WHERE request_id IN"
+                    f" ({', '.join('?' * len(chunk))}){returning}",
+                    chunk,
+                ).fetchall()
+                named.update(
+                    str(value) for row in rows for value in row if value is not None
+                )
+            return named
+
+        def blob_chunks(shas: set[str]) -> list[list[str]]:
+            ordered = sorted(shas)
+            return [
+                ordered[start : start + _SWEEP_CHUNK]
+                for start in range(0, len(ordered), _SWEEP_CHUNK)
+            ]
+
+        body_shas: set[str] = set()
+        if "request_bodies" in owed:
+            conn.execute(
+                "DELETE FROM request_bodies WHERE NOT EXISTS ("
+                " SELECT 1 FROM requests WHERE requests.id ="
+                " request_bodies.request_id)"
+            )
+        else:
+            body_shas = follow("request_bodies", " RETURNING sha, input_sha")
+        if "body_blobs" in owed:
+            conn.execute(
+                "DELETE FROM body_blobs WHERE NOT EXISTS ("
+                " SELECT 1 FROM request_bodies WHERE request_bodies.sha ="
+                " body_blobs.sha OR request_bodies.input_sha = body_blobs.sha)"
+            )
+        else:
+            # Two NOT EXISTS, one per indexed column: the same test as the
+            # whole sweep's OR, each answered by an index lookup.
+            for chunk in blob_chunks(body_shas):
+                conn.execute(
+                    "DELETE FROM body_blobs WHERE sha IN"
+                    f" ({', '.join('?' * len(chunk))})"
+                    " AND NOT EXISTS (SELECT 1 FROM request_bodies"
+                    " WHERE request_bodies.sha = body_blobs.sha)"
+                    " AND NOT EXISTS (SELECT 1 FROM request_bodies"
+                    " WHERE request_bodies.input_sha = body_blobs.sha)",
+                    chunk,
+                )
+        # Images follow the same rule as bodies: the link goes when its
+        # request does, and the picture itself only once no surviving
+        # request still points at it.
+        image_shas: set[str] = set()
+        if "request_images" in owed:
+            conn.execute(
+                "DELETE FROM request_images WHERE NOT EXISTS ("
+                " SELECT 1 FROM requests WHERE requests.id ="
+                " request_images.request_id)"
+            )
+        else:
+            image_shas = follow("request_images", " RETURNING sha")
+        if "request_attempts" in owed:
+            conn.execute(
+                "DELETE FROM request_attempts WHERE NOT EXISTS ("
+                " SELECT 1 FROM requests WHERE requests.id ="
+                " request_attempts.request_id)"
+            )
+        else:
+            follow("request_attempts")
+        # ``request_images`` has no index on ``sha``, so the NOT EXISTS every
+        # pass ran before 7.72.2 scanned every link once per picture (24 s for
+        # 1,020 pictures x 86,763 links on a real log). ``NOT IN`` over the
+        # non-NULL links reads them once; with ``sha IS NULL`` it deletes
+        # exactly the rows that NOT EXISTS did.
+        still_named = (
+            "sha NOT IN (SELECT sha FROM request_images WHERE sha IS NOT NULL)"
+        )
+        if "image_blobs" in owed:
+            conn.execute(f"DELETE FROM image_blobs WHERE sha IS NULL OR {still_named}")
+        else:
+            for chunk in blob_chunks(image_shas):
+                conn.execute(
+                    "DELETE FROM image_blobs WHERE sha IN"
+                    f" ({', '.join('?' * len(chunk))}) AND {still_named}",
+                    chunk,
+                )
+        # Generated media follow the same rule, and a stored file goes with
+        # its last row. The files are deleted here, on the writer thread,
+        # never on the event loop.
+        media_shas: set[str] = set()
+        if "request_media" in owed:
+            conn.execute(
+                "DELETE FROM request_media WHERE NOT EXISTS ("
+                " SELECT 1 FROM requests WHERE requests.id ="
+                " request_media.request_id)"
+            )
+        else:
+            media_shas = follow("request_media", " RETURNING sha256")
+        orphaned_media: list[str] = []
+        if "media_blobs" in owed:
+            orphaned_media = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT sha256 FROM media_blobs WHERE stored = 1"
+                    " AND NOT EXISTS (SELECT 1 FROM request_media"
+                    " WHERE request_media.sha256 = media_blobs.sha256)"
+                )
+            ]
+            conn.execute(
+                "DELETE FROM media_blobs WHERE NOT EXISTS ("
+                " SELECT 1 FROM request_media WHERE request_media.sha256 ="
+                " media_blobs.sha256)"
+            )
+        else:
+            for chunk in blob_chunks(media_shas):
+                unnamed = (
+                    f"sha256 IN ({', '.join('?' * len(chunk))})"
+                    " AND NOT EXISTS (SELECT 1 FROM request_media"
+                    " WHERE request_media.sha256 = media_blobs.sha256)"
+                )
+                orphaned_media.extend(
+                    str(row[0])
+                    for row in conn.execute(
+                        f"SELECT sha256 FROM media_blobs WHERE stored = 1 AND {unnamed}",
+                        chunk,
+                    )
+                )
+                conn.execute(f"DELETE FROM media_blobs WHERE {unnamed}", chunk)
+        if orphaned_media:
+            delete_media_files(media_root(self._db_path), orphaned_media)
 
     @staticmethod
     def _sweep_tool_catalogues(conn: sqlite3.Connection) -> None:
@@ -8972,6 +9158,9 @@ class RequestLogStore:
                 " (request_id, direction, idx, sha256) VALUES (?, ?, ?, ?)",
                 (request_id, output.direction, output.idx, output.sha256),
             )
+        # Linked to a request that may be gone already, or never be written,
+        # and possibly replacing a link to another file.
+        self._owe_full_sweeps("request_media", "media_blobs")
 
     # ---------------------------------------------------------- media stats ---
 
@@ -9208,6 +9397,9 @@ class RequestLogStore:
                         time.time(),
                     ),
                 )
+            # A picture row no request may ever point at: owed to the next
+            # whole sweep of ``image_blobs``, exactly as before 7.72.2.
+            self._owe_full_sweeps("image_blobs")
         except sqlite3.Error as exc:
             logger.warning("Image description store failed: {}", exc)
 

@@ -1476,8 +1476,8 @@ class Settings(BaseSettings):
         default=REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT,
         validation_alias="REQUEST_LOG_TEXT_MAX_CHARS",
     )
-    # zstd level for stored bodies. Measured on a real log, level 19 was 4.9%
-    # smaller than 9 at a ninth of the speed.
+    # zstd level for request bodies written from now on; stored rows keep
+    # theirs, and reading never depends on it. Applied on Save, no restart.
     request_log_compression_level: int = Field(
         default=REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
         validation_alias="REQUEST_LOG_COMPRESSION_LEVEL",
