@@ -1321,9 +1321,9 @@ def _tray_notifier(
     into a no-op, so a 7-hour outage reached nobody. Now (user answer 1,
     2026-10-01): the sentence always goes to ``server.log``; the host's own
     tray icon shows it when there is one; while the desktop app runs it is the
-    app's to show (from the app's next release -- never as a toast under
-    another program's name); otherwise it is one stamped line on the console
-    this host runs in, and nothing at all on a windowless host.
+    app's to show (the 7.71.0 app does, from its own facts -- never as a toast
+    under another program's name); otherwise it is one stamped line on the
+    console this host runs in, and nothing at all on a windowless host.
     """
 
     notify = getattr(tray, "notify", None)

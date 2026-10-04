@@ -1290,15 +1290,82 @@ outage ends. It never restarts anything itself.
 
 **Where the sentence goes.** Always into `server.log`. Then: with the Python tray
 icon (macOS, or Windows without the desktop app), as that icon's notification;
-**while the desktop app is running, nothing else is shown** — the notification
-belongs to the app, under its own name, and comes with the app's next release
-(this release never shows one under another program's name, such as Windows
-PowerShell); with no desktop app, one stamped line on the console `mcc-desktop`
-runs in (`[2026-10-04 07:02:11] My Claude Code: The My Claude Code server on port
-8082 is not answering (since 07:01): process 58620 has exited. …`). On Windows
-`mcc-desktop` normally runs windowless, so there the `server.log` line is the
-record. A server that loses its own port already says so in *its* console (7.69.2)
-and exits with code 75.
+**while the desktop app is running, nothing else is shown by `mcc-desktop`** — the
+notification belongs to the app, under its own name, and the app shows it from
+7.71.0 ([below](#a-slow-server-keeps-its-dashboard)); with no desktop app, one
+stamped line on the console `mcc-desktop` runs in (`[2026-10-04 07:02:11] My
+Claude Code: The My Claude Code server on port 8082 is not answering (since 07:01):
+process 58620 has exited. …`). On Windows `mcc-desktop` normally runs windowless,
+so there the `server.log` line is the record. A server that loses its own port
+already says so in *its* console (7.69.2) and exits with code 75.
+
+<a id="a-slow-server-keeps-its-dashboard"></a>
+
+#### A slow server keeps its dashboard; a dead one is replaced (7.71.0)
+
+**What was wrong.** On 2026-09-28 at 14:40 the desktop app replaced a server that
+was working: one `/health` answer came late, the app had only a process id cached
+from a status read that a healthy answer never refreshes, an unknown process id
+counted as *dead*, and the server the app started then took the port from the busy
+one. And on 2026-10-01 a server sat dead for seven hours with no notification at
+all. From 7.71.0 the app decides from what the **operating system** says, never
+from a timeout:
+
+| What the OS says | What the app does |
+| --- | --- |
+| The server's process still **holds the port** (or the lookup failed, or could not tell who holds it) | **Slow.** The dashboard stays on screen under an amber banner — *"The server is busy: it is running (process 33560) and still holds port 8082, but has not answered for 37 s. Nothing will be restarted while that is true."* Nothing is reloaded, started or stopped, for as long as that holds. When it answers again the banner goes away; the page is not reloaded. |
+| A program that is **not** My Claude Code holds the port | After `DESKTOP_FOREIGN_GRACE_SECONDS` (45 s), the port-conflict page and one notification. Nothing is ever stopped. |
+| **Nothing listens** and the server's process has **exited** | Replaced at once. |
+| **Nothing listens** and the process is **still running** (it lost its port) | Replaced after `DESKTOP_HEALTH_FAILURE_THRESHOLD` (3) looks spanning that many `DESKTOP_TICK_SECONDS` (30 s), so a reload that re-opens its own port is never touched. |
+| A server **the app started** is still running and has **never opened the port** | Replaced once it has been running for the whole start budget (`DESKTOP_SERVER_START_TIMEOUT` × (`DESKTOP_SERVER_START_RETRIES` + 1), 60 s at 20 × 3), with every look across that budget agreeing — one look that sees the port held, or a lookup that fails, starts the count again — and never a server that ever answered, even `503 starting`. |
+
+**What "replaced" does.** `mcc-desktop --rescue` looks again from fresh OS tables
+and does nothing at all if anything holds the port now. Then, for each **old
+server** — only My Claude Code server processes tied to **this port and this
+configuration folder** (one whose last record in this folder's request log was
+this port, or the exact server the app itself started); never a server on another
+port, never one of another configuration folder, never a program that is not My
+Claude Code — it waits up to `SERVER_GRACEFUL_SHUTDOWN_SECONDS` + 4 s (24 s by
+default) for it to finish its open requests and exit by itself, stops by exact
+process id, innermost first, only what is still there and still has no port, waits
+up to `DESKTOP_BUSY_GRACE_SECONDS` (15 s) for the port to be free, and only then
+starts the new server. For the first `DESKTOP_BUSY_GRACE_SECONDS` the app watches
+the new server and never acts on it. Every server the app starts is started with
+`--no-port-takeover` (it never takes the port from anything, whatever
+`SERVER_PORT_TAKEOVER` says) and `MCC_OPEN_BROWSER=0` (no browser tab beside the
+window).
+
+**The notification.** When the server is found dead, and for every replacement,
+the app says what happened, what was stopped and why — *"The My Claude Code
+server on port 8082 stopped answering: process 58620 is still running but no
+longer holds the port, so it cannot take requests. It was given 24 s to finish
+and exit by itself and did not, so it was stopped by process id because it had
+lost its port (pids 42776, 58620). A new server is starting."* — in three places:
+
+* **in the window**, as a banner at the bottom (dismissable), always;
+* **in the app's transcript**, `desktop-server-start.log` beside `server.log`,
+  always — with one more line saying how (or why not) it was shown natively;
+* **as a notification under the app's own name** where the platform allows it:
+  on **Windows** only when the app was installed with the Windows installer
+  (`MyClaudeCode-Setup-windows-x86_64.exe`), which registers the name
+  "My Claude Code" for notifications and removes it again when the app is
+  uninstalled; a copy of the app that `mcc-desktop` fetched by itself has no such
+  registration and shows the banner instead of a notification labelled with
+  another program's name. On **Linux** through `notify-send` when it is
+  installed. On **macOS** this release shows the banner only. When `mcc-desktop`'s
+  own tray icon is the one drawing the icon (macOS today), that icon announces
+  the outage and the app does not say it twice.
+
+**The desktop app has to be updated to get this.** It is a change to the app, not
+only to the server. The app release is 7.71.0; the server that pins it — and so
+fetches it — is 7.71.1 and later (the pin can only name an app release that
+already exists). Such a server updates the app it pins after it is ready
+(`DESKTOP_SHELL_AUTO_UPDATE`), and a running app is staged and swapped in the
+next time it starts — so quit the app and start it again once after updating.
+Until then the app you have keeps its old behaviour (it reloads the dashboard
+after a missed check and restarts a server it believes is dead); the 7.70.0
+server already protects a busy server from being taken over by a start that finds
+it answering.
 
 <a id="a-busy-server-is-not-an-absent-one"></a>
 

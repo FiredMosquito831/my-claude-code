@@ -4412,6 +4412,52 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>DISPLAY</code> or <code>WAYLAND_DISPLAY</code>, naming the
                   reason.
                 </p>
+                <h4 id="guide-desktop-rescue">When the server is busy, and when it is dead (7.71.0)</h4>
+                <p>
+                  The desktop app decides from what the <strong>operating system</strong>
+                  says about the port, never from a check that timed out. While the
+                  server&rsquo;s process <strong>still holds its port</strong> it is
+                  <em>busy</em>: this dashboard stays on screen under an amber banner
+                  (<em>&ldquo;The server is busy: it is running (process 33560) and still
+                  holds port 8082 &hellip; Nothing will be restarted while that is
+                  true.&rdquo;</em>), nothing is reloaded, started or stopped, and the
+                  banner goes away by itself when it answers. A lookup that fails counts
+                  as busy too.
+                </p>
+                <p>
+                  Only when <strong>nothing listens on the port</strong> is the server
+                  dead, and then the app <strong>replaces</strong> it: at once if its
+                  process exited; after three looks over 30&nbsp;seconds if the process
+                  is still running without its port (so a reload that re-opens its own
+                  port is never touched); and a server the app itself started that has
+                  not opened the port after its whole start budget (60&nbsp;s at
+                  20&nbsp;&times;&nbsp;3) &mdash; never one that ever answered, even
+                  <code>503 starting</code>. Replacing means: look again and do nothing if
+                  anything holds the port; give each <strong>old server</strong> up to
+                  <code>SERVER_GRACEFUL_SHUTDOWN_SECONDS</code>&nbsp;+&nbsp;4&nbsp;s to
+                  finish its open requests and exit by itself; stop by exact process id
+                  only what is still there; wait up to 15&nbsp;s for the port; start a
+                  new server, and watch it for 15&nbsp;s before anything counts against
+                  it. <strong>&ldquo;Old servers&rdquo; are only My Claude Code servers
+                  of this port and this configuration folder</strong> &mdash; never a
+                  server on another port, never another configuration folder, never a
+                  program that is not My Claude Code. Every server the app starts runs
+                  with <code>--no-port-takeover</code> and opens no browser tab.
+                </p>
+                <p class="guide-note">
+                  <strong>You are told, by the app.</strong> When the server is found
+                  dead and after every replacement, the app says what was stopped and
+                  why: as a banner at the bottom of this window, in
+                  <code>desktop-server-start.log</code> beside <code>server.log</code>,
+                  and as a notification under the name <em>My Claude Code</em> &mdash;
+                  on Windows when the app was installed with the Windows installer
+                  (which registers that name and removes it on uninstall), on Linux
+                  through <code>notify-send</code>. A copy the app fetched for itself,
+                  and macOS in this release, show the banner instead of a notification
+                  under another program&rsquo;s name. The app has to be updated to
+                  7.71.0 for any of this; until it is, the server you run still never
+                  lets a new start take the port from a server that answers.
+                </p>
                 <p>
                   The <strong>Token optimizer</strong> card on the
                   <strong>Providers</strong> tab manages the RTK binary, which filters

@@ -691,7 +691,16 @@ def test_every_installed_file_and_icon_lands_somewhere_the_uninstall_reaches() -
     )
 
 
-def test_the_installer_writes_no_registry_value_of_its_own() -> None:
+#: The one registry key the desktop-app installer writes (7.71.0): the app's
+#: notification identity, ``tauri.conf.json``'s ``identifier`` registered as
+#: an AppUserModelID with a display name and an icon, so a Windows toast from
+#: the app carries the app's own name (rescue spec, user answer 1).
+NOTIFICATION_IDENTITY_KEY = (
+    "Software\\Classes\\AppUserModelId\\com.myclaudecode.desktop"
+)
+
+
+def test_the_installer_writes_one_registry_key_and_it_removes_it() -> None:
     """Autostart has exactly one writer, and it is not the installer.
 
     ``config/desktop.py`` owns the HKCU ``Run`` value and
@@ -700,21 +709,63 @@ def test_the_installer_writes_no_registry_value_of_its_own() -> None:
     the *server tray's* autostart -- a value with two owners and one remover.
     Inno's own ``{AppId}_is1`` uninstall key is written by the compiler, not
     by this script, and is removed by the uninstaller.
+
+    The one key this script does write, from 7.71.0, is the app's notification
+    identity: without it a Windows toast from the app cannot carry the app's
+    name. Every entry is that key, and every entry carries ``uninsdeletekey``,
+    so the key has one writer and one remover and both are this file.
     """
 
     sections = _iss_sections()
-    assert not sections.get("Registry"), (
-        "MyClaudeCode.iss has grown a [Registry] section: "
-        f"{sections.get('Registry')}. Anything written there is a registry "
-        "value with no remover outside Inno's log, and autostart in "
-        "particular belongs to the application (config/desktop.py)."
-    )
+    entries = sections.get("Registry", [])
+    assert entries, "the notification identity is gone from MyClaudeCode.iss"
+    for entry in entries:
+        assert f'Subkey: "{NOTIFICATION_IDENTITY_KEY}"' in entry, (
+            f"MyClaudeCode.iss writes a registry value that is not the app's "
+            f"notification identity: {entry!r}. Anything else written there is "
+            "a value with no owner, and autostart in particular belongs to the "
+            "application (config/desktop.py)."
+        )
+        assert "Flags: uninsdeletekey" in entry, (
+            f"{entry!r} has no uninsdeletekey: the uninstaller would leave it behind"
+        )
+        assert entry.startswith("Root: HKA;"), entry
+    names = {
+        match.group(1)
+        for entry in entries
+        for match in [re.search(r'ValueName: "([^"]+)"', entry)]
+        if match
+    }
+    assert names == {"DisplayName", "IconUri"}, names
     text = _iss_text()
     for forbidden in ("CurrentVersion\\Run", "MyClaudeCodeDesktop"):
         assert forbidden not in text, (
             f"MyClaudeCode.iss names {forbidden!r}. The desktop app installer "
             "must not touch the start-at-login registration."
         )
+
+
+def test_the_notification_identity_is_the_apps_own_identifier_everywhere() -> None:
+    """One id in three places: Tauri's identifier, the shell's toast, the key."""
+
+    import json
+
+    conf = json.loads(
+        (REPO_ROOT / "desktop-shell" / "src-tauri" / "tauri.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    identifier = conf["identifier"]
+    assert NOTIFICATION_IDENTITY_KEY.endswith("\\" + identifier)
+    notify_rs = (
+        REPO_ROOT / "desktop-shell" / "src-tauri" / "src" / "notify.rs"
+    ).read_text(encoding="utf-8")
+    assert f'pub const APP_USER_MODEL_ID: &str = "{identifier}";' in notify_rs
+    # The icon the key names is a file this installer installs, into {app}.
+    assert any(
+        'DestName: "app-icon.png"' in line and 'DestDir: "{app}"' in line
+        for line in _iss_sections()["Files"]
+    )
 
 
 def test_the_uninstaller_stays_out_of_the_servers_directories() -> None:

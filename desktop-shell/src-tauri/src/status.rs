@@ -140,6 +140,13 @@ pub struct Status {
     /// The pid of MCC's own server, when one could be identified.
     #[serde(default)]
     pub server_pid: Option<i64>,
+    /// How long a server asked to stop is given to finish and exit by itself:
+    /// `SERVER_GRACEFUL_SHUTDOWN_SECONDS` plus the server's fixed stop margins
+    /// (24 s at the default). Emitted since 7.70.0 for the rescue's countdown.
+    /// Tolerated, never required, this release (C9): a window under a 7.69
+    /// wheel falls back to the shipped 24.
+    #[serde(default)]
+    pub server_stop_wait_seconds: Option<f64>,
     /// Who holds the port, decided by process. The whole of BUG-5's fix: the
     /// old answer came from a bind test, which cannot tell MCC's own starting
     /// python.exe from a stranger.
@@ -187,6 +194,13 @@ pub struct Holder {
     pub pid: Option<i64>,
     #[serde(default)]
     pub image: Option<String>,
+    /// Whether `kind` is a fact rather than a fallback (7.70.0). `Some(false)`
+    /// only for a holder whose lookup failed or timed out, which Python still
+    /// reports as `foreign` so an older window behaves exactly as before; this
+    /// window reads it as "could not tell", and could-not-tell is alive.
+    /// `None` from a wheel before 7.70.0. Tolerated, never required (C9).
+    #[serde(default)]
+    pub identified: Option<bool>,
 }
 
 /// Why a status document could not be used.
@@ -574,6 +588,26 @@ mod tests {
         // it, and `None` means "use what this release shipped with".
         assert_eq!(status.health_probe_timeouts, None);
         assert_eq!(status.busy_grace_seconds, None);
+    }
+
+    #[test]
+    fn the_rescue_keys_of_7_70_0_are_read_when_present_and_tolerated_when_absent() {
+        // C9 from both sides. 7.70.0 emits both; a 7.69 wheel emits neither,
+        // and a window that required them would refuse its document.
+        let status = parse_status(&sample_json().to_string()).expect("sample parses");
+        assert_eq!(status.server_stop_wait_seconds, None);
+        assert_eq!(status.holder.expect("a holder").identified, None);
+
+        let mut document = sample_json();
+        document["server_stop_wait_seconds"] = serde_json::json!(24.0);
+        document["holder"] = serde_json::json!({
+            "kind": "foreign", "pid": 31337, "image": null, "identified": false
+        });
+        let status = parse_status(&document.to_string()).expect("7.70.0's document parses");
+        assert_eq!(status.server_stop_wait_seconds, Some(24.0));
+        let holder = status.holder.expect("a holder");
+        assert_eq!(holder.kind, "foreign");
+        assert_eq!(holder.identified, Some(false));
     }
 
     #[test]

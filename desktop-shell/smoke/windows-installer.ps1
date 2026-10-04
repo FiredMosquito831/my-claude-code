@@ -24,9 +24,15 @@
          [Code] unpack the bundled copy and log its size, and this asserts the
          line is there. Without it a release could quietly go back to
          downloading the bootstrapper at install time;
+      2c. the app's notification identity (7.71.0): the one registry key the
+         installer writes, `HKCU\Software\Classes\AppUserModelId\
+         com.myclaudecode.desktop`, named "My Claude Code" with an icon that
+         exists -- what lets a toast from the app carry the app's name -- and
+         the notification platform's own answer for it, printed;
       3. the entry names the desktop app, not "My Claude Code", so nobody
          uninstalls the server by mistake;
-      4. `unins000.exe /VERYSILENT` removes every one of those again;
+      4. `unins000.exe /VERYSILENT` removes every one of those again, the
+         notification identity included;
       5. and -- the assertion this file exists for -- the uninstaller leaves
          the *server's* artefacts alone: the HKCU `Run` value, anything under
          `~/.local/bin`, and `~/.mcc`. Those belong to `scripts/uninstall.ps1`.
@@ -54,6 +60,10 @@ $UninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $AppId = '{5FC8D5C3-33F7-4366-AD8D-C844D21BC089}_is1'
 $StartMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+# The app's notification identity (7.71.0): tauri.conf.json's identifier,
+# registered so a Windows toast from the app carries the app's own name.
+$AumidRoot = 'HKCU:\Software\Classes\AppUserModelId'
+$AumidKey = Join-Path $AumidRoot 'com.myclaudecode.desktop'
 
 function Fail([string] $Message) {
     Write-Host "INSTALLER SMOKE FAIL: $Message" -ForegroundColor Red
@@ -78,6 +88,10 @@ function Get-Snapshot {
         )
         StartMenu = @(Get-ChildItem -LiteralPath $StartMenu -Recurse -ErrorAction SilentlyContinue |
             ForEach-Object { $_.FullName } | Sort-Object)
+        # 7.71.0: the notification identity is the one key the installer
+        # writes, so every AppUserModelID under HKCU is part of the proof.
+        Aumid     = @(Get-ChildItem -Path $AumidRoot -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.PSChildName } | Sort-Object)
     }
 }
 
@@ -116,6 +130,9 @@ $InstallDir = Join-Path $Scratch 'app'
 if (Test-Path -LiteralPath $UninstallKey\$AppId) {
     Fail "the desktop app is already installed ($AppId); this smoke refuses to uninstall someone else's copy"
 }
+if (Test-Path -LiteralPath $AumidKey) {
+    Fail "the notification identity $AumidKey already exists; this smoke refuses to remove someone else's"
+}
 
 $before = Get-Snapshot
 Ok "snapshotted $($before.Uninstall.Count) uninstall keys, $($before.Run.Count) Run values, $($before.StartMenu.Count) Start Menu paths"
@@ -134,11 +151,32 @@ if ($proc.ExitCode -ne 0) {
 }
 Ok '/VERYSILENT install completed without a prompt'
 
-foreach ($relative in @('MyClaudeCode.exe', 'app-icon.ico', 'unins000.exe')) {
+foreach ($relative in @('MyClaudeCode.exe', 'app-icon.ico', 'app-icon.png', 'unins000.exe')) {
     $path = Join-Path $InstallDir $relative
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing after install: $path" }
 }
-Ok 'the exe, the icon and the uninstaller are in place'
+Ok 'the exe, the icons and the uninstaller are in place'
+
+# The notification identity: the key, the app's own name, and an icon that
+# exists. This is what lets `notify.rs` show a toast as "My Claude Code"; a copy
+# of the app without it shows the sentence in its window instead.
+$identity = Get-ItemProperty -LiteralPath $AumidKey -ErrorAction SilentlyContinue
+if (-not $identity) { Fail "no notification identity at $AumidKey" }
+if ($identity.DisplayName -ne 'My Claude Code') {
+    Fail "the notification identity is named '$($identity.DisplayName)', not 'My Claude Code'"
+}
+if (-not (Test-Path -LiteralPath $identity.IconUri -PathType Leaf)) {
+    Fail "the notification identity's icon does not exist: $($identity.IconUri)"
+}
+Ok "notification identity: $AumidKey -> '$($identity.DisplayName)', icon $($identity.IconUri)"
+# What the Windows notification platform itself says about it: the same call
+# the app makes before it shows a toast. Informational -- a headless runner's
+# notification settings are not a user's -- but it is the platform's answer.
+$setting = & powershell.exe -NoProfile -NonInteractive -Command (
+    "[void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]; " +
+    "try { [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('com.myclaudecode.desktop').get_Setting() } " +
+    "catch { 'ERROR ' + `$_.Exception.Message }") 2>&1
+Ok "the notification platform's own answer for com.myclaudecode.desktop: $(($setting | Out-String).Trim())"
 
 # -- the WebView2 bootstrapper is really inside this setup ------------------
 # A runner has the runtime, so the installer's WebView2 branch never runs and
@@ -203,12 +241,16 @@ if (Test-Path -LiteralPath $shortcut) { Fail 'the Start Menu shortcut survived t
 if (Get-Item -LiteralPath "$UninstallKey\$AppId" -ErrorAction SilentlyContinue) {
     Fail 'the Apps & Features entry survived the uninstall'
 }
-Ok 'shortcut and Apps & Features entry are gone'
+if (Get-Item -LiteralPath $AumidKey -ErrorAction SilentlyContinue) {
+    Fail 'the notification identity survived the uninstall'
+}
+Ok 'shortcut, Apps & Features entry and notification identity are gone'
 
 $after = Get-Snapshot
 Compare-Snapshot 'HKCU Uninstall' $before.Uninstall $after.Uninstall
 Compare-Snapshot 'HKCU Run' $before.Run $after.Run
 Compare-Snapshot 'Start Menu' $before.StartMenu $after.StartMenu
+Compare-Snapshot 'HKCU AppUserModelId' $before.Aumid $after.Aumid
 
 Remove-Item -LiteralPath $Scratch -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host 'INSTALLER SMOKE PASS' -ForegroundColor Green

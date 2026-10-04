@@ -98,6 +98,11 @@ pub enum Page {
     /// middle of the user's own three-hundred-address bulk add is the window
     /// telling them something untrue about their own machine.
     Busy { message: String },
+    /// A dead server is being replaced (7.71.0): the old one is given its stop
+    /// budget to finish, anything left of it is stopped by exact pid, and a new
+    /// one is started. Shown only after the OS proved nothing listens on the
+    /// port -- never for a server that is merely slow.
+    Rescuing { message: String },
 
     /// The end of the line. `server_log` is shown when there is one to name.
     ///
@@ -139,6 +144,79 @@ pub fn render_script(page: &Page) -> String {
          if(window.__mccShell&&window.__mccShell.render){{\
          window.__mccShell.render(state);}}}})()"
     )
+}
+
+/// The element the busy banner lives in, in whatever document it is injected
+/// into. The shell owns this id and nothing else in a page it did not write.
+pub const BUSY_BANNER_ID: &str = "mcc-shell-busy-banner";
+
+/// The element the last notification is repeated in, inside the window.
+pub const NOTICE_BANNER_ID: &str = "mcc-shell-notice-banner";
+
+/// Which of the two banners, and so where it sits and what it looks like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Banner {
+    /// The server is slow (rescue spec rows 5-6): pinned to the top, amber,
+    /// not dismissible -- it is re-asserted every second for as long as the
+    /// server is busy, and taken away the moment it answers.
+    Busy,
+    /// The sentence a notification carried: pinned to the bottom, with a
+    /// close button. The same words as the toast, for a machine where there
+    /// is no toast (or the user did not see it).
+    Notice,
+}
+
+impl Banner {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Busy => BUSY_BANNER_ID,
+            Self::Notice => NOTICE_BANNER_ID,
+        }
+    }
+}
+
+/// JavaScript that shows `message` in a banner over whatever page is loaded --
+/// the shell's own, or the dashboard.
+///
+/// Injected with `eval` into a document this binary did not write, so it is
+/// built to be harmless there: DOM calls and `textContent` only (never
+/// `innerHTML`: the message carries pids and process names), styles set one
+/// property at a time through the CSSOM (which a page's CSP does not govern,
+/// where a `style` attribute would be), one element with an id the shell owns,
+/// and nothing else touched. Idempotent: a second call updates the text.
+pub fn banner_script(banner: Banner, message: &str) -> String {
+    let id = serde_json::to_string(banner.id()).unwrap_or_else(|_| "\"\"".to_owned());
+    let text = serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_owned());
+    let (edge, ink, ground, border, closable) = match banner {
+        Banner::Busy => ("top", "#3d2a00", "#fff4d6", "#e2a45f", "false"),
+        Banner::Notice => ("bottom", "#10213d", "#e6efff", "#6c8dff", "true"),
+    };
+    format!(
+        "(function(){{var id={id};var text={text};var root=document.documentElement;\
+         if(!root){{return;}}var el=document.getElementById(id);\
+         if(!el){{el=document.createElement('div');el.id=id;\
+         el.setAttribute('role','status');el.setAttribute('aria-live','polite');\
+         var s=el.style;s.position='fixed';s.left='16px';s.right='16px';\
+         s.{edge}='16px';s.zIndex='2147483647';s.display='flex';s.gap='12px';\
+         s.alignItems='flex-start';s.padding='10px 14px';s.borderRadius='10px';\
+         s.border='1px solid {border}';s.background='{ground}';s.color='{ink}';\
+         s.font='14px/1.45 system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif';\
+         s.boxShadow='0 6px 24px rgba(0,0,0,0.25)';\
+         var t=document.createElement('span');t.style.flex='1';el.appendChild(t);\
+         if({closable}){{var b=document.createElement('button');b.type='button';\
+         b.textContent='\\u00d7';b.setAttribute('aria-label','Dismiss');\
+         b.style.font='inherit';b.style.border='0';b.style.background='transparent';\
+         b.style.color='inherit';b.style.cursor='pointer';\
+         b.addEventListener('click',function(){{el.remove();}});el.appendChild(b);}}\
+         (document.body||root).appendChild(el);}}\
+         el.firstChild.textContent=text;}})()"
+    )
+}
+
+/// JavaScript that removes one banner, if it is there.
+pub fn clear_banner_script(banner: Banner) -> String {
+    let id = serde_json::to_string(banner.id()).unwrap_or_else(|_| "\"\"".to_owned());
+    format!("(function(){{var el=document.getElementById({id});if(el){{el.remove();}}}})()")
 }
 
 /// JavaScript that appends one line of installer output.
@@ -261,6 +339,34 @@ mod tests {
     }
 
     #[test]
+    fn a_banner_carries_its_message_as_text_and_never_as_markup() {
+        // The busy banner and the notice are injected into the dashboard,
+        // a document this binary did not write. Their message carries pids
+        // and process names; it must reach the page as one JSON string.
+        let script = banner_script(Banner::Busy, "pid 42 \"</script><b>x</b>\"');//");
+        assert!(script.contains("textContent=text"), "{script}");
+        assert!(!script.contains("innerHTML"), "{script}");
+        assert!(
+            script.contains(r#""pid 42 \"</script><b>x</b>\"');//""#),
+            "{script}"
+        );
+        assert!(script.contains(BUSY_BANNER_ID));
+        // Styles through the CSSOM, never a `style` attribute a page's CSP
+        // could refuse.
+        assert!(!script.contains("setAttribute('style'"), "{script}");
+    }
+
+    #[test]
+    fn only_the_notice_can_be_dismissed() {
+        assert!(banner_script(Banner::Notice, "x").contains("if(true)"));
+        assert!(banner_script(Banner::Busy, "x").contains("if(false)"));
+        assert!(banner_script(Banner::Notice, "x").contains("s.bottom="));
+        assert!(banner_script(Banner::Busy, "x").contains("s.top="));
+        assert!(clear_banner_script(Banner::Busy).contains(BUSY_BANNER_ID));
+        assert!(clear_banner_script(Banner::Notice).contains(NOTICE_BANNER_ID));
+    }
+
+    #[test]
     fn every_page_carries_a_kind_the_document_can_switch_on() {
         let pages = [
             Page::Checking,
@@ -283,6 +389,9 @@ mod tests {
                 message: String::new(),
             },
             Page::Busy {
+                message: String::new(),
+            },
+            Page::Rescuing {
                 message: String::new(),
             },
             Page::Error {
@@ -332,6 +441,9 @@ mod tests {
                 message: String::new(),
             },
             Page::Busy {
+                message: String::new(),
+            },
+            Page::Rescuing {
                 message: String::new(),
             },
             Page::Error {

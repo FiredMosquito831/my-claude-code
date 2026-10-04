@@ -300,6 +300,27 @@ def _port_freed_after_asking_the_holder(settings: Settings) -> bool:
     return False
 
 
+def _refuse_without_takeover(settings: Settings, waited: float) -> None:
+    """Name the holder and exit 1. Stops nothing (``--no-port-takeover``)."""
+
+    owner = diagnose_port_owner(settings.host, settings.port)
+    who = (
+        f"{owner.name or 'a process'} (pid {owner.pid})"
+        if owner is not None and owner.pid
+        else "another process"
+    )
+    message = (
+        f"Port {settings.port} is still held by {who} after {waited:.0f} s. This "
+        "server was started with --no-port-takeover, as the desktop app starts "
+        "every server, so it stops nothing and exits; the desktop app decides "
+        "what happens next from the operating system's own facts."
+    )
+    logger.error(message)
+    logger.complete()
+    write_console_line(f"My Claude Code: {message}")
+    raise SystemExit(1)
+
+
 def _settle_port_holder(settings: Settings) -> HolderSettlement:
     """Ask with the user's own patience: the desktop probe ladder, 30 s at most."""
 
@@ -454,8 +475,35 @@ def _emit_config_dir_banner() -> None:
     )
 
 
-def serve() -> None:
-    """Start and supervise the FastAPI server."""
+#: Whether this process may take the port from a holder (``SERVER_PORT_TAKEOVER``
+#: applies). False only for a server started with ``--no-port-takeover`` -- which
+#: the desktop app passes on every server it starts (7.71.0) -- and then for the
+#: life of the process, every generation included. Never a setting: the
+#: dashboard keeps showing the user's own ``SERVER_PORT_TAKEOVER``.
+_port_takeover_allowed = True
+
+
+def _takeover_allowed() -> bool:
+    return _port_takeover_allowed
+
+
+def serve(*, port_takeover: bool = True) -> None:
+    """Start and supervise the FastAPI server.
+
+    ``port_takeover=False`` is ``mcc-server --no-port-takeover``: if the port is
+    held, wait the bind budget for it and then exit with the diagnosis, having
+    asked, waited on and stopped nothing.
+    """
+    global _port_takeover_allowed
+    _port_takeover_allowed = port_takeover
+    try:
+        _serve()
+    finally:
+        _port_takeover_allowed = True
+
+
+def _serve() -> None:
+    """The body of :func:`serve`."""
     # First, and before anything resolves a path or reads a setting: make
     # the config home exist, move a legacy one into place, and write a
     # default .env with a token generated on this machine. Until 6.65.0 a
@@ -691,7 +739,18 @@ def _run_supervised_server(
     # budget -- for it to free before declaring a genuine conflict. Never kills
     # the owner; at worst it is diagnosed and the start is abandoned.
     bind_wait = max(5.0, min(float(settings.server_graceful_shutdown_seconds), 60.0))
-    if not probe_port_available(settings.host, settings.port):
+    if (
+        not probe_port_available(settings.host, settings.port)
+        and not _takeover_allowed()
+    ):
+        # ``--no-port-takeover`` (every server the desktop app starts, 7.71.0):
+        # the patient wait ``never`` has always had, and then the diagnosis.
+        # Nothing is asked, waited on beyond that, or stopped -- the desktop
+        # app's own rescue is the only thing that may stop an old server, and
+        # only one the operating system has proved dead.
+        if not wait_for_port_free(settings.host, settings.port, timeout=bind_wait):
+            _refuse_without_takeover(settings, bind_wait)
+    elif not probe_port_available(settings.host, settings.port):
         # The port is held. A short grace first, because a previous generation
         # that is a beat from releasing the socket should not be killed for
         # it -- but only a short one: the user's rule is that starting the

@@ -28,6 +28,14 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
 url = "=2.5.7"
 
+# Windows toasts under the app's own AppUserModelID (7.71.0, `notify.rs`). The
+# same `windows` release Tauri's own Windows stack already builds (tao, the
+# WebView2 bindings), pinned to it exactly, with the two WinRT namespaces a
+# toast needs -- so this adds no crate to the lock file, only two modules of
+# one that is already compiled.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.61.3", features = ["UI_Notifications", "Data_Xml_Dom"] }
+
 [features]
 # Tauri's own convention: `cargo build --features custom-protocol` for release.
 custom-protocol = ["tauri/custom-protocol"]

@@ -223,6 +223,147 @@ impl Holder {
     }
 }
 
+/// Fact L of the rescue spec: what the operating system says about the
+/// listening socket on the configured port.
+///
+/// Read from `mcc-desktop --print-status`'s `holder` (a bind test the OS
+/// answered, then `netstat`), never from an HTTP timeout. **Only `Free`, read
+/// fresh, can ever lead to a rescue** (decision R4): a server whose process
+/// still holds the listening socket is slow, however long it has been silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listener {
+    /// Nothing listens: the OS let a socket bind the port.
+    Free,
+    /// Something listens. `pid` is the OS's answer when it gave one; `mcc` is
+    /// whether that process is My Claude Code (`None`: it could not tell).
+    Held { pid: Option<i64>, mcc: Option<bool> },
+    /// The lookup failed, timed out, or has not been made. Treated exactly like
+    /// a held port: an unanswered question is never a reason to act.
+    Unknown,
+}
+
+/// Why a server is dead, by the OS. The three rows of the decision table that
+/// may lead to a rescue (rows 8, 9 and 11), and nothing else can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadReason {
+    /// Row 8: nothing listens and the server's process has exited.
+    ProcessGone,
+    /// Row 9: nothing listens and the server's process is still running --
+    /// it lost its listener. Confirmed over three checks spanning 30 s, so an
+    /// in-process reload (which closes and re-binds its own socket) is never
+    /// touched.
+    ListenerLost,
+    /// Row 11 (user answer 2): a server THIS window started is alive and has
+    /// never opened its port, past the start budget.
+    NeverBound,
+}
+
+impl DeadReason {
+    /// The word the rescue command and its JSON use.
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            Self::ProcessGone => "process-gone",
+            Self::ListenerLost => "listener-lost",
+            Self::NeverBound => "never-bound",
+        }
+    }
+}
+
+/// Why the window is being patient rather than acting (rows 5, 6 and 6b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlowReason {
+    /// The OS says a process of ours (or the pid that last answered) holds the
+    /// port: the server is alive and busy.
+    Holds { pid: Option<i64> },
+    /// The OS lookup failed or could not identify the holder (approved rule:
+    /// unknown = alive, be patient).
+    CouldNotTell,
+    /// The handshake completed but the OS said nothing listens: a race, and a
+    /// race is not a fact.
+    Contradiction,
+    /// The last OS answer is older than the last thing that answered: it says
+    /// nothing about the port now.
+    NotRecent,
+}
+
+/// What the facts add up to on a tick where nothing answered. Pure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Row 4: this window started a server under 15 s ago. It is watched and
+    /// never acted on (user answer 3).
+    InGrace,
+    /// Rows 5, 6, 6b.
+    Slow(SlowReason),
+    /// Row 7: a process positively identified as not My Claude Code holds the
+    /// port. Never spawned over, never stopped.
+    Foreign,
+    /// Nothing listens and this window knows of no server to replace -- a cold
+    /// start, or a child that exited before it ever bound. Started directly,
+    /// exactly as before 7.71.0 (decision Q4).
+    Free,
+    /// Rows 8, 9, 11 -- each still subject to its own confirmation.
+    Dead(DeadReason),
+}
+
+/// How a rescue ended, as `mcc-desktop --rescue` reported it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RescueResult {
+    /// The old servers are gone and nothing holds the port: start one.
+    PortFree,
+    /// The rescue looked again and something holds the port, or it could not
+    /// look. Nothing was started and nothing more is stopped.
+    Refused,
+    /// The installed `mcc-desktop` predates `--rescue` (it exited 2 with its
+    /// usage). The port was free by the OS when the rescue was asked for, so
+    /// the window starts a server exactly as 7.26.0 did -- and that server is
+    /// started with `--no-port-takeover`, so it can never stop anything.
+    Unsupported,
+    /// It did not finish inside its wall, crashed, or printed nothing usable.
+    /// Treated as `Refused`: not proven, nothing started.
+    Failed,
+}
+
+/// One old server the rescue dealt with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoppedServer {
+    /// The launch's pids, outermost first, as the OS listed them.
+    pub pids: Vec<i64>,
+    /// Whether it finished and exited by itself inside the stop wait, rather
+    /// than being stopped by pid.
+    pub exited_by_itself: bool,
+}
+
+/// Everything a finished rescue says, in plain data, so `step` can word it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RescueOutcome {
+    pub result: RescueResult,
+    /// Why the rescue was asked for.
+    pub reason: DeadReason,
+    /// The pid the window last heard from, when it knew one.
+    pub known_pid: Option<i64>,
+    /// The child this window started, when the rescue was asked to include it.
+    pub child_pid: Option<i64>,
+    pub servers: Vec<StoppedServer>,
+    /// Pids the rescue found and left alone because they are not this port's
+    /// and this configuration folder's (decision R1).
+    pub left_alone: Vec<i64>,
+    /// The rescue's own one-line reason, for `Refused` and `Failed`.
+    pub detail: String,
+    /// How long the old servers were given to finish, in seconds.
+    pub stop_wait_seconds: f64,
+}
+
+/// Where the rescue is, as the sampler last saw it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum RescueProgress {
+    #[default]
+    Idle,
+    /// `mcc-desktop --rescue` is running on its own thread.
+    Running,
+    /// It finished; this is the tick that hears about it.
+    Done(RescueOutcome),
+}
+
 /// What the update helper is doing. Read from `progress.json`'s `helper_pid`
 /// and stage (6.58.3), never from a stage name alone -- a helper killed
 /// mid-install leaves `installing` behind forever.
@@ -384,6 +525,28 @@ pub enum State {
     Verifying { attempts: u32 },
     /// Something a person has to resolve. Still re-checked every tick.
     Blocked { reason: Blocked },
+    /// The server is SLOW (rows 5, 6, 6b): it has not answered, and the OS
+    /// says its process still holds the port -- or could not say. The
+    /// dashboard stays on screen under a busy banner, nothing is reloaded,
+    /// nothing is started and nothing is stopped, for as long as this holds
+    /// (decision R4). 7.71.0.
+    Busy { since: f64 },
+    /// Nothing listens and the server is dead by the OS, but this reason needs
+    /// more than one look before it is acted on: a lost listener three checks
+    /// across 30 s, a child that never bound checks across its whole start
+    /// budget. Any disagreeing check leaves this state, which is the reset.
+    Confirming {
+        reason: DeadReason,
+        /// When the first agreeing check was taken.
+        first: f64,
+        /// How many agreeing checks so far, this one included.
+        checks: u32,
+        since: f64,
+    },
+    /// `mcc-desktop --rescue` is running: waiting for the old servers to
+    /// finish, stopping by exact pid what is left, waiting for the port. The
+    /// window starts the new server when it reports the port free. 7.71.0.
+    Rescuing { since: f64 },
 }
 
 impl State {
@@ -400,6 +563,9 @@ impl State {
             Self::Installing { .. } => "installing",
             Self::Verifying { .. } => "verifying",
             Self::Blocked { .. } => "blocked",
+            Self::Busy { .. } => "busy",
+            Self::Confirming { .. } => "confirming",
+            Self::Rescuing { .. } => "rescuing",
         }
     }
 }
@@ -442,7 +608,28 @@ pub struct Facts {
     /// words, not a guess assembled here.
     pub holder_image: Option<String>,
     pub holder_pid: Option<i64>,
+    /// How often a SLOW server's OS facts are re-read while it keeps not
+    /// answering. `DESKTOP_RECONNECT_RESTATUS_SECONDS`, emitted since 6.50.0
+    /// and read by nothing until 7.71.0 (rescue spec 2.2 row 5): `netstat` on
+    /// a busy machine is itself load, so a slow server is not asked about
+    /// every ten seconds.
+    pub reconnect_restatus_seconds: f64,
+    /// How long an old server is given to finish its open requests and exit
+    /// by itself before the rescue may stop it by pid. The status document's
+    /// `server_stop_wait_seconds` (7.70.0): `SERVER_GRACEFUL_SHUTDOWN_SECONDS`
+    /// plus the server's own fixed stop margins, 24 s at the default.
+    pub server_stop_wait_seconds: f64,
 }
+
+/// `server_stop_wait_seconds` when the document does not carry it (a wheel
+/// before 7.70.0): the shipped default, 20 + 3 + 1. Tolerated, never required,
+/// until the pin moves past 7.70.0 (C9).
+pub const DEFAULT_SERVER_STOP_WAIT_SECONDS: f64 = 24.0;
+
+/// `reconnect_restatus_seconds` for a document without one. Every wheel since
+/// 6.50.0 sends it and the parser requires it; this is only the floor under a
+/// value of zero.
+pub const DEFAULT_RECONNECT_RESTATUS_SECONDS: f64 = 30.0;
 
 impl Default for Facts {
     fn default() -> Self {
@@ -464,6 +651,8 @@ impl Default for Facts {
             holder_image: None,
 
             holder_pid: None,
+            reconnect_restatus_seconds: DEFAULT_RECONNECT_RESTATUS_SECONDS,
+            server_stop_wait_seconds: DEFAULT_SERVER_STOP_WAIT_SECONDS,
         }
     }
 }
@@ -479,21 +668,54 @@ pub struct Observation {
     /// How long the current holder classification has been unbroken. A
     /// `Foreign` holder becomes a reason to stop only past the grace window.
     pub holder_age: f64,
-    /// Whether the holder's pid is a live process right now.
-    ///
-    /// Checked by the caller, and only on a tick where the server did not
-    /// answer -- an attached window still pays for one `/health` probe and
-    /// nothing else (BUG-4). `false` when the pid cannot be told, which is
-    /// what keeps a dead server's restart timed exactly as it is today: an
-    /// unknown pid buys no patience at all.
-    pub holder_alive: bool,
     /// Seconds since the last probe that this window saw answered, or `None`
-    /// if it has never seen one answer in this session. The clock the busy
-    /// grace is measured on.
+    /// if it has never seen one answer in this session (or since its last
+    /// spawn).
     pub seconds_since_healthy: Option<f64>,
     /// How many consecutive probes have come back absent. Reset by any answer
     /// at all -- healthy, starting or draining -- and by a spawn.
     pub consecutive_absent: u32,
+
+    // -- the rescue spec's facts (section 2.1), 7.71.0 ------------------------
+    /// Fact P's half the old vocabulary lost: whether this tick's probe got as
+    /// far as a completed TCP handshake. `true` with `health == Absent` is
+    /// "connected, no answer" -- something holds the port.
+    pub probe_connected: bool,
+    /// Fact L: what the OS last said about the listening socket.
+    pub listener: Listener,
+    /// Whether `listener` was read after the last answer and recently enough
+    /// to describe the port now. A stale `Free` is never acted on.
+    pub listener_fresh: bool,
+    /// Fact K: the pid of the server this window last heard from -- the
+    /// `x-mcc-pid` of the last answer of any kind, else the document's own
+    /// `server_pid`. Always the header when there is one, never a cache that
+    /// a healthy tick does not refresh (spec section 1.3).
+    pub known_pid: Option<i64>,
+    /// Fact A: whether `known_pid` is alive. `None` is "could not tell", and
+    /// unknown is alive (the approved rule) -- never dead.
+    pub known_alive: Option<bool>,
+    /// Fact C: the exact pid of a server THIS window started and that is still
+    /// running. `None` when there is none. The only process a "never opened
+    /// its port" rescue may name (user answer 2, safeguard e).
+    pub child_pid: Option<i64>,
+    /// Whether the current child ever answered anything (healthy, starting or
+    /// draining) or the OS ever saw the port held since it was started. Such a
+    /// server is never "one that never opened its port" (safeguard d).
+    pub child_ever_bound: bool,
+    /// The pid this tick's answer named, when it named one.
+    pub answer_pid: Option<i64>,
+    /// `x-mcc-busy` on this tick's answer. The tray line, and nothing else.
+    pub busy_header: bool,
+    /// Whether the window is showing the dashboard right now.
+    pub on_dashboard: bool,
+    /// The pid of the server the dashboard on screen was loaded from.
+    pub dashboard_pid: Option<i64>,
+    /// Where the rescue is.
+    pub rescue: RescueProgress,
+    /// Seconds since this window last asked for a rescue.
+    pub since_rescue: Option<f64>,
+    /// Seconds since the status document was last read.
+    pub since_restatus: Option<f64>,
 
     pub helper: Helper,
     /// What the update in flight is saying about itself. Empty when there is
@@ -540,6 +762,13 @@ impl Observation {
         let waited = self.since_last_start.unwrap_or(backoff);
         (backoff - waited).max(0.0)
     }
+
+    /// Whether this window has evidence of a server it would be replacing: one
+    /// named itself, one answered, or one this window started ever bound.
+    /// Without any of that, "nothing listens" is a cold start, not a death.
+    fn knows_a_server(&self) -> bool {
+        self.known_pid.is_some() || self.seconds_since_healthy.is_some() || self.child_ever_bound
+    }
 }
 
 /// What the caller must do about a step. At most one of these *acts*; `Show`
@@ -548,10 +777,36 @@ impl Observation {
 pub enum Effect {
     /// Render one of the shell's own pages.
     Show(Page),
-    /// Navigate to the dashboard.
-    Attach { admin_url: String },
-    /// Start `mcc-server`. The takeover of any stale holder happens inside it.
+    /// Show the dashboard. `navigate` is false when the window is already on
+    /// it and the server that answered is the one it was loaded from: the
+    /// busy banner is cleared and nothing is reloaded (rescue spec row 1).
+    Attach { admin_url: String, navigate: bool },
+    /// Keep the dashboard on screen under a banner that says the server is
+    /// busy (rows 5-6). On a window that is not showing the dashboard, the
+    /// same sentence is shown as the busy page instead. Never navigates away.
+    Overlay { message: String },
+    /// Start `mcc-server`, with `--no-port-takeover` and `MCC_OPEN_BROWSER=0`:
+    /// a server this window starts can never stop anything, and never opens a
+    /// browser tab.
     Spawn,
+    /// Run `mcc-desktop --rescue` on a worker thread. Only ever asked for on a
+    /// port the OS reported free, read fresh; the command re-reads everything
+    /// itself and refuses if anything holds the port.
+    Rescue {
+        known_pid: Option<i64>,
+        child_pid: Option<i64>,
+        reason: DeadReason,
+    },
+    /// Say something to the user: a notification shown by the app under its
+    /// own name where the platform allows, always the same sentence in the
+    /// window, always a line in the shell log. Every rescue ends in one.
+    Notify { message: String },
+    /// The same, at most once per outage: "the server is dead and nothing was
+    /// started" (non-spawn modes, a stranger on the port). The caller holds the
+    /// "once", exactly as it does for `RaiseOnce`; a healthy tick re-arms it.
+    AnnounceDead { message: String },
+    /// One line for the shell's own transcript.
+    Log(String),
     /// Run `mcc-desktop --print-status` -- deliberately *not* on the tick path.
     Restatus,
     /// Run the install script for this machine.
@@ -574,49 +829,138 @@ impl Effect {
     /// together ("paint / navigate / spawn / nothing"). What is counted is the
     /// expensive, racy half -- a spawn, a `--print-status`, an installer, a
     /// download -- and there is never more than one of those on a tick.
+    ///
+    /// A rescue is on the expensive side. A notification is not: like
+    /// `RaiseOnce` it reaches the desktop rather than the server, and the tick
+    /// that starts the server after a rescue must be able to say why.
     pub fn acts(&self) -> bool {
         matches!(
             self,
-            Self::Spawn | Self::Restatus | Self::Install | Self::EnsureShell
+            Self::Spawn | Self::Restatus | Self::Install | Self::EnsureShell | Self::Rescue { .. }
         )
     }
 }
 
-/// Whether the port is held by one of our servers whose process is alive.
+/// The decision table of the rescue spec (section 2.2), for a tick on which
+/// nothing answered. Pure, and the only place "slow" and "dead" are told apart.
 ///
-/// Both halves matter and neither is enough. The classification alone is a
-/// cached answer from the last `--print-status` (or from the last healthy
-/// probe, via `remember_holder`), and a cached `OursHealthy` outlived the
-/// process it described on every one of the six restarts in the report. The
-/// pid alone cannot say whether the process is ours.
-pub fn live_holder(observation: &Observation) -> bool {
-    observation.holder.is_ours() && observation.holder_alive
-}
-
-/// Whether the server is *busy* rather than absent: ours, alive, and it
-/// answered inside [`Facts::busy_grace_seconds`].
+/// Until 7.71.0 the window decided "dead" from one failed probe plus a pid it
+/// had cached from a status document that a healthy answer never refreshed,
+/// and an unknown pid counted as dead -- so on 2026-09-28 at 14:40 one late
+/// answer from a busy server was enough to start a second server that killed
+/// it. The order below is the fix:
 ///
-/// Nothing is started or restarted while this is true, whatever the probe
-/// said. This is item (b) of decision I.
-pub fn busy_holder(observation: &Observation) -> bool {
-    live_holder(observation)
-        && observation
-            .seconds_since_healthy
-            .is_some_and(|seconds| seconds < observation.facts.busy_grace_seconds.max(0.0))
-}
-
-/// Whether "absent" has been established rather than merely sampled.
-///
-/// A live holder of ours must fail [`Facts::health_failure_threshold`]
-/// consecutive probes -- the README's row, finally implemented. Anything else
-/// (no holder, a foreign one, a holder whose pid is gone, a holder that
-/// cannot be identified) is confirmed on the first sample, exactly as today:
-/// a dead server is restarted on the same tick it always was.
-pub fn absent_confirmed(observation: &Observation) -> bool {
-    if !live_holder(observation) {
-        return true;
+/// 1. A server this window started under 15 s ago is watched, never judged
+///    (user answer 3).
+/// 2. **Anything the OS says about a held port is patience.** Held by the pid
+///    that last answered, or by a process identified as My Claude Code: slow.
+///    Held by something the lookup could not identify, or a lookup that
+///    failed: alive, be patient. Only a holder positively identified as NOT
+///    My Claude Code is foreign -- and foreign is never spawned over either.
+/// 3. Only a port the OS reported **free**, read after the last answer, can be
+///    dead -- and even then a completed handshake on this very tick (the OS
+///    disagreeing with itself) is patience.
+/// 4. Free, with a server known: its process gone is row 8; its process alive
+///    is row 9 (it lost its listener); a child of this window's that never
+///    once bound is row 11. Free with nothing known is a cold start.
+pub fn verdict(observation: &Observation) -> Verdict {
+    let grace = observation.facts.busy_grace_seconds.max(0.0);
+    if observation.since_last_start.is_some_and(|age| age < grace) {
+        return Verdict::InGrace;
     }
-    observation.consecutive_absent >= observation.facts.health_failure_threshold.max(1)
+    if !observation.listener_fresh && observation.known_alive == Some(false) {
+        // The OS answer predates the probe that failed, and the process it
+        // named is gone: it describes a port that no longer looks like that.
+        // Patience until it is re-read -- and never the sentence "it is
+        // running and still holds the port" about a process that has exited.
+        return Verdict::Slow(SlowReason::NotRecent);
+    }
+    match observation.listener {
+        Listener::Held { pid, mcc } => {
+            if pid.is_some() && pid == observation.known_pid {
+                return Verdict::Slow(SlowReason::Holds { pid });
+            }
+            match mcc {
+                Some(true) => Verdict::Slow(SlowReason::Holds { pid }),
+                Some(false) => Verdict::Foreign,
+                None => Verdict::Slow(SlowReason::CouldNotTell),
+            }
+        }
+        Listener::Unknown => Verdict::Slow(SlowReason::CouldNotTell),
+        Listener::Free => {
+            if !observation.listener_fresh {
+                return Verdict::Slow(SlowReason::NotRecent);
+            }
+            if observation.probe_connected {
+                return Verdict::Slow(SlowReason::Contradiction);
+            }
+            if observation.child_pid.is_some() && !observation.child_ever_bound {
+                return Verdict::Dead(DeadReason::NeverBound);
+            }
+            if !observation.knows_a_server() {
+                return Verdict::Free;
+            }
+            let gone = observation.known_alive == Some(false)
+                || (observation.known_pid.is_none() && observation.child_pid.is_none());
+            if gone {
+                Verdict::Dead(DeadReason::ProcessGone)
+            } else {
+                Verdict::Dead(DeadReason::ListenerLost)
+            }
+        }
+    }
+}
+
+/// Whether the verdict is SLOW: the one family no sequence of observations
+/// may turn into a spawn or a rescue.
+pub fn is_slow(verdict: Verdict) -> bool {
+    matches!(verdict, Verdict::Slow(_))
+}
+
+/// The whole start budget in seconds: the document's own
+/// `start_timeout_seconds * (server_start_retries + 1)` -- 60 s at the user's
+/// settings, 45 s at the shipped defaults.
+pub fn start_budget_seconds(facts: &Facts) -> f64 {
+    facts.start_timeout_seconds.max(1.0) * f64::from(facts.server_start_retries + 1)
+}
+
+/// Whether a dead reason has been looked at enough times, for long enough.
+///
+/// * Process gone (row 8): at once, exactly as 7.26.0 started a dead server.
+/// * Listener lost (row 9): `DESKTOP_HEALTH_FAILURE_THRESHOLD` agreeing checks
+///   spanning that many `DESKTOP_TICK_SECONDS` -- 3 checks, 30 s. An in-process
+///   reload closes and re-binds its own listener inside that, and is never
+///   touched.
+/// * Never bound (row 11, user answer 2): the same number of agreeing checks,
+///   spanning the WHOLE window from the end of the 15 s grace to the end of
+///   the start budget (safeguard c), and the child at least that old. One
+///   disagreeing check -- the port held, the lookup failed, an answer --
+///   leaves `Confirming`, so the span starts again from the next agreeing one.
+pub fn dead_is_confirmed(
+    observation: &Observation,
+    reason: DeadReason,
+    first: f64,
+    checks: u32,
+    now: f64,
+) -> bool {
+    let threshold = observation.facts.health_failure_threshold.max(1);
+    let span = now - first;
+    match reason {
+        DeadReason::ProcessGone => true,
+        DeadReason::ListenerLost => {
+            checks >= threshold
+                && span >= f64::from(threshold) * observation.facts.tick_seconds.max(1.0)
+        }
+        DeadReason::NeverBound => {
+            let budget = start_budget_seconds(&observation.facts);
+            let watched = (budget - observation.facts.busy_grace_seconds.max(0.0)).max(0.0);
+            checks >= threshold
+                && span >= watched
+                && observation
+                    .since_last_start
+                    .is_some_and(|age| age >= budget)
+        }
+    }
 }
 
 /// The timeout for the next probe, given how many have failed in a row.
@@ -637,8 +981,13 @@ pub fn probe_timeout_for(consecutive_absent: u32, ladder: &[f64]) -> Option<f64>
     Some(usable[index])
 }
 
-/// Whether a start may be made right now. The governor from §5.1, with Q4's
-/// amendment: no attempt cap, and the backoff is the tick.
+/// Whether a start may be made right now: the governor from §5.1, with Q4's
+/// amendment (no attempt cap; the backoff is the tick).
+///
+/// From 7.71.0 this is the governor ONLY. Whether the port is free -- the
+/// thing that used to be guessed here from a cached holder and a probe count
+/// -- is [`verdict`]'s, from the OS, and `step` asks this only after the
+/// verdict allows a start at all.
 pub fn may_start(observation: &Observation) -> bool {
     if !observation.fresh {
         return false;
@@ -646,22 +995,10 @@ pub fn may_start(observation: &Observation) -> bool {
     if observation.health != Health::Absent {
         return false;
     }
-    // The server answered a moment ago and its process is alive: it is busy,
-    // not gone. Nothing is started over it. (Decision I, 2026-09-18 21:25.)
-    if busy_holder(observation) {
-        return false;
-    }
-    // ...and even past the grace, one late answer is a sample, not a verdict.
-    if !absent_confirmed(observation) {
-        return false;
-    }
     if observation.child_alive {
         return false;
     }
     if matches!(observation.helper, Helper::Alive { .. }) {
-        return false;
-    }
-    if !observation.holder.allows_start() {
         return false;
     }
     if observation.facts.server_mode != "spawn" {
@@ -671,6 +1008,34 @@ pub fn may_start(observation: &Observation) -> bool {
         None => true,
         Some(waited) => waited >= observation.facts.start_backoff_seconds.max(1.0),
     }
+}
+
+/// Whether a rescue may be asked for right now.
+///
+/// The same governor as a start -- a fresh tick, no installer, spawn mode, the
+/// start backoff -- with two differences: a live child of this window's does
+/// not stop it (the rescue is how such a child is dealt with, by exact pid),
+/// and only one rescue runs at a time, never two inside one backoff.
+pub fn may_rescue(observation: &Observation) -> bool {
+    if !observation.fresh || observation.health != Health::Absent {
+        return false;
+    }
+    if matches!(observation.helper, Helper::Alive { .. }) {
+        return false;
+    }
+    if observation.facts.server_mode != "spawn" {
+        return false;
+    }
+    if matches!(observation.rescue, RescueProgress::Running) {
+        return false;
+    }
+    let backoff = observation.facts.start_backoff_seconds.max(1.0);
+    observation
+        .since_rescue
+        .is_none_or(|waited| waited >= backoff)
+        && observation
+            .since_last_start
+            .is_none_or(|waited| waited >= backoff)
 }
 
 /// Whether the environment behind `mcc-desktop` may be being replaced right
@@ -720,6 +1085,10 @@ fn foreign_confirmed(observation: &Observation) -> bool {
 /// problem while asking nothing about it. It costs nothing on the healthy
 /// path, which is the path BUG-4 was about, and nothing in the common absent
 /// case either: a tick that spawns drops the `Restatus` for it.
+///
+/// `Rescuing` is the second state that answers "never": the rescue command is
+/// re-reading the process table, the sockets and the session log itself, and
+/// a `--print-status` beside it would only be the same question twice.
 fn needs_restatus(state: &State, observation: &Observation) -> bool {
     if !observation.fresh {
         return false;
@@ -727,8 +1096,26 @@ fn needs_restatus(state: &State, observation: &Observation) -> bool {
     match state {
         State::Booting => true,
         State::Attached => observation.health == Health::Absent,
+        State::Rescuing { .. } => false,
         _ => observation.health != Health::Healthy,
     }
+}
+
+/// Whether a SLOW server's OS facts are due for another look.
+///
+/// Rescue spec row 5: while the probe keeps connecting and getting no answer,
+/// the holder is re-read at most every `reconnect_restatus_seconds` (30 s) --
+/// `netstat` on a busy machine is itself load, and the answer does not change
+/// while the handshake keeps completing. At once when the connect is refused
+/// (the port may have gone free), and at once for every other kind of
+/// patience: a lookup that failed is retried on the next tick (row 6).
+fn slow_restatus_due(observation: &Observation, reason: SlowReason) -> bool {
+    if !matches!(reason, SlowReason::Holds { .. }) || !observation.probe_connected {
+        return true;
+    }
+    observation
+        .since_restatus
+        .is_none_or(|seconds| seconds >= observation.facts.reconnect_restatus_seconds.max(1.0))
 }
 
 /// The whole state machine. Pure, total, and every arm has an outgoing edge.
@@ -876,18 +1263,32 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
         let mut effects = Vec::new();
         let attaching = !matches!(state, State::Attached);
         if attaching {
+            // Rescue spec row 1: a server that answers again after being busy
+            // is the SAME server, and the dashboard it rendered is still on
+            // screen -- reloading it is a full page load (two or three seconds
+            // of the server's own loop, and the next flap). The dashboard is
+            // navigated to only when the window is on a page of its own, or
+            // when the answer names a different process than the one the
+            // dashboard was loaded from.
+            let new_process = matches!(
+                (observation.answer_pid, observation.dashboard_pid),
+                (Some(answered), Some(loaded)) if answered != loaded
+            );
             effects.push(Effect::Attach {
                 admin_url: observation.facts.admin_url.clone(),
+                navigate: !observation.on_dashboard || new_process,
             });
             // Q3: the window comes forward once, when a restarted server first
             // answers. Never on the ordinary healthy tick, and never twice --
-            // the caller holds the "once".
+            // the caller holds the "once". A busy server that answers again
+            // was never restarted, so it raises nothing.
             if matches!(
                 state,
                 State::Reconnecting { .. }
                     | State::RestartPending { .. }
                     | State::Updating { .. }
                     | State::Draining { .. }
+                    | State::Rescuing { .. }
             ) {
                 effects.push(Effect::RaiseOnce);
             }
@@ -956,8 +1357,17 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
 
     match observation.health {
         Health::Healthy => unreachable!("handled above"),
+        // Rows 2 and 3: a server that answers -- starting or shutting down --
+        // is never rescued. Over the dashboard it is a banner, so a restart
+        // the dashboard itself asked for does not take the page away.
         Health::Draining => {
-            effects.push(Effect::Show(draining_page(observation)));
+            effects.push(if observation.on_dashboard {
+                Effect::Overlay {
+                    message: draining_overlay(observation),
+                }
+            } else {
+                Effect::Show(draining_page(observation))
+            });
             (
                 State::Draining {
                     since: since(state, now),
@@ -967,10 +1377,17 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
         }
         Health::Starting => {
             let attempts = attempts_of(state);
-            effects.push(Effect::Show(starting_page(
-                observation,
-                "The server is starting",
-            )));
+            effects.push(if observation.on_dashboard {
+                Effect::Overlay {
+                    message: format!(
+                        "The server on port {} is restarting and is still loading. The \
+                         dashboard comes back by itself the moment it answers.",
+                        observation.facts.port
+                    ),
+                }
+            } else {
+                Effect::Show(starting_page(observation, "The server is starting"))
+            });
             (
                 State::Starting {
                     since: since(state, now),
@@ -983,17 +1400,30 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
     }
 }
 
-/// The interesting half: nothing is answering. This is where Q4 lives.
+/// The interesting half: nothing is answering. Decided by [`verdict`], from
+/// the OS's facts; this function only turns a verdict into a page and, for a
+/// death the OS has proven, a rescue.
 fn step_absent(
     state: &State,
     observation: &Observation,
     now: f64,
     mut effects: Vec<Effect>,
 ) -> (State, Vec<Effect>) {
-    // A genuinely foreign holder, past its grace. The only thing here that
-    // stops a start -- and it still re-checks every tick.
+    // A rescue in flight, or the tick that hears it finished.
+    if let State::Rescuing { since: started } = state {
+        return step_rescuing(*started, observation, now, effects);
+    }
+
+    // A genuinely foreign holder, past its grace (row 7). The conflict page and
+    // one announcement; never a start, never a stop -- and it still re-checks
+    // every tick.
     if foreign_confirmed(observation) {
         effects.push(Effect::Show(port_conflict_page(observation)));
+        if observation.fresh {
+            effects.push(Effect::AnnounceDead {
+                message: foreign_sentence(observation),
+            });
+        }
         return (
             State::Blocked {
                 reason: Blocked::ForeignPort,
@@ -1002,16 +1432,86 @@ fn step_absent(
         );
     }
 
+    // The post-update path, named. The helper is gone, it wrote its terminal
+    // stage, and nothing is answering -- so a free port is started on at once,
+    // as before: the helper stopped the old server on purpose, and there is
+    // nothing to rescue.
+    let post_update = matches!(state, State::Updating { .. } | State::RestartPending { .. })
+        || matches!(observation.helper, Helper::Finished { .. });
+
+    match verdict(observation) {
+        Verdict::Slow(reason) => {
+            // Rows 5, 6, 6b: the dashboard stays, under a banner. Nothing is
+            // reloaded, started or stopped, however long this lasts.
+            if !slow_restatus_due(observation, reason) {
+                effects.retain(|effect| *effect != Effect::Restatus);
+            }
+            effects.push(Effect::Overlay {
+                message: slow_message(observation, reason),
+            });
+            (
+                State::Busy {
+                    since: since(state, now),
+                },
+                effects,
+            )
+        }
+        Verdict::Foreign => {
+            // Row 7 inside its grace: say what is being checked, start nothing.
+            effects.push(Effect::Show(Page::Reconnecting {
+                message: foreign_waiting_message(observation),
+            }));
+            (
+                State::Reconnecting {
+                    since: since(state, now),
+                },
+                effects,
+            )
+        }
+        Verdict::InGrace => {
+            // Row 4 (user answer 3): watched, never acted on. The page still
+            // tells the truth once the budget is spent.
+            effects.push(Effect::Show(if start_budget_spent(observation) {
+                server_failed_page(observation)
+            } else {
+                starting_page(
+                    observation,
+                    &format!(
+                        "Started the server; giving it {:.0} s before anything counts against it",
+                        observation.facts.busy_grace_seconds
+                    ),
+                )
+            }));
+            (
+                State::Starting {
+                    since: since(state, now),
+                    attempts: attempts_of(state),
+                },
+                effects,
+            )
+        }
+        Verdict::Free => step_free(state, observation, now, effects, post_update),
+        Verdict::Dead(reason) if post_update && reason != DeadReason::NeverBound => {
+            step_free(state, observation, now, effects, true)
+        }
+        Verdict::Dead(reason) => step_dead(state, observation, now, effects, reason),
+    }
+}
+
+/// A port the OS reports free and a server that is not there to be replaced:
+/// a cold start, the start after an update, or a child that exited before it
+/// ever bound. Decision Q4, unchanged: started on the tick, for ever, with the
+/// page telling the truth once the budget is spent.
+fn step_free(
+    state: &State,
+    observation: &Observation,
+    now: f64,
+    mut effects: Vec<Effect>,
+    post_update: bool,
+) -> (State, Vec<Effect>) {
     // Not this window's server to start.
     if observation.facts.server_mode != "spawn" {
-        effects.push(Effect::Show(Page::NotOurServer {
-            message: format!(
-                "The server is not running. Server mode is {}, so this window will not \
-                 start one; run mcc-server yourself, or switch to spawn in the dashboard. \
-                 Re-checking every {:.0} seconds.",
-                observation.facts.server_mode, observation.facts.tick_seconds
-            ),
-        }));
+        effects.push(Effect::Show(not_our_server_page(observation, None)));
         return (
             State::Blocked {
                 reason: Blocked::NotOurServer {
@@ -1021,32 +1521,6 @@ fn step_absent(
             effects,
         );
     }
-
-    // Ours, alive, and it answered inside the grace. The server is working,
-    // not missing: say so and touch nothing. The `Restatus` `step` already
-    // pushed is deliberately KEPT here -- a spawning tick drops it, and this
-    // tick does not spawn, so the next tick decides on a fresh process-based
-    // classification instead of a cached `OursHealthy`.
-    // ...and the same page while a live holder of ours is still inside the
-    // failure threshold. Nothing is being started in that window either, and
-    // "Reconnecting..." over a server whose process is alive and which
-    // answered a few seconds ago is the window saying something untrue.
-    if live_holder(observation) && (busy_holder(observation) || !absent_confirmed(observation)) {
-        effects.push(Effect::Show(busy_page(observation)));
-        return (
-            State::Reconnecting {
-                since: since(state, now),
-            },
-            effects,
-        );
-    }
-
-    // The post-update path, named. The helper is gone, it wrote its terminal
-
-    // stage, and nothing is answering -- so this tick spawns. No reload, no
-    // button, no other path involved.
-    let post_update = matches!(state, State::Updating { .. } | State::RestartPending { .. })
-        || matches!(observation.helper, Helper::Finished { .. });
 
     if may_start(observation) {
         effects.retain(|effect| !effect.acts());
@@ -1093,7 +1567,10 @@ fn step_absent(
         );
     }
 
-    let was_attached = matches!(state, State::Attached | State::Reconnecting { .. });
+    let was_attached = matches!(
+        state,
+        State::Attached | State::Reconnecting { .. } | State::Busy { .. }
+    );
     if was_attached && !start_budget_spent(observation) {
         effects.push(Effect::Show(reconnecting_page(observation)));
         return (
@@ -1118,6 +1595,214 @@ fn step_absent(
     )
 }
 
+/// Rows 8, 9 and 11: nothing listens, by a fresh OS answer, and a server this
+/// window knows of is dead -- its process gone, alive without its port, or a
+/// child of ours that never opened it.
+///
+/// Each reason is confirmed on fresh ticks only ([`dead_is_confirmed`]); the
+/// count lives in `State::Confirming`, so a disagreeing tick -- which lands in
+/// any other state -- is the reset. Once confirmed: in spawn mode the rescue,
+/// in any other mode the page and one announcement. Never a direct spawn: the
+/// spawn comes from the rescue's own report that the port is free.
+fn step_dead(
+    state: &State,
+    observation: &Observation,
+    now: f64,
+    mut effects: Vec<Effect>,
+    reason: DeadReason,
+) -> (State, Vec<Effect>) {
+    let (first, checks) = match state {
+        State::Confirming {
+            reason: held,
+            first,
+            checks,
+            ..
+        } if *held == reason => (
+            *first,
+            if observation.fresh {
+                checks.saturating_add(1)
+            } else {
+                *checks
+            },
+        ),
+        _ => (now, u32::from(observation.fresh)),
+    };
+    if checks == 0 {
+        // A paint tick on the way in: it repaints and counts nothing.
+        effects.push(confirming_effect(observation, reason, 0, now, now));
+        return (state.clone(), effects);
+    }
+    let confirming = State::Confirming {
+        reason,
+        first,
+        checks,
+        since: since(state, now),
+    };
+    if !dead_is_confirmed(observation, reason, first, checks, now) {
+        effects.push(confirming_effect(observation, reason, checks, first, now));
+        return (confirming, effects);
+    }
+    let sentence = dead_sentence(
+        &observation.facts,
+        reason,
+        observation.known_pid,
+        observation.child_pid,
+    );
+    if observation.facts.server_mode != "spawn" {
+        // Report only (spec section 2.2's pre-emption): the page, and one
+        // announcement per outage. Nothing is started and nothing is stopped.
+        effects.push(Effect::Show(not_our_server_page(
+            observation,
+            Some(&sentence),
+        )));
+        if observation.fresh {
+            effects.push(Effect::AnnounceDead {
+                message: format!(
+                    "{sentence} Server mode is {}, so this app does not start one, and \
+                     nothing was stopped.",
+                    observation.facts.server_mode
+                ),
+            });
+        }
+        return (
+            State::Blocked {
+                reason: Blocked::NotOurServer {
+                    server_mode: observation.facts.server_mode.clone(),
+                },
+            },
+            effects,
+        );
+    }
+    if may_rescue(observation) {
+        effects.retain(|effect| !effect.acts());
+        effects.push(Effect::Rescue {
+            known_pid: observation.known_pid,
+            child_pid: observation.child_pid,
+            reason,
+        });
+        effects.push(Effect::Log(format!(
+            "-- rescue asked for ({}): {sentence} --",
+            reason.as_arg()
+        )));
+        effects.push(Effect::Show(rescuing_page(observation, 0.0)));
+        return (State::Rescuing { since: now }, effects);
+    }
+    // Proven, and not this tick: the backoff, or a rescue still finishing.
+    effects.push(Effect::Show(Page::Reconnecting {
+        message: format!(
+            "{sentence} It is replaced automatically -- nothing here needs clicking ({}).",
+            cadence_tail(observation)
+        ),
+    }));
+    (confirming, effects)
+}
+
+/// `State::Rescuing`: the rescue is running, or this is the tick that hears it
+/// has finished.
+fn step_rescuing(
+    started: f64,
+    observation: &Observation,
+    now: f64,
+    mut effects: Vec<Effect>,
+) -> (State, Vec<Effect>) {
+    effects.retain(|effect| *effect != Effect::Restatus);
+    let outcome = match &observation.rescue {
+        RescueProgress::Running => {
+            effects.push(Effect::Show(rescuing_page(observation, now - started)));
+            return (State::Rescuing { since: started }, effects);
+        }
+        RescueProgress::Idle => {
+            // The caller lost the rescue (it never reports this today). Back to
+            // the facts, asking again.
+            if observation.fresh {
+                effects.push(Effect::Restatus);
+            }
+            effects.push(Effect::Show(reconnecting_page(observation)));
+            return (State::Reconnecting { since: now }, effects);
+        }
+        RescueProgress::Done(outcome) => outcome,
+    };
+    match outcome.result {
+        RescueResult::PortFree | RescueResult::Unsupported => {
+            if !observation.fresh {
+                // The spawn belongs to a fresh tick, like every spawn; the
+                // caller forces one the moment a rescue reports.
+                effects.push(Effect::Show(rescuing_page(observation, now - started)));
+                return (State::Rescuing { since: started }, effects);
+            }
+            if observation.child_alive {
+                // The rescue left this window's own server running (it held a
+                // socket somewhere, or it re-bound): never start a second one
+                // beside it. Watch it instead.
+                effects.push(Effect::Log(format!(
+                    "-- rescue finished, but this window's own server (pid {}) is still \
+                     running; watching it rather than starting another --",
+                    observation
+                        .child_pid
+                        .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string())
+                )));
+                effects.push(Effect::Show(starting_page(
+                    observation,
+                    "Waiting for the server this window started",
+                )));
+                return (
+                    State::Starting {
+                        since: now,
+                        attempts: 0,
+                    },
+                    effects,
+                );
+            }
+            if observation.facts.server_mode != "spawn" {
+                effects.push(Effect::Show(not_our_server_page(observation, None)));
+                return (
+                    State::Blocked {
+                        reason: Blocked::NotOurServer {
+                            server_mode: observation.facts.server_mode.clone(),
+                        },
+                    },
+                    effects,
+                );
+            }
+            effects.push(Effect::Spawn);
+            effects.push(Effect::Notify {
+                message: rescue_sentence(outcome, &observation.facts),
+            });
+            effects.push(Effect::Show(starting_page(
+                observation,
+                &format!(
+                    "Started a new server; giving it {:.0} s",
+                    observation.facts.busy_grace_seconds
+                ),
+            )));
+            (
+                State::Starting {
+                    since: now,
+                    attempts: 1,
+                },
+                effects,
+            )
+        }
+        RescueResult::Refused | RescueResult::Failed => {
+            // Not proven after all, or not finished: nothing was started, and
+            // the next fresh tick decides from fresh facts (row 12).
+            effects.push(Effect::Log(format!(
+                "-- rescue did not go ahead ({}): {} -- nothing was started --",
+                match outcome.result {
+                    RescueResult::Refused => "refused",
+                    _ => "failed",
+                },
+                outcome.detail.trim()
+            )));
+            if observation.fresh {
+                effects.push(Effect::Restatus);
+            }
+            effects.push(Effect::Show(reconnecting_page(observation)));
+            (State::Reconnecting { since: now }, effects)
+        }
+    }
+}
+
 /// Keep the `since` of a state we are already in, and stamp `now` otherwise.
 fn since(state: &State, now: f64) -> f64 {
     match state {
@@ -1125,7 +1810,10 @@ fn since(state: &State, now: f64) -> f64 {
         | State::Reconnecting { since }
         | State::Draining { since }
         | State::Updating { since }
-        | State::RestartPending { since } => *since,
+        | State::RestartPending { since }
+        | State::Busy { since }
+        | State::Confirming { since, .. }
+        | State::Rescuing { since } => *since,
         _ => now,
     }
 }
@@ -1287,8 +1975,7 @@ pub fn start_budget_spent(observation: &Observation) -> bool {
     if observation.start_attempts >= START_ATTEMPTS_BEFORE_THE_TRUTH {
         return true;
     }
-    let per_attempt = observation.facts.start_timeout_seconds.max(1.0);
-    let budget = per_attempt * f64::from(observation.facts.server_start_retries + 1);
+    let budget = start_budget_seconds(&observation.facts);
     observation
         .since_first_start
         .is_some_and(|elapsed| elapsed >= budget)
@@ -1441,16 +2128,286 @@ fn starting_page(observation: &Observation, lead: &str) -> Page {
     }
 }
 
-/// What the window says while the server is busy rather than gone.
-fn busy_page(observation: &Observation) -> Page {
-    let waited = observation.seconds_since_healthy.unwrap_or(0.0).max(0.0);
-    Page::Busy {
-        message: format!(
-            "The server is busy ({waited:.0} s since it last answered). It is alive and \
-             working -- a long operation is holding it up. Nothing is being restarted; \
-             this window keeps checking (last checked {} ago).",
-            seconds(observation.since_probe)
+/// "for 37 s", or "yet" for a server this window has never heard from.
+fn silent_for(observation: &Observation) -> String {
+    observation.seconds_since_healthy.map_or_else(
+        || "yet".to_owned(),
+        |waited| format!("for {}", duration(waited)),
+    )
+}
+
+/// The busy banner over the dashboard (rows 5, 6, 6b). Plain words: what the
+/// OS said, and the promise that matters -- nothing is restarted while it is
+/// true.
+pub fn slow_message(observation: &Observation, reason: SlowReason) -> String {
+    let port = observation.facts.port;
+    let silent = silent_for(observation);
+    let checked = seconds(observation.since_probe);
+    match reason {
+        SlowReason::Holds { pid: Some(pid) } => format!(
+            "The server is busy: it is running (process {pid}) and still holds port {port}, \
+             but has not answered {silent}. Nothing will be restarted while that is true. \
+             Last checked {checked} ago."
         ),
+        SlowReason::Holds { pid: None } => format!(
+            "The server is busy: My Claude Code still holds port {port}, but has not \
+             answered {silent}. Nothing will be restarted while that is true. Last checked \
+             {checked} ago."
+        ),
+        SlowReason::CouldNotTell => format!(
+            "The server has not answered {silent}, and this app could not check which \
+             process holds port {port} (the check failed or timed out), so it is treating \
+             the server as alive. Nothing will be restarted. Last checked {checked} ago."
+        ),
+        SlowReason::Contradiction => format!(
+            "The server accepted the connection on port {port} but has not answered \
+             {silent}. It is treated as busy; nothing will be restarted. Last checked \
+             {checked} ago."
+        ),
+        SlowReason::NotRecent => format!(
+            "The server has not answered {silent}. Checking which process holds port \
+             {port}; nothing is restarted while that is unknown. Last checked {checked} ago."
+        ),
+    }
+}
+
+/// Row 3 over the dashboard: the server is leaving on purpose.
+fn draining_overlay(observation: &Observation) -> String {
+    format!(
+        "The server on port {} is shutting down and finishing its open requests. This \
+         app waits for it; it is never replaced while it is still answering.",
+        observation.facts.port
+    )
+}
+
+/// Row 7 inside its grace: a stranger on the port, not called one yet.
+fn foreign_waiting_message(observation: &Observation) -> String {
+    format!(
+        "Port {} is held by {}, which does not look like My Claude Code. This app is \
+         checking again before it says so; it never stops another program ({}).",
+        observation.facts.port,
+        holder_phrase(observation),
+        cadence_tail(observation)
+    )
+}
+
+/// One announcement for a stranger on the port, past its grace.
+pub fn foreign_sentence(observation: &Observation) -> String {
+    format!(
+        "Port {} is held by {}, which is not My Claude Code. Nothing was stopped; this \
+         app re-checks every {:.0} s and starts the server itself once the port is free.",
+        observation.facts.port,
+        holder_phrase(observation),
+        observation.facts.tick_seconds
+    )
+}
+
+/// The port holder in words, from Python's own answer.
+fn holder_phrase(observation: &Observation) -> String {
+    match (
+        observation.facts.holder_image.as_deref(),
+        observation.facts.holder_pid,
+    ) {
+        (Some(image), Some(pid)) => format!("{image} (pid {pid})"),
+        (Some(image), None) => image.to_owned(),
+        (None, Some(pid)) => format!("pid {pid}"),
+        (None, None) => "another program".to_owned(),
+    }
+}
+
+/// The page for a server that is not this window's to start.
+fn not_our_server_page(observation: &Observation, dead: Option<&str>) -> Page {
+    let lead = dead.map_or_else(|| "The server is not running.".to_owned(), str::to_owned);
+    Page::NotOurServer {
+        message: format!(
+            "{lead} Server mode is {}, so this window will not start one; run mcc-server \
+             yourself, or switch to spawn in the dashboard. Re-checking every {:.0} seconds.",
+            observation.facts.server_mode, observation.facts.tick_seconds
+        ),
+    }
+}
+
+/// What a death IS, in one sentence: which process, and what the OS said.
+/// The first half of every rescue notification, and the whole of the
+/// announcement in a mode that starts nothing.
+pub fn dead_sentence(
+    facts: &Facts,
+    reason: DeadReason,
+    known_pid: Option<i64>,
+    child_pid: Option<i64>,
+) -> String {
+    let port = facts.port;
+    match reason {
+        DeadReason::ProcessGone => match known_pid {
+            Some(pid) => format!(
+                "The My Claude Code server on port {port} stopped answering: process {pid} \
+                 has exited."
+            ),
+            None => format!(
+                "The My Claude Code server on port {port} stopped answering, and nothing \
+                 is listening on the port any more."
+            ),
+        },
+        DeadReason::ListenerLost => match known_pid.or(child_pid) {
+            Some(pid) => format!(
+                "The My Claude Code server on port {port} stopped answering: process {pid} \
+                 is still running but no longer holds the port, so it cannot take requests."
+            ),
+            None => format!(
+                "The My Claude Code server on port {port} stopped answering: nothing holds \
+                 the port, and the server this app knew of is still running without it."
+            ),
+        },
+        DeadReason::NeverBound => {
+            let who = child_pid.map_or_else(String::new, |pid| format!(" (process {pid})"));
+            format!(
+                "The server this app started{who} has been running for {} without ever \
+                 opening port {port}.",
+                duration(start_budget_seconds(facts))
+            )
+        }
+    }
+}
+
+/// "pid 4242" or "pids 4242, 4243".
+fn pid_list(pids: &[i64]) -> String {
+    let joined = pids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if pids.len() == 1 {
+        format!("pid {joined}")
+    } else {
+        format!("pids {joined}")
+    }
+}
+
+/// The notification every rescue ends in (decision R6, safeguard f): what
+/// was dead, what was stopped and why, and what happens next. One sentence
+/// group, the same in the toast, in the window and in the shell log.
+pub fn rescue_sentence(outcome: &RescueOutcome, facts: &Facts) -> String {
+    let mut text = dead_sentence(facts, outcome.reason, outcome.known_pid, outcome.child_pid);
+    let exited: Vec<i64> = outcome
+        .servers
+        .iter()
+        .filter(|server| server.exited_by_itself)
+        .flat_map(|server| server.pids.iter().copied())
+        .collect();
+    let stopped: Vec<i64> = outcome
+        .servers
+        .iter()
+        .filter(|server| !server.exited_by_itself)
+        .flat_map(|server| server.pids.iter().copied())
+        .collect();
+    let wait = duration(outcome.stop_wait_seconds);
+    if !exited.is_empty() {
+        text.push_str(&format!(
+            " It finished its open requests and exited by itself ({}).",
+            pid_list(&exited)
+        ));
+    }
+    if !stopped.is_empty() {
+        let why = match outcome.reason {
+            DeadReason::NeverBound => "it never opened the port",
+            DeadReason::ListenerLost => "it had lost its port",
+            DeadReason::ProcessGone => "its server process was gone",
+        };
+        text.push_str(&format!(
+            " It was given {wait} to finish and exit by itself and did not, so it was \
+             stopped by process id because {why} ({}).",
+            pid_list(&stopped)
+        ));
+    }
+    if exited.is_empty() && stopped.is_empty() && outcome.result == RescueResult::PortFree {
+        text.push_str(" Nothing needed stopping.");
+    }
+    if !outcome.left_alone.is_empty() {
+        text.push_str(&format!(
+            " Left running, because it does not belong to this port and configuration \
+             folder: {}.",
+            pid_list(&outcome.left_alone)
+        ));
+    }
+    match outcome.result {
+        RescueResult::Unsupported => text.push_str(
+            " The installed My Claude Code is older than 7.71.0 and cannot check for old \
+             servers, so nothing was stopped. A new server is starting.",
+        ),
+        _ => text.push_str(" A new server is starting."),
+    }
+    text
+}
+
+/// The page while a rescue runs.
+fn rescuing_page(observation: &Observation, elapsed: f64) -> Page {
+    Page::Rescuing {
+        message: format!(
+            "Replacing the server on port {}. Waiting up to {} for the old server to \
+             finish its open requests and exit by itself; anything of it still running \
+             after that is stopped by its exact process id, then a new server is started \
+             ({} so far). Only My Claude Code servers of this port and this configuration \
+             folder are ever touched.",
+            observation.facts.port,
+            duration(observation.facts.server_stop_wait_seconds),
+            duration(elapsed)
+        ),
+    }
+}
+
+/// What a dead reason that is still being confirmed shows.
+fn confirming_effect(
+    observation: &Observation,
+    reason: DeadReason,
+    checks: u32,
+    first: f64,
+    now: f64,
+) -> Effect {
+    let threshold = observation.facts.health_failure_threshold.max(1);
+    match reason {
+        DeadReason::ListenerLost => {
+            let message = format!(
+                "The server is not answering and nothing is listening on port {} (check {} \
+                 of {threshold}, {} so far). {} If that is still true after {}, it is given \
+                 {} to finish and is then replaced.",
+                observation.facts.port,
+                checks.max(1),
+                duration((now - first).max(0.0)),
+                match observation.known_pid.or(observation.child_pid) {
+                    Some(pid) => format!("Process {pid} is still running -- it lost its port."),
+                    None => "Its process is still running -- it lost its port.".to_owned(),
+                },
+                duration(f64::from(threshold) * observation.facts.tick_seconds.max(1.0)),
+                duration(observation.facts.server_stop_wait_seconds)
+            );
+            if observation.on_dashboard {
+                Effect::Overlay { message }
+            } else {
+                Effect::Show(Page::Reconnecting { message })
+            }
+        }
+        DeadReason::NeverBound => Effect::Show(if start_budget_spent(observation) {
+            server_failed_page(observation)
+        } else {
+            // Row 10: still coming up. The countdown a cold start shows ("next
+            // start attempt in N s") would be untrue here -- nothing is started
+            // beside a child that is alive -- so the page says what is watched.
+            Page::Starting {
+                message: format!(
+                    "Starting the My Claude Code server... process {} has not opened \
+                     port {} yet ({} of its {} start budget; if it never does, it is \
+                     stopped and started again). Last checked {} ago.",
+                    observation
+                        .child_pid
+                        .map_or_else(|| "?".to_owned(), |pid| pid.to_string()),
+                    observation.facts.port,
+                    duration(observation.since_last_start.unwrap_or(0.0)),
+                    duration(start_budget_seconds(&observation.facts)),
+                    seconds(observation.since_probe)
+                ),
+            }
+        }),
+        DeadReason::ProcessGone => Effect::Show(reconnecting_page(observation)),
     }
 }
 
@@ -1505,15 +2462,7 @@ fn updating_page(stage: Option<&str>, observation: &Observation) -> Page {
 }
 
 fn port_conflict_page(observation: &Observation) -> Page {
-    let holder = match (
-        observation.facts.holder_image.as_deref(),
-        observation.facts.holder_pid,
-    ) {
-        (Some(image), Some(pid)) => format!("{image} (pid {pid})"),
-        (Some(image), None) => image.to_owned(),
-        (None, Some(pid)) => format!("pid {pid}"),
-        (None, None) => "another program".to_owned(),
-    };
+    let holder = holder_phrase(observation);
     Page::PortConflict {
         message: format!(
             "Port {} is held by {holder}, which is not My Claude Code. Stop it, or \
@@ -1542,9 +2491,24 @@ mod tests {
             health,
             holder: Holder::Absent,
             holder_age: 0.0,
-            holder_alive: false,
             seconds_since_healthy: None,
             consecutive_absent: 1,
+            // A refused connect on a port the OS just reported free, with no
+            // server known: the cold start every pre-7.71.0 test assumed.
+            probe_connected: false,
+            listener: Listener::Free,
+            listener_fresh: true,
+            known_pid: None,
+            known_alive: None,
+            child_pid: None,
+            child_ever_bound: false,
+            answer_pid: None,
+            busy_header: false,
+            on_dashboard: false,
+            dashboard_pid: None,
+            rescue: RescueProgress::Idle,
+            since_rescue: None,
+            since_restatus: None,
 
             helper: Helper::None,
             update: UpdateNarration::default(),
@@ -1596,6 +2560,20 @@ mod tests {
                     attempts: INSTALL_ATTEMPTS,
                 },
             },
+            State::Busy { since: 0.0 },
+            State::Confirming {
+                reason: DeadReason::ListenerLost,
+                first: 0.0,
+                checks: 1,
+                since: 0.0,
+            },
+            State::Confirming {
+                reason: DeadReason::NeverBound,
+                first: 0.0,
+                checks: 2,
+                since: 0.0,
+            },
+            State::Rescuing { since: 0.0 },
         ]
     }
 
@@ -1609,19 +2587,90 @@ mod tests {
             ("ours-draining", observation(Health::Draining)),
         ];
 
+        let stranger = Listener::Held {
+            pid: Some(31337),
+            mcc: Some(false),
+        };
         let mut foreign = observation(Health::Absent);
         foreign.holder = Holder::Foreign;
+        foreign.listener = stranger;
         foreign.holder_age = 600.0;
         cases.push(("foreign-confirmed", foreign));
 
         let mut fresh_foreign = observation(Health::Absent);
         fresh_foreign.holder = Holder::Foreign;
+        fresh_foreign.listener = stranger;
         fresh_foreign.holder_age = 1.0;
         cases.push(("foreign-unconfirmed", fresh_foreign));
 
         let mut stale = observation(Health::Absent);
         stale.holder = Holder::OursStale;
+        stale.listener = Listener::Held {
+            pid: Some(4242),
+            mcc: Some(true),
+        };
         cases.push(("ours-stale", stale));
+
+        // -- 7.71.0's classes: the rescue spec's facts ---------------------
+        let mut slow = observation(Health::Absent);
+        slow.probe_connected = true;
+        slow.known_pid = Some(4242);
+        slow.known_alive = Some(true);
+        slow.seconds_since_healthy = Some(40.0);
+        slow.listener = Listener::Held {
+            pid: Some(4242),
+            mcc: Some(true),
+        };
+        slow.on_dashboard = true;
+        cases.push(("slow", slow));
+
+        let mut unknown = observation(Health::Absent);
+        unknown.listener = Listener::Unknown;
+        cases.push(("lookup-failed", unknown));
+
+        let mut gone = observation(Health::Absent);
+        gone.known_pid = Some(4242);
+        gone.known_alive = Some(false);
+        gone.seconds_since_healthy = Some(3.0);
+        cases.push(("process-gone", gone));
+
+        let mut lost = observation(Health::Absent);
+        lost.known_pid = Some(4242);
+        lost.known_alive = Some(true);
+        lost.seconds_since_healthy = Some(3.0);
+        cases.push(("listener-lost", lost));
+
+        let mut unbound = observation(Health::Absent);
+        unbound.child_alive = true;
+        unbound.child_pid = Some(7001);
+        unbound.since_last_start = Some(70.0);
+        cases.push(("child-never-bound", unbound));
+
+        let mut port_free = observation(Health::Absent);
+        port_free.rescue = RescueProgress::Done(RescueOutcome {
+            result: RescueResult::PortFree,
+            reason: DeadReason::ProcessGone,
+            known_pid: Some(4242),
+            child_pid: None,
+            servers: Vec::new(),
+            left_alone: Vec::new(),
+            detail: String::new(),
+            stop_wait_seconds: 24.0,
+        });
+        cases.push(("rescue-port-free", port_free));
+
+        let mut refused = observation(Health::Absent);
+        refused.rescue = RescueProgress::Done(RescueOutcome {
+            result: RescueResult::Refused,
+            reason: DeadReason::ListenerLost,
+            known_pid: Some(4242),
+            child_pid: None,
+            servers: Vec::new(),
+            left_alone: Vec::new(),
+            detail: "held".to_owned(),
+            stop_wait_seconds: 24.0,
+        });
+        cases.push(("rescue-refused", refused));
 
         let mut helper = observation(Health::Absent);
         helper.helper = Helper::Alive {
@@ -1704,290 +2753,1050 @@ mod tests {
         cases
     }
 
-    // -- I-1: a busy server is not an absent one (2026-09-18) --------------
+    // -- 7.71.0: the decision table of the rescue spec, one test per row -----
+    //
+    // Rows are the spec's section 2.2; safeguards (a)-(f) are user answer 2
+    // of 2026-10-01 16:24. Every test drives `step` and nothing else.
 
-    /// The world at the moment of the reported bug: our own server, pid
-    /// alive, answering four milliseconds ago until this probe.
-    fn busy(consecutive_absent: u32, since_healthy: f64) -> Observation {
+    /// The server this window was attached to, pid 4242, which answered
+    /// until twelve seconds ago, with the dashboard it rendered on screen.
+    fn known(listener: Listener) -> Observation {
         let mut observation = observation(Health::Absent);
-        observation.holder = Holder::OursHealthy;
-        observation.holder_alive = true;
-        observation.seconds_since_healthy = Some(since_healthy);
-        observation.consecutive_absent = consecutive_absent;
+        observation.known_pid = Some(4242);
+        observation.known_alive = Some(true);
+        observation.seconds_since_healthy = Some(12.0);
+        observation.listener = listener;
+        observation.listener_fresh = true;
+        observation.on_dashboard = true;
+        observation.dashboard_pid = Some(4242);
         observation
     }
 
-    #[test]
-    fn a_live_holder_of_ours_is_absent_only_after_three_failed_probes() {
-        // The README has promised this row since 6.61.0 and the Rust
-        // controller never implemented it: "Was healthy, now failing, under
-        // health_failure_threshold -> Nothing at all."
-        for failures in 1..=2 {
-            let observation = busy(failures, 600.0);
-            assert!(
-                !absent_confirmed(&observation),
-                "{failures} failed probe(s) must not be enough to call a live \
-                 server absent"
-            );
-            assert!(!may_start(&observation), "{failures}");
+    /// Slow, exactly as 2026-09-28 14:40: the loop is held, the kernel still
+    /// completes the handshake, and the OS says pid 4242 holds the port.
+    fn slow() -> Observation {
+        let mut observation = known(Listener::Held {
+            pid: Some(4242),
+            mcc: Some(true),
+        });
+        observation.probe_connected = true;
+        observation
+    }
+
+    /// A child of this window's, pid 7001, alive, never bound, `age` seconds
+    /// old, on a port the OS keeps reporting free. The user's 60 s budget.
+    fn unbound_child(age: f64) -> Observation {
+        let mut observation = observation(Health::Absent);
+        observation.child_alive = true;
+        observation.child_pid = Some(7001);
+        observation.since_last_start = Some(age);
+        observation.since_first_start = Some(age);
+        observation.start_attempts = 1;
+        observation.facts.start_timeout_seconds = 20.0;
+        observation.facts.server_start_retries = 2;
+        observation
+    }
+
+    fn acts_on_a_server(effects: &[Effect]) -> bool {
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Spawn | Effect::Rescue { .. }))
+    }
+
+    fn rescue_in(effects: &[Effect]) -> Option<(Option<i64>, Option<i64>, DeadReason)> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::Rescue {
+                known_pid,
+                child_pid,
+                reason,
+            } => Some((*known_pid, *child_pid, *reason)),
+            _ => None,
+        })
+    }
+
+    fn outcome(
+        result: RescueResult,
+        reason: DeadReason,
+        servers: Vec<StoppedServer>,
+    ) -> RescueOutcome {
+        RescueOutcome {
+            result,
+            reason,
+            known_pid: Some(4242),
+            child_pid: None,
+            servers,
+            left_alone: Vec::new(),
+            detail: String::new(),
+            stop_wait_seconds: 24.0,
         }
-        let confirmed = busy(3, 600.0);
-        assert!(absent_confirmed(&confirmed));
-        assert!(
-            may_start(&confirmed),
-            "three failed probes past the grace is the whole tolerance; the \
-             server must still be started after it"
-        );
+    }
+
+    /// Fresh ticks `every` seconds apart, from `state` at `start`; every effect
+    /// they produced, in order, and the state they ended in.
+    fn run_ticks(
+        mut state: State,
+        observation: &Observation,
+        start: f64,
+        every: f64,
+        ticks: u32,
+    ) -> (State, Vec<(f64, Effect)>) {
+        let mut seen = Vec::new();
+        for tick in 0..ticks {
+            let now = start + every * f64::from(tick);
+            let (next, effects) = step(&state, observation, now);
+            seen.extend(effects.into_iter().map(|effect| (now, effect)));
+            state = next;
+        }
+        (state, seen)
     }
 
     #[test]
-    fn the_probe_timeouts_escalate_five_ten_fifteen_and_then_stay_at_fifteen() {
-        let ladder = default_probe_timeouts();
-        assert_eq!(probe_timeout_for(0, &ladder), Some(5.0));
-        assert_eq!(probe_timeout_for(1, &ladder), Some(10.0));
-        assert_eq!(probe_timeout_for(2, &ladder), Some(15.0));
-        assert_eq!(probe_timeout_for(3, &ladder), Some(15.0));
-        assert_eq!(probe_timeout_for(99, &ladder), Some(15.0));
-        // A document that carries no ladder leaves the caller's own timeout
-        // alone rather than inventing one (C9).
-        assert_eq!(probe_timeout_for(0, &[]), None);
-        assert_eq!(probe_timeout_for(0, &[0.0, -1.0]), None);
+    fn row_1_a_healthy_answer_attaches_without_reloading_the_same_server() {
+        // The self-inflicted load investigation's decision 3: a server that
+        // answers again after being busy is the SAME server, and its dashboard
+        // is still on screen. Reloading it was a full page load per flap.
+        let mut back = observation(Health::Healthy);
+        back.on_dashboard = true;
+        back.dashboard_pid = Some(4242);
+        back.answer_pid = Some(4242);
+        let (next, effects) = step(&State::Busy { since: 0.0 }, &back, 40.0);
+        assert_eq!(next, State::Attached);
+        assert_eq!(
+            effects,
+            vec![Effect::Attach {
+                admin_url: back.facts.admin_url.clone(),
+                navigate: false
+            }],
+            "no reload, no raise -- only the banner taken away"
+        );
+        // A server too old to name itself is still the same dashboard.
+        back.answer_pid = None;
+        let (_, effects) = step(&State::Busy { since: 0.0 }, &back, 40.0);
+        assert!(effects.contains(&Effect::Attach {
+            admin_url: back.facts.admin_url.clone(),
+            navigate: false
+        }));
     }
 
     #[test]
-    fn one_answer_resets_the_failure_count() {
-        // Not a controller assertion but the shape the caller must keep: the
-        // count is what `absent_confirmed` reads, and a server that answered
-        // between two timeouts has not failed twice in a row.
-        let mut observation = busy(2, 600.0);
-        assert!(!absent_confirmed(&observation));
-        observation.consecutive_absent = 0;
-        assert!(!absent_confirmed(&observation));
-        observation.consecutive_absent = 3;
-        assert!(absent_confirmed(&observation));
+    fn row_1_a_new_pid_reloads_once_and_a_shell_page_always_navigates() {
+        let mut replaced = observation(Health::Healthy);
+        replaced.on_dashboard = true;
+        replaced.dashboard_pid = Some(4242);
+        replaced.answer_pid = Some(5555);
+        let (_, effects) = step(&State::Busy { since: 0.0 }, &replaced, 40.0);
+        assert!(effects.contains(&Effect::Attach {
+            admin_url: replaced.facts.admin_url.clone(),
+            navigate: true
+        }));
+        // ...and only on the transition: an attached window that keeps hearing
+        // the new pid does not reload again.
+        let (_, effects) = step(&State::Attached, &replaced, 50.0);
+        assert!(effects.is_empty(), "{effects:?}");
+
+        let mut from_a_page = observation(Health::Healthy);
+        from_a_page.on_dashboard = false;
+        from_a_page.answer_pid = Some(4242);
+        let (_, effects) = step(
+            &State::Starting {
+                since: 0.0,
+                attempts: 1,
+            },
+            &from_a_page,
+            5.0,
+        );
+        assert!(effects.contains(&Effect::Attach {
+            admin_url: from_a_page.facts.admin_url.clone(),
+            navigate: true
+        }));
     }
 
     #[test]
-    fn a_busy_holder_inside_the_grace_window_is_not_spawned_over() {
-        // The user's report, exactly: a 300-address bulk add held the event
-        // loop, one /health probe took longer than its timeout, and the
-        // window started a second server that killed the first by pid.
-        let observation = busy(9, 4.0);
-        assert!(busy_holder(&observation));
-        assert!(
-            !may_start(&observation),
-            "a server that answered 4 s ago is busy, not gone"
-        );
-        let (state, effects) = step(&State::Attached, &observation, 100.0);
-        assert!(
-            !effects.contains(&Effect::Spawn),
-            "nothing may be started over a live, recently-answering server: \
-             {effects:?}"
-        );
-        assert!(
-            effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::Show(Page::Busy { .. }))),
-            "the window must say the server is busy: {effects:?}"
-        );
-        assert!(matches!(state, State::Reconnecting { .. }));
+    fn the_pid_used_to_decide_is_the_one_the_answer_named() {
+        // Fact K comes from `x-mcc-pid` on every answer. The dashboard is
+        // reloaded exactly when THAT pid differs from the one it was loaded
+        // from -- never on a cached document's guess.
+        for (answered, loaded, navigate) in [
+            (Some(10), Some(10), false),
+            (Some(11), Some(10), true),
+            (None, Some(10), false),
+            (Some(10), None, false),
+        ] {
+            let mut back = observation(Health::Healthy);
+            back.on_dashboard = true;
+            back.answer_pid = answered;
+            back.dashboard_pid = loaded;
+            // The document's guess is deliberately different, and ignored.
+            back.known_pid = Some(99);
+            let (_, effects) = step(&State::Busy { since: 0.0 }, &back, 1.0);
+            assert!(
+                effects.contains(&Effect::Attach {
+                    admin_url: back.facts.admin_url.clone(),
+                    navigate
+                }),
+                "{answered:?}/{loaded:?}: {effects:?}"
+            );
+        }
     }
 
     #[test]
-    fn the_busy_page_says_how_long_it_has_been() {
-        let observation = busy(2, 7.4);
-        let Page::Busy { message } = busy_page(&observation) else {
-            panic!("a busy page");
-        };
-        assert!(
-            message.contains("busy (7 s since it last answered)"),
-            "{message}"
-        );
+    fn row_2_a_starting_answer_never_rescues_and_keeps_the_dashboard() {
+        for state in all_states() {
+            let mut starting = observation(Health::Starting);
+            starting.on_dashboard = true;
+            let (next, effects) = step(&state, &starting, 1.0);
+            assert!(!acts_on_a_server(&effects), "{}: {effects:?}", state.name());
+            if !matches!(state, State::Rescuing { .. }) {
+                assert!(matches!(next, State::Starting { .. }), "{}", state.name());
+                assert!(
+                    effects
+                        .iter()
+                        .any(|effect| matches!(effect, Effect::Overlay { .. })),
+                    "over the dashboard it is a banner, not a page: {effects:?}"
+                );
+            }
+        }
     }
 
     #[test]
-    fn a_live_holder_under_the_threshold_also_says_it_is_busy() {
-        // Past the grace but under the threshold, nothing is started either,
-        // so the page must not say "Reconnecting..." over a server whose
-        // process is alive and which answered half a minute ago.
-        let observation = busy(1, 31.0);
-        assert!(!busy_holder(&observation));
-        assert!(!absent_confirmed(&observation));
-        let (_, effects) = step(&State::Attached, &observation, 100.0);
-        assert!(
-            effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::Show(Page::Busy { .. }))),
-            "{effects:?}"
-        );
-        assert!(!effects.contains(&Effect::Spawn), "{effects:?}");
+    fn row_3_a_draining_answer_never_rescues() {
+        for state in all_states() {
+            let (next, effects) = step(&state, &observation(Health::Draining), 1.0);
+            assert!(!acts_on_a_server(&effects), "{}: {effects:?}", state.name());
+            assert!(matches!(next, State::Draining { .. }), "{}", state.name());
+        }
     }
 
     #[test]
-    fn a_busy_tick_keeps_its_restatus() {
-        // controller.rs:880's `effects.retain(|effect| !effect.acts())` drops
-        // the Restatus on a tick that spawns, which is why the deciding tick
-        // read a cached `OursHealthy`. A busy tick does not spawn, so the
-        // Restatus survives and the NEXT tick decides on a fresh
-        // process-based classification.
-        let observation = busy(1, 2.0);
-        let (_, effects) = step(&State::Attached, &observation, 100.0);
+    fn row_4_nothing_counts_inside_the_grace_and_the_new_server_is_still_watched() {
+        // User answer 3: watched, never acted on. Every fact that would
+        // otherwise be a death, inside the first 15 s after a start.
+        let mut cases = vec![known(Listener::Free), unbound_child(3.0)];
+        let mut gone = known(Listener::Free);
+        gone.known_alive = Some(false);
+        cases.push(gone);
+        let mut exited = observation(Health::Absent);
+        exited.last_child_exit = Some(ChildExit {
+            code: Some(1),
+            last_lines: "boom".to_owned(),
+        });
+        cases.push(exited);
+        for mut case in cases {
+            for age in [0.0, 1.0, 7.5, 14.9] {
+                case.since_last_start = Some(age);
+                assert_eq!(verdict(&case), Verdict::InGrace, "{age}");
+                let (_, effects) = step(
+                    &State::Starting {
+                        since: 0.0,
+                        attempts: 1,
+                    },
+                    &case,
+                    age,
+                );
+                assert!(!acts_on_a_server(&effects), "{age}: {effects:?}");
+            }
+        }
+        // ...and watching means a server that answers inside the grace is
+        // attached at once.
+        let mut answered = observation(Health::Healthy);
+        answered.since_last_start = Some(4.0);
+        let (next, _) = step(
+            &State::Starting {
+                since: 0.0,
+                attempts: 1,
+            },
+            &answered,
+            4.0,
+        );
+        assert_eq!(next, State::Attached);
+    }
+
+    #[test]
+    fn row_5_a_listener_owned_by_the_known_pid_is_slow_forever() {
+        // 1,000 ticks -- two hours and three quarters at the user's tick --
+        // of a server that holds its port and never answers. Nothing is
+        // started, nothing is stopped, the dashboard is never navigated away
+        // from, and the banner is on every tick.
+        let observation = slow();
+        assert_eq!(
+            verdict(&observation),
+            Verdict::Slow(SlowReason::Holds { pid: Some(4242) })
+        );
+        let (state, seen) = run_ticks(State::Attached, &observation, 100.0, 10.0, 1_000);
+        assert!(matches!(state, State::Busy { .. }), "{state:?}");
         assert!(
-            effects.contains(&Effect::Restatus),
-            "the busy tick must still ask who holds the port: {effects:?}"
+            !seen.iter().any(|(_, effect)| matches!(
+                effect,
+                Effect::Spawn | Effect::Rescue { .. } | Effect::Show(_) | Effect::Attach { .. }
+            )),
+            "a slow server was acted on or navigated away from"
         );
         assert_eq!(
-            effects.iter().filter(|effect| effect.acts()).count(),
-            1,
-            "and still only one side effect: {effects:?}"
+            seen.iter()
+                .filter(|(_, effect)| matches!(effect, Effect::Overlay { .. }))
+                .count(),
+            1_000
         );
     }
 
     #[test]
-    fn grace_expiry_and_the_threshold_together_reach_todays_spawn() {
-        // The tolerance is finite. Past the grace AND past the threshold, the
-        // window starts a server exactly as it does today.
-        let past_grace_under_threshold = busy(1, 60.0);
-        assert!(!busy_holder(&past_grace_under_threshold));
-        assert!(!may_start(&past_grace_under_threshold));
-
-        let past_both = busy(3, 60.0);
-        assert!(!busy_holder(&past_both));
-        assert!(may_start(&past_both));
-        let (_, effects) = step(&State::Attached, &past_both, 100.0);
-        assert!(effects.contains(&Effect::Spawn), "{effects:?}");
+    fn row_5_an_mcc_listener_with_another_pid_is_slow() {
+        let mut observation = slow();
+        observation.listener = Listener::Held {
+            pid: Some(9999),
+            mcc: Some(true),
+        };
+        assert!(is_slow(verdict(&observation)));
+        let (_, effects) = step(&State::Attached, &observation, 1.0);
+        assert!(!acts_on_a_server(&effects), "{effects:?}");
     }
 
     #[test]
-    fn a_dead_holder_is_started_over_on_the_same_tick_as_before() {
-        // Item 3 of the decision: "a DEAD server (PID gone, or port free) is
-        // restarted exactly as today". The tick count is the proof -- one
-        // absent probe, one tick, one spawn -- and it is asserted for every
-        // way a holder can be dead.
-        let mut gone = busy(1, 0.5);
-        gone.holder_alive = false; // the pid is gone
-        let mut free = observation(Health::Absent);
-        free.holder = Holder::Absent; // the port is free
-        free.consecutive_absent = 1;
-        free.seconds_since_healthy = Some(0.5);
-        let mut stale = busy(1, 0.5);
-        stale.holder = Holder::OursStale;
-        stale.holder_alive = false;
-
-        for (name, observation) in [
-            ("pid gone", gone),
-            ("port free", free),
-            ("stale holder", stale),
+    fn row_6_an_unknown_lookup_is_patience() {
+        // The approved rule: unknown = alive, be patient. A lookup that failed
+        // or timed out, and a holder that could not be identified.
+        for listener in [
+            Listener::Unknown,
+            Listener::Held {
+                pid: Some(31337),
+                mcc: None,
+            },
+            Listener::Held {
+                pid: None,
+                mcc: None,
+            },
         ] {
-            assert!(
-                absent_confirmed(&observation),
-                "{name}: a dead server is absent on the first probe"
+            let mut observation = known(listener);
+            observation.known_alive = None;
+            assert_eq!(
+                verdict(&observation),
+                Verdict::Slow(SlowReason::CouldNotTell),
+                "{listener:?}"
             );
-            assert!(!busy_holder(&observation), "{name}");
-            assert!(may_start(&observation), "{name}");
-            let (_, effects) = step(&State::Attached, &observation, 100.0);
-            assert!(
-                effects.contains(&Effect::Spawn),
-                "{name}: the first absent tick must still spawn: {effects:?}"
-            );
+            let (state, effects) = step(&State::Attached, &observation, 1.0);
+            assert!(matches!(state, State::Busy { .. }));
+            assert!(!acts_on_a_server(&effects), "{effects:?}");
+            // ...and the lookup is retried on the very next fresh tick.
+            assert!(effects.contains(&Effect::Restatus), "{effects:?}");
         }
     }
 
     #[test]
-    fn nothing_but_a_live_holder_of_ours_buys_any_patience() {
-        // The debounce must never become a reason not to start a server that
-        // nobody is running. Every holder that is not identified as ours is
-        // confirmed absent on its first failed probe, whatever the count.
-        for holder in [Holder::Absent, Holder::Foreign, Holder::Unknown] {
-            let mut observation = busy(0, 0.0);
-            observation.holder = holder;
-            assert!(
-                absent_confirmed(&observation),
-                "{holder:?} must not be given the live-holder debounce"
-            );
-        }
+    fn row_6b_a_handshake_with_an_empty_table_is_patience() {
+        let mut observation = known(Listener::Free);
+        observation.probe_connected = true;
+        assert_eq!(
+            verdict(&observation),
+            Verdict::Slow(SlowReason::Contradiction)
+        );
+        let (_, effects) = step(&State::Attached, &observation, 1.0);
+        assert!(!acts_on_a_server(&effects), "{effects:?}");
     }
 
     #[test]
-    fn no_spawn_while_the_holder_is_ours_alive_and_answered_within_the_grace() {
-        // The property, over every state and every plausible number: there is
-        // no (state, grace, count) at which a live, recently-answering server
-        // of ours is started over.
-        for state in all_states() {
-            for count in [0_u32, 1, 3, 7, 400] {
-                for since_healthy in [0.0_f64, 0.1, 5.0, 14.9] {
-                    let observation = busy(count, since_healthy);
-                    assert!(
-                        !may_start(&observation),
-                        "{} + {count} failures + {since_healthy}s would spawn \
-                         over a busy server",
-                        state.name()
-                    );
-                    let (_, effects) = step(&state, &observation, 100.0);
-                    assert!(
-                        !effects.contains(&Effect::Spawn),
-                        "{} + {count} + {since_healthy}s spawned: {effects:?}",
-                        state.name()
-                    );
-                }
+    fn a_free_port_from_before_the_last_answer_is_not_a_fact() {
+        // Safeguard (a), generalised: "nothing listens" must be the OS's
+        // answer NOW. One the window read before the server last answered
+        // says nothing about the port, and is patience until re-read.
+        let mut observation = known(Listener::Free);
+        observation.known_alive = Some(false);
+        observation.listener_fresh = false;
+        assert_eq!(verdict(&observation), Verdict::Slow(SlowReason::NotRecent));
+        let (_, effects) = step(&State::Attached, &observation, 1.0);
+        assert!(!acts_on_a_server(&effects), "{effects:?}");
+        assert!(effects.contains(&Effect::Restatus), "it asks: {effects:?}");
+    }
+
+    #[test]
+    fn an_old_holder_answer_about_a_process_that_has_exited_is_not_repeated() {
+        // The OS said pid 4242 holds the port before the probe failed, and
+        // 4242 has since exited: patience until the port is re-read, and never
+        // "it is running and still holds port" about a process that is gone.
+        let mut stale = known(Listener::Held {
+            pid: Some(4242),
+            mcc: Some(true),
+        });
+        stale.listener_fresh = false;
+        stale.known_alive = Some(false);
+        assert_eq!(verdict(&stale), Verdict::Slow(SlowReason::NotRecent));
+        let (_, effects) = step(&State::Attached, &stale, 1.0);
+        assert!(!acts_on_a_server(&effects), "{effects:?}");
+        assert!(effects.contains(&Effect::Restatus));
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Overlay { message } if message.contains("is running")
+        )));
+    }
+
+    #[test]
+    fn row_7_a_foreign_listener_is_never_spawned_over_or_stopped() {
+        let mut stranger = known(Listener::Held {
+            pid: Some(31337),
+            mcc: Some(false),
+        });
+        stranger.holder = Holder::Foreign;
+        stranger.facts.holder_pid = Some(31337);
+        stranger.facts.holder_image = Some("nginx.exe".to_owned());
+        assert_eq!(verdict(&stranger), Verdict::Foreign);
+        stranger.holder_age = 5.0;
+        let (state, effects) = step(&State::Attached, &stranger, 1.0);
+        assert!(matches!(state, State::Reconnecting { .. }), "{state:?}");
+        assert!(!acts_on_a_server(&effects), "{effects:?}");
+
+        stranger.holder_age = 600.0;
+        let (state, seen) = run_ticks(State::Attached, &stranger, 1.0, 10.0, 50);
+        assert_eq!(
+            state,
+            State::Blocked {
+                reason: Blocked::ForeignPort
             }
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|(_, effect)| matches!(effect, Effect::Spawn | Effect::Rescue { .. }))
+        );
+        let announced: Vec<&String> = seen
+            .iter()
+            .filter_map(|(_, effect)| match effect {
+                Effect::AnnounceDead { message } => Some(message),
+                _ => None,
+            })
+            .collect();
+        assert!(!announced.is_empty());
+        assert!(
+            announced[0].contains("nginx.exe (pid 31337)"),
+            "{}",
+            announced[0]
+        );
+        assert!(
+            announced[0].contains("Nothing was stopped"),
+            "{}",
+            announced[0]
+        );
+    }
+
+    #[test]
+    fn row_8_a_gone_process_is_rescued_on_the_first_fresh_tick() {
+        // The 7.26.0 pin, moved as the spec says: a dead server still costs
+        // one tick, and that tick now asks for the rescue rather than spawning
+        // into whatever is left -- the spawn comes from the rescue's report.
+        let mut gone = known(Listener::Free);
+        gone.known_alive = Some(false);
+        assert_eq!(verdict(&gone), Verdict::Dead(DeadReason::ProcessGone));
+        let (state, effects) = step(&State::Attached, &gone, 100.0);
+        assert_eq!(state, State::Rescuing { since: 100.0 });
+        assert_eq!(
+            rescue_in(&effects),
+            Some((Some(4242), None, DeadReason::ProcessGone))
+        );
+        assert!(!effects.contains(&Effect::Spawn));
+        assert_eq!(effects.iter().filter(|effect| effect.acts()).count(), 1);
+    }
+
+    #[test]
+    fn row_9_a_listener_loss_waits_for_three_checks_and_thirty_seconds() {
+        let lost = known(Listener::Free);
+        assert_eq!(verdict(&lost), Verdict::Dead(DeadReason::ListenerLost));
+        let mut state = State::Attached;
+        for (tick, now) in [0.0, 10.0, 20.0].into_iter().enumerate() {
+            let (next, effects) = step(&state, &lost, now);
+            assert!(
+                rescue_in(&effects).is_none(),
+                "check {} at {now}: {effects:?}",
+                tick + 1
+            );
+            assert!(
+                effects.iter().any(|effect| matches!(
+                    effect,
+                    Effect::Overlay { message } if message.contains(&format!("check {} of 3", tick + 1))
+                )),
+                "{effects:?}"
+            );
+            state = next;
+        }
+        let (state, effects) = step(&state, &lost, 30.0);
+        assert_eq!(
+            rescue_in(&effects),
+            Some((Some(4242), None, DeadReason::ListenerLost))
+        );
+        assert!(matches!(state, State::Rescuing { .. }));
+    }
+
+    #[test]
+    fn row_9_a_reload_that_rebinds_inside_the_confirmation_is_never_restarted() {
+        // An in-process RELOAD closes and re-binds its own listener. Two
+        // checks see the port free; the third sees it held again.
+        let lost = known(Listener::Free);
+        let rebound = slow();
+        let mut state = State::Attached;
+        let mut seen = Vec::new();
+        for (now, observation) in [
+            (0.0, &lost),
+            (10.0, &lost),
+            (20.0, &rebound),
+            (30.0, &lost),
+            (40.0, &lost),
+            (50.0, &lost),
+        ] {
+            let (next, effects) = step(&state, observation, now);
+            seen.extend(effects);
+            state = next;
+        }
+        assert!(rescue_in(&seen).is_none(), "{seen:?}");
+        // The count started again at 30: three checks spanning 30 s is 60.
+        let (_, effects) = step(&state, &lost, 60.0);
+        assert!(rescue_in(&effects).is_some(), "{effects:?}");
+    }
+
+    #[test]
+    fn row_10_a_child_still_coming_up_is_waited_for() {
+        let mut state = State::Starting {
+            since: 0.0,
+            attempts: 1,
+        };
+        for age in [15.0, 25.0, 35.0, 45.0, 55.0, 59.9] {
+            let observation = unbound_child(age);
+            assert_eq!(verdict(&observation), Verdict::Dead(DeadReason::NeverBound));
+            let (next, effects) = step(&state, &observation, age);
+            assert!(!acts_on_a_server(&effects), "{age}: {effects:?}");
+            state = next;
         }
     }
 
     #[test]
-    fn a_server_this_window_has_never_seen_answer_gets_no_grace() {
-        // A cold start: nothing has ever answered, so there is nothing to be
-        // patient with and the window starts a server on the first tick,
-        // exactly as it does today.
-        let mut cold = observation(Health::Absent);
-        cold.holder = Holder::Unknown;
-        cold.holder_alive = false;
-        cold.seconds_since_healthy = None;
-        cold.consecutive_absent = 1;
-        assert!(!busy_holder(&cold));
-        assert!(absent_confirmed(&cold));
-        let (_, effects) = step(&State::Booting, &cold, 0.0);
-        assert!(effects.contains(&Effect::Spawn), "{effects:?}");
+    fn row_11_a_child_that_never_bound_is_replaced_after_its_whole_budget() {
+        let mut state = State::Starting {
+            since: 0.0,
+            attempts: 1,
+        };
+        let mut rescued_at = None;
+        let mut age = 15.0;
+        while age <= 120.0 {
+            let (next, effects) = step(&state, &unbound_child(age), age);
+            if let Some(found) = rescue_in(&effects) {
+                assert_eq!(found, (None, Some(7001), DeadReason::NeverBound));
+                rescued_at = Some(age);
+                break;
+            }
+            state = next;
+            age += 10.0;
+        }
+        assert_eq!(
+            rescued_at,
+            Some(65.0),
+            "the first check at or after 60 s whose agreeing checks span 15 -> 60"
+        );
     }
 
     #[test]
-    fn a_dead_server_costs_the_same_tick_count_as_7_25_0() {
-        // Measured on 7.25.0 (fork/main 6017bc57) in a detached worktree with
-        // this exact loop, and recorded here so the number cannot drift:
-        //
-        //     BASE pid gone / cached ours: first spawn on tick Some(1)
-        //     BASE port free:              first spawn on tick Some(1)
-        //     BASE stale holder:           first spawn on tick Some(1)
-        //
-        // The busy grace and the failure threshold are only ever granted to a
-        // holder that is ours AND whose pid is alive, so none of these three
-        // touches them and every one of them still spawns on the first tick.
-        const BASE_TICKS_TO_SPAWN: u32 = 1;
-        for (name, holder, alive) in [
-            ("pid gone / cached ours", Holder::OursHealthy, false),
-            ("port free", Holder::Absent, false),
-            ("stale holder", Holder::OursStale, false),
+    fn safeguard_a_the_port_state_comes_from_the_os_never_from_a_timeout() {
+        // Past the budget, a child alive, and every probe a timeout -- but no
+        // fresh OS answer saying the port is free. Never replaced.
+        for listener in [Listener::Unknown, Listener::Free] {
+            let mut observation = unbound_child(300.0);
+            observation.listener = listener;
+            observation.listener_fresh = false;
+            observation.probe_connected = false;
+            let (_, seen) = run_ticks(
+                State::Starting {
+                    since: 0.0,
+                    attempts: 1,
+                },
+                &observation,
+                15.0,
+                10.0,
+                100,
+            );
+            assert!(
+                !seen
+                    .iter()
+                    .any(|(_, effect)| matches!(effect, Effect::Rescue { .. })),
+                "{listener:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn safeguard_b_a_failed_or_slow_lookup_counts_as_alive_and_port_held() {
+        let mut failed = unbound_child(40.0);
+        failed.listener = Listener::Unknown;
+        assert_eq!(verdict(&failed), Verdict::Slow(SlowReason::CouldNotTell));
+        let mut unidentified = unbound_child(40.0);
+        unidentified.listener = Listener::Held {
+            pid: None,
+            mcc: None,
+        };
+        assert!(is_slow(verdict(&unidentified)));
+        let (state, effects) = step(
+            &State::Confirming {
+                reason: DeadReason::NeverBound,
+                first: 15.0,
+                checks: 3,
+                since: 0.0,
+            },
+            &failed,
+            40.0,
+        );
+        assert!(
+            matches!(state, State::Busy { .. }),
+            "a failed lookup leaves the count: {state:?}"
+        );
+        assert!(!acts_on_a_server(&effects));
+    }
+
+    #[test]
+    fn safeguard_c_one_disagreement_resets_the_count_and_the_span() {
+        let mut state = State::Starting {
+            since: 0.0,
+            attempts: 1,
+        };
+        let mut rescued_at = None;
+        let mut age = 15.0;
+        while age <= 200.0 {
+            let mut observation = unbound_child(age);
+            if (age - 45.0).abs() < 0.1 {
+                // One check at 45 s sees the port held.
+                observation.listener = Listener::Held {
+                    pid: Some(1234),
+                    mcc: Some(true),
+                };
+            }
+            let (next, effects) = step(&state, &observation, age);
+            if rescue_in(&effects).is_some() {
+                rescued_at = Some(age);
+                break;
+            }
+            state = next;
+            age += 10.0;
+        }
+        // The streak restarts at 55: 55 + 45 = 100.
+        assert_eq!(rescued_at, Some(105.0));
+    }
+
+    #[test]
+    fn safeguard_d_a_server_that_answered_or_bound_is_never_one_that_never_opened_its_port() {
+        let mut bound = unbound_child(300.0);
+        bound.child_ever_bound = true;
+        assert_ne!(verdict(&bound), Verdict::Dead(DeadReason::NeverBound));
+        let (_, seen) = run_ticks(
+            State::Starting {
+                since: 0.0,
+                attempts: 1,
+            },
+            &bound,
+            15.0,
+            10.0,
+            40,
+        );
+        assert!(!seen.iter().any(|(_, effect)| matches!(
+            effect,
+            Effect::Rescue {
+                reason: DeadReason::NeverBound,
+                ..
+            }
+        )));
+        // A 503 "starting" answer is an answer: the arm that handles it never
+        // asks for a rescue at all.
+        let mut starting = unbound_child(300.0);
+        starting.health = Health::Starting;
+        let (_, effects) = step(
+            &State::Starting {
+                since: 0.0,
+                attempts: 1,
+            },
+            &starting,
+            300.0,
+        );
+        assert!(!acts_on_a_server(&effects), "{effects:?}");
+    }
+
+    #[test]
+    fn safeguard_e_only_a_child_this_window_started_and_only_by_its_exact_pid() {
+        // No child of ours: a server alive without the port is never a
+        // "never bound" case, whatever its age.
+        let mut not_ours = observation(Health::Absent);
+        not_ours.known_pid = Some(4242);
+        not_ours.known_alive = Some(true);
+        not_ours.since_last_start = Some(500.0);
+        assert_eq!(verdict(&not_ours), Verdict::Dead(DeadReason::ListenerLost));
+        // A child of ours: the rescue names exactly its pid, and no other.
+        let (_, seen) = run_ticks(
+            State::Starting {
+                since: 0.0,
+                attempts: 1,
+            },
+            &unbound_child(65.0),
+            65.0,
+            10.0,
+            10,
+        );
+        let asked: Vec<_> = seen
+            .iter()
+            .filter_map(|(_, effect)| match effect {
+                Effect::Rescue { child_pid, .. } => Some(*child_pid),
+                _ => None,
+            })
+            .collect();
+        assert!(!asked.is_empty());
+        assert!(asked.iter().all(|pid| *pid == Some(7001)), "{asked:?}");
+    }
+
+    #[test]
+    fn safeguard_f_the_notification_and_the_log_say_what_was_stopped_and_why() {
+        let mut done = observation(Health::Absent);
+        done.rescue = RescueProgress::Done(RescueOutcome {
+            child_pid: Some(7001),
+            known_pid: None,
+            ..outcome(
+                RescueResult::PortFree,
+                DeadReason::NeverBound,
+                vec![StoppedServer {
+                    pids: vec![7001, 7002],
+                    exited_by_itself: false,
+                }],
+            )
+        });
+        let (state, effects) = step(&State::Rescuing { since: 60.0 }, &done, 90.0);
+        assert!(matches!(state, State::Starting { .. }));
+        assert!(effects.contains(&Effect::Spawn));
+        let message = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Notify { message } => Some(message.clone()),
+                _ => None,
+            })
+            .expect("every rescue ends in a notification");
+        for needle in [
+            "7001",
+            "7002",
+            "never opened the port",
+            "stopped by process id",
+            "24 s",
         ] {
-            let mut observation = observation(Health::Absent);
-            observation.holder = holder;
-            observation.holder_alive = alive;
-            let mut state = State::Attached;
-            let mut ticks = 0_u32;
-            let mut spawned_on = None;
-            for round in 1..=5 {
-                let (next, effects) = step(&state, &observation, 100.0 + f64::from(round));
-                ticks += 1;
-                if effects.contains(&Effect::Spawn) && spawned_on.is_none() {
-                    spawned_on = Some(ticks);
-                }
+            assert!(message.contains(needle), "{needle}: {message}");
+        }
+        // ...and the request itself is logged with its reason.
+        let (_, effects) = step(
+            &State::Confirming {
+                reason: DeadReason::NeverBound,
+                first: 15.0,
+                checks: 5,
+                since: 0.0,
+            },
+            &unbound_child(65.0),
+            65.0,
+        );
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::Log(line) if line.contains("never-bound") && line.contains("7001")
+            )),
+            "{effects:?}"
+        );
+    }
+
+    #[test]
+    fn row_12_a_refused_rescue_starts_nothing_and_asks_again() {
+        for result in [RescueResult::Refused, RescueResult::Failed] {
+            let mut refused = known(Listener::Free);
+            refused.rescue = RescueProgress::Done(RescueOutcome {
+                detail: "port 9999 is held by pid 31337".to_owned(),
+                ..outcome(result, DeadReason::ListenerLost, Vec::new())
+            });
+            let (state, effects) = step(&State::Rescuing { since: 0.0 }, &refused, 20.0);
+            assert!(matches!(state, State::Reconnecting { .. }), "{state:?}");
+            assert!(!acts_on_a_server(&effects), "{effects:?}");
+            assert!(effects.contains(&Effect::Restatus));
+            assert!(effects.iter().any(|effect| matches!(
+                effect,
+                Effect::Log(line) if line.contains("31337")
+            )));
+            assert!(
+                !effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::Notify { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn a_running_rescue_is_only_watched() {
+        let mut running = known(Listener::Free);
+        running.rescue = RescueProgress::Running;
+        for fresh in [true, false] {
+            running.fresh = fresh;
+            let (state, effects) = step(&State::Rescuing { since: 0.0 }, &running, 12.0);
+            assert_eq!(state, State::Rescuing { since: 0.0 });
+            assert!(!effects.iter().any(Effect::acts), "{effects:?}");
+            assert!(
+                effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::Show(Page::Rescuing { .. })))
+            );
+        }
+    }
+
+    #[test]
+    fn a_dead_server_costs_one_rescue_then_a_spawn() {
+        let mut gone = known(Listener::Free);
+        gone.known_alive = Some(false);
+        let (state, effects) = step(&State::Attached, &gone, 0.0);
+        assert!(rescue_in(&effects).is_some());
+        let mut running = gone.clone();
+        running.rescue = RescueProgress::Running;
+        running.since_rescue = Some(3.0);
+        let (state, effects) = step(&state, &running, 3.0);
+        assert!(!acts_on_a_server(&effects));
+        let mut done = gone.clone();
+        done.rescue = RescueProgress::Done(outcome(
+            RescueResult::PortFree,
+            DeadReason::ProcessGone,
+            Vec::new(),
+        ));
+        done.since_rescue = Some(5.0);
+        let (state, effects) = step(&state, &done, 5.0);
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| **effect == Effect::Spawn)
+                .count(),
+            1
+        );
+        assert!(matches!(state, State::Starting { .. }));
+        let message = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Notify { message } => Some(message.clone()),
+                _ => None,
+            })
+            .expect("a notification");
+        assert!(message.contains("process 4242 has exited"), "{message}");
+        assert!(message.contains("Nothing needed stopping"), "{message}");
+    }
+
+    #[test]
+    fn an_old_wheel_without_rescue_still_starts() {
+        let mut unsupported = known(Listener::Free);
+        unsupported.rescue = RescueProgress::Done(outcome(
+            RescueResult::Unsupported,
+            DeadReason::ProcessGone,
+            Vec::new(),
+        ));
+        let (state, effects) = step(&State::Rescuing { since: 0.0 }, &unsupported, 4.0);
+        assert!(matches!(state, State::Starting { .. }));
+        assert!(effects.contains(&Effect::Spawn));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Notify { message } if message.contains("older than 7.71.0")
+        )));
+    }
+
+    #[test]
+    fn the_2h22m_own_child_zombie_is_rescued_once() {
+        // 2026-09-28: a server this window started lost its listener and sat
+        // there, alive, for two hours and twenty-two minutes -- 783 ticks.
+        let mut zombie = known(Listener::Free);
+        zombie.child_alive = true;
+        zombie.child_pid = Some(7001);
+        zombie.child_ever_bound = true;
+        zombie.since_last_start = Some(9_000.0);
+        let mut state = State::Attached;
+        let mut rescues = Vec::new();
+        for tick in 0..783_u32 {
+            let now = 10.0 * f64::from(tick);
+            let (next, effects) = step(&state, &zombie, now);
+            if let Some((known_pid, child_pid, reason)) = rescue_in(&effects) {
+                rescues.push((now, known_pid, child_pid, reason));
+                // From here the caller reports the rescue as running.
+                zombie.rescue = RescueProgress::Running;
+            }
+            state = next;
+        }
+        assert_eq!(
+            rescues,
+            vec![(30.0, Some(4242), Some(7001), DeadReason::ListenerLost)],
+            "one rescue, after the confirmation, naming the child by its pid"
+        );
+        assert!(matches!(state, State::Rescuing { .. }));
+    }
+
+    #[test]
+    fn the_busy_header_changes_the_tray_line_only() {
+        let mut plain = observation(Health::Healthy);
+        plain.answer_pid = Some(4242);
+        let mut busy = plain.clone();
+        busy.busy_header = true;
+        for state in all_states() {
+            assert_eq!(
+                step(&state, &plain, 1.0),
+                step(&state, &busy, 1.0),
+                "{}",
+                state.name()
+            );
+        }
+    }
+
+    #[test]
+    fn a_slow_servers_holder_is_re_read_at_most_every_reconnect_restatus_seconds() {
+        let mut observation = slow();
+        observation.since_restatus = Some(5.0);
+        let (_, effects) = step(&State::Busy { since: 0.0 }, &observation, 10.0);
+        assert!(!effects.contains(&Effect::Restatus), "{effects:?}");
+        observation.since_restatus = Some(31.0);
+        let (_, effects) = step(&State::Busy { since: 0.0 }, &observation, 40.0);
+        assert!(effects.contains(&Effect::Restatus), "{effects:?}");
+        // At once when the connect is refused: the port may have gone free.
+        observation.since_restatus = Some(5.0);
+        observation.probe_connected = false;
+        let (_, effects) = step(&State::Busy { since: 0.0 }, &observation, 50.0);
+        assert!(effects.contains(&Effect::Restatus), "{effects:?}");
+    }
+
+    #[test]
+    fn a_mode_that_starts_nothing_announces_a_death_once_and_stops_nothing() {
+        let mut gone = known(Listener::Free);
+        gone.known_alive = Some(false);
+        gone.facts.server_mode = "attach".to_owned();
+        let (state, effects) = step(&State::Attached, &gone, 1.0);
+        assert!(matches!(
+            state,
+            State::Blocked {
+                reason: Blocked::NotOurServer { .. }
+            }
+        ));
+        assert!(!acts_on_a_server(&effects), "{effects:?}");
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::AnnounceDead { message } if message.contains("process 4242 has exited")
+                && message.contains("Server mode is attach")
+        )));
+        // Slow in attach mode is still only slow.
+        let mut busy = slow();
+        busy.facts.server_mode = "attach".to_owned();
+        let (state, _) = step(&State::Attached, &busy, 1.0);
+        assert!(matches!(state, State::Busy { .. }));
+    }
+
+    #[test]
+    fn a_free_port_with_no_server_known_is_a_cold_start_as_before() {
+        // Q4, unchanged: nothing was ever heard from, nothing listens, so the
+        // first fresh tick starts a server -- no rescue to scan for.
+        let cold = observation(Health::Absent);
+        assert_eq!(verdict(&cold), Verdict::Free);
+        let (state, effects) = step(&State::Booting, &cold, 0.0);
+        assert!(effects.contains(&Effect::Spawn), "{effects:?}");
+        assert!(rescue_in(&effects).is_none());
+        assert!(matches!(state, State::Starting { .. }));
+    }
+
+    /// A tiny deterministic generator, so the property below is reproducible.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+
+        fn pick<T: Clone>(&mut self, items: &[T]) -> T {
+            items[usize::try_from(self.next()).unwrap_or(0) % items.len()].clone()
+        }
+    }
+
+    #[test]
+    fn no_sequence_without_nothing_listens_ever_spawns_or_rescues() {
+        // THE property (decision R4): from any state, with the process alive
+        // and the port held -- or a lookup that could not say -- no sequence
+        // of observations that never contains "nothing listens" yields a
+        // spawn or a rescue. 20,000 random walks of 60 ticks.
+        let held = [
+            Listener::Held {
+                pid: Some(4242),
+                mcc: Some(true),
+            },
+            Listener::Held {
+                pid: Some(9999),
+                mcc: Some(true),
+            },
+            Listener::Held {
+                pid: Some(4242),
+                mcc: None,
+            },
+            Listener::Held {
+                pid: None,
+                mcc: None,
+            },
+            Listener::Unknown,
+        ];
+        let mut random = Lcg(0x5EED_2026_1004);
+        for walk in 0..20_000_u32 {
+            let mut state = random.pick(&all_states());
+            let mut now = 0.0;
+            for _ in 0..60 {
+                let mut observation = slow();
+                observation.listener = random.pick(&held);
+                observation.listener_fresh = random.pick(&[true, false]);
+                observation.probe_connected = random.pick(&[true, false]);
+                observation.known_pid = random.pick(&[Some(4242), None]);
+                observation.known_alive = random.pick(&[Some(true), None]);
+                observation.fresh = random.pick(&[true, true, false]);
+                observation.child_alive = random.pick(&[true, false]);
+                observation.child_pid = if observation.child_alive {
+                    Some(7001)
+                } else {
+                    None
+                };
+                observation.child_ever_bound = random.pick(&[true, false]);
+                observation.since_last_start = random.pick(&[None, Some(20.0), Some(500.0)]);
+                observation.seconds_since_healthy = random.pick(&[None, Some(1.0), Some(900.0)]);
+                observation.on_dashboard = random.pick(&[true, false]);
+                observation.facts.server_mode =
+                    random.pick(&["spawn", "spawn", "attach"]).to_owned();
+                now += random.pick(&[1.0, 10.0, 30.0]);
+                let (next, effects) = step(&state, &observation, now);
+                assert!(
+                    !acts_on_a_server(&effects),
+                    "walk {walk}: {} + {observation:?} -> {effects:?}",
+                    state.name()
+                );
                 state = next;
             }
-            assert_eq!(
-                spawned_on,
-                Some(BASE_TICKS_TO_SPAWN),
-                "{name}: a dead server must still be started on the same tick \
-                 7.25.0 started it on"
-            );
+        }
+    }
+
+    #[test]
+    fn only_a_fresh_free_port_can_ever_reach_a_rescue() {
+        // The converse, over every state and a sweep of facts: wherever a
+        // rescue IS asked for, the observation said "nothing listens", read
+        // fresh, with no handshake on that tick.
+        let mut random = Lcg(0xD15C_0FFE);
+        for _ in 0..20_000_u32 {
+            let state = random.pick(&all_states());
+            let mut observation = known(random.pick(&[
+                Listener::Free,
+                Listener::Unknown,
+                Listener::Held {
+                    pid: Some(4242),
+                    mcc: Some(true),
+                },
+            ]));
+            observation.listener_fresh = random.pick(&[true, false]);
+            observation.probe_connected = random.pick(&[true, false]);
+            observation.known_alive = random.pick(&[Some(true), Some(false), None]);
+            observation.child_alive = random.pick(&[true, false]);
+            observation.child_pid = observation.child_alive.then_some(7001);
+            observation.child_ever_bound = random.pick(&[true, false]);
+            observation.since_last_start = random.pick(&[None, Some(70.0), Some(500.0)]);
+            let (_, effects) = step(&state, &observation, 1_000.0);
+            if rescue_in(&effects).is_some() {
+                assert_eq!(observation.listener, Listener::Free);
+                assert!(observation.listener_fresh);
+                assert!(!observation.probe_connected);
+            }
         }
     }
 
@@ -2106,19 +3915,33 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_mcc_holder_is_started_over_because_the_server_takes_the_port() {
-        // 6.59.0's SERVER_PORT_TAKEOVER kills the stale holder from inside
-        // mcc-server, so the shell's force-start is simply "spawn".
+    fn a_silent_mcc_holder_is_slow_and_is_never_started_over() {
+        // Until 7.71.0 this test was the opposite: "6.59.0's
+        // SERVER_PORT_TAKEOVER kills the stale holder from inside mcc-server,
+        // so the shell's force-start is simply spawn". That spawn is how one
+        // late answer on 2026-09-28 at 14:40 ended with a working server
+        // killed. A silent My Claude Code that still holds its port is SLOW
+        // (decision R4): it is never started over, and a server this window
+        // starts carries `--no-port-takeover` and could not take it anyway.
         let mut stale = observation(Health::Absent);
         stale.holder = Holder::OursStale;
-        let (_, effects) = step(&State::Reconnecting { since: 0.0 }, &stale, 5.0);
-        assert!(effects.contains(&Effect::Spawn), "{effects:?}");
+        stale.listener = Listener::Held {
+            pid: Some(4242),
+            mcc: Some(true),
+        };
+        let (state, effects) = step(&State::Reconnecting { since: 0.0 }, &stale, 5.0);
+        assert!(!effects.contains(&Effect::Spawn), "{effects:?}");
+        assert!(matches!(state, State::Busy { .. }), "{state:?}");
     }
 
     #[test]
     fn a_foreign_holder_inside_the_grace_window_is_not_a_conflict_yet() {
         let mut fresh = observation(Health::Absent);
         fresh.holder = Holder::Foreign;
+        fresh.listener = Listener::Held {
+            pid: Some(4242),
+            mcc: Some(false),
+        };
         fresh.holder_age = 5.0;
         let (state, _) = step(&State::Booting, &fresh, 1.0);
         assert!(!matches!(state, State::Blocked { .. }), "{state:?}");
@@ -2210,6 +4033,9 @@ mod tests {
             );
             assert!(!effects.contains(&Effect::Spawn), "{effects:?}");
         }
+        // 7.71.0: the first 15 s after a start are the new server's own
+        // (user answer 3), so the ten-second backoff is now always inside the
+        // grace, and the next start comes when the grace ends.
         let mut backoff_elapsed = just_started.clone();
         backoff_elapsed.since_last_start = Some(10.0);
         let (_, effects) = step(
@@ -2219,6 +4045,17 @@ mod tests {
             },
             &backoff_elapsed,
             10.0,
+        );
+        assert!(!effects.contains(&Effect::Spawn), "{effects:?}");
+        let mut grace_over = just_started.clone();
+        grace_over.since_last_start = Some(15.0);
+        let (_, effects) = step(
+            &State::Starting {
+                since: 0.0,
+                attempts: 1,
+            },
+            &grace_over,
+            15.0,
         );
         assert!(effects.contains(&Effect::Spawn), "{effects:?}");
     }
@@ -2709,9 +4546,18 @@ mod tests {
         // outside itself: re-read the document, start the server, or install
         // the thing that is missing. A tick that only repaints is a window
         // waiting for something that will not arrive.
+        //
+        // One exception, and it is the act itself: while a rescue is running
+        // the window is waiting on the process it started, which is already
+        // reaching outside (and is bounded by its own wall).
         for state in all_states() {
             for (name, observation) in all_observations() {
                 if !observation.fresh || observation.health != Health::Absent {
+                    continue;
+                }
+                let rescue_running = matches!(state, State::Rescuing { .. })
+                    && matches!(observation.rescue, RescueProgress::Running);
+                if rescue_running {
                     continue;
                 }
                 let (_, effects) = step(&state, &observation, 5.0);
