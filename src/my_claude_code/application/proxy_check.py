@@ -67,6 +67,7 @@ from my_claude_code.config.proxy_chains import (
     FAILURE_REFUSED,
     FAILURE_TLS_TIMEOUT,
     FAILURE_TUNNEL,
+    PROXY_CHAINS_WRITE_LOCK,
     TLS_INTERCEPTED,
     TLS_STRICT,
     TLS_UNKNOWN,
@@ -1262,6 +1263,16 @@ class _CheckLoop:
         await asyncio.to_thread(self._thread.join, 10.0)
 
 
+def _persist_checks(outcomes: Mapping[str, ProxyCheckOutcome]) -> None:
+    """Write a sweep's verdicts on a fresh read, in one save, under the lock."""
+
+    with PROXY_CHAINS_WRITE_LOCK:
+        fresh = load_proxy_chains()
+        for proxy_id, outcome in outcomes.items():
+            fresh = fresh.with_check(proxy_id, outcome.record)
+        save_proxy_chains(fresh)
+
+
 async def check_endpoints(
     proxy_ids: Iterable[str],
     destinations: dict[str, str],
@@ -1448,10 +1459,10 @@ async def check_endpoints(
     }
 
     if persist and outcomes:
-        fresh = load_proxy_chains()
-        for proxy_id, outcome in outcomes.items():
-            fresh = fresh.with_check(proxy_id, outcome.record)
-        save_proxy_chains(fresh)
+        # Off the loop and under the store's writer lock, like every other
+        # writer of the file: on the loop, unlocked, this re-read could land
+        # between a chain edit's read and its save and undo it (7.72.1).
+        await asyncio.to_thread(_persist_checks, outcomes)
     if skipped:
         # Reported to the caller, never written: see ``charge_failures``.
         outcomes = outcomes | {

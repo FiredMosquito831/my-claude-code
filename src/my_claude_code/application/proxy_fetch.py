@@ -116,6 +116,7 @@ from my_claude_code.config.proxy_chains import (
     CHECK_STATE_WORKING,
     FAILURE_OTHER,
     FAILURE_REFUSED,
+    PROXY_CHAINS_WRITE_LOCK,
     TLS_UNKNOWN,
     ProxyChains,
     ProxyCheckRecord,
@@ -1168,27 +1169,32 @@ def _commit_fetch(
     the same machine as an unknown.
     """
 
-    fresh = load_proxy_chains()
-    proxies = dict(fresh.proxies)
-    for proxy_id, endpoint in passing + refused:
-        previous = proxies.get(proxy_id)
-        # Keep the row already there if there is one -- it may be a chain
-        # entry, which must keep its own provenance and health -- and give it
-        # the verdict this pass just measured. For an address that had been
-        # refused and has now passed, that write is what retires the refusal:
-        # a success is the only evidence that does (7.17.1), and it has to
-        # land in the store before ``with_candidates`` asks which addresses
-        # are still refused, or the address would stay unofferable for ever.
-        proxies[proxy_id] = (
-            endpoint
-            if previous is None
-            else replace(
-                previous,
-                last_check=endpoint.last_check,
-                checked_for=endpoint.checked_for,
+    # Under the store's writer lock, from the re-read to the save: a chain edit
+    # or a health flush landing in between used to be written back out of
+    # existence by this save (7.72.1).
+    with PROXY_CHAINS_WRITE_LOCK:
+        fresh = load_proxy_chains()
+        proxies = dict(fresh.proxies)
+        for proxy_id, endpoint in passing + refused:
+            previous = proxies.get(proxy_id)
+            # Keep the row already there if there is one -- it may be a chain
+            # entry, which must keep its own provenance and health -- and give
+            # it the verdict this pass just measured. For an address that had
+            # been refused and has now passed, that write is what retires the
+            # refusal: a success is the only evidence that does (7.17.1), and
+            # it has to land in the store before ``with_candidates`` asks which
+            # addresses are still refused, or the address would stay
+            # unofferable for ever.
+            proxies[proxy_id] = (
+                endpoint
+                if previous is None
+                else replace(
+                    previous,
+                    last_check=endpoint.last_check,
+                    checked_for=endpoint.checked_for,
+                )
             )
-        )
-    save_proxy_chains(replace(fresh, proxies=proxies).with_candidates(passing))
+        save_proxy_chains(replace(fresh, proxies=proxies).with_candidates(passing))
 
 
 # ------------------------------------------------------------------ the job

@@ -85,9 +85,14 @@ class LearnedFactStore:
     ) -> None:
         self._path = path
         self._debounce = max(0.0, flush_debounce_seconds)
+        # Owned by the event loop: every write below runs on it, and a worker
+        # thread is only ever handed an immutable snapshot of it.
         self._facts: dict[tuple[str, str, str, str], LearnedFact] = {}
         self._dirty = False
         self._flush_task: asyncio.Task[None] | None = None
+        #: The write a debounced flush handed to a worker and is still waiting
+        #: on. ``close`` waits for it rather than racing it to the file.
+        self._write_in_flight: asyncio.Future[bool | None] | None = None
         self._memories: dict[str, RecoveryMemory] = {}
 
     # -- lifecycle ------------------------------------------------------
@@ -193,6 +198,13 @@ class LearnedFactStore:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        write = self._write_in_flight
+        if write is not None and not write.done():
+            # Cancelling the timer does not stop a write already handed to a
+            # worker: it would finish anyway, possibly after the final write
+            # below, and put an older document back on disk. ``wait`` never
+            # raises the write's own outcome; ``_write_finished`` handles that.
+            await asyncio.wait({write})
         self.flush()
 
     # -- reads ----------------------------------------------------------
@@ -365,16 +377,7 @@ class LearnedFactStore:
     def as_document(self) -> dict[str, Any]:
         """The exact document this store would write."""
 
-        rows = sorted(
-            (fact.as_row() for fact in self._facts.values()),
-            key=lambda row: (
-                str(row["provider_id"]),
-                str(row["model_id"]),
-                str(row["fact_kind"]),
-                str(row.get("detail", "")),
-            ),
-        )
-        return {VERSION_KEY: DOCUMENT_VERSION, FACTS_KEY: rows}
+        return _document_of(tuple(self._facts.values()))
 
     def schedule_flush(self) -> None:
         """Mark the document dirty and coalesce a write onto a short timer."""
@@ -393,25 +396,84 @@ class LearnedFactStore:
         self._flush_task = loop.create_task(self._flush_after_debounce())
 
     async def _flush_after_debounce(self) -> None:
-        try:
+        # The facts belong to the event loop, which is the thread that records
+        # and forgets them. A worker that iterated the live dict could meet one
+        # of those writes mid-iteration -- "dictionary changed size during
+        # iteration" -- so the loop takes the snapshot, one tuple of immutable
+        # rows, and the worker only renders and writes it.
+        while True:
             await asyncio.sleep(self._debounce)
-        except asyncio.CancelledError:
-            raise
-        await asyncio.to_thread(self.flush)
+            snapshot = self._take_snapshot()
+            if snapshot is None:
+                return
+            write = self._start_write(*snapshot)
+            await asyncio.wait({write})
+            if _write_failed(write):
+                # Already re-marked dirty and logged once; the next fact, or
+                # ``close``, writes it. Not retried on a timer here: a disk
+                # that refuses one write would refuse the next one too.
+                return
+            if not self._dirty:
+                return
+            # Something was learned while the write was in flight. Its own
+            # ``schedule_flush`` found this task still running and left it to
+            # us, so go round again rather than leave it unwritten.
 
-    def flush(self) -> bool:
-        """Write the document now, if anything changed. Never raises."""
+    def _take_snapshot(self) -> tuple[Path, tuple[LearnedFact, ...]] | None:
+        """What to write and where, taken on the caller's thread; clears dirty."""
 
         if not self._dirty or self._path is None:
-            return False
+            return None
         self._dirty = False
-        try:
-            return write_json_document_atomically_if_changed(
-                self._path, self.as_document()
+        return self._path, tuple(self._facts.values())
+
+    def _start_write(
+        self, path: Path, facts: tuple[LearnedFact, ...]
+    ) -> asyncio.Future[bool | None]:
+        write = asyncio.ensure_future(asyncio.to_thread(_persist_facts, path, facts))
+        self._write_in_flight = write
+        write.add_done_callback(self._write_finished)
+        return write
+
+    def _write_finished(self, write: asyncio.Future[bool | None]) -> None:
+        """On the loop, before anything awaiting the write wakes."""
+
+        if self._write_in_flight is write:
+            self._write_in_flight = None
+        if write.cancelled():
+            self._dirty = True
+            return
+        exc = write.exception()
+        if exc is not None:
+            # ``_persist_facts`` catches what a write can raise; this is the
+            # net under it, so the task never ends on an exception nobody reads.
+            logger.warning(
+                "LEARNED FACTS: cannot write {}: {}: {}",
+                self._path,
+                type(exc).__name__,
+                exc,
             )
-        except OSError as exc:
-            logger.warning("LEARNED FACTS: cannot write {}: {}", self._path, exc)
+            self._dirty = True
+            return
+        if write.result() is None:
+            self._dirty = True
+
+    def flush(self) -> bool:
+        """Write the document now, if anything changed. Never raises.
+
+        Called on the event loop (or with none running). A write that fails
+        leaves the store dirty, so the next flush writes the same facts again
+        rather than the fact being dropped until something else is learned.
+        """
+
+        snapshot = self._take_snapshot()
+        if snapshot is None:
             return False
+        written = _persist_facts(*snapshot)
+        if written is None:
+            self._dirty = True
+            return False
+        return written
 
     def _evict_if_over_capacity(self) -> None:
         if len(self._facts) <= MAX_FACT_ROWS:
@@ -549,6 +611,42 @@ class LearnedFactStore:
             memory.responses_tool_choice_auto_only.clear()
             memory.responses_tool_schema_keywords.clear()
             self._populate_memory(provider_id, memory)
+
+
+def _document_of(facts: tuple[LearnedFact, ...]) -> dict[str, Any]:
+    """The on-disk document for one snapshot of facts."""
+
+    rows = sorted(
+        (fact.as_row() for fact in facts),
+        key=lambda row: (
+            str(row["provider_id"]),
+            str(row["model_id"]),
+            str(row["fact_kind"]),
+            str(row.get("detail", "")),
+        ),
+    )
+    return {VERSION_KEY: DOCUMENT_VERSION, FACTS_KEY: rows}
+
+
+def _persist_facts(path: Path, facts: tuple[LearnedFact, ...]) -> bool | None:
+    """Write one snapshot: rewritten, unchanged, or ``None`` when it failed.
+
+    Safe on a worker thread: it touches nothing but its own arguments, and a
+    :class:`LearnedFact` is frozen. The failure is logged here, once; the
+    caller re-marks the store dirty so the facts are written next time.
+    """
+
+    try:
+        return write_json_document_atomically_if_changed(path, _document_of(facts))
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("LEARNED FACTS: cannot write {}: {}", path, exc)
+        return None
+
+
+def _write_failed(write: asyncio.Future[bool | None]) -> bool:
+    if write.cancelled() or write.exception() is not None:
+        return True
+    return write.result() is None
 
 
 def _sink_for(store: LearnedFactStore, provider_id: str) -> FactSink:

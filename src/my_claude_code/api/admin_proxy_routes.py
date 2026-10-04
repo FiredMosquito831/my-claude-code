@@ -101,6 +101,7 @@ from my_claude_code.config.proxy_chains import (
     MAX_SWITCHES_MAX,
     MAX_SWITCHES_MIN,
     OAUTH_PROVIDER_IDS,
+    PROXY_CHAINS_WRITE_LOCK,
     PROXY_URL_SCHEMES,
     REFUSED_TRIGGER_KINDS,
     SCOPES,
@@ -135,8 +136,11 @@ router = APIRouter()
 # One writer at a time. Two chain edits landing together would each derive a
 # new document from a base read before the other committed, and the second
 # would silently drop the first -- the race ``apply_admin_config_with`` closes
-# for the env-var settings, which this file cannot use.
-_CHAIN_WRITE_LOCK = threading.Lock()
+# for the env-var settings, which this file cannot use. The process-wide lock
+# the store's own module owns (7.72.1), not one of this file's: the health
+# flush, the checker, a fetch and an ingest write the same file, and a lock
+# only these routes held kept the routes from each other and nothing else.
+_CHAIN_WRITE_LOCK = PROXY_CHAINS_WRITE_LOCK
 
 #: Providers whose chain a bulk batch wrote without republishing (7.55.0).
 #: A gesture republishes on its last batch, and a stopped one through

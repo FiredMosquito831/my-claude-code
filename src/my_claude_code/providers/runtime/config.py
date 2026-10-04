@@ -45,7 +45,12 @@ def resolve_proxy_chain(
     inside one attempt, and the card's own value is the choice within it.
     """
 
-    chain = current_proxy_chains().chain(provider_id)
+    # One read for the chain and the addresses it names. Two reads could
+    # straddle a save on a worker thread and resolve the old chain's entries
+    # against the new catalogue -- where an address the save removed is simply
+    # missing, and a chain left with no legs routes direct (7.72.1).
+    store = current_proxy_chains()
+    chain = store.chain(provider_id)
     if chain is None or not chain.enabled or not chain.entries:
         return static_proxy, None
     if provider_id in OAUTH_PROVIDER_IDS and not chain.oauth_acknowledged:
@@ -54,7 +59,6 @@ def resolve_proxy_chain(
         # and the chain is inert here, or the acknowledgement would be theatre.
         return static_proxy, None
 
-    store = current_proxy_chains()
     legs: list[ProxyLeg] = []
     for entry in chain.entries:
         if entry.paused:
