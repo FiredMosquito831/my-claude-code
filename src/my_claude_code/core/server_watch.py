@@ -33,9 +33,10 @@ machine is itself load.
 
 **Who shows it** (user answer 1, 2026-10-01 16:24): "if a desktop app running
 come from desktop app else come from console where it is running".
-:func:`notification_route` is that sentence as a function. The desktop app has
-no notification code of its own yet, so while it runs the host shows nothing
-and writes the line to ``server.log``; the app shows it from its next release.
+:func:`notification_route` is that sentence as a function. While the desktop
+app runs the host shows nothing and writes the line to ``server.log``; the app
+shows it itself, from its own facts, from 7.71.0 (``desktop-shell/src-tauri/
+src/notify.rs``) -- an app older than that shows nothing.
 """
 
 import time
@@ -293,8 +294,8 @@ class NotificationRoute(StrEnum):
 
     #: The host's own tray icon (pystray), named My Claude Code, shows it.
     TRAY = "tray"
-    #: The desktop app is running: it is the app's to show. Until the app can
-    #: (its next release), the host shows nothing and only logs it.
+    #: The desktop app is running: it is the app's to show (the 7.71.0 app
+    #: does; an older one shows nothing), and the host only logs it.
     APP = "app"
     #: No app: one line on the console this host runs in.
     CONSOLE = "console"

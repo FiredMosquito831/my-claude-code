@@ -81,6 +81,10 @@ class World:
     draining_seen: bool = False
     killed: list[int] = field(default_factory=list)
     bound: bool = False
+    #: The port comes free inside a wait of the whole bind budget (7.71.0).
+    frees_on_long_wait: bool = False
+    #: Every ``wait_for_port_free`` timeout the start used.
+    waits: list[float] = field(default_factory=list)
 
 
 def _settings(policy: str) -> Settings:
@@ -117,7 +121,10 @@ def _start(monkeypatch, world: World, policy: str, *, may_kill: bool):
 
     def wait_for_port_free(_host, _port, *, timeout=5.0, interval=0.2):
         del interval
+        world.waits.append(timeout)
         if world.draining_seen and world.frees_on_drain and timeout >= 20.0:
+            world.free = True
+        if world.frees_on_long_wait and timeout >= 20.0:
             world.free = True
         return world.free
 
@@ -416,3 +423,77 @@ def test_a_real_answering_holder_on_loopback_survives_a_start(
         holder.server_close()
         thread.join(timeout=5)
     assert f"(pid {HOLDER_PID}; it answered /health in" in capsys.readouterr().err
+
+
+# ------------------------------------------- --no-port-takeover (7.71.0, desktop)
+
+
+@pytest.mark.parametrize("policy", ["always", "mcc-only", "never"])
+@pytest.mark.parametrize(
+    ("reply", "identity"),
+    [(HEALTHY, MCC), (SILENT, MCC), (STRANGER_PAGE, STRANGER), (SILENT, None)],
+    ids=["answering-mcc", "silent-mcc", "stranger", "unidentified"],
+)
+def test_no_port_takeover_stops_nothing_and_asks_nothing_whatever_the_policy(
+    monkeypatch, capsys, policy, reply, identity
+) -> None:
+    # Every server the desktop app starts carries the flag (rescue spec 2.3,
+    # layer 3): even a race in which something grabs the port between the
+    # rescue and the bind cannot make it stop anything.
+    monkeypatch.setattr(commands, "_port_takeover_allowed", False)
+    monkeypatch.setattr(
+        port_takeover,
+        "take_port",
+        lambda *a, **k: pytest.fail("take_port ran under --no-port-takeover"),
+    )
+    monkeypatch.setattr(
+        commands,
+        "take_port",
+        lambda *a, **k: pytest.fail("take_port ran under --no-port-takeover"),
+    )
+    world = World(replies=[reply], identity=identity)
+
+    with pytest.raises(SystemExit) as exited:
+        _start(monkeypatch, world, policy, may_kill=False)
+
+    assert exited.value.code == 1
+    assert world.killed == []
+    assert world.asked == 0
+    assert world.bound is False
+    err = capsys.readouterr().err
+    assert "--no-port-takeover" in err
+    assert f"pid {HOLDER_PID}" in err
+
+
+def test_no_port_takeover_binds_when_the_port_comes_free_in_the_wait(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(commands, "_port_takeover_allowed", False)
+    world = World(replies=[], identity=MCC, frees_on_long_wait=True)
+
+    action = _start(monkeypatch, world, "always", may_kill=False)
+
+    assert action is commands.ServerExitAction.STOP
+    assert world.bound is True
+    assert world.killed == []
+    assert world.asked == 0
+    # The patient wait the bind budget allows, not the 2 s grace.
+    assert world.waits == [20.0]
+    capsys.readouterr()
+
+
+def test_the_flag_reaches_the_supervisor_and_is_never_left_behind(monkeypatch) -> None:
+    from my_claude_code.cli import entrypoints
+
+    seen: list[bool] = []
+    monkeypatch.setattr(entrypoints, "_bootstrap_config_paths", lambda: None)
+    monkeypatch.setattr(
+        commands, "_serve", lambda: seen.append(commands._takeover_allowed())
+    )
+
+    entrypoints.serve(["--no-port-takeover"])
+    entrypoints.serve([])
+
+    assert seen == [False, True]
+    # ...and nothing of the first start outlives it.
+    assert commands._takeover_allowed() is True

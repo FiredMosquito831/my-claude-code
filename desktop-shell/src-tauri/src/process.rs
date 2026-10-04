@@ -1,8 +1,9 @@
-//! The four processes this shell ever starts, and nothing else.
+//! The five processes this shell ever starts, and nothing else.
 //!
 //! 1. `mcc-desktop --print-status`, read for its stdout. This is the only way
 //!    the shell learns where anything is (C1).
-//! 2. `mcc-server`, started when -- and only when -- the ladder says `Start`.
+//! 2. `mcc-server`, started when -- and only when -- the ladder says `Start`,
+//!    always with `--no-port-takeover` and `MCC_OPEN_BROWSER=0` (7.71.0).
 //! 3. The projects own install script, when `mcc-desktop` is not on `PATH`
 //!    (decision Q4).
 //! 4. `mcc-desktop --ensure-shell`, when the tag compiled into this binary
@@ -10,6 +11,11 @@
 //!    Note what that is and is not: this window does not download, verify or
 //!    choose anything -- it asks the Python side to, and reads the one JSON
 //!    line it prints. C5 stands.
+//! 5. `mcc-desktop --rescue`, when the OS has proven the server dead (7.71.0).
+//!    The same arrangement: Python decides which processes are old servers of
+//!    this port and this configuration folder and stops them by exact pid; the
+//!    window reads the one JSON document it prints. The window itself still
+//!    never stops a process.
 //!
 //! It never takes `desktop.lock`, never writes `desktop.json`, and never
 //! registers autostart (C4). Every one of those stays Pythons.
@@ -407,6 +413,65 @@ pub fn ensure_shell(target: &std::path::Path) -> Result<String, StatusRunError> 
     run_for_stdout(&program, &args, ENSURE_SHELL_WALL)
 }
 
+/// The verb that asks Python to replace a dead server (7.71.0).
+pub const RESCUE_FLAG: &str = "--rescue";
+
+/// The arguments `mcc-desktop` is run with for a rescue. Split for the test.
+pub fn rescue_arguments(
+    known_pid: Option<i64>,
+    child_pid: Option<i64>,
+    reason: &str,
+) -> Vec<String> {
+    let mut args = vec![
+        RESCUE_FLAG.to_owned(),
+        "--reason".to_owned(),
+        reason.to_owned(),
+    ];
+    if let Some(pid) = known_pid {
+        args.push("--known-pid".to_owned());
+        args.push(pid.to_string());
+    }
+    if let Some(pid) = child_pid {
+        args.push("--child-pid".to_owned());
+        args.push(pid.to_string());
+    }
+    args
+}
+
+/// Run `mcc-desktop --rescue`, bounded by `wall`, and say how it ended.
+///
+/// Exit 2 is how an `mcc-desktop` from before 7.71.0 answers a verb it does not
+/// know (it prints its usage), so it is read as "unsupported" -- the caller
+/// then starts a server the way 7.26.0 did, into a port the OS has just
+/// reported free, and that server carries `--no-port-takeover`.
+pub fn run_rescue(
+    known_pid: Option<i64>,
+    child_pid: Option<i64>,
+    reason: &str,
+    wall: Duration,
+) -> crate::rescue::RescueRun {
+    use crate::rescue::RescueRun;
+    let (program, mut args) = resolve(DESKTOP_COMMAND_ENV, DESKTOP_COMMAND);
+    args.extend(rescue_arguments(known_pid, child_pid, reason));
+    match run_for_stdout(&program, &args, wall) {
+        Ok(stdout) => RescueRun::Report(stdout),
+        Err(StatusRunError::Failed {
+            code: Some(2),
+            stderr,
+        }) => RescueRun::Unsupported(stderr),
+        Err(StatusRunError::Failed { code, stderr }) => RescueRun::Failed(format!(
+            "mcc-desktop --rescue exited with {}: {stderr}",
+            code.map_or_else(|| "an unknown status".to_owned(), |value| value.to_string())
+        )),
+        Err(StatusRunError::NotInstalled) => {
+            RescueRun::Failed("mcc-desktop is not installed".to_owned())
+        }
+        Err(StatusRunError::Broken { detail } | StatusRunError::Unrunnable(detail)) => {
+            RescueRun::Failed(detail)
+        }
+    }
+}
+
 /// Read one pipe to the end on its own thread.
 fn drain_on_a_thread(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
     let (sender, receiver) = mpsc::channel();
@@ -484,6 +549,12 @@ impl ServerChild {
         self.exit.clone()
     }
 
+    /// The exact process id this window started. The only pid a "never opened
+    /// its port" rescue may name (user answer 2, safeguard e).
+    pub fn pid(&self) -> i64 {
+        i64::from(self.child.id())
+    }
+
     fn tail_text(&self) -> String {
         let Ok(guard) = self.tail.lock() else {
             return String::new();
@@ -503,6 +574,29 @@ impl ServerChild {
     }
 }
 
+/// The argument every server this window starts carries (7.71.0): it never
+/// takes the port from anything. If the port is held when it comes up, it
+/// waits its bind budget and exits with the diagnosis -- it does not ask, wait
+/// out or stop the holder, whatever `SERVER_PORT_TAKEOVER` says. The window's
+/// own rescue is the only thing that may stop an old server, and only one the
+/// OS proved dead (rescue spec section 2.3, layer 3). A wheel from before
+/// 7.71.0 ignores arguments it does not know, so this is safe against one.
+pub const NO_PORT_TAKEOVER_FLAG: &str = "--no-port-takeover";
+
+/// The server's "open the dashboard in a browser when I am healthy" switch.
+/// Off for every server this window starts: the window IS the dashboard, and a
+/// browser tab beside it is a second poller nobody asked for (self-inflicted
+/// load investigation, decision 6). Hand starts keep their tab.
+pub const OPEN_BROWSER_ENV: &str = "MCC_OPEN_BROWSER";
+
+/// The arguments and environment a server child is started with. Split out so
+/// the test can read them without starting anything.
+pub fn server_launch(args: &[String]) -> (Vec<String>, Vec<(&'static str, &'static str)>) {
+    let mut launch = args.to_vec();
+    launch.push(NO_PORT_TAKEOVER_FLAG.to_owned());
+    (launch, vec![(OPEN_BROWSER_ENV, "0")])
+}
+
 /// Start `mcc-server`, capturing what it says and how it ends.
 ///
 /// The child still outlives this window in the sense that matters -- nothing
@@ -512,9 +606,11 @@ impl ServerChild {
 /// merely quiet, and until now the window could not tell them apart.
 pub fn spawn_server(log_path: Option<PathBuf>) -> Result<ServerChild, String> {
     let (program, args) = resolve(SERVER_COMMAND_ENV, SERVER_COMMAND);
+    let (args, environment) = server_launch(&args);
     let mut command = Command::new(&program);
     command
         .args(&args)
+        .envs(environment)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1135,6 +1231,45 @@ mod tests {
         unsafe { std::env::set_var(key, "   ") };
         assert_eq!(resolve_in(None, key, SERVER_COMMAND).0, "mcc-server");
         unsafe { std::env::remove_var(key) };
+    }
+
+    #[test]
+    fn a_server_this_window_starts_never_takes_the_port_and_never_opens_a_browser() {
+        // Rescue spec section 2.3, layer 3, and the self-inflicted load
+        // investigation's decision 6: the window starts every server with
+        // `--no-port-takeover` and `MCC_OPEN_BROWSER=0`, whatever else the
+        // command line carries.
+        let (args, environment) = server_launch(&["--from-an-override".to_owned()]);
+        assert_eq!(
+            args,
+            vec![
+                "--from-an-override".to_owned(),
+                "--no-port-takeover".to_owned()
+            ]
+        );
+        assert_eq!(environment, vec![("MCC_OPEN_BROWSER", "0")]);
+        let (bare, _) = server_launch(&[]);
+        assert_eq!(bare, vec!["--no-port-takeover".to_owned()]);
+    }
+
+    #[test]
+    fn the_rescue_names_exactly_the_pids_it_was_given() {
+        assert_eq!(
+            rescue_arguments(Some(58620), Some(4242), "listener-lost"),
+            vec![
+                "--rescue",
+                "--reason",
+                "listener-lost",
+                "--known-pid",
+                "58620",
+                "--child-pid",
+                "4242"
+            ]
+        );
+        assert_eq!(
+            rescue_arguments(None, None, "process-gone"),
+            vec!["--rescue", "--reason", "process-gone"]
+        );
     }
 
     #[test]

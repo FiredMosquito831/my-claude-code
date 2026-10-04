@@ -25,7 +25,9 @@ pub mod activation;
 pub mod controller;
 pub mod health;
 pub mod install;
+pub mod notify;
 pub mod process;
+pub mod rescue;
 pub mod status;
 pub mod swap;
 pub mod ui;
@@ -34,7 +36,7 @@ pub mod window_state;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -222,6 +224,14 @@ static LOCAL_URL: OnceLock<String> = OnceLock::new();
 static TRAY_STATUS_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
 static TRAY_UPDATE_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
 static TRAY_SERVERS_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
+/// The busy banner currently over the dashboard, kept so a reload of the
+/// dashboard (F5, or the page reloading itself) gets it back. `None` whenever
+/// the server is not slow. 7.71.0.
+static BUSY_BANNER: Mutex<Option<String>> = Mutex::new(None);
+/// The last notification's sentence, repeated in the window until it has been
+/// shown on a dashboard once -- the dashboard a rescue ends on is a fresh page
+/// load, which would otherwise lose the banner the moment it appeared.
+static NOTICE: Mutex<Option<(String, bool)>> = Mutex::new(None);
 
 // -- commands the page may call -------------------------------------------
 
@@ -340,6 +350,9 @@ fn raise(app: &AppHandle) {
 /// that is where the window currently is.
 fn show_page(window: &WebviewWindow, page: &Page) {
     remember_page(Some(page.clone()));
+    // A page of the shell's own replaces the dashboard, and the busy banner
+    // with it.
+    set_busy_banner(None);
     let local = LOCAL_URL.get().cloned().unwrap_or_default();
     let current = window.url().map(|url| url.to_string()).unwrap_or_default();
     let elsewhere = current != local;
@@ -372,6 +385,112 @@ fn repush_current_page(window: &WebviewWindow) {
 
 fn append_output(window: &WebviewWindow, line: &str) {
     let _ = window.eval(ui::append_output_script(line));
+}
+
+/// Whether the window is showing the dashboard at `admin_url` right now -- a
+/// prefix test, so the dashboard's own `#view` routes still count.
+fn is_on_dashboard(window: &WebviewWindow, admin_url: &str) -> bool {
+    let wanted = admin_url.trim().trim_end_matches('/');
+    if wanted.is_empty() {
+        return false;
+    }
+    window
+        .url()
+        .map(|url| url.to_string())
+        .is_ok_and(|current| current.starts_with(wanted))
+}
+
+fn set_busy_banner(message: Option<String>) {
+    if let Ok(mut guard) = BUSY_BANNER.lock() {
+        *guard = message;
+    }
+}
+
+/// Keep the dashboard on screen under the busy banner (rescue spec rows 5-6).
+/// On a window that is not on the dashboard the same sentence is the busy
+/// page. Never a navigation away from the dashboard.
+fn show_busy(window: &WebviewWindow, admin_url: &str, message: &str) {
+    if is_on_dashboard(window, admin_url) {
+        set_busy_banner(Some(message.to_owned()));
+        let _ = window.eval(ui::banner_script(ui::Banner::Busy, message));
+    } else {
+        show_page(
+            window,
+            &Page::Busy {
+                message: message.to_owned(),
+            },
+        );
+    }
+}
+
+fn clear_busy(window: &WebviewWindow) {
+    set_busy_banner(None);
+    let _ = window.eval(ui::clear_banner_script(ui::Banner::Busy));
+}
+
+/// Put the banners back after a document finished loading: the busy banner on
+/// a reloaded dashboard, and the last notification until a dashboard has
+/// shown it once.
+fn reinject_banners(window: &WebviewWindow, on_dashboard: bool) {
+    if on_dashboard {
+        let busy = BUSY_BANNER.lock().ok().and_then(|guard| guard.clone());
+        if let Some(message) = busy {
+            let _ = window.eval(ui::banner_script(ui::Banner::Busy, &message));
+        }
+    }
+    let notice = NOTICE.lock().ok().and_then(|mut guard| {
+        let (message, shown) = guard.as_mut()?;
+        if *shown {
+            return None;
+        }
+        if on_dashboard {
+            *shown = true;
+        }
+        Some(message.clone())
+    });
+    if let Some(message) = notice {
+        let _ = window.eval(ui::banner_script(ui::Banner::Notice, &message));
+    }
+}
+
+/// Say `message` to the user, the three ways `notify.rs` describes: natively
+/// where the app can attribute it to itself, in the window, and in the shell
+/// transcript. The native half runs on a thread of its own and never holds up
+/// the tick.
+fn announce(window: &WebviewWindow, log: &Path, message: &str) {
+    process::append_line(log, &stamped(&format!("-- notification: {message} --")));
+    if let Ok(mut guard) = NOTICE.lock() {
+        *guard = Some((message.to_owned(), false));
+    }
+    let _ = window.eval(ui::banner_script(ui::Banner::Notice, message));
+    let body = message.to_owned();
+    let log = log.to_path_buf();
+    std::thread::spawn(move || {
+        let route = notify::route_here();
+        let line = match notify::deliver(&route, &body) {
+            Ok(done) => format!("-- notification shown: {done} --"),
+            Err(error) => format!("-- notification not shown natively: {error} --"),
+        };
+        process::append_line(&log, &stamped(&line));
+    });
+}
+
+/// `[HH:MM:SS UTC] line` -- the window's own transcript lines carry the time
+/// they were written, so the phases of a rescue can be read off the file. UTC,
+/// because this binary has no time-zone database and must not guess one; the
+/// server's own lines in the same file carry local time with their offset.
+pub fn stamped(line: &str) -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default()
+        % 86_400;
+    format!(
+        "[{:02}:{:02}:{:02} UTC] {line}",
+        seconds / 3_600,
+        (seconds / 60) % 60,
+        seconds % 60
+    )
 }
 
 /// Load the dashboard itself. The URL is whatever Python said it was (C1).
@@ -1003,11 +1122,6 @@ struct Lifecycle {
     health: controller::Health,
     holder: controller::Holder,
     holder_since: Instant,
-    /// Whether the holder's process was alive at the last probe that did not
-    /// answer. Re-checked only on a fresh tick, and only when the server did
-    /// not answer -- an attached window still pays for one `/health` and
-    /// nothing else (BUG-4).
-    holder_alive: bool,
     /// When this window last saw the server answer anything at all. The clock
     /// the busy grace is measured on; `None` until the first answer, which is
     /// what keeps a cold start timed exactly as it is today.
@@ -1015,6 +1129,43 @@ struct Lifecycle {
     /// Consecutive probes that came back absent. Reset by any answer, and by
     /// a spawn.
     consecutive_absent: u32,
+
+    // -- the rescue spec's facts (7.71.0) ---------------------------------
+    /// `x-mcc-pid` of the last answer of any kind: fact K, fresh on every
+    /// healthy tick. Cleared by a spawn -- the next server names itself.
+    header_pid: Option<i64>,
+    /// The document's own pid for MCC's server, for a server too old to send
+    /// the header. Only ever a fallback for `header_pid`.
+    status_pid: Option<i64>,
+    /// Fact A, re-checked only on a tick where the server did not answer --
+    /// an attached window still pays for one `/health` and nothing else
+    /// (BUG-4). `None` is "could not tell", and unknown is alive.
+    known_alive: Option<bool>,
+    /// The pid this tick's answer named.
+    answer_pid: Option<i64>,
+    busy_header: bool,
+    /// Whether this tick's probe completed a TCP handshake.
+    probe_connected: bool,
+    /// Fact L, and when it was read.
+    listener: controller::Listener,
+    listener_at: Option<Instant>,
+    /// When anything last answered (healthy, starting or draining). An OS
+    /// answer older than this says nothing about the port now.
+    last_answer: Option<Instant>,
+    /// Whether the current child ever answered, or the OS ever saw the port
+    /// held while it ran (safeguard d). Cleared by a spawn.
+    child_ever_bound: bool,
+    /// The pid of the server the dashboard on screen was loaded from.
+    dashboard_pid: Option<i64>,
+    /// A rescue in flight, its report once it has one, and when it began.
+    rescue_rx: Option<mpsc::Receiver<controller::RescueOutcome>>,
+    rescue_done: Option<controller::RescueOutcome>,
+    last_rescue: Option<Instant>,
+    /// Run the next tick at once: a rescue just reported, or the status that
+    /// makes a stale "nothing listens" a fresh one was just read.
+    recheck_now: bool,
+    /// Whether this outage has been announced (`AnnounceDead`, once).
+    dead_announced: bool,
 
     helper: controller::Helper,
     /// What the update in flight is saying about itself, refreshed on every
@@ -1043,9 +1194,24 @@ impl Lifecycle {
             health: controller::Health::Absent,
             holder: controller::Holder::Unknown,
             holder_since: Instant::now(),
-            holder_alive: false,
             last_healthy: None,
             consecutive_absent: 0,
+            header_pid: None,
+            status_pid: None,
+            known_alive: None,
+            answer_pid: None,
+            busy_header: false,
+            probe_connected: false,
+            listener: controller::Listener::Unknown,
+            listener_at: None,
+            last_answer: None,
+            child_ever_bound: false,
+            dashboard_pid: None,
+            rescue_rx: None,
+            rescue_done: None,
+            last_rescue: None,
+            recheck_now: false,
+            dead_announced: false,
 
             helper: controller::Helper::None,
             update: controller::UpdateNarration::default(),
@@ -1145,24 +1311,99 @@ impl Lifecycle {
         }
     }
 
-    /// Whether the holder's process is alive right now.
+    /// Fact K: the pid of the server this window last heard from -- the
+    /// header of the last answer, else the document's own pid for a server too
+    /// old to send one.
     ///
-    /// `false` when there is no pid to ask about or the question cannot be
-    /// answered: an unknown pid buys no patience, which is what keeps a dead
-    /// server's restart timed exactly as it is today.
-    fn holder_is_alive(&self) -> bool {
-        if !self.holder.is_ours() {
-            return false;
-        }
-        let Some(status) = self.status.as_ref() else {
+    /// Until 7.71.0 this was only ever the document's pid, refreshed only by a
+    /// `--print-status` on a tick where the server did NOT answer; a healthy
+    /// answer never touched it (spec section 1.3). Under load that is exactly
+    /// when it was stale, and a stale or missing pid read as "dead".
+    fn known_pid(&self) -> Option<i64> {
+        self.header_pid.or(self.status_pid)
+    }
+
+    /// Whether `known_pid` is alive. `None` when there is no pid or the
+    /// question cannot be answered -- and unknown is alive, never dead.
+    fn known_is_alive(&self) -> Option<bool> {
+        self.known_pid().and_then(update_progress::pid_is_alive)
+    }
+
+    /// Whether the last OS answer about the port describes it now: read after
+    /// anything last answered, and within two ticks.
+    fn listener_fresh(&self) -> bool {
+        let Some(read) = self.listener_at else {
             return false;
         };
-        let pid = status
-            .holder
-            .as_ref()
-            .and_then(|holder| holder.pid)
-            .or(status.server_pid);
-        pid.is_some_and(|pid| update_progress::pid_is_alive(pid) == Some(true))
+        if self.last_answer.is_some_and(|answered| answered >= read) {
+            return false;
+        }
+        read.elapsed().as_secs_f64() <= 2.0 * self.facts().tick_seconds.max(1.0)
+    }
+
+    /// How long a rescue may run before this window stops waiting on it: the
+    /// status wall twice (its first look at the process table, and the fresh
+    /// one it takes again before it stops anything), the stop wait for the old
+    /// servers, the busy grace for the port, and the stop's own `taskkill`
+    /// fallback bound (`core/mcc_processes.py`, 10 s). Every term an existing
+    /// number: 15 + 24 + 15 + 15 + 10 = 79 s at the defaults.
+    ///
+    /// Measured on a loaded machine (2026-10-04, a full test run beside it):
+    /// one scan took 7 s and a rescue that stopped a server reached its stop
+    /// 62 s after it was asked for, so the 64 s this was first written with
+    /// cut it off mid-stop. A rescue that overruns is stopped and counts as
+    /// not proven -- nothing is started -- and the next fresh tick decides
+    /// again from fresh facts.
+    fn rescue_wall(&self) -> Duration {
+        let facts = self.facts();
+        let status_wall = self.status_wall().as_secs_f64();
+        Duration::from_secs_f64(
+            2.0 * status_wall
+                + facts.server_stop_wait_seconds.max(0.0)
+                + facts.busy_grace_seconds.max(0.0)
+                + 10.0,
+        )
+    }
+
+    /// Fold a finished rescue in, if one finished. Returns whether it did,
+    /// which makes the next tick fresh: the spawn after a rescue belongs to a
+    /// fresh tick, and nobody should wait ten seconds for it.
+    fn poll_rescue(&mut self, log: &Path) -> bool {
+        let Some(receiver) = self.rescue_rx.as_ref() else {
+            return false;
+        };
+        let outcome = match receiver.try_recv() {
+            Ok(outcome) => outcome,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => controller::RescueOutcome {
+                result: controller::RescueResult::Failed,
+                reason: controller::DeadReason::ProcessGone,
+                known_pid: None,
+                child_pid: None,
+                servers: Vec::new(),
+                left_alone: Vec::new(),
+                detail: "the rescue thread ended without a report".to_owned(),
+                stop_wait_seconds: 0.0,
+            },
+        };
+        process::append_line(
+            log,
+            &stamped(&format!(
+                "-- rescue finished: {:?} ({}); servers {:?}; left alone {:?}{} --",
+                outcome.result,
+                outcome.reason.as_arg(),
+                outcome.servers,
+                outcome.left_alone,
+                if outcome.detail.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("; {}", outcome.detail.trim())
+                }
+            )),
+        );
+        self.rescue_rx = None;
+        self.rescue_done = Some(outcome);
+        true
     }
 
     /// How long `mcc-desktop --print-status` may take. Out of the binary since
@@ -1224,6 +1465,18 @@ impl Lifecycle {
             holder_image: holder.and_then(|holder| holder.image.clone()),
 
             holder_pid: holder.and_then(|holder| holder.pid),
+            // On the document since 6.50.0 and read for the first time in
+            // 7.71.0: how often a slow server's holder is re-read.
+            reconnect_restatus_seconds: if status.reconnect_restatus_seconds > 0.0 {
+                status.reconnect_restatus_seconds
+            } else {
+                controller::DEFAULT_RECONNECT_RESTATUS_SECONDS
+            },
+            // 7.70.0's key, tolerated this release (C9).
+            server_stop_wait_seconds: status
+                .server_stop_wait_seconds
+                .filter(|value| *value >= 0.0)
+                .unwrap_or(controller::DEFAULT_SERVER_STOP_WAIT_SECONDS),
         }
     }
 
@@ -1237,33 +1490,52 @@ impl Lifecycle {
             .filter(|url| !url.is_empty())
         else {
             self.health = controller::Health::Absent;
+            self.probe_connected = false;
+            self.answer_pid = None;
+            self.busy_header = false;
             return;
         };
-        self.health = match health::probe_outcome_within(&url, self.next_probe_timeout()) {
+        let probe = health::probe_within(&url, self.next_probe_timeout());
+        self.health = match probe.outcome {
             health::ProbeOutcome::Healthy => controller::Health::Healthy,
             health::ProbeOutcome::StartingUp => controller::Health::Starting,
             health::ProbeOutcome::ShuttingDown => controller::Health::Draining,
             _ => controller::Health::Absent,
         };
+        self.probe_connected = probe.outcome.connected();
+        self.busy_header = probe.busy;
         // A healthy answer settles who holds the port without a process
         // lookup, which is what keeps an attached window off `--print-status`
         // entirely (BUG-4).
         if self.health == controller::Health::Healthy {
             self.remember_holder(controller::Holder::OursHealthy);
+            self.dead_announced = false;
         }
         if self.health == controller::Health::Absent {
+            self.answer_pid = None;
             self.consecutive_absent = self.consecutive_absent.saturating_add(1);
-            // The one process lookup this release adds, and it is on the
-            // path where something is already wrong: never on the healthy
-            // tick, which is the cost rule BUG-4 set.
-            self.holder_alive = self.holder_is_alive();
+            // The one process lookup a tick ever makes, and it is on the path
+            // where something is already wrong: never on the healthy tick,
+            // which is the cost rule BUG-4 set.
+            self.known_alive = self.known_is_alive();
             self.note_absent_probe();
         } else {
             // Healthy, starting or draining: the server answered, so it is
-            // alive and the count starts again.
+            // alive and the count starts again -- and it said who it is.
+            self.answer_pid = probe.pid;
+            if probe.pid.is_some() {
+                self.header_pid = probe.pid;
+            }
             self.consecutive_absent = 0;
-            self.holder_alive = true;
-            self.last_healthy = Some(Instant::now());
+            self.known_alive = Some(true);
+            let now = Instant::now();
+            self.last_healthy = Some(now);
+            self.last_answer = Some(now);
+            if self.child.is_some() {
+                // Safeguard d: a child that answered anything -- even 503
+                // "starting" -- is never one that "never opened its port".
+                self.child_ever_bound = true;
+            }
         }
     }
 
@@ -1295,16 +1567,19 @@ impl Lifecycle {
             .unwrap_or_default();
         process::append_line(
             &log,
-            &format!(
-                "-- absent probe {}/{} (holder={:?} alive={}, last answered {:.0} s ago, \
-                 busy grace {:.0} s) --",
+            &stamped(&format!(
+                "-- absent probe {}/{} (connected={}, known pid={:?} alive={:?}, listener={:?} \
+                 fresh={}, last answered {:.0} s ago, busy grace {:.0} s) --",
                 self.consecutive_absent,
                 threshold,
-                self.holder,
-                self.holder_alive,
+                self.probe_connected,
+                self.known_pid(),
+                self.known_alive,
+                self.listener,
+                self.listener_fresh(),
                 waited,
                 self.busy_grace(),
-            ),
+            )),
         );
     }
 
@@ -1368,6 +1643,19 @@ impl Lifecycle {
                     ensure_activation_watcher(app, &status);
                     apply_status(window, &status);
                     self.remember_holder(holder_from(&status));
+                    // Fact L, stamped with when it was read: only a fresh
+                    // "nothing listens" may ever lead to a rescue.
+                    self.listener = listener_from(&status);
+                    self.listener_at = Some(Instant::now());
+                    self.status_pid = status_server_pid(&status);
+                    if self.child.is_some()
+                        && matches!(self.listener, controller::Listener::Held { .. })
+                    {
+                        // Safeguard d, conservatively: the port held at any
+                        // moment while our child ran means it is never "a
+                        // server that never opened its port".
+                        self.child_ever_bound = true;
+                    }
                     self.helper = helper_state(&status.config_dir);
                     self.status = Some(status);
                     self.status_health = controller::StatusHealth::Ok;
@@ -1414,11 +1702,28 @@ impl Lifecycle {
     }
 
     /// Assemble this tick's observation. Pure sampling: nothing here decides.
-    fn observe(&mut self, fresh: bool) -> controller::Observation {
+    fn observe(&mut self, fresh: bool, window: &WebviewWindow) -> controller::Observation {
         let child_alive = self
             .child
             .as_mut()
             .is_some_and(process::ServerChild::still_running);
+        let child_pid = if child_alive {
+            self.child.as_ref().map(process::ServerChild::pid)
+        } else {
+            None
+        };
+        let admin_url = self
+            .status
+            .as_ref()
+            .map(|status| status.admin_url.clone())
+            .unwrap_or_default();
+        let rescue = if let Some(done) = self.rescue_done.as_ref() {
+            controller::RescueProgress::Done(done.clone())
+        } else if self.rescue_rx.is_some() {
+            controller::RescueProgress::Running
+        } else {
+            controller::RescueProgress::Idle
+        };
         if !child_alive {
             // Reap the *reason* before dropping the child. Until 6.66.0 the
             // child was `Stdio::null()` on both streams and its exit code
@@ -1444,9 +1749,22 @@ impl Lifecycle {
             health: self.health,
             holder: self.holder,
             holder_age: self.holder_since.elapsed().as_secs_f64(),
-            holder_alive: self.holder_alive,
             seconds_since_healthy: self.last_healthy.map(|at| at.elapsed().as_secs_f64()),
             consecutive_absent: self.consecutive_absent,
+            probe_connected: self.probe_connected,
+            listener: self.listener,
+            listener_fresh: self.listener_fresh(),
+            known_pid: self.known_pid(),
+            known_alive: self.known_alive,
+            child_pid,
+            child_ever_bound: self.child_ever_bound,
+            answer_pid: self.answer_pid,
+            busy_header: self.busy_header,
+            on_dashboard: is_on_dashboard(window, &admin_url),
+            dashboard_pid: self.dashboard_pid,
+            rescue,
+            since_rescue: self.last_rescue.map(|at| at.elapsed().as_secs_f64()),
+            since_restatus: self.last_restatus.map(|at| at.elapsed().as_secs_f64()),
 
             helper: self.helper.clone(),
             update: self.update.clone(),
@@ -1502,6 +1820,58 @@ fn holder_from(status: &Status) -> controller::Holder {
         "foreign" => controller::Holder::Foreign,
         _ => controller::Holder::Unknown,
     }
+}
+
+/// Fact L, from Python's answer: what the OS says about the listening socket.
+///
+/// `absent` is a bind test the OS answered -- the only "free". A holder Python
+/// identified as ours is held by My Claude Code. A `foreign` holder is a
+/// stranger only when the lookup succeeded: `identified: false` (7.70.0) is a
+/// lookup that failed or timed out, and that is "could not tell", which is
+/// alive (the approved rule) -- never a stranger and never free. A wheel from
+/// before 7.70.0 cannot say which, and its `foreign` keeps meaning what it
+/// meant to 7.26.0: never spawned over, a conflict page after the grace.
+pub fn listener_from(status: &Status) -> controller::Listener {
+    use controller::Listener;
+    if let Some(holder) = status.holder.as_ref() {
+        return match holder.kind.as_str() {
+            "absent" => Listener::Free,
+            "ours_healthy" | "ours_starting" | "ours_draining" | "ours_stale" => Listener::Held {
+                pid: holder.pid,
+                mcc: Some(true),
+            },
+            "foreign" if holder.identified == Some(false) => Listener::Unknown,
+            "foreign" => Listener::Held {
+                pid: holder.pid,
+                mcc: Some(false),
+            },
+            _ => Listener::Unknown,
+        };
+    }
+    match status.server_presence.as_str() {
+        "free" => Listener::Free,
+        "healthy" | "starting" | "draining" | "mcc-stale" => Listener::Held {
+            pid: status.server_pid,
+            mcc: Some(true),
+        },
+        "foreign" => Listener::Held {
+            pid: None,
+            mcc: Some(false),
+        },
+        _ => Listener::Unknown,
+    }
+}
+
+/// The document's own pid for MCC's server: `server_pid`, else the holder's
+/// pid when the holder is ours. Never a stranger's pid.
+fn status_server_pid(status: &Status) -> Option<i64> {
+    status.server_pid.or_else(|| {
+        status
+            .holder
+            .as_ref()
+            .filter(|holder| holder.kind.starts_with("ours_"))
+            .and_then(|holder| holder.pid)
+    })
 }
 
 /// What the update helper is doing, from `progress.json` alone.
@@ -1568,10 +1938,93 @@ fn apply(
                 set_tray_status(tray_line(&life.state));
                 show_page(window, &page);
             }
-            Effect::Attach { admin_url } => {
-                set_tray_status("Server: running");
+            Effect::Attach {
+                admin_url,
+                navigate,
+            } => {
+                set_tray_status(if observation.busy_header {
+                    "Server: running (busy)"
+                } else {
+                    "Server: running"
+                });
                 remember_page(None);
-                show_dashboard(window, &admin_url);
+                if navigate {
+                    set_busy_banner(None);
+                    life.dashboard_pid = observation.answer_pid.or(observation.known_pid);
+                    show_dashboard(window, &admin_url);
+                } else {
+                    // The same server, answering again, under the dashboard
+                    // it rendered: take the banner away and reload nothing.
+                    clear_busy(window);
+                    if life.dashboard_pid.is_none() {
+                        life.dashboard_pid = observation.answer_pid;
+                    }
+                }
+            }
+            Effect::Overlay { message } => {
+                set_tray_status(tray_line(&life.state));
+                show_busy(window, &observation.facts.admin_url, &message);
+            }
+            Effect::Rescue {
+                known_pid,
+                child_pid,
+                reason,
+            } => {
+                let request = rescue::RescueRequest {
+                    known_pid,
+                    child_pid,
+                    reason,
+                    stop_wait_seconds: observation.facts.server_stop_wait_seconds,
+                };
+                let wall = life.rescue_wall();
+                let log = shell_log_path_now(life);
+                process::append_line(
+                    &log,
+                    &stamped(&format!(
+                        "-- running mcc-desktop {} (wall {:.0} s) --",
+                        process::rescue_arguments(known_pid, child_pid, reason.as_arg()).join(" "),
+                        wall.as_secs_f64()
+                    )),
+                );
+                set_tray_status("Server: replacing a dead server");
+                let (sender, receiver) = mpsc::channel();
+                life.rescue_rx = Some(receiver);
+                life.rescue_done = None;
+                life.last_rescue = Some(Instant::now());
+                std::thread::spawn(move || {
+                    let run = process::run_rescue(known_pid, child_pid, reason.as_arg(), wall);
+                    // The report itself, compacted onto one line: what was
+                    // found, what was stopped, and how long each phase took.
+                    let line = match &run {
+                        rescue::RescueRun::Report(raw) => {
+                            serde_json::from_str::<serde_json::Value>(raw.trim()).map_or_else(
+                                |_| format!("-- rescue report (unreadable): {} --", raw.trim()),
+                                |value| format!("-- rescue report: {value} --"),
+                            )
+                        }
+                        rescue::RescueRun::Unsupported(detail) => format!(
+                            "-- rescue unsupported by this mcc-desktop (exit 2): {} --",
+                            detail.trim()
+                        ),
+                        rescue::RescueRun::Failed(detail) => {
+                            format!("-- rescue failed: {} --", detail.trim())
+                        }
+                    };
+                    process::append_line(&log, &stamped(&line));
+                    let _ = sender.send(rescue::outcome_of(request, &run));
+                });
+            }
+            Effect::Notify { message } => {
+                announce(window, &shell_log_path_now(life), &message);
+            }
+            Effect::AnnounceDead { message } => {
+                if !life.dead_announced {
+                    life.dead_announced = true;
+                    announce(window, &shell_log_path_now(life), &message);
+                }
+            }
+            Effect::Log(line) => {
+                process::append_line(&shell_log_path_now(life), &stamped(&line));
             }
             Effect::Spawn => {
                 life.last_spawn = Some(Instant::now());
@@ -1580,7 +2033,16 @@ fn apply(
                 // timed exactly as it is today.
                 life.consecutive_absent = 0;
                 life.last_healthy = None;
-                life.holder_alive = false;
+                // ...and every fact about the old one is forgotten: the next
+                // server names itself, and nothing the OS said about the port
+                // before it existed describes it.
+                life.header_pid = None;
+                life.status_pid = None;
+                life.known_alive = None;
+                life.child_ever_bound = false;
+                life.listener = controller::Listener::Unknown;
+                life.listener_at = None;
+                life.rescue_done = None;
 
                 if life.first_spawn.is_none() {
                     life.first_spawn = life.last_spawn;
@@ -1620,7 +2082,20 @@ fn apply(
                     }
                 }
             }
-            Effect::Restatus => life.restatus(app, window),
+            Effect::Restatus => {
+                life.restatus(app, window);
+                // A tick that found the port possibly free on an OS answer
+                // older than the last reply decides again at once, on the
+                // answer just read -- so "process gone" is acted on within a
+                // second or two, as it was before 7.71.0, and not a tick later.
+                if observation.health == controller::Health::Absent
+                    && !observation.listener_fresh
+                    && life.status_health == controller::StatusHealth::Ok
+                    && matches!(life.listener, controller::Listener::Free)
+                {
+                    life.recheck_now = true;
+                }
+            }
             Effect::Install => {
                 let attempt = INSTALLS_RUN.load(Ordering::SeqCst).saturating_add(1);
                 INSTALLS_RUN.store(attempt, Ordering::SeqCst);
@@ -1649,7 +2124,6 @@ fn apply(
             }
         }
     }
-    let _ = observation;
 }
 
 /// The tray's status line, derived from the state like everything else.
@@ -1666,6 +2140,9 @@ fn tray_line(state: &controller::State) -> &'static str {
         controller::State::Installing { .. } => "Installing My Claude Code...",
         controller::State::Verifying { .. } => "Checking the install...",
         controller::State::Blocked { .. } => "Server: needs attention",
+        controller::State::Busy { .. } => "Server: busy (still running)",
+        controller::State::Confirming { .. } => "Server: not answering, checking",
+        controller::State::Rescuing { .. } => "Server: replacing a dead server",
     }
 }
 
@@ -1695,7 +2172,12 @@ fn run_controller(app: &AppHandle, window: &WebviewWindow) {
             life.last_spawn = None;
             life.remember_holder(controller::Holder::OursStale);
         }
-        let fresh = asked || life.last_probe.elapsed() >= life.tick();
+        // A rescue that just reported, or a status just read that turned an
+        // old "nothing listens" into a fresh one, decides on the next second
+        // rather than the next ten.
+        let rescued = life.poll_rescue(&shell_log_path_now(&life));
+        let recheck = std::mem::take(&mut life.recheck_now);
+        let fresh = asked || rescued || recheck || life.last_probe.elapsed() >= life.tick();
         // The bootstrap read: nothing -- not even the health URL -- is known
         // before the first document parses, so it happens immediately, and
         // then once per fresh tick until one does.
@@ -1729,10 +2211,35 @@ fn run_controller(app: &AppHandle, window: &WebviewWindow) {
             life.probe();
         }
 
-        let observation = life.observe(fresh);
+        let observation = life.observe(fresh, window);
         let now = life.started.elapsed().as_secs_f64();
         let (next, effects) = controller::step(&life.state, &observation, now);
+        if next.name() != life.state.name() {
+            // The reasoning behind every transition survives the transition:
+            // one line per change of state, with the facts it was made on.
+            process::append_line(
+                &shell_log_path_now(&life),
+                &stamped(&format!(
+                    "-- state {} -> {} (health={:?} connected={} listener={:?} fresh={} \
+                     known pid={:?} alive={:?} child={:?} bound={}) --",
+                    life.state.name(),
+                    next.name(),
+                    observation.health,
+                    observation.probe_connected,
+                    observation.listener,
+                    observation.listener_fresh,
+                    observation.known_pid,
+                    observation.known_alive,
+                    observation.child_pid,
+                    observation.child_ever_bound,
+                )),
+            );
+        }
         life.state = next;
+        if !matches!(life.state, controller::State::Rescuing { .. }) {
+            // A report is read once, by the tick that leaves `Rescuing`.
+            life.rescue_done = None;
+        }
         apply(app, window, &mut life, effects, &observation);
 
         std::thread::sleep(paint);
@@ -1883,6 +2390,12 @@ pub fn run() {
                     .get_webview_window(MAIN_WINDOW)
                 {
                     repush_current_page(&main);
+                    // 7.71.0: the busy banner survives a reload of the
+                    // dashboard, and the last notification reaches the
+                    // dashboard a rescue ends on.
+                    let local = LOCAL_URL.get().cloned().unwrap_or_default();
+                    let on_dashboard = payload.url().to_string() != local;
+                    reinject_banners(&main, on_dashboard);
                 }
             }
         })
@@ -2156,8 +2669,104 @@ mod tests {
             controller::State::Blocked {
                 reason: controller::Blocked::ForeignPort,
             },
+            controller::State::Busy { since: 0.0 },
+            controller::State::Confirming {
+                reason: controller::DeadReason::ListenerLost,
+                first: 0.0,
+                checks: 1,
+                since: 0.0,
+            },
+            controller::State::Rescuing { since: 0.0 },
         ] {
             assert!(!tray_line(&state).is_empty(), "{}", state.name());
         }
+    }
+
+    #[test]
+    fn a_transcript_line_carries_the_time_it_was_written() {
+        let line = stamped("-- rescue finished --");
+        assert!(line.starts_with('['), "{line}");
+        assert!(line.contains(" UTC] -- rescue finished --"), "{line}");
+        let clock = &line[1..9];
+        assert_eq!(clock.len(), 8);
+        assert_eq!(clock.as_bytes()[2], b':');
+        assert_eq!(clock.as_bytes()[5], b':');
+    }
+
+    fn status_with_holder(holder: serde_json::Value) -> Status {
+        let mut document = status::sample_json();
+        document["holder"] = holder;
+        status::parse_status(&document.to_string()).expect("parses")
+    }
+
+    #[test]
+    fn the_os_listener_is_read_from_the_holder_and_could_not_tell_is_never_free() {
+        use controller::Listener;
+        // `absent` is a bind test the OS answered: the only free.
+        assert_eq!(
+            listener_from(&status_with_holder(serde_json::json!({"kind": "absent"}))),
+            Listener::Free
+        );
+        for kind in [
+            "ours_healthy",
+            "ours_starting",
+            "ours_draining",
+            "ours_stale",
+        ] {
+            assert_eq!(
+                listener_from(&status_with_holder(
+                    serde_json::json!({"kind": kind, "pid": 4242, "identified": true})
+                )),
+                Listener::Held {
+                    pid: Some(4242),
+                    mcc: Some(true)
+                },
+                "{kind}"
+            );
+        }
+        // 7.70.0's `identified: false`: the lookup failed. Alive, unknown.
+        assert_eq!(
+            listener_from(&status_with_holder(
+                serde_json::json!({"kind": "foreign", "pid": null, "identified": false})
+            )),
+            Listener::Unknown
+        );
+        // A stranger the lookup did identify -- and an older wheel's
+        // `foreign`, which 7.26.0 also never spawned over.
+        for holder in [
+            serde_json::json!({"kind": "foreign", "pid": 31337, "identified": true}),
+            serde_json::json!({"kind": "foreign", "pid": 31337}),
+        ] {
+            assert_eq!(
+                listener_from(&status_with_holder(holder)),
+                Listener::Held {
+                    pid: Some(31337),
+                    mcc: Some(false)
+                }
+            );
+        }
+        // A kind this build has never heard of is not free.
+        assert_eq!(
+            listener_from(&status_with_holder(
+                serde_json::json!({"kind": "brand-new"})
+            )),
+            Listener::Unknown
+        );
+    }
+
+    #[test]
+    fn a_strangers_pid_is_never_the_servers() {
+        assert_eq!(
+            status_server_pid(&status_with_holder(
+                serde_json::json!({"kind": "foreign", "pid": 31337, "identified": true})
+            )),
+            None
+        );
+        assert_eq!(
+            status_server_pid(&status_with_holder(
+                serde_json::json!({"kind": "ours_stale", "pid": 4242})
+            )),
+            Some(4242)
+        );
     }
 }

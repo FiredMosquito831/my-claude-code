@@ -46,6 +46,18 @@ pub const SHUTDOWN_MARKER_HEADER: &str = "x-mcc-shutdown";
 /// spawning a second one into the bind race it is about to win.
 pub const STARTING_MARKER_HEADER: &str = "x-mcc-starting";
 
+/// The header every `/health` answer carries from 7.70.0, naming the process
+/// that answered (`core/server_pid.py`). Fact K of the rescue spec: the pid the
+/// window compares with the one the OS says holds the port. Read on every
+/// answer, so it is fresh on every healthy tick -- the cached status document
+/// it replaces was refreshed only while the server was NOT answering, which is
+/// exactly when it went stale (spec section 1.3).
+pub const PID_HEADER: &str = "x-mcc-pid";
+
+/// The header a ready server stamps on its 200 while its event loop is late
+/// (`core/loop_health.py`). Display only: a busy answer is still an answer.
+pub const BUSY_MARKER_HEADER: &str = "x-mcc-busy";
+
 /// How much of the response head to read. Enough for the status line and the
 /// handful of headers the gate sends; never the body, because a server stuck
 /// mid-body must not be able to stall the reconnect loop.
@@ -65,8 +77,17 @@ pub enum ProbeOutcome {
     StartingUp,
     /// Answered HTTP, but not with a 2xx and not as a drain.
     Http(u16),
-    /// Nothing accepted the connection, or it timed out.
+    /// Nothing accepted the connection, or the connect itself timed out.
     Refused(String),
+    /// The connection was accepted and no answer came back in time.
+    ///
+    /// Split from [`Self::Refused`] in 7.71.0, and the split is the point. A
+    /// completed TCP handshake is the operating system saying that something
+    /// is listening on the port -- the kernel fills the accept backlog even
+    /// while the server's event loop is held -- so this is evidence of a
+    /// *slow* server, never of a dead one (rescue spec section 2.1, fact P).
+    /// Until 7.71.0 both read as `Refused`, and both meant "absent".
+    Unanswered(String),
     /// Something answered, but not with anything this could read as HTTP.
     Unreadable(String),
 }
@@ -75,6 +96,17 @@ impl ProbeOutcome {
     /// Whether the dashboard can be shown. The one question the ladder asks.
     pub fn is_healthy(&self) -> bool {
         matches!(self, Self::Healthy)
+    }
+
+    /// Whether the TCP handshake completed, i.e. something holds the port.
+    ///
+    /// Only a refused (or never-completed) connect says no. Note what a "no"
+    /// is NOT: proof that the port is free. On Windows a closed loopback port
+    /// refuses only after about two seconds of SYN retries, which a shorter
+    /// connect budget reports as a timeout -- so a `false` here only prompts
+    /// the window to ask the OS (rescue spec section 2.1).
+    pub fn connected(&self) -> bool {
+        !matches!(self, Self::Refused(_))
     }
 
     /// A short phrase for the banner, in the reader's terms rather than the
@@ -86,9 +118,37 @@ impl ProbeOutcome {
             Self::ShuttingDown => "shutting down".to_owned(),
             Self::StartingUp => "starting".to_owned(),
             Self::Http(code) => format!("HTTP {code}"),
-            Self::Refused(detail) => detail.clone(),
-            Self::Unreadable(detail) => detail.clone(),
+            Self::Refused(detail) | Self::Unanswered(detail) | Self::Unreadable(detail) => {
+                detail.clone()
+            }
         }
+    }
+}
+
+/// One probe in full: the outcome, and the two facts its head carried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Probe {
+    pub outcome: ProbeOutcome,
+    /// `x-mcc-pid`, when the answer named its process. `None` for no answer,
+    /// and for a server from before 7.70.0, which never sends it.
+    pub pid: Option<i64>,
+    /// `x-mcc-busy: 1` on the answer.
+    pub busy: bool,
+}
+
+/// Probe `url` and keep everything the head said. See [`probe_outcome_within`].
+pub fn probe_within(raw: &str, timeout: Duration) -> Probe {
+    match probe(raw, timeout) {
+        Ok((outcome, head)) => Probe {
+            outcome,
+            pid: header_pid(&head),
+            busy: head_carries_marker(&head, BUSY_MARKER_HEADER),
+        },
+        Err(outcome) => Probe {
+            outcome,
+            pid: None,
+            busy: false,
+        },
     }
 }
 
@@ -113,13 +173,11 @@ pub fn probe_outcome(raw: &str) -> ProbeOutcome {
 /// in this binary goes through here, so there is no second place a probe can
 /// disagree about what a 503 means.
 pub fn probe_outcome_within(raw: &str, timeout: Duration) -> ProbeOutcome {
-    match probe(raw, timeout) {
-        Ok(outcome) => outcome,
-        Err(detail) => detail,
-    }
+    probe_within(raw, timeout).outcome
 }
 
-fn probe(raw: &str, timeout: Duration) -> Result<ProbeOutcome, ProbeOutcome> {
+/// One probe: the outcome and the head it was read from.
+fn probe(raw: &str, timeout: Duration) -> Result<(ProbeOutcome, String), ProbeOutcome> {
     let unreadable = |detail: &str| ProbeOutcome::Unreadable(detail.to_owned());
     let url = Url::parse(raw).map_err(|error| unreadable(&error.to_string()))?;
     let host = url
@@ -143,12 +201,14 @@ fn probe(raw: &str, timeout: Duration) -> Result<ProbeOutcome, ProbeOutcome> {
         })?;
     let mut stream = TcpStream::connect_timeout(&address, timeout)
         .map_err(|error| ProbeOutcome::Refused(connection_phrase(&error)))?;
+    // From here on the handshake has completed: something holds the port, and
+    // every failure below is "it did not answer", never "nothing is there".
     stream
         .set_read_timeout(Some(timeout))
-        .map_err(|error| ProbeOutcome::Refused(error.to_string()))?;
+        .map_err(|error| ProbeOutcome::Unanswered(error.to_string()))?;
     stream
         .set_write_timeout(Some(timeout))
-        .map_err(|error| ProbeOutcome::Refused(error.to_string()))?;
+        .map_err(|error| ProbeOutcome::Unanswered(error.to_string()))?;
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\
@@ -156,10 +216,10 @@ fn probe(raw: &str, timeout: Duration) -> Result<ProbeOutcome, ProbeOutcome> {
     );
     stream
         .write_all(request.as_bytes())
-        .map_err(|error| ProbeOutcome::Refused(connection_phrase(&error)))?;
+        .map_err(|error| ProbeOutcome::Unanswered(connection_phrase(&error)))?;
     stream
         .flush()
-        .map_err(|error| ProbeOutcome::Refused(connection_phrase(&error)))?;
+        .map_err(|error| ProbeOutcome::Unanswered(connection_phrase(&error)))?;
 
     // The head is all that is read. Draining the body would mean waiting on a
     // server that is, by hypothesis, possibly unwell -- and the marker header
@@ -177,15 +237,38 @@ fn probe(raw: &str, timeout: Duration) -> Result<ProbeOutcome, ProbeOutcome> {
             }
             Err(error) => {
                 if filled == 0 {
-                    return Err(ProbeOutcome::Refused(connection_phrase(&error)));
+                    return Err(ProbeOutcome::Unanswered(connection_phrase(&error)));
                 }
                 break;
             }
         }
     }
-    Ok(outcome_from_head(&String::from_utf8_lossy(
-        &buffer[..filled],
-    )))
+    if filled == 0 {
+        // Accepted, and closed without a byte. Something held the port.
+        return Err(ProbeOutcome::Unanswered(
+            "the connection was closed without an answer".to_owned(),
+        ));
+    }
+    let head = String::from_utf8_lossy(&buffer[..filled]).into_owned();
+    Ok((outcome_from_head(&head), head))
+}
+
+/// The pid a head named in `x-mcc-pid`, when it is a positive integer.
+///
+/// Anything else is `None`, exactly as `core/server_pid.py` reads it: a value
+/// the window would act on must look like no value at all when it cannot be
+/// trusted.
+pub fn header_pid(head: &str) -> Option<i64> {
+    let mut found = None;
+    for line in head.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case(PID_HEADER) {
+            found = value.trim().parse::<i64>().ok().filter(|pid| *pid > 0);
+        }
+    }
+    found
 }
 
 /// Whether the blank line that ends an HTTP head has arrived.
@@ -203,7 +286,7 @@ fn connection_phrase(error: &std::io::Error) -> String {
     match error.kind() {
         std::io::ErrorKind::ConnectionRefused => "connection refused".to_owned(),
         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
-            "no answer within 1.5s".to_owned()
+            "no answer in time".to_owned()
         }
         std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted => {
             "the connection was closed".to_owned()
@@ -370,5 +453,107 @@ mod tests {
     fn the_head_ends_at_the_blank_line() {
         assert!(head_is_complete(b"HTTP/1.1 200 OK\r\n\r\n"));
         assert!(!head_is_complete(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    #[test]
+    fn the_pid_is_read_from_every_kind_of_answer() {
+        // 7.70.0 stamps it on all four answers the ASGI gate gives.
+        for head in [
+            "HTTP/1.1 200 OK\r\nx-mcc-pid: 4242\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nx-mcc-busy: 1\r\nX-MCC-PID: 4242\r\n\r\n",
+            "HTTP/1.1 503 Service Unavailable\r\nx-mcc-starting: 1\r\nx-mcc-pid: 4242\r\n\r\n",
+            "HTTP/1.1 503 Service Unavailable\r\nx-mcc-shutdown: 1\r\nx-mcc-pid:4242\r\n\r\n",
+        ] {
+            assert_eq!(header_pid(head), Some(4242), "{head}");
+        }
+    }
+
+    #[test]
+    fn a_pid_that_cannot_be_trusted_is_no_pid() {
+        // A server from before 7.70.0 names none, and a value the window
+        // would act on must look like no value when it is not a pid.
+        for head in [
+            "HTTP/1.1 200 OK\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nx-mcc-pid: zero\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nx-mcc-pid: 0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nx-mcc-pid: -7\r\n\r\n",
+            // The status line is never a header.
+            "x-mcc-pid: 4242\r\n\r\n",
+        ] {
+            assert_eq!(header_pid(head), None, "{head}");
+        }
+    }
+
+    #[test]
+    fn the_busy_header_is_read_and_changes_nothing_else() {
+        let busy = "HTTP/1.1 200 OK\r\nx-mcc-busy: 1\r\n\r\n";
+        assert!(head_carries_marker(busy, BUSY_MARKER_HEADER));
+        assert_eq!(outcome_from_head(busy), ProbeOutcome::Healthy);
+        assert!(!head_carries_marker(
+            "HTTP/1.1 200 OK\r\n\r\n",
+            BUSY_MARKER_HEADER
+        ));
+    }
+
+    #[test]
+    fn a_refused_connect_is_not_connected_and_everything_else_is() {
+        // Fact P: only a connect that failed says nothing holds the port --
+        // and even that only prompts the window to ask the OS.
+        assert!(!ProbeOutcome::Refused("connection refused".to_owned()).connected());
+        for outcome in [
+            ProbeOutcome::Healthy,
+            ProbeOutcome::StartingUp,
+            ProbeOutcome::ShuttingDown,
+            ProbeOutcome::Http(404),
+            ProbeOutcome::Unanswered("no answer in time".to_owned()),
+            ProbeOutcome::Unreadable("not HTTP".to_owned()),
+        ] {
+            assert!(outcome.connected(), "{outcome:?}");
+        }
+    }
+
+    #[test]
+    fn a_listener_that_accepts_and_never_answers_is_unanswered_not_refused() {
+        // The busy server, on a real socket: the kernel completes the
+        // handshake into the backlog, and the head never comes. Until 7.71.0
+        // this read as `Refused`, which the controller read as "absent".
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let probe = probe_within(
+            &format!("http://127.0.0.1:{port}/health"),
+            Duration::from_millis(300),
+        );
+        assert!(
+            matches!(probe.outcome, ProbeOutcome::Unanswered(_)),
+            "{probe:?}"
+        );
+        assert!(probe.outcome.connected());
+        assert_eq!(probe.pid, None);
+        drop(listener);
+    }
+
+    #[test]
+    fn a_real_answer_carries_its_pid_through_the_probe() {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 512];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nx-mcc-pid: 31337\r\nx-mcc-busy: 1\r\n\
+                      content-length: 2\r\n\r\n{}",
+                );
+            }
+        });
+        let probe = probe_within(
+            &format!("http://127.0.0.1:{port}/health"),
+            Duration::from_secs(5),
+        );
+        let _ = server.join();
+        assert_eq!(probe.outcome, ProbeOutcome::Healthy);
+        assert_eq!(probe.pid, Some(31337));
+        assert!(probe.busy);
     }
 }

@@ -74,6 +74,39 @@ Every number in that table is read from the status document. None of them is
 compiled into this binary (contract C9), which is what stops a routine server
 update being painted over with an error page.
 
+### From 7.71.0: slow is never dead, and only the OS can say dead
+
+The three "was healthy, now failing" rows above are replaced by the rescue
+spec's decision table (`controller.rs::verdict`, one `cargo test` per row). A
+failed probe is never a verdict on its own; the window asks the **operating
+system** about the port (`--print-status`'s `holder`, a bind test and
+`netstat`) and the server names itself on every answer (`x-mcc-pid`):
+
+| # | Facts | Verdict | What happens |
+|---|---|---|---|
+| 1 | an answer (2xx) | healthy | attach; **no reload** when the dashboard on screen came from the same pid |
+| 2/3 | `503` starting / shutting down | answering | a banner over the dashboard, or the page; never a rescue |
+| 4 | this window started a server under `busy_grace_seconds` ago | grace | watched, never acted on |
+| 5 | the port is held by the pid that last answered, or by My Claude Code | **slow** | the dashboard stays under a busy banner; nothing reloaded, started or stopped, for ever; the holder re-read at most every `reconnect_restatus_seconds` while the connect keeps completing |
+| 6 | the lookup failed, or the holder could not be identified | slow | the same; retried next tick |
+| 6b | the connect completed but the OS says nothing listens | slow | a race is not a fact |
+| 7 | a holder identified as not My Claude Code | foreign | conflict page after `foreign_grace_seconds`, one notification; never spawned over or stopped |
+| 8 | nothing listens, the server's process exited | dead | **rescue** at once |
+| 9 | nothing listens, the process is alive (lost its listener) | dead | rescue after `health_failure_threshold` checks spanning that many `tick_seconds` |
+| 11 | nothing listens, a child of this window's is alive and never bound | dead | rescue once it is past the start budget and every check across it agreed (one disagreement resets) |
+| — | nothing listens, no server known | cold start | spawn, as before (decision Q4) |
+
+A **rescue** is `mcc-desktop --rescue` on a worker thread (state `Rescuing`):
+Python re-reads everything, refuses if anything holds the port, waits
+`server_stop_wait_seconds` for each old server of this port and this
+configuration folder to exit by itself, stops by exact pid what is left, waits
+`busy_grace_seconds` for the port, and prints one JSON report. The window then
+spawns -- every server it starts carries `--no-port-takeover` and
+`MCC_OPEN_BROWSER=0` -- and announces what happened (`notify.rs`): natively
+under the app's own name where it can, always as a banner in the window and a
+line in `desktop-server-start.log`. An `mcc-desktop` too old for `--rescue`
+exits 2 with its usage, and the window falls back to the spawn 7.26.0 made.
+
 ### The `health_failure_threshold` row, and why it took until 7.26.0
 
 That row was written when this README was, and the shipped Rust controller did

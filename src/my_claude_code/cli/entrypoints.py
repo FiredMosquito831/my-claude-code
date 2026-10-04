@@ -91,6 +91,17 @@ def _bootstrap_config_paths() -> None:
     request_log.set_request_log_path(paths.request_log_path())
 
 
+#: The one argument ``mcc-server`` itself reads (7.71.0): this server never
+#: takes the port from anything. The desktop app passes it on every server it
+#: starts, so a desktop start can never stop a process, whatever
+#: ``SERVER_PORT_TAKEOVER`` says. An argument rather than the environment
+#: variable on purpose: a process-environment value shows on the dashboard as
+#: the setting's source, and this is not the user's setting, it is how one
+#: caller starts one process. A build before 7.71.0 ignores it, as it ignores
+#: every argument it does not know.
+NO_PORT_TAKEOVER_FLAG = "--no-port-takeover"
+
+
 def serve(argv: Sequence[str] | None = None) -> None:
     """Start the FastAPI server."""
     if _print_version_if_requested(argv):
@@ -104,7 +115,11 @@ def serve(argv: Sequence[str] | None = None) -> None:
     # Keep the server composition root off metadata-only command paths.
     from my_claude_code.cli.commands import serve as run_server
 
-    run_server()
+    args = sys.argv[1:] if argv is None else argv
+    if NO_PORT_TAKEOVER_FLAG in args:
+        run_server(port_takeover=False)
+    else:
+        run_server()
 
 
 def init(argv: Sequence[str] | None = None) -> None:

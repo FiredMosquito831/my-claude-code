@@ -320,8 +320,18 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
   healthy and 5 s otherwise, and after the failure threshold asks the OS whether the
   known pid exited or lost its port; a holder of the port is slow, never dead. The
   sentence always goes to `server.log`; it is shown by the host's own tray, else left to
-  the desktop app while that runs (the app shows it from its next release), else written
-  as one stamped console line.
+  the desktop app while that runs (the app shows it from 7.71.0), else written as one
+  stamped console line.
+- **The desktop app replaces a server only when the OS proves it dead (7.71.0).** The
+  shell's pure `controller::verdict` reads the OS facts (the listener on the port from
+  `--print-status`, `x-mcc-pid`, the pid's liveness): a held port, or a lookup that
+  failed, is slow and keeps the dashboard under a banner for ever; only a fresh "nothing
+  listens" can be dead. A death runs `mcc-desktop --rescue`
+  ([cli/rescue.py](src/my_claude_code/cli/rescue.py)), which looks again, refuses if
+  anything holds the port, waits each old server of this port and this configuration
+  folder out, stops by exact pid what is left, waits for the port and prints one JSON
+  report; the shell then spawns with `--no-port-takeover` and `MCC_OPEN_BROWSER=0` and
+  announces it (`desktop-shell/src-tauri/src/notify.rs`).
 - **The update helper installs and exits when a window is watching (6.61.0).** The shell
   injects `window.__mccShellWatching` into every page it loads; the dashboard's Update
   button sends `no_restart` when it is there; `apply-upgrade.ps1` then skips its

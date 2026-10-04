@@ -3830,9 +3830,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="3",
         description=(
             "Consecutive failed health probes before mcc-desktop reports an "
-            "outage. This is what keeps a brief self-update restart from "
-            "being read as the server dying. Applies the next time "
-            "mcc-desktop starts, not to a tray already running."
+            "outage, and the number of looks the desktop app needs (spread over "
+            "that many lifecycle ticks, 30 s by default) before it replaces a "
+            "server whose process is still running but has lost its port. This "
+            "is what keeps a brief self-update restart, or a reload that "
+            "re-opens its own port, from being read as the server dying. "
+            "Applies the next time mcc-desktop starts, not to a tray already "
+            "running."
         ),
     ),
     ConfigFieldSpec(
@@ -3844,11 +3848,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="30",
         advanced=True,
         description=(
-            "While the desktop window is waiting for the server to come back "
-            "after a restart, how often it re-reads the whole status instead "
-            "of only re-checking the health URL. This is what lets it notice "
-            "that the port has gone free and start the server itself, once, "
-            "rather than waiting out the whole reconnect budget. Applies the "
+            "While the server is busy - its process still holds the port but "
+            "it is not answering - how often the desktop app and mcc-desktop "
+            "ask the operating system again who holds the port. That lookup "
+            "is itself work on a machine that is already busy, so a slow "
+            "server is not asked about on every check; the moment a "
+            "connection is refused instead, it is asked at once. Applies the "
             "next time mcc-desktop starts, not to a window already open."
         ),
     ),
@@ -3925,14 +3930,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="desktop_busy_grace_seconds",
         default="15",
         description=(
-            "How long the desktop app leaves your server alone after it last "
-            "answered, even if a later check times out. A long operation - a "
-            "bulk proxy add, a big provider refresh - can hold the server up "
-            "for several seconds at a time, and a server that answered a "
-            "moment ago is busy, not gone. Nothing is restarted during this "
-            "window; the app says the server is busy instead. A server whose "
-            "process has actually exited is still restarted immediately. Set "
-            "0 to restart on the first missed check, as before 7.26.0."
+            "Two short windows of the desktop app's (7.71.0). After it starts "
+            "a server, how long it only watches it: an answer is shown at once "
+            "and nothing counts against the new server. When it replaces a "
+            "dead server, how long it waits for the port to come free before "
+            "starting the new one. A server that is merely busy is never "
+            "restarted at all, whatever this says: while its process still "
+            "holds the port the dashboard stays on screen under a busy banner. "
+            "Set 0 to stop watching new servers before judging them."
         ),
     ),
     ConfigFieldSpec(

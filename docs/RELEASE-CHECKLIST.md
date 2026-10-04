@@ -146,14 +146,39 @@ two-release rule: 7.70.0 emits both; the pinned v7.26.0 shell tolerates them (it
 moves past a release that emits them. The same release stamps `x-mcc-pid` on every
 `/health` answer -- a header, so no reader can be refused for it.
 
-**Notifications while the desktop app runs are the app's (hand-off for the next shell
-release).** From 7.70.0 `mcc-desktop` never shows a notification while its desktop
-app (the shell child) is running: it writes the sentence to `server.log` and leaves
-showing it to the app, under the app's own name (user answer 1, 2026-10-01). The
-shell has no notification code yet; when it gains it, it decides "dead" from its own
-facts (the probe, `x-mcc-pid`, `holder.pid`/`identified`, the OS liveness of that
-pid) rather than relaying the host's sentence, so the two can never both speak. No
+**Notifications while the desktop app runs are the app's.** From 7.70.0
+`mcc-desktop` never shows a notification while its desktop app (the shell child) is
+running: it writes the sentence to `server.log` and leaves showing it to the app,
+under the app's own name (user answer 1, 2026-10-01). The 7.71.0 shell does that
+(`desktop-shell/src-tauri/src/notify.rs`): it decides "dead" from its own facts
+(the probe, `x-mcc-pid`, `holder.pid`/`identified`, the OS liveness of that pid)
+rather than relaying the host's sentence, so the two never both speak -- and when
+`mcc-desktop`'s own Python tray is the one drawing the icon (`MCC_DESKTOP_SHELL_TRAY=0`
+in the shell's environment), the shell shows the sentence in its window only. No
 status key carries the host's sentence, by design.
+
+### The 7.71.0 shell reads, and the one thing it adds
+
+The 7.71.0 shell reads `server_stop_wait_seconds` and `holder.identified` (7.70.0's
+keys) and `reconnect_restatus_seconds` (6.50.0's, required since then) -- all three
+**tolerated, never required**: `status.rs` keeps them `Option` with the shipped
+defaults, so the 7.71.0 window keeps working under a 7.69 wheel. It adds **no
+status key**; the new contract surface is one `mcc-desktop` verb, `--rescue
+--reason R [--known-pid N] [--child-pid N]` (prints one JSON document; an older
+`mcc-desktop` exits 2 with its usage, which the shell reads as "fall back to a plain
+start"), and one `mcc-server` flag, `--no-port-takeover` (an older server ignores
+it). The pin may move to the 7.71.0 shell in 7.71.1 under the usual rule: the wheel
+that emits every key it reads is already published.
+
+**The Windows installer registers one notification identity.** From 7.71.0
+`MyClaudeCode.iss` writes `HKA\Software\Classes\AppUserModelId\com.myclaudecode.desktop`
+(`DisplayName` "My Claude Code", `IconUri` `{app}\app-icon.png`, `uninsdeletekey`)
+-- the only way an unpackaged program's Windows toast carries its own name -- and
+`smoke/windows-installer.ps1` asserts it after install and its absence after
+uninstall, and prints what the notification platform says about it. A copy of the
+shell fetched by `mcc-desktop` (path A) has no such key; `notify.rs` asks Windows
+first (`ToastNotifier.Setting`) and shows the sentence in its window instead of a
+toast with another program's name.
 
 ### Adding a key the *shell* writes back
 

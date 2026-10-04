@@ -23,9 +23,10 @@
 ;
 ; UNINSTALL SPLIT -- read this before adding anything below.
 ;   "My Claude Code (desktop app)" in Apps & Features removes ONLY what this
-;   file created: the exe, the icons, the shortcuts, its own registry key and,
-;   if the user says yes, the shell's window-geometry directory. It must never
-;   touch `~/.local/bin`, `~/.mcc`, `~/.fcc`, or the HKCU `Run` value.
+;   file created: the exe, the icons, the shortcuts, its own uninstall key, the
+;   notification identity in [Registry] (7.71.0) and, if the user says yes, the
+;   shell's window-geometry directory. It must never touch `~/.local/bin`,
+;   `~/.mcc`, `~/.fcc`, or the HKCU `Run` value.
 ;   Removing the server is `scripts/uninstall.ps1`'s job, and only on explicit
 ;   consent.
 ;
@@ -174,6 +175,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; contract asserts that.
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#AppExeName}"; Flags: ignoreversion
 Source: "..\..\src-tauri\icons\icon.ico"; DestDir: "{app}"; DestName: "app-icon.ico"; Flags: ignoreversion
+; The picture Windows shows beside a notification from this app (7.71.0). PNG,
+; because that is what a toast's app icon is drawn from; see [Registry].
+Source: "..\..\src-tauri\icons\128x128.png"; DestDir: "{app}"; DestName: "app-icon.png"; Flags: ignoreversion
 #ifdef WebView2Bundled
 ; The WebView2 Evergreen bootstrapper (~1.8 MB), carried inside this setup and
 ; never installed: `dontcopy` means it has no DestDir, is not written into
@@ -188,10 +192,27 @@ Source: "{#WebView2Setup}"; Flags: dontcopy noencryption
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\app-icon.ico"; Comment: "The My Claude Code dashboard, in its own window."
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\app-icon.ico"; Tasks: desktopicon
 
-; There is deliberately no [Registry] section. Inno writes its own
-; HKCU\...\Uninstall\{AppId}_is1 key and removes it; anything else this file
-; wrote would be a registry value with no owner. Autostart in particular
-; belongs to the application (see the header).
+[Registry]
+; ONE key, and only because a notification cannot carry the app's name without
+; it (7.71.0). When the server dies, or the app replaces a dead one, the app
+; says so in a Windows notification under its OWN name (user answer 1 of
+; 2026-10-01: "if a desktop app running come from desktop app"). An unpackaged
+; Win32 program can attribute a toast to itself only through an
+; AppUserModelID that Windows knows, and the per-user way to make it known is
+; this key with a display name and an icon -- the same thing Firefox and the
+; Windows Community Toolkit write. The id is tauri.conf.json's `identifier`,
+; and `src-tauri/src/notify.rs` asks Windows whether it is registered before
+; it shows anything: a copy of the app without this key (one fetched by
+; mcc-desktop) shows the sentence in its window instead of a toast labelled
+; with somebody else's name.
+;
+; `uninsdeletekey` removes the whole key on uninstall, so it has exactly one
+; writer and one remover, both this file. HKA is HKCU for the per-user install
+; this file defaults to (HKLM only if the user asked for a machine install).
+; It is never the HKCU `Run` value: autostart stays the application's own
+; (see the header and tests/contracts/test_uninstaller_parity.py).
+Root: HKA; Subkey: "Software\Classes\AppUserModelId\com.myclaudecode.desktop"; ValueType: string; ValueName: "DisplayName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\AppUserModelId\com.myclaudecode.desktop"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\app-icon.png"; Flags: uninsdeletekey
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

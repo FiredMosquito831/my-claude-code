@@ -277,6 +277,7 @@
           "not-our-server": "The server is not running",
           "port-conflict": "Something else is on the port",
           busy: "The server is busy",
+          rescuing: "Replacing the server",
           reconnecting: "Reconnecting",
           error: "My Claude Code could not start",
           "server-failed": "The server is not answering",
@@ -318,7 +319,12 @@
           title.textContent = TITLES[kind] || "My Claude Code";
           message.textContent = state.message || "Checking the server...";
           card.className = "";
-          if (kind === "not-our-server" || kind === "reconnecting" || kind === "busy") {
+          if (
+            kind === "not-our-server" ||
+            kind === "reconnecting" ||
+            kind === "busy" ||
+            kind === "rescuing"
+          ) {
             card.className = "warn";
           } else if (
             kind === "port-conflict" ||
@@ -333,7 +339,8 @@
             kind === "installing" ||
             kind === "updating" ||
             kind === "reconnecting" ||
-            kind === "busy"
+            kind === "busy" ||
+            kind === "rescuing"
           );
 
           // The command and its output belong to an installer THIS window is

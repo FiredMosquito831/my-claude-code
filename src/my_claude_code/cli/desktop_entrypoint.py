@@ -54,7 +54,9 @@ def _print_usage() -> None:
         "[--start-at-login | --no-start-at-login | "
         "--tray-enabled | --no-tray-enabled | "
         "--status | --print-status [--presence-v2] | "
-        "--ensure-shell [--target PATH] | --export-icon PATH]",
+        "--ensure-shell [--target PATH] | --export-icon PATH | "
+        "--rescue --reason process-gone|listener-lost|never-bound "
+        "[--known-pid N] [--child-pid N]]",
         file=sys.stderr,
     )
 
@@ -132,6 +134,19 @@ def launch(argv: Sequence[str] | None = None) -> None:
         # Without it the document carries only the three values every shell
         # ever built understands. See cli/desktop_status.py's docstring.
         print_status(presence_v2="--presence-v2" in args[1:])
+        return
+
+    if args and args[0] == "--rescue":
+        # 7.71.0. The desktop app asks for this only after the OS proved the
+        # server dead; it looks again and refuses if anything holds the port.
+        # Bad arguments are the usage and exit 2 -- the same answer an older
+        # mcc-desktop gives the whole verb, which the app reads as "too old".
+        from my_claude_code.cli.rescue import rescue_command
+
+        status = rescue_command(args[1:])
+        if status != 0:
+            _print_usage()
+            raise SystemExit(status)
         return
 
     if args:
