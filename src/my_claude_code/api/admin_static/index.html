@@ -4025,9 +4025,13 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Prompts, the rest of a body and wire snapshots each relearn their
                   dictionary in the background once it is older than the last 14 days
                   of traffic and 1,024 new samples of that kind exist; older
-                  dictionaries are kept, so no row ever becomes unreadable. This
-                  applies to new rows. An older version reads everything but shows a
-                  compressed wire snapshot as empty until you update again.
+                  dictionaries are kept, so no row ever becomes unreadable. Since
+                  7.74.0 older history is converted too, by itself, in the background:
+                  a value is replaced only after its new form decodes back to exactly
+                  the same bytes, the file shrinks gradually as freed space is handed
+                  back, and the progress shows beside the log's size. An older version
+                  reads everything but shows a compressed wire snapshot as empty until
+                  you update again.
                 </p>
                 <h4>No traffic, or no server?</h4>
                 <p>

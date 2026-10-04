@@ -18820,8 +18820,25 @@ function logSizeNote(storage) {
   const size = formatLogBytes(storage.bytes);
   const rows = storage.rows == null ? null : Number(storage.rows);
   if (!size && rows == null) return "";
-  if (rows == null) return ` · ${size} on disk`;
-  return ` · ${formatAnalyticsNumber(rows)} rows kept, ${size} on disk`;
+  const history = historyConversionNote(storage.history);
+  if (rows == null) return ` · ${size} on disk${history}`;
+  return ` · ${formatAnalyticsNumber(rows)} rows kept, ${size} on disk${history}`;
+}
+
+// 7.74.0: while the background conversion of older history runs, say so and
+// how far it is. Nothing once it is done, and nothing from an older server.
+function historyConversionNote(history) {
+  if (!history) return "";
+  const percent = Number(history.percent);
+  const shown = Number.isFinite(percent) ? ` ${percent}%` : "";
+  if (history.state === "converting") {
+    const what = history.phase === "bodies" ? "bodies" : "snapshots";
+    return ` · compressing older history (${what}${shown})`;
+  }
+  if (history.state === "returning_space") {
+    return ` · handing freed space back to the disk${shown}`;
+  }
+  return "";
 }
 
 function renderRequestLifetime(lifetime) {
