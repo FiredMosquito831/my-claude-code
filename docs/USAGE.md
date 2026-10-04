@@ -458,6 +458,83 @@ answering server's process id as `x-mcc-pid`, which is how the line above
 names it (a server older than 7.70.0 is named from the operating system's port
 table instead).
 
+<a id="old-servers-of-this-port-are-stopped-at-start"></a>
+
+#### Old servers of this port and folder do not outlive a start or an update (7.72.0)
+
+**What was wrong.** For days at the end of September three My Claude Code server
+processes ran on one machine with no listening socket: servers from before 7.69.2
+that had lost their listener (those never exit by themselves) and servers left
+behind by updates. Nobody could reach them, and they kept doing everything else a
+server does — an hourly catalogue sweep with outbound calls, refreshes of a stale
+Claude Code sign-in (a 7.61.0 one posted a stale refresh token every hour),
+rewriting the agent files under `~/.mcc` from settings read days earlier, holding
+`server.log` open. Every start only *listed* them.
+
+**What happens now.** Every `mcc-server` start that may take its port — a start
+from a terminal, and the start the installer makes after an install or an update
+— looks for the **old servers of this port and this configuration folder**: My
+Claude Code server processes (recognised by their process, never by a name or a
+path) that
+
+* own **no listening socket on any port**,
+* whose own latest record in **this configuration folder's** request log
+  (`logs/requests.db`, the `server_sessions` table) says they served **this
+  port**, and
+* started **before** this server.
+
+Each one is given `SERVER_GRACEFUL_SHUTDOWN_SECONDS` + 4 s (24 s by default) to
+finish and exit by itself — a 7.69.2 or later server that lost its listener does
+exactly that — and whatever is still running then is stopped **by exact process
+id, innermost first**, after the process table has been read again. It runs on
+its own thread, so the new server binds and answers meanwhile. Each outcome is
+one line in the server log (`WARNING` for a stop) and, for what was found and what
+was stopped, one line in the console:
+
+```text
+[2026-10-04 09:24:59] My Claude Code: Found 1 old My Claude Code server of port 18870 and this configuration folder with no listening socket: pid 36428, 11900, 49744 (version unknown, older than 7.72.0, the first version that records it; started 2026-10-04 09:23:31; last heartbeat 18 s ago). It is given up to 24 s to finish and exit by itself; whatever is still running then is stopped by process id.
+[2026-10-04 09:25:31] My Claude Code: Stopped an old My Claude Code server of port 18870 and this configuration folder: pid 36428, 11900, 49744 (version unknown, older than 7.72.0, the first version that records it; started 2026-10-04 09:23:31; last heartbeat 18 s ago). It owned no listening socket, so it could not answer anyone on port 18870, and it did not exit by itself within 24 s, so it was stopped by process id, innermost first.
+```
+
+From 7.72.0 every server records its version on its `server_sessions` row, so the
+line names it; a row without one was written by a server older than 7.72.0.
+
+**What is never touched.** A server that owns a listening socket anywhere — one
+that answers is decided by the rule above, never by this; a server whose record
+says **another port** (your agents' servers); a server with **no record in this
+folder** (another configuration folder's); anything that is **not a My Claude
+Code server** (the coding-agent launchers, the desktop app, other programs); a
+server that started after this one. And whenever the evidence is missing or
+ambiguous — a record that names no port, a record that may belong to an earlier
+process that had the same process id, a process whose start time the operating
+system did not give — the server is **left alone** and named in one `Left alone:`
+line in the server log, and it stays in the list of other servers. A server the
+desktop app starts carries `--no-port-takeover` and stops nothing here; the app's
+own rescue (below) does the same job when its server dies.
+
+**Keeping a second server on purpose.** Give it its own `PORT` or its own
+configuration folder (`MCC_CONFIG_DIR`). A server that keeps its listening socket
+is never stopped either way.
+
+**On an update.** The installer still stops only the one server holding the
+configured port and starts the new one; the new server then does the above. The
+first update *to* 7.72.0 runs the installer of the version you had, which does
+not know about this — the old servers are stopped when the new 7.72.0 server
+starts, which is the same moment.
+
+**`SERVER_STALE_SERVER_ACTION` is unchanged.** It still decides what a start does
+about every *other* server it finds: `report` (the default) names them and stops
+none, `stop` also stops the provably stale ones. The old servers of this port and
+folder are stopped whatever it says, because that is your decision (2026-10-01),
+and a value a first start wrote into `.env` long ago must not be able to undo it.
+
+**The rule this amends.** Until 7.71.0 the rule was "My Claude Code never stops a
+server it did not start; stopping a stale one needs provable staleness and your
+confirmation (7.7.0)". It still holds for everything outside the scope above.
+Inside it — old servers of this port and this configuration folder with no
+listening socket — a start (from 7.72.0) and the desktop app's rescue (from
+7.71.0) stop them without asking, with a log line instead of a confirmation.
+
 <div align="center">
   <img src="../assets/admin-page.png" alt="Admin dashboard overview" width="860">
 </div>
@@ -1323,7 +1400,9 @@ from a timeout:
 and does nothing at all if anything holds the port now. Then, for each **old
 server** — only My Claude Code server processes tied to **this port and this
 configuration folder** (one whose last record in this folder's request log was
-this port, or the exact server the app itself started); never a server on another
+this port — from 7.72.0, a record written by that very process, never one left by
+an earlier process that had the same process id — or the exact server the app
+itself started); never a server on another
 port, never one of another configuration folder, never a program that is not My
 Claude Code — it waits up to `SERVER_GRACEFUL_SHUTDOWN_SECONDS` + 4 s (24 s by
 default) for it to finish its open requests and exit by itself, stops by exact
@@ -5356,7 +5435,7 @@ Supported, and it is the normal path. The installer renames the old tool environ
 If Windows refuses to move a launcher aside (an antivirus scan, the search indexer, or the shell can hold an `.exe` for a moment), the installer does not give up: it re-runs uv with `UV_TOOL_BIN_DIR` pointed at a staging directory, so uv writes every shim and a complete receipt somewhere nothing is holding, then places the shims one at a time. A shim that still cannot be replaced keeps the file it had and is listed by name as *"these keep working and will refresh on the next install"* — that is not a failure. A uv launcher is a version-agnostic stub that runs the interpreter inside the tool directory, and that directory now holds the new install, so the old stub already runs the new code.
 
 **Windows: the install retries, or says a launcher was "in use".**
-Since 6.72.2 it tells you *who*. When a launcher or the tool environment cannot be moved aside, the install prints every My Claude Code process running out of those files — process id, command, when it started, and the exact path it holds — and then takes the staging path described above. **It never stops any of them**, and the server does not either: one of them may be a server you are using right now. The same list is in the server log at every start (`At start: N other My Claude Code server processes are running on this machine`), and in `mcc-desktop --print-status` under `other_servers`. Each entry carries a status: `serving` owns a listening socket, `live` is checking in normally, `unknown` is one MCC cannot classify, and `stale` is the only one that has been *proven* finished — either its heartbeat has been silent past `SERVER_STALE_SESSION_SECONDS` (default 900) *and* the port it recorded is now served by a different My Claude Code, or it is a launcher whose server process is gone. Set `SERVER_STALE_SERVER_ACTION=stop` on **Limits & Resilience** if you want those stale ones stopped automatically; it is `report` by default, and a server with no listening socket is never stopped merely for that — it may be starting, draining, or still streaming an answer it accepted earlier.
+Since 6.72.2 it tells you *who*. When a launcher or the tool environment cannot be moved aside, the install prints every My Claude Code process running out of those files — process id, command, when it started, and the exact path it holds — and then takes the staging path described above. **It never stops any of them**, and the server stops only one kind: an [old server of its own port and configuration folder](#old-servers-of-this-port-are-stopped-at-start) that owns no listening socket (7.72.0) — any other may be a server you are using right now. The same list is in the server log at every start (`At start: N other My Claude Code server processes are running on this machine`), and in `mcc-desktop --print-status` under `other_servers`. Each entry carries a status: `serving` owns a listening socket, `live` is checking in normally, `unknown` is one MCC cannot classify, and `stale` is the only one that has been *proven* finished — either its heartbeat has been silent past `SERVER_STALE_SESSION_SECONDS` (default 900) *and* the port it recorded is now served by a different My Claude Code, or it is a launcher whose server process is gone. Set `SERVER_STALE_SERVER_ACTION=stop` on **Limits & Resilience** if you want those stale ones stopped automatically; it is `report` by default, and a server with no listening socket is never stopped merely for that — it may be starting, draining, or still streaming an answer it accepted earlier.
 
 **Windows: the installer says a command is missing.**
 That means a command the release publishes is genuinely absent, not merely stale. Close the `mcc-claude` window(s) and the tray, then re-run the install command. The installer exits non-zero in that case — it never reports "verified" for a command that does not exist.
@@ -5466,7 +5545,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `OPENCODE_CLIENT_RUNTIME` | *(empty)* | **New in 7.28.0.** The last user-agent segment, written `<runtime>/<version>` and sent as `runtime/<that>` — `bun/1.3.14` on the captured client. Empty sends the captured value. Only used when `OPENCODE_CLIENT_IDENTITY` is `opencode`. |
 | `OPENCODE_FREE_TIER_MODELS` | `big-pickle` | **New in 7.28.0.** Comma-separated Zen/Go model ids that are on the free tier without saying so in their name. On these — and on any id ending `-free` or `:free`, and any model the catalogue prices at zero here — MCC sends OpenCode's own tool-name spellings and translates the model's calls back, because that tier answers `403` to any other catalogue. Every other model keeps the request it has always been sent. See [The free tier now reads your tool names](#the-free-tier-now-reads-your-tool-names). |
 | `OPENCODE_FREE_TIER_CREDENTIAL` | `public` | **New in 7.34.0.** Which credential free OpenCode Zen models are fetched with. The free-usage limit is metered per credential, not per address. `public` uses OpenCode's shared anonymous credential exactly as the OpenCode CLI does when no key is configured, so your own key's free allowance is not spent — and neither are the hourly model-discovery sweep or the **Test** button. `key` uses your key for everything, as 7.33.0 did. Paid Zen models always use your key; OpenCode Go is never affected; the shared credential is shared. Same scope as `OPENCODE_FREE_TIER_MODELS`. See [The free tier is metered per key](#the-free-tier-is-metered-per-key-so-free-models-use-opencodes-own). |
-| `SERVER_STALE_SERVER_ACTION` | `report` | **New in 6.72.2.** What the server does about other My Claude Code servers it finds at start. `report` names each one in the server log — pid, session, recorded port, start time, last heartbeat, and the files it holds open — and stops nothing. `stop` also stops the ones this install can prove are finished: a heartbeat silent past `SERVER_STALE_SESSION_SECONDS` whose recorded port is now served by a different MCC, or a launcher whose server process is gone. A server is never stopped merely for owning no listening socket. |
+| `SERVER_STALE_SERVER_ACTION` | `report` | **New in 6.72.2.** What the server does about other My Claude Code servers it finds at start. `report` names each one in the server log — pid, session, recorded port, start time, last heartbeat, and the files it holds open — and stops nothing. `stop` also stops the ones this install can prove are finished: a heartbeat silent past `SERVER_STALE_SESSION_SECONDS` whose recorded port is now served by a different MCC, or a launcher whose server process is gone. A server is never stopped merely for owning no listening socket. **From 7.72.0** the [old servers of this port and this configuration folder](#old-servers-of-this-port-are-stopped-at-start) — no listening socket anywhere, and their own record here names this port — are stopped at start whatever this says (your decision of 2026-10-01); this setting governs every other server. |
 | `SERVER_STALE_SESSION_SECONDS` | `900` | **New in 6.72.2.** How long another server's heartbeat must be silent before the word "stale" is available for it. A running server checks in every 30 s, so the default is thirty missed beats. Silence alone never stops anything. Range 60–86400. |
 | `SERVER_PORT_TAKEOVER` | `always` | **New in 6.59.0; narrowed in 7.70.0.** What happens when the server starts and its port is already held. `always` replaces a holder that is not answering; a holder that is not MCC is named in one `WARNING` line first. A My Claude Code server that answers `/health` (healthy, busy or starting, within 30 s) is never stopped: the new start names it and exits with code 1 — stop it first to replace it. Setting it to mcc-only replaces only processes this install can identify as its own; never is the pre-6.59.0 behaviour — name the holder and refuse to start. Whether a holder is stopped is decided by its process; its answer can only make a start stop nothing. |
 | `SERVER_GRACEFUL_SHUTDOWN_SECONDS` | `20` | **Changed in 6.41.0** — was `300`, and it used to bound only uvicorn's connection wait while the response cleanup, the provider drain and the ASGI lifespan had no bound at all (a request against a silent upstream meant a server that never exited). It is now one deadline for the whole stop, new requests are refused with `503` for its duration, and the process exits a few seconds past it. Lower an inherited `300` unless you would rather wait five minutes for a restart than cut a long request. |

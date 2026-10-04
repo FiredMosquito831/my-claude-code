@@ -37,7 +37,18 @@ OTHER_PORT = 18732
 _TOOL_PYTHON = r"C:\Users\x\AppData\Roaming\uv\tools\my-claude-code\Scripts\python.exe"
 
 
-def _launch(root_pid: int, leaf_pid: int, *, parent: int = 1) -> list[ProcessFacts]:
+#: When every fake launch's processes were created: before every fake session
+#: row (``_session`` writes at 1001+), as a real launch is before its own row.
+LAUNCHED_AT = 900.0
+
+
+def _launch(
+    root_pid: int,
+    leaf_pid: int,
+    *,
+    parent: int = 1,
+    started_at: float | None = LAUNCHED_AT,
+) -> list[ProcessFacts]:
     """The two processes of one ``mcc-server`` launch: trampoline and server."""
 
     return [
@@ -47,6 +58,7 @@ def _launch(root_pid: int, leaf_pid: int, *, parent: int = 1) -> list[ProcessFac
             image="mcc-server.exe",
             executable=r"C:\Users\x\.local\bin\mcc-server.exe",
             command='"mcc-server"',
+            started_at=started_at,
         ),
         ProcessFacts(
             pid=leaf_pid,
@@ -54,6 +66,7 @@ def _launch(root_pid: int, leaf_pid: int, *, parent: int = 1) -> list[ProcessFac
             image="python.exe",
             executable=_TOOL_PYTHON,
             command=f'"{_TOOL_PYTHON}" "C:\\Users\\x\\.local\\bin\\mcc-server.exe"',
+            started_at=started_at,
         ),
     ]
 

@@ -27,6 +27,12 @@ from my_claude_code.cli.port_diagnostics import (
 )
 from my_claude_code.cli.port_takeover import take_port
 from my_claude_code.cli.process_registry import kill_all_best_effort
+from my_claude_code.cli.rescue import (
+    CleanupRequest,
+    cleanup_world,
+    plan_old_server_cleanup,
+    run_old_server_cleanup,
+)
 from my_claude_code.config.constants import (
     LISTENER_LOST_EXIT_CODE,
     PORT_ALREADY_SERVED_EXIT_CODE,
@@ -79,6 +85,7 @@ from my_claude_code.core.stop_deadline import (
     clamp_stop_budget,
     stop_deadline,
 )
+from my_claude_code.core.version import package_version
 from my_claude_code.runtime.bootstrap import build_asgi_app
 from my_claude_code.runtime.console_logging import build_uvicorn_log_config
 
@@ -409,6 +416,19 @@ def _survey_other_servers(settings: Settings) -> None:
     ``~/.mcc`` on the *real* home after that test's redirect had been torn down
     -- and the same shape in production is a server writing its report into
     somebody else's config directory.
+
+    **One class is the user's decision, not this setting's (7.72.0).** An old
+    server of THIS port and THIS configuration folder -- an MCC server that
+    owns no listening socket anywhere and whose own record in this folder says
+    it served this port -- is stopped whatever ``SERVER_STALE_SERVER_ACTION``
+    says (decisions R1, R2, 12 and answer 4 of 2026-10-01): it is given the
+    stop budget to exit by itself and then stopped by exact pid, and every
+    outcome is one line. The installer starts the new server after an update,
+    so this is also what an update does to them. A server started with
+    ``--no-port-takeover`` (every server the desktop app starts) stops nothing
+    here; the desktop app's rescue does this there. The machine is looked at
+    once and shared by the survey and the cleanup, and resolved here, on the
+    calling thread, like the paths.
     """
 
     log_path = request_log_path()
@@ -416,22 +436,70 @@ def _survey_other_servers(settings: Settings) -> None:
     self_pid = os.getpid()
     stale_after = settings.server_stale_session_seconds
     action = settings.server_stale_server_action
+    cleanup = (
+        CleanupRequest(
+            port=int(settings.port),
+            stop_wait_seconds=stop_wait_seconds(
+                settings.server_graceful_shutdown_seconds
+            ),
+            version=package_version(),
+        )
+        if _takeover_allowed()
+        else None
+    )
+    world = cleanup_world(log_path)
 
     def survey() -> None:
         try:
+            processes = world.processes()
+            endpoints = world.listening()
+            sessions = world.sessions()
             observations = observe_servers(
                 request_log_path=log_path,
                 self_pid=self_pid,
                 stale_after_seconds=stale_after,
+                processes=processes,
+                listening=endpoints,
+                sessions=sessions,
             )
         except OSError as exc:
             logger.debug("Could not survey other My Claude Code servers: {}", exc)
             return
         report_servers(observations, context="At start")
+        plan = (
+            plan_old_server_cleanup(
+                cleanup,
+                processes=processes,
+                endpoints=endpoints,
+                sessions=sessions,
+                self_pid=self_pid,
+            )
+            if cleanup is not None
+            else None
+        )
+        planned = plan.planned_pids if plan is not None else frozenset()
         if action == "stop":
-            stopped = {item.pids for item in stop_stale_servers(observations)}
+            # The opt-in 7.7.0 sweep keeps its own rule, for everything the
+            # old-server cleanup below does not already own.
+            stopped = {
+                item.pids
+                for item in stop_stale_servers(
+                    [item for item in observations if not planned & set(item.pids)]
+                )
+            }
             observations = [item for item in observations if item.pids not in stopped]
         write_survey(survey_path, observations)
+        if plan is None:
+            return
+        outcome = run_old_server_cleanup(plan, world)
+        gone = set(outcome["gone_pids"])
+        if gone:
+            # The list the desktop status and the dashboard read must not name
+            # a server that is no longer there.
+            write_survey(
+                survey_path,
+                [item for item in observations if not gone & set(item.pids)],
+            )
 
     threading.Thread(target=survey, name="mcc-server-survey", daemon=True).start()
 
@@ -785,8 +853,10 @@ def _run_supervised_server(
     # After the takeover and before the bind: who else is running? The port
     # takeover has just settled the one process that was in this server's way;
     # this settles the ones that are in an *installer's* way, which nothing has
-    # ever been able to see. It reports and returns -- nothing here decides to
-    # stop anybody unless SERVER_STALE_SERVER_ACTION says so.
+    # ever been able to see. It reports and returns at once; on its own thread
+    # it stops only the old servers of THIS port and THIS configuration folder
+    # that own no listening socket (7.72.0, decisions R1/R2/12/answer 4), and
+    # anything else only if SERVER_STALE_SERVER_ACTION says so.
     _survey_other_servers(settings)
     # Bind here, in the supervisor, rather than leaving it to uvicorn.
     #

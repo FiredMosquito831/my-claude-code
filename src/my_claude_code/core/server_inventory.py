@@ -42,6 +42,18 @@ Four statuses, and only one of them is ever actionable:
 Even ``stale`` is only reported unless the operator has opted in. Detection is
 a fact; stopping somebody's server is a decision, and it is not this module's
 to take by default.
+
+One narrower class is decided by the user and not by a setting (decisions R1,
+R2, 12 and answer 4, 2026-10-01): an **old server of this port and this
+configuration folder** -- an MCC server launch that owns no listening socket
+anywhere and whose own record in THIS configuration folder's
+``server_sessions`` says it was serving THIS port. Such a process cannot answer
+anyone and keeps doing everything else a server does (hourly sweeps, token
+refreshes with stale tokens, rewriting harness files from stale settings). The
+desktop app's rescue (7.71.0) and every server's own start (7.72.0) stop it
+after giving it the stop budget to exit by itself. Which processes are in that
+class is decided in exactly one place, :func:`old_server_scope`; everything
+outside it keeps the rules above.
 """
 
 import json
@@ -76,6 +88,24 @@ STATUS_UNKNOWN = "unknown"
 
 #: The only status any caller may act on, and only when told to.
 ACTIONABLE_STATUSES = frozenset({STATUS_STALE})
+
+#: How much earlier than its pid's process a session row may say it started
+#: and still be that process's row. A row is written *after* its process is
+#: created, so a genuine row is never earlier at all; the slack only absorbs the
+#: whole-second creation times Windows reports and the computed ones on Linux.
+#: A row any earlier was written by a previous process that had the same pid --
+#: pids are reused, and ``server_sessions`` keeps a thousand rows -- and is
+#: never evidence about the process that has the pid now.
+PID_REUSE_SLACK_SECONDS = 2.0
+
+#: The verdicts of :func:`old_server_scope`. Only ``old`` may be stopped.
+SCOPE_OLD = "old"
+SCOPE_SELF = "self"
+SCOPE_SERVING = "serving"
+SCOPE_NO_RECORD = "no-record"
+SCOPE_OTHER_PORT = "other-port"
+SCOPE_UNPROVEN = "unproven"
+SCOPE_NEWER = "newer"
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +199,145 @@ def _chain_started_at(chain: ProcessChain) -> float | None:
         member.started_at for member in chain.members if member.started_at is not None
     ]
     return min(stamps) if stamps else None
+
+
+@dataclass(frozen=True, slots=True)
+class OldServerScope:
+    """Whether one MCC server launch is an old server of this port and folder."""
+
+    #: One of the ``SCOPE_*`` values. Only :data:`SCOPE_OLD` may be stopped.
+    kind: str
+    #: Why, in one clause, for the log line and the report.
+    why: str
+    #: The launch's own latest row in THIS folder's ``server_sessions``, when
+    #: one could be proven to be its own (never a row of an earlier process
+    #: that had the same pid).
+    session: ServerSession | None = None
+
+    @property
+    def is_old(self) -> bool:
+        return self.kind == SCOPE_OLD
+
+
+def _own_sessions(
+    chain: ProcessChain, sessions: list[ServerSession]
+) -> tuple[list[ServerSession], list[int], bool]:
+    """The rows ``chain``'s own processes wrote, and what could not be checked.
+
+    Returns ``(own rows, pids whose start time is unknown, any reused row)``. A
+    row counts only if it was written no earlier than the process that has its
+    pid now was created (:data:`PID_REUSE_SLACK_SECONDS`): otherwise it belongs
+    to an earlier process with the same number, which may have been a server of
+    this port while the process now holding the pid is a server of another
+    configuration folder entirely.
+    """
+
+    started = {member.pid: member.started_at for member in chain.members}
+    own: list[ServerSession] = []
+    unknown: list[int] = []
+    reused = False
+    for row in sessions:
+        if row.pid is None or row.pid not in started:
+            continue
+        process_started = started[row.pid]
+        if process_started is None:
+            if row.pid not in unknown:
+                unknown.append(row.pid)
+            continue
+        if row.started_at + PID_REUSE_SLACK_SECONDS < process_started:
+            reused = True
+            continue
+        own.append(row)
+    return own, unknown, reused
+
+
+def old_server_scope(
+    chain: ProcessChain,
+    *,
+    port: int,
+    sessions: list[ServerSession],
+    listening_pids: frozenset[int],
+    self_pids: frozenset[int] = frozenset(),
+    started_before: float | None = None,
+) -> OldServerScope:
+    """Decision R1 as one function: is ``chain`` an old server of ``port`` here?
+
+    ``sessions`` must be THIS configuration folder's ``server_sessions`` (the
+    request log lives at ``<config folder>/logs/requests.db`` and nowhere else,
+    so a row there is a row written by a server of this folder). ``chain`` must
+    come from :func:`~my_claude_code.core.mcc_processes.mcc_server_chains`, so it
+    is an MCC *server* by its process structure -- never a launcher, never
+    another program, never a name or substring match.
+
+    In scope (``old``) only when ALL of these hold:
+
+    * it is not this process's own launch (``self_pids``);
+    * none of its processes owns a listening socket on any port -- a server
+      that listens anywhere is running, and one that answers is never touched;
+    * its own latest row in this folder's ``server_sessions`` (pid reuse ruled
+      out by the process's start time) recorded ``port``;
+    * when ``started_before`` is given, it started before that moment -- a
+      server that started after the one doing the cleaning is not "old".
+
+    Everything else is left alone, and missing or ambiguous evidence is always
+    "left alone": no row, a row that names no port, a row that may belong to an
+    earlier process with the same pid, a process whose start time the operating
+    system did not give.
+    """
+
+    members = set(chain.pids)
+    if members & self_pids:
+        return OldServerScope(SCOPE_SELF, "it is this server's own launch")
+    own, unknown, reused = _own_sessions(chain, sessions)
+    session = max(own, key=lambda row: row.last_seen_at) if own else None
+    if members & listening_pids:
+        return OldServerScope(
+            SCOPE_SERVING,
+            "it owns a listening socket, so it is a running server",
+            session,
+        )
+    if unknown:
+        return OldServerScope(
+            SCOPE_UNPROVEN,
+            f"the operating system gave no start time for pid "
+            f"{', '.join(map(str, unknown))}, so its record in this configuration "
+            "folder cannot be told apart from an earlier process's with the same pid",
+        )
+    if session is None:
+        if reused:
+            return OldServerScope(
+                SCOPE_NO_RECORD,
+                "it has no record in this configuration folder (the records "
+                "with its pids were written by earlier processes that had the "
+                "same pids)",
+            )
+        return OldServerScope(
+            SCOPE_NO_RECORD, "it has no record in this configuration folder"
+        )
+    if session.port is None:
+        return OldServerScope(
+            SCOPE_UNPROVEN,
+            "its record in this configuration folder names no port",
+            session,
+        )
+    if session.port != port:
+        return OldServerScope(
+            SCOPE_OTHER_PORT, f"it recorded port {session.port}", session
+        )
+    if started_before is not None:
+        chain_started = _chain_started_at(chain)
+        if chain_started is None or chain_started >= started_before:
+            return OldServerScope(
+                SCOPE_NEWER,
+                "it did not start before this server, so it is not an old one",
+                session,
+            )
+    return OldServerScope(
+        SCOPE_OLD,
+        f"a server of this configuration folder that recorded port {port} and "
+        "holds no listening socket",
+        session,
+    )
 
 
 def observe_servers(

@@ -2375,6 +2375,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "entirely. It never stops a server merely because no listening "
             "socket was found for it. Turn this on if stale servers keep "
             "holding files open and making your updates retry. "
+            "One kind is not this setting's to decide (7.72.0, your decision): an "
+            "old server of THIS port and THIS configuration folder -- no listening "
+            "socket anywhere, and its own record here names this port -- is "
+            "stopped at start by process id after the stop budget to exit by "
+            "itself, whichever value this has; this setting governs every other "
+            "server. "
             "Requires a restart: it is read only by the supervisor, once, when the "
             "server starts."
         ),
