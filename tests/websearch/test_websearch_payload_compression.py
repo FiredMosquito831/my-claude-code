@@ -535,6 +535,7 @@ class TestHistoryConversion:
         # else freed: the conversion may return only what is above its start.
         path = tmp_path / "websearch.db"
         _seed(path, count=20)
+        _as_older_version_wrote_it(path)
         connection = sqlite3.connect(path)
         try:
             connection.execute("DELETE FROM search_log WHERE id > 10")
