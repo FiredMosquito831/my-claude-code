@@ -530,6 +530,27 @@ class TestHistoryConversion:
         finally:
             connection.close()
 
+    def test_space_owed_never_exceeds_what_the_freelist_gained(self, tmp_path) -> None:
+        # Pages a retention prune handed back already, then pages somebody
+        # else freed: the conversion may return only what is above its start.
+        path = tmp_path / "websearch.db"
+        _seed(path, count=20)
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute("DELETE FROM search_log WHERE id > 10")
+            connection.commit()
+            free = connection.execute("PRAGMA freelist_count").fetchone()[0]
+            assert free > 10
+            store = WebSearchLogStore(tmp_path / "other.db")
+            store.close()
+            state = {"freed_pages": free * 10, "returned_pages": 0}
+            state["freelist_at_start"] = free - 10
+            assert store._space_owed(connection, state) == 10
+            state["freelist_at_start"] = free + 5
+            assert store._space_owed(connection, state) == 0
+        finally:
+            connection.close()
+
     def test_a_new_database_finishes_at_once_and_silently(self, tmp_path) -> None:
         path = tmp_path / "websearch.db"
         store = WebSearchLogStore(path)
