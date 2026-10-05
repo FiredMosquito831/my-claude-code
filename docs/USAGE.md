@@ -4183,6 +4183,8 @@ Reasoning and tool calls are the majority of a real log: on a typical machine 55
 
 **Every word must appear, in any order and anywhere in the request.** Searching `proxy 8082` finds a request that says "restart the proxy" in the prompt and "port 8082 is busy" in the reasoning. A single word behaves exactly as before. Matching is case-insensitive and by substring, so `kube` finds `kubernetes`.
 
+**Words with letters or symbols outside ASCII are found too (7.77.1).** Before 7.77.1 a search for `ș`, `ă`, `—`, `→` or `é` found nothing inside a stored prompt, reply, reasoning or tool call, even where thousands of requests contained it: bodies are stored with such characters escaped, and the search looked only for them unescaped. On a copy of a real log, one day of 9,569 requests, `—` now finds 9,555 requests, `→` 9,536, `…` 7,764, `✓` 2,020, `ș` 220 and `ă` 194 (0 each before); every search made of ASCII words returns exactly the rows it returned before. Case folding still covers ASCII letters only, as before: `Ș` does not find `ș`, while `PE șosea` finds "Pe șosea".
+
 #### Which model actually answered
 
 A request does not always go where the tier points. **View** on any row draws the whole path it took:

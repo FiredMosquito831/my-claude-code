@@ -2269,12 +2269,34 @@ def _packed_or_none(packed: bytes) -> bytes | None:
 
 
 def _is_json_transparent(needle: str) -> bool:
-    """True when JSON encoding leaves ``needle`` byte-identical.
+    """True when JSON encoding writes ``needle`` as one predictable run of bytes.
 
-    ``json.dumps`` rewrites only ``"``, ``\\`` and control characters, so any
-    other string appears verbatim inside the encoded payload.
+    ``json.dumps`` rewrites ``"``, ``\\`` and control characters in ways a
+    substring cannot predict; anything else is written either as itself or,
+    with ``ensure_ascii`` on, as its ``\\uXXXX`` escape (``_stored_probes``).
     """
     return not any(char in '"\\' or char < " " for char in needle)
+
+
+def _stored_probes(term: str) -> tuple[bytes, ...]:
+    """Byte strings, lower-cased, one of which a body blob holds wherever ``term`` is.
+
+    ``pack_fields`` writes JSON with ``ensure_ascii`` on, so a non-ASCII
+    character is stored as its ``\\uXXXX`` escape ("ș" as ``\\u0219``), never as
+    its UTF-8 bytes. Until 7.77.1 the search looked only for the UTF-8 bytes,
+    found them in no blob, and rejected every row before its text was read: a
+    search for "ș", "ă", "—" or "→" found nothing. Both spellings are probed,
+    so a blob written either way passes, and the decoded text decides. For a
+    term of plain ASCII the two are the same bytes, which leaves every ASCII
+    search exactly as it was. Empty for a term no substring of the blob is
+    guaranteed to hold (``_is_json_transparent``): the decoded text alone
+    decides.
+    """
+    if not _is_json_transparent(term):
+        return ()
+    literal = term.encode("utf-8", "surrogatepass").lower()
+    escaped = json.dumps(term)[1:-1].encode("ascii").lower()
+    return (literal,) if escaped == literal else (literal, escaped)
 
 
 def unpack_bodies(raw: bytes) -> dict[str, Any]:
@@ -3228,9 +3250,10 @@ class RequestLogStore:
             return 0
         probes = [term.encode("utf-8", "surrogatepass").lower() for term in terms]
         lowered = [raw.lower() for raw in raws]
-        for term, probe in zip(terms, probes, strict=True):
-            if _is_json_transparent(term) and not any(
-                probe in candidate for candidate in lowered
+        for term in terms:
+            stored = _stored_probes(term)
+            if stored and not any(
+                probe in candidate for probe in stored for candidate in lowered
             ):
                 return 0
         merged: dict[str, Any] = {}
@@ -3265,13 +3288,14 @@ class RequestLogStore:
         # the inline rows beside them do not.
         probes = [term.encode("utf-8", "surrogatepass").lower() for term in terms]
         lowered_raw = raw.lower()
-        # JSON escaping only ever rewrites quotes, backslashes and control
-        # characters, so a term containing none of them survives into the blob
-        # byte for byte: absent from the encoded bytes proves absent from the
-        # text. The converse does not hold -- it can match structure -- so a
-        # survivor is still verified against the decoded content below.
-        for term, probe in zip(terms, probes, strict=True):
-            if _is_json_transparent(term) and probe not in lowered_raw:
+        # A term the blob must hold, in one of the spellings ``_stored_probes``
+        # names, wherever the text holds it: absent from the encoded bytes
+        # proves absent from the text. The converse does not hold -- it can
+        # match structure -- so a survivor is still verified against the
+        # decoded content below.
+        for term in terms:
+            stored = _stored_probes(term)
+            if stored and not any(probe in lowered_raw for probe in stored):
                 return 0
         haystack = (
             searchable_text(unpack_bodies(raw)).encode("utf-8", "surrogatepass").lower()
