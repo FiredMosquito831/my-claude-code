@@ -19,7 +19,7 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from compression import zstd
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -75,9 +75,9 @@ _PAYLOAD_ENVELOPE_V1 = 1
 # wrote 101.8 MB at 2.2 MB/s and 19 wrote 101.2 MB at 1.0 MB/s -- about 0.2 s
 # per result on average. Decoding is the same 1.6-1.8 s for all of them.
 _PAYLOAD_COMPRESSION_LEVEL = 19
-# The SQL function the content search reads a compressed payload through; see
-# ``_searchable_payload``.
-_PAYLOAD_SQL_FUNCTION = "mcc_websearch_payload"
+# The SQL function the content search matches a compressed payload with; see
+# ``_payload_matcher``.
+_PAYLOAD_SQL_FUNCTION = "mcc_websearch_match"
 # ``input_json`` (0.37 MB) and ``provider_config_json`` (0.99 MB) stay plain:
 # compressed they measured 0.36 MB smaller together, and an older version would
 # show a converted one as empty.
@@ -1049,10 +1049,11 @@ class WebSearchLogStore:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
         connection.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-        # Every reader may run the content search, which reads a compressed
-        # payload through this function (``_searched_output``).
+        # Every reader may run the content search, which matches a compressed
+        # payload through this function (``_output_matches``); one per
+        # connection, so what it remembers lives as long as one call.
         connection.create_function(
-            _PAYLOAD_SQL_FUNCTION, 1, _searchable_payload, deterministic=True
+            _PAYLOAD_SQL_FUNCTION, 3, _payload_matcher(), deterministic=True
         )
         _initialize_schema(connection)
         return connection
@@ -1431,33 +1432,54 @@ def _payload_text(stored: object) -> str | None:
         return None
 
 
-def _searchable_payload(value: object) -> bytes | None:
-    """SQL ``mcc_websearch_payload(x)``: what the content search reads for a BLOB.
+def _payload_matcher() -> Callable[[object, object, object], int]:
+    """A fresh SQL ``mcc_websearch_match(id, output_json, needle)`` for one reader.
 
-    The bytes the envelope holds, returned as a BLOB: SQLite's ``lower()``
-    reads a BLOB as text of the same bytes, so ``instr(lower(...), lower(?))``
-    sees exactly what it saw when the row held the TEXT, and matches the same.
+    1 when the compressed payload holds ``needle``, the way
+    ``instr(lower(text), lower(?)) > 0`` decides on the TEXT it replaced:
+    SQLite's ``lower()`` folds ASCII letters only, as ``bytes.lower()`` does,
+    and on UTF-8 a character substring is a byte substring. ``needle`` arrives
+    already through SQLite's ``lower()``.
+
+    Remembers its answer per row and needle for the life of the connection: a
+    statistics call runs a dozen queries with the same filter, and decoding
+    every payload for each of them measured 1.6x slower than the plain text
+    did. A row's payload never changes once written (the conversion keeps its
+    bytes, and ids are never reused), so a remembered answer cannot go stale.
     Total, because an exception in a SQL function fails the whole query:
-    anything undecodable is NULL, which the search reads as no payload, as the
-    detail does.
+    anything undecodable holds nothing, as the detail shows no payload.
     """
-    if not isinstance(value, bytes):
-        return None
-    try:
-        return _unwrap_payload(value)
-    except zstd.ZstdError, ValueError, MemoryError:
-        return None
+    seen: dict[tuple[object, str], int] = {}
+
+    def match(row_id: object, value: object, needle: object) -> int:
+        if not isinstance(value, bytes) or not isinstance(needle, str):
+            return 0
+        key = (row_id, needle)
+        found = seen.get(key)
+        if found is None:
+            try:
+                data = _unwrap_payload(value)
+            except zstd.ZstdError, ValueError, MemoryError:
+                found = 0
+            else:
+                found = int(needle.encode("utf-8").lower() in data.lower())
+            seen[key] = found
+        return found
+
+    return match
 
 
-def _searched_output(column: str) -> str:
-    """SQL for the text the content search matches in ``column`` (output_json).
+def _output_matches(id_column: str, column: str) -> str:
+    """SQL: does ``column`` (output_json) hold the search term, in either encoding.
 
-    A TEXT row stays on SQLite's own path, untouched; only a BLOB goes through
-    ``_searchable_payload``.
+    A TEXT row stays on SQLite's own ``instr(lower(...), lower(?))``, untouched;
+    only a BLOB goes through ``_payload_matcher``. Two placeholders, both bound
+    to the term.
     """
     return (
         f"CASE WHEN typeof({column}) = 'blob'"
-        f" THEN {_PAYLOAD_SQL_FUNCTION}({column}) ELSE {column} END"
+        f" THEN {_PAYLOAD_SQL_FUNCTION}({id_column}, {column}, lower(?))"
+        f" ELSE instr(lower(COALESCE({column}, '')), lower(?)) > 0 END"
     )
 
 
@@ -1500,11 +1522,9 @@ def _attempt_filter_where(
         clauses.append(
             "(instr(lower(query), lower(?)) > 0"
             " OR instr(lower(COALESCE(input_json, '')), lower(?)) > 0"
-            " OR instr(lower(COALESCE("
-            + _searched_output("output_json")
-            + ", '')), lower(?)) > 0)"
+            " OR " + _output_matches("id", "output_json") + ")"
         )
-        params.extend((q, q, q))
+        params.extend((q, q, q, q))
     if since_epoch is not None:
         clauses.append("ts_epoch >= ?")
         params.append(since_epoch)
@@ -1537,11 +1557,9 @@ def _route_filter_where(
             " OR EXISTS (SELECT 1 FROM search_log AS attempt"
             " WHERE attempt.route_id = search_route_log.route_id"
             " AND (instr(lower(COALESCE(attempt.input_json, '')), lower(?)) > 0"
-            " OR instr(lower(COALESCE("
-            + _searched_output("attempt.output_json")
-            + ", '')), lower(?)) > 0)))"
+            " OR " + _output_matches("attempt.id", "attempt.output_json") + ")))"
         )
-        params.extend((q, q, q))
+        params.extend((q, q, q, q))
     if since_epoch is not None:
         clauses.append("ts_epoch >= ?")
         params.append(since_epoch)

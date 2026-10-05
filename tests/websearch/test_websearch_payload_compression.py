@@ -307,6 +307,9 @@ class TestSearch:
             ("→", 2),
             ("https://example.org/7", 1),
             ("zzzz-none", 0),
+            # Case folding stays ASCII-only, as SQLite's lower(): "Ș" is not "ș".
+            ("BUCURESTI", 3),
+            ("ȘOSEA", 0),
         ],
     )
     def test_terms_inside_compressed_results_are_found(
@@ -344,6 +347,32 @@ class TestSearch:
             before, sort_keys=True, default=str
         )
         assert before["q:ș"][0]["total"] == 3
+
+    def test_one_statistics_call_decodes_each_result_once(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # stats() runs a dozen queries with the same filter; decoding every
+        # payload for each one made the search 1.6x slower than plain text.
+        path = tmp_path / "websearch.db"
+        _seed(path)
+        blobs = list(_storage(path).values()).count("blob")
+        decoded: list[int] = []
+        real = analytics._unwrap_payload
+
+        def counting(data: bytes) -> bytes:
+            decoded.append(len(data))
+            return real(data)
+
+        monkeypatch.setattr(analytics, "_unwrap_payload", counting)
+        store = WebSearchLogStore(path)
+        try:
+            stats = store.stats("daily", q="needle")
+        finally:
+            store.close()
+        assert stats["totals"]["requests"] == 2
+        # Each BLOB once for the attempt queries' connection; the routes'
+        # EXISTS reads them again only under the same connection's memory.
+        assert len(decoded) == blobs
 
 
 class TestHistoryConversion:
