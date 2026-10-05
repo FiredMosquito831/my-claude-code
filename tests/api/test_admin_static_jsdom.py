@@ -3665,6 +3665,16 @@ def test_the_history_note_names_the_metadata_part(rendered) -> None:
     assert notes["future"] == " · compressing older history (5%)"
 
 
+def test_the_history_note_names_the_skipped_attempts_part(rendered) -> None:
+    """7.76.0: the part that stores skipped route attempts compactly says so."""
+
+    notes = rendered["logReadout"]["historyNotes"]
+
+    assert notes["skipped"] == (
+        " · compressing older history (skipped route attempts 63%)"
+    )
+
+
 def test_the_cost_card_ships_the_denominator_behind_its_totals(rendered) -> None:
     """A window where most models are unpriced must not read as a cheap week."""
 

@@ -33,7 +33,7 @@ from my_claude_code.core import gemini_native_media, request_log
 from my_claude_code.core.gemini_native_media import TRANSCRIBE_INSTRUCTION
 from my_claude_code.providers.media import adapters, leaf
 from my_claude_code.providers.media.registry import MediaRegistry
-from tests.api.support import create_test_app, requests_as_read
+from tests.api.support import attempts_as_read, create_test_app, requests_as_read
 
 GEMINI_KEY = "AIza" + "g" * 35
 GOOGLE = "generativelanguage.googleapis.com"
@@ -151,14 +151,8 @@ def _row(tmp_path: Path) -> dict[str, Any]:
 def _attempt_kinds(tmp_path: Path, request_id: str) -> list[str | None]:
     conn = _db(tmp_path)
     try:
-        return [
-            kind
-            for (kind,) in conn.execute(
-                "SELECT error_kind FROM request_attempts WHERE request_id = ?"
-                " ORDER BY attempt",
-                (request_id,),
-            )
-        ]
+        # 7.76.0: skipped attempts may be stored compactly; read them back.
+        return [row["error_kind"] for row in attempts_as_read(conn, request_id)]
     finally:
         conn.close()
 
@@ -314,11 +308,11 @@ def test_tts_answer_without_audio_falls_back(monkeypatch, tmp_path) -> None:
     assert len(kinds) == 2 and kinds[0] is not None and kinds[1] is None
     conn = _db(tmp_path)
     try:
-        (message,) = conn.execute(
-            "SELECT error_message FROM request_attempts WHERE request_id = ?"
-            " AND attempt = 0",
-            (row["id"],),
-        ).fetchone()
+        (message,) = [
+            attempt["error_message"]
+            for attempt in attempts_as_read(conn, row["id"])
+            if attempt["attempt"] == 0
+        ]
     finally:
         conn.close()
     assert "gemini answered without audio" in message

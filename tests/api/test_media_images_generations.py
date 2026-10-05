@@ -9,6 +9,7 @@ import base64
 import dataclasses
 import json
 import sqlite3
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ from my_claude_code.core import request_log
 from my_claude_code.core.media_store import media_file_path, media_root
 from my_claude_code.providers.media.key_pool import MediaKeyPool
 from my_claude_code.providers.media.registry import MediaRegistry
-from tests.api.support import create_test_app
+from tests.api.support import attempts_as_read, create_test_app
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 PNG_B64 = base64.b64encode(PNG).decode()
@@ -85,16 +86,11 @@ def _rows(tmp_path: Path) -> list[sqlite3.Row]:
         conn.close()
 
 
-def _attempts(tmp_path: Path, request_id: str) -> list[sqlite3.Row]:
+def _attempts(tmp_path: Path, request_id: str) -> list[Mapping[str, Any]]:
     conn = sqlite3.connect(tmp_path / "requests.db")
-    conn.row_factory = sqlite3.Row
     try:
-        return list(
-            conn.execute(
-                "SELECT * FROM request_attempts WHERE request_id = ? ORDER BY attempt",
-                (request_id,),
-            )
-        )
+        # 7.76.0: skipped attempts may be stored compactly; read them back.
+        return attempts_as_read(conn, request_id)
     finally:
         conn.close()
 

@@ -9,10 +9,18 @@ import math
 import os
 import queue
 import sqlite3
+import struct
 import threading
 import time
-from collections import OrderedDict
-from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from collections import Counter, OrderedDict
+from collections.abc import (
+    Callable,
+    Collection,
+    Generator,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from compression import zstd
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -160,6 +168,10 @@ _ORPHAN_SWEEP_TABLES = (
     "body_blobs",
     "request_images",
     "request_attempts",
+    # 7.76.0: compact skipped attempts are keyed by request id like a link
+    # table. Swept whole on a process's first pass too, which collects any an
+    # older version's prune left behind (it does not know the table).
+    "request_attempt_skips",
     "image_blobs",
     "request_media",
     "media_blobs",
@@ -1057,6 +1069,33 @@ CREATE TABLE IF NOT EXISTS request_values (
 );
 CREATE INDEX IF NOT EXISTS idx_request_values_digest_v1
     ON request_values(digest);
+-- Skipped route attempts stored compactly (7.76.0). Nine attempt rows in ten
+-- record a model the chain never asked -- "never reached", "paused by you" --
+-- and repeat the same few thousand facts across millions of rows. A request's
+-- skipped attempts are one row of ``request_attempt_skips`` naming one
+-- ``attempt_skip_sets`` row: the JSON array of their
+-- ``[attempt, provider, model_ref, error_kind, error_message]``, stored once
+-- however many requests share it. ``ts_epoch`` / ``key_index`` / ``key_label``
+-- are the same for every skipped attempt of a request and live on its row;
+-- every other attempt column of such a row is NULL by definition (an attempt
+-- that holds anything more stays in ``request_attempts``). Their own tables,
+-- never ``request_values``: an older version's sweep of that table knows only
+-- its own three refs and would delete these. AUTOINCREMENT, so a set id is
+-- never handed out twice.
+CREATE TABLE IF NOT EXISTS attempt_skip_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    digest BLOB NOT NULL,
+    attempts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attempt_skip_sets_digest_v1
+    ON attempt_skip_sets(digest);
+CREATE TABLE IF NOT EXISTS request_attempt_skips (
+    request_id TEXT PRIMARY KEY,
+    set_id INTEGER NOT NULL,
+    ts_epoch REAL,
+    key_index INTEGER,
+    key_label TEXT
+) WITHOUT ROWID;
 -- Images a request carried, content-addressed on the *source* bytes. Claude
 -- Code re-sends the whole conversation every turn, so one pasted screenshot
 -- reaches the proxy again on every following request; keying on the image
@@ -1335,7 +1374,7 @@ _DATA_MARK_IGNORED_KEYS = frozenset({_HISTORY_CONVERSION_KEY})
 # ``_HISTORY_CONVERSION_KEY`` document. A part added by a later release is
 # missing from a document an earlier one finished; the document is then opened
 # again for that part alone (``_reopen_history_state``).
-_HISTORY_PHASES = ("wire", "bodies", "metadata")
+_HISTORY_PHASES = ("wire", "bodies", "metadata", "skipped")
 
 # Request metadata stored once (7.75.0). ``headers``, ``route_chain`` and
 # ``params`` repeat a few hundred distinct values across hundreds of thousands
@@ -2061,6 +2100,59 @@ _ATTEMPT_INSERT_COLUMNS = (
 #: params blob is a private diagnostic whose shape is not a contract, and the
 #: columns derived from it are.
 ATTEMPT_PARAMS_KEY = "_attempt_params"
+
+# Skipped route attempts stored compactly (7.76.0); see the ``attempt_skip_sets``
+# comment in ``_BODIES_SCHEMA``. Measured on a 2,817,195-attempt log: 2,496,969
+# rows (88.6 %) were skipped attempts, 2,496,100 of them holding nothing but
+# these eight values, and their rows and index entries filled 1.33 GB of pages.
+#
+# What one member of a stored set holds, in this order.
+_SKIP_SET_FIELDS = ("attempt", "provider", "model_ref", "error_kind", "error_message")
+# Shared by every skipped attempt of one request; one ``request_attempt_skips``
+# row each.
+_SKIP_SHARED_FIELDS = ("ts_epoch", "key_index", "key_label")
+# Every other attempt column, derived rather than listed so a column added to
+# ``_ATTEMPT_INSERT_COLUMNS`` later is one a compact attempt must not hold:
+# an attempt with anything in one of these stays a row of ``request_attempts``.
+_SKIP_EMPTY_FIELDS = tuple(
+    column
+    for column in _ATTEMPT_INSERT_COLUMNS
+    if column not in ("request_id", "outcome", *_SKIP_SET_FIELDS, *_SKIP_SHARED_FIELDS)
+)
+# Text columns of a compact attempt; anything else in them keeps the row.
+_SKIP_TEXT_FIELDS = (
+    "provider",
+    "model_ref",
+    "error_kind",
+    "error_message",
+    "key_label",
+)
+# A set of one request's skipped attempts is a few hundred bytes; a reading
+# process keeps the sets it has read, by id (never reused: AUTOINCREMENT).
+_SKIP_SET_CACHE_MAX = 8_192
+# The history conversion's read of one request's attempts: per column its
+# storage class and its stored bytes, plus whether every column a compact
+# attempt leaves empty is NULL.
+_SKIP_FETCH_SQL = (
+    "SELECT rowid, typeof(outcome), CAST(outcome AS BLOB),"
+    " typeof(attempt), attempt, typeof(ts_epoch), ts_epoch,"
+    " typeof(key_index), key_index, "
+    + ", ".join(
+        f"typeof({column}), CAST({column} AS BLOB)" for column in _SKIP_TEXT_FIELDS
+    )
+    + ", ("
+    + " AND ".join(f"{column} IS NULL" for column in _SKIP_EMPTY_FIELDS)
+    + ") FROM request_attempts WHERE request_id = ?"
+)
+_ATTEMPT_INSERT_SQL = (
+    "INSERT OR REPLACE INTO request_attempts"
+    f" ({', '.join(_ATTEMPT_INSERT_COLUMNS)}) VALUES"
+    f" ({', '.join('?' * len(_ATTEMPT_INSERT_COLUMNS))})"
+)
+_SKIP_PACK_INSERT_SQL = (
+    "INSERT OR REPLACE INTO request_attempt_skips"
+    " (request_id, set_id, ts_epoch, key_index, key_label) VALUES (?, ?, ?, ?, ?)"
+)
 
 # Blank, not zero: a request whose attempts predate the ladder measured
 # nothing, and "0 tries" would be a claim the database cannot support.
@@ -2874,6 +2966,9 @@ class RequestLogStore:
         # ``request_values`` texts by id, for readers on any thread; see
         # ``_VALUE_CACHE_MAX``.
         self._value_cache: dict[int, str] = {}
+        # Parsed ``attempt_skip_sets`` by id, for readers on any thread; see
+        # ``_SKIP_SET_CACHE_MAX``.
+        self._skip_set_cache: dict[int, tuple[tuple[Any, ...], ...]] = {}
         # The orphan sweeps the next prune pass owes over a whole table; see
         # ``prune``. All of them to begin with, so the first pass of a process
         # is exactly the pass every prune ran before 7.72.2. Any thread may
@@ -4068,6 +4163,8 @@ class RequestLogStore:
             progressed = self._recompress_body_step(conn)
         elif pending and pending[0] == "metadata":
             progressed = self._convert_metadata_step(conn)
+        elif pending and pending[0] == "skipped":
+            progressed = self._convert_skipped_step(conn)
         if self._queue.empty() and self._return_space_step(conn):
             progressed = True
         state = self._load_history_state(conn)
@@ -4092,6 +4189,8 @@ class RequestLogStore:
             work.append(f"older {' and '.join(recompressed)} are recompressed")
         if "metadata" in pending:
             work.append("repeated request metadata of older rows is stored once")
+        if "skipped" in pending:
+            work.append("older skipped route attempts are stored compactly")
         on_disk = int(state.get("bytes_at_reopen") or state["bytes_at_start"]) / 1e9
         if not work:
             logger.info(
@@ -4509,6 +4608,192 @@ class RequestLogStore:
             return None
         return self._proven_value_id(conn, text, added)
 
+    def _convert_skipped_step(self, conn: sqlite3.Connection) -> bool:
+        """Store the next requests' skipped attempts compactly; one transaction.
+
+        Walks ``request_attempts`` by rowid up to where the table ended when
+        the part began; rows written since are compact already. At each
+        request it meets, every skipped attempt of that request that fits the
+        compact form is read as stored (storage class and bytes), its compact
+        form written, read back through the readers' own path, and only if
+        that gives exactly the same rows are the rows deleted. Anything else
+        -- an attempt holding more, a value that is not what the form holds,
+        a request whose skipped attempts differ in time or key -- stays a row
+        and is counted.
+
+        Deleting is enough to free the pages: on the full-size copy the
+        2,496,100 rows and their index entries gave back 324,179 pages. No row
+        moves, so the rowid order ``latency_by_model`` samples by is kept.
+        """
+        budget_end = time.perf_counter() + _HISTORY_STEP_SECONDS
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(conn)
+            phase = state["skipped"]
+            if phase["end"] is None:
+                phase["end"] = int(
+                    conn.execute(
+                        "SELECT COALESCE(MAX(rowid), 0) FROM request_attempts"
+                    ).fetchone()[0]
+                )
+            end = int(phase["end"])
+            freelist_before = self._freelist_count(conn)
+            cursor = int(phase["through"])
+            known: dict[str, int | None] = {}
+            added: list[int] = []
+            seen: set[str] = set()
+            finished = False
+            while True:
+                rows = conn.execute(
+                    "SELECT rowid, request_id FROM request_attempts"
+                    " WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?",
+                    (cursor, end, _HISTORY_FETCH_ROWS),
+                ).fetchall()
+                if not rows:
+                    finished = True
+                    break
+                for row in rows:
+                    cursor = int(row[0])
+                    request_id = row[1]
+                    if isinstance(request_id, str) and request_id not in seen:
+                        seen.add(request_id)
+                        self._compact_request_skips(
+                            conn, request_id, cursor, phase, known, added
+                        )
+                    if time.perf_counter() >= budget_end:
+                        break
+                # At least one request per step, however slow, so the walk
+                # always moves; then the budget decides.
+                if time.perf_counter() >= budget_end:
+                    break
+            phase["bytes_after"] += sum(added)
+            phase["through"] = cursor
+            if finished:
+                phase["done_at"] = time.time()
+            state["freed_pages"] = int(state["freed_pages"]) + max(
+                0, self._freelist_count(conn) - freelist_before
+            )
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if finished and phase["failed"]:
+            logger.warning(
+                "Request log history conversion left {} skipped route attempts"
+                " as they were: their compact form did not read back as the"
+                " same rows",
+                phase["failed"],
+            )
+        return True
+
+    def _compact_request_skips(
+        self,
+        conn: sqlite3.Connection,
+        request_id: str,
+        rowid: int,
+        phase: dict[str, Any],
+        known: dict[str, int | None],
+        added: list[int],
+    ) -> None:
+        """Store one request's compactable skipped attempts as one row, proven.
+
+        Done once per request, where the walk (at ``rowid``) first meets it,
+        so every count is the same however the walk was cut into steps.
+        """
+        if (
+            conn.execute(
+                "SELECT 1 FROM request_attempt_skips WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            is not None
+        ):
+            # Compact already: by this walk a step ago, or by the writer.
+            return
+        if (
+            conn.execute(
+                "SELECT 1 FROM request_attempts WHERE request_id = ? AND rowid < ?"
+                " LIMIT 1",
+                (request_id, rowid),
+            ).fetchone()
+            is not None
+        ):
+            # The walk met this request at an earlier row, in an earlier step,
+            # and left what it left: done.
+            return
+        compact: list[tuple[int, dict[str, Any], int]] = []
+        for row in conn.execute(_SKIP_FETCH_SQL, (request_id,)).fetchall():
+            if row[1] != "text" or bytes(row[2]) != b"skipped":
+                continue
+            stored = _stored_skip_values(request_id, row)
+            if stored is None:
+                phase["kept"] += 1
+                continue
+            values, size = stored
+            compact.append((int(row[0]), values, size))
+        if not compact:
+            return
+        shared = {
+            (
+                struct.pack("<d", values["ts_epoch"]),
+                values["key_index"],
+                values["key_label"],
+            )
+            for _, values, _ in compact
+        }
+        parent = conn.execute(
+            "SELECT 1 FROM requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        if len(shared) != 1 or parent is None:
+            phase["kept"] += len(compact)
+            return
+        members = [
+            tuple(values[column] for column in _ATTEMPT_INSERT_COLUMNS)
+            for _, values, _ in compact
+        ]
+        text = _skip_set_text(members)
+        if text not in known:
+            known[text] = self._proven_skip_set_id(conn, text, added)
+        set_id = known[text]
+        if set_id is None:
+            phase["failed"] += len(compact)
+            return
+        first = compact[0][1]
+        conn.execute("SAVEPOINT history_skip")
+        # A plain INSERT: a request already compact was passed over above,
+        # and a compact row is never overwritten from here.
+        conn.execute(
+            "INSERT INTO request_attempt_skips"
+            " (request_id, set_id, ts_epoch, key_index, key_label)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                request_id,
+                set_id,
+                first["ts_epoch"],
+                first["key_index"],
+                first["key_label"],
+            ),
+        )
+        restored = self._skip_rows(conn, [request_id], cache=False).get(request_id)
+        if not _same_attempt_rows(restored, [values for _, values, _ in compact]):
+            conn.execute("ROLLBACK TO history_skip")
+            conn.execute("RELEASE history_skip")
+            phase["failed"] += len(compact)
+            return
+        conn.executemany(
+            "DELETE FROM request_attempts WHERE rowid = ?",
+            [(rowid,) for rowid, _, _ in compact],
+        )
+        conn.execute("RELEASE history_skip")
+        phase["converted"] += len(compact)
+        phase["bytes_before"] += sum(size for _, _, size in compact)
+        added.append(
+            len(request_id.encode("utf-8"))
+            + 8
+            + 8
+            + (len(first["key_label"].encode("utf-8")) if first["key_label"] else 0)
+        )
+
     def _space_owed(self, conn: sqlite3.Connection, state: dict[str, Any]) -> int:
         """Pages the conversion freed that are not handed back yet.
 
@@ -4610,6 +4895,13 @@ class RequestLogStore:
                 f"{metadata['converted']} rows' repeated metadata stored once"
                 f" ({int(metadata['bytes_before']) / 1e9:.2f} GB ->"
                 f" {int(metadata['bytes_after']) / 1e6:.2f} MB)"
+            )
+        if "skipped" in ran:
+            skipped = state["skipped"]
+            work.append(
+                f"{skipped['converted']} skipped route attempts stored compactly"
+                f" ({int(skipped['bytes_before']) / 1e9:.2f} GB ->"
+                f" {int(skipped['bytes_after']) / 1e6:.2f} MB)"
             )
         returned = int(state["returned_pages"]) - int(
             state.get("returned_at_reopen") or 0
@@ -6233,7 +6525,10 @@ class RequestLogStore:
         )
 
     def _store_attempts(
-        self, conn: sqlite3.Connection, batch: list[RequestRecord]
+        self,
+        conn: sqlite3.Connection,
+        batch: list[RequestRecord],
+        rewritten: Collection[str] = (),
     ) -> None:
         """Persist each record's route attempts.
 
@@ -6243,6 +6538,13 @@ class RequestLogStore:
         ``wire_body`` is stored compressed when that is smaller (7.73.0; see
         ``_encode_wire_body``), at the level and with the switch the store
         holds now, each read once so one batch is written one way.
+
+        Skipped attempts that hold nothing but the compact form's values are
+        stored as one ``request_attempt_skips`` row (7.76.0; see
+        ``_store_skip_packs``), with the same switch. ``rewritten`` names the
+        requests already stored or written twice in this batch: for those the
+        merge above has to see every attempt as a row, so their compact
+        attempts are first turned back into rows and nothing new is packed.
         """
         level = self._compression_level
         compress = self._compress_bodies
@@ -6296,12 +6598,233 @@ class RequestLogStore:
                 "request_attempts row width"
                 f" {len(rows[0])} != {len(_ATTEMPT_INSERT_COLUMNS)} columns"
             )
+        if rewritten:
+            # Before the rows: a compact attempt the new write also names must
+            # be a row for ``INSERT OR REPLACE`` to replace it, exactly as it
+            # would have been before 7.76.0.
+            self._expand_skip_packs(
+                conn, sorted({str(row[0]) for row in rows} & set(rewritten))
+            )
+        if compress:
+            rows = self._store_skip_packs(conn, rows, rewritten)
+        if rows:
+            conn.executemany(_ATTEMPT_INSERT_SQL, rows)
+
+    def _store_skip_packs(
+        self,
+        conn: sqlite3.Connection,
+        rows: list[tuple[Any, ...]],
+        rewritten: Collection[str],
+    ) -> list[tuple[Any, ...]]:
+        """Store each request's compactable skipped attempts as one row.
+
+        Called inside the write transaction. Returns the rows still to be
+        inserted into ``request_attempts``, in their original order. A request
+        is packed only when its set reads back through ``_load_skip_sets`` as
+        the same text and its whole compact form reads back through
+        ``_skip_rows`` -- the readers' own path -- as exactly the rows it
+        replaces; otherwise every one of its rows is inserted as before.
+        """
+        by_request: dict[str, list[int]] = {}
+        for index, row in enumerate(rows):
+            request_id = row[0]
+            if isinstance(request_id, str) and request_id not in rewritten:
+                by_request.setdefault(request_id, []).append(index)
+        known: dict[str, int | None] = {}
+        packs: dict[str, tuple[list[int], tuple[Any, ...]]] = {}
+        for request_id, all_indexes in by_request.items():
+            numbers = [rows[index][1] for index in all_indexes]
+            if len(set(numbers)) != len(numbers):
+                # Two attempts with one number: which survives is the order of
+                # the ``INSERT OR REPLACE``, which only rows keep.
+                continue
+            indexes = [
+                index for index in all_indexes if _compactable_attempt_row(rows[index])
+            ]
+            if not indexes:
+                continue
+            members = [rows[index] for index in indexes]
+            shared = {_skip_shared_values(row) for row in members}
+            if len(shared) != 1:
+                continue
+            text = _skip_set_text(members)
+            if text not in known:
+                known[text] = self._proven_skip_set_id(conn, text)
+            set_id = known[text]
+            if set_id is None:
+                continue
+            ts_epoch, key_index, key_label = next(iter(shared))
+            packs[request_id] = (
+                indexes,
+                (request_id, set_id, ts_epoch, key_index, key_label),
+            )
+        if not packs:
+            return rows
+        conn.executemany(_SKIP_PACK_INSERT_SQL, [pack for _, pack in packs.values()])
+        restored = self._skip_rows(conn, list(packs), cache=False)
+        packed: set[int] = set()
+        unproven: list[tuple[str]] = []
+        for request_id, (indexes, _) in packs.items():
+            expected = [
+                dict(zip(_ATTEMPT_INSERT_COLUMNS, rows[index], strict=True))
+                for index in indexes
+            ]
+            if _same_attempt_rows(restored.get(request_id), expected):
+                packed.update(indexes)
+            else:
+                unproven.append((request_id,))
+        if unproven:
+            conn.executemany(
+                "DELETE FROM request_attempt_skips WHERE request_id = ?", unproven
+            )
+        return [row for index, row in enumerate(rows) if index not in packed]
+
+    def _expand_skip_packs(
+        self, conn: sqlite3.Connection, request_ids: list[str]
+    ) -> None:
+        """Turn these requests' compact skipped attempts back into rows.
+
+        For a request written again: its attempts are then rows only, and the
+        ``INSERT OR REPLACE`` that follows merges exactly as it always has.
+        ``OR IGNORE``: a row already there for an attempt is what every reader
+        shows for it, and stays.
+        """
+        if not request_ids:
+            return
+        restored = self._skip_rows(conn, request_ids, cache=False)
         conn.executemany(
-            "INSERT OR REPLACE INTO request_attempts"
+            "INSERT OR IGNORE INTO request_attempts"
             f" ({', '.join(_ATTEMPT_INSERT_COLUMNS)}) VALUES"
             f" ({', '.join('?' * len(_ATTEMPT_INSERT_COLUMNS))})",
-            rows,
+            [
+                tuple(row[column] for column in _ATTEMPT_INSERT_COLUMNS)
+                for members in restored.values()
+                for row in members
+            ],
         )
+        # Every one of these requests: a compact row whose set is gone reads
+        # as nothing, and nothing is lost by dropping it.
+        conn.executemany(
+            "DELETE FROM request_attempt_skips WHERE request_id = ?",
+            [(request_id,) for request_id in request_ids],
+        )
+
+    def _proven_skip_set_id(
+        self, conn: sqlite3.Connection, text: str, added: list[int] | None = None
+    ) -> int | None:
+        """The ``attempt_skip_sets`` id holding ``text``, adding it if needed.
+
+        None -- keep the attempts as rows -- unless the id reads back as
+        exactly ``text`` through ``_load_skip_sets``, the readers' own lookup.
+        Must run inside a write transaction. ``added`` collects the size of
+        each set this call had to add.
+        """
+        try:
+            encoded = text.encode("utf-8")
+            digest = hashlib.sha256(encoded).digest()[:_VALUE_DIGEST_BYTES]
+            set_id: int | None = None
+            for found_id, found in conn.execute(
+                "SELECT id, attempts FROM attempt_skip_sets WHERE digest = ?"
+                " ORDER BY id",
+                (digest,),
+            ):
+                if found == text:
+                    set_id = int(found_id)
+                    break
+            if set_id is None:
+                cursor = conn.execute(
+                    "INSERT INTO attempt_skip_sets (digest, attempts) VALUES (?, ?)",
+                    (digest, text),
+                )
+                set_id = int(cursor.lastrowid or 0)
+                if added is not None:
+                    added.append(len(encoded))
+            if not set_id:
+                return None
+            check = _load_skip_sets(conn, {set_id}).get(set_id)
+            if check is None or check.encode("utf-8") != encoded:
+                return None
+            return set_id
+        except sqlite3.Error:
+            raise
+        except Exception:  # every other failure means "keep the rows"
+            return None
+
+    def _skip_sets(
+        self, conn: sqlite3.Connection, set_ids: set[int], *, cache: bool = True
+    ) -> dict[int, tuple[tuple[Any, ...], ...]]:
+        """Parsed ``attempt_skip_sets`` by id; a bad or missing one is absent.
+
+        ``cache`` is for readers only. Inside a write transaction a set may be
+        one this transaction added, and a rollback would hand its id out again
+        to a different set; so a writer neither reads nor fills the cache.
+        """
+        held = self._skip_set_cache
+        found: dict[int, tuple[tuple[Any, ...], ...]] = {}
+        missing: set[int] = set()
+        for set_id in set_ids:
+            # One ``get``, never ``in`` then ``[]``: another reader may clear
+            # the cache between the two.
+            cached = held.get(set_id) if cache else None
+            if cached is None:
+                missing.add(set_id)
+            else:
+                found[set_id] = cached
+        if missing:
+            for set_id, text in _load_skip_sets(conn, missing).items():
+                members = _parse_skip_set(text)
+                if members is None:
+                    continue
+                found[set_id] = members
+                if cache:
+                    if len(held) >= _SKIP_SET_CACHE_MAX:
+                        held.clear()
+                    held[set_id] = members
+        return found
+
+    def _skip_rows(
+        self,
+        conn: sqlite3.Connection,
+        request_ids: Sequence[str],
+        *,
+        cache: bool = True,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """These requests' compact skipped attempts, as whole attempt rows.
+
+        Each comes back as a mapping of every ``_ATTEMPT_INSERT_COLUMNS``
+        column to exactly the value a ``request_attempts`` row holding it
+        returns, in attempt order. A request with no compact attempts is
+        absent; so is one whose set is gone, which reads as no rows rather
+        than raising. Pass ``cache=False`` inside a write transaction.
+        """
+        sides: list[sqlite3.Row | tuple[Any, ...]] = []
+        for start in range(0, len(request_ids), _SHA_LOOKUP_CHUNK):
+            chunk = list(request_ids[start : start + _SHA_LOOKUP_CHUNK])
+            sides.extend(
+                conn.execute(
+                    "SELECT request_id, set_id, ts_epoch, key_index, key_label"
+                    " FROM request_attempt_skips"
+                    f" WHERE request_id IN ({', '.join('?' * len(chunk))})",
+                    chunk,
+                ).fetchall()
+            )
+        if not sides:
+            return {}
+        sets = self._skip_sets(conn, {int(side[1]) for side in sides}, cache=cache)
+        out: dict[str, list[dict[str, Any]]] = {}
+        for request_id, set_id, ts_epoch, key_index, key_label in sides:
+            members = sets.get(int(set_id))
+            if members is None:
+                continue
+            shared = {
+                "ts_epoch": ts_epoch,
+                "key_index": key_index,
+                "key_label": key_label,
+            }
+            out[str(request_id)] = [
+                _skip_row(str(request_id), member, shared) for member in members
+            ]
+        return out
 
     def _fetch_attempts(
         self, conn: sqlite3.Connection, request_id: str
@@ -6310,17 +6833,21 @@ class RequestLogStore:
 
         ``wire_body`` comes back as the same parsed JSON whichever encoding the
         row holds: TEXT as written before 7.73.0, or the compressed envelope.
+        Skipped attempts stored compactly (7.76.0) come back exactly as the
+        rows they replaced, in their place in the chain.
         """
-        rows = conn.execute(
-            "SELECT attempt, provider, model_ref, outcome, error_kind,"
-            " error_message, duration_ms, params, wire_body, reasoning_emitted,"
-            " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
-            " cost_usd, cost_source, ts_epoch, ttft_ms, first_reasoning_ms,"
-            " proxy_label"
-            " FROM request_attempts"
-            " WHERE request_id = ? ORDER BY attempt",
-            (request_id,),
-        ).fetchall()
+        with _one_snapshot(conn):
+            rows = conn.execute(
+                "SELECT attempt, provider, model_ref, outcome, error_kind,"
+                " error_message, duration_ms, params, wire_body, reasoning_emitted,"
+                " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
+                " cost_usd, cost_source, ts_epoch, ttft_ms, first_reasoning_ms,"
+                " proxy_label"
+                " FROM request_attempts"
+                " WHERE request_id = ? ORDER BY attempt",
+                (request_id,),
+            ).fetchall()
+            packed = self._skip_rows(conn, [request_id]).get(request_id)
         return [
             {
                 "attempt": row["attempt"],
@@ -6372,7 +6899,7 @@ class RequestLogStore:
                 "ttft_ms": row["ttft_ms"],
                 "first_reasoning_ms": row["first_reasoning_ms"],
             }
-            for row in rows
+            for row in _merge_skip_rows(rows, packed)
         ]
 
     @staticmethod
@@ -6701,7 +7228,15 @@ class RequestLogStore:
                 self._store_bodies(conn, packed)
                 self._store_images(conn, batch)
                 self._store_media(conn, batch)
-                self._store_attempts(conn, batch)
+                written = Counter(record.id for record in batch)
+                self._store_attempts(
+                    conn,
+                    batch,
+                    already_stored
+                    | {
+                        request_id for request_id, count in written.items() if count > 1
+                    },
+                )
                 # One list, computed once and shared, so the two aggregates
                 # provably fold in the same set of records.
                 fresh = [record for record in batch if record.id not in already_stored]
@@ -7915,9 +8450,8 @@ class RequestLogStore:
         finally:
             conn.close()
 
-    @staticmethod
     def _fetch_export_attempts(
-        conn: sqlite3.Connection, request_ids: list[str]
+        self, conn: sqlite3.Connection, request_ids: list[str]
     ) -> list[dict[str, Any]]:
         """Read one page's attempts, newest request first, chain order within.
 
@@ -7925,20 +8459,37 @@ class RequestLogStore:
         the table and the only thing the export wants from it -- which of a
         multi-surface gateway's endpoints the attempt was posted to -- is
         already summarised in ``params.wire.surface``.
+
+        Skipped attempts stored compactly (7.76.0) are exported exactly as the
+        rows they replaced; a stored row wins over a compact attempt of the
+        same number.
         """
         if not request_ids:
             return []
         order = {request_id: index for index, request_id in enumerate(request_ids)}
         markers = ", ".join("?" * len(request_ids))
-        rows = conn.execute(
-            "SELECT request_id, attempt, provider, model_ref, outcome,"
-            " error_kind, error_message, duration_ms, params, reasoning_emitted,"
-            " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
-            " cost_usd, cost_source, ttft_ms, first_reasoning_ms, proxy_label"
-            " FROM request_attempts"
-            f" WHERE request_id IN ({markers})",
-            request_ids,
-        ).fetchall()
+        with _one_snapshot(conn):
+            rows: list[Mapping[str, Any]] = list(
+                conn.execute(
+                    "SELECT request_id, attempt, provider, model_ref, outcome,"
+                    " error_kind, error_message, duration_ms, params,"
+                    " reasoning_emitted, key_index, key_label, ladder_tries,"
+                    " tokens_in, tokens_out, cost_usd, cost_source, ttft_ms,"
+                    " first_reasoning_ms, proxy_label"
+                    " FROM request_attempts"
+                    f" WHERE request_id IN ({markers})",
+                    request_ids,
+                ).fetchall()
+            )
+            packed = self._skip_rows(conn, request_ids)
+        if packed:
+            present = {(str(row["request_id"]), row["attempt"]) for row in rows}
+            rows.extend(
+                row
+                for request_id, members in packed.items()
+                for row in members
+                if (request_id, row["attempt"]) not in present
+            )
         out: list[dict[str, Any]] = [
             {
                 "request_id": str(row["request_id"]),
@@ -10200,6 +10751,7 @@ class RequestLogStore:
                     self._last_tool_sweep = now
                     self._sweep_tool_catalogues(conn)
                     self._sweep_request_values(conn)
+                    self._sweep_skip_sets(conn)
             committed = True
             if removed:
                 # Return the freed pages to the filesystem instead of leaving
@@ -10335,6 +10887,14 @@ class RequestLogStore:
             )
         else:
             follow("request_attempts")
+        if "request_attempt_skips" in owed:
+            conn.execute(
+                "DELETE FROM request_attempt_skips WHERE NOT EXISTS ("
+                " SELECT 1 FROM requests WHERE requests.id ="
+                " request_attempt_skips.request_id)"
+            )
+        else:
+            follow("request_attempt_skips")
         # ``request_images`` has no index on ``sha``, so the NOT EXISTS every
         # pass ran before 7.72.2 scanned every link once per picture (24 s for
         # 1,020 pictures x 86,763 links on a real log). ``NOT IN`` over the
@@ -10447,6 +11007,26 @@ class RequestLogStore:
         if dead:
             conn.executemany("DELETE FROM request_values WHERE id = ?", dead)
 
+    @staticmethod
+    def _sweep_skip_sets(conn: sqlite3.Connection) -> None:
+        """Drop skip sets no retained request names any more.
+
+        Mark and sweep, as ``_sweep_request_values``: one pass over the set ids
+        ``request_attempt_skips`` names, then only the rest goes. A mistake can
+        only leave a set behind, never delete one a request still names.
+        """
+        named = {
+            int(row[0])
+            for row in conn.execute("SELECT DISTINCT set_id FROM request_attempt_skips")
+        }
+        dead = [
+            (int(row[0]),)
+            for row in conn.execute("SELECT id FROM attempt_skip_sets")
+            if int(row[0]) not in named
+        ]
+        if dead:
+            conn.executemany("DELETE FROM attempt_skip_sets WHERE id = ?", dead)
+
     def clear(self) -> int:
         """Erase the stored history, including the permanent counters.
 
@@ -10478,6 +11058,8 @@ class RequestLogStore:
             conn.execute("DELETE FROM media_blobs")
             conn.execute("DELETE FROM media_jobs")
             conn.execute("DELETE FROM request_attempts")
+            conn.execute("DELETE FROM request_attempt_skips")
+            conn.execute("DELETE FROM attempt_skip_sets")
             conn.execute("DELETE FROM tool_catalogues")
             conn.execute("DELETE FROM tool_schemas")
             conn.execute("DELETE FROM request_values")
@@ -11418,6 +12000,230 @@ def _load_request_values(conn: sqlite3.Connection, ids: set[int]) -> dict[int, s
     return found
 
 
+def _load_skip_sets(conn: sqlite3.Connection, ids: set[int]) -> dict[int, str]:
+    """``attempt_skip_sets`` texts by id; an id with no row is simply absent."""
+    found: dict[int, str] = {}
+    ordered = sorted(ids)
+    for start in range(0, len(ordered), _SHA_LOOKUP_CHUNK):
+        chunk = ordered[start : start + _SHA_LOOKUP_CHUNK]
+        for set_id, text in conn.execute(
+            "SELECT id, attempts FROM attempt_skip_sets"
+            f" WHERE id IN ({', '.join('?' * len(chunk))})",
+            chunk,
+        ):
+            if isinstance(text, str):
+                found[int(set_id)] = text
+    return found
+
+
+def _is_text_or_none(value: Any) -> bool:
+    return value is None or type(value) is str
+
+
+def _compactable_attempt_row(row: Sequence[Any]) -> bool:
+    """Whether one ``_ATTEMPT_INSERT_COLUMNS`` row fits the compact form.
+
+    A skipped attempt whose every column outside the compact form's values is
+    NULL, with values of exactly the types a row read back gives: anything
+    else -- a wire snapshot, a ladder, a number where text belongs -- is
+    stored as a row, exactly as before.
+    """
+    values = dict(zip(_ATTEMPT_INSERT_COLUMNS, row, strict=True))
+    if values["outcome"] != RouteAttemptOutcome.SKIPPED.value:
+        return False
+    if type(values["attempt"]) is not int:
+        return False
+    if any(values[column] is not None for column in _SKIP_EMPTY_FIELDS):
+        return False
+    if not all(_is_text_or_none(values[column]) for column in _SKIP_TEXT_FIELDS):
+        return False
+    if values["key_index"] is not None and type(values["key_index"]) is not int:
+        return False
+    ts_epoch = values["ts_epoch"]
+    if type(ts_epoch) is not float or not math.isfinite(ts_epoch):
+        return False
+    try:
+        for column in _SKIP_TEXT_FIELDS:
+            text = values[column]
+            if text is not None:
+                text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _stored_skip_values(
+    request_id: str, row: Sequence[Any]
+) -> tuple[dict[str, Any], int] | None:
+    """One ``_SKIP_FETCH_SQL`` row as the values a reader gets, if compactable.
+
+    ``(every _ATTEMPT_INSERT_COLUMNS value, stored bytes)``, decoded from the
+    storage class and the stored bytes exactly as a reader decodes them (text
+    as strict UTF-8 that encodes back to the same bytes); None when the row
+    holds anything the compact form cannot give back exactly.
+    """
+    attempt_class, attempt, ts_class, ts_epoch, key_class, key_index = row[3:9]
+    if attempt_class != "integer" or ts_class != "real" or row[-1] != 1:
+        return None
+    if type(attempt) is not int or type(ts_epoch) is not float:
+        return None
+    if not math.isfinite(ts_epoch):
+        return None
+    if key_class not in ("null", "integer"):
+        return None
+    values: dict[str, Any] = dict.fromkeys(_ATTEMPT_INSERT_COLUMNS)
+    values["request_id"] = request_id
+    values["attempt"] = attempt
+    values["outcome"] = RouteAttemptOutcome.SKIPPED.value
+    values["ts_epoch"] = ts_epoch
+    values["key_index"] = None if key_class == "null" else key_index
+    size = len(request_id.encode("utf-8")) + len(b"skipped") + 8 + 8 + 8
+    for index, column in enumerate(_SKIP_TEXT_FIELDS):
+        kind, raw = row[9 + 2 * index : 11 + 2 * index]
+        if kind == "null":
+            continue
+        if kind != "text":
+            return None
+        original = bytes(raw)
+        try:
+            text = original.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        if text.encode("utf-8") != original:
+            return None
+        values[column] = text
+        size += len(original)
+    return values, size
+
+
+def _skip_shared_values(row: Sequence[Any]) -> tuple[Any, ...]:
+    """The values every compact attempt of one request must share."""
+    values = dict(zip(_ATTEMPT_INSERT_COLUMNS, row, strict=True))
+    return tuple(values[column] for column in _SKIP_SHARED_FIELDS)
+
+
+def _skip_set_text(rows: Sequence[Sequence[Any]]) -> str:
+    """The canonical ``attempt_skip_sets`` text of these attempt rows.
+
+    One JSON array per attempt, ``_SKIP_SET_FIELDS`` in order, sorted by
+    attempt number: the same attempts always give the same text, so a set is
+    stored once however many requests repeat it.
+    """
+    members = sorted(
+        (
+            [values[column] for column in _SKIP_SET_FIELDS]
+            for values in (
+                dict(zip(_ATTEMPT_INSERT_COLUMNS, row, strict=True)) for row in rows
+            )
+        ),
+        key=lambda member: member[0],
+    )
+    return json.dumps(members, ensure_ascii=False, separators=(",", ":"))
+
+
+def _parse_skip_set(text: str) -> tuple[tuple[Any, ...], ...] | None:
+    """A stored set as member tuples, or None when it is not one this code wrote."""
+    try:
+        members = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(members, list):
+        return None
+    parsed: list[tuple[Any, ...]] = []
+    for member in members:
+        if not isinstance(member, list) or len(member) != len(_SKIP_SET_FIELDS):
+            return None
+        attempt, *texts = member
+        if type(attempt) is not int or not all(_is_text_or_none(t) for t in texts):
+            return None
+        parsed.append(tuple(member))
+    return tuple(parsed)
+
+
+def _skip_row(
+    request_id: str, member: Sequence[Any], shared: Mapping[str, Any]
+) -> dict[str, Any]:
+    """One compact attempt as the whole row ``request_attempts`` would hold."""
+    row: dict[str, Any] = dict.fromkeys(_ATTEMPT_INSERT_COLUMNS)
+    row["request_id"] = request_id
+    row["outcome"] = RouteAttemptOutcome.SKIPPED.value
+    row.update(zip(_SKIP_SET_FIELDS, member, strict=True))
+    row.update(shared)
+    return row
+
+
+def _same_value(left: Any, right: Any) -> bool:
+    """Equal as stored values: same type, same value; a REAL to the bit."""
+    if type(left) is not type(right):
+        return False
+    if type(left) is float:
+        return struct.pack("<d", left) == struct.pack("<d", right)
+    return left == right
+
+
+def _same_attempt_rows(
+    restored: Sequence[Mapping[str, Any]] | None,
+    expected: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Whether a compact form reads back as exactly the rows it replaces."""
+    if restored is None or len(restored) != len(expected):
+        return False
+    ordered = sorted(expected, key=lambda values: values["attempt"])
+    return all(
+        set(back) == set(_ATTEMPT_INSERT_COLUMNS)
+        and all(
+            _same_value(back[column], values[column])
+            for column in _ATTEMPT_INSERT_COLUMNS
+        )
+        for back, values in zip(restored, ordered, strict=True)
+    )
+
+
+def _merge_skip_rows(
+    rows: Sequence[Mapping[str, Any]], packed: Sequence[Mapping[str, Any]] | None
+) -> list[Mapping[str, Any]]:
+    """One request's attempt rows with its compact ones, in attempt order.
+
+    A stored row wins over a compact attempt of the same number. Without
+    compact attempts the rows come back exactly as the query returned them.
+    """
+    if not packed:
+        return list(rows)
+    present = {row["attempt"] for row in rows}
+    merged = [*rows, *(row for row in packed if row["attempt"] not in present)]
+    merged.sort(key=lambda row: _sqlite_order_key(row["attempt"]))
+    return merged
+
+
+def _sqlite_order_key(value: Any) -> tuple[int, Any]:
+    """``ORDER BY`` order across storage classes: NULL, numbers, text, blobs."""
+    if value is None:
+        return (0, 0)
+    if isinstance(value, (int, float)):
+        return (1, value)
+    if isinstance(value, str):
+        return (2, value.encode("utf-8"))
+    return (3, bytes(value))
+
+
+@contextlib.contextmanager
+def _one_snapshot(conn: sqlite3.Connection) -> Iterator[None]:
+    """Run the enclosed reads in one read transaction.
+
+    A request's attempts are read from two tables; a write between the two
+    reads -- a conversion step, or a request written again -- must not show
+    the reader half of each. Inside a transaction already, that one is used.
+    """
+    if conn.in_transaction:
+        yield
+        return
+    conn.execute("BEGIN")
+    try:
+        yield
+    finally:
+        conn.execute("COMMIT")
+
+
 def _restore_stored_once(data: dict[str, Any], values: Mapping[int, str]) -> None:
     """Put each stored-once text back in its column and drop the refs.
 
@@ -11469,7 +12275,12 @@ def _history_status(state: Mapping[str, Any]) -> dict[str, Any]:
     }
     if state.get("done_at") is not None:
         return status
-    labels = {"wire": "snapshots", "bodies": "bodies", "metadata": "metadata"}
+    labels = {
+        "wire": "snapshots",
+        "bodies": "bodies",
+        "metadata": "metadata",
+        "skipped": "skipped",
+    }
     for name in _HISTORY_PHASES:
         phase = state.get(name) or {}
         if phase.get("done_at") is None:

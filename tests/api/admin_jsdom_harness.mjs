@@ -7097,6 +7097,7 @@ const logReadout = {};
     snapshots: historyNote({ state: "converting", phase: "snapshots", percent: 10 }),
     bodies: historyNote({ state: "converting", phase: "bodies", percent: 42 }),
     metadata: historyNote({ state: "converting", phase: "metadata", percent: 7 }),
+    skipped: historyNote({ state: "converting", phase: "skipped", percent: 63 }),
     space: historyNote({ state: "returning_space", phase: "space", percent: 99 }),
     done: historyNote({ state: "done", phase: null, percent: 100 }),
     future: historyNote({ state: "converting", phase: "a-later-part", percent: 5 }),

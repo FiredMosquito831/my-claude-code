@@ -1,7 +1,13 @@
 """Explicit test composition for the API adapter."""
 
 import sqlite3
-from collections.abc import AsyncIterator, Iterable, MutableMapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +45,38 @@ def requests_as_read(
         request_log._restore_stored_once(data, values)
         out.append(data)
     return out
+
+
+def attempts_as_read(
+    conn: sqlite3.Connection, request_id: str
+) -> list[Mapping[str, Any]]:
+    """One request's ``request_attempts`` rows, as the store's readers see them.
+
+    Since 7.76.0 a request's skipped attempts may be stored compactly, as one
+    ``request_attempt_skips`` row naming an ``attempt_skip_sets`` row; this adds
+    them back as whole rows, in attempt order, with the store's own functions.
+    """
+    conn.row_factory = sqlite3.Row
+    rows = list(
+        conn.execute(
+            "SELECT * FROM request_attempts WHERE request_id = ? ORDER BY attempt",
+            (request_id,),
+        )
+    )
+    side = conn.execute(
+        "SELECT set_id, ts_epoch, key_index, key_label FROM request_attempt_skips"
+        " WHERE request_id = ?",
+        (request_id,),
+    ).fetchone()
+    if side is None:
+        return list(rows)
+    text = request_log._load_skip_sets(conn, {int(side[0])}).get(int(side[0]))
+    members = request_log._parse_skip_set(text) if text is not None else None
+    shared = {"ts_epoch": side[1], "key_index": side[2], "key_label": side[3]}
+    packed = [
+        request_log._skip_row(request_id, member, shared) for member in members or ()
+    ]
+    return request_log._merge_skip_rows(rows, packed)
 
 
 class ModelListingProviderDouble(BaseProvider):

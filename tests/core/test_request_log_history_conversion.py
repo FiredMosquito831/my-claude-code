@@ -253,6 +253,15 @@ def _truth(path: Path) -> dict[str, Any]:
             # bookkeeping; neither is history.
             if name not in ("server_sessions", "request_log_meta")
         }
+        # 7.76.0: a skipped attempt is a row, or a member of its request's
+        # compact set; both are attempts the readers return.
+        counts["attempts_as_read"] = counts["request_attempts"] + int(
+            conn.execute(
+                "SELECT COALESCE(SUM(json_array_length(s.attempts)), 0)"
+                " FROM request_attempt_skips AS k"
+                " JOIN attempt_skip_sets AS s ON s.id = k.set_id"
+            ).fetchone()[0]
+        )
     return {"wires": wires, "bodies": bodies, "counts": counts}
 
 
@@ -769,8 +778,8 @@ def test_live_writes_during_the_conversion_are_all_stored_and_nothing_changes_va
     # Written rows: the conversion added and removed nothing; only the live
     # requests (and their attempts and bodies) are new.
     assert after["counts"]["requests"] == before["counts"]["requests"] + 120
-    assert after["counts"]["request_attempts"] == (
-        before["counts"]["request_attempts"] + 240
+    assert after["counts"]["attempts_as_read"] == (
+        before["counts"]["attempts_as_read"] + 240
     )
     for table in ("body_dictionaries", "wire_dictionaries"):
         assert after["counts"][table] == before["counts"][table]

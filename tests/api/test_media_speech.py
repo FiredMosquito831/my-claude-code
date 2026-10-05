@@ -18,7 +18,7 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core import request_log
 from my_claude_code.core.media_store import media_file_path, media_root
 from my_claude_code.providers.media.registry import MediaRegistry
-from tests.api.support import create_test_app
+from tests.api.support import attempts_as_read, create_test_app
 
 
 def _wav(seconds: float, rate: int = 24000) -> bytes:
@@ -125,14 +125,8 @@ def test_named_format_unsupported_skips_candidate(monkeypatch, tmp_path) -> None
     row = _row(tmp_path)
     conn = sqlite3.connect(tmp_path / "requests.db")
     try:
-        kinds = [
-            kind
-            for (kind,) in conn.execute(
-                "SELECT error_kind FROM request_attempts WHERE request_id = ?"
-                " ORDER BY attempt",
-                (row["id"],),
-            )
-        ]
+        # 7.76.0: skipped attempts may be stored compactly; read them back.
+        kinds = [attempt["error_kind"] for attempt in attempts_as_read(conn, row["id"])]
     finally:
         conn.close()
     assert kinds == ["unsupported", None]
