@@ -3648,6 +3648,23 @@ def test_the_lifetime_panel_says_how_far_the_history_conversion_is(rendered) -> 
     assert "4.19 GB on disk · compressing older history (bodies 42%)" in span
 
 
+def test_the_history_note_names_the_metadata_part(rendered) -> None:
+    """7.75.0: the part that stores repeated request metadata once says so.
+
+    The earlier parts keep their words; an unknown part from a newer server
+    still reads as a conversion, never as nothing.
+    """
+
+    notes = rendered["logReadout"]["historyNotes"]
+
+    assert notes["metadata"] == " · compressing older history (request metadata 7%)"
+    assert notes["snapshots"] == " · compressing older history (snapshots 10%)"
+    assert notes["bodies"] == " · compressing older history (bodies 42%)"
+    assert notes["space"] == " · handing freed space back to the disk 99%"
+    assert notes["done"] == ""
+    assert notes["future"] == " · compressing older history (5%)"
+
+
 def test_the_cost_card_ships_the_denominator_behind_its_totals(rendered) -> None:
     """A window where most models are unpriced must not read as a cheap week."""
 

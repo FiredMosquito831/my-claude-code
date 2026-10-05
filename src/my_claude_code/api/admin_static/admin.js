@@ -18827,13 +18827,24 @@ function logSizeNote(storage) {
 
 // 7.74.0: while the background conversion of older history runs, say so and
 // how far it is. Nothing once it is done, and nothing from an older server.
+// 7.75.0 added the "metadata" part: repeated request metadata stored once.
+const HISTORY_PHASE_LABELS = {
+  snapshots: "snapshots",
+  bodies: "bodies",
+  metadata: "request metadata",
+};
+
 function historyConversionNote(history) {
   if (!history) return "";
   const percent = Number(history.percent);
   const shown = Number.isFinite(percent) ? ` ${percent}%` : "";
   if (history.state === "converting") {
-    const what = history.phase === "bodies" ? "bodies" : "snapshots";
-    return ` · compressing older history (${what}${shown})`;
+    // A part a newer server added still reads as the conversion it is.
+    const what = HISTORY_PHASE_LABELS[history.phase];
+    const inside = what ? `${what}${shown}` : shown.trim();
+    return inside
+      ? ` · compressing older history (${inside})`
+      : " · compressing older history";
   }
   if (history.state === "returning_space") {
     return ` · handing freed space back to the disk${shown}`;

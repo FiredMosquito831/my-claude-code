@@ -1,7 +1,9 @@
 """Explicit test composition for the API adapter."""
 
-from collections.abc import AsyncIterator, Iterable, MutableMapping
+import sqlite3
+from collections.abc import AsyncIterator, Iterable, MutableMapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -10,12 +12,33 @@ from my_claude_code.api.ports import ApiServices
 from my_claude_code.application.media.ports import MediaRuntimePort
 from my_claude_code.config.provider_registry import ProviderRegistry
 from my_claude_code.config.settings import Settings
+from my_claude_code.core import request_log
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.runtime import ProviderRuntime
 from my_claude_code.runtime.application import ApplicationRuntime, RestartCallback
 from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
+
+
+def requests_as_read(
+    conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]
+) -> list[dict[str, Any]]:
+    """``requests`` rows read straight from SQL, as the store's readers see them.
+
+    Since 7.75.0 ``headers`` / ``route_chain`` / ``params`` are stored once in
+    ``request_values`` and a row names them by id; this puts the text back and
+    drops the ids, with the store's own two functions.
+    """
+    refs = ("headers_ref", "route_chain_ref", "params_ref")
+    wanted = {int(row[ref]) for row in rows for ref in refs if row[ref] is not None}
+    values = request_log._load_request_values(conn, wanted)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        data = dict(row)
+        request_log._restore_stored_once(data, values)
+        out.append(data)
+    return out
 
 
 class ModelListingProviderDouble(BaseProvider):

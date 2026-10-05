@@ -30,7 +30,11 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core import request_log
 from my_claude_code.core.anthropic.streaming import format_sse_event
 from my_claude_code.providers.media.registry import MediaRegistry
-from tests.api.support import create_test_app, provider_manager_for_app
+from tests.api.support import (
+    create_test_app,
+    provider_manager_for_app,
+    requests_as_read,
+)
 
 XAI = "api.x.ai"
 TOGETHER = "api.together.ai"
@@ -142,12 +146,14 @@ def _db(tmp_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _requests(tmp_path: Path) -> list[sqlite3.Row]:
+def _requests(tmp_path: Path) -> list[dict[str, Any]]:
     # Closing the stores drains the writer thread, so every row is on disk.
     request_log.reset_request_log_stores()
     conn = _db(tmp_path)
     try:
-        return list(conn.execute("SELECT * FROM requests ORDER BY ts_epoch"))
+        return requests_as_read(
+            conn, conn.execute("SELECT * FROM requests ORDER BY ts_epoch").fetchall()
+        )
     finally:
         conn.close()
 

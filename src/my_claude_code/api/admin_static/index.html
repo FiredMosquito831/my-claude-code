@@ -4033,6 +4033,15 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   reads everything but shows a compressed wire snapshot as empty until
                   you update again.
                 </p>
+                <p>
+                  Since 7.75.0 a request's headers, route chain and parameters, which
+                  repeat a few hundred values across every row, are stored once each
+                  and named by number &mdash; new rows from the start, older rows by
+                  the same background conversion, with the same read-back check.
+                  Everything on these pages reads exactly as before. An older version
+                  shows those three fields empty on converted rows until you update
+                  again; nothing is deleted.
+                </p>
                 <h4>No traffic, or no server?</h4>
                 <p>
                   A flat stretch in <em>Requests over time</em> means one of two very

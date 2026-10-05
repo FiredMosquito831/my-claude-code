@@ -1044,6 +1044,19 @@ CREATE TABLE IF NOT EXISTS wire_dictionaries (
     created_at REAL NOT NULL,
     content BLOB NOT NULL
 );
+-- Request metadata stored once (7.75.0): each distinct ``headers`` /
+-- ``route_chain`` / ``params`` text, named by ``requests.<column>_ref``.
+-- ``digest`` is the first bytes of the text's SHA-256, a lookup key only.
+-- AUTOINCREMENT, so an id is never handed out twice: a value no retained row
+-- names is deleted by ``prune``, and a later row naming the same text gets a
+-- new id rather than an old one.
+CREATE TABLE IF NOT EXISTS request_values (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    digest BLOB NOT NULL,
+    value TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_request_values_digest_v1
+    ON request_values(digest);
 -- Images a request carried, content-addressed on the *source* bytes. Claude
 -- Code re-sends the whole conversation every turn, so one pasted screenshot
 -- reaches the proxy again on every following request; keying on the image
@@ -1318,6 +1331,40 @@ _INDEX_WARM_FETCH_ROWS = 20_000
 # Markers that do not describe the data: the conversion rewrites how values
 # are stored, never what they are, so a derived payload stays right across it.
 _DATA_MARK_IGNORED_KEYS = frozenset({_HISTORY_CONVERSION_KEY})
+# The conversion's parts, in the order they run. Each is one key of the
+# ``_HISTORY_CONVERSION_KEY`` document. A part added by a later release is
+# missing from a document an earlier one finished; the document is then opened
+# again for that part alone (``_reopen_history_state``).
+_HISTORY_PHASES = ("wire", "bodies", "metadata")
+
+# Request metadata stored once (7.75.0). ``headers``, ``route_chain`` and
+# ``params`` repeat a few hundred distinct values across hundreds of thousands
+# of rows (measured: 353 / 253 / 233 values, 484 MB, on a 551,774-row log).
+# Each distinct value lives once in ``request_values``; a row names it in the
+# ``<column>_ref`` beside the column and leaves the column itself NULL. A row
+# with an inline value and no ref -- every row an older version wrote -- reads
+# exactly as before. Readers return the text either way, byte for byte, and
+# never the ref.
+_STORED_ONCE_COLUMNS = ("headers", "route_chain", "params")
+_STORED_ONCE_REFS = tuple(f"{column}_ref" for column in _STORED_ONCE_COLUMNS)
+# The history conversion's read of the next rows: per column its storage
+# class, its stored bytes exactly as they are, and its ref.
+_METADATA_FETCH_SQL = (
+    "SELECT rowid, "
+    + ", ".join(
+        f"typeof({column}), CAST({column} AS BLOB), {column}_ref"
+        for column in _STORED_ONCE_COLUMNS
+    )
+    + " FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?"
+)
+# Bytes of the SHA-256 of a value kept as its lookup key. Not unique on its
+# own: a lookup compares the stored text, so a collision costs a second row,
+# never a wrong one.
+_VALUE_DIGEST_BYTES = 8
+# Values a reading process keeps in memory, by id. A value never changes once
+# written and its id is never reused (AUTOINCREMENT), so a cached entry cannot
+# go stale; the bound only stops a log of unusual values from growing it.
+_VALUE_CACHE_MAX = 4_096
 
 # Columns a content search covers on rows still stored inline. Reasoning and
 # tool calls are more than half of what a real log contains -- 55% of requests
@@ -1773,6 +1820,14 @@ _ADDED_COLUMNS = (
     # stable code (``shared:adopted``, ``shared:refreshed+wrote-back``,
     # ``native:refreshed``, ...). NULL = a plain use, nothing decided.
     ("credential_event", "ALTER TABLE requests ADD COLUMN credential_event TEXT"),
+    # 7.75.0: ``request_values`` ids of ``headers``, ``route_chain`` and
+    # ``params`` stored once; see ``_STORED_ONCE_COLUMNS``. A ref and its
+    # column are never both set. NULL = the column holds its own value (or is
+    # NULL), which is every row an older version wrote. Never returned to a
+    # reader: ``_row_to_dict`` puts the text back in the column and drops these.
+    ("headers_ref", "ALTER TABLE requests ADD COLUMN headers_ref INTEGER"),
+    ("route_chain_ref", "ALTER TABLE requests ADD COLUMN route_chain_ref INTEGER"),
+    ("params_ref", "ALTER TABLE requests ADD COLUMN params_ref INTEGER"),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1927,12 +1982,22 @@ _REQUEST_INSERT_COLUMNS = (
     "media_job_id",
     "output_video_seconds",
     "credential_event",
+    "headers_ref",
+    "route_chain_ref",
+    "params_ref",
 )
 
 _REQUEST_INSERT_SQL = (
     "INSERT OR REPLACE INTO requests"
     f" ({', '.join(_REQUEST_INSERT_COLUMNS)})"
     f" VALUES ({', '.join('?' * len(_REQUEST_INSERT_COLUMNS))})"
+)
+# Where ``_record_to_row`` puts each stored-once column and its ref.
+_STORED_ONCE_COLUMN_INDEXES = tuple(
+    _REQUEST_INSERT_COLUMNS.index(column) for column in _STORED_ONCE_COLUMNS
+)
+_STORED_ONCE_REF_INDEXES = tuple(
+    _REQUEST_INSERT_COLUMNS.index(ref) for ref in _STORED_ONCE_REFS
 )
 
 # Every column of ``requests`` this rollup was designed against.
@@ -2806,6 +2871,9 @@ class RequestLogStore:
         }
         # Monotonic time of the last tool-catalogue sweep; see ``prune``.
         self._last_tool_sweep: float | None = None
+        # ``request_values`` texts by id, for readers on any thread; see
+        # ``_VALUE_CACHE_MAX``.
+        self._value_cache: dict[int, str] = {}
         # The orphan sweeps the next prune pass owes over a whole table; see
         # ``prune``. All of them to begin with, so the first pass of a process
         # is exactly the pass every prune ran before 7.72.2. Any thread may
@@ -3524,14 +3592,25 @@ class RequestLogStore:
         try:
             while True:
                 rows = conn.execute(
-                    "SELECT id, headers FROM requests WHERE harness IS NULL LIMIT ?",
+                    "SELECT id, headers, headers_ref FROM requests"
+                    " WHERE harness IS NULL LIMIT ?",
                     (_HARNESS_CHUNK_ROWS,),
                 ).fetchall()
                 if not rows:
                     break
+                # Headers stored once (7.75.0) are read back like any reader's.
+                values = _load_request_values(
+                    conn, {int(row[2]) for row in rows if row[2] is not None}
+                )
                 updates = [
                     (
-                        harness_from_headers(_stored_headers(row[1])).harness,
+                        harness_from_headers(
+                            _stored_headers(
+                                values.get(int(row[2]))
+                                if row[2] is not None
+                                else row[1]
+                            )
+                        ).harness,
                         str(row[0]),
                     )
                     for row in rows
@@ -3734,7 +3813,7 @@ class RequestLogStore:
         """Writer thread, idle only: make the stored history smaller, losslessly.
 
         7.73.0 compresses what it writes; this converts what was written
-        before, and hands the freed space back to the filesystem. Four parts,
+        before, and hands the freed space back to the filesystem. Five parts,
         in this order, each step a transaction of its own that carries its
         bookkeeping (``_HISTORY_CONVERSION_KEY``), so a kill between any two
         statements leaves the database consistent and the walk resumes where
@@ -3743,7 +3822,8 @@ class RequestLogStore:
         1. drop ``idx_request_attempts_model_v1``, which nothing reads;
         2. wire snapshots still stored as TEXT become the 7.73.0 envelope;
         3. bodies are recompressed with the newest dictionary of their kind;
-        4. the pages 1-3 freed go back to the filesystem, a few at a time.
+        4. (7.75.0) request metadata still stored inline is stored once;
+        5. the pages 1-4 freed go back to the filesystem, a few at a time.
 
         A value is replaced only once its new form has been decoded by the
         reader's own decoder and found byte-identical to the original (and,
@@ -3805,8 +3885,7 @@ class RequestLogStore:
             "freelist_at_start": int(
                 conn.execute("PRAGMA freelist_count").fetchone()[0]
             ),
-            "wire": dict(phase),
-            "bodies": dict(phase),
+            **{name: dict(phase) for name in _HISTORY_PHASES},
             "freed_pages": 0,
             "returned_pages": 0,
             "done_at": None,
@@ -3819,8 +3898,61 @@ class RequestLogStore:
             with contextlib.suppress(ValueError, TypeError):
                 state = json.loads(raw)
                 if isinstance(state, dict):
-                    return state
+                    return self._reopen_history_state(conn, state)
         return self._new_history_state(conn)
+
+    @staticmethod
+    def _reopen_history_state(
+        conn: sqlite3.Connection, state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """A document an earlier release wrote, with this release's parts added.
+
+        A part it does not have starts from the beginning. If the earlier
+        release had finished, the document is open again: its own parts stay
+        done, and the space it already handed back stays counted, but the
+        freelist is measured afresh -- pages free now were freed by somebody
+        else, and may hold a deleted row (IV.13). An older release reading the
+        reopened document runs nothing it does not know and closes it again;
+        the next start of this one reopens it.
+        """
+        missing = [
+            name
+            for name in _HISTORY_PHASES
+            if not isinstance(state.get(name), dict)
+            or state[name].get("done_at") is None
+        ]
+        added = [
+            name for name in _HISTORY_PHASES if not isinstance(state.get(name), dict)
+        ]
+        if not added and (state.get("done_at") is None or not missing):
+            return state
+        for name in added:
+            state[name] = {
+                "through": 0,
+                "end": None,
+                "converted": 0,
+                "kept": 0,
+                "failed": 0,
+                "bytes_before": 0,
+                "bytes_after": 0,
+                "done_at": None,
+            }
+        if state.get("done_at") is not None and missing:
+            page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+            page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+            returned = int(state.get("returned_pages") or 0)
+            state["done_at"] = None
+            state["bytes_at_end"] = None
+            state["reopened_at"] = time.time()
+            state["reopened_for"] = missing
+            state["bytes_at_reopen"] = page_count * page_size
+            state["freelist_at_start"] = int(
+                conn.execute("PRAGMA freelist_count").fetchone()[0]
+            )
+            # Nothing owed from before: what is free now is somebody else's.
+            state["freed_pages"] = returned
+            state["returned_at_reopen"] = returned
+        return state
 
     def _save_history_state(
         self, conn: sqlite3.Connection, state: dict[str, Any]
@@ -3913,39 +4045,68 @@ class RequestLogStore:
         )
 
     def _history_step(self, conn: sqlite3.Connection) -> bool:
-        """One bounded step of the conversion; False when there is nothing to do now."""
+        """One bounded step of the conversion; False when there is nothing to do now.
+
+        The parts run in ``_HISTORY_PHASES`` order, one step of the first that
+        is not done. A document an earlier release finished comes back open
+        from ``_load_history_state`` when this release added a part to it, so
+        the earlier release's ``done_at`` stops nothing here.
+        """
         state = self._load_history_state(conn)
         if state.get("done_at") is not None:
             self._history_done = True
             return False
+        pending = [name for name in _HISTORY_PHASES if state[name]["done_at"] is None]
         if not self._history_announced:
             self._history_announced = True
             self._history_logged_at = time.monotonic()
-            resumed = bool(state["wire"]["through"] or state["bodies"]["through"])
-            logger.info(
-                "Request log history conversion {}: older wire snapshots and"
-                " bodies are recompressed in the background, each checked"
-                " before it is replaced ({:.2f} GB on disk)",
-                "resumed" if resumed else "started",
-                int(state["bytes_at_start"]) / 1e9,
-            )
+            self._announce_history(state, pending)
         progressed = False
-        if state["wire"]["done_at"] is None:
+        if pending and pending[0] == "wire":
             progressed = self._convert_wire_step(conn)
-        elif state["bodies"]["done_at"] is None:
+        elif pending and pending[0] == "bodies":
             progressed = self._recompress_body_step(conn)
+        elif pending and pending[0] == "metadata":
+            progressed = self._convert_metadata_step(conn)
         if self._queue.empty() and self._return_space_step(conn):
             progressed = True
         state = self._load_history_state(conn)
-        converted = (
-            state["wire"]["done_at"] is not None
-            and state["bodies"]["done_at"] is not None
-        )
+        converted = all(state[name]["done_at"] is not None for name in _HISTORY_PHASES)
         if converted and not self._space_owed(conn, state):
             self._finish_history(conn)
             return False
         self._log_history_progress(state)
         return progressed
+
+    @staticmethod
+    def _announce_history(state: dict[str, Any], pending: list[str]) -> None:
+        """The one line a start of the conversion logs: which parts are left."""
+        resumed = any(int(state[name]["through"] or 0) for name in pending)
+        recompressed = [
+            label
+            for name, label in (("wire", "wire snapshots"), ("bodies", "bodies"))
+            if name in pending
+        ]
+        work: list[str] = []
+        if recompressed:
+            work.append(f"older {' and '.join(recompressed)} are recompressed")
+        if "metadata" in pending:
+            work.append("repeated request metadata of older rows is stored once")
+        on_disk = int(state.get("bytes_at_reopen") or state["bytes_at_start"]) / 1e9
+        if not work:
+            logger.info(
+                "Request log history conversion resumed: the space it freed is"
+                " handed back to the disk ({:.2f} GB on disk)",
+                on_disk,
+            )
+            return
+        logger.info(
+            "Request log history conversion {}: {} in the background, each"
+            " checked before it is replaced ({:.2f} GB on disk)",
+            "resumed" if resumed else "started",
+            ", and ".join(work),
+            on_disk,
+        )
 
     def _convert_wire_step(self, conn: sqlite3.Connection) -> bool:
         """Turn the next TEXT wire snapshots into the envelope; one transaction.
@@ -4208,6 +4369,146 @@ class RequestLogStore:
         except Exception:  # every failure means "leave the body alone"
             return None
 
+    def _convert_metadata_step(self, conn: sqlite3.Connection) -> bool:
+        """Store the next rows' inline metadata once, moving each row; one transaction.
+
+        A row's ``headers`` / ``route_chain`` / ``params`` text is replaced by
+        the id of its ``request_values`` row only once that id reads back,
+        through the readers' own lookup, as exactly the bytes the row held. A
+        row with any value that does not -- or that is not TEXT, or not UTF-8
+        -- is left exactly as it is and counted. NULL stays NULL.
+
+        A converted row also moves to a new rowid at the end of the table.
+        Clearing the columns in place shrinks the row, but SQLite does not
+        merge the half-empty pages that leaves: on 100,000 rows of the real
+        log an in-place update freed no page at all, and moving the same rows
+        freed 48 % of the table's pages. Nothing names a request by its rowid
+        -- every reader, and the retention cap, goes by ``id`` and
+        ``ts_epoch`` -- and rows move in rowid order, so they keep their order.
+
+        The walk goes on past the rowid the table ended at when it began, over
+        the rows it moved there and any written since, until no row is left;
+        those already name their values and are passed over, uncounted.
+        """
+        budget_end = time.perf_counter() + _HISTORY_STEP_SECONDS
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(conn)
+            phase = state["metadata"]
+            top = int(
+                conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM requests").fetchone()[
+                    0
+                ]
+            )
+            if phase["end"] is None:
+                phase["end"] = top
+            end = int(phase["end"])
+            freelist_before = self._freelist_count(conn)
+            cursor = int(phase["through"])
+            known: dict[bytes, int | None] = {}
+            added: list[int] = []
+            finished = False
+            while True:
+                rows = conn.execute(
+                    _METADATA_FETCH_SQL, (cursor, _HISTORY_FETCH_ROWS)
+                ).fetchall()
+                if not rows:
+                    finished = True
+                    break
+                for row in rows:
+                    cursor = int(row[0])
+                    refs = self._stored_once_refs(conn, row, known, added)
+                    if refs is None:
+                        phase["failed"] += 1
+                    elif refs:
+                        top += 1
+                        assignments = ", ".join(
+                            f"{column} = NULL, {column}_ref = ?"
+                            for column, _, _ in refs
+                        )
+                        conn.execute(
+                            f"UPDATE requests SET {assignments}, rowid = ?"
+                            " WHERE rowid = ?",
+                            [*(value_id for _, value_id, _ in refs), top, cursor],
+                        )
+                        phase["converted"] += 1
+                        phase["bytes_before"] += sum(size for _, _, size in refs)
+                    elif cursor <= end:
+                        # Nothing inline: written by this release, or empty.
+                        phase["kept"] += 1
+                    if time.perf_counter() >= budget_end:
+                        break
+                # At least one row per step, however slow, so the walk always
+                # moves; then the budget decides.
+                if time.perf_counter() >= budget_end:
+                    break
+            phase["bytes_after"] += sum(added)
+            phase["through"] = cursor
+            if finished:
+                phase["done_at"] = time.time()
+            state["freed_pages"] = int(state["freed_pages"]) + max(
+                0, self._freelist_count(conn) - freelist_before
+            )
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if finished and phase["failed"]:
+            logger.warning(
+                "Request log history conversion left {} rows' metadata as it"
+                " was: a value was not text, or did not read back as the same"
+                " bytes",
+                phase["failed"],
+            )
+        return True
+
+    def _stored_once_refs(
+        self,
+        conn: sqlite3.Connection,
+        row: Sequence[Any],
+        known: dict[bytes, int | None],
+        added: list[int],
+    ) -> list[tuple[str, int, int]] | None:
+        """One ``_METADATA_FETCH_SQL`` row's inline values as proven value ids.
+
+        ``(column, value id, bytes the column held)`` for every column that
+        holds a value inline; empty when none does; None when any of them
+        cannot be stored once, and then the row must stay exactly as it is.
+        """
+        refs: list[tuple[str, int, int]] = []
+        for index, column in enumerate(_STORED_ONCE_COLUMNS):
+            kind, raw, ref = row[1 + 3 * index : 4 + 3 * index]
+            if kind == "null":
+                continue
+            if kind != "text" or ref is not None:
+                return None
+            original = bytes(raw)
+            if original not in known:
+                known[original] = self._proven_metadata_id(conn, original, added)
+            value_id = known[original]
+            if value_id is None:
+                return None
+            refs.append((column, value_id, len(original)))
+        return refs
+
+    def _proven_metadata_id(
+        self, conn: sqlite3.Connection, original: bytes, added: list[int]
+    ) -> int | None:
+        """The value id for one column's stored bytes, or None to leave the row.
+
+        The bytes are the column exactly as stored (``CAST(... AS BLOB)``);
+        they must be strict UTF-8, as every reader decodes them, and the id
+        must read back as these same bytes (``_proven_value_id``).
+        """
+        try:
+            text = original.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        if text.encode("utf-8") != original:
+            return None
+        return self._proven_value_id(conn, text, added)
+
     def _space_owed(self, conn: sqlite3.Connection, state: dict[str, Any]) -> int:
         """Pages the conversion freed that are not handed back yet.
 
@@ -4240,9 +4541,7 @@ class RequestLogStore:
         automatic checkpoint; nothing here forces one.
         """
         state = self._load_history_state(conn)
-        converting = (
-            state["wire"]["done_at"] is None or state["bodies"]["done_at"] is None
-        )
+        converting = any(state[name]["done_at"] is None for name in _HISTORY_PHASES)
         owed = self._space_owed(conn, state)
         if owed <= 0 or (converting and owed < self._space_step_pages):
             return False
@@ -4287,22 +4586,46 @@ class RequestLogStore:
             conn.rollback()
             raise
         self._history_done = True
-        wire, bodies = state["wire"], state["bodies"]
+        # A document an earlier release finished and this one reopened reports
+        # only what ran since: the earlier release logged its own parts.
+        ran = [
+            name
+            for name in state.get("reopened_for") or _HISTORY_PHASES
+            if name in _HISTORY_PHASES
+        ]
+        work: list[str] = []
+        if "wire" in ran or "bodies" in ran:
+            snapshots = state["wire"]["converted"] if "wire" in ran else 0
+            bodies = state["bodies"]["converted"] if "bodies" in ran else 0
+            recompressed = [state[name] for name in ("wire", "bodies") if name in ran]
+            before = sum(int(phase["bytes_before"]) for phase in recompressed) / 1e9
+            after = sum(int(phase["bytes_after"]) for phase in recompressed) / 1e9
+            work.append(
+                f"{snapshots} wire snapshots and {bodies} bodies compressed"
+                f" ({before:.2f} GB -> {after:.2f} GB)"
+            )
+        if "metadata" in ran:
+            metadata = state["metadata"]
+            work.append(
+                f"{metadata['converted']} rows' repeated metadata stored once"
+                f" ({int(metadata['bytes_before']) / 1e9:.2f} GB ->"
+                f" {int(metadata['bytes_after']) / 1e6:.2f} MB)"
+            )
+        returned = int(state["returned_pages"]) - int(
+            state.get("returned_at_reopen") or 0
+        )
         logger.info(
-            "Request log history conversion done in {:.0f} min: {} wire snapshots"
-            " and {} bodies compressed ({:.2f} GB -> {:.2f} GB), {} left as they"
+            "Request log history conversion done in {:.0f} min: {}, {} left as they"
             " were, {} failed the check; database {:.2f} GB -> {:.2f} GB,"
             " {:.2f} GB handed back",
-            (state["done_at"] - float(state["started_at"])) / 60,
-            wire["converted"],
-            bodies["converted"],
-            (wire["bytes_before"] + bodies["bytes_before"]) / 1e9,
-            (wire["bytes_after"] + bodies["bytes_after"]) / 1e9,
-            wire["kept"] + bodies["kept"],
-            wire["failed"] + bodies["failed"],
-            int(state["bytes_at_start"]) / 1e9,
+            (state["done_at"] - float(state.get("reopened_at") or state["started_at"]))
+            / 60,
+            ", ".join(work),
+            sum(int(state[name]["kept"]) for name in ran),
+            sum(int(state[name]["failed"]) for name in ran),
+            int(state.get("bytes_at_reopen") or state["bytes_at_start"]) / 1e9,
             int(state["bytes_at_end"]) / 1e9,
-            int(state["returned_pages"]) * int(state["page_size"]) / 1e9,
+            max(0, returned) * int(state["page_size"]) / 1e9,
         )
 
     def _log_history_progress(self, state: dict[str, Any]) -> None:
@@ -6370,6 +6693,10 @@ class RequestLogStore:
                 already_stored = self._existing_ids(
                     conn, [record.id for record in batch]
                 )
+                if self._compress_bodies:
+                    # Inside the transaction, so no prune of another process
+                    # can delete a value between its lookup and the row naming it.
+                    rows = self._store_request_values(conn, rows)
                 conn.executemany(_REQUEST_INSERT_SQL, rows)
                 self._store_bodies(conn, packed)
                 self._store_images(conn, batch)
@@ -6412,6 +6739,104 @@ class RequestLogStore:
             # what lets a fresh install start compressing properly, and a
             # dictionary be relearned, without waiting for a restart.
             self._maybe_refresh_dictionaries()
+
+    def _store_request_values(
+        self, conn: sqlite3.Connection, rows: list[tuple[Any, ...]]
+    ) -> list[tuple[Any, ...]]:
+        """Swap each row's metadata text for the id of its ``request_values`` row.
+
+        Called inside the write transaction. A text is replaced only by an id
+        whose stored value reads back as that exact text through the reader's
+        own lookup; anything else stays in its column, as an older version
+        would write it.
+        """
+        known: dict[str, int | None] = {}
+        stored: list[tuple[Any, ...]] = []
+        for row in rows:
+            values = list(row)
+            for column, ref in zip(
+                _STORED_ONCE_COLUMN_INDEXES, _STORED_ONCE_REF_INDEXES, strict=True
+            ):
+                text = values[column]
+                if not isinstance(text, str):
+                    continue
+                if text not in known:
+                    known[text] = self._proven_value_id(conn, text)
+                value_id = known[text]
+                if value_id is not None:
+                    values[column] = None
+                    values[ref] = value_id
+            stored.append(tuple(values))
+        return stored
+
+    def _proven_value_id(
+        self, conn: sqlite3.Connection, text: str, added: list[int] | None = None
+    ) -> int | None:
+        """The ``request_values`` id holding ``text``, adding it if needed.
+
+        None -- keep the text inline -- unless the id reads back as exactly
+        ``text`` through ``_load_request_values``, the readers' own lookup.
+        Must run inside a write transaction. ``added`` collects the size of
+        each value this call had to add.
+        """
+        try:
+            encoded = text.encode("utf-8")
+            digest = hashlib.sha256(encoded).digest()[:_VALUE_DIGEST_BYTES]
+            value_id: int | None = None
+            for found_id, found in conn.execute(
+                "SELECT id, value FROM request_values WHERE digest = ? ORDER BY id",
+                (digest,),
+            ):
+                if found == text:
+                    value_id = int(found_id)
+                    break
+            if value_id is None:
+                cursor = conn.execute(
+                    "INSERT INTO request_values (digest, value) VALUES (?, ?)",
+                    (digest, text),
+                )
+                value_id = int(cursor.lastrowid or 0)
+                if added is not None:
+                    added.append(len(encoded))
+            if not value_id:
+                return None
+            check = _load_request_values(conn, {value_id}).get(value_id)
+            if check is None or check.encode("utf-8") != encoded:
+                return None
+            return value_id
+        except sqlite3.Error:
+            raise
+        except Exception:  # every other failure means "keep the text inline"
+            return None
+
+    def _request_values(
+        self, conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]
+    ) -> dict[int, str]:
+        """The stored-once texts the given rows name, by id, cached."""
+        wanted: set[int] = set()
+        for row in rows:
+            keys = row.keys()
+            for ref in _STORED_ONCE_REFS:
+                if ref in keys and row[ref] is not None:
+                    wanted.add(int(row[ref]))
+        if not wanted:
+            return {}
+        cache = self._value_cache
+        found: dict[int, str] = {}
+        for value_id in wanted:
+            # One ``get``, never ``in`` then ``[]``: another reader may clear
+            # the cache between the two.
+            cached = cache.get(value_id)
+            if cached is not None:
+                found[value_id] = cached
+        missing = wanted - found.keys()
+        if missing:
+            loaded = _load_request_values(conn, missing)
+            if len(cache) + len(loaded) > _VALUE_CACHE_MAX:
+                cache.clear()
+            cache.update(loaded)
+            found.update(loaded)
+        return found
 
     @staticmethod
     def _price_record(record: RequestRecord) -> None:
@@ -6515,6 +6940,11 @@ class RequestLogStore:
             record.media_job_id,
             record.output_video_seconds,
             record.credential_event,
+            # The refs: filled inside the write transaction, once the values
+            # are in ``request_values``; see ``_store_request_values``.
+            None,
+            None,
+            None,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -6868,7 +7298,7 @@ class RequestLogStore:
                 " length(output_text) AS output_text_length"
             )
             body_args = [preview, preview]
-        columns = ", ".join(_LIST_METADATA_COLUMNS)
+        columns = ", ".join(_LIST_METADATA_COLUMNS + _STORED_ONCE_REFS)
         # Read before the page's own connection is opened, not inside it: it is
         # cached for five seconds and shared with every other derived answer, so
         # a page normally pays nothing for it.
@@ -6891,12 +7321,14 @@ class RequestLogStore:
             has_more = len(raw_rows) > limit
             raw_rows = raw_rows[:limit]
             bodies = self._fetch_bodies(conn, [str(row["id"]) for row in raw_rows])
+            values = self._request_values(conn, raw_rows)
             rows = [
                 self._row_to_dict(
                     row,
                     body_preview_chars=body_preview_chars,
                     bodies=bodies.get(str(row["id"])),
                     boundaries=boundaries,
+                    values=values,
                 )
                 for row in raw_rows
             ]
@@ -7106,6 +7538,7 @@ class RequestLogStore:
             images = self._fetch_images(conn, request_id)
             media = self._fetch_media(conn, request_id)
             attempts = self._fetch_attempts(conn, request_id)
+            values = self._request_values(conn, [row])
             # The guarded ALTER in ``_init_db`` guarantees the column.
             catalogue_sha = row["tool_catalogue_sha"]
             tool_catalogue = (
@@ -7118,6 +7551,7 @@ class RequestLogStore:
             body_preview_chars=None,
             bodies=bodies.get(request_id),
             boundaries=boundaries,
+            values=values,
         )
         data["input_images"] = images
         data["media"] = media
@@ -7303,6 +7737,14 @@ class RequestLogStore:
             for column in SUCCESS_REASON_SOURCE_COLUMNS
             if column not in sql_columns
         ]
+        # A stored-once column is read with its ref; ``_row_to_dict`` puts the
+        # text back and drops the ref, so the row the caller projects is the
+        # same either way.
+        sql_columns += [
+            ref
+            for column, ref in zip(_STORED_ONCE_COLUMNS, _STORED_ONCE_REFS, strict=True)
+            if column in sql_columns and ref not in sql_columns
+        ]
         boundaries = self.restart_boundaries()
         where, args = self._where(
             provider=provider,
@@ -7342,12 +7784,14 @@ class RequestLogStore:
                 # ``request_attempts`` is joined by no export path, so the
                 # ladder columns would otherwise be unexportable entirely.
                 ladders = self._fetch_ladder_rollup(conn, ids) if need_ladder else {}
+                values = self._request_values(conn, rows)
                 for row in rows:
                     data = self._row_to_dict(
                         row,
                         body_preview_chars=None,
                         bodies=bodies.get(str(row["id"])),
                         boundaries=boundaries,
+                        values=values,
                     )
                     if need_ladder:
                         data.update(_EMPTY_LADDER_ROLLUP)
@@ -7626,8 +8070,12 @@ class RequestLogStore:
         body_preview_chars: int | None,
         bodies: dict[str, Any] | None = None,
         boundaries: Sequence[float] = (),
+        values: Mapping[int, str] | None = None,
     ) -> dict[str, Any]:
         data = dict(row)
+        # First, so everything below sees exactly the row an inline write
+        # would have produced.
+        _restore_stored_once(data, values or {})
         data["stream"] = bool(data["stream"])
         # Stored as the raw 32 bytes, half the size of hex on every row; read
         # back as hex so JSON, CSV and the modal all carry the same string.
@@ -9751,6 +10199,7 @@ class RequestLogStore:
                 ):
                     self._last_tool_sweep = now
                     self._sweep_tool_catalogues(conn)
+                    self._sweep_request_values(conn)
             committed = True
             if removed:
                 # Return the freed pages to the filesystem instead of leaving
@@ -9975,6 +10424,29 @@ class RequestLogStore:
         if dead:
             conn.executemany("DELETE FROM tool_schemas WHERE sha = ?", dead)
 
+    @staticmethod
+    def _sweep_request_values(conn: sqlite3.Connection) -> None:
+        """Drop stored-once values no retained request names any more.
+
+        Mark and sweep, never a count: one pass over the three ref columns of
+        every row collects what is still named, and only the rest goes. A
+        mistake here can only leave a value behind, never delete one a row
+        still names. Same cadence as the tool-catalogue sweep beside it.
+        """
+        named: set[int] = set()
+        for row in conn.execute(
+            f"SELECT {', '.join(_STORED_ONCE_REFS)} FROM requests"
+            f" WHERE {' OR '.join(f'{ref} IS NOT NULL' for ref in _STORED_ONCE_REFS)}"
+        ):
+            named.update(int(value) for value in row if value is not None)
+        dead = [
+            (int(row[0]),)
+            for row in conn.execute("SELECT id FROM request_values")
+            if int(row[0]) not in named
+        ]
+        if dead:
+            conn.executemany("DELETE FROM request_values WHERE id = ?", dead)
+
     def clear(self) -> int:
         """Erase the stored history, including the permanent counters.
 
@@ -10008,6 +10480,7 @@ class RequestLogStore:
             conn.execute("DELETE FROM request_attempts")
             conn.execute("DELETE FROM tool_catalogues")
             conn.execute("DELETE FROM tool_schemas")
+            conn.execute("DELETE FROM request_values")
             removed = cursor.rowcount
         if stored_media:
             delete_media_files(media_root(self._db_path), stored_media)
@@ -10929,6 +11402,37 @@ def _resplit_combined_blobs(store: RequestLogStore, progress: Any, already: int)
             progress(already + done)
 
 
+def _load_request_values(conn: sqlite3.Connection, ids: set[int]) -> dict[int, str]:
+    """``request_values`` texts by id; an id with no row is simply absent."""
+    found: dict[int, str] = {}
+    ordered = sorted(ids)
+    for start in range(0, len(ordered), _SHA_LOOKUP_CHUNK):
+        chunk = ordered[start : start + _SHA_LOOKUP_CHUNK]
+        for value_id, value in conn.execute(
+            "SELECT id, value FROM request_values"
+            f" WHERE id IN ({', '.join('?' * len(chunk))})",
+            chunk,
+        ):
+            if isinstance(value, str):
+                found[int(value_id)] = value
+    return found
+
+
+def _restore_stored_once(data: dict[str, Any], values: Mapping[int, str]) -> None:
+    """Put each stored-once text back in its column and drop the refs.
+
+    Whatever the query projected comes out exactly as a row with the text
+    inline would: the ref keys never reach a caller. A ref whose value is gone
+    reads as NULL rather than raising.
+    """
+    for column, ref in zip(_STORED_ONCE_COLUMNS, _STORED_ONCE_REFS, strict=True):
+        if ref not in data:
+            continue
+        value_id = data.pop(ref)
+        if value_id is not None and column in data:
+            data[column] = values.get(int(value_id))
+
+
 def _loads_or_none(raw: Any) -> Any:
     if not isinstance(raw, str):
         return None
@@ -10965,13 +11469,14 @@ def _history_status(state: Mapping[str, Any]) -> dict[str, Any]:
     }
     if state.get("done_at") is not None:
         return status
-    for name in ("wire", "bodies"):
+    labels = {"wire": "snapshots", "bodies": "bodies", "metadata": "metadata"}
+    for name in _HISTORY_PHASES:
         phase = state.get(name) or {}
         if phase.get("done_at") is None:
             end = int(phase.get("end") or 0)
             through = int(phase.get("through") or 0)
             status["state"] = "converting"
-            status["phase"] = "snapshots" if name == "wire" else "bodies"
+            status["phase"] = labels[name]
             status["percent"] = min(99, 100 * through // end) if end else 0
             return status
     freed = int(state.get("freed_pages") or 0)

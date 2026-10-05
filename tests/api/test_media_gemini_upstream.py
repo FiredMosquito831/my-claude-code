@@ -33,7 +33,7 @@ from my_claude_code.core import gemini_native_media, request_log
 from my_claude_code.core.gemini_native_media import TRANSCRIBE_INSTRUCTION
 from my_claude_code.providers.media import adapters, leaf
 from my_claude_code.providers.media.registry import MediaRegistry
-from tests.api.support import create_test_app
+from tests.api.support import create_test_app, requests_as_read
 
 GEMINI_KEY = "AIza" + "g" * 35
 GOOGLE = "generativelanguage.googleapis.com"
@@ -135,12 +135,14 @@ def _db(tmp_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _row(tmp_path: Path) -> sqlite3.Row:
+def _row(tmp_path: Path) -> dict[str, Any]:
     # Closing the stores drains the writer thread, so the row is on disk.
     request_log.reset_request_log_stores()
     conn = _db(tmp_path)
     try:
-        (row,) = conn.execute("SELECT * FROM requests").fetchall()
+        (row,) = requests_as_read(
+            conn, conn.execute("SELECT * FROM requests").fetchall()
+        )
         return row
     finally:
         conn.close()
@@ -161,7 +163,7 @@ def _attempt_kinds(tmp_path: Path, request_id: str) -> list[str | None]:
         conn.close()
 
 
-def _not_forwarded(row: sqlite3.Row) -> list[str]:
+def _not_forwarded(row: dict[str, Any]) -> list[str]:
     return json.loads(row["params"])["media"].get("not_forwarded", [])
 
 

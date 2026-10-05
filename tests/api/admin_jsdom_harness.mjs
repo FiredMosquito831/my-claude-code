@@ -7091,6 +7091,16 @@ const logReadout = {};
   await new Promise((resolve) => setTimeout(resolve, 300));
   logReadout.lifetimeSpan = doc.getElementById("reqLifetimeSpan").textContent;
   logReadout.costNote = doc.getElementById("reqCostNote").textContent;
+  // 7.75.0: every part of the history conversion has its own words.
+  const historyNote = window.eval("historyConversionNote");
+  logReadout.historyNotes = {
+    snapshots: historyNote({ state: "converting", phase: "snapshots", percent: 10 }),
+    bodies: historyNote({ state: "converting", phase: "bodies", percent: 42 }),
+    metadata: historyNote({ state: "converting", phase: "metadata", percent: 7 }),
+    space: historyNote({ state: "returning_space", phase: "space", percent: 99 }),
+    done: historyNote({ state: "done", phase: null, percent: 100 }),
+    future: historyNote({ state: "converting", phase: "a-later-part", percent: 5 }),
+  };
 }
 
 // ------------------------------------------------------- cost panel timing
