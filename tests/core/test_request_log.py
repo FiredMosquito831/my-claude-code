@@ -3525,9 +3525,13 @@ def test_the_harness_backfill_classifies_rows_written_before_the_column(
     seed.enqueue(_record("silent", headers=None))
     seed.enqueue(_record("broken", headers=_headers("curl/8.4.0")))
     seed.close()
-    # A blob no JSON decoder can read must not stop the walk.
+    # A blob no JSON decoder can read must not stop the walk. Stored inline,
+    # as an older version wrote it (7.75.0 stores headers once, by ref).
     with sqlite3.connect(path) as conn:
-        conn.execute("UPDATE requests SET headers = '{not json' WHERE id = 'broken'")
+        conn.execute(
+            "UPDATE requests SET headers = '{not json', headers_ref = NULL"
+            " WHERE id = 'broken'"
+        )
     _drop_harness_column(path)
 
     upgraded = RequestLogStore(path, max_rows=1000)
