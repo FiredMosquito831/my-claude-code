@@ -245,6 +245,21 @@ class TestNewRows:
             store.close()
         assert _storage(path) == {1: "text", 2: "null"}
 
+    def test_a_payload_that_does_not_read_back_is_stored_as_text(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(analytics, "_reads_back", lambda _e, _r: False)
+        path = tmp_path / "websearch.db"
+        output = _page(1, "Alpha proxy")
+        store = WebSearchLogStore(path)
+        try:
+            store.record(_outcome(1, output=output))
+            store.flush()
+            assert _output(store, 1) == output
+        finally:
+            store.close()
+        assert _storage(path) == {1: "text"}
+
     def test_text_that_is_not_utf8_is_stored_as_before(self) -> None:
         assert analytics._stored_output("lone \udc80 surrogate") == (
             "lone \udc80 surrogate"
@@ -481,6 +496,37 @@ class TestHistoryConversion:
         try:
             assert connection.execute("PRAGMA auto_vacuum").fetchone()[0] == 0
             assert connection.execute("PRAGMA freelist_count").fetchone()[0] > 0
+        finally:
+            connection.close()
+
+    def test_pages_free_before_the_conversion_are_not_handed_back(
+        self, tmp_path
+    ) -> None:
+        path = tmp_path / "websearch.db"
+        _seed(path, count=20)
+        _as_older_version_wrote_it(path)
+        connection = sqlite3.connect(path)
+        try:
+            # Somebody else's free pages: rows deleted with no vacuum after.
+            connection.execute("DELETE FROM search_log WHERE id > 14")
+            connection.commit()
+            free_before = connection.execute("PRAGMA freelist_count").fetchone()[0]
+        finally:
+            connection.close()
+        assert free_before > 0
+        store = WebSearchLogStore(path)
+        try:
+            state = _wait_done(path)
+        finally:
+            store.close()
+        assert state["freelist_at_start"] == free_before
+        assert state["payloads"]["converted"] == 14
+        assert 0 < state["returned_pages"] <= state["freed_pages"]
+        connection = sqlite3.connect(path)
+        try:
+            assert connection.execute("PRAGMA freelist_count").fetchone()[0] >= (
+                free_before
+            )
         finally:
             connection.close()
 
