@@ -613,7 +613,7 @@ def test_pages_free_before_the_reopen_are_never_handed_back(
     assert min(after_each_return) >= free_at_reopen
 
 
-def test_a_finished_7740_document_is_reopened_for_the_metadata_part_alone(
+def test_a_finished_7740_document_is_reopened_for_the_parts_it_lacks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "requests.db"
@@ -626,7 +626,8 @@ def test_a_finished_7740_document_is_reopened_for_the_metadata_part_alone(
     state = _wait_done(path)
     store.close()
 
-    assert state["reopened_for"] == ["metadata"]
+    # 7.75.0's part and every later one (7.76.0: skipped attempts).
+    assert state["reopened_for"] == ["metadata", "skipped"]
     assert state["returned_at_reopen"] == 5
     assert state["reopened_at"] > earlier["done_at"]
     assert state["done_at"] >= state["reopened_at"]
@@ -653,7 +654,12 @@ def test_a_fresh_conversion_runs_every_part_in_order(
     store = RequestLogStore(path, max_rows=0)
     state = _wait_done(path)
     store.close()
-    assert list(request_log_module._HISTORY_PHASES) == ["wire", "bodies", "metadata"]
+    assert list(request_log_module._HISTORY_PHASES) == [
+        "wire",
+        "bodies",
+        "metadata",
+        "skipped",
+    ]
     done = [state[name]["done_at"] for name in request_log_module._HISTORY_PHASES]
     assert all(at is not None for at in done)
     assert done == sorted(done)

@@ -4042,6 +4042,18 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   shows those three fields empty on converted rows until you update
                   again; nothing is deleted.
                 </p>
+                <p>
+                  Since 7.76.0 the route attempts a chain skipped &mdash; "never
+                  reached", "paused by you", a provider in cooldown &mdash; which were
+                  nine attempt rows in ten, are stored compactly: one small row per
+                  request naming a stored set of them, each set kept once. New
+                  requests are written that way, older ones by the same background
+                  conversion, and a row is deleted only after its compact form reads
+                  back identical. The route trace, the attempt export and every
+                  Analytics figure read exactly as before. An older version leaves the
+                  skipped attempts of converted requests out of its route trace until
+                  you update again; nothing is deleted.
+                </p>
                 <h4>No traffic, or no server?</h4>
                 <p>
                   A flat stretch in <em>Requests over time</em> means one of two very

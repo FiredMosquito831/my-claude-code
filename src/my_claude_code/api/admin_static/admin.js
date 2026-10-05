@@ -18828,10 +18828,12 @@ function logSizeNote(storage) {
 // 7.74.0: while the background conversion of older history runs, say so and
 // how far it is. Nothing once it is done, and nothing from an older server.
 // 7.75.0 added the "metadata" part: repeated request metadata stored once.
+// 7.76.0 added the "skipped" part: skipped route attempts stored compactly.
 const HISTORY_PHASE_LABELS = {
   snapshots: "snapshots",
   bodies: "bodies",
   metadata: "request metadata",
+  skipped: "skipped route attempts",
 };
 
 function historyConversionNote(history) {
