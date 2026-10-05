@@ -13,11 +13,14 @@ Import direction: this module may import ``config``/``core`` and the sibling
 registry reaches the recorders through dynamic import seams.
 """
 
+import contextlib
 import hashlib
 import json
 import sqlite3
 import threading
-from collections.abc import Iterator, Mapping
+import time
+from collections.abc import Callable, Iterator, Mapping
+from compression import zstd
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +59,52 @@ _EXPORT_JSON_COLUMNS: dict[str, str] = {
     "output": "output_json",
     "provider_config": "provider_config_json",
 }
+
+# Captured search results are stored compressed (7.77.0). On a real
+# websearch.db ``output_json`` held 480.0 of its 485.9 MB: 2,467 payloads of up
+# to 2.1 MB of page text each. A compressed payload is a BLOB in the same
+# column a plain one is TEXT in, so the storage class says which encoding a
+# row holds: TEXT is the JSON as written, BLOB is this envelope -- byte 0 the
+# envelope version, then one zstd frame of the JSON's UTF-8 bytes. A version
+# this code does not know reads as no payload, never as bytes passed through.
+# No dictionary: the payloads are large enough that one trained on 256 of them
+# made 400 others only 1.4% smaller (level 9), not worth a table and a trainer.
+_PAYLOAD_ENVELOPE_V1 = 1
+# The smallest result the user asked for, at a cost only the background writer
+# pays: on all 2,467 real payloads level 9 wrote 107.9 MB at 21.7 MB/s, 17
+# wrote 101.8 MB at 2.2 MB/s and 19 wrote 101.2 MB at 1.0 MB/s -- about 0.2 s
+# per result on average. Decoding is the same 1.6-1.8 s for all of them.
+_PAYLOAD_COMPRESSION_LEVEL = 19
+# The SQL function the content search matches a compressed payload with; see
+# ``_payload_matcher``.
+_PAYLOAD_SQL_FUNCTION = "mcc_websearch_match"
+# ``input_json`` (0.37 MB) and ``provider_config_json`` (0.99 MB) stay plain:
+# compressed they measured 0.36 MB smaller together, and an older version would
+# show a converted one as empty.
+
+# History conversion (7.77.0); see ``_run_history_conversion``. One JSON
+# document in ``search_log_meta``, written in the same transaction as the rows
+# each step changes, so a step either happened with its bookkeeping or not at
+# all. Versioned name per the marker rule.
+_HISTORY_CONVERSION_KEY = "payload_conversion_v1"
+# Writer time one step may take before it commits and looks at the queue
+# again: the longest a search's row can wait behind the conversion.
+_HISTORY_STEP_SECONDS = 0.25
+# Rows read per query inside a step. A payload can be 2 MB, so a few at a
+# time; the step itself ends on the time budget above, never on a row count.
+_HISTORY_FETCH_ROWS = 4
+# The longest the conversion keeps the writer's idle branch before it polls
+# the queue once more.
+_HISTORY_IDLE_SLICE_SECONDS = 5.0
+# At most one progress line per this many seconds.
+_HISTORY_PROGRESS_LOG_SECONDS = 300.0
+# ``PRAGMA incremental_vacuum(N)`` step bounds, the request log's: a step adapts
+# N to fit ``_HISTORY_STEP_SECONDS``, at most doubling from one to the next.
+_SPACE_STEP_PAGES_MIN = 16
+_SPACE_STEP_PAGES_START = 256
+_SPACE_STEP_PAGES_MAX = 1_024
+# Retried after this long when another process held the write lock.
+_HISTORY_RETRY_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +157,10 @@ CREATE TABLE IF NOT EXISTS search_route_log (
     cost_usd REAL,
     error_kind TEXT,
     error_message TEXT
+);
+CREATE TABLE IF NOT EXISTS search_log_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_search_log_ts ON search_log (ts_epoch);
 CREATE INDEX IF NOT EXISTS idx_search_log_provider_ts ON search_log (provider, ts_epoch);
@@ -227,6 +280,14 @@ class WebSearchLogStore:
         self._closed = False
         self._dropped = 0
         self._inserts_since_prune = 0
+        # History conversion state; writer thread only. See
+        # ``_run_history_conversion``.
+        self._history_done = False
+        self._history_retry_at = 0.0
+        self._history_announced = False
+        self._history_logged_at = 0.0
+        self._history_space_mode: int | None = None
+        self._space_step_pages = _SPACE_STEP_PAGES_START
         self._writer = threading.Thread(
             target=self._writer_main,
             name="websearch-log-writer",
@@ -579,6 +640,10 @@ class WebSearchLogStore:
                     self._write_batch(connection, batch)
                 elif self._stopping.is_set():
                     return
+                else:
+                    # Nothing to write: one bounded step at a time, back to
+                    # the queue the moment a record or a close arrives.
+                    self._run_history_conversion(connection)
         except Exception:
             logger.exception("websearch analytics writer crashed")
         finally:
@@ -683,10 +748,313 @@ class WebSearchLogStore:
             connection.rollback()
             logger.exception("websearch analytics retention prune failed")
 
+    # ------------------------------------------------------ history conversion
+
+    def _run_history_conversion(self, connection: sqlite3.Connection) -> None:
+        """Writer thread, idle only: compress the payloads written before 7.77.0.
+
+        Each step is one transaction that carries its bookkeeping
+        (``_HISTORY_CONVERSION_KEY``), so a kill between any two statements
+        leaves the database consistent and the walk resumes where the last
+        committed step ended. A payload is replaced only once its compressed
+        form has been read back by the reader's own decoder as exactly the
+        bytes it replaces; anything else stays as it was and is counted. The
+        pages this frees go back to the filesystem a few at a time, only when
+        the database's ``auto_vacuum`` is incremental. A step stops on a time
+        budget, and the slice the moment a record, a flush or a close arrives.
+        """
+        if self._history_done or time.monotonic() < self._history_retry_at:
+            return
+        try:
+            deadline = time.monotonic() + _HISTORY_IDLE_SLICE_SECONDS
+            while (
+                self._queue.empty()
+                and not self._stopping.is_set()
+                and time.monotonic() < deadline
+            ):
+                if not self._history_step(connection):
+                    break
+        except sqlite3.Error as exc:
+            with contextlib.suppress(sqlite3.Error):
+                connection.rollback()
+            # Another process may hold the write lock for longer than the busy
+            # timeout. Nothing is lost by trying again later.
+            logger.warning("Websearch log history conversion paused: {}", exc)
+            self._history_retry_at = time.monotonic() + _HISTORY_RETRY_SECONDS
+
+    @staticmethod
+    def _new_history_state(connection: sqlite3.Connection) -> dict[str, Any]:
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+        return {
+            "started_at": time.time(),
+            "page_size": page_size,
+            "bytes_at_start": page_count * page_size,
+            # Pages already free before the conversion freed any: never
+            # handed back by it (they are not its own to give).
+            "freelist_at_start": _freelist_count(connection),
+            "payloads": {
+                "through": 0,
+                "end": None,
+                "converted": 0,
+                "kept": 0,
+                "failed": 0,
+                "bytes_before": 0,
+                "bytes_after": 0,
+                "done_at": None,
+            },
+            "freed_pages": 0,
+            "returned_pages": 0,
+            "done_at": None,
+            "bytes_at_end": None,
+        }
+
+    def _load_history_state(self, connection: sqlite3.Connection) -> dict[str, Any]:
+        row = connection.execute(
+            "SELECT value FROM search_log_meta WHERE key = ?",
+            (_HISTORY_CONVERSION_KEY,),
+        ).fetchone()
+        if row is not None:
+            with contextlib.suppress(ValueError, TypeError):
+                state = json.loads(row[0])
+                if isinstance(state, dict) and isinstance(state.get("payloads"), dict):
+                    return state
+        return self._new_history_state(connection)
+
+    @staticmethod
+    def _save_history_state(
+        connection: sqlite3.Connection, state: dict[str, Any]
+    ) -> None:
+        connection.execute(
+            "INSERT INTO search_log_meta (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_HISTORY_CONVERSION_KEY, json.dumps(state, sort_keys=True)),
+        )
+
+    def _history_step(self, connection: sqlite3.Connection) -> bool:
+        """One bounded step; False when there is nothing to do now."""
+        state = self._load_history_state(connection)
+        if state.get("done_at") is not None:
+            self._history_done = True
+            return False
+        if not self._history_announced:
+            self._history_announced = True
+            self._history_logged_at = time.monotonic()
+            # Silent when there is nothing to convert: a new database, or one
+            # every row of which this version wrote.
+            if connection.execute(
+                "SELECT 1 FROM search_log WHERE id > ?"
+                " AND typeof(output_json) = 'text' LIMIT 1",
+                (int(state["payloads"]["through"] or 0),),
+            ).fetchone():
+                logger.info(
+                    "Websearch log history conversion {}: older search results"
+                    " are compressed in the background, each checked before it"
+                    " is replaced ({:.2f} GB on disk)",
+                    "resumed" if int(state["payloads"]["through"] or 0) else "started",
+                    int(state["bytes_at_start"]) / 1e9,
+                )
+        progressed = False
+        if state["payloads"]["done_at"] is None:
+            progressed = self._convert_payload_step(connection)
+        if self._queue.empty() and self._return_space_step(connection):
+            progressed = True
+        state = self._load_history_state(connection)
+        if state["payloads"]["done_at"] is not None and not self._space_owed(
+            connection, state
+        ):
+            self._finish_history(connection)
+            return False
+        self._log_history_progress(state)
+        return progressed
+
+    def _convert_payload_step(self, connection: sqlite3.Connection) -> bool:
+        """Turn the next plain ``output_json`` values into the envelope; one transaction."""
+        budget_end = time.perf_counter() + _HISTORY_STEP_SECONDS
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(connection)
+            phase = state["payloads"]
+            if phase["end"] is None:
+                phase["end"] = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(id), 0) FROM search_log"
+                    ).fetchone()[0]
+                )
+            freelist_before = _freelist_count(connection)
+            cursor = int(phase["through"])
+            updates: list[tuple[bytes, int]] = []
+            finished = False
+            while True:
+                rows = connection.execute(
+                    "SELECT id, CASE WHEN typeof(output_json) = 'text'"
+                    " THEN CAST(output_json AS BLOB) END FROM search_log"
+                    " WHERE id > ? ORDER BY id LIMIT ?",
+                    (cursor, _HISTORY_FETCH_ROWS),
+                ).fetchall()
+                if not rows:
+                    finished = True
+                    break
+                for row in rows:
+                    cursor = int(row[0])
+                    if row[1] is not None:
+                        original = bytes(row[1])
+                        envelope = _payload_envelope(original)
+                        if envelope is None:
+                            phase["kept"] += 1
+                        elif not _reads_back(envelope, original):
+                            phase["failed"] += 1
+                        else:
+                            updates.append((envelope, cursor))
+                            phase["converted"] += 1
+                            phase["bytes_before"] += len(original)
+                            phase["bytes_after"] += len(envelope)
+                    if time.perf_counter() >= budget_end:
+                        break
+                # At least one row per step, however slow, so the walk always
+                # moves; then the budget decides.
+                if time.perf_counter() >= budget_end:
+                    break
+            if updates:
+                connection.executemany(
+                    "UPDATE search_log SET output_json = ? WHERE id = ?", updates
+                )
+            phase["through"] = cursor
+            if finished:
+                phase["done_at"] = time.time()
+            state["freed_pages"] = int(state["freed_pages"]) + max(
+                0, _freelist_count(connection) - freelist_before
+            )
+            self._save_history_state(connection, state)
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        if finished and phase["failed"]:
+            logger.warning(
+                "Websearch log history conversion left {} search results as they"
+                " were: their compressed form did not read back as the same bytes",
+                phase["failed"],
+            )
+        return True
+
+    def _space_owed(self, connection: sqlite3.Connection, state: dict[str, Any]) -> int:
+        """Pages the conversion freed that are not handed back yet.
+
+        Never more than the freelist holds above what it held before the
+        conversion freed anything, and zero when the database cannot hand
+        pages back without a full rewrite (``auto_vacuum`` not incremental).
+        """
+        if self._history_space_mode is None:
+            self._history_space_mode = int(
+                connection.execute("PRAGMA auto_vacuum").fetchone()[0]
+            )
+            if self._history_space_mode != 2:
+                logger.info(
+                    "Websearch log auto_vacuum is not incremental: the space the"
+                    " conversion frees stays inside the file for new rows"
+                )
+        if self._history_space_mode != 2:
+            return 0
+        owed = int(state["freed_pages"]) - int(state["returned_pages"])
+        above = _freelist_count(connection) - int(state["freelist_at_start"])
+        return max(0, min(owed, above))
+
+    def _return_space_step(self, connection: sqlite3.Connection) -> bool:
+        """Hand a few freed pages back to the filesystem; one transaction.
+
+        A step is sized to fit ``_HISTORY_STEP_SECONDS``, adapting to how long
+        the last one took. In WAL mode the file itself shrinks at the next
+        automatic checkpoint; nothing here forces one.
+        """
+        state = self._load_history_state(connection)
+        converting = state["payloads"]["done_at"] is None
+        owed = self._space_owed(connection, state)
+        if owed <= 0 or (converting and owed < self._space_step_pages):
+            return False
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            # Again under the write lock: what was owed a moment ago may have
+            # been handed back by a retention prune since.
+            state = self._load_history_state(connection)
+            owed = self._space_owed(connection, state)
+            if owed <= 0:
+                connection.commit()
+                return False
+            pages = min(self._space_step_pages, owed)
+            before = _freelist_count(connection)
+            started = time.perf_counter()
+            connection.execute(f"PRAGMA incremental_vacuum({int(pages)})").fetchall()
+            elapsed = time.perf_counter() - started
+            returned = max(0, before - _freelist_count(connection))
+            state["returned_pages"] = int(state["returned_pages"]) + returned
+            self._save_history_state(connection, state)
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        if elapsed > 0:
+            scaled = min(pages * 2, int(pages * _HISTORY_STEP_SECONDS / elapsed))
+            self._space_step_pages = max(
+                _SPACE_STEP_PAGES_MIN, min(_SPACE_STEP_PAGES_MAX, scaled)
+            )
+        return returned > 0
+
+    def _finish_history(self, connection: sqlite3.Connection) -> None:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(connection)
+            page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+            state["bytes_at_end"] = page_count * int(state["page_size"])
+            state["done_at"] = time.time()
+            self._save_history_state(connection, state)
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        self._history_done = True
+        phase = state["payloads"]
+        if not phase["converted"] and not phase["kept"] and not phase["failed"]:
+            return
+        logger.info(
+            "Websearch log history conversion done in {:.0f} min: {} search results"
+            " compressed ({:.2f} GB -> {:.2f} GB), {} left as they were, {} failed"
+            " the check; database {:.2f} GB -> {:.2f} GB, {:.2f} GB handed back",
+            (state["done_at"] - float(state["started_at"])) / 60,
+            phase["converted"],
+            int(phase["bytes_before"]) / 1e9,
+            int(phase["bytes_after"]) / 1e9,
+            phase["kept"],
+            phase["failed"],
+            int(state["bytes_at_start"]) / 1e9,
+            int(state["bytes_at_end"]) / 1e9,
+            int(state["returned_pages"]) * int(state["page_size"]) / 1e9,
+        )
+
+    def _log_history_progress(self, state: dict[str, Any]) -> None:
+        now = time.monotonic()
+        if now - self._history_logged_at < _HISTORY_PROGRESS_LOG_SECONDS:
+            return
+        self._history_logged_at = now
+        phase = state["payloads"]
+        end = int(phase["end"] or 0)
+        percent = min(99, 100 * int(phase["through"]) // end) if end else 0
+        logger.info(
+            "Websearch log history conversion: {}%, {:.2f} GB handed back so far",
+            100 if phase["done_at"] is not None else percent,
+            int(state["returned_pages"]) * int(state["page_size"]) / 1e9,
+        )
+
     def _connect_reader(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
         connection.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        # Every reader may run the content search, which matches a compressed
+        # payload through this function (``_output_matches``); one per
+        # connection, so what it remembers lives as long as one call.
+        connection.create_function(
+            _PAYLOAD_SQL_FUNCTION, 3, _payload_matcher(), deterministic=True
+        )
         _initialize_schema(connection)
         return connection
 
@@ -827,7 +1195,7 @@ def _row_tuple(
         outcome.route_id,
         max(1, outcome.attempt_number),
         input_capture.stored_json,
-        output_capture.stored_json,
+        _stored_output(output_capture.stored_json),
         provider_config_json,
         input_capture.original_chars,
         output_capture.original_chars,
@@ -989,7 +1357,139 @@ def _json_dumps(value: object) -> str:
     )
 
 
+def _stored_output(text: str | None) -> str | bytes | None:
+    """What ``output_json`` stores for ``text``: the envelope, or the text itself.
+
+    The envelope only when it is smaller and reads back, through the reader's
+    own decoder, as exactly the bytes of ``text``; anything else -- NULL, a
+    payload compression does not shrink, text that is not valid UTF-8 -- is
+    stored as it always was.
+    """
+    if text is None:
+        return None
+    try:
+        raw = text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text
+    envelope = _payload_envelope(raw)
+    if envelope is None or not _reads_back(envelope, raw):
+        return text
+    return envelope
+
+
+def _payload_envelope(raw: bytes) -> bytes | None:
+    """The envelope for ``raw`` when it is smaller than ``raw``, else None."""
+    try:
+        envelope = bytes((_PAYLOAD_ENVELOPE_V1,)) + zstd.compress(
+            raw, level=_PAYLOAD_COMPRESSION_LEVEL
+        )
+    except zstd.ZstdError, ValueError, MemoryError:
+        return None
+    return envelope if len(envelope) < len(raw) else None
+
+
+def _reads_back(envelope: bytes, raw: bytes) -> bool:
+    """True when ``envelope`` reads back as exactly ``raw``, and as its text.
+
+    Both through the readers' own paths: the bytes the search matches on and
+    the text the detail and the exports decode.
+    """
+    try:
+        return _unwrap_payload(envelope) == raw and _payload_text(
+            envelope
+        ) == raw.decode("utf-8")
+    except zstd.ZstdError, ValueError, MemoryError:
+        return False
+
+
+def _unwrap_payload(data: bytes) -> bytes:
+    """The UTF-8 bytes an ``output_json`` envelope holds, or raise.
+
+    The one decoder: the detail, the exports, the search and the history
+    conversion's proof all go through it, so what the proof checked is what a
+    reader gets.
+    """
+    if not data or data[0] != _PAYLOAD_ENVELOPE_V1:
+        raise ValueError("unknown search result envelope")
+    return zstd.decompress(data[1:])
+
+
+def _payload_text(stored: object) -> str | None:
+    """The JSON text a stored ``output_json`` holds, in either encoding.
+
+    TEXT is returned as it is; a BLOB is unwrapped from its envelope. A value
+    that cannot be decoded reads as no payload and says so in the log, rather
+    than failing the whole page.
+    """
+    if stored is None or isinstance(stored, str):
+        return stored
+    if not isinstance(stored, bytes | bytearray | memoryview):
+        return None
+    try:
+        return _unwrap_payload(bytes(stored)).decode("utf-8")
+    except (zstd.ZstdError, ValueError, MemoryError) as exc:
+        logger.warning("Websearch log search result decode failed: {}", exc)
+        return None
+
+
+def _payload_matcher() -> Callable[[object, object, object], int]:
+    """A fresh SQL ``mcc_websearch_match(id, output_json, needle)`` for one reader.
+
+    1 when the compressed payload holds ``needle``, the way
+    ``instr(lower(text), lower(?)) > 0`` decides on the TEXT it replaced:
+    SQLite's ``lower()`` folds ASCII letters only, as ``bytes.lower()`` does,
+    and on UTF-8 a character substring is a byte substring. ``needle`` arrives
+    already through SQLite's ``lower()``.
+
+    Remembers its answer per row and needle for the life of the connection: a
+    statistics call runs a dozen queries with the same filter, and decoding
+    every payload for each of them measured 1.6x slower than the plain text
+    did. A row's payload never changes once written (the conversion keeps its
+    bytes, and ids are never reused), so a remembered answer cannot go stale.
+    Total, because an exception in a SQL function fails the whole query:
+    anything undecodable holds nothing, as the detail shows no payload.
+    """
+    seen: dict[tuple[object, str], int] = {}
+
+    def match(row_id: object, value: object, needle: object) -> int:
+        if not isinstance(value, bytes) or not isinstance(needle, str):
+            return 0
+        key = (row_id, needle)
+        found = seen.get(key)
+        if found is None:
+            try:
+                data = _unwrap_payload(value)
+            except zstd.ZstdError, ValueError, MemoryError:
+                found = 0
+            else:
+                found = int(needle.encode("utf-8").lower() in data.lower())
+            seen[key] = found
+        return found
+
+    return match
+
+
+def _output_matches(id_column: str, column: str) -> str:
+    """SQL: does ``column`` (output_json) hold the search term, in either encoding.
+
+    A TEXT row stays on SQLite's own ``instr(lower(...), lower(?))``, untouched;
+    only a BLOB goes through ``_payload_matcher``. Two placeholders, both bound
+    to the term.
+    """
+    return (
+        f"CASE WHEN typeof({column}) = 'blob'"
+        f" THEN {_PAYLOAD_SQL_FUNCTION}({id_column}, {column}, lower(?))"
+        f" ELSE instr(lower(COALESCE({column}, '')), lower(?)) > 0 END"
+    )
+
+
+def _freelist_count(connection: sqlite3.Connection) -> int:
+    return int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+
+
 def _decode_json(value: object) -> object | None:
+    if isinstance(value, bytes | bytearray | memoryview):
+        value = _payload_text(value)
     if not isinstance(value, str) or not value:
         return None
     try:
@@ -1022,9 +1522,9 @@ def _attempt_filter_where(
         clauses.append(
             "(instr(lower(query), lower(?)) > 0"
             " OR instr(lower(COALESCE(input_json, '')), lower(?)) > 0"
-            " OR instr(lower(COALESCE(output_json, '')), lower(?)) > 0)"
+            " OR " + _output_matches("id", "output_json") + ")"
         )
-        params.extend((q, q, q))
+        params.extend((q, q, q, q))
     if since_epoch is not None:
         clauses.append("ts_epoch >= ?")
         params.append(since_epoch)
@@ -1057,9 +1557,9 @@ def _route_filter_where(
             " OR EXISTS (SELECT 1 FROM search_log AS attempt"
             " WHERE attempt.route_id = search_route_log.route_id"
             " AND (instr(lower(COALESCE(attempt.input_json, '')), lower(?)) > 0"
-            " OR instr(lower(COALESCE(attempt.output_json, '')), lower(?)) > 0)))"
+            " OR " + _output_matches("attempt.id", "attempt.output_json") + ")))"
         )
-        params.extend((q, q, q))
+        params.extend((q, q, q, q))
     if since_epoch is not None:
         clauses.append("ts_epoch >= ?")
         params.append(since_epoch)

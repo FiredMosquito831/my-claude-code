@@ -4806,6 +4806,16 @@ WEBSEARCH_LOG_CONTENT_MAX_CHARS=2000000 # cap per input/output JSON payload
 >
 > API keys are never written to either store — only masked `first4…last4` labels. Proxy credentials are stripped from recorded URLs.
 
+#### Search results are stored compressed (7.77.0)
+
+The web search log lives in its own file, `~/.mcc/logs/websearch.db`, and almost all of it is the captured search results — the pages of text each provider sent back. On a real 486 MB file they were 480 MB of plain JSON.
+
+- **New searches** store their results zstd-compressed (level 19), but only when that is smaller and only after the compressed copy has been read back, through the same code the dashboard reads it with, as exactly the same bytes; anything else is stored as plain text, as before. The query, the request input and the provider configuration stay plain (together about 1.5 MB on that file; compressing them would save 0.36 MB).
+- **Older results are converted by themselves** after the update — no button, no setting. The web search log's own writer does it while no search is being written, in steps of about a quarter of a second, each step one transaction with its own progress marker, so stopping or killing MCC at any moment loses nothing and the next start carries on. A result is replaced only once its compressed form reads back byte for byte; one that does not stays as it was and is counted. The space this frees goes back to the disk a few pages at a time (the file uses incremental auto-vacuum); nothing ever rewrites the whole file.
+- **How long, and how much**: on a copy of a real 486 MB file it took about 8½ minutes on an idle server, in steps of about a third of a second (95 % under 1.2 s; a single large result is compressed in one piece, the longest step took 2.8 s); its 2,467 results went from 480.0 MB to 101.2 MB (4.7×), none failed the check, and the file shrank from 485.9 MB to 108.5 MB as the freed space went back to the disk. Killed 45 times mid-way and restarted, it lost nothing: every result read back identical afterwards.
+- **Everything reads the same**: the attempt detail, the request list, every filter, the content search (`q`), the statistics and every export return exactly what they returned before, on converted and unconverted rows alike. The search still matches inside the results, case-insensitively for ASCII letters, as before.
+- **Going back to an older version** (7.76.0 or earlier) is safe: it reads every row without error, but shows a compressed result as no captured output, and its content search does not find words inside one — while a short search term can match the compressed bytes by chance (on that copy 7.76.0 listed 911 attempts for "ș", which 104 contain). The query, the input, the provider configuration, the counts and the statistics without a search are unaffected, nothing is deleted, and updating again shows the results.
+
 ---
 
 ## 12. Multi-key rotation
