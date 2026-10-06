@@ -193,18 +193,19 @@ class ToolNameLengthRecovery:
         return retry, None
 
 
-#: Last resort, and nothing else: the five ids Codex CLI 0.151.0 publishes with
-#: ``visibility: "list"``. It exists so a brand-new offline install with no
-#: Codex and no request log still draws a picker, and it is labelled ``seed``
-#: on the Models page precisely because nobody stands behind it. No filter is
-#: applied to it -- the list that preceded it held fifteen ids of which the
-#: filter reading it deleted eight, so more than half of it was unreachable.
+#: Last resort, and nothing else: the five ids Codex CLI 0.155.1 publishes with
+#: ``visibility: "list"``, in its own order. It exists so a brand-new offline
+#: install with no Codex and no request log still draws a picker, and it is
+#: labelled ``seed`` on the Models page precisely because nobody stands behind
+#: it. No filter is applied to it -- the list that preceded it held fifteen ids
+#: of which the filter reading it deleted eight, so more than half of it was
+#: unreachable.
 CHATGPT_OAUTH_SEED_MODELS: tuple[str, ...] = (
-    "gpt-5.2",
-    "gpt-5.5",
-    "gpt-5.6-luna",
+    "gpt-6-astra",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
 )
 
 #: What the backend says when it does not have a model, in its own words.

@@ -552,17 +552,17 @@ def test_a_model_the_vendor_retired_with_no_observation_is_not_listed(monkeypatc
 
 
 def test_the_seed_ids_are_never_vetoed_by_this(monkeypatch):
-    """The five seed ids and ``gpt-5.2`` are outside both fixes.
+    """The five seed ids are outside both fixes.
 
-    ``gpt-5.2`` is the id the heuristic 6.48.0 deleted used to drop; nothing
-    in this change may put it back in the bin.
+    They are the ids Codex CLI 0.155.1 lists, in its own order; ``gpt-5.2``
+    left the seed when Codex stopped listing it.
     """
     assert CHATGPT_OAUTH_SEED_MODELS == (
-        "gpt-5.2",
-        "gpt-5.5",
-        "gpt-5.6-luna",
+        "gpt-6-astra",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
     )
     listed = CodexCatalogue(
         version="0.151.0",
