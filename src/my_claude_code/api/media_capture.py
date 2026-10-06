@@ -290,7 +290,7 @@ class MediaCapture:
         Everything the price depends on is measured here, on the loop, where
         it is a few dictionary reads; the catalogue lookups run later on the
         writer thread, so no request -- and no streamed answer's
-        fire-and-forget finish -- waits for them. ``None`` when cost
+        finish -- waits for them. ``None`` when cost
         estimation is off: nothing is attempted, as for chat.
         """
         if not self._pricing.enabled:

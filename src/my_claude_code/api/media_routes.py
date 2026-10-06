@@ -31,6 +31,7 @@ from typing import IO, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
+from loguru import logger
 from starlette.datastructures import FormData, UploadFile
 
 from my_claude_code.application.errors import ApplicationError
@@ -652,9 +653,17 @@ async def _stream_body(
 ) -> AsyncIterator[bytes]:
     """Forward SSE frames; measure the completed images once the stream ends.
 
-    The row is written (and the uploads closed) from a task rather than awaited
-    here: a client that hangs up closes this generator with ``GeneratorExit``,
-    and awaiting during that is unsafe.
+    The row is written (and the uploads closed) by a task. A stream that ends
+    -- answered, or closed by an error frame -- waits for that task here,
+    before the response's last chunk, as the chat path waits for its row
+    (``request_capture._finalize_off_loop``): a graceful stop waits for the
+    request and only then closes the log store, so it can no longer overtake
+    the row. The wait is shielded, so a cancellation that lands during it
+    leaves the task to finish on its own.
+
+    A client that hangs up closes this generator with ``GeneratorExit`` or
+    cancels it, and awaiting during that is unsafe: the task then runs on its
+    own, and the hang-up leaves by the exception before the wait is reached.
     """
     seen = bytearray()
     status = "success"
@@ -676,8 +685,15 @@ async def _stream_body(
     finally:
         if status == "success" and b"event: error" in seen:
             status = "error"
-        asyncio.ensure_future(
+        finishing = asyncio.ensure_future(
             _finish_stream(capture, status, error, bytes(seen), cleanup, parse_stream)
+        )
+    try:
+        await asyncio.shield(finishing)
+    except Exception as exc:
+        # The answer has been delivered; failing bookkeeping must not break it.
+        logger.warning(
+            "MEDIA: could not log the streamed request: {}", type(exc).__name__
         )
 
 

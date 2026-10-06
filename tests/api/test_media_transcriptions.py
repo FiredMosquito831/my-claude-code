@@ -3,6 +3,7 @@
 import io
 import json
 import sqlite3
+import time
 import wave
 from email.parser import BytesParser
 from email.policy import HTTP
@@ -12,6 +13,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.api import media_routes
 from my_claude_code.config.media_surfaces import transcription_surface
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings
@@ -247,6 +249,74 @@ def test_stream_deltas(monkeypatch, tmp_path) -> None:
     assert row["stream"] == 1
     assert row["output_chars"] == len("hello world")
     assert row["input_audio_seconds"] == 3.0
+
+
+_ANSWERED = _sse(
+    {"type": "transcript.text.delta", "delta": "hello "},
+    {
+        "type": "transcript.text.done",
+        "text": "hello world",
+        "usage": {"type": "duration", "seconds": 3, "cost": 0.0042, "is_byok": False},
+    },
+)
+_ERRORED = _sse({"type": "transcript.text.delta", "delta": "hello "}) + (
+    b'event: error\ndata: {"error": {"message": "upstream gave up"}}\n\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("frames", "status", "cost"),
+    [
+        (_ANSWERED, "success", (0.0042, "provider")),
+        (_ERRORED, "error", (None, "unpriced")),
+    ],
+    ids=["answered", "errored"],
+)
+def test_a_finished_stream_is_logged_before_the_store_closes(
+    monkeypatch, tmp_path, frames, status, cost
+) -> None:
+    """A stop closes the log store as soon as the last request has ended.
+
+    The row of a streamed answer used to be written by a task left running
+    after the response had ended (7.60.0 to 7.78.3): a stop, restart or update
+    that closed the store -- or ended the loop -- first lost the whole row,
+    cost and attempts included, though the client had its answer. The parser
+    is held 0.3 s on its worker thread here, as a loaded machine can hold it;
+    the row was lost on every run.
+    """
+    parse = media_routes.parse_transcription_stream
+
+    def slow_parse(seen: bytes):
+        time.sleep(0.3)
+        return parse(seen)
+
+    monkeypatch.setattr(media_routes, "parse_transcription_stream", slow_parse)
+    settings = _settings(monkeypatch, tmp_path, MODEL_ASR="mistral/voxtral-mini-latest")
+    upstream = Upstream(
+        {
+            "api.mistral.ai": [
+                httpx.Response(
+                    200, content=frames, headers={"content-type": "text/event-stream"}
+                )
+            ]
+        }
+    )
+    with _client(settings, upstream) as client:
+        response = client.post(
+            "/v1/audio/transcriptions",
+            data={"stream": "true"},
+            files=[("file", ("clip.wav", WAV, "audio/wav"))],
+        )
+        # What the server's own stop does once no request is left: close the
+        # stores (runtime/application.py, _close_owned_resources).
+        request_log.reset_request_log_stores()
+        assert response.status_code == 200
+        assert response.content == frames
+    row = _row(tmp_path)
+    assert row["status"] == status
+    assert row["stream"] == 1
+    assert row["media_operation"] == "transcribe"
+    assert (row["cost_usd"], row["cost_source"]) == cost
 
 
 def test_a_stream_skips_a_surface_that_cannot_stream(monkeypatch, tmp_path) -> None:
