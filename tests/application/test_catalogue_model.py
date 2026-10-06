@@ -1,11 +1,14 @@
 """The neutral catalogue record carries the ladder's answers, unknowns included."""
 
+from collections.abc import Callable
+
 from my_claude_code.api.model_catalog import build_models_list_response
 from my_claude_code.application.catalogue_model import (
     build_catalogue_models,
     derive_supports_tool_calls,
 )
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelReasoningCapability,
     ProviderModelInfo,
 )
@@ -32,6 +35,7 @@ class FakeRuntime(RequestRuntimePort):
         reasoning: dict[str, ModelReasoningCapability] | None = None,
         tool_calls: dict[str, bool] | None = None,
         prices: dict[str, dict[str, float]] | None = None,
+        modalities: dict[str, DeclaredModalities] | None = None,
     ) -> None:
         self._settings = settings
         self._cached_infos = cached_infos
@@ -42,6 +46,7 @@ class FakeRuntime(RequestRuntimePort):
         self._reasoning = reasoning or {}
         self._tool_calls = tool_calls or {}
         self._prices = prices or {}
+        self._modalities = modalities or {}
 
     async def acquire(self) -> RequestRuntimeLease:
         raise AssertionError("Catalogue building must not acquire a provider lease.")
@@ -98,6 +103,19 @@ class FakeRuntime(RequestRuntimePort):
                 "cache_write_price",
             )
         }
+
+    def model_modalities_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[DeclaredModalities | None, ResolutionTier | None]]:
+        def lookup(
+            provider_id: str, model_id: str
+        ) -> tuple[DeclaredModalities | None, ResolutionTier | None]:
+            declared = self._modalities.get(f"{provider_id}/{model_id}")
+            if declared is None:
+                return None, None
+            return declared, ResolutionTier.MODELS_DEV_BUCKET_EXACT
+
+        return lookup
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos
@@ -359,3 +377,106 @@ def test_the_configured_primary_route_is_marked_on_its_record() -> None:
     )
     assert best.display_name == "Best (open_router/primary)"
     assert not raw.is_primary_route
+
+
+def _media_runtime(**update: object) -> FakeRuntime:
+    """A catalogue holding one model of every stated kind, and one of none."""
+
+    return FakeRuntime(
+        settings=_settings(**update),
+        cached_infos=(
+            ProviderModelInfo("open_router/chat"),
+            ProviderModelInfo("open_router/draws"),
+            ProviderModelInfo("open_router/chat-and-draws"),
+            ProviderModelInfo("open_router/speaks"),
+            ProviderModelInfo("open_router/hears"),
+            ProviderModelInfo("open_router/films"),
+            ProviderModelInfo("open_router/never-described"),
+            ProviderModelInfo("custom_x/placed-image"),
+        ),
+        modalities={
+            "open_router/chat": DeclaredModalities(("text",), ("text",)),
+            "open_router/draws": DeclaredModalities(("text",), ("image",)),
+            "open_router/chat-and-draws": DeclaredModalities(
+                ("text", "image"), ("image", "text")
+            ),
+            "open_router/speaks": DeclaredModalities(("text",), ("audio",)),
+            "open_router/hears": DeclaredModalities(("audio",), ("text",)),
+            "open_router/films": DeclaredModalities(("text",), ("video",)),
+        },
+    )
+
+
+def _listed_refs(settings: Settings, runtime: FakeRuntime) -> tuple[set[str], set[str]]:
+    catalogue = {
+        model.provider_model_ref
+        for model in build_catalogue_models(settings, runtime)
+        if not is_tier_ref(model.provider_model_ref)
+    }
+    listing = {
+        entry.display_name.removesuffix(" (no thinking)")
+        for entry in build_models_list_response(settings, runtime).data
+        if "/" in entry.id and not is_tier_ref(entry.id)
+    }
+    return catalogue, listing
+
+
+def test_media_models_leave_both_chat_listings_and_saved_refs_stay() -> None:
+    """7.78.2: a stated non-chat kind is not offered as a chat model.
+
+    ``/v1/models`` and the harness catalogues drop the same refs, an unknown
+    kind stays, a model that also chats stays, and a media model the operator
+    saved on a chat rail stays listed -- it is the route they chose.
+    """
+
+    runtime = _media_runtime(
+        model="open_router/chat",
+        model_haiku="open_router/films",
+        model_image="custom_x/placed-image",
+    )
+    settings = runtime.current_settings()
+
+    catalogue, listing = _listed_refs(settings, runtime)
+
+    assert catalogue == listing
+    assert catalogue == {
+        "open_router/chat",
+        "open_router/chat-and-draws",
+        "open_router/never-described",
+        # Saved on MODEL_HAIKU: listed whatever its kind.
+        "open_router/films",
+    }
+
+
+def test_the_kind_filter_never_runs_ahead_of_visibility_or_reorders() -> None:
+    """Hide-only: the surviving entries keep their order and their twins."""
+
+    runtime = _media_runtime(model="open_router/chat")
+    settings = runtime.current_settings()
+
+    ids = [entry.id for entry in build_models_list_response(settings, runtime).data]
+    discovered = [model_id for model_id in ids if "open_router/" in model_id]
+
+    assert discovered == [
+        "anthropic/open_router/chat",
+        "claude-3-freecc-no-thinking/open_router/chat",
+        "anthropic/open_router/chat-and-draws",
+        "claude-3-freecc-no-thinking/open_router/chat-and-draws",
+        "anthropic/open_router/never-described",
+        "claude-3-freecc-no-thinking/open_router/never-described",
+    ]
+
+
+def test_a_tier_alias_still_points_at_a_media_model_saved_on_its_tier() -> None:
+    """The alias is a route, so a saved cross-kind primary keeps its alias."""
+
+    runtime = _media_runtime(model="open_router/draws")
+    settings = runtime.current_settings()
+
+    aliases = {
+        model.provider_model_ref: model.display_name
+        for model in build_catalogue_models(settings, runtime)
+        if is_tier_ref(model.provider_model_ref)
+    }
+
+    assert aliases[tier_ref(ModelTier.BEST)] == "Best (open_router/draws)"

@@ -533,7 +533,10 @@ def test_admin_static_model_combobox_preserves_custom_slugs_and_none_semantics()
         encoding="utf-8"
     )
 
-    assert '? ["None", ...state.modelOptions]' in script
+    # 7.78.2: the "None" entry of an optional picker survives the grouping
+    # of options by kind -- it is the first section of every optional field.
+    assert 'if (this.fieldType === "optional_model") {' in script
+    assert 'sections.push({ label: null, values: ["None"], kinds: null });' in script
     assert "You can still enter a custom slug." in script
     assert 'input.dataset.fieldType === "optional_model"' in script
     assert 'return "";' in script
@@ -694,6 +697,14 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
         ],
         "failed_providers": [],
         "blind_models": [],
+        "kinds": {},
+        "kind_labels": {
+            "chat": "Chat",
+            "image": "Image",
+            "tts": "Speech",
+            "asr": "Transcription",
+            "video": "Video",
+        },
     }
 
 
@@ -760,6 +771,14 @@ def test_admin_model_refresh_returns_the_updated_canonical_catalog():
         "models": ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
         "failed_providers": [],
         "blind_models": [],
+        "kinds": {},
+        "kind_labels": {
+            "chat": "Chat",
+            "image": "Image",
+            "tts": "Speech",
+            "asr": "Transcription",
+            "video": "Video",
+        },
     }
     runtime.refresh_models.assert_awaited_once_with()
 
@@ -783,6 +802,14 @@ def test_admin_model_refresh_reports_partial_provider_failures():
         "models": ["deepseek/deepseek-chat"],
         "failed_providers": ["open_router"],
         "blind_models": [],
+        "kinds": {},
+        "kind_labels": {
+            "chat": "Chat",
+            "image": "Image",
+            "tts": "Speech",
+            "asr": "Transcription",
+            "video": "Video",
+        },
     }
 
 

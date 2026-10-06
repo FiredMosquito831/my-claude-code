@@ -23,14 +23,16 @@ own serialiser supplies that CLI's documented default and records the
 substitution. See ``application/catalogues/base.py``.
 
 The record is built alongside :func:`my_claude_code.api.model_catalog.build_models_list_response`
-from the same visibility filter, the same ref enumeration and the same
-two-variant projection, so a model can never appear in ``/v1/models`` and not
-in a harness catalogue, or the reverse.
+from the same visibility filter, the same kind filter
+(``application/model_kinds.chat_listing_filter``, 7.78.2), the same ref
+enumeration and the same two-variant projection, so a model can never appear in
+``/v1/models`` and not in a harness catalogue, or the reverse.
 """
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
+from my_claude_code.application.model_kinds import chat_listing_filter
 from my_claude_code.application.model_metadata import (
     ModelDefaultParameters,
     ModelReasoningCapability,
@@ -182,6 +184,12 @@ def build_catalogue_models(
     visibility = ModelVisibility.from_raw(
         settings.model_visibility_allow, settings.model_visibility_deny
     )
+    # Discovered models only, and the same predicate ``/v1/models`` applies:
+    # a model whose stated kind is not chat (an image, speech or video model)
+    # is not offered as one. A configured ref is listed whatever its kind.
+    chat_listable = chat_listing_filter(
+        settings, runtime.model_modalities_lookup(), harness_tiers
+    )
     primary_ref = settings.model.strip()
     infos_by_ref: dict[str, ProviderModelInfo] = {}
     for info in runtime.cached_prefixed_model_infos():
@@ -205,6 +213,8 @@ def build_catalogue_models(
 
     for info in runtime.cached_prefixed_model_infos():
         if not visibility.is_visible(info.model_id):
+            continue
+        if not chat_listable(info.model_id):
             continue
         _append_variants(
             models,

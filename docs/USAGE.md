@@ -3807,7 +3807,7 @@ A provider with three hundred models is not manageable one tick at a time. On a 
 
 **1. Open Admin UI → Models.** Each provider is a collapsed disclosure with a sticky header carrying its visible / hidden / configured counts. The header buttons — **Show all**, **Hide all**, **Invert** — work while the provider is still collapsed; you never have to expand 317 rows to act on them.
 
-**2. Press `/` to search.** It focuses the filter from anywhere on the page. Type `opus`, or a provider id, or a fragment of a model name. The facet chips — All / Visible / Hidden / Configured / Overridden — narrow the same list, and the result-count line offers **Select all N**.
+**2. Press `/` to search.** It focuses the filter from anywhere on the page. Type `opus`, or a provider id, or a fragment of a model name. The facet chips — All / Visible / Hidden / Configured / Overridden / Learned, and one per model kind (Chat / Image / Speech / Transcription / Video / Kind not known, 7.78.2) — narrow the same list, and the result-count line offers **Select all N**. A row whose stated kind is not chat carries a chip saying so: that model is left out of `/v1/models`, the coding agents' catalogues and the chat pickers (see [Media routing](MEDIA.md#which-lists-offer-a-model-7782)).
 
 **3. Apply to what the filter left.** This is the point of the filter: the bulk buttons act on the *filtered* set, not the whole catalogue. "Hide the 38 models matching `opus` across four providers" is three interactions — filter, Select all 38, Hide.
 

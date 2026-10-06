@@ -10,6 +10,7 @@ from loguru import logger
 
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelReasoningCapability,
     ProviderModelInfo,
     ProviderModelRefreshResult,
@@ -32,6 +33,7 @@ from my_claude_code.providers.runtime.discovery import (
 )
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.models_dev import (
+    declared_modalities_lookup,
     model_context_length_tiered,
     model_output_limit_tiered,
     model_prices_tiered,
@@ -398,6 +400,20 @@ class ProviderRuntimeManager:
         if info.output_price is not None:
             resolved["output_price"] = (info.output_price, tier)
         return resolved
+
+    def model_modalities_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[DeclaredModalities | None, ResolutionTier | None]]:
+        """What models.dev catalogues each model as accepting and producing.
+
+        Tiers 3-10 only, like :meth:`model_tool_call_tiered`: no gateway
+        ``/models`` answer MCC reads carries a modality list, so there is no
+        provider rung to prefer. One lookup per listing, bound to the file as
+        it is now (one ``stat``, then memo hits). Read by
+        ``application/model_kinds`` to decide which lists offer a model; never
+        by routing.
+        """
+        return declared_modalities_lookup()
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._model_cache.cached_prefixed_model_infos()

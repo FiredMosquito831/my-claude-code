@@ -9,7 +9,11 @@ from my_claude_code.core.anthropic import MessagesRequest
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningDialect, ReasoningPolicy
 
-from .model_metadata import ModelReasoningCapability, ProviderModelInfo
+from .model_metadata import (
+    DeclaredModalities,
+    ModelReasoningCapability,
+    ProviderModelInfo,
+)
 
 
 class ProviderPort(Protocol):
@@ -147,6 +151,12 @@ class RequestRuntimePort(Protocol):
     def model_prices_tiered(
         self, provider_id: str, model_id: str
     ) -> dict[str, tuple[float | None, ResolutionTier | None]]: ...
+
+    def model_modalities_lookup(
+        self,
+    ) -> Callable[
+        [str, str], tuple[DeclaredModalities | None, ResolutionTier | None]
+    ]: ...
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]: ...
 

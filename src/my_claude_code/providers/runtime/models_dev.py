@@ -29,6 +29,7 @@ import httpx
 from loguru import logger
 
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelReasoningCapability,
     ProviderModelInfo,
 )
@@ -1925,6 +1926,38 @@ OUTPUT_MODALITIES_FIELD: _LadderField[tuple[str, ...]] = _LadderField(
     minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
 )
 
+
+def _models_dev_input_modalities(
+    metadata: Mapping[str, Any],
+) -> tuple[str, ...] | None:
+    """models.dev's ``modalities.input`` for one row, sorted, or None.
+
+    The twin of :func:`_models_dev_output_modalities`, and as silent: a row
+    without the list has not said "text only".
+    """
+
+    modalities = metadata.get("modalities")
+    if not isinstance(modalities, Mapping):
+        return None
+    inputs = modalities.get("input")
+    if not isinstance(inputs, list):
+        return None
+    named = sorted({item for item in inputs if isinstance(item, str) and item})
+    return tuple(named) or None
+
+
+#: 7.78.2: what a model is catalogued as accepting, read beside
+#: :data:`OUTPUT_MODALITIES_FIELD` so a model's *kind* (chat, image, speech,
+#: transcription, video) is decided from both halves of the same declaration:
+#: a transcription model is the one that hears audio and writes text. Same
+#: rungs, same quorum, same lean to the richer list.
+INPUT_MODALITIES_FIELD: _LadderField[tuple[str, ...]] = _LadderField(
+    name="input_modalities",
+    reader=_models_dev_input_modalities,
+    tie_break=len,
+    minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+)
+
 #: The five price rates, in the catalogue's own vocabulary. models.dev
 #: publishes all five under ``cost``; ``ProviderModelInfo`` carries only the
 #: first two, so the cache and reasoning rates have no provider rung and
@@ -2055,7 +2088,17 @@ def prewarm_models_dev_indexes(path: Path | None = None) -> bool:
     _cached_reasoning_index(path)
     _cached_cross_provider_index(path)
     _cached_output_limit_index(path)
-    for field in (CONTEXT_LENGTH_FIELD, VISION_FIELD, TOOL_CALL_FIELD, *PRICE_FIELDS):
+    # 7.78.2: the two modality fields too -- every chat listing now reads them
+    # for every discovered model to tell a chat model from a media one, and
+    # the first ``/v1/models`` after a start must not build them on the loop.
+    for field in (
+        CONTEXT_LENGTH_FIELD,
+        VISION_FIELD,
+        TOOL_CALL_FIELD,
+        *PRICE_FIELDS,
+        OUTPUT_MODALITIES_FIELD,
+        INPUT_MODALITIES_FIELD,
+    ):
         _cached_field_index(field, path)
         _cached_field_cross_index(field, path)
     return True
@@ -2162,10 +2205,34 @@ def _model_field_tiered[T: Hashable](
     """
 
     cache_path = path if path is not None else models_dev_cache_path()
+    return _model_field_tiered_at(
+        field, provider_id, model_id, path, cache_path, _cache_mtime(cache_path)
+    )
+
+
+def _cache_mtime(cache_path: Path) -> float | None:
     try:
-        mtime = cache_path.stat().st_mtime
+        return cache_path.stat().st_mtime
     except OSError:
-        mtime = None
+        return None
+
+
+def _model_field_tiered_at[T: Hashable](
+    field: _LadderField[T],
+    provider_id: str,
+    model_id: str,
+    path: Path | None,
+    cache_path: Path,
+    mtime: float | None,
+) -> tuple[T | None, ResolutionTier | None]:
+    """:func:`_model_field_tiered` once the file's revision is known.
+
+    Split out (7.78.2) so a caller asking about every model of a listing can
+    stat the file once instead of once per model and field: on a 1,337-model
+    catalogue the per-lookup ``stat`` was 0.15 s of a 0.3 s ``/v1/models``.
+    Same memo key, same ladder, same answer.
+    """
+
     key = (
         (cache_path, mtime, field.name, provider_id, model_id)
         if mtime is not None
@@ -2252,6 +2319,66 @@ def model_output_modalities_tiered(
     """
 
     return _model_field_tiered(OUTPUT_MODALITIES_FIELD, provider_id, model_id, path)
+
+
+def model_input_modalities_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[tuple[str, ...] | None, ResolutionTier | None]:
+    """models.dev's input modalities for one model, plus its rung (7.78.2)."""
+
+    return _model_field_tiered(INPUT_MODALITIES_FIELD, provider_id, model_id, path)
+
+
+def declared_modalities_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[DeclaredModalities | None, ResolutionTier | None]:
+    """Both halves of what models.dev catalogues a model as, or nothing (7.78.2).
+
+    ``None`` unless BOTH lists were stated: a model's kind is read from what
+    it accepts and what it produces together, and half a declaration is not
+    one. The rung is the looser of the two, so an approximate half is never
+    reported as authoritative.
+    """
+
+    return declared_modalities_lookup(path)(provider_id, model_id)
+
+
+def declared_modalities_lookup(
+    path: Path | None = None,
+) -> Callable[[str, str], tuple[DeclaredModalities | None, ResolutionTier | None]]:
+    """:func:`declared_modalities_tiered` bound to the file as it is now.
+
+    For a caller about to ask about every model of a listing: the file is
+    located and stat'ed once here, and each question after that is a memo
+    hit on the same key :func:`_model_field_tiered` uses. A listing built
+    across a models.dev refresh answers from the revision it started on.
+    """
+
+    cache_path = path if path is not None else models_dev_cache_path()
+    mtime = _cache_mtime(cache_path)
+
+    def lookup(
+        provider_id: str, model_id: str
+    ) -> tuple[DeclaredModalities | None, ResolutionTier | None]:
+        outputs, output_tier = _model_field_tiered_at(
+            OUTPUT_MODALITIES_FIELD, provider_id, model_id, path, cache_path, mtime
+        )
+        inputs, input_tier = _model_field_tiered_at(
+            INPUT_MODALITIES_FIELD, provider_id, model_id, path, cache_path, mtime
+        )
+        if (
+            outputs is None
+            or inputs is None
+            or output_tier is None
+            or input_tier is None
+        ):
+            return None, None
+        return (
+            DeclaredModalities(inputs=inputs, outputs=outputs),
+            max(output_tier, input_tier),
+        )
+
+    return lookup
 
 
 def model_prices_tiered(

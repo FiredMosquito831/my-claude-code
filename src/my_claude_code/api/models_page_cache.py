@@ -56,6 +56,7 @@ def capability_half_key(
     configured: Sequence[ConfiguredChatModelRef],
     visibility: ModelVisibility,
     overrides: ModelParameterOverrides,
+    media_placements: Mapping[str, frozenset[str]] | None = None,
 ) -> str:
     """A digest of everything the cached half is built from.
 
@@ -97,6 +98,13 @@ def capability_half_key(
     digest.update(
         json.dumps(overrides.as_document(), sort_keys=True, default=str).encode("utf-8")
     )
+    # Each row's kind can come from where the operator put it on a media rail
+    # (7.78.2), so moving a model between rails is a different payload.
+    digest.update(b"\x00media-placements\x00")
+    for ref in sorted(media_placements or {}):
+        rails = ",".join(sorted((media_placements or {})[ref]))
+        digest.update(f"{ref}|{rails}".encode())
+        digest.update(b"\x00")
     return f"models-page-{digest.hexdigest()[:32]}"
 
 
@@ -108,6 +116,7 @@ def build_capability_half(
     *,
     dialect_lookup: Any,
     measured_days: int,
+    media_placements: Mapping[str, frozenset[str]] | None = None,
 ) -> dict[str, Any]:
     """The Models page with the four moving parts deliberately left out."""
 
@@ -122,6 +131,7 @@ def build_capability_half(
         learned=None,
         catalogue_refresh=None,
         image_estimates=None,
+        media_placements=media_placements,
     )
 
 

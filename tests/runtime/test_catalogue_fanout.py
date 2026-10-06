@@ -2,6 +2,7 @@
 
 import json
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelReasoningCapability,
     ProviderModelInfo,
 )
@@ -98,6 +100,11 @@ class FakeRuntime(RequestRuntimePort):
                 "cache_write_price",
             )
         }
+
+    def model_modalities_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[DeclaredModalities | None, ResolutionTier | None]]:
+        return lambda _provider_id, _model_id: (None, None)
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos

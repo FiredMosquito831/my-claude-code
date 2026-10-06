@@ -44,8 +44,29 @@ The proxy token is the same one every other client uses (`Authorization: Bearer`
 - An empty rail answers `404` with an OpenAI error naming `MODEL_IMAGE`. A media request is
   never sent to a chat model.
 
-A media rail is **not a chat tier**: nothing on it appears in `/v1/models` or in any coding
-agent's model list, and `/v1/messages` cannot reach it.
+A media rail is **not a chat tier**: `/v1/messages` cannot reach it, and a model saved on a
+media rail (and on no chat rail) is not offered as a chat model.
+
+### Which lists offer a model (7.78.2)
+
+Every model has a **kind**: chat, or the media rail it belongs on (Image, Speech,
+Transcription, Video). The kind comes from declared data only, never from a model's name:
+
+1. what models.dev catalogues it as accepting and producing (its `modalities`) -- a model that
+   reads and writes text is chat, one that writes an image is Image, writes audio is Speech,
+   hears audio and writes text is Transcription, writes video is Video; a model can be several;
+2. otherwise, the media rail you saved it on, when it is on no chat rail.
+
+A model whose kind is stated and is not chat is left out of `/v1/models`, `/v1beta/models`,
+every coding agent's generated catalogue and every chat picker on Model Config. Each media rail's
+picker offers only models of its own kind. A model **nobody has described** stays everywhere it
+was: listed for chat, and selectable on every media rail under **Kind not known** -- unknown is
+not unsupported. Nothing you saved changes: a model of another kind already on a rail stays
+there, marked in its picker and on the Models page, and routes exactly as before. This is a
+listing change only; no request is routed or sent differently.
+
+The **Models** page shows a chip on every row whose kind is not chat, and one filter chip per
+kind (plus *Kind not known*) with its count.
 
 ## Which providers can serve it
 
