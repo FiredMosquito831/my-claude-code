@@ -199,7 +199,7 @@ class MediaCapture:
 
     @property
     def proxy_label(self) -> str | None:
-        """The egress address the last dial of this request went out through."""
+        """The exit the attempt in flight last dialled; ``None`` if it dialled none."""
         return self._proxy.label
 
     def set_plan(self, plan: MediaPlan) -> None:
@@ -211,6 +211,14 @@ class MediaCapture:
 
     def on_attempt(self, attempt: MediaAttempt, index: int) -> None:
         """The model the chain is about to try; the last one names the row."""
+        if index != self._route_index:
+            # A new attempt has dialled nothing yet, so it must not carry the
+            # exit an earlier attempt's chain dialled -- the same rule, for
+            # the same last-write-wins slot, as ``RequestCapture.set_routing``.
+            # A chain records its own exit before every dial; a provider with
+            # none is left at ``None``, exactly as a first attempt on it is.
+            # Re-announcing the attempt in flight clears nothing.
+            self._proxy.label = None
         self._routed = attempt
         self._route_index = index
 
