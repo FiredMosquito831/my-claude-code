@@ -17444,6 +17444,9 @@ const reqState = {
   providerOptions: new Set(),
   modelOptions: new Set(),
   keyOptions: new Set(),
+  // `{text, label}`: the mask the Key box's text was last resolved to, so a
+  // key renamed while it is the active filter keeps being the active filter.
+  keyFilterPick: null,
   harnessOptions: new Set(),
   // id -> display name, as the stats payload reports it. The registry lives
   // on the server; the page only ever renders the names it was handed.
@@ -17490,7 +17493,7 @@ function reqFilters() {
   const params = new URLSearchParams();
   const provider = byId("reqFilterProvider").value.trim();
   const model = byId("reqFilterModel").value.trim();
-  const key = byId("reqFilterKey").value.trim();
+  const key = keyFilterLabel(byId("reqFilterKey").value);
   const harness = byId("reqFilterHarness").value.trim();
   const session = byId("reqFilterSession").value.trim();
   const folder = byId("reqFilterFolder").value.trim();
@@ -17903,6 +17906,90 @@ async function loadRequestDeferredStats(loadId, params) {
   }
 }
 
+/* The Key filter names keys the way the table, the modal and the breakdown
+   already do (7.78.1): a named key is offered as its name, an unnamed key as
+   its mask, exactly as before. The name stays display only. The store matches
+   the mask a row was written with (`key_label = ?`), so the box's text is
+   turned back into that mask before any query, export or saved view sees it
+   -- which is also why a key named or renamed after its rows were written
+   still finds every one of them. */
+
+/** The keys the Key filter offers, as `{label, text}` with every `text` unique.
+ *
+ * `text` is `keyReferenceText`, the one name-or-mask rule. A name that would
+ * read the same as another choice -- two keys given one name, or a name that
+ * is some key's mask -- reads "name (mask)" instead, the Key breakdown's own
+ * wording. The bare mask is the last resort: no two labels here are equal. */
+function keyFilterChoices(labels) {
+  const masks = Array.from(new Set(Array.from(labels || []).filter(Boolean).map(String)));
+  const uses = new Map();
+  const use = (text) => uses.set(text, (uses.get(text) || 0) + 1);
+  masks.forEach((label) => {
+    use(label);
+    const text = keyReferenceText(label);
+    if (text !== label) use(text);
+  });
+  const choices = masks.map((label) => {
+    const text = keyReferenceText(label);
+    return { label, text: text !== label && uses.get(text) > 1 ? keyBreakdownLabel(label) : text };
+  });
+  const shown = new Map();
+  choices.forEach(({ text }) => shown.set(text, (shown.get(text) || 0) + 1));
+  return choices.map((choice) =>
+    shown.get(choice.text) > 1 && choice.text !== choice.label
+      ? { label: choice.label, text: choice.label }
+      : choice,
+  );
+}
+
+/** The mask the Key box stands for: a choice's text maps to its key's mask,
+ *  anything else (a typed mask, a half-typed name) is sent as typed.
+ *
+ * The answer is remembered against the text, because each load replaces the
+ * name index: once the key is renamed, its old name is no longer any choice's
+ * text, and the filter on screen must not turn into a search for it. */
+function keyFilterLabel(text) {
+  const typed = String(text || "").trim();
+  const pick = reqState.keyFilterPick;
+  if (pick && pick.text === typed) return pick.label;
+  const choice = typed
+    ? keyFilterChoices(reqState.keyOptions).find((entry) => entry.text === typed)
+    : null;
+  reqState.keyFilterPick = choice ? { text: typed, label: choice.label } : null;
+  return choice ? choice.label : typed;
+}
+
+/** Offer every known key by name, and show the active one the same way. */
+function paintKeyFilter() {
+  const choices = keyFilterChoices(reqState.keyOptions);
+  byId("reqKeyOptions").replaceChildren(
+    ...choices
+      .map(({ text }) => text)
+      .sort((left, right) => left.localeCompare(right))
+      .map((text) => {
+        const option = document.createElement("option");
+        option.value = text;
+        return option;
+      }),
+  );
+  const box = byId("reqFilterKey");
+  const label = keyFilterLabel(box.value);
+  // A mask restored from a saved view (or typed in full), or a name that has
+  // since changed, reads as the key's current text -- never under the
+  // reader's cursor. The query does not move: it is the same mask.
+  const current = label ? choices.find((choice) => choice.label === label) : null;
+  if (current && current.text !== box.value.trim() && document.activeElement !== box) {
+    box.value = current.text;
+    reqState.keyFilterPick = { text: current.text, label };
+  }
+  // The mask moves to the tooltip, as it does on every other key surface.
+  if (label && label !== box.value.trim()) {
+    box.title = label;
+  } else {
+    box.removeAttribute("title");
+  }
+}
+
 function populateRequestFilterOptions(stats) {
   // `label` shows the reader the words the table uses while `value` stays the
   // key the filter actually matches on. Synthetic keys ("local:<rule>") are
@@ -17930,7 +18017,8 @@ function populateRequestFilterOptions(stats) {
     providerDisplayLabel,
   );
   populate("reqModelOptions", stats.by_model || [], reqState.modelOptions);
-  populate("reqKeyOptions", stats.by_key || [], reqState.keyOptions);
+  (stats.by_key || []).forEach((row) => reqState.keyOptions.add(row.key));
+  paintKeyFilter();
   populate(
     "reqHarnessOptions",
     stats.by_harness || [],
@@ -19983,7 +20071,9 @@ function persistDashboardState() {
       reqFilters: {
         provider: byId("reqFilterProvider")?.value?.trim() || undefined,
         model: byId("reqFilterModel")?.value?.trim() || undefined,
-        key: byId("reqFilterKey")?.value?.trim() || undefined,
+        // The mask, not the name in the box: a saved view must still find
+        // the same rows after the key is renamed.
+        key: keyFilterLabel(byId("reqFilterKey")?.value) || undefined,
         harness: byId("reqFilterHarness")?.value?.trim() || undefined,
         session: byId("reqFilterSession")?.value?.trim() || undefined,
         folder: byId("reqFilterFolder")?.value?.trim() || undefined,

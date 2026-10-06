@@ -10290,6 +10290,143 @@ const originFilters = {};
   originFilters.disabledRows = doc.querySelectorAll("#reqFolderBreakdown tr").length;
 }
 
+// ------------------------------------------- Key filter by name (7.78.1)
+/* The Key box offered every key by its mask even when the key had a name. The
+   choice list now goes through the one name-or-mask rule; what leaves the page
+   must still be the mask, because that is all a stored row carries. */
+const keyFilter = {};
+{
+  const A = "nvap…1111"; // named "Work laptop"
+  const B = "nvap…2222"; // never named
+  const C = "nvap…3333"; // named "Team old", renamed "Team shared"
+  const D = "nvap…4444"; // named "Team shared"
+  const choices = (labels, names) => {
+    window.eval(`adoptKeyNames(${JSON.stringify(names)})`);
+    return window.eval(`keyFilterChoices(${JSON.stringify(labels)})`);
+  };
+  keyFilter.unit = {
+    plain: choices([A, B, C], { [A]: "Work laptop", [C]: "Team old" }),
+    sharedName: choices([A, B, C, D], { [A]: "Work laptop", [C]: "Team shared", [D]: "Team shared" }),
+    nameIsAMask: choices([A, B], { [A]: B }),
+    nameIsItsOwnMask: choices([A], { [A]: A }),
+    nameLooksDisambiguated: choices([A, C, D], {
+      [A]: `Team shared (${C})`,
+      [C]: "Team shared",
+      [D]: "Team shared",
+    }),
+    noNames: choices([A, B, "unknown"], {}),
+    duplicatesAndBlanks: choices([A, A, "", null, B], {}),
+  };
+  window.eval("adoptKeyNames({})");
+
+  /* The real control, through the page's own load path. */
+  const since = (prefix) => fetchUrls.filter((url) => url.startsWith(prefix));
+  const listCalls = () => since("/admin/api/requests?");
+  const keyOf = (url) => (url ? new URLSearchParams(url.split("?")[1]).get("key") : null);
+  const persisted = () =>
+    JSON.parse(window.localStorage.getItem("mcc-dashboard-state") || "{}").reqFilters || {};
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const click = (el) => el.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  const box = doc.getElementById("reqFilterKey");
+  const options = () =>
+    Array.from(doc.getElementById("reqKeyOptions").querySelectorAll("option")).map((option) => [
+      option.value,
+      option.getAttribute("label"),
+    ]);
+  const pick = async (text) => {
+    fetchUrls.length = 0;
+    box.value = text;
+    box.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(700);
+    return {
+      box: box.value,
+      title: box.getAttribute("title"),
+      key: keyOf(listCalls()[listCalls().length - 1]),
+      persisted: persisted().key || null,
+    };
+  };
+  const saved = {
+    stats: ROUTES["/admin/api/requests/stats"],
+    list: ROUTES["/admin/api/requests"],
+  };
+  const withNames = (names) => {
+    ROUTES["/admin/api/requests/stats"] = {
+      ...saved.stats,
+      by_key: [A, B, C, D].map((key, index) => ({ key, requests: 9 - index, errors: 0 })),
+      key_names: names,
+    };
+    ROUTES["/admin/api/requests"] = { ...saved.list, key_names: names };
+  };
+  const named = { [A]: "Work laptop", [C]: "Team old", [D]: "Team shared" };
+  withNames(named);
+  click(doc.getElementById("reqClearFilters"));
+  await wait(700);
+  keyFilter.options = options();
+  keyFilter.unfilteredKey = keyOf(listCalls()[listCalls().length - 1]);
+  // Each choice, picked as the list picks it: the value lands in the box.
+  keyFilter.picked = {
+    named: await pick("Work laptop"),
+    unnamed: await pick(B),
+    renamedBefore: await pick("Team old"),
+  };
+  // Renamed while it is the active filter: the next full load hands the page
+  // the new name. The box follows it; the query never moves off the mask.
+  withNames({ ...named, [C]: "Team shared" });
+  fetchUrls.length = 0;
+  window.eval("applyReqFilters()");
+  await wait(700);
+  keyFilter.renamedWhileActive = {
+    box: box.value,
+    title: box.getAttribute("title"),
+    key: keyOf(listCalls()[listCalls().length - 1]),
+    options: options(),
+  };
+  keyFilter.picked.renamedAfter = await pick(`Team shared (${C})`);
+  keyFilter.picked.sharedOther = await pick(`Team shared (${D})`);
+  // A mask typed in full still works, and reads as the name once loaded.
+  keyFilter.typedMask = await pick(A);
+  box.blur();
+  window.eval("applyReqFilters()");
+  await wait(700);
+  keyFilter.typedMaskAfterLoad = { box: box.value, title: box.getAttribute("title") };
+  // A half-typed name is sent as typed, exactly as any unknown text was.
+  keyFilter.halfTyped = await pick("Work");
+  // A saved view holds the mask; restoring it shows the name after a load.
+  window.eval(`restoreReqFilters(${JSON.stringify({ key: A })})`);
+  keyFilter.restoredRaw = box.value;
+  fetchUrls.length = 0;
+  window.eval("applyReqFilters()");
+  await wait(700);
+  keyFilter.restored = {
+    box: box.value,
+    key: keyOf(listCalls()[listCalls().length - 1]),
+  };
+  // The export carries the mask too.
+  fetchUrls.length = 0;
+  window.eval('openExportModal("requests")');
+  try {
+    await window.eval("runExport()");
+  } catch {
+    /* expected under the stub */
+  }
+  window.eval("closeExportModal()");
+  await wait(100);
+  keyFilter.exportKey = keyOf(since("/admin/api/export")[0]);
+  // Clear empties the box and the query.
+  fetchUrls.length = 0;
+  click(doc.getElementById("reqClearFilters"));
+  await wait(700);
+  keyFilter.cleared = {
+    box: box.value,
+    title: box.getAttribute("title"),
+    key: keyOf(listCalls()[listCalls().length - 1]),
+    persisted: persisted().key || null,
+  };
+  ROUTES["/admin/api/requests/stats"] = saved.stats;
+  ROUTES["/admin/api/requests"] = saved.list;
+  window.eval("adoptKeyNames({})");
+}
+
 // ------------------------------------------------------- in flight (7.45.0)
 /* The panel through every state it can be in: empty, five rows, the
    two-snapshot labels, stuck, a row finishing, 120 rows paged, the live
@@ -10998,6 +11135,7 @@ console.log(
       toolCatalogue,
       requestOrigin,
       originFilters,
+      keyFilter,
       credHints,
       inflight,
       cancelledViews,

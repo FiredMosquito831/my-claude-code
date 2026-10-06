@@ -5421,6 +5421,124 @@ def test_the_display_join_shows_a_name_instead_of_a_mask(rendered) -> None:
     assert names["afterClear"] == "sk-t\u20262222"
 
 
+# ------------------------------------------------- Key filter by name (7.78.1)
+# The user (2026-10-06): searching requests by key showed the masked key even
+# for keys they had named -- "for unnamed keys keep their key and for named
+# ones show the name". The rows were already named; the Key box was not. What
+# leaves the page must stay the mask: a row stores `key_label`, never a name,
+# and the store matches it with `key_label = ?`.
+
+KF_A = "nvap\u20261111"  # "Work laptop"
+KF_B = "nvap\u20262222"  # unnamed
+KF_C = "nvap\u20263333"  # "Team old", renamed "Team shared"
+KF_D = "nvap\u20264444"  # "Team shared"
+
+
+def _texts(choices: list[dict]) -> dict[str, str]:
+    return {choice["label"]: choice["text"] for choice in choices}
+
+
+def test_the_key_choice_list_names_named_keys_and_keeps_masks(rendered) -> None:
+    unit = rendered["keyFilter"]["unit"]
+
+    assert _texts(unit["plain"]) == {
+        KF_A: "Work laptop",
+        KF_B: KF_B,
+        KF_C: "Team old",
+    }
+    # No names at all: every choice is exactly the mask it always was.
+    assert _texts(unit["noNames"]) == {KF_A: KF_A, KF_B: KF_B, "unknown": "unknown"}
+    assert [choice["label"] for choice in unit["duplicatesAndBlanks"]] == [KF_A, KF_B]
+
+
+def test_keys_that_would_read_the_same_stay_distinguishable(rendered) -> None:
+    unit = rendered["keyFilter"]["unit"]
+
+    # Two keys given one name read as the Key breakdown reads them.
+    assert _texts(unit["sharedName"]) == {
+        KF_A: "Work laptop",
+        KF_B: KF_B,
+        KF_C: f"Team shared ({KF_C})",
+        KF_D: f"Team shared ({KF_D})",
+    }
+    # A name that is another key's mask cannot take that mask's place.
+    assert _texts(unit["nameIsAMask"]) == {KF_A: f"{KF_B} ({KF_A})", KF_B: KF_B}
+    assert _texts(unit["nameIsItsOwnMask"]) == {KF_A: KF_A}
+    # Even a name spelled like a disambiguated choice leaves every text unique.
+    for case in unit.values():
+        texts = [choice["text"] for choice in case]
+        assert len(texts) == len(set(texts)), case
+    assert _texts(unit["nameLooksDisambiguated"]) == {
+        KF_A: KF_A,
+        KF_C: KF_C,
+        KF_D: f"Team shared ({KF_D})",
+    }
+
+
+def test_the_key_box_offers_names_and_queries_the_mask(rendered) -> None:
+    kf = rendered["keyFilter"]
+
+    # The rendered list: names for named keys, the mask for the unnamed one,
+    # and no mask riding along as a label.
+    assert sorted(kf["options"]) == sorted(
+        [[KF_B, None], ["Team old", None], ["Team shared", None], ["Work laptop", None]]
+    )
+    assert kf["unfilteredKey"] is None
+    picked = kf["picked"]
+    # Equality with before: the base offered the mask itself as the value, so
+    # it sent `key=<mask>`. Each pick now sends that same mask -- the same
+    # query, so the same rows.
+    assert picked["named"] == {
+        "box": "Work laptop",
+        "title": KF_A,
+        "key": KF_A,
+        "persisted": KF_A,
+    }
+    assert picked["unnamed"] == {
+        "box": KF_B,
+        "title": None,
+        "key": KF_B,
+        "persisted": KF_B,
+    }
+    assert picked["renamedBefore"]["key"] == KF_C
+    assert picked["renamedBefore"]["box"] == "Team old"
+
+
+def test_a_key_renamed_while_it_is_the_filter_stays_the_filter(rendered) -> None:
+    kf = rendered["keyFilter"]
+
+    after = kf["renamedWhileActive"]
+    assert after["key"] == KF_C
+    assert after["box"] == f"Team shared ({KF_C})"
+    assert after["title"] == KF_C
+    assert sorted(after["options"]) == sorted(
+        [
+            [KF_B, None],
+            [f"Team shared ({KF_C})", None],
+            [f"Team shared ({KF_D})", None],
+            ["Work laptop", None],
+        ]
+    )
+    # Two keys that share a name are separately selectable.
+    assert kf["picked"]["renamedAfter"]["key"] == KF_C
+    assert kf["picked"]["sharedOther"]["key"] == KF_D
+
+
+def test_typed_saved_and_exported_key_filters_still_mean_the_mask(rendered) -> None:
+    kf = rendered["keyFilter"]
+
+    # A full mask typed by hand queries it, then reads as the key's name.
+    assert kf["typedMask"]["key"] == KF_A
+    assert kf["typedMaskAfterLoad"] == {"box": "Work laptop", "title": KF_A}
+    # Unknown text goes out as typed, exactly as before.
+    assert kf["halfTyped"]["key"] == "Work"
+    # A saved view (always a mask) is restored, queried and then named.
+    assert kf["restoredRaw"] == KF_A
+    assert kf["restored"] == {"box": "Work laptop", "key": KF_A}
+    assert kf["exportKey"] == KF_A
+    assert kf["cleared"] == {"box": "", "title": None, "key": None, "persisted": None}
+
+
 # --------------------------------------------------------- advanced fields
 # 7.29.1. A user could not find RATE_LIMIT_COOLDOWN_MODE or
 # RATE_LIMIT_COOLDOWN_MAX_SECONDS on Limits & Resilience. Both existed; both
