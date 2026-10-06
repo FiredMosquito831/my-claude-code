@@ -40,6 +40,20 @@ class TestSettings:
         monkeypatch.delenv("MODEL", raising=False)
         monkeypatch.delenv("HTTP_READ_TIMEOUT", raising=False)
         monkeypatch.delenv("HTTP_CONNECT_TIMEOUT", raising=False)
+        # Every other value asserted below is read from the environment too;
+        # a shell that exports one (``MCC_OPEN_BROWSER=0`` is common in the
+        # isolated shells that run this suite) must not decide a default.
+        for name in (
+            "REASONING_POLICY",
+            "ENABLE_WEB_SERVER_TOOLS",
+            "LOG_RAW_API_PAYLOADS",
+            "LOG_RAW_SSE_EVENTS",
+            "DEBUG_PLATFORM_EDITS",
+            "DEBUG_SUBAGENT_STACK",
+            "LOG_LEVEL",
+            "MCC_OPEN_BROWSER",
+        ):
+            monkeypatch.delenv(name, raising=False)
         monkeypatch.setitem(Settings.model_config, "env_file", ())
         settings = Settings()
         assert settings.model == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"

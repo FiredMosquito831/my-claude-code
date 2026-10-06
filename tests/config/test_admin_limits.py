@@ -312,8 +312,14 @@ DEFAULTS_OWNED_BY_THE_SHIPPED_TEMPLATE: tuple[str, ...] = ()
         if key not in DEFAULTS_OWNED_BY_THE_SHIPPED_TEMPLATE
     ),
 )
-def test_each_limit_default_matches_the_setting_default(key: str) -> None:
+def test_each_limit_default_matches_the_setting_default(
+    key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A form that shows a different default than the code uses is a lie."""
+    # The key is the environment variable ``Settings`` reads, and an exported
+    # one outranks the default this compares against -- the isolated shells
+    # that run this suite export ``SERVER_PORT_TAKEOVER=never``.
+    monkeypatch.delenv(key, raising=False)
     field = FIELD_BY_KEY[key]
     attr = field.settings_attr
     assert attr is not None

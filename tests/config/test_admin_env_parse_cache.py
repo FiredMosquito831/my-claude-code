@@ -228,6 +228,10 @@ def test_a_commit_is_visible_to_the_very_next_read(
     config_dir = tmp_path / ".mcc"
     config_dir.mkdir()
     monkeypatch.setenv("MCC_CONFIG_DIR", str(config_dir))
+    # A key set in the process environment is a locked "process" source that
+    # a save must not overwrite, so an exported ``PORT`` -- the isolated shells
+    # that run this suite export one -- would keep 8123 on disk by design.
+    monkeypatch.delenv("PORT", raising=False)
     managed = config_dir / ".env"
     _write(managed, "PORT=8123\n")
     assert sources.dotenv_values_from_file(managed)["PORT"] == "8123"
