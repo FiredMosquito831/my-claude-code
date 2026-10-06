@@ -5356,6 +5356,53 @@ def test_a_capability_note_is_rendered_once(rendered) -> None:
     assert sum(1 for text in row["notes"] if text.startswith("guessed from")) == 1
 
 
+# ------------------------------------------------------- provider card faces
+# 7.78.0: a keyless OpenCode Zen serves its free models on the anonymous
+# credential, and a fresh install routes four Claude tiers there, so its card
+# says so instead of "Missing key" in amber.
+
+
+def test_a_keyless_zen_card_says_free_models_are_ready(rendered) -> None:
+    face = rendered["providerFaces"]["freeReady"]
+
+    assert face["pill"] == "Free models ready"
+    assert face["pillClass"] == "status-pill ok"
+    assert face["meta"] == (
+        "Configured by default: free models work with no key. A key is needed "
+        "only for paid models and for OpenCode Go."
+    )
+    # A sentence, so it is set as prose rather than as a variable name.
+    assert face["metaClass"] == "provider-meta provider-meta-prose"
+    assert face["configured"] == "true"
+
+
+def test_the_opt_out_and_a_key_keep_their_old_card_faces(rendered) -> None:
+    faces = rendered["providerFaces"]
+
+    assert faces["optedOut"] == {
+        "pill": "Missing key",
+        "pillClass": "status-pill warn",
+        "meta": "OPENCODE_API_KEY",
+        "metaClass": "provider-meta",
+        "configured": "false",
+    }
+    assert faces["keyed"] == {
+        "pill": "Configured",
+        "pillClass": "status-pill ok",
+        "meta": "1 key",
+        "metaClass": "provider-meta",
+        "configured": "true",
+    }
+
+
+def test_only_configured_keeps_a_free_ready_card(rendered) -> None:
+    faces = rendered["providerFaces"]
+
+    assert faces["onlyConfigured"] == ["Free models ready", "Configured"]
+    assert faces["onlyConfiguredCount"] == "2 of 3"
+    assert faces["allCount"] == "3 providers · 2 configured"
+
+
 def test_the_display_join_shows_a_name_instead_of_a_mask(rendered) -> None:
     """One resolver feeds the log row, the modal, the ladder and the breakdown."""
 

@@ -208,6 +208,14 @@ class ProviderDescriptor:
     # tool owns. The card still offers the field so a value can be pasted, but
     # an empty one is not a configuration error.
     credential_discoverable: bool = False
+    # The setting that says which credential this provider's FREE models are
+    # fetched with, for a host whose free models need no key of the operator's
+    # (OpenCode Zen's anonymous ``public`` slot, 7.34.0). While that setting is
+    # not the opt-out, a card with no key reads "Free models ready" instead of
+    # "Missing key" (7.78.0). Declared data, so the Providers card, the Model
+    # Config hints and anything else that reads the status payload share one
+    # rule instead of each matching a provider id.
+    free_tier_credential_attr: str | None = None
     default_base_url: str | None = None
     base_url_attr: str | None = None
     proxy_attr: str | None = None
@@ -436,6 +444,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_env="OPENCODE_API_KEY",
         credential_url="https://opencode.ai/auth",
         credential_attr="opencode_api_key",
+        free_tier_credential_attr="opencode_free_tier_credential",
         default_base_url=OPENCODE_DEFAULT_BASE,
         proxy_attr="opencode_proxy",
         group="gateway",

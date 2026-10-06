@@ -316,7 +316,11 @@ function sourceText(field) {
 }
 
 function statusClass(status) {
-  if (["configured", "reachable", "running"].includes(status)) return "ok";
+  // `free_ready` (7.78.0): a keyless provider whose free models are served on
+  // the host's own anonymous credential. Working, so not a warning colour.
+  if (["configured", "free_ready", "reachable", "running"].includes(status)) {
+    return "ok";
+  }
   if (["missing_key", "missing_url", "unknown"].includes(status)) return "warn";
   if (["offline", "error"].includes(status)) return "error";
   return "neutral";
@@ -8592,7 +8596,12 @@ function renderProviderCard(provider, fields) {
   const card = document.createElement("article");
   card.className = "provider-card pv-card";
   card.dataset.provider = provider.provider_id;
-  card.dataset.pvConfigured = provider.status === "configured" ? "true" : "false";
+  // A provider that serves free models with no key is configured by default
+  // (7.78.0), so "Only configured" keeps it and the count includes it.
+  card.dataset.pvConfigured =
+    provider.status === "configured" || provider.status === "free_ready"
+      ? "true"
+      : "false";
   card.dataset.pvSearch = [
     provider.display_name,
     provider.provider_id,
@@ -8618,6 +8627,10 @@ function renderProviderCard(provider, fields) {
   const meta = document.createElement("div");
   meta.className = "provider-meta";
   meta.textContent = providerSummaryText(provider);
+  // The server's own sentence is prose, not a variable name (7.78.0).
+  if (Number(provider.key_count || 0) === 0 && provider.summary) {
+    meta.classList.add("provider-meta-prose");
+  }
   card.appendChild(meta);
 
   const actions = document.createElement("div");
@@ -8737,7 +8750,9 @@ function providerSummaryText(provider) {
     return provider.base_url || "No local URL configured";
   }
   const count = Number(provider.key_count || 0);
-  if (count === 0) return provider.credential_env || "No key yet";
+  // `summary` is the server's own sentence for a state a variable name cannot
+  // describe -- today only "free models work with no key" (7.78.0).
+  if (count === 0) return provider.summary || provider.credential_env || "No key yet";
   const keys = count === 1 ? "1 key" : `${count} keys`;
   const rotation = count > 1 ? providerRotationLabel(provider) : "";
   return rotation ? `${keys} \u00b7 ${rotation}` : keys;

@@ -510,6 +510,15 @@ textarea:focus-visible,
   overflow-wrap: anywhere;
 }
 
+/* A sentence the server wrote for the card (7.78.0: "free models work with no
+   key") is prose, not a variable name: body face, wrapped at words. */
+.pv-card .provider-meta.provider-meta-prose {
+  font-family: inherit;
+  font-size: 12.5px;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
 .pv-actions {
   display: flex;
   align-items: center;

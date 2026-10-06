@@ -1228,3 +1228,34 @@ OPENCODE_FREE_TIER_MODELS_DEFAULT = "big-pickle"
 # affected: `public` cannot buy them, and the operator's key is what makes
 # them reachable at all.
 OPENCODE_FREE_TIER_CREDENTIAL_DEFAULT = "public"
+
+# The one value of `OPENCODE_FREE_TIER_CREDENTIAL` that turns the anonymous
+# slot off. Anything else reads as `public`
+# (`config.settings.configured_opencode_free_tier_credential`), so this is the
+# only spelling the Providers card has to recognise to know that a keyless
+# OpenCode Zen cannot serve anything at all.
+OPENCODE_FREE_TIER_CREDENTIAL_OPT_OUT = "key"
+
+# What a FRESH install's Mythos, Fable, Opus and Sonnet routes point at (7.78.0).
+#
+# OpenCode Zen's free Muse Spark model. It answers on OpenCode's own anonymous
+# credential with no key at all (7.34.0), so a new install can serve Claude
+# Code's big tiers before the operator has added a single provider key.
+# Spelled the way models.dev's registry and the free-tier catalogue spell it.
+# The vendor rotates its free roster without notice; a withdrawn free model
+# answers 401 "not supported", which is not a key problem.
+#
+# Written ONLY by a first start, into the `.env` it creates
+# (`config.env_template.render_default_env`). It is deliberately NOT the
+# `Settings` default of those four fields. A `.env` is written once and never
+# back-filled, so an install first started before 7.2.0 has no `MODEL_MYTHOS`
+# line at all (and one from before Fable has no `MODEL_FABLE` line): a changed
+# code default would silently repoint every such install. Blank and absent both
+# keep meaning "follow MODEL". `MODEL_HAIKU` and `MODEL` are not on this list.
+FRESH_INSTALL_ROUTE_MODEL = "opencode/muse-spark-1.3-contributor-free"
+FRESH_INSTALL_ROUTE_KEYS = (
+    "MODEL_MYTHOS",
+    "MODEL_FABLE",
+    "MODEL_OPUS",
+    "MODEL_SONNET",
+)

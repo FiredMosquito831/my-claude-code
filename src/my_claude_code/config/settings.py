@@ -733,11 +733,18 @@ class Settings(BaseSettings):
 
     # Per-model overrides (optional, falls back to MODEL)
     # Each can use a different provider
-    # The Mythos route (alias ``mcc/cyber``). Unset by default like every other
-    # per-route override: MCC has no evidence about what a Mythos route should
-    # point at -- across 380k+ logged requests in two databases not one names a
-    # mythos model -- and inventing one would be MCC choosing a model for the
-    # operator. Unset, it collapses onto MODEL exactly as the other four do.
+    # The Mythos route is alias ``mcc/cyber``.
+    #
+    # The CODE default of all five stays unset, and that is load-bearing: an
+    # unset (blank OR absent) override collapses onto MODEL. Since 7.78.0 a
+    # FRESH install's first start writes OpenCode Zen's free model
+    # (``constants.FRESH_INSTALL_ROUTE_MODEL``, no key needed) into the
+    # Mythos, Fable, Opus and Sonnet lines of the ``.env`` it creates -- the
+    # user's decision of 2026-10-06. It is written there and not defaulted
+    # here because a ``.env`` is never back-filled: an install first started
+    # before 7.2.0 has no ``MODEL_MYTHOS`` line at all, and a default here
+    # would silently repoint its Mythos route. Haiku was not named and keeps
+    # following MODEL on a fresh install too.
     model_mythos: str | None = Field(default=None, validation_alias="MODEL_MYTHOS")
     model_fable: str | None = Field(default=None, validation_alias="MODEL_FABLE")
     model_opus: str | None = Field(default=None, validation_alias="MODEL_OPUS")

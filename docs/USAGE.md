@@ -41,6 +41,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [OpenCode Zen serves different models on different endpoints](#opencode-zen-serves-different-models-on-different-endpoints)
   - [Custom providers](#custom-providers)
 - [9. Model tiers and routing](#9-model-tiers-and-routing)
+  - [What a fresh install routes to](#what-a-fresh-install-routes-to)
   - [Tiers for every other coding agent](#tiers-for-every-other-coding-agent)
   - [Images, the vision adapter, and outbound image size](#images-and-the-vision-adapter)
   - [Tutorial: describe mode](#tutorial-describe-mode)
@@ -3143,7 +3144,13 @@ your own key's free allowance is not spent on them. Concretely:
   **Models**. **Probe capabilities** picks per model: a free model is probed
   anonymously, a paid one on your key;
 - with **no `OPENCODE_API_KEY` at all**, free Zen models now work. A paid one
-  is refused with the same sentence it was refused with before.
+  is refused with the same sentence it was refused with before. Since 7.78.0
+  the **OpenCode Zen** card says so: *Free models ready* (not *Missing key*),
+  with "Configured by default: free models work with no key. A key is needed
+  only for paid models and for OpenCode Go." With
+  `OPENCODE_FREE_TIER_CREDENTIAL="key"` and no key it says *Missing key*,
+  because then nothing can be served; the **OpenCode Go** card says *Missing
+  key* without a key either way.
 
 **The caveat, stated plainly: `public` is a *shared* bucket.** Anyone can
 exhaust it, and its scope — per address, per device, global — is not known;
@@ -3292,6 +3299,25 @@ MCC routes by **tier**, not by a single model. Fable, Opus, Sonnet, Haiku and a 
 </div>
 
 So when Claude Code requests "Sonnet", it receives whatever you mapped Sonnet to. This is the mechanism that lets an unmodified agent run on any backend.
+
+### What a fresh install routes to
+
+**New in 7.78.0.** The first start of a new install writes its `.env`, and since 7.78.0 that file sends four tiers to OpenCode Zen's free model, which needs no key (free Zen models go out on OpenCode's own anonymous credential, see [The free tier is metered per key](#the-free-tier-is-metered-per-key-so-free-models-use-opencodes-own)):
+
+| Setting | A fresh install | An install from before 7.78.0 |
+| --- | --- | --- |
+| `MODEL_MYTHOS`, `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET` | `opencode/muse-spark-1.3-contributor-free` | unchanged: whatever its `.env` says. A blank or missing line still follows `MODEL` |
+| `MODEL_HAIKU` | blank, so it follows `MODEL` | unchanged |
+| `MODEL` | `nvidia_nim/nvidia/nemotron-3-super-120b-a12b` (needs an NVIDIA NIM key) | unchanged |
+
+So Claude Code's Opus, Sonnet, Fable and Mythos traffic works on a new machine before you add a single key, and the **OpenCode Zen** card on **Providers** says *Free models ready*. Haiku-tier and unmapped traffic still go to `MODEL`, so add a key for it or point `MODEL` and `MODEL_HAIKU` somewhere you can use.
+
+Things to know:
+
+- **An existing install never moves.** The value is written once, by the first start, into the file it creates. It is not a code default: a `.env` is never back-filled, so an install first started before 7.2.0 has no `MODEL_MYTHOS` line at all, and a code default would have repointed it. A dashboard **Save** writes these lines back exactly as they were.
+- **"Use default" on one of these four tiers clears it,** and a cleared tier follows `MODEL` (the field's default reads *none*). Type the Zen model back in to return to it.
+- **A tier with its own model uses only its own fallback chain,** and a fresh install's chains are empty. When the free model is rate-limited (`429 FreeUsageLimitError`, reset around midnight UTC; the anonymous bucket is shared by everyone using it) or withdrawn, those four tiers have nothing to fall back to until you add a chain.
+- **Free models come and go.** OpenCode rotates its free roster without notice; a withdrawn free model answers `401` "not supported", which is not a key problem. Pick another free model on **Model Config** when that happens.
 
 ### Practical advice
 

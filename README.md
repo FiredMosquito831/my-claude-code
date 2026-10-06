@@ -59,7 +59,7 @@ Those download links always resolve to the newest release. Each desktop download
 ### Your first five minutes
 
 1. **Start it and open the dashboard.** `mcc-server`, then <http://127.0.0.1:8082/admin> (the desktop app does both for you).
-2. **Add a provider key.** On the **Providers** page, find your provider, click **Configure**, paste the key, then **Validate** and **Apply**.
+2. **Add a provider key.** On the **Providers** page, find your provider, click **Configure**, paste the key, then **Validate** and **Apply**. **OpenCode Zen needs none for its free models:** since 7.78.0 a fresh install already routes Mythos, Fable, Opus and Sonnet to `opencode/muse-spark-1.3-contributor-free` (free, no key), and the OpenCode Zen card says *Free models ready*. `MODEL` and Haiku still point at NVIDIA NIM, so they need a key or a new model.
 3. **Point the tiers at a model.** On the **Model Config** page set `MODEL` and, if you want per-tier routing, `MODEL_MYTHOS` / `MODEL_FABLE` / `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU`, each with a fallback chain.
 4. **Launch an agent.** `mcc-claude`, `mcc-codex`, `mcc-opencode`, `mcc-gemini` … or press **Configure** on the **Coding agents** page for a desktop app such as Claude Desktop.
 
@@ -116,7 +116,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 
 ## Capabilities
 
-**Start here:** add one provider key on **Providers**, set your tiers on **Model Config**, then run `mcc-claude` (or whichever agent you use). Everything below is optional until you want it.
+**Start here:** add one provider key on **Providers**, set your tiers on **Model Config**, then run `mcc-claude` (or whichever agent you use). A fresh install's Mythos, Fable, Opus and Sonnet tiers already work with no key at all, on OpenCode Zen's free model. Everything below is optional until you want it.
 
 ### Routing
 
@@ -254,7 +254,7 @@ The legacy `fcc-*` names were retired in 7.0.0: `fcc-claude`, `fcc-codex`, `fcc-
 | [DeepSeek](https://platform.deepseek.com/api_keys) | `DEEPSEEK_API_KEY` | `deepseek/deepseek-chat` |
 | [Mistral La Plateforme](https://console.mistral.ai/) | `MISTRAL_API_KEY` | `mistral/devstral-small-latest` |
 | [Mistral Codestral](https://console.mistral.ai/) | `CODESTRAL_API_KEY` | `mistral_codestral/codestral-latest` |
-| [OpenCode Zen](https://opencode.ai/auth) | `OPENCODE_API_KEY` | `opencode/gpt-5.3-codex` |
+| [OpenCode Zen](https://opencode.ai/auth) | `OPENCODE_API_KEY` — optional: free models need no key | `opencode/muse-spark-1.3-contributor-free` |
 | [OpenCode Go](https://opencode.ai/auth) | `OPENCODE_API_KEY` | `opencode_go/minimax-m2.7` |
 | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway/models-and-providers) | `AI_GATEWAY_API_KEY` | `vercel/openai/gpt-5.5` |
 | [Hugging Face Inference Providers](https://huggingface.co/settings/tokens) | `HUGGINGFACE_API_KEY` | `huggingface/Qwen/Qwen3-Coder-480B-A35B-Instruct:fastest` |
@@ -360,11 +360,11 @@ Every setting lives in [.env.example](.env.example) with inline comments and cos
 | `ANTHROPIC_AUTH_TOKEN` | The token clients present to this proxy, generated for this machine on the first start. Required once `HOST` is not loopback. |
 | `HOST` / `PORT` | Where the server listens. Defaults are loopback and `8082`. |
 | `MODEL` | The model used when nothing more specific matches. |
-| `MODEL_MYTHOS` | The model Mythos-tier traffic routes to (alias `mcc/cyber`). |
+| `MODEL_MYTHOS` | The model Mythos-tier traffic routes to (alias `mcc/cyber`). A fresh install (7.78.0+) starts it on `opencode/muse-spark-1.3-contributor-free`, as it does the next three. |
 | `MODEL_FABLE` | The model Fable-tier traffic routes to. |
 | `MODEL_OPUS` | The model Opus-tier traffic routes to. |
 | `MODEL_SONNET` | The model Sonnet-tier traffic routes to. |
-| `MODEL_HAIKU` | The model Haiku-tier traffic routes to. |
+| `MODEL_HAIKU` | The model Haiku-tier traffic routes to. Blank follows `MODEL`, on a fresh install too. |
 | `MCC_CONFIG_DIR` | Pins the configuration directory. Environment-only — it cannot be set from the dashboard. |
 | `REQUEST_LOG_ENABLED` | Turns the persistent request log, and therefore Analytics, on or off. |
 | `REQUEST_LOG_MAX_ROWS` | The retention cap on that log: oldest rows are pruned periodically, so the database does not grow without bound. Once you hit it the log is a rolling window, and **All time** on Analytics means "all time still stored" — counts and token totals stop rising rather than the dashboard being broken. |

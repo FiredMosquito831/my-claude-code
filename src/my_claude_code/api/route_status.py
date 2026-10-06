@@ -35,7 +35,6 @@ from my_claude_code.providers.anthropic_oauth.credentials import (
     load_claude_code_tokens,
 )
 from my_claude_code.providers.chatgpt_oauth.credentials import load_chatgpt_accounts
-from my_claude_code.providers.runtime.opencode_credentials import OPENCODE_PROVIDER_ID
 
 #: The providers whose credential is a sign-in rather than a pasted key, with
 #: the setting that can still carry a raw token and the managed-store sentinel
@@ -152,10 +151,12 @@ def credential_problems(
                 }
                 continue
         # OpenCode Zen with no key still serves its zero-cost models on the
-        # shared public credential, so a missing key there is not "cannot serve".
-        elif (
-            entry.get("status") == "missing_key" and provider_id != OPENCODE_PROVIDER_ID
-        ):
+        # shared public credential. The status payload says so itself
+        # (``free_ready``, 7.78.0), so this reads the same rule the Providers
+        # card does instead of matching Zen's id: a keyless Zen with the
+        # anonymous slot switched off (``OPENCODE_FREE_TIER_CREDENTIAL=key``)
+        # really cannot serve, and is now flagged like any other missing key.
+        elif entry.get("status") == "missing_key":
             problems[provider_id] = {
                 "state": NO_CREDENTIALS,
                 "action": "add_key",

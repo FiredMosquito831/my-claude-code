@@ -333,13 +333,35 @@ def test_a_failing_pool_reader_still_serves_the_payload(
 
 
 def test_opencode_zen_without_a_key_is_not_flagged() -> None:
-    """Zen's zero-cost models answer on the shared public credential."""
+    """Zen's zero-cost models answer on the shared public credential.
+
+    Since 7.78.0 the status payload says so itself (``free_ready``) instead of
+    this module matching Zen's provider id.
+    """
 
     status = [
-        _remote("opencode", status="missing_key"),
+        _remote("opencode", status="free_ready"),
         _remote("opencode_go", status="missing_key"),
     ]
 
     assert list(credential_problems(status, {}, lambda _: None, now=NOW)) == [
         "opencode_go"
     ]
+
+
+def test_opencode_zen_with_the_anonymous_slot_off_and_no_key_is_flagged() -> None:
+    """``OPENCODE_FREE_TIER_CREDENTIAL=key`` and no key: nothing can be served.
+
+    The payload reports ``missing_key`` for exactly that case, and this hint
+    now agrees with the card instead of exempting Zen by name.
+    """
+
+    status = [_remote("opencode", status="missing_key")]
+
+    assert credential_problems(status, {}, lambda _: None, now=NOW) == {
+        "opencode": {
+            "state": "no_credentials",
+            "action": "add_key",
+            "display_name": "OPENCODE",
+        }
+    }
