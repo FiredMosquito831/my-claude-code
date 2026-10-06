@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from my_claude_code.api.model_admin import (
+    declared_modalities_lookup,
     declared_model_kind,
     media_output_modalities,
     model_kind_payload,
@@ -247,6 +248,7 @@ def media_models_payload(
     # uses, so a chat model someone saved on the Image rail is marked here
     # rather than looking like any other image model.
     rail_placements = media_rail_placements(settings)
+    kind_modalities = declared_modalities_lookup()
     kinds: dict[str, ModelKind] = {}
     for rail in MediaRail:
         names = RAIL_SETTINGS[rail]
@@ -277,7 +279,7 @@ def media_models_payload(
             provider_id = parse_provider_type(ref)
             descriptor = descriptors.get(provider_id)
             if ref not in rows:
-                kinds[ref] = declared_model_kind(ref, rail_placements)
+                kinds[ref] = declared_model_kind(ref, rail_placements, kind_modalities)
                 if descriptor is None:
                     provider_state = "unknown"
                 elif provider_id in disabled:

@@ -30,6 +30,7 @@ from my_claude_code.application.model_kinds import (
     KIND_LABELS,
     KIND_SOURCE_LABELS,
     MODEL_KINDS,
+    ModalitiesLookup,
     ModelKind,
     resolve_model_kind,
 )
@@ -79,7 +80,7 @@ from my_claude_code.providers.openai_chat import (
 )
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
-    declared_modalities_tiered,
+    declared_modalities_lookup,
     model_context_length_tiered,
     model_output_limit_tiered,
     model_output_modalities_tiered,
@@ -535,18 +536,25 @@ def media_output_modalities(provider_id: str, model_id: str) -> dict[str, Any]:
 
 
 def declared_model_kind(
-    model_ref: str, placements: Mapping[str, frozenset[str]]
+    model_ref: str,
+    placements: Mapping[str, frozenset[str]],
+    modalities: ModalitiesLookup | None = None,
 ) -> ModelKind:
     """One ref's stated kind, from the same ladder the request runtime reads.
 
-    ``declared_modalities_tiered`` is the function ``ProviderManager`` answers
-    ``model_modalities_tiered`` with, so the Models page and the lists it
+    ``declared_modalities_lookup`` is what ``ProviderManager`` answers
+    ``model_modalities_lookup`` with, so the Models page and the lists it
     describes -- ``/v1/models``, the harness catalogues, the pickers -- cannot
-    disagree about a model's kind.
+    disagree about a model's kind. A caller rendering many rows passes one
+    lookup for all of them.
     """
 
     return resolve_model_kind(
-        model_ref, modalities=declared_modalities_tiered, placements=placements
+        model_ref,
+        modalities=modalities
+        if modalities is not None
+        else declared_modalities_lookup(),
+        placements=placements,
     )
 
 
@@ -1611,6 +1619,7 @@ def _model_entry(
     measured: Mapping[str, Any] | None = None,
     learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     media_placements: Mapping[str, frozenset[str]] | None = None,
+    kind_modalities: ModalitiesLookup | None = None,
 ) -> dict[str, Any]:
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
@@ -1638,7 +1647,7 @@ def _model_entry(
         # What kind of model this is -- chat, or one media rail's -- and who
         # said so (7.78.2). ``kinds: None`` is the "kind not known" group.
         "kind": model_kind_payload(
-            declared_model_kind(model_ref, media_placements or {})
+            declared_model_kind(model_ref, media_placements or {}, kind_modalities)
         ),
         "has_metadata": info is not None,
         # Existence provenance, distinct from the per-field capability tiers
@@ -1732,6 +1741,7 @@ def build_models_page_payload(
         by_ref.setdefault(ref, None)
 
     grouped: dict[str, list[dict[str, Any]]] = {}
+    kind_modalities = declared_modalities_lookup()
     for model_ref in sorted(by_ref, key=str.casefold):
         grouped.setdefault(parse_provider_type(model_ref), []).append(
             _model_entry(
@@ -1744,6 +1754,7 @@ def build_models_page_payload(
                 measured=None if measured is None else measured.get(model_ref),
                 learned=learned,
                 media_placements=media_placements,
+                kind_modalities=kind_modalities,
             )
         )
 

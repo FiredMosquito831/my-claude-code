@@ -1,5 +1,7 @@
 """The neutral catalogue record carries the ladder's answers, unknowns included."""
 
+from collections.abc import Callable
+
 from my_claude_code.api.model_catalog import build_models_list_response
 from my_claude_code.application.catalogue_model import (
     build_catalogue_models,
@@ -102,11 +104,18 @@ class FakeRuntime(RequestRuntimePort):
             )
         }
 
-    def model_modalities_tiered(
-        self, provider_id: str, model_id: str
-    ) -> tuple[DeclaredModalities | None, ResolutionTier | None]:
-        declared = self._modalities.get(f"{provider_id}/{model_id}")
-        return declared, None if declared is None else ResolutionTier.PROVIDER_EXACT
+    def model_modalities_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[DeclaredModalities | None, ResolutionTier | None]]:
+        def lookup(
+            provider_id: str, model_id: str
+        ) -> tuple[DeclaredModalities | None, ResolutionTier | None]:
+            declared = self._modalities.get(f"{provider_id}/{model_id}")
+            if declared is None:
+                return None, None
+            return declared, ResolutionTier.MODELS_DEV_BUCKET_EXACT
+
+        return lookup
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos

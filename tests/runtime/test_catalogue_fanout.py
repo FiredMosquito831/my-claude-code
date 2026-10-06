@@ -2,6 +2,7 @@
 
 import json
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import patch
@@ -100,10 +101,10 @@ class FakeRuntime(RequestRuntimePort):
             )
         }
 
-    def model_modalities_tiered(
-        self, provider_id: str, model_id: str
-    ) -> tuple[DeclaredModalities | None, ResolutionTier | None]:
-        return None, None
+    def model_modalities_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[DeclaredModalities | None, ResolutionTier | None]]:
+        return lambda _provider_id, _model_id: (None, None)
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos

@@ -2659,13 +2659,10 @@ def _model_options(
     # "kind not known" group. Saved media-rail refs are included so a picker
     # can say what the value it is holding is.
     placements = media_rail_placements(settings)
+    modalities = services.requests.model_modalities_lookup()
     kinds: dict[str, list[str]] = {}
     for ref in sorted(configured | discovered | set(placements), key=str.casefold):
-        kind = resolve_model_kind(
-            ref,
-            modalities=services.requests.model_modalities_tiered,
-            placements=placements,
-        )
+        kind = resolve_model_kind(ref, modalities=modalities, placements=placements)
         if kind.kinds is not None:
             kinds[ref] = [name for name in MODEL_KINDS if name in kind.kinds]
     # Only models the provider *says* reject images. An unreported capability

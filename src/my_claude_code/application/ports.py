@@ -152,9 +152,11 @@ class RequestRuntimePort(Protocol):
         self, provider_id: str, model_id: str
     ) -> dict[str, tuple[float | None, ResolutionTier | None]]: ...
 
-    def model_modalities_tiered(
-        self, provider_id: str, model_id: str
-    ) -> tuple[DeclaredModalities | None, ResolutionTier | None]: ...
+    def model_modalities_lookup(
+        self,
+    ) -> Callable[
+        [str, str], tuple[DeclaredModalities | None, ResolutionTier | None]
+    ]: ...
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]: ...
 
