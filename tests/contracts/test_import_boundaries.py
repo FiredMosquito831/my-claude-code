@@ -248,14 +248,6 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "keeps the hint and the executor one answer. Read-only, no network."
     ),
     (
-        "my_claude_code.api.route_status",
-        "my_claude_code.providers.runtime.opencode_credentials",
-    ): (
-        "Owner: Model Config per-rail credential hint. "
-        "Reason: OpenCode Zen serves its free models with no key on the public "
-        "credential; the id that side applies to is owned by that module."
-    ),
-    (
         "my_claude_code.api.admin_routes",
         "my_claude_code.providers.chatgpt_oauth.codex_catalogue",
     ): (

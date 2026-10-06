@@ -9715,6 +9715,62 @@ const capabilityRow = {};
   ).length;
 }
 
+/* The Providers card face for OpenCode Zen in its three states (7.78.0):
+   keyless on the default anonymous slot ("Free models ready", the server's own
+   summary sentence, ok colour, counted as configured), keyless with the slot
+   switched off ("Missing key", warn) and with a key ("Configured"). Drawn by
+   the real renderProviderCard from status payloads shaped like the server's,
+   and filtered by the real applyProviderFilter. */
+const providerFaces = {};
+{
+  const base = {
+    provider_id: "opencode",
+    display_name: "OpenCode Zen",
+    group: "gateway",
+    kind: "remote",
+    credential_env: "OPENCODE_API_KEY",
+    credential_owner_id: "opencode",
+    credential_owner_name: "OpenCode Zen",
+    credential_shared_with: [],
+  };
+  const states = {
+    freeReady: {
+      ...base,
+      status: "free_ready",
+      label: "Free models ready",
+      key_count: 0,
+      summary:
+        "Configured by default: free models work with no key. A key is needed " +
+        "only for paid models and for OpenCode Go.",
+    },
+    optedOut: { ...base, status: "missing_key", label: "Missing key", key_count: 0 },
+    keyed: { ...base, status: "configured", label: "Configured", key_count: 1 },
+  };
+  const wrap = doc.createElement("div");
+  doc.body.appendChild(wrap);
+  for (const [name, provider] of Object.entries(states)) {
+    const card = window.eval("renderProviderCard")(provider, []);
+    wrap.appendChild(card);
+    const pill = card.querySelector(".status-pill");
+    providerFaces[name] = {
+      pill: pill ? pill.textContent : null,
+      pillClass: pill ? pill.className : null,
+      meta: card.querySelector(".provider-meta")?.textContent ?? null,
+      metaClass: card.querySelector(".provider-meta")?.className ?? null,
+      configured: card.dataset.pvConfigured,
+    };
+  }
+  const count = doc.createElement("span");
+  window.eval("applyProviderFilter")(wrap, "", true, count);
+  providerFaces.onlyConfigured = Array.from(wrap.querySelectorAll(".pv-card"))
+    .filter((card) => !card.hidden)
+    .map((card) => card.querySelector(".status-pill")?.textContent);
+  providerFaces.onlyConfiguredCount = count.textContent;
+  window.eval("applyProviderFilter")(wrap, "", false, count);
+  providerFaces.allCount = count.textContent;
+  wrap.remove();
+}
+
 /* The tools array a request carried (7.40.0): the modal shows the catalogue
    hash, the count, and the names behind an expander; choosing a name lists the
    requests that carried it; a request that predates the recording says so; and
@@ -10969,6 +11025,7 @@ console.log(
       keyRail,
       sharedRail,
       capabilityRow,
+      providerFaces,
       keyNames,
       dialectPanels,
       docs,

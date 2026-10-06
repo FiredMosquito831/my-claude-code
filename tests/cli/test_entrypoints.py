@@ -15,7 +15,11 @@ from urllib.request import Request
 
 import pytest
 
-from my_claude_code.config.constants import CATALOGUE_FETCH_TIMEOUT_SECONDS
+from my_claude_code.config.constants import (
+    CATALOGUE_FETCH_TIMEOUT_SECONDS,
+    FRESH_INSTALL_ROUTE_KEYS,
+    FRESH_INSTALL_ROUTE_MODEL,
+)
 from my_claude_code.config.harnesses import harness_spec
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.client_fingerprint import HARNESS_HEADER
@@ -79,12 +83,14 @@ def test_init_creates_env_file(tmp_path: Path) -> None:
 
 
 def test_init_copies_template_content(tmp_path: Path) -> None:
-    """init() writes the canonical template, with one line filled in.
+    """init() writes the canonical template, with five lines filled in.
 
     Since 6.65.0 the shipped ``ANTHROPIC_AUTH_TOKEN=`` line is empty on
     purpose -- a value printed in a public repository is not a secret -- and
     both ``mcc-init`` and a first ``mcc-server`` replace it with a token
-    generated on this machine. Everything else is byte-identical.
+    generated on this machine. Since 7.78.0 the same first write fills the
+    blank Mythos, Fable, Opus and Sonnet routes with OpenCode Zen's free model
+    (``FRESH_INSTALL_ROUTE_MODEL``). Everything else is byte-identical.
     """
     template = (Path(__file__).resolve().parents[2] / ".env.example").read_text(
         encoding="utf-8"
@@ -101,7 +107,12 @@ def test_init_copies_template_content(tmp_path: Path) -> None:
     token = token_lines[0].split("=", 1)[1].strip('"')
     assert len(token) >= 40
     assert token != "freecc"
-    assert written.replace(token_lines[0], "ANTHROPIC_AUTH_TOKEN=") == template
+    unfilled = written.replace(token_lines[0], "ANTHROPIC_AUTH_TOKEN=")
+    for key in FRESH_INSTALL_ROUTE_KEYS:
+        filled = f'{key}="{FRESH_INSTALL_ROUTE_MODEL}"\n'
+        assert unfilled.count(filled) == 1, key
+        unfilled = unfilled.replace(filled, f"{key}=\n")
+    assert unfilled == template
 
 
 def test_init_migrates_home_checkout_env_before_template(tmp_path: Path) -> None:

@@ -3,15 +3,60 @@
 from collections.abc import Mapping
 from typing import Any
 
+from my_claude_code.config.constants import OPENCODE_FREE_TIER_CREDENTIAL_OPT_OUT
 from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.config.provider_catalog import (
     CUSTOM_PROVIDER_GROUP,
     PROVIDER_CATALOG,
+    ProviderDescriptor,
 )
 from my_claude_code.config.provider_registry import get_provider_registry
 
 from .manifest import FIELDS
 from .provider_manifest import credential_env_owner
+
+#: A keyless provider whose free models are served on the host's own anonymous
+#: credential (OpenCode Zen's ``public``, 7.34.0). Not ``configured`` -- there
+#: is no key of the operator's and a paid model is still refused -- and not
+#: ``missing_key``: until 7.78.0 the card said "Missing key" in amber on a
+#: provider that was answering requests, which is what a fresh install routes
+#: four Claude tiers to.
+FREE_TIER_READY_STATUS = "free_ready"
+FREE_TIER_READY_LABEL = "Free models ready"
+
+
+def _free_tier_ready(
+    descriptor: ProviderDescriptor, state: Mapping[str, Mapping[str, Any]]
+) -> bool:
+    """Whether this keyless provider still serves its free models.
+
+    The same reading the runtime makes (``public_credential_enabled``): only
+    the explicit opt-out turns the anonymous slot off, and a blank or unknown
+    value reads as the default.
+    """
+
+    attr = descriptor.free_tier_credential_attr
+    if attr is None:
+        return False
+    mode = _value_for_settings_attr(state, attr).strip().lower()
+    return mode != OPENCODE_FREE_TIER_CREDENTIAL_OPT_OUT
+
+
+def _free_tier_summary(credential_env: str | None, provider_id: str) -> str:
+    """The card's one-line explanation of a free-ready provider."""
+
+    sharers = (
+        [
+            other["display_name"]
+            for other in _credential_sharers(credential_env, provider_id)
+        ]
+        if credential_env
+        else []
+    )
+    paid = "A key is needed only for paid models"
+    if sharers:
+        paid += " and for " + ", ".join(sharers)
+    return f"Configured by default: free models work with no key. {paid}."
 
 
 def _credential_sharers(credential_env: str, provider_id: str) -> list[dict[str, str]]:
@@ -68,29 +113,39 @@ def provider_config_status(
         # otherwise its card offers no way to add a key and looks broken.
         owner_id = credential_env_owner(credential_env) if credential_env else None
         owner = PROVIDER_CATALOG.get(owner_id) if owner_id else None
-        statuses.append(
-            {
-                "provider_id": provider_id,
-                "display_name": descriptor.display_name,
-                "group": descriptor.group,
-                "kind": "remote",
-                "status": "configured" if configured else "missing_key",
-                "label": "Configured" if configured else "Missing key",
-                "credential_env": credential_env,
-                "credential_owner_id": owner_id,
-                "credential_owner_name": owner.display_name if owner else None,
-                "credential_shared_with": (
-                    _credential_sharers(credential_env, provider_id)
-                    if credential_env
-                    else []
-                ),
-                # How many keys are in the pool. Secret values are masked to a
-                # constant before they reach the client, so the Admin UI cannot
-                # derive this itself, and fetching it per provider would mean
-                # one request per provider on every page load.
-                "key_count": len(parse_credential_keys(value)),
-            }
-        )
+        if configured:
+            status, label = "configured", "Configured"
+        elif _free_tier_ready(descriptor, state):
+            status, label = FREE_TIER_READY_STATUS, FREE_TIER_READY_LABEL
+        else:
+            status, label = "missing_key", "Missing key"
+        remote: dict[str, Any] = {
+            "provider_id": provider_id,
+            "display_name": descriptor.display_name,
+            "group": descriptor.group,
+            "kind": "remote",
+            "status": status,
+            "label": label,
+            "credential_env": credential_env,
+            "credential_owner_id": owner_id,
+            "credential_owner_name": owner.display_name if owner else None,
+            "credential_shared_with": (
+                _credential_sharers(credential_env, provider_id)
+                if credential_env
+                else []
+            ),
+            # How many keys are in the pool. Secret values are masked to a
+            # constant before they reach the client, so the Admin UI cannot
+            # derive this itself, and fetching it per provider would mean
+            # one request per provider on every page load.
+            "key_count": len(parse_credential_keys(value)),
+        }
+        if status == FREE_TIER_READY_STATUS:
+            # Only on this state, so every other card's payload is unchanged.
+            # The card face shows it where a keyless card shows the variable
+            # name, so "no key" and "ready" are said in one place.
+            remote["summary"] = _free_tier_summary(credential_env, provider_id)
+        statuses.append(remote)
     for entry in get_provider_registry().list_custom():
         if not entry.enabled:
             status, label = "disabled", "Disabled"

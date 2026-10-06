@@ -282,7 +282,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Model serving requests Claude Code routes to Mythos. Leave it None and the "
             "Mythos tier uses the Default Model and the Default Fallback Chain; set it "
             "and this tier uses only its own model and its own chain -- the two are never "
-            "merged."
+            "merged. A fresh install (7.78.0+) starts this tier on "
+            "opencode/muse-spark-1.3-contributor-free, OpenCode Zen's free model, "
+            "which needs no key; an install from before keeps what its settings "
+            "file says, and a blank line still means the Default Model."
         ),
     ),
     ConfigFieldSpec(
@@ -326,7 +329,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Model serving requests Claude Code routes to Fable. Leave it None and the "
             "Fable tier uses the Default Model and the Default Fallback Chain; set it and "
             "this tier uses only its own model and its own chain -- the two are never "
-            "merged."
+            "merged. A fresh install (7.78.0+) starts this tier on "
+            "opencode/muse-spark-1.3-contributor-free, OpenCode Zen's free model, "
+            "which needs no key; an install from before keeps what its settings "
+            "file says, and a blank line still means the Default Model."
         ),
     ),
     ConfigFieldSpec(
@@ -370,7 +376,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Model serving requests Claude Code routes to Opus. Leave it None and the "
             "Opus tier uses the Default Model and the Default Fallback Chain; set it and "
             "this tier uses only its own model and its own chain -- the two are never "
-            "merged."
+            "merged. A fresh install (7.78.0+) starts this tier on "
+            "opencode/muse-spark-1.3-contributor-free, OpenCode Zen's free model, "
+            "which needs no key; an install from before keeps what its settings "
+            "file says, and a blank line still means the Default Model."
         ),
     ),
     ConfigFieldSpec(
@@ -414,7 +423,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Model serving requests Claude Code routes to Sonnet. Leave it None and the "
             "Sonnet tier uses the Default Model and the Default Fallback Chain; set it "
             "and this tier uses only its own model and its own chain -- the two are never "
-            "merged."
+            "merged. A fresh install (7.78.0+) starts this tier on "
+            "opencode/muse-spark-1.3-contributor-free, OpenCode Zen's free model, "
+            "which needs no key; an install from before keeps what its settings "
+            "file says, and a blank line still means the Default Model."
         ),
     ),
     ConfigFieldSpec(
