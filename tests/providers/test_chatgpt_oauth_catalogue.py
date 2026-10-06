@@ -552,13 +552,16 @@ def test_a_model_the_vendor_retired_with_no_observation_is_not_listed(monkeypatc
 
 
 def test_the_seed_ids_are_never_vetoed_by_this(monkeypatch):
-    """The five seed ids are outside both fixes.
+    """The six seed ids are outside both fixes.
 
-    They are the ids Codex CLI 0.155.1 lists, in its own order; ``gpt-5.2``
-    left the seed when Codex stopped listing it.
+    Five are the ids Codex CLI 0.155.1 lists, in its own order; ``gpt-5.2``
+    left the seed when Codex stopped listing it. ``gpt-6.1-sol`` is the one the
+    user added on 2026-10-07 ahead of any installed Codex
+    (``SEED_IDS_NEWER_THAN_INSTALLED_CODEX`` below).
     """
     assert CHATGPT_OAUTH_SEED_MODELS == (
         "gpt-6-astra",
+        "gpt-6.1-sol",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -712,22 +715,50 @@ def test_an_unreadable_credential_reports_an_unknown_plan(tmp_path):
 # ----------------------------------------------------------- the drift guard
 
 
+#: Seed ids the user put in the seed BEFORE an installed Codex lists them, and
+#: the only seed ids the drift guard below lets the installed Codex not publish.
+#: ``gpt-6.1-sol``: the user's decision of 2026-10-07 ("add sol 6.1 to the
+#: catalogue"); Codex CLI 0.155.1 does not list it, models.dev's ``openai``
+#: bucket publishes it as "GPT-6.1 Sol" (released 2026-09-29). REMOVE the entry
+#: once an installed Codex lists it -- the guard fails until you do, so the
+#: exemption cannot outlive its reason.
+SEED_IDS_NEWER_THAN_INSTALLED_CODEX: frozenset[str] = frozenset({"gpt-6.1-sol"})
+
+
 def test_every_seed_id_is_still_in_the_installed_codex_catalogue():
-    """The seed list is five literals, so drift must be a failing build.
+    """The seed list is six literals, so drift must be a failing build.
 
     Skipped where Codex is not installed, which is every CI runner: the point
     is that a developer who *does* have Codex cannot let the seed rot the way
-    the allowlist it replaced did.
+    the allowlist it replaced did. The one exemption is the documented
+    allow-set above, and it is checked in both directions: any OTHER seed id
+    the installed Codex does not publish fails, and so does an allow-set entry
+    the installed Codex has since started to list (it is then no longer newer
+    than Codex, so the exemption must go).
     """
     codex_catalogue.clear_codex_catalogue_cache()
     catalogue = load_codex_catalogue()
     if catalogue is None:
         pytest.skip("Codex CLI is not installed on this machine")
     slugs = {entry.slug for entry in catalogue.entries}
-    missing = sorted(set(CHATGPT_OAUTH_SEED_MODELS) - slugs)
+    not_seeded = sorted(
+        SEED_IDS_NEWER_THAN_INSTALLED_CODEX - set(CHATGPT_OAUTH_SEED_MODELS)
+    )
+    assert not not_seeded, (
+        f"SEED_IDS_NEWER_THAN_INSTALLED_CODEX names {not_seeded}, which the "
+        "seed does not hold. Remove them."
+    )
+    missing = sorted(
+        set(CHATGPT_OAUTH_SEED_MODELS) - slugs - SEED_IDS_NEWER_THAN_INSTALLED_CODEX
+    )
     assert not missing, (
         f"Codex {catalogue.version} no longer publishes {missing}. "
         "Update CHATGPT_OAUTH_SEED_MODELS to the ids it lists."
+    )
+    caught_up = sorted(SEED_IDS_NEWER_THAN_INSTALLED_CODEX & slugs)
+    assert not caught_up, (
+        f"Codex {catalogue.version} now publishes {caught_up}. Remove them from "
+        "SEED_IDS_NEWER_THAN_INSTALLED_CODEX."
     )
 
 

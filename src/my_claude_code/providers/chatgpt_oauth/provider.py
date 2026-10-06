@@ -194,14 +194,18 @@ class ToolNameLengthRecovery:
 
 
 #: Last resort, and nothing else: the five ids Codex CLI 0.155.1 publishes with
-#: ``visibility: "list"``, in its own order. It exists so a brand-new offline
-#: install with no Codex and no request log still draws a picker, and it is
-#: labelled ``seed`` on the Models page precisely because nobody stands behind
-#: it. No filter is applied to it -- the list that preceded it held fifteen ids
-#: of which the filter reading it deleted eight, so more than half of it was
+#: ``visibility: "list"``, in its own order, plus ``gpt-6.1-sol``, which the
+#: user added on 2026-10-07 ahead of any installed Codex (models.dev's
+#: ``openai`` bucket publishes it as "GPT-6.1 Sol", released 2026-09-29;
+#: Codex 0.155.1 does not list it). It exists so a brand-new offline install
+#: with no Codex and no request log still draws a picker, and it is labelled
+#: ``seed`` on the Models page precisely because nobody stands behind it. No
+#: filter is applied to it -- the list that preceded it held fifteen ids of
+#: which the filter reading it deleted eight, so more than half of it was
 #: unreachable.
 CHATGPT_OAUTH_SEED_MODELS: tuple[str, ...] = (
     "gpt-6-astra",
+    "gpt-6.1-sol",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
