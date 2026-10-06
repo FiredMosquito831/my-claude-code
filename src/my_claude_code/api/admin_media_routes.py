@@ -31,7 +31,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from my_claude_code.api.model_admin import media_output_modalities
+from my_claude_code.api.model_admin import (
+    declared_model_kind,
+    media_output_modalities,
+    model_kind_payload,
+)
 from my_claude_code.application.media.executor import media_route_health_registry
 from my_claude_code.application.media.rails import rail_refs
 from my_claude_code.application.media.request import (
@@ -40,6 +44,7 @@ from my_claude_code.application.media.request import (
     RAIL_SETTINGS,
     MediaRail,
 )
+from my_claude_code.application.model_kinds import ModelKind, media_rail_placements
 from my_claude_code.application.route_health import RouteHealthRegistry
 from my_claude_code.config.admin.status import provider_config_status
 from my_claude_code.config.media_surfaces import (
@@ -238,6 +243,11 @@ def media_models_payload(
     rails: list[dict[str, Any]] = []
     rows: dict[str, dict[str, Any]] = {}
     placements: dict[str, list[dict[str, Any]]] = {}
+    # Each row's stated kind (7.78.2), from the same answer every model list
+    # uses, so a chat model someone saved on the Image rail is marked here
+    # rather than looking like any other image model.
+    rail_placements = media_rail_placements(settings)
+    kinds: dict[str, ModelKind] = {}
     for rail in MediaRail:
         names = RAIL_SETTINGS[rail]
         primary = str(getattr(settings, names.model_attr, "") or "").strip()
@@ -267,6 +277,7 @@ def media_models_payload(
             provider_id = parse_provider_type(ref)
             descriptor = descriptors.get(provider_id)
             if ref not in rows:
+                kinds[ref] = declared_model_kind(ref, rail_placements)
                 if descriptor is None:
                     provider_state = "unknown"
                 elif provider_id in disabled:
@@ -287,6 +298,7 @@ def media_models_payload(
                     "placements": placements[ref],
                     "declared": _declared(descriptor),
                     "modalities": media_output_modalities(provider_id, model_id),
+                    "kind": model_kind_payload(kinds[ref]),
                     "health": bench.health[ref],
                     "key": _key_state(keys.get(provider_id)),
                 }
@@ -298,6 +310,9 @@ def media_models_payload(
                     "index": index,
                     "paused": ref in paused,
                     "served": _serves(descriptor, rail),
+                    # ``None`` when the kind is not known: a mismatch is only
+                    # ever claimed against a stated kind.
+                    "kind_matches": kinds[ref].states(rail.value),
                 }
             )
 

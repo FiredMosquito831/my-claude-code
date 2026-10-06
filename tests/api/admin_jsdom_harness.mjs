@@ -559,6 +559,28 @@ const modelsFor = (providerId, hiddenTail) =>
     // What dictates the row's state, which the row reports permanently.
     hidden_by: hiddenTail && index % 5 === 0 ? "*:free" : "",
     configured: providerId === "alpha" && index === 0,
+    // 7.78.2: what kind each row is stated to be. Two image rows and one chat
+    // row in "alpha"; every other row has no stated kind.
+    kind:
+      providerId === "alpha" && (index === 2 || index === 3)
+        ? {
+            kinds: ["image"],
+            labels: ["Image"],
+            source: "models_dev",
+            source_label: "models.dev modalities",
+            tier: "models.dev bucket, exact id",
+            approximate: false,
+          }
+        : providerId === "alpha" && index === 4
+          ? {
+              kinds: ["chat"],
+              labels: ["Chat"],
+              source: "models_dev",
+              source_label: "models.dev modalities",
+              tier: null,
+              approximate: false,
+            }
+          : { kinds: null, labels: [], source: null, source_label: null, tier: null, approximate: false },
     has_metadata: true,
     override: index === 1 ? { temperature: 0.1 } : {},
     effective:
@@ -695,6 +717,7 @@ const MODEL_ADMIN_PAGE = {
   source_labels: {},
   fact_labels: {},
   learned_source_labels: {},
+  kind_labels: { chat: "Chat", image: "Image", tts: "Speech", asr: "Transcription", video: "Video" },
   catalogue_refresh: {
     enabled: true,
     interval_seconds: 3600,
@@ -6547,6 +6570,8 @@ if (modelsLink) {
   const firstToggle = tree.querySelector(".models-provider-toggle");
   await click(firstToggle);
   models.rowsAfterOpen = rows().length;
+  // 7.78.2: a row whose stated kind is not chat says so.
+  models.kindChips = Array.from(tree.querySelectorAll(".models-chip-kind")).map(flat);
   models.moreLabel = flat(tree.querySelector(".models-more"));
   models.selectBoxes = boxes().length;
   models.visibilityReadouts = tree.querySelectorAll(".models-visible-state").length;
@@ -10427,6 +10452,106 @@ const keyFilter = {};
   window.eval("adoptKeyNames({})");
 }
 
+// ------------------------------------------- Pickers by model kind (7.78.2)
+/* Every model picker offers only its own kind: chat routes chat models, a
+   media rail its own. A model nobody has stated a kind for stays inline on a
+   chat route and under "Kind not known" on a media rail, and a saved value of
+   another kind heads its own picker, marked -- never dropped. Driven through
+   the page's own buildFieldControl, so the real ModelCombobox renders. The
+   page's `state` is not reachable from here (indirect eval), so the options
+   are set and reset through setModelOptions / setModelKinds. */
+const modelKinds = {};
+{
+  window.eval(
+    `setModelOptions(${JSON.stringify([
+      "p/chat-a",
+      "p/chat-b",
+      "p/draw",
+      "p/chat-and-draw",
+      "p/speak",
+      "p/hear",
+      "p/film",
+      "p/quiet",
+    ])})`,
+  );
+  window.eval(
+    `setModelKinds(${JSON.stringify({
+      "p/chat-a": ["chat"],
+      "p/chat-b": ["chat", "asr"],
+      "p/draw": ["image"],
+      "p/chat-and-draw": ["chat", "image"],
+      "p/speak": ["tts"],
+      "p/hear": ["asr"],
+      "p/film": ["video"],
+    })}, ${JSON.stringify({
+      chat: "Chat",
+      image: "Image",
+      tts: "Speech",
+      asr: "Transcription",
+      video: "Video",
+    })})`,
+  );
+  const optionsOf = (listbox) =>
+    Array.from(listbox.querySelectorAll('[role="option"]')).map((option) => option.dataset.value);
+  const picker = (key, type, value) => {
+    const field = {
+      key,
+      type,
+      label: key,
+      value: value || "",
+      default: "",
+      secret: false,
+      configured: false,
+      locked: false,
+    };
+    // Never attached to the document: a detached control cannot be collected
+    // as an edited setting by changedValues().
+    const built = window.eval(`buildFieldControl(${JSON.stringify(field)})`);
+    const input = built.input;
+    input.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    const listbox = built.control.querySelector('[role="listbox"]');
+    const groups = Array.from(listbox.children).map((child) =>
+      child.getAttribute("role") === "group"
+        ? { label: child.getAttribute("aria-label"), options: optionsOf(child) }
+        : { label: null, options: [child.dataset.value] },
+    );
+    const badges = Array.from(listbox.querySelectorAll(".model-combobox-kind")).map(
+      (badge) => badge.textContent,
+    );
+    const ids = Array.from(listbox.querySelectorAll('[role="option"]')).map(
+      (option) => option.id,
+    );
+    input.value = "dra";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    const filtered = optionsOf(listbox);
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    return { groups, badges, uniqueIds: new Set(ids).size === ids.length, filtered };
+  };
+  const tierKey = (harness) =>
+    window.eval(`harnessTierKey(${JSON.stringify(harness)}, "best", "MODEL")`);
+  modelKinds.pickerKind = {
+    opus: window.eval('modelPickerKind("MODEL_OPUS")'),
+    vision: window.eval('modelPickerKind("MODEL_VISION_FALLBACKS__chain_2")'),
+    image: window.eval('modelPickerKind("MODEL_IMAGE")'),
+    imageChainRow: window.eval('modelPickerKind("MODEL_IMAGE_FALLBACKS__chain_7")'),
+    tts: window.eval('modelPickerKind("MODEL_TTS")'),
+    asrChain: window.eval('modelPickerKind("MODEL_ASR_FALLBACKS")'),
+    video: window.eval('modelPickerKind("MODEL_VIDEO")'),
+    agentTier: window.eval(`modelPickerKind(${JSON.stringify(tierKey("codex"))})`),
+  };
+  modelKinds.chat = picker("MODEL_OPUS", "model", "p/chat-a");
+  modelKinds.chatOptional = picker("MODEL_MYTHOS", "optional_model", "");
+  modelKinds.image = picker("MODEL_IMAGE", "model", "p/draw");
+  modelKinds.imageHoldingChat = picker("MODEL_IMAGE_FALLBACKS__chain_1", "model", "p/chat-a");
+  modelKinds.chatHoldingFilm = picker("MODEL_HAIKU", "model", "p/film");
+  modelKinds.transcription = picker("MODEL_ASR", "model", "");
+  modelKinds.agentTier = picker(tierKey("codex"), "optional_model", "p/speak");
+
+  // Back to what the page's own load path gives it.
+  window.eval("setModelOptions([])");
+  window.eval("setModelKinds({}, {})");
+}
+
 // ------------------------------------------------------- in flight (7.45.0)
 /* The panel through every state it can be in: empty, five rows, the
    two-snapshot labels, stuck, a row finishing, 120 rows paged, the live
@@ -11136,6 +11261,7 @@ console.log(
       requestOrigin,
       originFilters,
       keyFilter,
+      modelKinds,
       credHints,
       inflight,
       cancelledViews,

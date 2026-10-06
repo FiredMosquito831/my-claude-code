@@ -61,6 +61,11 @@ const state = {
   fields: new Map(),
   localStatus: new Map(),
   modelOptions: [],
+  // 7.78.2: ref -> the kinds it is stated to be ("chat", "image", "tts",
+  // "asr", "video"), from /admin/api/models. A ref with no entry is of
+  // unknown kind, which is never the same as "not chat".
+  modelKinds: new Map(),
+  modelKindLabels: {},
   // Models the provider itself says reject images. Empty is honest:
   // an unreported capability is not a refusal.
   blindModels: new Set(),
@@ -9848,6 +9853,9 @@ class ModelCombobox {
   constructor(input, field) {
     this.input = input;
     this.fieldType = field.type;
+    // Which kind of model this picker offers is decided by the setting it
+    // edits (modelPickerKind), so it is read from the key at render time.
+    this.fieldKey = field.key;
     this.activeIndex = -1;
     this.query = "";
 
@@ -9909,10 +9917,57 @@ class ModelCombobox {
     return this.element.classList.contains("open");
   }
 
-  get values() {
-    return this.fieldType === "optional_model"
-      ? ["None", ...state.modelOptions]
-      : state.modelOptions;
+  /** What this picker offers, grouped (7.78.2).
+   *
+   * Its own kind first; on a media rail, the models nobody has stated a kind
+   * for under "Kind not known" (unknown is not unsupported, so they stay
+   * selectable). A value this route already holds whose stated kind is
+   * another rail's is never dropped from its own picker: it heads the list,
+   * marked. Each section is filtered by the typed query. */
+  sections(query) {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const matches = (value) =>
+      !normalizedQuery || value.toLocaleLowerCase().includes(normalizedQuery);
+    const kind = modelPickerKind(this.fieldKey);
+    const own = [];
+    const unknown = [];
+    state.modelOptions.forEach((value) => {
+      const kinds = modelKindsOf(value);
+      if (kinds === null) {
+        if (kind === "chat") own.push(value);
+        else unknown.push(value);
+      } else if (kinds.includes(kind)) {
+        own.push(value);
+      }
+    });
+    const saved = this.input.value.trim();
+    const savedKinds =
+      saved && saved.toLowerCase() !== "none" ? modelKindsOf(saved) : null;
+    const crossKind =
+      savedKinds !== null && !savedKinds.includes(kind) ? saved : null;
+    const sections = [];
+    if (this.fieldType === "optional_model") {
+      sections.push({ label: null, values: ["None"], kinds: null });
+    }
+    if (crossKind) {
+      sections.push({
+        label: "Saved on this route, stated as another kind",
+        values: [crossKind],
+        kinds: savedKinds,
+      });
+    }
+    const grouped = Boolean(crossKind) || (kind !== "chat" && unknown.length > 0);
+    sections.push({
+      label: grouped ? `${modelKindLabel(kind)} models` : null,
+      values: own,
+      kinds: null,
+    });
+    if (kind !== "chat") {
+      sections.push({ label: "Kind not known", values: unknown, kinds: null });
+    }
+    return sections
+      .map((section) => ({ ...section, values: section.values.filter(matches) }))
+      .filter((section) => section.values.length > 0);
   }
 
   get visibleOptions() {
@@ -9946,15 +10001,10 @@ class ModelCombobox {
 
   render(query) {
     this.query = query;
-    const normalizedQuery = query.trim().toLocaleLowerCase();
-    const values = normalizedQuery
-      ? this.values.filter((value) =>
-          value.toLocaleLowerCase().includes(normalizedQuery),
-        )
-      : this.values;
+    const sections = this.sections(query);
     this.listbox.innerHTML = "";
 
-    if (values.length === 0) {
+    if (sections.length === 0) {
       const empty = document.createElement("div");
       empty.className = "model-combobox-empty";
       empty.textContent = state.modelOptions.length
@@ -9966,14 +10016,43 @@ class ModelCombobox {
       return;
     }
 
-    values.forEach((value, index) => {
-      const optionEl = document.createElement("div");
-      optionEl.className = "model-combobox-option";
-      optionEl.id = `${this.listbox.id}-option-${index}`;
-      optionEl.dataset.value = value;
-      optionEl.setAttribute("role", "option");
-      optionEl.textContent = value;
-      this.listbox.appendChild(optionEl);
+    const values = [];
+    sections.forEach((section) => {
+      let parent = this.listbox;
+      if (section.label) {
+        const group = document.createElement("div");
+        group.className = "model-combobox-group";
+        group.setAttribute("role", "group");
+        group.setAttribute("aria-label", section.label);
+        const heading = document.createElement("div");
+        heading.className = "model-combobox-group-label";
+        heading.setAttribute("aria-hidden", "true");
+        heading.textContent = section.label;
+        group.appendChild(heading);
+        this.listbox.appendChild(group);
+        parent = group;
+      }
+      section.values.forEach((value) => {
+        const optionEl = document.createElement("div");
+        optionEl.className = "model-combobox-option";
+        optionEl.id = `${this.listbox.id}-option-${values.length}`;
+        optionEl.dataset.value = value;
+        optionEl.setAttribute("role", "option");
+        optionEl.textContent = value;
+        if (section.kinds) {
+          const stated = section.kinds.map(modelKindLabel).join(" + ") || "none";
+          const badge = document.createElement("span");
+          badge.className = "model-combobox-kind";
+          badge.textContent = stated;
+          optionEl.appendChild(badge);
+          optionEl.title =
+            `Stated kind: ${stated}. This route keeps it and keeps routing to it ` +
+            `exactly as saved; the list below offers ` +
+            `${modelKindLabel(modelPickerKind(this.fieldKey))} models.`;
+        }
+        parent.appendChild(optionEl);
+        values.push(value);
+      });
     });
     const selectedIndex = values.indexOf(this.input.value);
     this.setActive(selectedIndex >= 0 ? selectedIndex : 0, false);
@@ -10558,6 +10637,7 @@ async function loadModelOptions(refresh = false) {
   });
   setModelOptions(result.models);
   setBlindModels(result.blind_models);
+  setModelKinds(result.kinds, result.kind_labels);
   return result;
 }
 
@@ -11684,6 +11764,48 @@ function setModelOptions(models) {
   state.modelComboboxes.forEach((combobox) => {
     if (combobox.isOpen) combobox.render(combobox.query);
   });
+}
+
+/* 7.78.2: what kind of model each ref is stated to be -- by its models.dev
+   modalities, or else by the media rail the operator saved it on; never by
+   its name. Each picker offers only its own kind: a chat route chat models,
+   the Image rail image models, and so on. A ref with no entry is of unknown
+   kind and stays where it always was -- inline in a chat picker, and under
+   its own "Kind not known" group in a media one. Hide-only: nothing here
+   changes a saved value or where a request goes. */
+function setModelKinds(kinds, labels) {
+  const entries =
+    kinds && typeof kinds === "object" ? Object.entries(kinds) : [];
+  state.modelKinds = new Map(
+    entries.filter(([ref, list]) => ref && Array.isArray(list)),
+  );
+  state.modelKindLabels = labels && typeof labels === "object" ? labels : {};
+  state.modelComboboxes.forEach((combobox) => {
+    if (combobox.isOpen) combobox.render(combobox.query);
+  });
+}
+
+/** The kinds a ref is stated to be, or null when nothing stated one. */
+function modelKindsOf(ref) {
+  return state.modelKinds.get(ref) || null;
+}
+
+function modelKindLabel(kind) {
+  return state.modelKindLabels[kind] || kind;
+}
+
+/** The kind a model picker offers, from the setting it edits.
+ *
+ * A media rail's field, or a row of that rail's fallback chain, offers the
+ * rail's kind (MEDIA_RAILS' `tier` is the rail id the server keys kinds by).
+ * Every other model picker -- the chat tiers, Vision, their fallbacks, a
+ * coding agent's own tiers -- offers chat models. */
+function modelPickerKind(fieldKey) {
+  const base = String(fieldKey || "").replace(/__chain_\d+$/, "");
+  const media = MEDIA_RAILS.find(
+    (spec) => spec.modelKey === base || spec.chainKey === base,
+  );
+  return media ? media.tier : "chat";
 }
 
 function webSearchProviders() {
@@ -25140,6 +25262,22 @@ function mediaPlacementChips(row) {
   (row.placements || []).forEach((placement) => {
     chips.push(mediaChip(`${placement.label} · ${placement.position}`, "rail"));
     if (placement.paused) chips.push(mediaChip(`${placement.label}: paused`, "paused"));
+    // 7.78.2: a model whose stated kind is not this rail's -- a chat model
+    // saved on the Image rail. Marked, never removed: it stays on the rail and
+    // routes exactly as saved. `kind_matches` is null when the kind is not
+    // known, and an unknown is never called a mismatch.
+    if (placement.kind_matches === false) {
+      const kind = row.kind || {};
+      const labels = Array.isArray(kind.labels) ? kind.labels : [];
+      const stated = labels.length ? labels.join(" + ") : "none of the rail kinds";
+      chips.push(
+        mediaChip(
+          `${placement.label}: stated as ${stated}`,
+          "warn",
+          `${kind.source_label || "A declared source"} states this model's kind as ${stated}. It stays on the ${placement.label} rail and routes exactly as saved.`,
+        ),
+      );
+    }
     if (!placement.served) {
       chips.push(
         mediaChip(
@@ -25409,12 +25547,23 @@ function modelsMatchesFacet(model) {
   if (facet === "learned") {
     return Array.isArray(model.learned) && model.learned.length > 0;
   }
+  if (typeof facet === "string" && facet.startsWith(MODELS_KIND_FACET)) {
+    const wanted = facet.slice(MODELS_KIND_FACET.length);
+    const kinds =
+      model.kind && Array.isArray(model.kind.kinds) ? model.kind.kinds : null;
+    if (wanted === MODELS_KIND_UNKNOWN) return kinds === null;
+    return kinds !== null && kinds.includes(wanted);
+  }
   return true;
 }
 
 function modelsFacetLabel() {
   const facet = modelsState.facet;
   if (facet instanceof Set) return "the models a pattern overruled";
+  if (typeof facet === "string" && facet.startsWith(MODELS_KIND_FACET)) {
+    const known = modelsAllFacets().find(([key]) => key === facet);
+    return known ? known[1] : facet;
+  }
   return facet;
 }
 
@@ -25710,6 +25859,27 @@ const MODELS_FACETS = [
   ["learned", "Learned"],
 ];
 
+/* 7.78.2: one facet per model kind, named by the server's own labels (the
+   rail names), plus the models nobody has stated a kind for. A model can be
+   several kinds at once -- a Gemini model chats and transcribes -- so these
+   counts overlap; "Kind not known" never does. */
+const MODELS_KIND_FACET = "kind:";
+const MODELS_KIND_UNKNOWN = "unknown";
+
+function modelsAllFacets() {
+  const labels = (modelsState.data && modelsState.data.kind_labels) || {};
+  const kinds = Object.entries(labels).map(([kind, label]) => [
+    `${MODELS_KIND_FACET}${kind}`,
+    label,
+  ]);
+  if (!kinds.length) return MODELS_FACETS;
+  return [
+    ...MODELS_FACETS,
+    ...kinds,
+    [`${MODELS_KIND_FACET}${MODELS_KIND_UNKNOWN}`, "Kind not known"],
+  ];
+}
+
 function renderModelsFacets() {
   const target = byId("modelsFacets");
   const data = modelsState.data;
@@ -25721,12 +25891,13 @@ function renderModelsFacets() {
   });
   const saved = modelsState.facet;
   const counts = new Map();
-  MODELS_FACETS.forEach(([key]) => {
+  const facets = modelsAllFacets();
+  facets.forEach(([key]) => {
     modelsState.facet = key;
     counts.set(key, models.filter((model) => modelsMatchesFacet(model)).length);
   });
   modelsState.facet = saved;
-  MODELS_FACETS.forEach(([key, label]) => {
+  facets.forEach(([key, label]) => {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "models-facet";
@@ -26154,6 +26325,23 @@ function buildModelSummary(model) {
   summary.appendChild(ref);
   if (model.configured) {
     summary.appendChild(buildModelsChip("route", "named by a MODEL* setting"));
+  }
+  // 7.78.2: a model whose stated kind is not chat (an image, speech or video
+  // model) is left out of /v1/models, every coding agent's catalogue and every
+  // chat picker. The row says so, and who stated it. Routing is unchanged.
+  const kind = model.kind;
+  if (kind && Array.isArray(kind.kinds) && !kind.kinds.includes("chat")) {
+    const labels = Array.isArray(kind.labels) ? kind.labels : [];
+    const chip = buildModelsChip(
+      "kind",
+      labels.length ? `${labels.join(" + ")} model` : "not a chat model",
+    );
+    chip.title =
+      `Stated by ${kind.source_label || "a declared source"}` +
+      `${kind.tier ? ` (${kind.tier})` : ""}. Not offered as a chat model: ` +
+      "left out of /v1/models, the coding agents' catalogues and the chat " +
+      "pickers. A request that names it still routes exactly as before.";
+    summary.appendChild(chip);
   }
   if (!model.visible) {
     summary.appendChild(buildModelsChip("hidden", "hidden from catalogues"));

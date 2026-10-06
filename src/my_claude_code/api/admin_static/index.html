@@ -3644,6 +3644,16 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   came back and their size; turn on <em>Store generated media</em> on
                   <strong>Analytics</strong> to keep the files too.
                 </p>
+                <p>
+                  Each picker offers only its own kind of model: a chat route chat models, the
+                  Image rail image models, and so on. The kind comes from what models.dev says
+                  a model accepts and produces, or from the media rail you saved it on; never
+                  from its name. A model whose kind is not chat is left out of
+                  <code>/v1/models</code> and every coding agent's catalogue. A model nobody has
+                  described stays listed for chat and appears on a media rail under
+                  <em>Kind not known</em>, and a value you already saved is never dropped -- it
+                  is marked. The <strong>Models</strong> page has a filter chip per kind.
+                </p>
 
                 <h3 id="guide-images">Images, and what they cost</h3>
                 <p>

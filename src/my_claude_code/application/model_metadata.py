@@ -141,6 +141,20 @@ class ModelReasoningCapability:
     default_enabled: bool | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DeclaredModalities:
+    """What a catalogue states a model accepts and produces (7.78.2).
+
+    Both halves or neither: a model's *kind* -- chat, image, speech,
+    transcription, video -- is read from the pair, and a value of this type
+    exists only when a source stated both lists. Lower-case names as models.dev
+    spells them (``text``, ``image``, ``audio``, ``video``, ``pdf``), sorted.
+    """
+
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+
+
 type ModelDefaultParameterValue = str | int | float | bool
 """A scalar a provider may pin as a per-model default request parameter."""
 

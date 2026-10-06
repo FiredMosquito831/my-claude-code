@@ -29,6 +29,7 @@ import httpx
 from loguru import logger
 
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelReasoningCapability,
     ProviderModelInfo,
 )
@@ -1925,6 +1926,38 @@ OUTPUT_MODALITIES_FIELD: _LadderField[tuple[str, ...]] = _LadderField(
     minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
 )
 
+
+def _models_dev_input_modalities(
+    metadata: Mapping[str, Any],
+) -> tuple[str, ...] | None:
+    """models.dev's ``modalities.input`` for one row, sorted, or None.
+
+    The twin of :func:`_models_dev_output_modalities`, and as silent: a row
+    without the list has not said "text only".
+    """
+
+    modalities = metadata.get("modalities")
+    if not isinstance(modalities, Mapping):
+        return None
+    inputs = modalities.get("input")
+    if not isinstance(inputs, list):
+        return None
+    named = sorted({item for item in inputs if isinstance(item, str) and item})
+    return tuple(named) or None
+
+
+#: 7.78.2: what a model is catalogued as accepting, read beside
+#: :data:`OUTPUT_MODALITIES_FIELD` so a model's *kind* (chat, image, speech,
+#: transcription, video) is decided from both halves of the same declaration:
+#: a transcription model is the one that hears audio and writes text. Same
+#: rungs, same quorum, same lean to the richer list.
+INPUT_MODALITIES_FIELD: _LadderField[tuple[str, ...]] = _LadderField(
+    name="input_modalities",
+    reader=_models_dev_input_modalities,
+    tie_break=len,
+    minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+)
+
 #: The five price rates, in the catalogue's own vocabulary. models.dev
 #: publishes all five under ``cost``; ``ProviderModelInfo`` carries only the
 #: first two, so the cache and reasoning rates have no provider rung and
@@ -2252,6 +2285,35 @@ def model_output_modalities_tiered(
     """
 
     return _model_field_tiered(OUTPUT_MODALITIES_FIELD, provider_id, model_id, path)
+
+
+def model_input_modalities_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[tuple[str, ...] | None, ResolutionTier | None]:
+    """models.dev's input modalities for one model, plus its rung (7.78.2)."""
+
+    return _model_field_tiered(INPUT_MODALITIES_FIELD, provider_id, model_id, path)
+
+
+def declared_modalities_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[DeclaredModalities | None, ResolutionTier | None]:
+    """Both halves of what models.dev catalogues a model as, or nothing (7.78.2).
+
+    ``None`` unless BOTH lists were stated: a model's kind is read from what
+    it accepts and what it produces together, and half a declaration is not
+    one. The rung is the looser of the two, so an approximate half is never
+    reported as authoritative.
+    """
+
+    outputs, output_tier = model_output_modalities_tiered(provider_id, model_id, path)
+    inputs, input_tier = model_input_modalities_tiered(provider_id, model_id, path)
+    if outputs is None or inputs is None or output_tier is None or input_tier is None:
+        return None, None
+    return (
+        DeclaredModalities(inputs=inputs, outputs=outputs),
+        max(output_tier, input_tier),
+    )
 
 
 def model_prices_tiered(

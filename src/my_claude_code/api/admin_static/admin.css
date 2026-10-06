@@ -1140,6 +1140,35 @@ textarea:focus-visible,
   line-height: 1.4;
 }
 
+/* 7.78.2: a picker's groups -- its own kind, "Kind not known", and a saved
+   value of another kind. The label is a heading, never an option. */
+.model-combobox-group + .model-combobox-group,
+.model-combobox-option + .model-combobox-group {
+  margin-top: 6px;
+  border-top: 1px solid var(--line-strong);
+  padding-top: 4px;
+}
+
+.model-combobox-group-label {
+  padding: 6px 10px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.model-combobox-kind {
+  margin-left: 8px;
+  border: 1px solid var(--warn-border);
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 10px;
+}
+
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
@@ -7447,6 +7476,13 @@ audio.req-media-preview {
   border-color: var(--warn-border);
   background: var(--warn-bg);
   color: var(--warn);
+}
+
+/* 7.78.2: a model whose stated kind is not chat, kept out of chat lists. */
+.models-chip-kind {
+  border-color: var(--accent-border);
+  background: var(--neutral-bg);
+  color: var(--accent);
 }
 
 /* Existence provenance. Four quiet variants and one loud one: `seed` is the

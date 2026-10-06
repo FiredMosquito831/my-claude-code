@@ -67,6 +67,12 @@ from my_claude_code.application.derived_payloads import (
     latency_by_model_cache_key,
     recent_analytics,
 )
+from my_claude_code.application.model_kinds import (
+    KIND_LABELS,
+    MODEL_KINDS,
+    media_rail_placements,
+    resolve_model_kind,
+)
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.release_updates import (
     get_release_status,
@@ -1649,9 +1655,12 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     configured = tuple(configured_chat_model_refs(settings))
     visibility = settings_model_visibility(settings)
     overrides = current_model_overrides()
+    placements = media_rail_placements(settings)
     payload = cached_payload(
         MODELS_PAGE_ENTRY,
-        key=capability_half_key(model_infos, configured, visibility, overrides),
+        key=capability_half_key(
+            model_infos, configured, visibility, overrides, placements
+        ),
         compute=lambda: build_capability_half(
             model_infos,
             configured,
@@ -1659,6 +1668,7 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
             overrides,
             dialect_lookup=services.requests.model_reasoning_dialect,
             measured_days=REASONING_MEASUREMENT_DAYS,
+            media_placements=placements,
         ),
         # 5.5 MB of JSON: indented it would be 11 MB, and half the read would
         # be whitespace.
@@ -2624,7 +2634,7 @@ def _model_options(
     services: ApiServices,
     *,
     refresh_result: ProviderModelRefreshResult | None = None,
-) -> dict[str, list[str]]:
+) -> dict[str, Any]:
     settings = services.requests.current_settings()
     # Configured refs are never filtered here, unlike in `/v1/models`. A picker
     # has to be able to render the value that is actually saved; dropping a
@@ -2642,6 +2652,22 @@ def _model_options(
     failed_provider_ids = (
         refresh_result.failed_provider_ids if refresh_result is not None else ()
     )
+    # What kind each model is stated to be (7.78.2), so every picker offers
+    # only its own: a chat rail chat models, the Image rail image models, and
+    # so on. A ref with no entry here is of unknown kind and is offered where
+    # it always was -- a chat picker lists it, a media picker under its own
+    # "kind not known" group. Saved media-rail refs are included so a picker
+    # can say what the value it is holding is.
+    placements = media_rail_placements(settings)
+    kinds: dict[str, list[str]] = {}
+    for ref in sorted(configured | discovered | set(placements), key=str.casefold):
+        kind = resolve_model_kind(
+            ref,
+            modalities=services.requests.model_modalities_tiered,
+            placements=placements,
+        )
+        if kind.kinds is not None:
+            kinds[ref] = [name for name in MODEL_KINDS if name in kind.kinds]
     # Only models the provider *says* reject images. An unreported capability
     # is not a refusal, so it stays out of this list -- the routing page uses
     # it to say "this tier needs the vision adapter", which would be a lie for
@@ -2653,6 +2679,8 @@ def _model_options(
             (info.model_id for info in infos if info.supports_vision is False),
             key=str.casefold,
         ),
+        "kinds": kinds,
+        "kind_labels": dict(KIND_LABELS),
     }
 
 

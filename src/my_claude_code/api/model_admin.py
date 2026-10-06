@@ -26,6 +26,13 @@ from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import Any
 
+from my_claude_code.application.model_kinds import (
+    KIND_LABELS,
+    KIND_SOURCE_LABELS,
+    MODEL_KINDS,
+    ModelKind,
+    resolve_model_kind,
+)
 from my_claude_code.application.model_metadata import (
     ModelListingEvidence,
     ModelListingProvenance,
@@ -72,6 +79,7 @@ from my_claude_code.providers.openai_chat import (
 )
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
+    declared_modalities_tiered,
     model_context_length_tiered,
     model_output_limit_tiered,
     model_output_modalities_tiered,
@@ -521,6 +529,50 @@ def media_output_modalities(provider_id: str, model_id: str) -> dict[str, Any]:
     output, tier = model_output_modalities_tiered(provider_id, model_id)
     return {
         "output": None if output is None else list(output),
+        "tier": None if tier is None else TIER_LABELS.get(tier, tier.name),
+        "approximate": bool(tier is not None and tier.is_approximate),
+    }
+
+
+def declared_model_kind(
+    model_ref: str, placements: Mapping[str, frozenset[str]]
+) -> ModelKind:
+    """One ref's stated kind, from the same ladder the request runtime reads.
+
+    ``declared_modalities_tiered`` is the function ``ProviderManager`` answers
+    ``model_modalities_tiered`` with, so the Models page and the lists it
+    describes -- ``/v1/models``, the harness catalogues, the pickers -- cannot
+    disagree about a model's kind.
+    """
+
+    return resolve_model_kind(
+        model_ref, modalities=declared_modalities_tiered, placements=placements
+    )
+
+
+def model_kind_payload(kind: ModelKind) -> dict[str, Any]:
+    """How the dashboard renders a :class:`ModelKind`.
+
+    ``kinds`` is ``None`` when nothing stated one -- the "kind not known"
+    group, never an empty list, which would mean "stated: none of these".
+    """
+
+    tier = kind.tier
+    return {
+        "kinds": (
+            None
+            if kind.kinds is None
+            else [name for name in MODEL_KINDS if name in kind.kinds]
+        ),
+        "labels": (
+            []
+            if kind.kinds is None
+            else [KIND_LABELS[name] for name in MODEL_KINDS if name in kind.kinds]
+        ),
+        "source": kind.source,
+        "source_label": (
+            None if kind.source is None else KIND_SOURCE_LABELS.get(kind.source)
+        ),
         "tier": None if tier is None else TIER_LABELS.get(tier, tier.name),
         "approximate": bool(tier is not None and tier.is_approximate),
     }
@@ -1558,6 +1610,7 @@ def _model_entry(
     dialect_lookup: ReasoningDialectLookup | None = None,
     measured: Mapping[str, Any] | None = None,
     learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    media_placements: Mapping[str, frozenset[str]] | None = None,
 ) -> dict[str, Any]:
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
@@ -1582,6 +1635,11 @@ def _model_entry(
         # state dictated by a glob must say which glob every time it is drawn.
         "hidden_by": hiding_pattern(visibility, model_ref),
         "configured": model_ref in configured_refs,
+        # What kind of model this is -- chat, or one media rail's -- and who
+        # said so (7.78.2). ``kinds: None`` is the "kind not known" group.
+        "kind": model_kind_payload(
+            declared_model_kind(model_ref, media_placements or {})
+        ),
         "has_metadata": info is not None,
         # Existence provenance, distinct from the per-field capability tiers
         # below it: this answers "why is this model in my picker", they answer
@@ -1656,6 +1714,7 @@ def build_models_page_payload(
     learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     catalogue_refresh: Mapping[str, Any] | None = None,
     image_estimates: Mapping[str, Mapping[str, Any]] | None = None,
+    media_placements: Mapping[str, frozenset[str]] | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page renders, in one request.
 
@@ -1684,6 +1743,7 @@ def build_models_page_payload(
                 dialect_lookup=dialect_lookup,
                 measured=None if measured is None else measured.get(model_ref),
                 learned=learned,
+                media_placements=media_placements,
             )
         )
 
@@ -1718,6 +1778,7 @@ def build_models_page_payload(
         "measured_days": measured_days,
         "fact_labels": dict(FACT_KIND_LABELS),
         "learned_source_labels": dict(LEARNED_SOURCE_LABELS),
+        "kind_labels": dict(KIND_LABELS),
         # When the background sweep last ran and when it is next due, so the
         # page can say "last refreshed 12 min ago, next in 48 min" rather than
         # leaving a catalogue's age unanswerable.

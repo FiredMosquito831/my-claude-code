@@ -7772,3 +7772,82 @@ def test_a_dead_polling_tab_is_taken_over_within_the_lease(pause_polls) -> None:
     # The 6 s lease, checked on the 2 s beat.
     assert dead["takeoverMs"] is not None
     assert dead["takeoverMs"] <= 8_000
+
+
+def test_each_model_picker_offers_only_its_own_kind(rendered) -> None:
+    """7.78.2: chat routes chat models, each media rail its own kind.
+
+    A model of unknown kind stays inline on a chat route and is grouped under
+    "Kind not known" on a media rail; a saved value of another kind heads its
+    own picker, marked, and is never dropped.
+    """
+
+    kinds = rendered["modelKinds"]
+    assert kinds["pickerKind"] == {
+        "opus": "chat",
+        "vision": "chat",
+        "image": "image",
+        "imageChainRow": "image",
+        "tts": "tts",
+        "asrChain": "asr",
+        "video": "video",
+        "agentTier": "chat",
+    }
+    assert kinds["chat"]["groups"] == [
+        {
+            "label": None,
+            "options": ["p/chat-a"],
+        },
+        {"label": None, "options": ["p/chat-and-draw"]},
+        {"label": None, "options": ["p/chat-b"]},
+        {"label": None, "options": ["p/quiet"]},
+    ]
+    assert kinds["chatOptional"]["groups"][0] == {"label": None, "options": ["None"]}
+    assert [group["options"][0] for group in kinds["chatOptional"]["groups"][1:]] == [
+        "p/chat-a",
+        "p/chat-and-draw",
+        "p/chat-b",
+        "p/quiet",
+    ]
+    assert kinds["image"]["groups"] == [
+        {"label": "Image models", "options": ["p/chat-and-draw", "p/draw"]},
+        {"label": "Kind not known", "options": ["p/quiet"]},
+    ]
+    assert kinds["image"]["filtered"] == ["p/chat-and-draw", "p/draw"]
+    assert kinds["imageHoldingChat"]["groups"][0] == {
+        "label": "Saved on this route, stated as another kind",
+        "options": ["p/chat-a"],
+    }
+    assert kinds["imageHoldingChat"]["badges"] == ["Chat"]
+    assert kinds["chatHoldingFilm"]["groups"][0] == {
+        "label": "Saved on this route, stated as another kind",
+        "options": ["p/film"],
+    }
+    assert kinds["chatHoldingFilm"]["groups"][1]["label"] == "Chat models"
+    assert kinds["transcription"]["groups"] == [
+        {"label": "Transcription models", "options": ["p/chat-b", "p/hear"]},
+        {"label": "Kind not known", "options": ["p/quiet"]},
+    ]
+    assert kinds["agentTier"]["groups"][1] == {
+        "label": "Saved on this route, stated as another kind",
+        "options": ["p/speak"],
+    }
+    for picker in ("chat", "image", "imageHoldingChat", "transcription", "agentTier"):
+        assert kinds[picker]["uniqueIds"], picker
+
+
+def test_the_models_page_filters_and_marks_by_kind(rendered) -> None:
+    """7.78.2: one facet per kind plus "Kind not known", and a chip on a row
+    whose stated kind is not chat. Kinds overlap; unknown never does."""
+
+    facets = {
+        label.rsplit(" ", 1)[0]: int(label.rsplit(" ", 1)[1])
+        for label, _pressed in rendered["models"]["facets"]
+    }
+    assert facets["Chat"] == 1
+    assert facets["Image"] == 2
+    assert facets["Speech"] == 0
+    assert facets["Transcription"] == 0
+    assert facets["Video"] == 0
+    assert facets["Kind not known"] == 3 * 45 - 3
+    assert rendered["models"]["kindChips"] == ["Image model", "Image model"]

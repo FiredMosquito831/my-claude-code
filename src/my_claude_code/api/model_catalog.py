@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from my_claude_code.application.model_kinds import chat_listing_filter
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.application.tier_chains import global_tier_chain
 from my_claude_code.config.model_refs import configured_chat_model_refs
@@ -132,6 +133,10 @@ def build_models_list_response(
     models: list[ModelResponse] = []
     seen: set[str] = set()
     visibility = settings_model_visibility(settings)
+    # The predicate every harness catalogue applies too (7.78.2): a discovered
+    # model whose stated kind is not chat -- an image, speech or video model --
+    # is not an id a chat client may send. Configured refs are never filtered.
+    chat_listable = chat_listing_filter(settings, runtime.model_modalities_tiered)
 
     for ref in configured_chat_model_refs(settings):
         if not visibility.is_visible(ref.model_ref):
@@ -148,6 +153,8 @@ def build_models_list_response(
 
     for model_info in runtime.cached_prefixed_model_infos():
         if not visibility.is_visible(model_info.model_id):
+            continue
+        if not chat_listable(model_info.model_id):
             continue
         _append_provider_model_variants(
             models,

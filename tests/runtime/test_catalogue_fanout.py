@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelReasoningCapability,
     ProviderModelInfo,
 )
@@ -98,6 +99,11 @@ class FakeRuntime(RequestRuntimePort):
                 "cache_write_price",
             )
         }
+
+    def model_modalities_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[DeclaredModalities | None, ResolutionTier | None]:
+        return None, None
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos
