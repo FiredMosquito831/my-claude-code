@@ -764,6 +764,17 @@ class RequestCapture:
         # executor both announce attempt 0, and the second is not a new one.
         if self._attempt_mono is None or self._attempt_index != attempt:
             self._attempt_mono = time.monotonic()
+            # A new attempt has dialled nothing yet. The proxy slot is
+            # last-write-wins and only a chain's dial writes it, so without
+            # this an attempt on a provider with no chain carried the exit an
+            # earlier attempt -- or a describe pass -- had dialled: on its
+            # tries, on its ``proxy_label`` and in the in-flight view. Cleared,
+            # it reads exactly as a first attempt on that provider always has
+            # (``None``, not measured). Inside one attempt nothing changes: a
+            # switch still overwrites the label. Above the early return because
+            # the in-flight view and the watchdog read it whether or not the
+            # request log is on.
+            self._proxy.label = None
         self._attempt_index = attempt
         self._attempt_provider = routed.resolved.provider_id
         self._attempt_model_ref = routed.resolved.provider_model_ref
