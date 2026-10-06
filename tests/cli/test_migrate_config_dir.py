@@ -255,7 +255,11 @@ def test_liveness_probe_never_creates_the_lock_file(
     assert not (legacy / "desktop.lock").exists()
 
 
-def test_configured_port_comes_from_the_legacy_env(tmp_path: Path) -> None:
+def test_configured_port_comes_from_the_legacy_env(tmp_path: Path, monkeypatch) -> None:
+    # ``PORT`` in the process environment outranks the file, on purpose (see
+    # ``_configured_port``). A shell that exports one -- the isolated shells
+    # that run this suite export a scratch ``PORT`` -- must not decide this.
+    monkeypatch.delenv("PORT", raising=False)
     legacy = tmp_path / ".fcc"
     legacy.mkdir()
     (legacy / ".env").write_text("MODEL=nvidia_nim/test\nPORT=18099\n")
@@ -263,10 +267,14 @@ def test_configured_port_comes_from_the_legacy_env(tmp_path: Path) -> None:
     assert migrate_config_dir._configured_port(legacy) == 18099
 
 
-def test_configured_port_falls_back_to_the_settings_default(tmp_path: Path) -> None:
+def test_configured_port_falls_back_to_the_settings_default(
+    tmp_path: Path, monkeypatch
+) -> None:
     """No ``PORT`` line means the server would be on the shipped default."""
     from my_claude_code.config.settings import Settings
 
+    # As above: an exported ``PORT`` would outrank both the file and the default.
+    monkeypatch.delenv("PORT", raising=False)
     legacy = tmp_path / ".fcc"
     legacy.mkdir()
     (legacy / ".env").write_text("MODEL=nvidia_nim/test\n")

@@ -305,6 +305,13 @@ class TestServerPresenceProbe:
         monkeypatch.setattr(
             desktop_module, "probe_port_available", lambda host, port: False
         )
+        # The holder is the nginx of this story, not MCC. Unstubbed, this asks
+        # the real socket and process tables who holds 8082 -- on a machine
+        # whose own MCC server listens there, MCC, and the answer is
+        # ``mcc-stale``.
+        monkeypatch.setattr(
+            desktop_module, "port_is_held_by_mcc", lambda host, port: False
+        )
 
         assert probe_server_presence(_Settings(), presence_v2=True) == "foreign"
 

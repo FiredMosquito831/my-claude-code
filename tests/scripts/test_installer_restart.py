@@ -261,7 +261,7 @@ def _run(executable: str, script: Path) -> subprocess.CompletedProcess[str]:
 @pytestmark_windows
 @pytest.mark.parametrize(("name", "executable"), _powershells(), ids=lambda v: v)
 def test_the_installer_reads_a_scratch_port_out_of_a_scratch_env(
-    name: str, executable: str, tmp_path: Path
+    name: str, executable: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A3, RUN: ``MCC_CONFIG_DIR`` + a non-default ``PORT`` in that directory.
 
@@ -269,6 +269,11 @@ def test_the_installer_reads_a_scratch_port_out_of_a_scratch_env(
     a health probe can actually dial.
     """
 
+    # ``Get-MccEnvSetting`` reads the process environment before the file, as
+    # the server does, and the PowerShell child inherits this process's. The
+    # isolated shells that run this suite export a scratch ``PORT``.
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("HOST", raising=False)
     config_dir = tmp_path / name
     config_dir.mkdir()
     (config_dir / ".env").write_text(

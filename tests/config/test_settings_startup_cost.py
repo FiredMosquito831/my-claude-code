@@ -93,6 +93,11 @@ def test_settings_reads_the_declared_fields_whatever_the_file_size(
 ) -> None:
     """The filtering must not drop a value the model does actually declare."""
 
+    # The values must come out of the FILE: an exported ``PORT``/``HOST``
+    # outranks it, and the isolated shells that run this suite export a
+    # scratch ``PORT``.
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("HOST", raising=False)
     path = _write_env(tmp_path / ".env", keys=keys)
     monkeypatch.setattr(
         Settings,
