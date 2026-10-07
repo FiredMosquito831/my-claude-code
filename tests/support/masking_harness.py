@@ -20,16 +20,20 @@ event loop in a background thread so a synchronous ``TestClient`` test and an
     opened onward -- which is exactly what the host records as its peer when
     the traffic really went through the proxy.
 
-The provider's hostname is :data:`FAKE_PROVIDER_HOST`. The proxies resolve it
-themselves, the way a real proxy does for ``socks5h`` and ``CONNECT``; this
-computer must never look it up. :class:`DnsGuard` patches
-``socket.getaddrinfo`` to record every local lookup of it and fail it, so a
-request that skipped the proxy shows up as a recorded lookup (and no
-connection) rather than silently succeeding. A test that is *meant* to go
-direct turns the guard to ``answer`` and the lookup resolves to the host.
+The provider is addressed by the *name* :data:`FAKE_PROVIDER_HOST`, never by
+an address, and the proxies resolve it themselves -- the way a real proxy does
+for ``socks5h`` and ``CONNECT``. Two things follow, and they are the two halves
+of every row's assertion:
 
-So the assertion every row makes is two sets: every peer the host saw is one of
-the proxies' onward sockets, and the guard saw no lookup.
+* a request that skipped its proxy still arrives (the name resolves here
+  too), from a socket no proxy opened -- :meth:`MaskingRig.direct_peers`;
+* a request that went through a proxy handed it the *name*. A client that
+  looked the name up itself would hand over ``127.0.0.1`` instead, so the
+  recorded targets are the DNS half of the check.
+
+``socket.getaddrinfo`` is deliberately left alone: the suite's token-host block
+owns it (``tests/test_no_live_token_hosts.py`` fails any other file that
+rebinds it), and ``localhost`` needs no network to resolve.
 """
 
 import asyncio
@@ -42,9 +46,10 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
-#: The provider's hostname in every rig URL. ``.test`` is reserved (RFC 2606)
-#: and never resolves on a real network.
-FAKE_PROVIDER_HOST = "fake-provider.test"
+#: The provider's hostname in every rig URL: a name, so a proxy that is handed
+#: an address instead shows the client resolved it, and one that resolves on
+#: this computer without a network.
+FAKE_PROVIDER_HOST = "localhost"
 
 #: How long any one rig operation may take before the test fails instead of
 #: hanging. Generous: everything here is loopback.
@@ -350,47 +355,9 @@ class RecordingHttpProxy(_RecordingProxy):
         await _relay(reader, writer, up_reader, up_writer)
 
 
-class DnsGuard:
-    """Records every local lookup of the provider's hostname.
-
-    ``mode`` is ``"fail"`` (the default: a lookup is a leak, so it fails the
-    connection and is recorded) or ``"answer"`` (a test that is meant to go
-    direct: the lookup is recorded and resolves to the host on ``127.0.0.1``).
-    """
-
-    def __init__(self, names: tuple[str, ...] = (FAKE_PROVIDER_HOST,)) -> None:
-        self._names = frozenset(name.lower() for name in names)
-        self.mode = "fail"
-        self._lookups: list[str] = []
-        self._lock = threading.Lock()
-        self._real = socket.getaddrinfo
-
-    @property
-    def lookups(self) -> list[str]:
-        with self._lock:
-            return list(self._lookups)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._lookups.clear()
-
-    def getaddrinfo(self, host: Any, *args: Any, **kwargs: Any) -> Any:
-        name = host.decode() if isinstance(host, bytes) else str(host or "")
-        if name.lower() in self._names:
-            with self._lock:
-                self._lookups.append(name)
-            if self.mode != "answer":
-                raise socket.gaierror(
-                    socket.EAI_NONAME,
-                    f"{name} was looked up on this computer: a DNS leak",
-                )
-            return self._real("127.0.0.1", *args, **kwargs)
-        return self._real(host, *args, **kwargs)
-
-
 @dataclass
 class MaskingRig:
-    """The host, two SOCKS5 proxies, one HTTP proxy and the DNS guard.
+    """The host, two SOCKS5 proxies and one HTTP proxy.
 
     ``proxies`` is in chain order: SOCKS5, HTTP, SOCKS5 -- both proxy kinds the
     chain store accepts, so a row exercises both.
@@ -398,7 +365,6 @@ class MaskingRig:
 
     host: FakeProviderHost
     proxies: tuple[_RecordingProxy, ...]
-    dns: DnsGuard
     _loop: _LoopThread = field(repr=False)
 
     @property
@@ -414,30 +380,35 @@ class MaskingRig:
         through = self.proxy_outbound()
         return [peer for peer in self.host.peers if peer not in through]
 
+    def proxy_targets(self) -> list[Address]:
+        return [target for proxy in self.proxies for target in proxy.targets]
+
     def clear(self) -> None:
         self.host.clear()
         for proxy in self.proxies:
             proxy.clear()
-        self.dns.clear()
 
     def assert_masked(self) -> None:
-        """Something reached the host, all of it through a proxy, no lookup."""
+        """Something reached the host, all of it through a proxy, by name."""
 
-        # The lookup first: a request that skipped the proxy fails right there
-        # (the guard refuses it), so it shows up as a lookup and no connection.
-        assert self.dns.lookups == [], (
-            f"the provider's hostname was looked up locally: {self.dns.lookups}"
-        )
         assert self.direct_peers() == [], (
             f"connections from this computer's own address: {self.direct_peers()}"
         )
         assert self.host.peers, "nothing reached the provider host at all"
+        resolved_here = [
+            target
+            for target in self.proxy_targets()
+            if target[0].lower() != FAKE_PROVIDER_HOST
+        ]
+        assert resolved_here == [], (
+            "a proxy was handed an address, so the provider's name was looked "
+            f"up on this computer: {resolved_here}"
+        )
 
     def assert_nothing_sent(self) -> None:
         """Not one connection to the host, through a proxy or otherwise."""
 
         assert self.host.peers == [], f"the host saw {self.host.peers}"
-        assert self.dns.lookups == [], f"local lookups: {self.dns.lookups}"
         for proxy in self.proxies:
             assert proxy.targets == [], f"{proxy.url} was asked for {proxy.targets}"
 
@@ -449,7 +420,7 @@ class MaskingRig:
 
 
 def start_masking_rig(responder: Responder | None = None) -> MaskingRig:
-    """Start the host and the three proxies; the caller installs the guard."""
+    """Start the host and the three proxies, each on a free loopback port."""
 
     loop = _LoopThread()
     host = FakeProviderHost(responder)
@@ -464,7 +435,7 @@ def start_masking_rig(responder: Responder | None = None) -> MaskingRig:
     except BaseException:
         loop.close()
         raise
-    return MaskingRig(host=host, proxies=proxies, dns=DnsGuard(), _loop=loop)
+    return MaskingRig(host=host, proxies=proxies, _loop=loop)
 
 
 def closed_port() -> int:
@@ -514,7 +485,6 @@ async def _shut(writer: asyncio.StreamWriter | None) -> None:
 __all__ = [
     "FAKE_PROVIDER_HOST",
     "RIG_TIMEOUT_SECONDS",
-    "DnsGuard",
     "FakeProviderHost",
     "MaskingRig",
     "RecordingHttpProxy",

@@ -4,9 +4,9 @@ The leak contract of ``specs/PR-EXIT-ROTATION-AND-REPEAT-MODELS-SPEC.md`` C.4,
 and the grid every later masking fix fills in. One row per kind of traffic MCC
 sends to a provider host; each row drives its traffic against the rig in
 ``tests/support/masking_harness.py`` -- a fake provider host that records the
-peer of every connection, two SOCKS5 proxies and an HTTP proxy that record the
-onward socket of every tunnel, and a guard that fails any local lookup of the
-provider's hostname -- and asserts where it came from.
+peer of every connection, and two SOCKS5 proxies and an HTTP proxy that record
+the onward socket and the requested name of every tunnel -- and asserts where
+it came from, and that the proxy, not this computer, resolved the name.
 
 The rows that are filled are the three the Providers card's buttons send: the
 capability probe, the client-identity probe that rides on it, and a custom
@@ -28,7 +28,6 @@ Four questions per row:
 
 import dataclasses
 import json
-import socket
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -133,7 +132,6 @@ class ProbeWorld:
 @pytest.fixture
 def world(tmp_path, monkeypatch) -> Iterator[ProbeWorld]:
     rig = start_masking_rig(_rig_answers)
-    monkeypatch.setattr(socket, "getaddrinfo", rig.dns.getaddrinfo)
     chains_path = tmp_path / "proxy_chains.json"
     monkeypatch.setattr(
         "my_claude_code.config.proxy_chains.proxy_chains_path", lambda: chains_path
@@ -319,7 +317,6 @@ async def test_no_usable_exit_and_direct_fallback_on_goes_direct(
 ) -> None:
     world.chain_everything(direct_fallback=True)
     world.mark_unreachable(0, 1, 2)
-    world.rig.dns.mode = "answer"
 
     payload = await _drive(row)(world)
 

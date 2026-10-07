@@ -21,7 +21,6 @@ unchanged against the release before it.
 
 import dataclasses
 import json
-import socket
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -125,9 +124,6 @@ class Bench:
 @pytest.fixture
 def bench(tmp_path, monkeypatch) -> Iterator[Bench]:
     rig = start_masking_rig(_answers)
-    # Direct is the expected path for half of these, so the lookup answers.
-    rig.dns.mode = "answer"
-    monkeypatch.setattr(socket, "getaddrinfo", rig.dns.getaddrinfo)
     chains_path = tmp_path / "proxy_chains.json"
     monkeypatch.setattr(
         "my_claude_code.config.proxy_chains.proxy_chains_path", lambda: chains_path
