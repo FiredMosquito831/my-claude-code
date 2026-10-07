@@ -88,7 +88,11 @@ from my_claude_code.providers.runtime.capability_probes import (
     PROBE_FACT_KINDS,
     probe_model_capabilities,
 )
-from my_claude_code.providers.runtime.config import provider_credential
+from my_claude_code.providers.runtime.config import (
+    MaskedExit,
+    masked_exit_for,
+    provider_credential,
+)
 from my_claude_code.providers.runtime.discovery import cache_enriched_model_infos
 from my_claude_code.providers.runtime.identity_probe import (
     probe_client_identity,
@@ -860,11 +864,26 @@ class ApplicationRuntime:
             }
         models = sorted(self.cached_model_ids().get(provider_id, frozenset()))
         key = entry.api_keys[0] if entry.api_keys else ""
+        # Through the provider's chain, as its real requests go -- a host this
+        # operator only reaches through proxies must not see this computer's
+        # address because a card button asked it something.
+        exit_ = masked_exit_for(
+            provider_id, entry.proxy, self.settings, name=entry.display_name
+        )
+        if exit_.refused:
+            # Nothing was sent, so nothing is stored: the last measurement
+            # stays on the card rather than being overwritten by a non-answer.
+            return {
+                "provider_id": provider_id,
+                "status": "not_sent",
+                "detail": exit_.refused,
+                "model": models[0] if models else "",
+            }
         outcome: ReasoningProbeOutcome = await probe_reasoning_dialect(
             entry.base_url,
             key,
             models[0] if models else "",
-            proxy=entry.proxy,
+            proxy=exit_.proxy,
         )
         registry.update(
             provider_id,
@@ -890,6 +909,8 @@ class ApplicationRuntime:
         payload = outcome.as_payload()
         payload["provider_id"] = provider_id
         payload["model"] = models[0] if models else ""
+        if exit_.label is not None:
+            payload["proxy_exit"] = exit_.label
         return payload
 
     async def probe_provider_capabilities(
@@ -916,7 +937,17 @@ class ApplicationRuntime:
                 "detail": "not configured",
                 "results": [],
             }
-        base_url, api_key, proxy = target
+        base_url, api_key, exit_ = target
+        if exit_.refused:
+            # Not one request: the chain allows no exit and Direct fallback is
+            # off, so every probe would have left from this computer's address.
+            return {
+                "provider_id": provider_id,
+                "status": "not_sent",
+                "detail": exit_.refused,
+                "results": [],
+            }
+        proxy = exit_.proxy
         known = sorted(self.cached_model_ids().get(provider_id, frozenset()))
         chosen = [model for model in models if model] or known
         chosen = chosen[:MAX_MODELS_PER_PROBE_RUN]
@@ -970,7 +1001,7 @@ class ApplicationRuntime:
         if identity is not None:
             results.append(identity.as_payload())
         self._learned_facts.flush()
-        return {
+        payload: dict[str, Any] = {
             "provider_id": provider_id,
             "status": "unprobeable" if unprobeable else "probed",
             "detail": unprobeable,
@@ -978,14 +1009,22 @@ class ApplicationRuntime:
             "probes": list(probes),
             "results": results,
         }
+        if exit_.label is not None:
+            payload["proxy_exit"] = exit_.label
+        return payload
 
-    def _probe_target(self, provider_id: str) -> tuple[str, str, str | None] | None:
-        """Resolve one provider's base URL and credential, registry-first.
+    def _probe_target(self, provider_id: str) -> tuple[str, str, MaskedExit] | None:
+        """Resolve one provider's base URL, credential and exit, registry-first.
 
         No per-provider branch: a custom provider carries its own base URL and
         keys on its registry entry, and every other provider is described by
         its catalogue descriptor plus the credential ``provider_credential``
         already reads out of settings for discovery.
+
+        The exit is the provider's chain when it has one -- the probes send real
+        model requests, so they leave through the same proxies the provider's
+        real requests do -- and otherwise exactly the static proxy this always
+        returned.
         """
 
         registry = get_provider_registry()
@@ -993,7 +1032,16 @@ class ApplicationRuntime:
         if entry is not None:
             key = entry.api_keys[0] if entry.api_keys else ""
             if entry.base_url and key:
-                return entry.base_url, key, entry.proxy
+                return (
+                    entry.base_url,
+                    key,
+                    masked_exit_for(
+                        provider_id,
+                        entry.proxy,
+                        self.settings,
+                        name=entry.display_name,
+                    ),
+                )
             return None
         descriptor = registry.all_descriptors().get(provider_id)
         if descriptor is None:
@@ -1012,7 +1060,13 @@ class ApplicationRuntime:
         if descriptor.proxy_attr:
             value = getattr(self.settings, descriptor.proxy_attr, None)
             proxy = value if isinstance(value, str) and value.strip() else None
-        return base_url, credential, proxy
+        return (
+            base_url,
+            credential,
+            masked_exit_for(
+                provider_id, proxy, self.settings, name=descriptor.display_name
+            ),
+        )
 
     def learned_facts_by_model(self) -> dict[str, list[dict[str, Any]]]:
         """Every stored fact, grouped by ``provider/model`` for the page."""

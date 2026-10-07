@@ -1,6 +1,7 @@
 """Provider configuration construction from neutral catalog metadata."""
 
 import os
+from dataclasses import dataclass
 
 from loguru import logger
 
@@ -15,6 +16,11 @@ from my_claude_code.config.proxy_chains import (
 )
 from my_claude_code.config.settings import Settings, parse_lockout_tiers
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
+from my_claude_code.core.proxy_rotation import (
+    PROXY_HEALTH,
+    PROXY_INTERCEPTION,
+    PROXY_REACHABILITY,
+)
 from my_claude_code.providers.base import ProviderConfig, ProxyChainPlan, ProxyLeg
 
 CREDENTIAL_ROTATION_POLICIES = frozenset(
@@ -92,6 +98,118 @@ def resolve_proxy_chain(
             chain.max_switches, int(settings.proxy_max_switches_per_request)
         ),
         direct_fallback=chain.direct_fallback,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MaskedExit:
+    """Where one out-of-band request to a provider leaves this computer from.
+
+    The Providers card's probes are not requests: nothing above them rotates,
+    retries or falls back, so they cannot be handed a chain. They are handed one
+    exit, picked by :func:`masked_exit_for` from the chain real requests are
+    built from.
+
+    ``proxy`` is what the probe passes to ``httpx`` -- ``None`` or ``""`` is this
+    computer's own address. ``label`` is the masked name of the chain entry that
+    decided it, and ``None`` when no chain did (the static ``<PROVIDER>_PROXY``
+    or the registry entry's proxy, the same value as before). ``refused`` is a
+    sentence when nothing may carry the request: the caller sends nothing and
+    shows it.
+    """
+
+    proxy: str | None
+    label: str | None = None
+    refused: str = ""
+
+
+#: The health states a probe never dials into. Both are the two sets
+#: ``ProxyRotationState`` holds out of selection: an address on the
+#: reachability ladder until a check passes, and an address measured
+#: terminating TLS.
+_EXIT_STATES_NEVER_DIALLED = frozenset({"unreachable", "intercepted"})
+
+
+def _exit_state(provider_id: str, label: str) -> str:
+    """One chain entry's health, as the Proxying page reads it.
+
+    The Direct entry is never charged a reachability failure or an
+    interception -- ``ProxyRotationState`` exempts it the same way -- so only a
+    trigger bench (``cooldown``) can hold it back.
+    """
+
+    if label != DIRECT_PROXY_LABEL:
+        if PROXY_INTERCEPTION.is_refused(label):
+            return "intercepted"
+        if PROXY_REACHABILITY.is_unhealthy(label):
+            return "unreachable"
+    return str(PROXY_HEALTH.snapshot(provider_id, label)["state"])
+
+
+def masked_exit_for(
+    provider_id: str,
+    static_proxy: str | None,
+    settings: Settings,
+    *,
+    name: str = "",
+) -> MaskedExit:
+    """The one exit a probe of this provider goes out through.
+
+    The chain is resolved by :func:`resolve_proxy_chain` -- the same single read
+    every real request is built from, so paused entries, removed addresses, the
+    OAuth acknowledgement and a switched-off chain mean exactly what they mean
+    there. Then, in the chain's order (only its first entry under the
+    ``single`` policy, which is all a real request ever uses):
+
+    1. the first entry that is neither unreachable, intercepted nor in a
+       trigger cooldown for this provider;
+    2. else the first entry that is merely in cooldown -- it still answers, and
+       this computer's address may be used only once every proxy is unhealthy;
+    3. else, every entry being unreachable or intercepted: this computer's own
+       address if the chain's Direct fallback is on, and nothing at all if it is
+       off (``refused`` says why and names the setting).
+
+    No chain (or one the resolver drops) hands back ``static_proxy`` itself,
+    so a provider without a chain probes exactly as it always has. A one-entry
+    chain is its one entry, as it is for real requests.
+
+    This reads the shared health ledgers and writes nothing to them. A probe's
+    outcome reaches its caller as a type name, not the exception the rotation
+    classifies, so charging an exit from here would be a second, guessed
+    bookkeeping.
+    """
+
+    proxy, plan = resolve_proxy_chain(provider_id, static_proxy or "", settings)
+    if plan is None:
+        if proxy == (static_proxy or ""):
+            return MaskedExit(proxy=static_proxy)
+        return MaskedExit(
+            proxy=proxy,
+            label=mask_proxy_label(proxy) if proxy else DIRECT_PROXY_LABEL,
+        )
+    legs = plan.legs[:1] if plan.policy == "single" else plan.legs
+    usable: list[tuple[str, str, bool]] = []
+    for leg in legs:
+        label = leg.label or DIRECT_PROXY_LABEL
+        state = _exit_state(provider_id, label)
+        if state not in _EXIT_STATES_NEVER_DIALLED:
+            usable.append((leg.url, label, state == "cooldown"))
+    chosen = next((rung for rung in usable if not rung[2]), None) or next(
+        iter(usable), None
+    )
+    if chosen is not None:
+        return MaskedExit(proxy=chosen[0], label=chosen[1])
+    if plan.direct_fallback:
+        return MaskedExit(proxy="", label=DIRECT_PROXY_LABEL)
+    who = name or provider_id
+    return MaskedExit(
+        proxy=None,
+        refused=(
+            f"Not sent: no proxy in {who}'s chain can be used right now "
+            "(every one is unreachable or refused) and Direct fallback is off, "
+            "so it would have gone out from this computer's own address. "
+            f"Re-check the chain or turn Direct fallback on: Proxying page, {who}."
+        ),
     )
 
 
