@@ -13841,16 +13841,23 @@ async function probeProviderCapabilities(provider, button) {
     const learned = (result.results || []).filter(
       (row) => row.status === "learned",
     ).length;
-    if (result.status === "unprobeable") {
+    if (result.status === "not_sent") {
+      // The provider's proxy chain had no exit to offer and Direct fallback
+      // is off: nothing left this computer. The server's sentence names the
+      // setting and the page.
+      showMessage(result.detail, "warn");
+    } else if (result.status === "unprobeable") {
       showMessage(
         `${provider.display_name || provider.provider_id} could not be probed ` +
-          `(${result.detail}). Nothing was claimed.`,
+          `(${result.detail}). Nothing was claimed.` +
+          probeExitSentence(result.proxy_exit),
         "warn",
       );
     } else {
       showMessage(
         `Probed ${(result.models || []).length} model(s); learned ${learned} fact(s). ` +
-          "See the Models page.",
+          "See the Models page." +
+          probeExitSentence(result.proxy_exit),
         learned ? "ok" : "warn",
       );
     }
@@ -13860,6 +13867,17 @@ async function probeProviderCapabilities(provider, button) {
     button.disabled = false;
     button.textContent = original;
   }
+}
+
+/* Where a probe left from, when the provider's proxy chain decided it. Empty
+   for a provider with no chain, so that card reads exactly as before. The
+   label is the masked host:port the Proxying page shows, never a password. */
+function probeExitSentence(exit) {
+  if (!exit) return "";
+  if (exit === "direct") {
+    return " Sent from this computer's own address (Direct, as the chain allows).";
+  }
+  return ` Sent through ${exit}.`;
 }
 
 /** Per-key health for a custom pool, in the static pool's own badges. */
@@ -13937,8 +13955,17 @@ async function probeCustomProviderDialect(provider, button) {
       `/admin/api/custom-providers/${provider.provider_id}/reasoning-probe`,
       { method: "POST", body: "{}" },
     );
+    const probe = result.probe || {};
+    if (probe.status === "not_sent") {
+      // Nothing was sent and nothing stored; the card keeps what it showed.
+      showMessage(probe.detail, "warn");
+      button.disabled = false;
+      button.textContent = original;
+      return;
+    }
     showMessage(
-      `Reasoning dialect: ${result.reasoning_dialect_label}`,
+      `Reasoning dialect: ${result.reasoning_dialect_label}` +
+        probeExitSentence(probe.proxy_exit),
       result.reasoning_effort_enum ? "ok" : "warn",
     );
     await loadCustomProviders();
