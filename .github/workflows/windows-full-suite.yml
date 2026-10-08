@@ -1,0 +1,193 @@
+# The whole pytest suite on Windows, off the merge path.
+#
+# tests.yml runs the suite on ubuntu-latest for every pull request. About 70
+# tests run only on Windows (the PowerShell installers and uninstallers, the
+# install-progress runs, the proactor listener, the desktop controller,
+# Windows process times), and every other test meets Windows paths, file
+# locks and CRLF checkouts only on a Windows machine. Until this workflow the
+# implementer's own machine was the only place either ran. This job runs them
+# nightly on main, on every published release and on demand -- never on
+# pull_request, so it can never block a merge. A red run is a finding to fix
+# at its root, never a reason to mark a test flaky.
+#
+# A separate workflow rather than a job in tests.yml: tests.yml's
+# concurrency group cancels in-progress runs per ref, so a push to main would
+# kill a nightly halfway through, and a skipped job there would add a check to
+# every pull request's list.
+
+name: Windows full suite
+
+on:
+  schedule:
+    # 01:37 UTC every day, off the :00/:30 minutes where scheduled jobs pile
+    # up. Scheduled runs use the default branch (main).
+    - cron: "37 1 * * *"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  # One run per ref at a time. A second nightly queues behind the first
+  # instead of cancelling a suite that is halfway through.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows-full-suite:
+    name: windows-full-suite
+    runs-on: windows-latest
+    timeout-minutes: 50
+    env:
+      # The same isolation the local Windows gate runs under (WORKING-NOTES
+      # II.6 rule 7). The suite is hermetic per test; these cover whatever a
+      # subprocess or writer path might still read from the shell. Tests that
+      # bind a socket ask the OS for a free port (bind to 0); PORT only has to
+      # stay off the default 8082 and outside the excluded ranges, which a
+      # step below checks against this runner before pytest starts.
+      PORT: "18563"
+      SERVER_PORT_TAKEOVER: never
+      MCC_OPEN_BROWSER: "0"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        # Same SHA pins and uv version as tests.yml.
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.11.15"
+          enable-cache: true
+          cache-python: true
+
+      - name: Install Node LTS
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+
+      - name: Install jsdom
+        run: npm ci --prefix tests
+
+      - name: Sync the environment
+        # The only step that needs the network for Python packages; both
+        # pytest steps below run `--offline --no-sync` against this .venv.
+        run: uv sync
+
+      - name: Create the redirected home
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path @(
+            '${{ runner.workspace }}\mcc-home\AppData\Roaming',
+            '${{ runner.workspace }}\mcc-home\AppData\Local'
+          ) | Out-Null
+          exit 0
+
+      - name: Check PORT is outside the excluded port ranges
+        shell: pwsh
+        run: |
+          $port = [int]$env:PORT
+          $ranges = netsh interface ipv4 show excludedportrange protocol=tcp
+          $ranges | Out-Host
+          foreach ($line in $ranges) {
+            if ($line -match '^\s*(\d+)\s+(\d+)') {
+              if ($port -ge [int]$Matches[1] -and $port -le [int]$Matches[2]) {
+                Write-Output "::error::PORT $port is inside the excluded range $($Matches[1])-$($Matches[2]); pick another 185xx port"
+                exit 1
+              }
+            }
+          }
+          Write-Output "PORT $port is outside every excluded range"
+          exit 0
+
+      - name: pytest (everything except the jsdom file)
+        id: suite
+        env:
+          # Redirected beside the checkout, not inside it: the hermetic guard
+          # (tests/support/hermetic.py) exempts the checkout only while no
+          # protected root lies under it, and HOME is a protected root.
+          HOME: ${{ runner.workspace }}\mcc-home
+          USERPROFILE: ${{ runner.workspace }}\mcc-home
+          APPDATA: ${{ runner.workspace }}\mcc-home\AppData\Roaming
+          LOCALAPPDATA: ${{ runner.workspace }}\mcc-home\AppData\Local
+        # xdist (`-n auto --dist loadgroup --max-worker-restart=0`) and
+        # `faulthandler_timeout = 300` come from pyproject, exactly as for the
+        # Linux pytest job. The jsdom file runs alone in the next step.
+        run: >-
+          uv run --offline --no-sync pytest -v --tb=short
+          --ignore=tests/api/test_admin_static_jsdom.py
+          --junitxml=test-results/junit-suite.xml
+
+      - name: pytest (the jsdom file, alone)
+        if: ${{ !cancelled() && steps.suite.outcome != 'skipped' }}
+        env:
+          HOME: ${{ runner.workspace }}\mcc-home
+          USERPROFILE: ${{ runner.workspace }}\mcc-home
+          APPDATA: ${{ runner.workspace }}\mcc-home\AppData\Roaming
+          LOCALAPPDATA: ${{ runner.workspace }}\mcc-home\AppData\Local
+          # As in tests.yml: a missing node or jsdom fails, never skips.
+          MCC_CI: "1"
+          MCC_JSDOM_TIMEOUT_SECONDS: "600"
+        run: >-
+          uv run --offline --no-sync pytest tests/api/test_admin_static_jsdom.py
+          -n 0 -v --tb=short -o faulthandler_timeout=660
+          --junitxml=test-results/junit-jsdom.xml
+
+      - name: Summarise the failures
+        if: ${{ !cancelled() && steps.suite.outcome != 'skipped' }}
+        shell: pwsh
+        run: |
+          $reports = @(Get-ChildItem -Path test-results -Filter 'junit-*.xml' -ErrorAction SilentlyContinue)
+          $total = 0; $failed = 0; $errors = 0; $skipped = 0; $seconds = 0.0
+          $lines = [System.Collections.Generic.List[string]]::new()
+          foreach ($report in $reports) {
+            [xml]$doc = Get-Content -LiteralPath $report.FullName -Raw -Encoding utf8
+            foreach ($suite in $doc.SelectNodes('//testsuite')) {
+              $total += [int]$suite.tests
+              $failed += [int]$suite.failures
+              $errors += [int]$suite.errors
+              $skipped += [int]$suite.skipped
+              $seconds += [double]$suite.time
+            }
+            foreach ($case in $doc.SelectNodes('//testcase[failure or error]')) {
+              $outcome = $case.SelectSingleNode('failure|error')
+              $message = (([string]$outcome.message) -split "`n")[0].Trim()
+              if ($message.Length -gt 240) { $message = $message.Substring(0, 240) + '...' }
+              $lines.Add("$($case.classname)::$($case.name) [$($outcome.LocalName)] $message")
+            }
+          }
+          New-Item -ItemType Directory -Force -Path test-results | Out-Null
+          Set-Content -LiteralPath test-results/failures.txt -Value $lines -Encoding utf8
+          $passed = $total - $failed - $errors - $skipped
+          $summary = [System.Collections.Generic.List[string]]::new()
+          $summary.Add('## Windows full suite')
+          $summary.Add('')
+          if ($reports.Count -eq 0) {
+            $summary.Add('No junit report was written: pytest ended before its summary. Read the step log.')
+          } else {
+            $summary.Add("Reports: $($reports.Name -join ', ')")
+            $summary.Add('')
+            $summary.Add("**$passed passed, $failed failed, $errors errors, $skipped skipped** of $total in $([math]::Round($seconds)) s of pytest time")
+            $summary.Add('')
+            if ($lines.Count -gt 0) {
+              $summary.Add("### Failing tests ($($lines.Count))")
+              $summary.Add('')
+              foreach ($line in $lines) { $summary.Add('- ' + ($line -replace '`', "'")) }
+            }
+          }
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $summary | Out-Host
+          exit 0
+
+      - name: Upload the junit reports and the failure list
+        if: ${{ !cancelled() && steps.suite.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-full-suite-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 30

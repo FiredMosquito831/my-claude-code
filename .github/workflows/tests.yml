@@ -170,6 +170,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y             libwebkit2gtk-4.1-dev             libgtk-3-dev             libayatana-appindicator3-dev             librsvg2-dev
 
+      - name: Read the rustc version for the cache key
+        id: rustc
+        working-directory: desktop-shell/src-tauri
+        # A cached target directory is reusable only by the rustc that built
+        # it. Keyed on Cargo.lock alone, a runner image with another rustc
+        # restored the cache ("Cache hit"), recompiled all ~850 crates, and
+        # never saved the result because the key had hit -- so every run on
+        # that image stayed cold (about 4.5 min of cargo instead of 1) until
+        # Cargo.lock next changed. Seen on 2026-10-03 and again on the
+        # 20261004 ubuntu image. Prints e.g. `1.90.0-1159e78c4`.
+        run: echo "version=$(rustc -V | awk '{print $2 "-" substr($3, 2)}')" >> "$GITHUB_OUTPUT"
+
       - name: Cache cargo
         uses: actions/cache@640a1c2554105b57832a23eea0b4672fc7a790d5
         with:
@@ -177,7 +189,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop-shell/src-tauri/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('desktop-shell/src-tauri/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-rustc-${{ steps.rustc.outputs.version }}-${{ hashFiles('desktop-shell/src-tauri/Cargo.lock') }}
 
       - name: cargo fmt
         working-directory: desktop-shell/src-tauri
