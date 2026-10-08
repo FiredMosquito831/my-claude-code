@@ -7,7 +7,9 @@ paused, every address removed, no entry at all, or a chain file that could not
 be read -- ``resolve_proxy_chain`` answers a
 :class:`~my_claude_code.providers.base.MaskedRefusalPlan`, and the factory
 builds this in place of the leaf it would otherwise have built with no proxy at
-all (7.78.8).
+all (7.78.8). Since 7.79.2 the same holds with Direct fallback ON: that switch
+uses this computer's address only once every proxy of the chain is unhealthy,
+and a chain with nothing usable in it has no proxy that was.
 
 It owns no client and dials nothing. Every call -- the preflight the executor
 runs before any attempt, the stream itself, a model listing from the hourly

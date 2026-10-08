@@ -101,6 +101,10 @@ class MaskedRefusalPlan(ProxyChainPlan):
     chain resolved to no plan and no proxy, and the provider was built to dial
     from this computer's own address.
 
+    Since 7.79.2 also with Direct fallback ON (``direct_fallback`` then says
+    so): Direct fallback is for proxies found unhealthy, and a chain with
+    nothing usable in it has none.
+
     The construction seams (``factory._create_single_provider`` and the media
     registry's ``_single``) build a refusal in its place: every call answers
     ``reason`` as a 503 and nothing is dialled. A subclass rather than a new
@@ -183,6 +187,14 @@ class ProviderConfig:
     # "credential" is a rotating token, so unlike an API-key pool there is no
     # secret to put in ``api_key`` that would still be true after a refresh.
     oauth_account_id: str = ""
+    # The masked name of the one chain entry ``proxy`` came from, when a chain
+    # with exactly one usable entry collapsed to it (7.79.2): the label the
+    # Proxying page and the speed ledger know that address by -- the entry's
+    # own name if the operator gave it one. Empty for a static
+    # ``<PROVIDER>_PROXY`` (named by its masked ``host:port``) and for no proxy.
+    # Read only to say in the request log which address carried a request;
+    # nothing that dials reads it.
+    proxy_label: str = ""
 
     def rate_limit_cooldown(self) -> RateLimitCooldown:
         """The operator's whole 429 policy, as one value to hand around.

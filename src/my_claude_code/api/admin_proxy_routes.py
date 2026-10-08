@@ -130,6 +130,7 @@ from my_claude_code.config.proxy_feeds import (
     normalise_parser,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.config.system_proxy import system_proxy_for
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
 from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
@@ -2473,9 +2474,11 @@ def _provider_payload(
     # Each key is present only when it has something to say, so the card of
     # every provider that routes as configured is exactly what it was.
     provider_id = str(entry["provider_id"])
-    if chain is not None and not chain.direct_fallback and not inherited:
-        # The same sentence a request to it is refused with: Direct fallback
-        # off and nothing in the chain to route through.
+    if chain is not None and not inherited:
+        # The same sentence a request to it is refused with: nothing in the
+        # chain to route through and Direct fallback off -- or, since 7.79.2,
+        # on, when the chain's entries are all paused or removed (Direct only
+        # once every proxy is unhealthy). ``""`` when it is not refused.
         refusal = masked_refusal_sentence(
             store, provider_id, str(entry["display_name"])
         )
@@ -2492,6 +2495,13 @@ def _provider_payload(
         payload["chain_inert"] = True
     if provider_id in _NOT_ROUTING:
         payload["not_routing"] = _NOT_ROUTING[provider_id]
+    # Where a Direct dial to this provider really goes (7.79.2, C-9 c): a
+    # client with no proxy of its own follows the operating system's, and the
+    # card's "What it can see" box says so. Masked ``host:port``; present
+    # only when a system proxy carries this provider's host.
+    system_proxy = system_proxy_for(str(entry.get("base_url") or ""))
+    if system_proxy:
+        payload["system_proxy"] = system_proxy
     return payload
 
 

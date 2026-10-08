@@ -89,6 +89,8 @@ from dataclasses import dataclass
 from statistics import median
 from typing import Any
 
+from my_claude_code.core.proxy_attribution import is_direct_label
+
 #: How many check and dial samples each ``(address, provider)`` keeps.
 SAMPLE_RING = 20
 
@@ -367,8 +369,9 @@ class ProxySpeedLedger:
 
         The rows are ``core/upstream_ladder.py::dial_rows`` output as stored in
         the request log: ``proxy``, ``connect_ms``, ``handshake_ms``,
-        ``outcome``, ``reason``. The direct rung and a row that said nothing
-        about its address are skipped.
+        ``outcome``, ``reason``. The direct rung (also when the system proxy
+        carried it, 7.79.2) and a row that said nothing about its address are
+        skipped.
         """
 
         wall = time.time() if now is None else now
@@ -376,7 +379,7 @@ class ProxySpeedLedger:
         for row in rows:
             sample = dial_sample(row, at=wall)
             address = str(row.get("proxy") or "")
-            if sample is None or not address or address == "direct":
+            if sample is None or not address or is_direct_label(address):
                 continue
             self.note(address, provider, sample)
             taken += 1

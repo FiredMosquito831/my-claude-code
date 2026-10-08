@@ -45,8 +45,8 @@ from my_claude_code.core.failures import failure_kind_name, find_execution_failu
 from my_claude_code.core.image_geometry import image_dimensions
 from my_claude_code.core.keepalive_tally import install_keepalive_tally
 from my_claude_code.core.proxy_attribution import (
-    DIRECT_PROXY_LABEL,
     install_proxy_attribution,
+    is_direct_label,
 )
 from my_claude_code.core.proxy_speed import PROXY_SPEED
 from my_claude_code.core.reasoning import (
@@ -78,6 +78,7 @@ from my_claude_code.core.request_origin import (
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.upstream_ladder import (
     DEFAULT_LADDER_BODY_MAX_CHARS,
+    amend_proxy_dial,
     install_ladder_trace,
     ladder_payload,
     ladder_proxy_label,
@@ -264,7 +265,11 @@ class RequestCapture:
         # switch -- and a dial that never completed -- is on the record rather
         # than inferred from which label happened to survive.
         self._proxy = install_proxy_attribution(
-            on_dial=record_proxy_dial if self.enabled else None
+            on_dial=record_proxy_dial if self.enabled else None,
+            # 7.79.2: a dial corrected after it was announced -- a Direct
+            # fallback withheld because a proxy is still healthy (the row goes),
+            # or Direct carried by the system proxy (the row says so).
+            on_amend=amend_proxy_dial if self.enabled else None,
         )
         # Stream-recovery counters arrive the same way: a provider's runner
         # increments this collector from inside its holdback and retry
@@ -1553,7 +1558,7 @@ class RequestCapture:
                 provider,
                 attempt.model_ref,
                 float(attempt.ttft_ms),
-                address=None if label in ("", DIRECT_PROXY_LABEL) else label,
+                address=None if not label or is_direct_label(label) else label,
             )
 
     def _apply_origin(self, origin: RequestOrigin) -> None:

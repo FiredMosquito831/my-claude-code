@@ -99,6 +99,7 @@ from my_claude_code.providers.media.proxy_pool import (
     MediaProxyRotationState,
 )
 from my_claude_code.providers.media.registry import _leaf_limiter
+from my_claude_code.providers.runtime.direct_leg import DirectFallbackLeg
 from my_claude_code.providers.runtime.proxy_rotating import (
     ProxyRotatingProvider,
     ProxyRotationState,
@@ -194,6 +195,8 @@ class ProviderSpec:
     retry_attempts: int = 1
     #: A header-less 429's bench, in seconds (the shipped default is 60).
     cooldown: float = 0.05
+    #: ``PROXY_MAX_LIVE_FAILURES`` for the chain (0 = unbounded).
+    max_live_failures: int = 0
 
 
 def _config(provider: str, spec: ProviderSpec) -> ProviderConfig:
@@ -326,17 +329,38 @@ def _chat_node(
         url = legs[index].url if index < len(legs) else ""
         leg_config = dataclasses.replace(config, proxy=url, proxy_chain=None)
         leg = labels[index] if index < len(legs) else DIRECT_PROXY_LABEL
-        return _ChatLeaf(
-            leg_config,
-            _leaf(script, provider, leg_config, key, leg, bool(url)),
-            provider,
-        )
+
+        def leaf() -> BaseProvider:
+            return _ChatLeaf(
+                leg_config,
+                _leaf(script, provider, leg_config, key, leg, bool(url)),
+                provider,
+            )
+
+        if index >= len(legs):
+            # The Direct fallback, gated exactly as the factory gates it
+            # (7.79.2): this computer only once every proxy is unhealthy.
+            return DirectFallbackLeg(
+                config,
+                build=leaf,
+                state=lambda: state,
+                labels=labels,
+                scope=plan.scope,
+                provider_id=provider,
+            )
+        return leaf()
 
     state = ProxyRotationState(
         len(legs), plan.policy, labels=labels, provider_id=provider, scope=plan.scope
     )
     return ProxyRotatingProvider(
-        config, build, state, labels=labels, plan=plan, provider_id=provider
+        config,
+        build,
+        state,
+        labels=labels,
+        plan=plan,
+        provider_id=provider,
+        max_live_failures=_LIVE_FAILURES.get(provider, 0),
     )
 
 
@@ -360,7 +384,13 @@ def _per_key(config: ProviderConfig) -> list[ProviderConfig]:
     ]
 
 
+#: Each provider's ``max_live_failures``, set from its spec as a stack is
+#: built (both stacks of one scenario read the same spec).
+_LIVE_FAILURES: dict[str, int] = {}
+
+
 def _chat_provider(script: Script, provider: str, spec: ProviderSpec):
+    _LIVE_FAILURES[provider] = spec.max_live_failures
     config = _config(provider, spec)
     if len(config.api_keys) <= 1:
         return _chat_node(script, provider, config, 0), None
@@ -403,10 +433,18 @@ def _media_node(
     state = MediaProxyRotationState(
         len(legs), plan.policy, labels=labels, provider_id=provider, scope=plan.scope
     )
-    return MediaProxyPool(build, state, labels=labels, plan=plan, provider_id=provider)
+    return MediaProxyPool(
+        build,
+        state,
+        labels=labels,
+        plan=plan,
+        provider_id=provider,
+        max_live_failures=_LIVE_FAILURES.get(provider, 0),
+    )
 
 
 def _media_provider(script: Script, provider: str, spec: ProviderSpec):
+    _LIVE_FAILURES[provider] = spec.max_live_failures
     config = _config(provider, spec)
     if len(config.api_keys) <= 1:
         return _media_node(script, provider, config, 0), None
@@ -798,6 +836,12 @@ def _scenarios() -> list[Scenario]:
             Script({("a", None, None, None): [status(500, "internal error")]}),
         ),
         Scenario(
+            "a healthy address left never goes direct",
+            {"a": ProviderSpec(legs=3, max_live_failures=1), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, "a-p0"): [CONNECT]}),
+        ),
+        Scenario(
             "every address dead falls back to the direct leg",
             {"a": ProviderSpec(legs=2), "b": one},
             (("a", "m1"), ("b", "m2")),
@@ -874,6 +918,11 @@ def test_the_scenarios_actually_exercise_the_rules() -> None:
     assert [call[3] for call in switched["calls"]] == ["a-p0", "a-p1", "-"]
     direct = chat["every address dead falls back to the direct leg"]
     assert [call[3] for call in direct["calls"]] == ["a-p0", "a-p1", DIRECT_PROXY_LABEL]
+    withheld = chat["a healthy address left never goes direct"]
+    # The bound of one live failure ends the chain at a-p0; a-p1 and a-p2 are
+    # healthy, so Direct is withheld and the route moves on to b.
+    assert [call[3] for call in withheld["calls"]] == ["a-p0", "-"]
+    assert [call[0] for call in withheld["calls"]] == ["a", "b"]
     benched = chat["consecutive failures bench a model for later requests"]
     assert benched["benched"]["a/m1"] is True
     stepped = chat["a reactive 429 block makes the next request step over the provider"]

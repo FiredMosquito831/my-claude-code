@@ -192,6 +192,7 @@ from my_claude_code.core.async_stacks import (
 from my_claude_code.core.client_fingerprint import (
     NON_REGISTRY_HARNESS_LABELS,
 )
+from my_claude_code.core.credential_refresh_scope import refresh_exit
 from my_claude_code.core.loop_health import (
     BUSY_MARKER_HEADER,
     BUSY_MARKER_VALUE,
@@ -343,6 +344,7 @@ from my_claude_code.providers.oauth_ownership import (
 from my_claude_code.providers.oauth_ownership import (
     read_only_reason as oauth_read_only_reason,
 )
+from my_claude_code.providers.runtime.config import masked_exit_for
 from my_claude_code.websearch.errors import WebSearchError
 from my_claude_code.websearch.registry import search_with_logging
 
@@ -3469,14 +3471,53 @@ def _anthropic_tokens_or_none(account_id: str) -> OAuthTokens | None:
         return None
 
 
-async def _reread_shared_anthropic(account_id: str) -> _AnthropicOAuthRefreshResponse:
+def _oauth_refresh_exit(services: ApiServices, provider_id: str) -> str:
+    """Where an operator's Refresh leaves from: the provider's chain exit.
+
+    7.79.2 (C-4): a token refresh goes through the proxy chain like the
+    provider's requests do, and the card's Refresh button is a token
+    refresh. The exit is the one the Providers card's probes use
+    (:func:`~my_claude_code.providers.runtime.config.masked_exit_for`, the
+    same single read real requests are built from): the chain's first
+    usable proxy, this computer's address only once every proxy is
+    unhealthy and Direct fallback is on, and -- with no chain -- the
+    provider's own ``<PROVIDER>_PROXY`` or this computer, as before. When
+    nothing may carry it, the button answers 503 with the reason and the
+    setting, and nothing is sent.
+    """
+
+    settings = services.requests.current_settings()
+    descriptor = PROVIDER_CATALOG.get(provider_id)
+    attr = descriptor.proxy_attr if descriptor is not None else None
+    static = str(getattr(settings, attr, "") or "") if attr else ""
+    exit_ = masked_exit_for(
+        provider_id,
+        static,
+        settings,
+        name=descriptor.display_name if descriptor is not None else provider_id,
+    )
+    if exit_.refused:
+        raise HTTPException(status_code=503, detail=exit_.refused)
+    return exit_.proxy or ""
+
+
+async def _reread_shared_anthropic(
+    account_id: str, *, proxy: str = ""
+) -> _AnthropicOAuthRefreshResponse:
     """Rule 12: "Re-read from Claude Code" on a shared row.
 
     Re-reads and adopts Claude Code's file. Only when the token has expired
     and the file is unchanged does it take the locked refresh, as
     ``purpose="operator"``. It never POSTs while the token is valid.
+
+    ``proxy`` is where that POST leaves from (7.79.2): the provider's
+    chain exit, ``""`` for this computer's own address.
     """
-    auth = AnthropicOAuthAuth(account_id=account_id)
+    auth = (
+        AnthropicOAuthAuth(account_id=account_id, proxy=proxy)
+        if proxy
+        else AnthropicOAuthAuth(account_id=account_id)
+    )
     try:
         before = await asyncio.to_thread(_anthropic_tokens_or_none, account_id)
         served = await auth.current_tokens(purpose="operator")
@@ -3506,7 +3547,9 @@ async def _reread_shared_anthropic(account_id: str) -> _AnthropicOAuthRefreshRes
 
 
 @router.post("/admin/api/anthropic-oauth/refresh")
-async def anthropic_oauth_refresh(request: Request):
+async def anthropic_oauth_refresh(
+    request: Request, services: ApiServices = Depends(get_services)
+):
     """Refresh the stored Claude subscription credential, now, on demand.
 
     Before 6.43.0 there was no control for this at all: the card could say the
@@ -3523,8 +3566,9 @@ async def anthropic_oauth_refresh(request: Request):
         tokens = await asyncio.to_thread(load_tokens)
     except AnthropicOAuthUnavailableError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    exit_proxy = _oauth_refresh_exit(services, "anthropic_oauth")
     if await asyncio.to_thread(is_shared_anthropic_credential, tokens, ""):
-        return await _reread_shared_anthropic("")
+        return await _reread_shared_anthropic("", proxy=exit_proxy)
     if not tokens.has_refresh_token:
         raise HTTPException(
             status_code=400,
@@ -3534,7 +3578,11 @@ async def anthropic_oauth_refresh(request: Request):
             ),
         )
     try:
-        refreshed = await refresh_anthropic_oauth_tokens(tokens)
+        refreshed = (
+            await refresh_anthropic_oauth_tokens(tokens, proxy=exit_proxy)
+            if exit_proxy
+            else await refresh_anthropic_oauth_tokens(tokens)
+        )
     except AnthropicOAuthRefreshError as exc:
         # 401 tells the dashboard "this credential is finished"; 503 tells it
         # "Anthropic could not answer, the credential is fine". Any other
@@ -3612,7 +3660,11 @@ class _OAuthAccountNameResponse(BaseModel):
 
 
 @router.post("/admin/api/anthropic-oauth/accounts/{account_id}/refresh")
-async def anthropic_oauth_account_refresh(account_id: str, request: Request):
+async def anthropic_oauth_account_refresh(
+    account_id: str,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
     """Refresh **one** Claude account, now, on demand.
 
     The status mapping is the 6.43.0 one, unchanged and for the same reason:
@@ -3626,8 +3678,9 @@ async def anthropic_oauth_account_refresh(account_id: str, request: Request):
         raise HTTPException(
             status_code=404, detail=f"No stored Claude account {account_id}."
         )
+    exit_proxy = _oauth_refresh_exit(services, "anthropic_oauth")
     if await asyncio.to_thread(is_shared_anthropic_credential, tokens, account_id):
-        return await _reread_shared_anthropic(account_id)
+        return await _reread_shared_anthropic(account_id, proxy=exit_proxy)
     if not tokens.has_refresh_token:
         raise HTTPException(
             status_code=400,
@@ -3637,7 +3690,13 @@ async def anthropic_oauth_account_refresh(account_id: str, request: Request):
             ),
         )
     try:
-        refreshed = await refresh_anthropic_oauth_tokens(tokens, account_id=account_id)
+        refreshed = (
+            await refresh_anthropic_oauth_tokens(
+                tokens, account_id=account_id, proxy=exit_proxy
+            )
+            if exit_proxy
+            else await refresh_anthropic_oauth_tokens(tokens, account_id=account_id)
+        )
     except AnthropicOAuthRefreshError as exc:
         raise HTTPException(
             status_code=401 if exc.definitive else 503,
@@ -3698,7 +3757,11 @@ async def anthropic_oauth_account_name(
 
 
 @router.post("/admin/api/chatgpt-oauth/accounts/{account_id}/refresh")
-async def chatgpt_oauth_account_refresh(account_id: str, request: Request):
+async def chatgpt_oauth_account_refresh(
+    account_id: str,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
     """Refresh **one** ChatGPT account, now, on demand.
 
     The ChatGPT card had no refresh control at all before 7.30.0 -- it could
@@ -3706,12 +3769,17 @@ async def chatgpt_oauth_account_refresh(account_id: str, request: Request):
     mapping mirrors the Anthropic one exactly, so the two cards cannot drift.
     """
     require_loopback_admin(request)
+    exit_proxy = _oauth_refresh_exit(services, "chatgpt_oauth")
     try:
         # "Re-read from Codex" on a shared row: re-reads first, POSTs only
         # once the token has expired (rule 12). A native row refreshes now.
-        credentials = await asyncio.to_thread(
-            force_refresh_chatgpt_oauth_credentials, account_id, purpose="operator"
-        )
+        # ``to_thread`` copies this context, so the exit reaches the POST.
+        with refresh_exit(exit_proxy):
+            credentials = await asyncio.to_thread(
+                force_refresh_chatgpt_oauth_credentials,
+                account_id,
+                purpose="operator",
+            )
     except ChatGPTOAuthRefreshError as exc:
         raise HTTPException(
             status_code=(

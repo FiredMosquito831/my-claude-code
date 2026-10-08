@@ -35,7 +35,7 @@ from my_claude_code.config.constants import (
     PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
 )
 from my_claude_code.config.credential_names import credential_fingerprint
-from my_claude_code.config.credentials import mask_key_label
+from my_claude_code.config.credentials import mask_key_label, mask_proxy_label
 from my_claude_code.config.media_surfaces import MediaSurface
 from my_claude_code.config.provider_catalog import ProviderDescriptor
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -204,6 +204,7 @@ class MediaRegistry:
         config: ProviderConfig,
         *,
         proxied_leg: bool,
+        proxy_label: str = "",
     ) -> MediaLeaf:
         return MediaLeaf(
             provider_id=descriptor.provider_id,
@@ -211,6 +212,7 @@ class MediaRegistry:
             surfaces=descriptor.media_surfaces,
             rate_limiter=_leaf_limiter(config, proxied_leg=proxied_leg),
             transport=self._transport,
+            proxy_label=proxy_label,
         )
 
     def _single(
@@ -230,7 +232,16 @@ class MediaRegistry:
                 message=plan.reason,
             )
         if plan is None or len(plan.legs) < 2:
-            return self._leaf(descriptor, config, proxied_leg=False)
+            # One fixed way out names itself in the log (7.79.2, C-9 b): a
+            # one-entry chain's entry, else the static proxy's masked address.
+            # No proxy at all records nothing, as before.
+            return self._leaf(
+                descriptor,
+                config,
+                proxied_leg=False,
+                proxy_label=config.proxy_label
+                or (mask_proxy_label(config.proxy) if config.proxy else ""),
+            )
         legs = plan.legs
         labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
         connect_timeout = float(
@@ -272,6 +283,8 @@ class MediaRegistry:
             provider_id=descriptor.provider_id,
             max_open_legs=int(getattr(settings, "proxy_max_open_legs", 0) or 0),
             max_live_failures=int(getattr(settings, "proxy_max_live_failures", 0) or 0),
+            name=descriptor.display_name,
+            base_url=config.base_url,
         )
 
     def _build(

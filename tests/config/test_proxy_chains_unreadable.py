@@ -16,6 +16,7 @@ import json
 import logging
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -150,19 +151,47 @@ def test_at_a_broken_start_the_masking_record_refuses_the_masked_providers(
 ) -> None:
     save_proxy_chains(_table())
     assert _record(path)["masked"] == [MASKED]
+    assert _record(path)["direct_only_when_unhealthy"] == [OPEN]
     path.write_text("{ this is not json", encoding="utf-8")
     reset_proxy_chains_cache()  # a new process: nothing read before
 
     _proxy, plan = resolve_proxy_chain(MASKED, "", Settings(), name="NVIDIA NIM")
-    open_answer = resolve_proxy_chain(OPEN, "", Settings())
+    _proxy, open_plan = resolve_proxy_chain(OPEN, "", Settings(), name="OpenRouter")
 
     assert isinstance(plan, MaskedRefusalPlan)
     assert plan.reason.startswith("Not sent: proxy_chains.json cannot be parsed")
     assert "Direct fallback" in plan.reason
     assert "Proxying page" in plan.reason
-    # Everything else is built as before 7.78.8: no chain.
-    assert open_answer == ("", None)
-    assert MASKED in proxy_chains_problem()
+    # 7.79.2: a chain with Direct fallback ON may go direct only once every
+    # proxy is unhealthy, which nothing can judge from an unreadable file.
+    assert isinstance(open_plan, MaskedRefusalPlan)
+    assert open_plan.direct_fallback is True
+    assert open_plan.reason.startswith("Not sent: proxy_chains.json cannot be parsed")
+    assert "with Direct fallback on" in open_plan.reason
+    assert "only once every proxy in the chain is unhealthy" in open_plan.reason
+    # A provider the record does not name is built as before 7.78.8: no chain.
+    assert resolve_proxy_chain("deepseek", "", Settings()) == ("", None)
+    problem = proxy_chains_problem()
+    assert MASKED in problem and OPEN in problem
+
+
+def test_a_record_written_before_7_79_2_still_refuses_only_the_masked(
+    path: Path,
+) -> None:
+    """A 7.78.8 record has no second list: those chains are built as it built them."""
+
+    save_proxy_chains(_table())
+    masking_record_path(path).write_text(
+        json.dumps({"version": 1, "about": "7.78.8", "masked": [MASKED]}),
+        encoding="utf-8",
+    )
+    path.write_text("{ this is not json", encoding="utf-8")
+    reset_proxy_chains_cache()
+
+    _proxy, plan = resolve_proxy_chain(MASKED, "", Settings())
+
+    assert isinstance(plan, MaskedRefusalPlan)
+    assert resolve_proxy_chain(OPEN, "", Settings()) == ("", None)
 
 
 def test_at_a_start_that_cannot_open_the_file_the_record_decides_too(
@@ -220,11 +249,51 @@ def test_a_document_derived_from_a_failed_read_is_never_saved(path: Path) -> Non
 # ------------------------------------------------------------ the record
 
 
-def test_no_record_is_written_while_nothing_is_masked(path: Path) -> None:
-    save_proxy_chains(_table(masked_fallback=True))
+def test_no_record_is_written_while_no_chain_is_switched_on(path: Path) -> None:
+    table = _table(masked_fallback=True)
+    save_proxy_chains(
+        ProxyChains(
+            proxies=table.proxies,
+            chains={
+                provider_id: replace(chain, enabled=False)
+                for provider_id, chain in table.chains.items()
+            },
+        )
+    )
 
     assert not masking_record_path(path).exists()
     assert masking_record_path(path).name == MASKING_RECORD_FILENAME
+
+
+def test_chains_with_direct_fallback_on_are_recorded_beside_the_masked(
+    path: Path,
+) -> None:
+    """7.79.2: their own list, so a 7.78.8 reader of ``masked`` is unchanged."""
+
+    save_proxy_chains(_table(masked_fallback=True))
+
+    record = _record(path)
+    assert record["masked"] == []
+    assert record["direct_only_when_unhealthy"] == sorted([MASKED, OPEN])
+
+
+def test_a_chain_of_only_direct_entries_is_not_recorded(path: Path) -> None:
+    """The operator wrote Direct: it goes out from here because they said so."""
+
+    save_proxy_chains(
+        ProxyChains(
+            proxies=PROXIES,
+            chains={
+                OPEN: ProxyChain(
+                    enabled=True,
+                    entries=(ProxyChainEntry(proxy=""),),
+                    direct_fallback=True,
+                )
+            },
+        )
+    )
+
+    assert not masking_record_path(path).exists()
 
 
 def test_the_record_follows_the_chains_and_is_not_rewritten_when_unchanged(

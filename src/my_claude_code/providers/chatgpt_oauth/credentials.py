@@ -20,6 +20,7 @@ from my_claude_code.config.paths import chatgpt_oauth_auth_path
 from my_claude_code.core.credential_refresh_scope import (
     RefreshPurpose,
     current_purpose,
+    current_refresh_exit,
 )
 from my_claude_code.providers.oauth_account_store import (
     ORIGIN_CODEX,
@@ -818,16 +819,35 @@ def store_managed_chatgpt_oauth_tokens(
 def _refresh_access_token(
     refresh_token: str,
 ) -> tuple[str, str | None, int | None, str | None]:
-    """Refresh an OAuth access token and return the new credential set."""
-    response = httpx.post(
-        CODEX_OAUTH_TOKEN_URL,
-        json={
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": CODEX_OAUTH_CLIENT_ID,
-        },
-        headers={"originator": CODEX_OAUTH_ORIGINATOR},
-        timeout=httpx.Timeout(30.0),
+    """Refresh an OAuth access token and return the new credential set.
+
+    Through the exit of the chain leg whose request needed it, when one is
+    set in this context (7.79.2, C-4: the provider's ``refresh_exit``), so a
+    provider reached through a proxy chain never sees this computer's
+    address on a refresh. With none, the very call every release made.
+    """
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": CODEX_OAUTH_CLIENT_ID,
+    }
+    headers = {"originator": CODEX_OAUTH_ORIGINATOR}
+    exit_proxy = current_refresh_exit()
+    response = (
+        httpx.post(
+            CODEX_OAUTH_TOKEN_URL,
+            json=payload,
+            headers=headers,
+            timeout=httpx.Timeout(30.0),
+            proxy=exit_proxy,
+        )
+        if exit_proxy
+        else httpx.post(
+            CODEX_OAUTH_TOKEN_URL,
+            json=payload,
+            headers=headers,
+            timeout=httpx.Timeout(30.0),
+        )
     )
     if response.status_code != 200:
         raise ChatGPTOAuthRefreshError(response.status_code)

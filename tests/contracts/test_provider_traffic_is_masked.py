@@ -28,15 +28,33 @@ with the three fail-closed causes (every entry paused, every address removed,
 a chain file that cannot be read at start-up -- leaks C-2 and C-5, which went
 out from this computer until 7.78.8).
 
-Every other traffic class is a ``skip`` placeholder naming the change that
-drives it, so the grid says what is covered and what is not instead of
-implying the whole provider surface is.
+Filled by 7.79.2 (PR-4, PR-5, PR-6 in one change):
+
+* PR-4 -- Direct fallback ON uses this computer's address only once EVERY
+  proxy of the chain is unhealthy (the user's decision of 2026-10-06 23:03):
+  a chain with nothing usable is refused with it on too; every exit
+  unhealthy goes direct; one unhealthy exit among healthy ones never does;
+  a loop that ends with a healthy exit left (its live-failure bound spent)
+  withholds Direct and the request moves on; the switch bound never ends
+  in Direct.
+* PR-5 -- the token refresh rows: Claude and ChatGPT sign-ins refresh
+  through the exit of the leg about to send (and the cards' Refresh buttons
+  through the chain's exit), and a Vertex refresh through a ``socks5://``
+  entry has the proxy, not this computer, resolve the token host.
+* PR-6 -- the request log names the address that carried a request: a
+  one-entry chain's entry, a static proxy, and Direct carried by the system
+  proxy.
+
+Every traffic class in the grid is now driven; none is a placeholder.
 """
 
+import asyncio
+import base64
 import contextlib
 import dataclasses
 import functools
 import json
+import time
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,9 +65,11 @@ import pytest
 from anyio.from_thread import BlockingPortal
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from google.auth.credentials import Credentials as GoogleCredentials
 
 from my_claude_code.application.model_metadata import ResponseSurface
 from my_claude_code.application.ports import PooledCredentialPort
+from my_claude_code.config.constants import CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -65,15 +85,28 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY, reset_proxy_health
+from my_claude_code.core.request_log import store_from_settings
+from my_claude_code.providers.anthropic_oauth import credentials as claude_creds
+from my_claude_code.providers.chatgpt_oauth import credentials as chatgpt_creds
+from my_claude_code.providers.media import proxy_pool as media_proxy_pool
 from my_claude_code.providers.media.registry import MediaRegistry
+from my_claude_code.providers.oauth_account_store import ORIGIN_MCC
 from my_claude_code.providers.openai_chat import response_surface
 from my_claude_code.providers.openai_chat.opencode_identity import (
     OPENCODE_SESSION_HEADER,
 )
+from my_claude_code.providers.runtime.factory import create_provider
+from my_claude_code.providers.runtime.proxy_rotating import ProxyRotatingProvider
+from my_claude_code.providers.vertex.auth import GoogleAccessTokenProvider
 from my_claude_code.runtime.application import ApplicationRuntime
 from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.api.support import create_test_app, provider_manager_for_app
-from tests.support.masking_harness import MaskingRig, SeenRequest, start_masking_rig
+from tests.support.masking_harness import (
+    MaskingRig,
+    SeenRequest,
+    closed_port,
+    start_masking_rig,
+)
 
 #: The custom provider every custom-card row probes.
 CUSTOM_NAME = "Mask Co"
@@ -406,6 +439,8 @@ class TrafficWorld:
     chains_path: Path
     ids: dict[str, str]
     chat_failures_left: int = 0
+    #: A proxy address nothing listens on, for a dead exit.
+    dead_url: str = ""
 
     @property
     def masked_ids(self) -> tuple[str, ...]:
@@ -457,23 +492,35 @@ class TrafficWorld:
         direct_fallback: bool = False,
         paused: bool = False,
         removed: bool = False,
+        dead_first: bool = False,
+        on: tuple[str, ...] | None = None,
+        max_switches: int | None = None,
     ) -> None:
         """The rig's three exits, in order, on every masked provider.
 
         ``paused`` pauses every entry; ``removed`` leaves the addresses out of
         the catalogue, so the read drops every entry naming one -- the two
-        ways a chain ends up with nothing usable in it.
+        ways a chain ends up with nothing usable in it. ``dead_first`` puts a
+        proxy nobody listens on ahead of them (7.79.2).
         """
 
         proxies = {
             f"px_{index}": ProxyEndpoint(url=url)
             for index, url in enumerate(self.rig.proxy_urls)
         }
+        if dead_first:
+            proxies = {"px_dead": ProxyEndpoint(url=self.dead_url)} | proxies
+        extra: dict[str, Any] = {}
+        if on is not None:
+            extra["on"] = on
+        if max_switches is not None:
+            extra["max_switches"] = max_switches
         chain = ProxyChain(
             enabled=True,
             policy="failover",
             entries=tuple(ProxyChainEntry(proxy=key, paused=paused) for key in proxies),
             direct_fallback=direct_fallback,
+            **extra,
         )
         save_proxy_chains(
             ProxyChains(
@@ -484,10 +531,10 @@ class TrafficWorld:
         )
         reset_proxy_chains_cache()
 
-    def corrupt(self) -> None:
+    def corrupt(self, *, direct_fallback: bool = False) -> None:
         """A healthy chain saved, then the file broken -- and a fresh process."""
 
-        self.write()
+        self.write(direct_fallback=direct_fallback)
         self.chains_path.write_text("{ this is not json", encoding="utf-8")
         reset_proxy_chains_cache()
 
@@ -554,7 +601,12 @@ def traffic(tmp_path, monkeypatch) -> Iterator[TrafficWorld]:
             media_operations=media or None,
         )
         ids[name] = entry.provider_id
-    world = TrafficWorld(rig=rig, chains_path=chains_path, ids=ids)
+    world = TrafficWorld(
+        rig=rig,
+        chains_path=chains_path,
+        ids=ids,
+        dead_url=f"http://127.0.0.1:{closed_port()}",
+    )
     rig.host.responder = world.answer
     # Which door each model is served on, as an operator states it in
     # ``model_overrides.json``: with nothing stated a custom host is asked on
@@ -775,6 +827,9 @@ class TrafficClass:
     #: Real traffic through the provider tree (PR-3): answers what the client
     #: or the card was told.
     traffic: TrafficDriver | None = None
+    #: A token refresh (PR-5): drives one through the leg (and, for a
+    #: sign-in, through the card's Refresh button) against the rig.
+    refresh: RefreshDriver | None = None
 
 
 TRAFFIC: tuple[TrafficClass, ...] = (
@@ -798,9 +853,15 @@ TRAFFIC: tuple[TrafficClass, ...] = (
         "PR-3",
         traffic=_media_image_with_result_download,
     ),
-    TrafficClass("oauth_token_refresh_claude", "PR-5"),
-    TrafficClass("oauth_token_refresh_chatgpt", "PR-5"),
-    TrafficClass("vertex_token_refresh_socks5", "PR-5"),
+    TrafficClass(
+        "oauth_token_refresh_claude", "PR-5", refresh=lambda w: _claude_refresh(w)
+    ),
+    TrafficClass(
+        "oauth_token_refresh_chatgpt", "PR-5", refresh=lambda w: _chatgpt_refresh(w)
+    ),
+    TrafficClass(
+        "vertex_token_refresh_socks5", "PR-5", refresh=lambda w: _vertex_refresh(w)
+    ),
 )
 
 
@@ -830,7 +891,7 @@ def _traffic_rows() -> list[Any]:
     return [
         pytest.param(row, id=row.name) if row.traffic else _placeholder(row)
         for row in TRAFFIC
-        if row.driver is None
+        if row.driver is None and row.refresh is None
     ]
 
 
@@ -925,6 +986,9 @@ def test_every_row_names_who_fills_it() -> None:
         assert row.filled_by.startswith("PR-")
         assert (row.driver is not None) == (row.filled_by == "PR-2")
         assert (row.traffic is not None) == (row.filled_by == "PR-3")
+        assert (row.refresh is not None) == (row.filled_by == "PR-5")
+    # 7.79.2: no placeholder is left.
+    assert all(row.driver or row.traffic or row.refresh for row in TRAFFIC)
 
 
 # ------------------------------------------------- real traffic (PR-3 rows)
@@ -943,10 +1007,16 @@ def test_every_row_names_who_fills_it() -> None:
 #   case is a later change of its own (PR-4), not this one.
 
 #: How each fail-closed row breaks the chain.
-NO_USABLE_ENTRY: dict[str, Callable[[TrafficWorld], None]] = {
-    "all_paused": lambda world: world.write(paused=True),
-    "all_removed": lambda world: world.write(removed=True),
-    "chain_file_unreadable": TrafficWorld.corrupt,
+NO_USABLE_ENTRY: dict[str, Callable[[TrafficWorld, bool], None]] = {
+    "all_paused": lambda world, direct: world.write(
+        paused=True, direct_fallback=direct
+    ),
+    "all_removed": lambda world, direct: world.write(
+        removed=True, direct_fallback=direct
+    ),
+    "chain_file_unreadable": lambda world, direct: world.corrupt(
+        direct_fallback=direct
+    ),
 }
 
 
@@ -972,7 +1042,7 @@ def test_real_traffic_reaches_the_host_only_through_the_chain(
 def test_no_usable_entry_and_direct_fallback_off_sends_nothing(
     traffic: TrafficWorld, row: TrafficClass, cause: str
 ) -> None:
-    NO_USABLE_ENTRY[cause](traffic)
+    NO_USABLE_ENTRY[cause](traffic, False)
 
     outcome = _send(row)(traffic)
 
@@ -982,19 +1052,26 @@ def test_no_usable_entry_and_direct_fallback_off_sends_nothing(
         assert words in outcome.text, outcome.text
 
 
+@pytest.mark.parametrize("cause", sorted(NO_USABLE_ENTRY))
 @pytest.mark.parametrize("row", _traffic_rows())
 @pytest.mark.local_serial
-def test_no_usable_entry_and_direct_fallback_on_is_what_it_always_was(
-    traffic: TrafficWorld, row: TrafficClass
+def test_no_usable_entry_and_direct_fallback_on_sends_nothing_too(
+    traffic: TrafficWorld, row: TrafficClass, cause: str
 ) -> None:
-    traffic.write(paused=True, direct_fallback=True)
+    """PR-4: paused, removed or unreadable is not "every proxy unhealthy".
+
+    Up to 7.79.1 each of these went out from this computer's own address
+    when Direct fallback was on.
+    """
+
+    NO_USABLE_ENTRY[cause](traffic, True)
 
     outcome = _send(row)(traffic)
 
-    assert outcome.ok, outcome.text
-    assert traffic.rig.host.peers
-    assert traffic.rig.direct_peers() == traffic.rig.host.peers
-    assert all(not proxy.targets for proxy in traffic.rig.proxies)
+    traffic.rig.assert_nothing_sent()
+    assert not outcome.ok, outcome.text
+    for words in REFUSAL_WORDS:
+        assert words in outcome.text, outcome.text
 
 
 @pytest.mark.local_serial
@@ -1080,3 +1157,617 @@ def test_a_static_proxy_still_carries_a_chain_with_nothing_usable(
     traffic.rig.assert_masked()
     first, second, third = traffic.rig.proxies
     assert third.targets and not first.targets and not second.targets
+
+
+# =========================================== 7.79.2: PR-4 Direct fallback rows
+#
+# The user's decision of 2026-10-06 23:03: Direct fallback ON uses this
+# computer's address only once EVERY proxy of the chain is unhealthy. Not after
+# a number of failed exits in one request, not when the switch bound is spent,
+# not for paused / removed / unreadable (the fail-closed rows above), and not
+# for a listing while a proxy answers.
+
+#: The rows that are requests through the chain's rotation. A model listing --
+#: the sweep and the Test button -- asks the chain's first entry and is never
+#: rotated, so it never reaches the fallback at all.
+REQUEST_ROWS = frozenset(
+    {
+        "chat_completions",
+        "responses",
+        "anthropic_messages",
+        "same_exit_retry",
+        "fallback_to_a_model_of_the_same_provider",
+        "credential_health_probe",
+        "media_image_with_result_download",
+    }
+)
+
+
+def _mark_unhealthy(world: TrafficWorld, *indexes: int) -> None:
+    """Put exits on the reachability ladder in both books, as failed dials would."""
+
+    for index in indexes:
+        label = mask_proxy_label(world.rig.proxy_urls[index])
+        PROXY_REACHABILITY.note_failure(label, "rig: refused")
+        media_proxy_pool.MEDIA_PROXY_REACHABILITY.note_failure(label, "rig: refused")
+
+
+def _last_attempts(world: TrafficWorld) -> list[dict[str, Any]]:
+    """The newest request's attempts, as the request log stored them."""
+
+    store = store_from_settings(world.settings())
+    assert store is not None
+    deadline = time.monotonic() + 10.0
+    while True:
+        rows, _total = store.list_requests(limit=1)
+        if rows:
+            row = store.get_request(rows[0]["id"])
+            if row is not None and row["route_attempts"]:
+                return sorted(
+                    row["route_attempts"], key=lambda attempt: attempt["attempt"]
+                )
+        assert time.monotonic() < deadline, "the request was never logged"
+        time.sleep(0.05)
+
+
+def _dial_proxies(attempt: dict[str, Any]) -> list[str | None]:
+    ladder = (attempt.get("params") or {}).get("ladder") or {}
+    return [dial.get("proxy") for dial in ladder.get("dials") or []]
+
+
+@pytest.mark.parametrize("row", _traffic_rows())
+@pytest.mark.local_serial
+def test_every_exit_unhealthy_and_direct_fallback_on_goes_direct(
+    traffic: TrafficWorld, row: TrafficClass
+) -> None:
+    """The one case the user allowed this computer's address."""
+
+    traffic.write(direct_fallback=True)
+    _mark_unhealthy(traffic, 0, 1, 2)
+
+    outcome = _send(row)(traffic)
+
+    assert outcome.ok, outcome.text
+    if row.name in REQUEST_ROWS:
+        assert traffic.rig.host.peers
+        assert traffic.rig.direct_peers() == traffic.rig.host.peers
+        assert all(not proxy.targets for proxy in traffic.rig.proxies)
+    else:
+        # A listing asks the first entry, as it always has: masked.
+        traffic.rig.assert_masked()
+
+
+@pytest.mark.parametrize("row", _traffic_rows())
+@pytest.mark.local_serial
+def test_one_unhealthy_exit_among_healthy_never_goes_direct(
+    traffic: TrafficWorld, row: TrafficClass
+) -> None:
+    traffic.write(direct_fallback=True)
+    _mark_unhealthy(traffic, 0)
+
+    outcome = _send(row)(traffic)
+
+    assert outcome.ok, outcome.text
+    traffic.rig.assert_masked()
+    if row.name in REQUEST_ROWS:
+        first, second, _third = traffic.rig.proxies
+        assert not first.targets, "a request went through the unhealthy exit"
+        assert second.targets
+
+
+@pytest.mark.local_serial
+def test_a_healthy_exit_left_withholds_direct_and_the_request_moves_on(
+    traffic: TrafficWorld,
+) -> None:
+    """The live-failure bound ends the loop at the dead exit; three are healthy.
+
+    Up to 7.79.1 the request then went out from this computer. Now Direct is
+    withheld, nothing is dialled, and the route's next model answers.
+    """
+
+    traffic.write(direct_fallback=True, dead_first=True)
+    masked = traffic.ids[CHAT_NAME]
+    plain = traffic.ids[PLAIN_NAME]
+
+    with traffic.client(
+        model=f"{masked}/{MODEL}",
+        MODEL_FALLBACKS=f"{plain}/{MODEL}",
+        PROXY_MAX_LIVE_FAILURES="1",
+    ) as client:
+        response = client.post(
+            "/v1/messages", json=_messages_body("claude-sonnet-4-5", stream=False)
+        )
+
+    assert response.status_code == 200, response.text
+    assert traffic.requests_for(CHAT_NAME) == []
+    assert len(traffic.requests_for(PLAIN_NAME)) == 1
+    # The plain provider has no chain: its one request is the only peer.
+    assert traffic.rig.direct_peers() == traffic.rig.host.peers
+    assert len(traffic.rig.host.peers) == 1
+    assert all(not proxy.targets for proxy in traffic.rig.proxies)
+
+
+@pytest.mark.local_serial
+def test_a_withheld_direct_is_a_503_and_the_log_names_no_direct_dial(
+    traffic: TrafficWorld,
+) -> None:
+    traffic.write(direct_fallback=True, dead_first=True)
+
+    with traffic.client(PROXY_MAX_LIVE_FAILURES="1") as client:
+        response = client.post(
+            "/v1/messages",
+            json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+        )
+
+    assert response.status_code == 503, response.text
+    message = response.json()["error"]["message"]
+    for phrase in (
+        "Not sent from this computer's own address",
+        f"3 of 4 proxies in {CHAT_NAME}'s chain are not unhealthy",
+        "Direct fallback uses this computer's address only once every proxy",
+        f"Proxying page -> {CHAT_NAME} -> Direct fallback",
+    ):
+        assert phrase in message, message
+    traffic.rig.assert_nothing_sent()
+    dead = mask_proxy_label(traffic.dead_url)
+    attempt = _last_attempts(traffic)[0]
+    assert _dial_proxies(attempt) == [dead]
+    assert attempt["proxy_label"] in (dead, None)
+
+
+@pytest.mark.local_serial
+def test_media_withholds_direct_the_same_way(traffic: TrafficWorld) -> None:
+    traffic.write(direct_fallback=True, dead_first=True)
+    with traffic.client(PROXY_MAX_LIVE_FAILURES="1") as client:
+        response = client.post(
+            GEMINI_IMAGE_PATH,
+            json={
+                "contents": [{"role": "user", "parts": [{"text": "a red kite"}]}],
+                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            },
+        )
+
+    assert response.status_code != 200, response.text
+    assert "Direct fallback" in response.text, response.text
+    traffic.rig.assert_nothing_sent()
+
+
+@pytest.mark.local_serial
+def test_the_switch_bound_never_ends_in_direct(traffic: TrafficWorld) -> None:
+    """Every exit answers 503 and the chain switches on it, once: then it ends."""
+
+    traffic.write(direct_fallback=True, on=("upstream", "overloaded"), max_switches=1)
+    traffic.chat_failures_left = 10_000
+
+    with traffic.client() as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+            )
+        )
+
+    assert not outcome.ok
+    traffic.rig.assert_masked()
+    used = [proxy for proxy in traffic.rig.proxies if proxy.targets]
+    assert len(used) == 2, [proxy.url for proxy in used]
+
+
+# ================================================ 7.79.2: PR-6 log label rows
+
+
+@pytest.mark.local_serial
+def test_the_log_names_a_one_entry_chain_s_entry(traffic: TrafficWorld) -> None:
+    """A chain left with one usable entry is that entry: named in the log."""
+
+    proxies = {
+        f"px_{index}": ProxyEndpoint(url=url)
+        for index, url in enumerate(traffic.rig.proxy_urls)
+    }
+    save_proxy_chains(
+        ProxyChains(
+            proxies=proxies,
+            chains={
+                traffic.ids[CHAT_NAME]: ProxyChain(
+                    enabled=True,
+                    entries=(
+                        ProxyChainEntry(proxy="px_0", paused=True),
+                        ProxyChainEntry(proxy="px_1"),
+                    ),
+                )
+            },
+        ),
+        traffic.chains_path,
+    )
+    reset_proxy_chains_cache()
+
+    with traffic.client() as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+            )
+        )
+
+    assert outcome.ok, outcome.text
+    traffic.rig.assert_masked()
+    label = mask_proxy_label(traffic.rig.proxy_urls[1])
+    attempt = _last_attempts(traffic)[0]
+    assert attempt["proxy_label"] == label
+    assert _dial_proxies(attempt) == [label]
+
+
+@pytest.mark.local_serial
+def test_the_log_names_a_static_proxy(traffic: TrafficWorld) -> None:
+    entry = get_provider_registry().add(
+        display_name="Static Log Co",
+        base_url=traffic.rig.host.base_url(path="/static_log_co/v1"),
+        api_keys=(RIG_KEY,),
+        proxy=traffic.rig.proxy_urls[2],
+    )
+
+    with traffic.client() as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{entry.provider_id}/{MODEL}", stream=False),
+            )
+        )
+
+    assert outcome.ok, outcome.text
+    traffic.rig.assert_masked()
+    label = mask_proxy_label(traffic.rig.proxy_urls[2])
+    attempt = _last_attempts(traffic)[0]
+    assert attempt["proxy_label"] == label
+    assert _dial_proxies(attempt) == [label]
+
+
+@pytest.mark.local_serial
+def test_the_log_names_direct_carried_by_the_system_proxy(
+    traffic: TrafficWorld, monkeypatch
+) -> None:
+    """Direct fallback, every exit unhealthy, and the OS proxy carries it.
+
+    The rig's HTTP proxy plays the operating system's proxy: httpx really goes
+    through it (a client with no proxy of its own follows the system's), and the
+    log says so instead of ``direct``.
+    """
+
+    system = {"http": traffic.rig.proxy_urls[1]}
+    monkeypatch.setattr("httpx._utils.getproxies", lambda: dict(system))
+    monkeypatch.setattr(
+        "my_claude_code.config.system_proxy.getproxies", lambda: dict(system)
+    )
+    traffic.write(direct_fallback=True)
+    _mark_unhealthy(traffic, 0, 1, 2)
+
+    with traffic.client() as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+            )
+        )
+
+    assert outcome.ok, outcome.text
+    carrier = traffic.rig.proxies[1]
+    assert traffic.rig.host.peers
+    assert set(traffic.rig.host.peers) <= set(carrier.outbound)
+    label = f"direct via system proxy {mask_proxy_label(carrier.url)}"
+    attempt = _last_attempts(traffic)[0]
+    assert attempt["proxy_label"] == label
+    assert _dial_proxies(attempt) == [label]
+
+
+# ============================================== 7.79.2: PR-5 token refresh rows
+
+FRESH_CLAUDE = "sk-ant-oat01-rigfresh-0000"
+FRESH_CHATGPT_EXP = 9_999_999_999
+VERTEX_TOKEN = "ya29.rig-fresh"
+
+
+def _jwt(claims: dict[str, Any]) -> str:
+    def part(value: dict[str, Any]) -> str:
+        raw = json.dumps(value).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    return f"{part({})}.{part(claims)}."
+
+
+@dataclass
+class RefreshWorld:
+    """The rig, the token stores and the chain file, for the refresh rows."""
+
+    rig: MaskingRig
+    chains_path: Path
+    chatgpt_store: Path
+    #: Whether a chain was written: the Vertex row reads it to decide whether
+    #: its refresh has a proxy at all.
+    proxied: bool = False
+
+    def answer(self, request: SeenRequest) -> tuple[int, bytes]:
+        if request.path.endswith("/oauth/token"):
+            body = json.loads(request.body or b"{}")
+            if body.get("client_id") == chatgpt_creds.CODEX_OAUTH_CLIENT_ID:
+                return 200, json.dumps(
+                    {
+                        "access_token": _jwt(
+                            {"exp": FRESH_CHATGPT_EXP, "chatgpt_account_id": "acct"}
+                        ),
+                        "refresh_token": "rig-chatgpt-refresh-2",
+                        "expires_in": 3600,
+                    }
+                ).encode()
+            return 200, json.dumps(
+                {
+                    "access_token": FRESH_CLAUDE,
+                    "refresh_token": "sk-ant-ort01-rigfresh-0000",
+                    "expires_in": 3600,
+                }
+            ).encode()
+        if request.path.endswith("/vertex/token"):
+            return 200, b"{}"
+        return 400, b'{"error":{"message":"rig: not part of the refresh rows"}}'
+
+    def chain(self, *, direct_fallback: bool = False) -> None:
+        proxies = {
+            f"px_{index}": ProxyEndpoint(url=url)
+            for index, url in enumerate(self.rig.proxy_urls)
+        }
+        chain = ProxyChain(
+            enabled=True,
+            policy="failover",
+            entries=tuple(ProxyChainEntry(proxy=key) for key in proxies),
+            direct_fallback=direct_fallback,
+            oauth_acknowledged=True,
+        )
+        save_proxy_chains(
+            ProxyChains(
+                proxies=proxies,
+                chains=dict.fromkeys(("anthropic_oauth", "chatgpt_oauth"), chain),
+            ),
+            self.chains_path,
+        )
+        reset_proxy_chains_cache()
+        self.proxied = True
+
+    def settings(self) -> Settings:
+        return Settings.model_validate(
+            {
+                "CHATGPT_OAUTH_BASE_URL": self.rig.host.base_url(path="/chatgpt"),
+                # The stored sign-in, not a pasted token.
+                "CHATGPT_OAUTH_ACCESS_TOKEN": CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+            }
+        )
+
+    def token_posts(self) -> list[SeenRequest]:
+        return [
+            seen
+            for seen in self.rig.host.requests
+            if seen.path.endswith(("/oauth/token", "/vertex/token"))
+        ]
+
+    def press(self, button: str) -> tuple[int, str]:
+        """The card's Refresh button, as the dashboard presses it."""
+
+        app = create_test_app(self.settings())
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
+            if button == "claude":
+                response = client.post("/admin/api/anthropic-oauth/refresh", json={})
+            else:
+                account = chatgpt_creds.load_chatgpt_accounts(
+                    auth_path=self.chatgpt_store
+                )[0]
+                response = client.post(
+                    f"/admin/api/chatgpt-oauth/accounts/{account.id}/refresh",
+                    json={},
+                )
+        return response.status_code, response.text
+
+
+@pytest.fixture
+def refresh_world(tmp_path, monkeypatch) -> Iterator[RefreshWorld]:
+    rig = start_masking_rig()
+    chains_path = tmp_path / "proxy_chains.json"
+    monkeypatch.setattr(
+        "my_claude_code.config.proxy_chains.proxy_chains_path", lambda: chains_path
+    )
+    reset_proxy_chains_cache()
+    reset_proxy_health()
+    token_base = rig.host.base_url(path="")
+    # The token endpoints, pointed at the rig. The real hosts are blocked in
+    # the suite anyway (tests/support/token_host_block.py).
+    monkeypatch.setattr(claude_creds, "TOKEN_URL", f"{token_base}/v1/oauth/token")
+    monkeypatch.setattr(
+        claude_creds, "LEGACY_TOKEN_URL", f"{token_base}/v1/oauth/token"
+    )
+    monkeypatch.setattr(
+        chatgpt_creds, "CODEX_OAUTH_TOKEN_URL", f"{token_base}/oauth/token"
+    )
+    monkeypatch.setattr(
+        claude_creds, "managed_store_path", lambda: tmp_path / "anthropic_oauth.json"
+    )
+    monkeypatch.setattr(
+        "my_claude_code.config.credential_names.credential_names_path",
+        lambda: tmp_path / "credential_names.json",
+    )
+    claude_creds._REFRESH_LOCKS.clear()
+    chatgpt_store = tmp_path / "auth" / "chatgpt-oauth.json"
+    monkeypatch.setattr(chatgpt_creds, "chatgpt_oauth_auth_path", lambda: chatgpt_store)
+    # Two expired credentials MCC signed in itself (NATIVE): a refresh is due.
+    claude_creds.add_or_update_account(
+        claude_creds.OAuthTokens(
+            access_token="sk-ant-oat01-rigold-0000",
+            refresh_token="sk-ant-ort01-rigold-0000",
+            expires_at=int(time.time()) - 600,
+            account_uuid="uuid-rig",
+            scopes=("user:inference",),
+        ),
+        origin=ORIGIN_MCC,
+    )
+    chatgpt_creds.store_managed_chatgpt_oauth_tokens(
+        {
+            "access_token": _jwt({"exp": int(time.time()) - 600}),
+            "refresh_token": "rig-chatgpt-refresh-1",
+            "id_token": _jwt({"chatgpt_account_id": "acct"}),
+            "account_id": "acct",
+        },
+        auth_path=chatgpt_store,
+    )
+    world = RefreshWorld(rig=rig, chains_path=chains_path, chatgpt_store=chatgpt_store)
+    rig.host.responder = world.answer
+    try:
+        yield world
+    finally:
+        rig.close()
+        reset_proxy_chains_cache()
+        reset_proxy_health()
+
+
+def _first_leg(provider: Any) -> Any:
+    """The leg a request to this provider goes out through first."""
+
+    if isinstance(provider, ProxyRotatingProvider):
+        return provider._pool.get(0)
+    return provider
+
+
+def _claude_refresh(world: RefreshWorld) -> Outcome:
+    """A request finds the credential expired: the leg refreshes it, now."""
+
+    async def run() -> Outcome:
+        provider = create_provider("anthropic_oauth", world.settings())
+        try:
+            tokens = await _first_leg(provider)._oauth.current_tokens(purpose="request")
+        finally:
+            await provider.cleanup()
+        return Outcome(ok=tokens.access_token == FRESH_CLAUDE, text="")
+
+    return asyncio.run(run())
+
+
+def _chatgpt_refresh(world: RefreshWorld) -> Outcome:
+    """The leg's own request path resolves the credential: expired, so refreshed."""
+
+    async def run() -> Outcome:
+        provider = create_provider("chatgpt_oauth", world.settings())
+        request = MessagesRequest.model_validate(_messages_body("gpt-5.5", stream=True))
+        try:
+            stream = _first_leg(provider).stream_response(request)
+            with contextlib.suppress(Exception):
+                async for _chunk in stream:
+                    pass
+        finally:
+            await provider.cleanup()
+        record = chatgpt_creds.load_chatgpt_accounts(auth_path=world.chatgpt_store)[0]
+        return Outcome(
+            ok=record.tokens.get("refresh_token") == "rig-chatgpt-refresh-2",
+            text=str(sorted(record.tokens)),
+        )
+
+    return asyncio.run(run())
+
+
+class _RigGoogleCredentials(GoogleCredentials):
+    """ADC that refreshes against the rig, through whatever session it is handed."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__()
+        self._url = url
+
+    def refresh(self, request: Any) -> None:
+        response = request(url=self._url, method="POST", body=b"grant_type=rig")
+        assert response.status == 200
+        self.token = VERTEX_TOKEN
+
+
+def _vertex_refresh(world: RefreshWorld) -> Outcome:
+    """Vertex refreshes through a ``socks5://`` entry: the proxy resolves the host."""
+
+    url = f"{world.rig.host.base_url(path='')}/vertex/token"
+    provider = GoogleAccessTokenProvider(
+        lambda: _RigGoogleCredentials(url),
+        proxy=world.rig.proxy_urls[0] if world.proxied else None,
+    )
+    token = asyncio.run(provider())
+    return Outcome(ok=token == VERTEX_TOKEN, text=token)
+
+
+RefreshDriver = Callable[[RefreshWorld], Outcome]
+
+
+def _refresh_rows() -> list[Any]:
+    return [pytest.param(row, id=row.name) for row in TRAFFIC if row.refresh]
+
+
+def _refresh(row: TrafficClass) -> RefreshDriver:
+    assert row.refresh is not None
+    return row.refresh
+
+
+@pytest.mark.parametrize("row", _refresh_rows())
+@pytest.mark.local_serial
+def test_a_token_refresh_leaves_through_the_leg_s_exit(
+    refresh_world: RefreshWorld, row: TrafficClass
+) -> None:
+    refresh_world.chain()
+
+    outcome = _refresh(row)(refresh_world)
+
+    assert outcome.ok, outcome.text
+    assert refresh_world.token_posts(), refresh_world.rig.host.requests
+    # Through the chain's first exit only, and the proxy -- not this
+    # computer -- resolved the token host (the Vertex row's socks5:// entry
+    # is the C-8 case: requests resolves locally unless told socks5h).
+    refresh_world.rig.assert_masked()
+    first, *others = refresh_world.rig.proxies
+    assert first.targets
+    assert all(not proxy.targets for proxy in others)
+
+
+@pytest.mark.parametrize("row", _refresh_rows())
+@pytest.mark.local_serial
+def test_with_no_chain_a_token_refresh_is_what_it_always_was(
+    refresh_world: RefreshWorld, row: TrafficClass
+) -> None:
+    outcome = _refresh(row)(refresh_world)
+
+    assert outcome.ok, outcome.text
+    posts = refresh_world.token_posts()
+    assert posts
+    assert refresh_world.rig.direct_peers() == refresh_world.rig.host.peers
+    assert all(not proxy.targets for proxy in refresh_world.rig.proxies)
+
+
+@pytest.mark.parametrize("button", ["claude", "chatgpt"])
+@pytest.mark.local_serial
+def test_the_cards_refresh_button_leaves_through_the_chain(
+    refresh_world: RefreshWorld, button: str
+) -> None:
+    refresh_world.chain()
+
+    status, text = refresh_world.press(button)
+
+    assert status == 200, text
+    assert refresh_world.token_posts()
+    refresh_world.rig.assert_masked()
+    first, *others = refresh_world.rig.proxies
+    assert first.targets
+    assert all(not proxy.targets for proxy in others)
+
+
+@pytest.mark.parametrize("button", ["claude", "chatgpt"])
+@pytest.mark.local_serial
+def test_the_refresh_button_sends_nothing_when_no_exit_may_carry_it(
+    refresh_world: RefreshWorld, button: str
+) -> None:
+    refresh_world.chain(direct_fallback=False)
+    for url in refresh_world.rig.proxy_urls:
+        PROXY_REACHABILITY.note_failure(mask_proxy_label(url), "rig: refused")
+
+    status, text = refresh_world.press(button)
+
+    assert status == 503, text
+    assert "Direct fallback is off" in text
+    assert "Proxying page" in text
+    refresh_world.rig.assert_nothing_sent()

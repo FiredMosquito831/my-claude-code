@@ -3979,6 +3979,31 @@ def test_jsdom_the_card_says_how_its_provider_routes_right_now(rendered) -> None
     assert proxying["routingNotesOnTheOtherCard"] == 0
 
 
+def test_jsdom_each_card_says_what_its_provider_can_see(rendered) -> None:
+    """7.79.2 (spec C.5): through the chain, never through it, and Direct."""
+
+    box = rendered["proxying"]["visibility"]
+    assert box is not None
+    assert box["title"] == "What NVIDIA NIM can see"
+    lines = {line["cls"].split()[-1]: line["text"] for line in box["lines"]}
+    direct = lines["proxy-visibility-direct"]
+    assert direct.startswith("Direct fallback on: NVIDIA NIM sees this machine")
+    assert "only once every proxy in this chain is unhealthy" in direct
+    assert "through the system proxy corp-proxy.test:3128" in direct
+    assert lines["proxy-visibility-through"].startswith("Through it: model requests")
+    assert "model listing (hourly and Test)" in lines["proxy-visibility-through"]
+    never = lines["proxy-visibility-never"]
+    assert "web search and web fetch" in never
+    assert "signing in" not in never  # an API key, not a sign-in
+    assert "corp-proxy.test:3128" in lines["proxy-visibility-system"]
+
+    other = rendered["proxying"]["visibilityOnTheOtherCard"]
+    assert other is not None
+    texts = [line["text"] for line in other["lines"]]
+    assert texts[0] == ("Not in use: ChatGPT (OAuth) sees this machine's own address.")
+    assert any(text.startswith("Never through it: signing in") for text in texts)
+
+
 def test_jsdom_an_unreadable_chain_file_raises_the_red_banner(rendered) -> None:
     banner = rendered["proxying"]["storeBanner"]
 

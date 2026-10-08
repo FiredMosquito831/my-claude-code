@@ -24,6 +24,7 @@ from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.credential_refresh_scope import (
     claimed_scope,
+    refresh_exit,
     stream_purpose,
 )
 from my_claude_code.core.diagnostics import (
@@ -769,7 +770,10 @@ class ChatGPTOAuthProvider(BaseProvider):
         # with Codex; the describe side call's background scope may not.
         purpose = stream_purpose()
         try:
-            with claimed_scope(purpose):
+            # 7.79.2 (C-4): a refresh this needs leaves through this leg's
+            # own exit -- the proxy its request goes out through, or this
+            # computer's address on a Direct leg or with no proxy at all.
+            with claimed_scope(purpose), refresh_exit(self._config.proxy):
                 credentials = load_chatgpt_oauth_credentials(
                     access_token=self._api_key or None,
                     account_id=self._account_id or None,
@@ -912,7 +916,10 @@ class ChatGPTOAuthProvider(BaseProvider):
                                     # other account's refresh token.
                                     # ``to_thread`` copies this context, so
                                     # the claimed purpose reaches the refresh.
-                                    with claimed_scope(purpose):
+                                    with (
+                                        claimed_scope(purpose),
+                                        refresh_exit(self._config.proxy),
+                                    ):
                                         active_credentials = await asyncio.to_thread(
                                             force_refresh_managed_chatgpt_oauth_credentials,
                                             self._pinned_account_id

@@ -9011,6 +9011,47 @@ audio.req-media-preview {
   color: var(--muted);
 }
 
+/* "What <provider> can see" (7.79.2): which traffic goes through the chain,
+   which never does, and when the provider sees this machine's address. */
+.proxy-visibility {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.proxy-visibility-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.proxy-visibility-line {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.proxy-visibility-through,
+.proxy-visibility-never,
+.proxy-visibility-system {
+  color: var(--text);
+}
+
+.proxy-visibility-direct {
+  color: var(--warn);
+}
+
+.proxy-visibility-refused {
+  color: var(--error);
+}
+
 .proxy-triggers {
   display: flex;
   flex-direction: column;

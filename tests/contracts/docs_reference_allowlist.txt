@@ -65,6 +65,9 @@ NO_COLOR
 HTTPS_PROXY
 HTTP_PROXY
 NO_PROXY
+# The third standard proxy variable httpx reads (7.79.2: a Direct dial it
+# carries is labelled "direct via system proxy" in the request log).
+ALL_PROXY
 
 # --- Placeholders that stand in for a value the reader supplies. -----------
 YOUR_API_KEY

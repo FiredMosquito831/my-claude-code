@@ -92,7 +92,12 @@ def test_factory_preserves_key_pool_rotation_and_proxy(monkeypatch) -> None:
 
     assert isinstance(provider, RotatingProvider)
     assert len(provider._providers) == 2
-    assert all(isinstance(item, CommandCodeProvider) for item in provider._providers)
+    # 7.79.2: a static proxy's leaf is named in the log by an AttributedLeg
+    # around it; the leaf itself is what it always was.
+    assert all(
+        isinstance(getattr(item, "leaf", item), CommandCodeProvider)
+        for item in provider._providers
+    )
     assert [item._config.api_key for item in provider._providers] == [
         "key-one",
         "key-two",

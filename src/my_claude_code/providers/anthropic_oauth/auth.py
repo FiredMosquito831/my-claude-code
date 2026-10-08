@@ -61,7 +61,9 @@ enough to be given this header set.
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -77,6 +79,7 @@ from my_claude_code.providers.anthropic_messages import ANTHROPIC_API_VERSION
 from my_claude_code.providers.oauth_names import account_name
 from my_claude_code.providers.oauth_ownership import file_stamp
 
+from . import credentials as credentials_module
 from . import shared
 from .betas import merge_betas
 from .constants import (
@@ -130,12 +133,20 @@ class AnthropicOAuthAuth:
     """
 
     def __init__(
-        self, tokens: OAuthTokens | None = None, *, account_id: str = ""
+        self,
+        tokens: OAuthTokens | None = None,
+        *,
+        account_id: str = "",
+        proxy: str = "",
     ) -> None:
         # One instance per **account** since 7.30.0. The stamp, the background
         # task and the cached credential are all per account, so two accounts
         # neither share a refresh nor invalidate each other's cache.
         self._account_id = account_id
+        # The exit of the chain leg this instance belongs to (7.79.2, C-4):
+        # every token POST it makes leaves through it. ``""`` -- no chain,
+        # or a Direct leg -- is this computer's address, as before.
+        self._proxy = proxy
         self._tokens = tokens
         self._lock = asyncio.Lock()
         self._background: asyncio.Task[None] | None = None
@@ -185,7 +196,7 @@ class AnthropicOAuthAuth:
             slot = self._shared
         if slot is not None:
             # SHARED: never early, never in the background (rules 3, 4, 7).
-            served = await shared.use(slot, effective)
+            served = await shared.use(slot, effective, post=self._poster())
             async with self._lock:
                 self._tokens = served
                 self._stamp = _store_stamp()
@@ -240,7 +251,9 @@ class AnthropicOAuthAuth:
         if current_purpose() != "request":
             return None
         try:
-            served = await shared.use(slot, "request", after_401=True)
+            served = await shared.use(
+                slot, "request", after_401=True, post=self._poster()
+            )
         except Exception as error:
             logger.warning(
                 "Shared Claude subscription credential after a 401: {}", error
@@ -302,8 +315,28 @@ class AnthropicOAuthAuth:
         self._shared = slot
         return slot.seen
 
+    def _poster(self) -> Callable[[str], Awaitable[Any]] | None:
+        """The shared refresh's POST through this leg's exit; ``None`` with none.
+
+        ``None`` keeps :func:`.shared.locked_refresh` on its own default,
+        the one-argument :func:`.credentials._post_refresh`, read when it
+        posts -- exactly as before for every provider with no chain.
+        """
+        if not self._proxy:
+            return None
+        proxy = self._proxy
+
+        async def post(refresh_token: str) -> Any:
+            return await credentials_module._post_refresh(refresh_token, proxy=proxy)
+
+        return post
+
     async def _refresh_now(self, tokens: OAuthTokens) -> OAuthTokens:
-        refreshed = await refresh_tokens(tokens, account_id=self._account_id)
+        refreshed = (
+            await refresh_tokens(tokens, account_id=self._account_id, proxy=self._proxy)
+            if self._proxy
+            else await refresh_tokens(tokens, account_id=self._account_id)
+        )
         async with self._lock:
             self._tokens = refreshed
             # ``refresh_tokens`` just wrote the store, so adopt the stamp it

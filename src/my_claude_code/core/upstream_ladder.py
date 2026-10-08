@@ -272,6 +272,31 @@ class LadderTrace:
             ProxyDial(proxy=label, at_try=len(ladder.tries), started=time.monotonic())
         )
 
+    def amend_dial(self, announced: str | None, actual: str | None) -> None:
+        """Correct the latest dial row (7.79.2): relabel it, or drop it.
+
+        ``actual`` ``None`` means the dial announced as ``announced`` never
+        happened -- the Direct fallback withheld because a proxy in the chain is
+        still healthy -- so its row goes, rather than claim a dial nobody made.
+        Only the latest row, and only while no try has been recorded on it.
+        """
+        ladder = self.slot()
+        if ladder.dials_dropped:
+            # Past the cap, so the dial being corrected was counted, not
+            # stored: a withdrawn one is simply not counted.
+            if actual is None:
+                ladder.dials_dropped -= 1
+            return
+        if not ladder.dials:
+            return
+        dial = ladder.dials[-1]
+        if dial.proxy != announced or dial.at_try != len(ladder.tries):
+            return
+        if actual is None:
+            ladder.dials.pop()
+        else:
+            dial.proxy = actual
+
     def _open_dial(self) -> ProxyDial | None:
         """The dial the tries now being recorded belong to, if there is one.
 
@@ -537,6 +562,19 @@ def record_proxy_dial(label: str | None) -> None:
     if slot is None:
         return
     slot.record_dial(label)
+
+
+def amend_proxy_dial(announced: str | None, actual: str | None) -> None:
+    """Correct the dial just recorded as *announced*, if tracked (7.79.2).
+
+    Installed as :func:`~my_claude_code.core.proxy_attribution.amend_proxy`'s
+    observer beside :func:`record_proxy_dial`. ``actual`` ``None`` drops the
+    row: the dial never happened.
+    """
+    slot = _LADDER.get()
+    if slot is None:
+        return
+    slot.amend_dial(announced, actual)
 
 
 def record_proxy_connect(seconds: float) -> None:

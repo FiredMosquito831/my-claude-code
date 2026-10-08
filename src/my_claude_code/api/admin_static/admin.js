@@ -3738,6 +3738,7 @@ function proxyCard(provider) {
   card.appendChild(proxyPolicyHelp(draft));
   if (provider.oauth) card.appendChild(proxyOauthNote(provider, draft));
   card.appendChild(proxyInheritedNote(provider, draft));
+  card.appendChild(proxyVisibilityBox(provider, draft));
   card.appendChild(proxyTriggers(provider, draft));
   card.appendChild(proxyEntryList(provider, draft));
   card.appendChild(proxyOrderRow(provider, draft));
@@ -3920,17 +3921,139 @@ function proxyInheritedNote(provider, draft) {
       : `Inherited from this provider's stored proxy: ${provider.inherited_label}.`;
     return note;
   }
-  // A switched-on chain with Direct fallback off and nothing to route through
-  // is refused, never sent from this machine (7.78.8): saying it "goes out on
-  // this machine's own address" here would contradict the red note above. An
-  // unacknowledged subscription chain is inert, so it is not that case.
+  // A switched-on chain with nothing to route through is refused, never sent
+  // from this machine (7.78.8 with Direct fallback off; since 7.79.2 with it
+  // on too -- Direct fallback is for proxies found unhealthy, and there are
+  // none): saying it "goes out on this machine's own address" here would
+  // contradict the red note above. An unacknowledged subscription chain is
+  // inert, so it is not that case.
   const inert = provider.oauth && !draft.oauth_acknowledged;
   note.textContent =
-    draft.enabled && draft.direct_fallback === false && !inert
-      ? "No proxy configured, and Direct fallback is off: requests to this " +
-        "provider are refused, never sent from this machine's own address."
+    draft.enabled && !inert
+      ? "No proxy configured: requests to this provider are refused, never " +
+        "sent from this machine's own address. Add a proxy, or switch the " +
+        "chain off to send them from this machine."
       : "No proxy configured. Requests go out on this machine's own address.";
   return note;
+}
+
+/* "What <provider> can see" (7.79.2, spec C.5): one box per card saying,
+ * in plain words, which of MCC's traffic to this provider goes through the
+ * chain, which never does, and when -- if ever -- the provider sees this
+ * machine's own address. Read from the card's draft, so it changes as the
+ * operator ticks Enabled or Direct fallback, before Save. The system proxy
+ * (the server's `system_proxy`) is named wherever a Direct dial can happen,
+ * because that is where such a dial really leaves from. */
+function proxyVisibilityBox(provider, draft) {
+  const name = provider.display_name;
+  const box = document.createElement("section");
+  box.className = "proxy-visibility";
+  const title = document.createElement("h5");
+  title.className = "proxy-visibility-title";
+  title.textContent = `What ${name} can see`;
+  box.appendChild(title);
+
+  const inert = provider.oauth && !draft.oauth_acknowledged;
+  const usable = draft.entries.filter((entry) => !entry.paused);
+  const inherited = provider.inherited_label || "";
+  const system = provider.system_proxy || "";
+  const viaSystem = system ? ` (through the system proxy ${system})` : "";
+  const lines = [];
+  let routed = false;
+  if (!draft.enabled || inert || !draft.entries.length) {
+    if (draft.enabled && !inert && !inherited) {
+      lines.push([
+        "proxy-visibility-refused",
+        "Nothing to route through: ",
+        `requests to ${name} are refused, never sent from this ` +
+          "machine's own address.",
+      ]);
+    } else {
+      routed = Boolean(inherited);
+      lines.push([
+        inherited ? "proxy-visibility-through" : "proxy-visibility-direct",
+        "Not in use: ",
+        inherited
+          ? `${name} sees ${inherited}, this provider's own proxy setting.`
+          : `${name} sees this machine's own address${viaSystem}.`,
+      ]);
+    }
+  } else if (!usable.length) {
+    lines.push([
+      "proxy-visibility-refused",
+      "Every entry is paused: ",
+      inherited
+        ? `${name} sees ${inherited}, this provider's own proxy setting.`
+        : `requests to ${name} are refused, never sent from this machine's ` +
+            "own address -- whatever Direct fallback says.",
+    ]);
+    routed = Boolean(inherited);
+  } else {
+    routed = true;
+    if (usable.length === 1) {
+      lines.push([
+        "proxy-visibility-through",
+        "One entry: ",
+        "no switching and no Direct fallback; everything below goes through it.",
+      ]);
+    } else if (draft.direct_fallback !== false) {
+      lines.push([
+        "proxy-visibility-direct",
+        "Direct fallback on: ",
+        `${name} sees this machine's own address${viaSystem} only once every ` +
+          "proxy in this chain is unhealthy (unreachable, refused for " +
+          "intercepting TLS, or cooling down after a refusal). Never after a " +
+          "number of failed proxies in one request, never when the request's " +
+          "switch limit is spent.",
+      ]);
+    } else {
+      lines.push([
+        "proxy-visibility-through",
+        "Direct fallback off: ",
+        `${name} never sees this machine's own address; when no proxy ` +
+          "works, the request moves on to the next model of its fallback chain.",
+      ]);
+    }
+  }
+  if (routed) {
+    const through = [
+      "model requests (every surface, retries, fallbacks to its other models)",
+      "model listing (hourly and Test)",
+      "Probe capabilities",
+      "health probes",
+    ];
+    if (provider.oauth) {
+      through.push("renewing the sign-in (token refresh, and the Refresh button)");
+    } else if (provider.provider_id === "vertex") {
+      through.push("Google token refresh");
+    }
+    through.push("media requests");
+    lines.push(["proxy-visibility-through", "Through it: ", `${through.join(", ")}.`]);
+  }
+  const never = [];
+  if (provider.oauth) never.push("signing in (from this machine's own address)");
+  never.push(
+    `not sent to ${name} at all: web search and web fetch (their own proxy ` +
+      "settings), models.dev and price lists, update checks",
+  );
+  lines.push(["proxy-visibility-never", "Never through it: ", `${never.join("; ")}.`]);
+  if (system) {
+    lines.push([
+      "proxy-visibility-system",
+      "System proxy: ",
+      `this machine's own requests go out through ${system}, so a Direct ` +
+        "dial does too, and the request log says so.",
+    ]);
+  }
+  lines.forEach(([kind, lead, text]) => {
+    const line = document.createElement("p");
+    line.className = `proxy-visibility-line ${kind}`;
+    const strong = document.createElement("strong");
+    strong.textContent = lead;
+    line.append(strong, document.createTextNode(text));
+    box.appendChild(line);
+  });
+  return box;
 }
 
 function proxyTriggers(provider, draft) {
@@ -4716,7 +4839,8 @@ function proxyCardFoot(provider, draft) {
   // that stops answering the moment its free proxies die -- and an operator
   // who added proxies to REACH a provider did not ask for that. Off is
   // available and means it: a chain with this off never sends a request from
-  // this machine's own address.
+  // this machine's own address. Since 7.79.2 "nothing healthy left" means
+  // EVERY proxy of the chain is unhealthy (the user's decision of 2026-10-06).
   const directLabel = document.createElement("label");
   directLabel.className = "proxy-control proxy-direct-fallback";
   const directInput = document.createElement("input");
@@ -4731,9 +4855,12 @@ function proxyCardFoot(provider, draft) {
   directText.textContent = "Fall back to this machine's own address";
   directLabel.title =
     directInput.checked
-      ? "When no healthy proxy is left, the request goes out with no proxy " +
-        "at all rather than failing. It is tried once, and the request log " +
-        "says Direct on that try."
+      ? "Only once every proxy in this chain is unhealthy (unreachable, " +
+        "refused for intercepting TLS, or cooling down after a refusal), " +
+        "the request goes out with no proxy at all rather than failing. It " +
+        "is tried once, and the request log says Direct on that try. A " +
+        "request that ends with a healthy proxy still untried moves on to " +
+        "its next model instead."
       : "This chain never uses this machine's own address. When every proxy " +
         "in it is unhealthy, requests fail through to the model fallback " +
         "chain as they did before 7.19.0.";
@@ -21359,6 +21486,11 @@ function hasDials(attempt) {
 /** "Direct" is a rung the operator chose; say it the way the Proxying page does. */
 function dialAddressText(dial) {
   if (dial.proxy === "direct") return "Direct (no proxy)";
+  // 7.79.2: a Direct dial the operating system's proxy carried.
+  const viaSystem = "direct via system proxy ";
+  if (dial.proxy && dial.proxy.startsWith(viaSystem)) {
+    return `Direct, through the system proxy ${dial.proxy.slice(viaSystem.length)}`;
+  }
   return dial.proxy || NOT_MEASURED;
 }
 

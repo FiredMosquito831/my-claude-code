@@ -2438,6 +2438,8 @@ const ROUTES = {
           "Not sent: NVIDIA NIM's proxy chain has no usable entry (all 3 entries are paused) and Direct fallback is off, so this request would have gone out from this computer's own address. Resume or add an entry, or switch Direct fallback on: Proxying page -> NVIDIA NIM -> \"Fall back to this machine's own address\".",
         not_routing:
           "Saved -- not routing yet: the provider could not be rebuilt (RuntimeError: boom). Requests still go the way they went before this save. Restart MCC, or press Save again.",
+        // 7.79.2: where a Direct dial to this provider really leaves from.
+        system_proxy: "corp-proxy.test:3128",
       },
       {
         provider_id: "chatgpt_oauth",
@@ -3908,6 +3910,22 @@ if (withChain) {
   proxying.routingNotesOnTheOtherCard = (
     proxyCardFor("chatgpt_oauth")?.querySelectorAll(".proxy-routing-note") || []
   ).length;
+  // 7.79.2: the "What <provider> can see" box on both cards.
+  const visibility = (card) => {
+    const box = card?.querySelector(".proxy-visibility");
+    if (!box) return null;
+    return {
+      title: (box.querySelector(".proxy-visibility-title")?.textContent || "").trim(),
+      lines: Array.from(box.querySelectorAll(".proxy-visibility-line")).map(
+        (line) => ({
+          cls: line.className,
+          text: line.textContent.replace(/\s+/g, " ").trim(),
+        }),
+      ),
+    };
+  };
+  proxying.visibility = visibility(withChain);
+  proxying.visibilityOnTheOtherCard = visibility(proxyCardFor("chatgpt_oauth"));
   const storeBanner = doc.querySelector("#proxyStoreBanner");
   proxying.storeBanner = {
     present: Boolean(storeBanner),

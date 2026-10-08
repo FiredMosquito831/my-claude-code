@@ -9,7 +9,7 @@ from my_claude_code.config.constants import (
     PROVIDER_RATE_WINDOW_DEFAULT,
     PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT,
 )
-from my_claude_code.config.credentials import mask_key_label
+from my_claude_code.config.credentials import mask_key_label, mask_proxy_label
 from my_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     ProviderDescriptor,
@@ -33,6 +33,7 @@ from my_claude_code.providers.openai_chat import (
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .config import build_provider_config
+from .direct_leg import AttributedLeg, DirectFallbackLeg
 from .masked_refusal import MaskedRefusalProvider
 from .opencode_credentials import build_opencode_provider
 from .proxy_leg import ProxiedLegRateLimiter
@@ -307,6 +308,13 @@ def _create_single_provider(
     in place of the leaf: the leaf would have had no proxy, so it would have
     dialled from this computer's own address. Checked first, because a
     refusal has no legs and the line below would build exactly that leaf.
+
+    Since 7.79.2 (C-9 b) a provider with one fixed proxy -- a static
+    ``<PROVIDER>_PROXY``, a custom provider's stored proxy, or a chain that
+    collapsed to its one usable entry -- is its leaf inside an
+    :class:`~.direct_leg.AttributedLeg`, which names that address in the
+    request log before every dial; it used to record nothing. A provider with
+    no proxy at all is built exactly as before.
     """
 
     plan = config.proxy_chain
@@ -317,7 +325,17 @@ def _create_single_provider(
     if plan is None or len(plan.legs) < 2:
         # One rung is a static proxy by another name; zero is no chain at all.
         # Either way nothing rotates and nothing new is constructed.
-        return _create_leaf_provider(descriptor, config, settings)
+        leaf = _create_leaf_provider(descriptor, config, settings)
+        if config.proxy_label == DIRECT_PROXY_LABEL:
+            # A one-entry chain whose entry is Direct: the operator's own
+            # choice, named as such -- and as the system proxy when that is
+            # what carries it. Announced here, since no pool announces it.
+            return AttributedLeg(leaf, direct=True, announce=True)
+        if not config.proxy:
+            return leaf
+        return AttributedLeg(
+            leaf, label=config.proxy_label or mask_proxy_label(config.proxy)
+        )
 
     legs = plan.legs
     labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
@@ -341,11 +359,30 @@ def _create_single_provider(
         if not url:
             # The direct rung. Nothing about it is proxied, so it is built
             # from exactly the line every release before 7.19 built it from.
-            return _create_leaf_provider(
-                descriptor,
-                dataclasses.replace(config, proxy=url, proxy_chain=None),
-                settings,
-            )
+            def direct_leaf() -> BaseProvider:
+                return _create_leaf_provider(
+                    descriptor,
+                    dataclasses.replace(config, proxy=url, proxy_chain=None),
+                    settings,
+                )
+
+            if index >= len(legs):
+                # The Direct FALLBACK (7.79.2): this computer's address only
+                # once every proxy of the chain is unhealthy, read from this
+                # chain's own rotation state at the moment the pool reaches it.
+                return DirectFallbackLeg(
+                    config,
+                    build=direct_leaf,
+                    state=lambda: state,
+                    labels=labels,
+                    scope=plan.scope,
+                    provider_id=descriptor.provider_id,
+                    name=descriptor.display_name,
+                )
+            # A Direct entry the operator wrote into the chain: an ordinary
+            # rung, dialled whenever the rotation picks it -- only its label
+            # says so when the system proxy carries it (C-9 c).
+            return AttributedLeg(direct_leaf(), direct=True)
         # Two things a proxied leg gets that nothing else does, both handed
         # over as configuration at this one line rather than by editing what
         # the leg is made of:

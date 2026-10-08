@@ -355,11 +355,17 @@
             <p class="field-description" id="proxyingNeverDirect">
               With <strong>Fall back to this machine's own address</strong>
               (Direct fallback) switched off, a chain never sends a request
-              from this computer. If every entry is paused, every address has
-              been removed or the chain file cannot be read, requests to that
-              provider are refused with a 503 that names this setting and move
-              on to your model fallback chain, and its card says so in red.
-              MCC never rewrites a chain file it cannot read.
+              from this computer. Switched on, it does so only once
+              <em>every</em> proxy in the chain is unhealthy &mdash; unreachable,
+              refused for intercepting TLS, or cooling down after a refusal.
+              Either way, if every entry is paused, every address has been
+              removed or the chain file cannot be read, requests to that
+              provider are refused with a 503 that names the setting and move
+              on to your model fallback chain, and its card says so in red;
+              switch the chain off to send them from this computer on purpose.
+              MCC never rewrites a chain file it cannot read. Each card's
+              <em>What it can see</em> box says which traffic goes through the
+              chain (see the <a href="#guide-proxy-chains">Guide</a>).
             </p>
             <!-- Written by renderProxyCheckerNote(): whether anything is
                  measuring these addresses, what a test actually does, and
@@ -1979,6 +1985,7 @@
                 <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-media">Generate images through the proxy</a>
+                <a href="#guide-proxy-chains">What a proxy chain hides</a>
                 <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
@@ -3614,6 +3621,43 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Advanced options drawers, which are open when the page loads, and each
                   states what leaving it blank does.
                 </p>
+
+                <h3 id="guide-proxy-chains">What a proxy chain hides</h3>
+                <p>
+                  A chain on the <strong>Proxying</strong> page sends a provider's
+                  traffic out through other addresses, so the provider does not see
+                  this computer's own. Each card has a box, <em>What &lt;provider&gt;
+                  can see</em>, that says exactly which traffic that covers, worked
+                  out from the card as you edit it.
+                </p>
+                <ul>
+                  <li><strong>Through the chain:</strong> model requests on every
+                    surface, with their retries and fallbacks to the provider's other
+                    models; the model listing (hourly and <em>Test</em>);
+                    <em>Probe capabilities</em>; health probes; renewing a sign-in's
+                    token (by the request that needed it, and the card's
+                    <em>Refresh</em> button); media requests.</li>
+                  <li><strong>Never through the chain:</strong> signing in (from this
+                    computer, once). Web search, web fetch, models.dev, price lists and
+                    update checks are not sent to the provider at all; web search and
+                    fetch have proxy settings of their own.</li>
+                  <li><strong>Direct fallback</strong> (<em>Fall back to this
+                    machine's own address</em>): on, the provider sees this computer's
+                    address only once <em>every</em> proxy in the chain is unhealthy
+                    &mdash; unreachable, refused for intercepting TLS, or cooling down
+                    after a refusal. A request that ends with a healthy proxy still
+                    untried moves on to its next model instead. Off, the provider never
+                    sees this computer's address.</li>
+                  <li>A chain whose entries are all paused or removed, or whose file
+                    cannot be read, is <strong>refused</strong> whatever Direct fallback
+                    says. Switch the chain off to send that provider's requests from
+                    this computer on purpose.</li>
+                  <li>The <strong>request log</strong> names the address that carried
+                    each try: a chain's entry, a one-entry chain's entry, a provider's
+                    own static proxy, <code>direct</code>, or <code>direct via system
+                    proxy host:port</code> when the operating system's proxy (a VPN
+                    app, a corporate proxy) carried a Direct dial.</li>
+                </ul>
 
                 <h3 id="guide-advanced">Where the advanced settings went</h3>
                 <p>

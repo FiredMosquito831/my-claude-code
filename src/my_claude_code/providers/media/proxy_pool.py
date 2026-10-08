@@ -15,6 +15,13 @@ switch after the first chunk; a reachability failure always advances (bounded
 by ``PROXY_MAX_LIVE_FAILURES``), an armed trigger advances up to the chain's
 ``max_switches``, anything else re-raises; the direct leg when the chain allows
 it.
+
+Since 7.79.2 the direct leg is the user's rule of 2026-10-06 23:03, exactly as
+chat's: this computer's address only once every proxy of the chain is
+unhealthy by media's own books (:meth:`MediaProxyRotationState.selectable_indexes`);
+otherwise the request is refused with the same ``UNAVAILABLE`` 503 chat's
+withheld fallback answers (``providers/runtime/direct_leg``). A Direct dial the
+system proxy carries is labelled ``direct via system proxy host:port``.
 """
 
 import asyncio
@@ -29,6 +36,7 @@ from my_claude_code.application.media.request import (
     MediaChunk,
     MediaRequest,
 )
+from my_claude_code.config.system_proxy import system_proxy_for
 from my_claude_code.core import proxy_rotation
 from my_claude_code.core.credential_rotation import RotationEngine
 from my_claude_code.core.failures import (
@@ -37,7 +45,12 @@ from my_claude_code.core.failures import (
     failure_kind,
     find_execution_failure,
 )
-from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL, record_proxy
+from my_claude_code.core.proxy_attribution import (
+    DIRECT_PROXY_LABEL,
+    is_direct_label,
+    record_proxy,
+    system_proxy_label,
+)
 from my_claude_code.core.proxy_rotation import (
     PROXY_INTERCEPTION,
     PROXY_REFUSED_TRIGGER_KINDS,
@@ -46,6 +59,11 @@ from my_claude_code.core.proxy_rotation import (
 )
 from my_claude_code.providers.base import ProxyChainPlan
 from my_claude_code.providers.http import maybe_await_aclose
+from my_claude_code.providers.runtime.direct_leg import (
+    chain_exit_health,
+    direct_fallback_withheld,
+    direct_withheld_sentence,
+)
 from my_claude_code.providers.runtime.proxy_rotating import proxy_reachability_failure
 
 from .leaf import MediaLeaf, MediaNode
@@ -97,6 +115,10 @@ class MediaProxyRotationState:
         self._lock = asyncio.Lock()
         self._reachability = reachability
         self._health = health
+
+    @property
+    def policy(self) -> str:
+        return self._engine.policy
 
     @property
     def reachability(self) -> ReachabilityLedger:
@@ -321,10 +343,16 @@ class MediaProxyPool:
         provider_id: str = "",
         max_open_legs: int = 0,
         max_live_failures: int = 0,
+        name: str = "",
+        base_url: str = "",
     ) -> None:
         self._labels = tuple(labels)
         if len(self._labels) < 2:
             raise ValueError("MediaProxyPool requires at least two rungs")
+        #: The provider as the operator knows it, for the withheld sentence,
+        #: and the host a Direct dial goes to, for the system-proxy label.
+        self._name = name or provider_id
+        self._base_url = base_url
         self._pool = _MediaLegPool(build, max_open=max_open_legs)
         self._state = state
         self._plan = plan
@@ -357,8 +385,15 @@ class MediaProxyPool:
             return None
         if proxy_label in self._labels:
             index = self._labels.index(proxy_label)
-        elif proxy_label == DIRECT_PROXY_LABEL:
-            index = self._direct_index
+        elif is_direct_label(proxy_label):
+            # Plain Direct, or Direct the system proxy carried (7.79.2): the
+            # operator's own Direct entry when the chain has one, else the
+            # fallback -- both are this computer's address.
+            index = (
+                self._labels.index(DIRECT_PROXY_LABEL)
+                if DIRECT_PROXY_LABEL in self._labels
+                else self._direct_index
+            )
         else:
             if proxy_label is not None:
                 logger.info(
@@ -429,6 +464,21 @@ class MediaProxyPool:
                 switches += 1
 
         if self._direct_fallback and DIRECT_PROXY_LABEL not in self._labels:
+            # 7.79.2: only once every proxy of the chain is unhealthy. Asked
+            # before anything is announced, so a withheld fallback dials
+            # nothing and the log names no dial.
+            health = chain_exit_health(self._state, self._labels, scope_key)
+            if not health.all_unhealthy:
+                logger.info(
+                    "PROXY CHAIN: {}: media Direct fallback withheld -- {} of {} "
+                    "proxies not unhealthy; the request moves to its next model",
+                    self._provider_id,
+                    len(health.usable),
+                    len(health.considered),
+                )
+                raise direct_fallback_withheld(
+                    direct_withheld_sentence(self._name, self._labels, health)
+                )
             outcome = await self._attempt(
                 self._direct_index, attempt, request_id, scope_key
             )
@@ -468,7 +518,7 @@ class MediaProxyPool:
         label = (
             DIRECT_PROXY_LABEL if index >= len(self._labels) else self._labels[index]
         )
-        record_proxy(label)
+        record_proxy(self._dial_label(label))
         provider = self._pool.get(index)
         self._pool.hold(index)
         try:
@@ -496,6 +546,19 @@ class MediaProxyPool:
             None,
             "",
         )
+
+    def _dial_label(self, label: str) -> str:
+        """What the log calls a dial: a Direct one names the system proxy carrying it.
+
+        The health books keep ``label`` itself; only the request log's word for
+        the dial changes, and only when the operating system's proxy really
+        carries this provider's host.
+        """
+
+        if label != DIRECT_PROXY_LABEL:
+            return label
+        address = system_proxy_for(self._base_url)
+        return system_proxy_label(address) if address else label
 
     async def _drain(
         self,
