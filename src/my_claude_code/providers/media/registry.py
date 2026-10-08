@@ -41,7 +41,7 @@ from my_claude_code.config.provider_catalog import ProviderDescriptor
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
-from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.base import MaskedRefusalPlan, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.runtime.config import build_provider_config
@@ -51,6 +51,7 @@ from .jobs import PinnedMediaClient
 from .key_pool import MediaKeyPool
 from .leaf import MediaLeaf, MediaNode
 from .proxy_pool import MediaProxyPool, MediaProxyRotationState
+from .refusal import MediaRefusalNode
 
 
 def _leaf_limiter(config: ProviderConfig, *, proxied_leg: bool) -> ProviderRateLimiter:
@@ -219,6 +220,15 @@ class MediaRegistry:
         settings: Settings,
     ) -> MediaNode:
         plan = config.proxy_chain
+        if isinstance(plan, MaskedRefusalPlan):
+            # Direct fallback off and nothing in the chain to route through
+            # (7.78.8): the leaf below would have no proxy at all.
+            return MediaRefusalNode(
+                provider_id=descriptor.provider_id,
+                config=config,
+                surfaces=descriptor.media_surfaces,
+                message=plan.reason,
+            )
         if plan is None or len(plan.legs) < 2:
             return self._leaf(descriptor, config, proxied_leg=False)
         legs = plan.legs

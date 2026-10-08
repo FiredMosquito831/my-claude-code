@@ -169,6 +169,7 @@ from my_claude_code.config.paths import (
 )
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.proxy_auth import proxy_auth_token
+from my_claude_code.config.proxy_chains import proxy_chains_problem
 from my_claude_code.config.rtk import (
     RtkError,
     RtkState,
@@ -1540,6 +1541,10 @@ class ConfigDirStatusPayload(BaseModel):
     failed_check: str | None = Field(None, alias="failedCheck")
     notice: str = ""
     banner: str = ""
+    #: The proxy chain file in this directory cannot be read or parsed: what
+    #: the dashboard's red banner says, on every page (7.78.8). ``""`` while
+    #: it reads, which is always on a healthy install.
+    proxy_chains_problem: str = Field("", alias="proxyChainsProblem")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1594,6 +1599,7 @@ def _config_dir_status_payload() -> ConfigDirStatusPayload:
         failedCheck=health.failed_check if health else None,
         notice=resolution.notice,
         banner=banner,
+        proxyChainsProblem=proxy_chains_problem(),
     )
 
 

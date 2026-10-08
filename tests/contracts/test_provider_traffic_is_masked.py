@@ -8,15 +8,9 @@ peer of every connection, and two SOCKS5 proxies and an HTTP proxy that record
 the onward socket and the requested name of every tunnel -- and asserts where
 it came from, and that the proxy, not this computer, resolved the name.
 
-The rows that are filled are the three the Providers card's buttons send: the
+Filled by PR-2 (7.78.7): the three the Providers card's buttons send -- the
 capability probe, the client-identity probe that rides on it, and a custom
-provider's reasoning-dialect probe (leak C-1 -- until 7.78.7 they went out
-from this computer whenever the provider was proxied only by a chain). Every
-other traffic class is a ``skip`` placeholder naming the change that drives
-it, so the grid says what is covered and what is not instead of implying the
-whole provider surface is.
-
-Four questions per row:
+provider's reasoning-dialect probe (leak C-1). Four questions each:
 
 * chain healthy, Direct fallback off: everything through the first exit;
 * first exit unreachable: through the next one, never the dead one;
@@ -24,17 +18,38 @@ Four questions per row:
   names the setting;
 * every exit unhealthy, Direct fallback on: this computer's address, which is
   the one case the user allowed it (2026-10-06 23:03).
+
+Filled by PR-3 (7.78.8): real traffic through the provider tree -- a request on
+each of the three upstream doors (Chat Completions, Responses, Anthropic
+Messages), streamed and not; a same-exit retry; a fallback to another model of
+the same provider; the discovery sweep; the Test button; the credential health
+probe; a media image whose answer MCC downloads. Their questions are below,
+with the three fail-closed causes (every entry paused, every address removed,
+a chain file that cannot be read at start-up -- leaks C-2 and C-5, which went
+out from this computer until 7.78.8).
+
+Every other traffic class is a ``skip`` placeholder naming the change that
+drives it, so the grid says what is covered and what is not instead of
+implying the whole provider surface is.
 """
 
+import contextlib
 import dataclasses
+import functools
 import json
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from anyio.from_thread import BlockingPortal
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from my_claude_code.application.model_metadata import ResponseSurface
+from my_claude_code.application.ports import PooledCredentialPort
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -47,12 +62,17 @@ from my_claude_code.config.proxy_chains import (
     save_proxy_chains,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY, reset_proxy_health
+from my_claude_code.providers.media.registry import MediaRegistry
+from my_claude_code.providers.openai_chat import response_surface
 from my_claude_code.providers.openai_chat.opencode_identity import (
     OPENCODE_SESSION_HEADER,
 )
 from my_claude_code.runtime.application import ApplicationRuntime
 from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.api.support import create_test_app, provider_manager_for_app
 from tests.support.masking_harness import MaskingRig, SeenRequest, start_masking_rig
 
 #: The custom provider every custom-card row probes.
@@ -210,52 +230,618 @@ async def _dialect_probe(world: ProbeWorld) -> dict[str, Any]:
 Driver = Callable[[ProbeWorld], Awaitable[dict[str, Any]]]
 
 
+# ------------------------------------------------- real traffic (PR-3 rows)
+#
+# The rows a request, a retry, a fallback, a listing, a health probe and a
+# media call drive. Each goes through the real provider tree the factory
+# builds -- from the app's own ``/v1/messages`` and media routes where there is
+# one, from the runtime's own call where there is not -- against custom
+# providers pointed at the rig, every one behind the same three-exit chain.
+# Each lives under its own path on the host, so the host's log says which
+# provider a request was for.
+
+CHAT_NAME = "Mask Chat"
+RESPONSES_NAME = "Mask Responses"
+MESSAGES_NAME = "Mask Messages"
+MEDIA_NAME = "Mask Media"
+PAIR_NAME = "Mask Pair"
+#: No chain at all: where a refused request falls back to.
+PLAIN_NAME = "Plain Co"
+RIG_KEY = "sk-rigmask-0000aaaa1111bbbb"
+SECOND_KEY = "sk-rigmask-2222cccc3333dddd"
+#: A model the host says does not exist: the fallback row's first entry.
+REJECTED_MODEL = "rig-rejected"
+MEDIA_MODEL = "rig-image"
+PICTURE = b"\x89PNG\r\n\x1a\n" + b"\x07" * 64
+GEMINI_IMAGE_PATH = "/v1beta/models/mcc-image:generateContent"
+#: Every refused answer names the setting and where it lives.
+REFUSAL_WORDS = ("Direct fallback", "Proxying page")
+
+
+def _sse(events: list[tuple[str | None, dict[str, Any] | str]]) -> bytes:
+    lines: list[str] = []
+    for event, data in events:
+        if event is not None:
+            lines.append(f"event: {event}")
+        lines.append(f"data: {data if isinstance(data, str) else json.dumps(data)}")
+        lines.append("")
+    return ("\n".join(lines) + "\n").encode()
+
+
+_CHAT_STREAM = _sse(
+    [
+        (
+            None,
+            {
+                "id": "chatcmpl-rig",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "masked"},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+        ),
+        (
+            None,
+            {
+                "id": "chatcmpl-rig",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": MODEL,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        ),
+        (None, "[DONE]"),
+    ]
+)
+_RESPONSE = {
+    "id": "resp_rig",
+    "object": "response",
+    "model": MODEL,
+    "status": "completed",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_rig",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "masked", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+_RESPONSES_STREAM = _sse(
+    [
+        (
+            "response.created",
+            {
+                "type": "response.created",
+                "response": _RESPONSE | {"status": "in_progress", "output": []},
+            },
+        ),
+        (
+            "response.output_text.delta",
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_rig",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "masked",
+            },
+        ),
+        ("response.completed", {"type": "response.completed", "response": _RESPONSE}),
+    ]
+)
+_MESSAGES_STREAM = _sse(
+    [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_rig",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": MODEL,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "masked"},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 1},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+)
+
+
+@dataclass
+class Outcome:
+    """What the client (or the card) was told."""
+
+    ok: bool
+    text: str
+
+
+@dataclass
+class TrafficWorld:
+    """The rig, six custom providers and the chain file, wired together."""
+
+    rig: MaskingRig
+    chains_path: Path
+    ids: dict[str, str]
+    chat_failures_left: int = 0
+
+    @property
+    def masked_ids(self) -> tuple[str, ...]:
+        """Every provider the chain covers: all but :data:`PLAIN_NAME`'s."""
+
+        return tuple(pid for name, pid in self.ids.items() if name != PLAIN_NAME)
+
+    def answer(
+        self, request: SeenRequest
+    ) -> tuple[int, bytes] | tuple[int, bytes, str]:
+        path = request.path
+        if path.endswith("/models"):
+            # The rejected model is listed: it exists in the catalogue and
+            # fails only when asked, which is what makes a fallback walk to it.
+            return 200, json.dumps(
+                {
+                    "object": "list",
+                    "data": [
+                        {"id": model, "object": "model"}
+                        for model in (MODEL, REJECTED_MODEL)
+                    ],
+                }
+            ).encode()
+        if path.endswith("/files/kite.png"):
+            return 200, PICTURE, "image/png"
+        if path.endswith("/images/generations"):
+            url = f"{self.rig.host.base_url(path='')}/files/kite.png"
+            return 200, json.dumps({"created": 1, "data": [{"url": url}]}).encode()
+        body = json.loads(request.body or b"{}")
+        if body.get("model") == REJECTED_MODEL:
+            message = f"The model `{REJECTED_MODEL}` does not exist"
+            return 404, json.dumps({"error": {"message": message}}).encode()
+        if path.endswith("/chat/completions"):
+            if self.chat_failures_left > 0:
+                self.chat_failures_left -= 1
+                return 503, b'{"error":{"message":"rig: try again"}}'
+            return 200, _CHAT_STREAM, "text/event-stream"
+        if path.endswith("/responses"):
+            return 200, _RESPONSES_STREAM, "text/event-stream"
+        if path.endswith("/messages"):
+            return 200, _MESSAGES_STREAM, "text/event-stream"
+        return 404, b'{"error":{"message":"rig: no such path"}}'
+
+    # -- the chain file, in every state a row is asked about ---------------
+
+    def write(
+        self,
+        *,
+        direct_fallback: bool = False,
+        paused: bool = False,
+        removed: bool = False,
+    ) -> None:
+        """The rig's three exits, in order, on every masked provider.
+
+        ``paused`` pauses every entry; ``removed`` leaves the addresses out of
+        the catalogue, so the read drops every entry naming one -- the two
+        ways a chain ends up with nothing usable in it.
+        """
+
+        proxies = {
+            f"px_{index}": ProxyEndpoint(url=url)
+            for index, url in enumerate(self.rig.proxy_urls)
+        }
+        chain = ProxyChain(
+            enabled=True,
+            policy="failover",
+            entries=tuple(ProxyChainEntry(proxy=key, paused=paused) for key in proxies),
+            direct_fallback=direct_fallback,
+        )
+        save_proxy_chains(
+            ProxyChains(
+                proxies={} if removed else proxies,
+                chains=dict.fromkeys(self.masked_ids, chain),
+            ),
+            self.chains_path,
+        )
+        reset_proxy_chains_cache()
+
+    def corrupt(self) -> None:
+        """A healthy chain saved, then the file broken -- and a fresh process."""
+
+        self.write()
+        self.chains_path.write_text("{ this is not json", encoding="utf-8")
+        reset_proxy_chains_cache()
+
+    def settings(self, **values: str) -> Settings:
+        return Settings.model_validate(
+            {
+                # ``model`` has no env alias: the field's own name is its key.
+                "model": f"{self.ids[CHAT_NAME]}/{MODEL}",
+                "MODEL_IMAGE": f"{self.ids[MEDIA_NAME]}/{MEDIA_MODEL}",
+                "MODEL_IMAGE_FALLBACKS": "",
+                "MEDIA_FALLBACK_ON_UNDOWNLOADABLE": "true",
+                "PROVIDER_RETRY_BACKOFF_BASE_SECONDS": "0",
+                "PROVIDER_RETRY_BACKOFF_MAX_SECONDS": "0",
+                "PROVIDER_RETRY_BACKOFF_JITTER_SECONDS": "0",
+            }
+            | values
+        )
+
+    @contextlib.contextmanager
+    def client(self, **values: str) -> Iterator[TestClient]:
+        app = create_test_app(self.settings(**values), media=MediaRegistry())
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
+            yield client
+
+    def requests_for(self, name: str) -> list[SeenRequest]:
+        """What the host saw for ``name``: each provider lives under its slug."""
+
+        prefix = f"/{_slug(name)}/"
+        return [seen for seen in self.rig.host.requests if seen.path.startswith(prefix)]
+
+
+def _slug(name: str) -> str:
+    return name.lower().replace(" ", "_")
+
+
+@pytest.fixture
+def traffic(tmp_path, monkeypatch) -> Iterator[TrafficWorld]:
+    rig = start_masking_rig()
+    chains_path = tmp_path / "proxy_chains.json"
+    monkeypatch.setattr(
+        "my_claude_code.config.proxy_chains.proxy_chains_path", lambda: chains_path
+    )
+    reset_proxy_chains_cache()
+    reset_proxy_health()
+    registry = get_provider_registry()
+    ids: dict[str, str] = {}
+    shapes: tuple[
+        tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...
+    ] = (
+        # name, keys, chat surfaces declared, media operations declared
+        (CHAT_NAME, (RIG_KEY,), (), ()),
+        (RESPONSES_NAME, (RIG_KEY,), ("responses",), ()),
+        (MESSAGES_NAME, (RIG_KEY,), ("messages",), ()),
+        (MEDIA_NAME, (RIG_KEY,), (), ("image_generate",)),
+        (PAIR_NAME, (RIG_KEY, SECOND_KEY), (), ()),
+        (PLAIN_NAME, (RIG_KEY,), (), ()),
+    )
+    for name, keys, surfaces, media in shapes:
+        entry = registry.add(
+            display_name=name,
+            base_url=rig.host.base_url(path=f"/{_slug(name)}/v1"),
+            api_keys=keys,
+            surfaces=surfaces or None,
+            media_operations=media or None,
+        )
+        ids[name] = entry.provider_id
+    world = TrafficWorld(rig=rig, chains_path=chains_path, ids=ids)
+    rig.host.responder = world.answer
+    # Which door each model is served on, as an operator states it in
+    # ``model_overrides.json``: with nothing stated a custom host is asked on
+    # Chat Completions, and these two rows are about the other two doors.
+    doors = {
+        ids[RESPONSES_NAME]: ResponseSurface.RESPONSES,
+        ids[MESSAGES_NAME]: ResponseSurface.MESSAGES,
+    }
+    monkeypatch.setattr(
+        response_surface,
+        "override_surface",
+        lambda provider_id, _model_id: doors.get(provider_id),
+    )
+    try:
+        yield world
+    finally:
+        rig.close()
+        reset_proxy_chains_cache()
+        reset_proxy_health()
+
+
+def _app_of(client: TestClient) -> FastAPI:
+    app = client.app
+    assert isinstance(app, FastAPI)
+    return app
+
+
+def _portal(client: TestClient) -> BlockingPortal:
+    """The app's own event loop, so a runtime call shares its providers."""
+
+    portal = client.portal
+    assert portal is not None, "only inside `with TestClient(...)`"
+    return portal
+
+
+def _messages_body(model: str, *, stream: bool) -> dict[str, Any]:
+    return {
+        "model": model,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": stream,
+    }
+
+
+def _answered(response: Any) -> Outcome:
+    text = response.text
+    return Outcome(
+        ok=response.status_code == 200 and "event: error" not in text,
+        text=text,
+    )
+
+
+def _both_ways(world: TrafficWorld, name: str) -> Outcome:
+    """One request on ``name``'s model, streamed and not, from the client."""
+
+    outcomes: list[Outcome] = []
+    with world.client() as client:
+        for stream in (True, False):
+            response = client.post(
+                "/v1/messages",
+                json=_messages_body(f"{world.ids[name]}/{MODEL}", stream=stream),
+            )
+            outcomes.append(_answered(response))
+    if all(outcome.ok for outcome in outcomes):
+        assert len(world.requests_for(name)) >= 2, world.rig.host.requests
+    return Outcome(
+        ok=all(outcome.ok for outcome in outcomes),
+        text="\n".join(outcome.text for outcome in outcomes),
+    )
+
+
+def _chat_completions(world: TrafficWorld) -> Outcome:
+    outcome = _both_ways(world, CHAT_NAME)
+    if outcome.ok:
+        assert {seen.path for seen in world.requests_for(CHAT_NAME)} == {
+            f"/{_slug(CHAT_NAME)}/v1/chat/completions"
+        }
+    return outcome
+
+
+def _responses(world: TrafficWorld) -> Outcome:
+    outcome = _both_ways(world, RESPONSES_NAME)
+    if outcome.ok:
+        assert {seen.path for seen in world.requests_for(RESPONSES_NAME)} == {
+            f"/{_slug(RESPONSES_NAME)}/v1/responses"
+        }
+    return outcome
+
+
+def _anthropic_messages(world: TrafficWorld) -> Outcome:
+    outcome = _both_ways(world, MESSAGES_NAME)
+    if outcome.ok:
+        assert {seen.path for seen in world.requests_for(MESSAGES_NAME)} == {
+            f"/{_slug(MESSAGES_NAME)}/v1/messages"
+        }
+    return outcome
+
+
+def _same_exit_retry(world: TrafficWorld) -> Outcome:
+    """A 503 and then a 200: the leg's own retry, on the exit it already has."""
+
+    world.chat_failures_left = 1
+    with world.client() as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{world.ids[CHAT_NAME]}/{MODEL}", stream=False),
+            )
+        )
+    if outcome.ok:
+        assert len(world.requests_for(CHAT_NAME)) == 2
+    return outcome
+
+
+def _fallback_within_the_provider(world: TrafficWorld) -> Outcome:
+    """The route's first model does not exist; its fallback, same provider, does."""
+
+    chat = world.ids[CHAT_NAME]
+    with world.client(
+        model=f"{chat}/{REJECTED_MODEL}", MODEL_FALLBACKS=f"{chat}/{MODEL}"
+    ) as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages", json=_messages_body("claude-sonnet-4-5", stream=False)
+            )
+        )
+    if outcome.ok:
+        models = [
+            json.loads(seen.body).get("model")
+            for seen in world.requests_for(CHAT_NAME)
+            if seen.path.endswith("/chat/completions")
+        ]
+        assert REJECTED_MODEL in models and MODEL in models, models
+    return outcome
+
+
+def _discovery_sweep(world: TrafficWorld) -> Outcome:
+    """The sweep's own per-provider call: ``list_model_infos`` on the tree."""
+
+    with world.client() as client:
+        manager = provider_manager_for_app(_app_of(client))
+        result = _portal(client).call(
+            functools.partial(
+                manager.refresh_provider_models, world.ids[CHAT_NAME], attempts=1
+            )
+        )
+    failure = result.failure_for(world.ids[CHAT_NAME])
+    return Outcome(ok=failure is None, text="" if failure is None else failure.message)
+
+
+def _test_button(world: TrafficWorld) -> Outcome:
+    with world.client() as client:
+        payload = client.post(
+            f"/admin/api/providers/{world.ids[CHAT_NAME]}/test"
+        ).json()
+    return Outcome(ok=bool(payload.get("ok")), text=str(payload.get("message", "")))
+
+
+def _credential_health_probe(world: TrafficWorld) -> Outcome:
+    """What the executor sends after a 429: one request on one named key."""
+
+    request = MessagesRequest.model_validate(_messages_body(MODEL, stream=True))
+
+    async def probe(manager: ProviderRuntimeManager) -> Outcome:
+        lease = await manager.acquire()
+        try:
+            provider = lease.resolve_provider(world.ids[PAIR_NAME])
+            assert isinstance(provider, PooledCredentialPort)
+            stream = provider.stream_on_credential(1, request)
+            try:
+                async for _chunk in stream:
+                    pass
+            except ExecutionFailure as exc:
+                return Outcome(ok=False, text=exc.message)
+            return Outcome(ok=True, text="")
+        finally:
+            await lease.release()
+
+    with world.client() as client:
+        outcome = _portal(client).call(probe, provider_manager_for_app(_app_of(client)))
+    if outcome.ok:
+        # The key the probe named, and only that one.
+        auths = {seen.headers.get("authorization") for seen in world.rig.host.requests}
+        assert auths == {f"Bearer {SECOND_KEY}"}, auths
+    return outcome
+
+
+def _media_image_with_result_download(world: TrafficWorld) -> Outcome:
+    """A picture the host answers with a link, fetched by MCC before answering."""
+
+    with world.client() as client:
+        response = client.post(
+            GEMINI_IMAGE_PATH,
+            json={
+                "contents": [{"role": "user", "parts": [{"text": "a red kite"}]}],
+                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            },
+        )
+    outcome = Outcome(ok=response.status_code == 200, text=response.text)
+    if outcome.ok:
+        paths = [seen.path for seen in world.rig.host.requests]
+        assert f"/{_slug(MEDIA_NAME)}/v1/images/generations" in paths, paths
+        assert "/files/kite.png" in paths, paths
+    return outcome
+
+
+TrafficDriver = Callable[[TrafficWorld], Outcome]
+
+
 @dataclass(frozen=True)
 class TrafficClass:
     name: str
-    #: The change that drives this row: ``PR-2`` for the filled rows, else the
-    #: one that will (the PR split in the spec).
+    #: The change that drives this row: ``PR-2`` / ``PR-3`` for the filled
+    #: rows, else the one that will (the PR split in the spec).
     filled_by: str
+    #: A Providers-card probe (PR-2): answers with the card's payload.
     driver: Driver | None = None
+    #: Real traffic through the provider tree (PR-3): answers what the client
+    #: or the card was told.
+    traffic: TrafficDriver | None = None
 
 
 TRAFFIC: tuple[TrafficClass, ...] = (
     TrafficClass("probe_capabilities", "PR-2", _capability_probe),
     TrafficClass("identity_probe", "PR-2", _identity_probe),
     TrafficClass("dialect_probe", "PR-2", _dialect_probe),
-    TrafficClass("chat_completions", "PR-3"),
-    TrafficClass("responses", "PR-3"),
-    TrafficClass("anthropic_messages", "PR-3"),
-    TrafficClass("same_exit_retry", "PR-3"),
-    TrafficClass("fallback_to_a_model_of_the_same_provider", "PR-3"),
-    TrafficClass("discovery_sweep", "PR-3"),
-    TrafficClass("test_button", "PR-3"),
-    TrafficClass("credential_health_probe", "PR-3"),
-    TrafficClass("media_image_with_result_download", "PR-3"),
+    TrafficClass("chat_completions", "PR-3", traffic=_chat_completions),
+    TrafficClass("responses", "PR-3", traffic=_responses),
+    TrafficClass("anthropic_messages", "PR-3", traffic=_anthropic_messages),
+    TrafficClass("same_exit_retry", "PR-3", traffic=_same_exit_retry),
+    TrafficClass(
+        "fallback_to_a_model_of_the_same_provider",
+        "PR-3",
+        traffic=_fallback_within_the_provider,
+    ),
+    TrafficClass("discovery_sweep", "PR-3", traffic=_discovery_sweep),
+    TrafficClass("test_button", "PR-3", traffic=_test_button),
+    TrafficClass("credential_health_probe", "PR-3", traffic=_credential_health_probe),
+    TrafficClass(
+        "media_image_with_result_download",
+        "PR-3",
+        traffic=_media_image_with_result_download,
+    ),
     TrafficClass("oauth_token_refresh_claude", "PR-5"),
     TrafficClass("oauth_token_refresh_chatgpt", "PR-5"),
     TrafficClass("vertex_token_refresh_socks5", "PR-5"),
 )
 
 
+def _placeholder(row: TrafficClass) -> Any:
+    return pytest.param(
+        row,
+        id=row.name,
+        marks=pytest.mark.skip(
+            reason=f"placeholder: {row.name} is driven from {row.filled_by}"
+        ),
+    )
+
+
 def _rows() -> list[Any]:
+    """The Providers card's probes, asked the probe questions."""
+
+    return [pytest.param(row, id=row.name) for row in TRAFFIC if row.driver]
+
+
+def _traffic_rows() -> list[Any]:
+    """Every other traffic class, asked the real-traffic questions.
+
+    A row nobody drives yet stays a strict ``skip`` naming who will, so the
+    grid says what is covered and what is not.
+    """
+
     return [
-        pytest.param(
-            row,
-            id=row.name,
-            marks=()
-            if row.driver is not None
-            else pytest.mark.skip(
-                reason=f"placeholder: {row.name} is driven from {row.filled_by}"
-            ),
-        )
+        pytest.param(row, id=row.name) if row.traffic else _placeholder(row)
         for row in TRAFFIC
+        if row.driver is None
     ]
 
 
 def _drive(row: TrafficClass) -> Driver:
     assert row.driver is not None
     return row.driver
+
+
+def _send(row: TrafficClass) -> TrafficDriver:
+    assert row.traffic is not None
+    return row.traffic
 
 
 # -------------------------------------------------------------------- rows
@@ -334,3 +920,153 @@ def test_every_row_names_who_fills_it() -> None:
     for row in TRAFFIC:
         assert row.filled_by.startswith("PR-")
         assert (row.driver is not None) == (row.filled_by == "PR-2")
+        assert (row.traffic is not None) == (row.filled_by == "PR-3")
+
+
+# ------------------------------------------------- real traffic (PR-3 rows)
+#
+# Three questions per row, plus the two that prove nothing else moved:
+#
+# * chain healthy, Direct fallback off: the host sees it, and only from the
+#   chain's first exit, by name;
+# * the chain has nothing usable -- every entry paused, every address removed,
+#   or the chain file unreadable at start -- and Direct fallback off: not one
+#   connection reaches the host or any proxy, and the answer names the setting
+#   and the page (7.78.8; before it, each of these went out from this
+#   computer's own address);
+# * the same chain with Direct fallback ON: exactly what every release did
+#   before -- this computer's address -- because the user's rule for that
+#   case is a later change of its own (PR-4), not this one.
+
+#: How each fail-closed row breaks the chain.
+NO_USABLE_ENTRY: dict[str, Callable[[TrafficWorld], None]] = {
+    "all_paused": lambda world: world.write(paused=True),
+    "all_removed": lambda world: world.write(removed=True),
+    "chain_file_unreadable": TrafficWorld.corrupt,
+}
+
+
+@pytest.mark.parametrize("row", _traffic_rows())
+def test_real_traffic_reaches_the_host_only_through_the_chain(
+    traffic: TrafficWorld, row: TrafficClass
+) -> None:
+    traffic.write()
+
+    outcome = _send(row)(traffic)
+
+    assert outcome.ok, outcome.text
+    traffic.rig.assert_masked()
+    first, *others = traffic.rig.proxies
+    assert first.targets, "the first exit in the chain's order carried nothing"
+    assert all(not proxy.targets for proxy in others)
+
+
+@pytest.mark.parametrize("cause", sorted(NO_USABLE_ENTRY))
+@pytest.mark.parametrize("row", _traffic_rows())
+def test_no_usable_entry_and_direct_fallback_off_sends_nothing(
+    traffic: TrafficWorld, row: TrafficClass, cause: str
+) -> None:
+    NO_USABLE_ENTRY[cause](traffic)
+
+    outcome = _send(row)(traffic)
+
+    traffic.rig.assert_nothing_sent()
+    assert not outcome.ok, outcome.text
+    for words in REFUSAL_WORDS:
+        assert words in outcome.text, outcome.text
+
+
+@pytest.mark.parametrize("row", _traffic_rows())
+def test_no_usable_entry_and_direct_fallback_on_is_what_it_always_was(
+    traffic: TrafficWorld, row: TrafficClass
+) -> None:
+    traffic.write(paused=True, direct_fallback=True)
+
+    outcome = _send(row)(traffic)
+
+    assert outcome.ok, outcome.text
+    assert traffic.rig.host.peers
+    assert traffic.rig.direct_peers() == traffic.rig.host.peers
+    assert all(not proxy.targets for proxy in traffic.rig.proxies)
+
+
+def test_a_refused_request_moves_on_to_the_next_model(traffic: TrafficWorld) -> None:
+    """Refused exactly as any unavailable provider is: the chain carries on.
+
+    The route's first model is on a provider whose chain has nothing usable
+    and Direct fallback off; its fallback is on a provider with no chain. The
+    first is never dialled -- not through a proxy, not directly -- and the
+    second answers the client.
+    """
+
+    traffic.write(paused=True)
+    masked = traffic.ids[CHAT_NAME]
+    plain = traffic.ids[PLAIN_NAME]
+
+    with traffic.client(
+        model=f"{masked}/{MODEL}", MODEL_FALLBACKS=f"{plain}/{MODEL}"
+    ) as client:
+        response = client.post(
+            "/v1/messages", json=_messages_body("claude-sonnet-4-5", stream=False)
+        )
+
+    assert response.status_code == 200, response.text
+    assert traffic.requests_for(CHAT_NAME) == []
+    assert len(traffic.requests_for(PLAIN_NAME)) == 1
+    assert all(not proxy.targets for proxy in traffic.rig.proxies)
+
+
+def test_a_refusal_reaches_the_client_as_a_503_naming_the_setting(
+    traffic: TrafficWorld,
+) -> None:
+    """With nothing behind it, the refusal is the answer: 503, and why."""
+
+    traffic.write(paused=True)
+    with traffic.client() as client:
+        response = client.post(
+            "/v1/messages",
+            json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+        )
+
+    assert response.status_code == 503, response.text
+    message = response.json()["error"]["message"]
+    assert message.startswith(f"Not sent: {CHAT_NAME}'s proxy chain has no usable")
+    assert "all 3 entries are paused" in message
+    assert "Direct fallback is off" in message
+    assert f"Proxying page -> {CHAT_NAME}" in message
+    traffic.rig.assert_nothing_sent()
+
+
+def test_a_static_proxy_still_carries_a_chain_with_nothing_usable(
+    traffic: TrafficWorld,
+) -> None:
+    """A provider's own stored proxy stands in, as it always has: masked.
+
+    The fail-closed rule is about this computer's own address. A chain with
+    nothing usable stands aside for the provider's static proxy exactly as
+    before (``<PROVIDER>_PROXY``, or a custom provider's stored one), and that
+    goes out through the proxy -- not refused.
+    """
+
+    entry = get_provider_registry().add(
+        display_name="Static Co",
+        base_url=traffic.rig.host.base_url(path="/static_co/v1"),
+        api_keys=(RIG_KEY,),
+        proxy=traffic.rig.proxy_urls[2],
+    )
+    traffic.ids["Static Co"] = entry.provider_id
+    traffic.write(paused=True)
+
+    with traffic.client() as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{entry.provider_id}/{MODEL}", stream=False),
+            )
+        )
+
+    assert outcome.ok, outcome.text
+    assert traffic.requests_for("Static Co")
+    traffic.rig.assert_masked()
+    first, second, third = traffic.rig.proxies
+    assert third.targets and not first.targets and not second.targets

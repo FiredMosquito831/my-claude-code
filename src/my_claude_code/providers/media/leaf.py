@@ -87,6 +87,30 @@ def same_host(url: str, base_url: str) -> bool:
     return bool(host) and host == _host(base_url)
 
 
+def surfaces_serve(surfaces: tuple[MediaSurface, ...], request: MediaRequest) -> bool:
+    """Whether a provider declaring ``surfaces`` can serve ``request`` at all.
+
+    :meth:`MediaLeaf.supports`, as a function of what was declared, so a node
+    that never builds a leaf (the masked refusal) answers it identically.
+    """
+
+    surface = surface_for(surfaces, request.operation)
+    if surface is None:
+        return False
+    if request.stream and not surface.stream:
+        return False
+    # A file cannot be sent where the host documents JSON only.
+    if request.uploads and surface.encoding == MEDIA_ENCODING_JSON:
+        return False
+    # A format the client NAMED and the host does not document is a
+    # format this host cannot produce: skipped uncharged, never
+    # transcoded (user decision 9). No list = the host judges.
+    named = request.body.get("response_format")
+    if surface.formats is not None and isinstance(named, str) and named:
+        return named in surface.formats
+    return True
+
+
 class MediaNode(MediaProviderPort, Protocol):
     """A media provider the registry can close."""
 
@@ -163,21 +187,7 @@ class MediaLeaf:
         return surface_for(self._surfaces, request.operation)
 
     def supports(self, request: MediaRequest) -> bool:
-        surface = self._surface(request)
-        if surface is None:
-            return False
-        if request.stream and not surface.stream:
-            return False
-        # A file cannot be sent where the host documents JSON only.
-        if request.uploads and surface.encoding == MEDIA_ENCODING_JSON:
-            return False
-        # A format the client NAMED and the host does not document is a
-        # format this host cannot produce: skipped uncharged, never
-        # transcoded (user decision 9). No list = the host judges.
-        named = request.body.get("response_format")
-        if surface.formats is not None and isinstance(named, str) and named:
-            return named in surface.formats
-        return True
+        return surfaces_serve(self._surfaces, request)
 
     def preflight(self, attempt: MediaAttempt) -> None:
         """Nothing to validate before sending; the upstream judges the body."""

@@ -13,6 +13,7 @@ from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.proxy_chains import (
     OAUTH_PROVIDER_IDS,
     current_proxy_chains,
+    masked_refusal_sentence,
 )
 from my_claude_code.config.settings import Settings, parse_lockout_tiers
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
@@ -21,7 +22,12 @@ from my_claude_code.core.proxy_rotation import (
     PROXY_INTERCEPTION,
     PROXY_REACHABILITY,
 )
-from my_claude_code.providers.base import ProviderConfig, ProxyChainPlan, ProxyLeg
+from my_claude_code.providers.base import (
+    MaskedRefusalPlan,
+    ProviderConfig,
+    ProxyChainPlan,
+    ProxyLeg,
+)
 
 CREDENTIAL_ROTATION_POLICIES = frozenset(
     {"single", "round_robin", "least_used", "failover", "on_error"}
@@ -30,7 +36,7 @@ DEFAULT_CREDENTIAL_ROTATION = "single"
 
 
 def resolve_proxy_chain(
-    provider_id: str, static_proxy: str, settings: Settings
+    provider_id: str, static_proxy: str, settings: Settings, *, name: str = ""
 ) -> tuple[str, ProxyChainPlan | None]:
     """Turn the stored chain for one provider into what the runtime uses.
 
@@ -40,6 +46,19 @@ def resolve_proxy_chain(
     untouched and gets no plan at all, which is byte-for-byte the behaviour of
     every release before this one. The ``.env`` key is never rewritten; a chain
     with entries simply stops it being consulted.
+
+    With one exception, the one place the decision is made (7.78.8): a chain
+    that is switched on, has **Direct fallback off** and has nothing to route
+    through -- every entry paused, every address removed, no entry at all, or
+    a chain file that could not be read -- with no ``<PROVIDER>_PROXY`` left to
+    carry the provider either. Collapsing that to "no plan, no proxy" built a
+    provider that dialled from this computer's own address, the one thing the
+    operator who switched Direct fallback off said must never happen. It
+    resolves to a :class:`MaskedRefusalPlan` instead, which every construction
+    seam builds as a refusal (a 503 naming the setting), and which the
+    Providers card's probes read as "not sent". ``name`` is the provider as
+    the operator knows it, for that sentence. With Direct fallback on, or with
+    a ``<PROVIDER>_PROXY`` to fall back to, nothing changes.
 
     One rung collapses to a static proxy rather than a pool: there is nothing
     to move between, and a one-entry pool would build a second client, a second
@@ -57,7 +76,7 @@ def resolve_proxy_chain(
     # missing, and a chain left with no legs routes direct (7.72.1).
     store = current_proxy_chains()
     chain = store.chain(provider_id)
-    if chain is None or not chain.enabled or not chain.entries:
+    if chain is None or not chain.enabled:
         return static_proxy, None
     if provider_id in OAUTH_PROVIDER_IDS and not chain.oauth_acknowledged:
         # A subscription login whose operator has not said they understand what
@@ -86,7 +105,21 @@ def resolve_proxy_chain(
         )
 
     if not legs:
-        return static_proxy, None
+        if chain.direct_fallback or static_proxy:
+            # Today's answer, and a masked one when ``static_proxy`` is set:
+            # the chain stands aside and ``<PROVIDER>_PROXY`` carries it.
+            return static_proxy, None
+        who = name or provider_id
+        return "", MaskedRefusalPlan(
+            direct_fallback=False,
+            reason=masked_refusal_sentence(store, provider_id, who)
+            # Unreachable -- the cause and the legs are the same test -- but
+            # this line runs on the way to a refusal and must not be empty.
+            or (
+                f"Not sent: {who}'s proxy chain has no usable entry and Direct "
+                f"fallback is off (Proxying page -> {who})."
+            ),
+        )
     if len(legs) == 1:
         return legs[0].url, None
     return "", ProxyChainPlan(
@@ -171,7 +204,9 @@ def masked_exit_for(
 
     No chain (or one the resolver drops) hands back ``static_proxy`` itself,
     so a provider without a chain probes exactly as it always has. A one-entry
-    chain is its one entry, as it is for real requests.
+    chain is its one entry, as it is for real requests. A chain the resolver
+    refuses (:class:`MaskedRefusalPlan`: Direct fallback off and no usable
+    entry) is refused here with the very sentence a real request gets.
 
     This reads the shared health ledgers and writes nothing to them. A probe's
     outcome reaches its caller as a type name, not the exception the rotation
@@ -179,7 +214,11 @@ def masked_exit_for(
     bookkeeping.
     """
 
-    proxy, plan = resolve_proxy_chain(provider_id, static_proxy or "", settings)
+    proxy, plan = resolve_proxy_chain(
+        provider_id, static_proxy or "", settings, name=name
+    )
+    if isinstance(plan, MaskedRefusalPlan):
+        return MaskedExit(proxy=None, refused=plan.reason)
     if plan is None:
         if proxy == (static_proxy or ""):
             return MaskedExit(proxy=static_proxy)
@@ -303,6 +342,7 @@ def build_provider_config(
         descriptor.provider_id,
         string_setting(settings, descriptor.proxy_attr),
         settings,
+        name=descriptor.display_name,
     )
     return ProviderConfig(
         proxy_chain=proxy_chain,
@@ -351,7 +391,10 @@ def _build_dynamic_provider_config(
     if rotation not in CREDENTIAL_ROTATION_POLICIES:
         rotation = DEFAULT_CREDENTIAL_ROTATION
     proxy, proxy_chain = resolve_proxy_chain(
-        descriptor.provider_id, entry.proxy or "", settings
+        descriptor.provider_id,
+        entry.proxy or "",
+        settings,
+        name=entry.display_name,
     )
     return ProviderConfig(
         proxy_chain=proxy_chain,
