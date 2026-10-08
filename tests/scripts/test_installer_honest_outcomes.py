@@ -232,6 +232,7 @@ PRE_START_FUNCTIONS = (
     "health_answer",
     "process_owner",
     "port_answerer",
+    "why_answerer_is_not_stopped",
     "stop_hint_for_answerer",
     "stop_configured_server",
 )
@@ -287,6 +288,36 @@ def test_a_port_answered_by_a_server_the_build_cannot_see_is_not_free(
     )
     assert "Nothing was stopped and nothing was started." in completed.stdout
     assert "then start yours with: mcc-server" in completed.stdout
+    # Nobody can be named as its owner here, so it is not called another
+    # user's: the build simply could not identify it.
+    assert "could not identify as the process holding the port" in completed.stdout
+    assert "Stop it (kill 424242)" in completed.stdout
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="needs a POSIX process owned by a different user (pid 1, root)",
+)
+def test_another_users_server_is_named_as_such(
+    tmp_path: Path, health_server: HealthServer
+) -> None:
+    """The sudo case: the server that answers is root's. The message says so
+    and names the command that stops it."""
+    shell = _require_sh()
+    health_server.pid_header.append("1")
+    script = tmp_path / "pre.sh"
+    script.write_text(
+        _sh_harness(PRE_START_FUNCTIONS, _pre_start_body(health_server.port)),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    completed = _run_sh(shell, script)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "OUTCOME=held-elsewhere" in completed.stdout
+    assert "pid 1, run by root -- another user's server" in completed.stdout
+    assert "Stop it (it is root's: sudo kill 1)" in completed.stdout
 
 
 def test_a_port_answered_without_a_pid_is_still_not_free(

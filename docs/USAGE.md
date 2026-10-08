@@ -5485,11 +5485,14 @@ lock it is, how old it is and which folder it cannot write, names the
 
 The installer's success line, "installed and answering on port N", now means
 the answer came from the server it started (every server since 7.70.0 names its
-process id on `/health`). When a server this account cannot see or stop holds
-the port — typically one another user started, for example through `sudo` —
-the installer names that server's process id and user, starts nothing, says how
-to stop it, and exits 1 (7.78.11). The new version is still installed; nothing
-is rolled back.
+process id on `/health`). When the port is held by a server the installer
+cannot stop — another user's (one started through `sudo` runs as root), or your
+own previous server on a machine where the installed `mcc-server` cannot tell
+which process holds a port (it asks `ss` or `netstat`; a minimal image has
+neither) — the installer names that server's process id and user, starts
+nothing, says how to stop it, and exits 1 (7.78.11). Before, it started a
+server that gave up at once and reported the other server's answer as its own
+success. The new version is still installed; nothing is rolled back.
 
 #### The receipt keeps every episode
 

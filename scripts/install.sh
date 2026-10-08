@@ -2188,6 +2188,24 @@ port_answerer() {
     fi
 }
 
+why_answerer_is_not_stopped() {
+    # Why the server that answered the last health_answer is not stopped here.
+    # Another user's server cannot be; a server of this user's that the
+    # installed mcc-server could not identify (it reads the holder of a port
+    # from `ss` or `netstat`, and a minimal image has neither) is not, because
+    # which processes may be stopped is the product's decision, not this
+    # script's.
+    if [ -n "$health_answer_pid" ]; then
+        why_owner=$(process_owner "$health_answer_pid")
+        why_me=$(id -un 2>/dev/null || printf '')
+        if [ -n "$why_owner" ] && [ -n "$why_me" ] && [ "$why_owner" != "$why_me" ]; then
+            printf 'another user'"'"'s server (one started through sudo runs as root), which this installer cannot stop'
+            return 0
+        fi
+    fi
+    printf 'which the installed mcc-server could not identify as the process holding the port, so this installer does not stop it'
+}
+
 stop_hint_for_answerer() {
     # How to stop the server that answered, or a generic sentence.
     if [ -z "$health_answer_pid" ]; then
@@ -2316,13 +2334,18 @@ stop_configured_server() {
         # another user's socket, so a server started through sudo -- running
         # as root -- reads as a free port, and the installer used to start a
         # server that abandoned its start and then report the root server's
-        # answer as its own success. One GET of /health tells the two apart:
-        # only a real HTTP answer counts, so a dropped SYN never blocks a start.
+        # answer as its own success. The same happens with the user's OWN
+        # server where the installed build cannot read the holder of a port
+        # at all (it asks `ss` or `netstat`; a minimal image has neither):
+        # the new version was swapped in, the old server kept serving, and
+        # the run said "installed and answering". One GET of /health tells
+        # "free" from "held": only a real HTTP answer counts, so a dropped SYN
+        # never blocks a start.
         health_answer "http://$server_reachable_host:$server_port/health"
         if [ "$health_answer_code" != "000" ]; then
             stop_outcome="held-elsewhere"
             install_progress_holder=$(port_answerer)
-            stop_message="Port $server_port is answered by $install_progress_holder, which this installer cannot identify as a server it may stop -- a server another user started looks exactly like this (one started through sudo runs as root). Nothing was stopped and nothing was started. $(stop_hint_for_answerer), then start yours with: mcc-server"
+            stop_message="Port $server_port is answered by $install_progress_holder -- $(why_answerer_is_not_stopped). Nothing was stopped and nothing was started. $(stop_hint_for_answerer), then start yours with: mcc-server"
             return 0
         fi
         stop_outcome="nothing-listening"
