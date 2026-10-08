@@ -1,4 +1,4 @@
-"""7.78.11: the installers say what actually happened, and WSL is server only.
+"""7.79.1: the installers say what actually happened, and WSL is server only.
 
 Four findings of ``specs/INVESTIGATION-NPM-SUDO.md`` and
 ``specs/INVESTIGATION-NPM-ROUTE.md``, each RUN here against the real function
@@ -259,7 +259,7 @@ report_other_servers() {{ :; }}
 install_progress_holder=""
 server_reachable_host=127.0.0.1
 server_port={port}
-stop_configured_server /nowhere/mcc-server 7.78.11
+stop_configured_server /nowhere/mcc-server 7.79.1
 printf 'OUTCOME=%s\\n' "$stop_outcome"
 printf 'MESSAGE=%s\\n' "$stop_message"
 """

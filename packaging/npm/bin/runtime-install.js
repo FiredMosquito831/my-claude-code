@@ -62,7 +62,7 @@ const OVERRIDE_FLAGS = [
   // environment without any help from here.
   "--no-restart",
   "--no-start",
-  // 7.78.11: install for root even when this runs as root through sudo on
+  // 7.79.1: install for root even when this runs as root through sudo on
   // behalf of another user. Passed through to install.sh, which refuses that
   // case too; the environment form is MCC_INSTALL_ALLOW_ROOT=1.
   "--allow-root",
@@ -137,7 +137,7 @@ function displayState(platform, env, wsl) {
   if (platform === "win32") return { desktop: true, why: "Windows always has a session" };
   if (platform === "darwin") return { desktop: true, why: "macOS always has a session" };
   if (platform === "linux") {
-    // 7.78.11: WSL is server only, display or not. WSLg sets DISPLAY and
+    // 7.79.1: WSL is server only, display or not. WSLg sets DISPLAY and
     // WAYLAND_DISPLAY, so this used to install the LINUX desktop app inside
     // WSL -- a second, separate install on a PC whose desktop app is the
     // Windows one (and `mcc-desktop` refuses to run in WSL at all).
@@ -644,7 +644,7 @@ function serverInstallerCommand(platform, withDesktop, script, serverFlags) {
   }
   const posix = (withDesktop ? ["--desktop"] : []).concat(extras);
   const flag = posix.length ? ` -s -- ${posix.join(" ")}` : "";
-  // 7.78.11: download first, then run -- never `curl ... | sh`. A pipeline
+  // 7.79.1: download first, then run -- never `curl ... | sh`. A pipeline
   // exits with its LAST command's status, and `sh` fed an empty script exits
   // 0, so a missing curl or a failed download was reported as a successful
   // install ("done", with nothing installed) and `mcc uninstall` as a
@@ -665,7 +665,7 @@ function serverInstallerCommand(platform, withDesktop, script, serverFlags) {
 /**
  * The user this run acts for when it is root through sudo, or null.
  *
- * 7.78.11. My Claude Code is a per-user install (uv's tool directory,
+ * 7.79.1. My Claude Code is a per-user install (uv's tool directory,
  * ~/.local/bin, the config home), so `sudo npm install -g` -- which a system
  * Node needs only to write the `mcc` command into a root-owned prefix --
  * installed a second, root-owned copy for root and started a root server on
@@ -730,7 +730,7 @@ async function performInstall(options) {
 
   // The one line the spec asks for: what, where, and why.
   log(decision.reason);
-  // 7.78.11: nothing at all for root acting for another user -- no server and
+  // 7.79.1: nothing at all for root acting for another user -- no server and
   // no desktop app. `npm install -g` passes `refusedStatus: 0`, so the `mcc`
   // command it wrote (the only thing sudo was needed for) stays; `mcc
   // install` and a bare `mcc` keep the default 1 and fail honestly.

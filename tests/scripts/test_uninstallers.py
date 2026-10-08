@@ -935,7 +935,7 @@ def _write_real_shortcut(powershell: str, shortcut: Path, target: Path) -> None:
 def test_uninstall_ps1_keeps_the_installed_desktop_apps_start_menu_entry(
     powershell_uninstall_harness: PowerShellUninstallHarness, tmp_path: Path
 ) -> None:
-    """7.78.11. The desktop app's own setup writes the same "My Claude
+    """7.79.1. The desktop app's own setup writes the same "My Claude
     Code.lnk" (pointing at MyClaudeCode.exe). This uninstaller does not
     remove the app, so it must not take the app's Start Menu entry with it:
     `mcc uninstall` on an npm machine used to leave the app with no entry."""

@@ -174,12 +174,12 @@ $script:InstallProgressHolder = ""
 $script:HoldsUpdateLock = $false
 $script:UpdateLockPath = ""
 $script:UpdateLockOwner = $null
-# 7.78.11: set by Enter-UpdateLock when the lock could not be taken although
+# 7.79.1: set by Enter-UpdateLock when the lock could not be taken although
 # NO running update holds it (the folder or a leftover file is not this
 # user's to write). That is not "an update is already running"; the run says
 # whose lock it is and exits 1.
 $script:UpdateLockUnavailable = $false
-# 7.78.11: set when the configured port is answered by a server this run did
+# 7.79.1: set when the configured port is answered by a server this run did
 # not start (Confirm-RestartedServer). The install may have happened; the run
 # still ends with exit 1, because the server it is for is not the one serving.
 $script:PortHeldByAnother = $false
@@ -2877,7 +2877,7 @@ function Enter-UpdateLock {
         try { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue } catch { }
     }
     $script:UpdateLockOwner = (Read-UpdateLockOwner -Path $path)
-    # 7.78.11: nobody alive holds it and it still could not be taken -- the
+    # 7.79.1: nobody alive holds it and it still could not be taken -- the
     # folder, or a lock left in it, is not this user's to write. Until now
     # this read as "An update is already running", exit 0.
     if (-not (Test-UpdateLockOwnerAlive -Owner $script:UpdateLockOwner)) {
@@ -2902,7 +2902,7 @@ function Get-PathOwner {
 function Write-UpdateLockUnavailableNotice {
     <#
         .SYNOPSIS
-        7.78.11: the honest version of "An update is already running" for the
+        7.79.1: the honest version of "An update is already running" for the
         case where none is -- whose lock this is, how old, and why it cannot be
         taken. The caller exits 1: nothing was installed.
     #>
@@ -3959,7 +3959,7 @@ function Start-RestartedServer {
 function Get-HealthAnswerPid {
     <#
         .SYNOPSIS
-        7.78.11: the pid a /health answer names in `x-mcc-pid` (every server
+        7.79.1: the pid a /health answer names in `x-mcc-pid` (every server
         since 7.70.0 sends it), or 0 when it names none or nothing answers.
         Never throws.
     #>
@@ -3983,7 +3983,7 @@ function Get-HealthAnswerPid {
 function Test-AnswerIsFromStartedServer {
     <#
         .SYNOPSIS
-        7.78.11: whether the server that answered (`-AnswerPid`) is the one
+        7.79.1: whether the server that answered (`-AnswerPid`) is the one
         this run started (`-StartedPid`) or runs under it. 0 = ours, 1 =
         positively not, 2 = cannot tell.
 
@@ -3994,7 +3994,7 @@ function Test-AnswerIsFromStartedServer {
         while our server runs that chain is unbroken; a chain that ends without
         meeting the started pid is somebody else's server. "Cannot tell" (the
         process table could not be read, or the answering process is already
-        gone) is treated as ours by the caller: the reading before 7.78.11.
+        gone) is treated as ours by the caller: the reading before 7.79.1.
     #>
     param(
         [Parameter(Mandatory = $true)][int] $AnswerPid,
@@ -4057,7 +4057,7 @@ function Confirm-RestartedServer {
     Write-Host "Waiting for it to answer $HealthUrl."
     Write-InstallLog ("Waiting for " + $HealthUrl + ".")
     if (Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)) {
-        # 7.78.11: an answer is success only when it comes from the server this
+        # 7.79.1: an answer is success only when it comes from the server this
         # run started. Another server on the same port -- one started by
         # another user, which this account cannot identify or stop -- answers
         # /health too, while the one started here finds the port served and
@@ -4425,7 +4425,7 @@ function Test-ShortcutOpensDesktopApp {
         app's own setup (Inno, per user) puts in the Start Menu.
 
         .DESCRIPTION
-        7.78.11. The app's setup and `install.ps1 -Desktop` write the SAME
+        7.79.1. The app's setup and `install.ps1 -Desktop` write the SAME
         file, "Start Menu\Programs\My Claude Code.lnk": the app's points at
         MyClaudeCode.exe, this script's at mcc-desktop.exe. The target is the
         only thing that tells them apart -- the Windows twin of the bundle
@@ -4453,7 +4453,7 @@ function New-DesktopShortcut {
 
     Write-Step "Creating a Start Menu shortcut"
 
-    # 7.78.11: ONE Start Menu entry, not a tug of war. When the desktop app is
+    # 7.79.1: ONE Start Menu entry, not a tug of war. When the desktop app is
     # installed, its setup already put "My Claude Code" in the Start Menu and
     # that is the better entry -- it opens the dashboard in its own window --
     # so this steps aside exactly as install.sh does on Linux and macOS. It
@@ -5090,7 +5090,7 @@ Add-KnownBinDirectories
 # installer does not queue and does not install: it names the owner, points at
 # the transcript that owner is writing, and exits 0.
 #
-# 7.78.11: unless NO running update holds the lock and it still could not be
+# 7.79.1: unless NO running update holds the lock and it still could not be
 # taken -- then it says whose lock it is and why, and exits 1.
 if (-not (Enter-UpdateLock)) {
     if ($script:UpdateLockUnavailable) {
@@ -5579,7 +5579,7 @@ elseif ($script:StagedSwapped) {
         Remove-StalePreviousEnvironment -Root (Get-UpdateAsideRoot -ToolsRoot (Split-Path -Parent $StagedToolDir) -Name $PreviousEnvDirName) -Keep $PreviousEnvsKept
     }
     elseif ($script:PortHeldByAnother) {
-        # 7.78.11: the port is answered by a server this run did not start.
+        # 7.79.1: the port is answered by a server this run did not start.
         # The new version is in place and was never the problem, so this is
         # not a rollback; Confirm-RestartedServer has said why and written the
         # terminal record. The previous version stays aside for the sweep.
@@ -5636,7 +5636,7 @@ else {
     Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'
 }
 
-# 7.78.11: the configured port is answered by a server this run did not start
+# 7.79.1: the configured port is answered by a server this run did not start
 # (Confirm-RestartedServer). Whatever was installed, the server this install
 # is for is not the one serving, and an exit 0 was how another server's
 # answer got reported as this install's success. The finally below still

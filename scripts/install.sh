@@ -74,11 +74,11 @@ no_restart_requested=0
 no_start_requested=0
 no_desktop_requested=0
 desktop_app_started=0
-# 7.78.11: --allow-root (or MCC_INSTALL_ALLOW_ROOT=1). Without it, a run as
+# 7.79.1: --allow-root (or MCC_INSTALL_ALLOW_ROOT=1). Without it, a run as
 # root through sudo -- root, on behalf of a real SUDO_USER -- is refused; see
 # refuse_install_through_sudo. A plain root shell is not affected.
 allow_root=0
-# 7.78.11: set when the configured port turned out to be answered by a server
+# 7.79.1: set when the configured port turned out to be answered by a server
 # this run did not start and could not stop. The install itself may still
 # have happened; the script then ends with exit 1 instead of a success that
 # was another server's.
@@ -662,7 +662,7 @@ validate_args() {
 }
 
 refuse_install_through_sudo() {
-    # 7.78.11. My Claude Code is a per-user install: uv's tool directory,
+    # 7.79.1. My Claude Code is a per-user install: uv's tool directory,
     # ~/.local/bin and the configuration home all belong to whoever runs this.
     # Under sudo that is root -- so `sudo npm install -g`, `curl ... | sudo sh`
     # and `sudo mcc update` installed a second, root-owned copy in root's home
@@ -701,7 +701,7 @@ refuse_install_through_sudo() {
 running_under_wsl() {
     # Whether this Linux is WSL, by the product's own test. Under WSL the
     # desktop app to use is the WINDOWS one: mcc-desktop refuses to run here,
-    # and a Linux app inside WSL is a second, separate install (7.78.11).
+    # and a Linux app inside WSL is a second, separate install (7.79.1).
     [ -n "${WSL_DISTRO_NAME:-}" ] && return 0
     [ -n "${WSL_INTEROP:-}" ] && return 0
     [ -r "$WSL_OSRELEASE_PATH" ] || return 1
@@ -1346,7 +1346,7 @@ create_desktop_shortcut() {
     [ "$enable_desktop" -eq 1 ] || return 0
 
     step "Creating a desktop launcher"
-    # 7.78.11: WSL gets the server only, even when WSLg reports a display.
+    # 7.79.1: WSL gets the server only, even when WSLg reports a display.
     # mcc-desktop refuses to run inside WSL, so a launcher for it would be a
     # menu entry that does nothing; the desktop app to use is the Windows one.
     if running_under_wsl; then
@@ -1830,7 +1830,7 @@ enter_update_lock() {
         fi
         rm -f "$lock_file" 2>/dev/null || true
     done
-    # 7.78.11: nobody alive holds the lock, and it still could not be taken --
+    # 7.79.1: nobody alive holds the lock, and it still could not be taken --
     # the folder (or a lock file left in it) is not this user's to write. An
     # install run as root with this HOME leaves exactly that: a root-owned
     # updates folder. Until now this read as "An update is already running",
@@ -2090,7 +2090,7 @@ wait_for_server_health() {
 
 health_answer() {
     # ONE GET of the /health URL $1, and what it says about who answered
-    # (7.78.11):
+    # (7.79.1):
     #   health_answer_code  the HTTP status; 000 when nothing answered at all
     #   health_answer_pid   the pid the answer named in x-mcc-pid (every
     #                       server since 7.70.0 sends it); "" when it named none
@@ -2137,7 +2137,7 @@ answer_is_from_started_server() {
     # (pid $2) or runs under it -- a launcher may exec its interpreter or spawn
     # it. 0 = ours; 1 = positively not (its parents were walked to the top
     # without meeting ours); 2 = cannot tell (not even its own parent could be
-    # read), which the caller treats as ours, exactly as before 7.78.11.
+    # read), which the caller treats as ours, exactly as before 7.79.1.
     answer_walk=$1
     answer_started=$2
     answer_depth=0
@@ -2286,7 +2286,7 @@ stop_configured_server() {
     #   nothing-listening the port was already free
     #   foreign           a non-MCC process holds the port; nothing touched
     #   unclassifiable    the port is busy and this build cannot say by what
-    #   held-elsewhere    (7.78.11) the build saw no holder, yet /health answers:
+    #   held-elsewhere    (7.79.1) the build saw no holder, yet /health answers:
     #                     a server this account cannot see or stop
     #   failed            our server would not stop
     stop_launcher=$1
@@ -2329,7 +2329,7 @@ stop_configured_server() {
     fi
 
     if [ "$mcc_holder_pid" -le 0 ]; then
-        # 7.78.11: "nothing" from --report-holder can also mean "nothing THIS
+        # 7.79.1: "nothing" from --report-holder can also mean "nothing THIS
         # account is allowed to see". A user cannot read which process owns
         # another user's socket, so a server started through sudo -- running
         # as root -- reads as a free port, and the installer used to start a
@@ -2482,7 +2482,7 @@ desktop_skip_reason() {
     #   2. --no-start / MCC_INSTALL_NO_START was not given -- there is nothing
     #      for a window to attach to;
     #   3. --no-desktop / MCC_INSTALL_NO_DESKTOP was not given;
-    #   4. this is not CI, not WSL (7.78.11: the server only there, whatever
+    #   4. this is not CI, not WSL (7.79.1: the server only there, whatever
     #      display WSLg reports) and not a headless session (no DISPLAY and no
     #      WAYLAND_DISPLAY on anything but macOS);
     #   5. the desktop shell is installed here, proved by the binary AND the
@@ -2498,7 +2498,7 @@ desktop_skip_reason() {
         ""|0|false|False|FALSE) ;;
         *) printf 'this is CI'; return 0 ;;
     esac
-    # 7.78.11: WSL gets the server only, display or not (WSLg reports one).
+    # 7.79.1: WSL gets the server only, display or not (WSLg reports one).
     if running_under_wsl; then
         printf 'this is WSL, which gets the server only'
         return 0
@@ -2614,7 +2614,7 @@ restart_after_install() {
             return 1
             ;;
         held-elsewhere)
-            # 7.78.11: the install itself succeeded, but the server it is for
+            # 7.79.1: the install itself succeeded, but the server it is for
             # cannot run on this port; the script ends with exit 1.
             printf '\n%s\n' "$stop_message"
             write_install_log "$stop_message"
@@ -2683,7 +2683,7 @@ confirm_restarted_server() {
     write_install_log "Waiting for $restart_health_url."
 
     if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
-        # 7.78.11: an answer is success only when it comes from the server
+        # 7.79.1: an answer is success only when it comes from the server
         # this run started. A server another user started on the same port
         # (through sudo, as root) answers /health too, while the one started
         # here finds the port served and abandons its start -- and that answer
@@ -2882,7 +2882,7 @@ if [ "$no_desktop_requested" -eq 1 ] || [ "$start_allowed" -eq 0 ]; then desktop
 # installer does not queue and does not install: it names the owner, points at
 # the transcript that owner is writing, and exits 0.
 #
-# 7.78.11: unless NO running update holds the lock and it still could not be
+# 7.79.1: unless NO running update holds the lock and it still could not be
 # taken (status 2) -- then it says whose lock it is and why, and exits 1.
 if enter_update_lock; then
     :
@@ -3060,7 +3060,7 @@ if [ "$staged_ok" -eq 1 ]; then
                 exit 1
                 ;;
             held-elsewhere)
-                # 7.78.11: a server this account cannot see or stop answers on
+                # 7.79.1: a server this account cannot see or stop answers on
                 # the port. As for a foreign holder, the install still happens
                 # and nothing is started -- and the run ends with exit 1.
                 printf '\n%s\n' "$stop_message"
@@ -3237,7 +3237,7 @@ elif [ "$staged_swapped" -eq 1 ]; then
     # swapped the environment. What is left is the start, the health gate, and
     # the rollback the previous environment was kept for.
     #
-    # 7.78.11: the health gate's answer is read once, up front. 0 is a new
+    # 7.79.1: the health gate's answer is read once, up front. 0 is a new
     # server answering; 2 is "the port is answered by a server this run did
     # not start" -- the new version is fine and stays, so that is never a
     # rollback; anything else is the rollback it always was.
@@ -3309,7 +3309,7 @@ else
     write_install_progress done "The new version is installed."
 fi
 
-# 7.78.11: the configured port is answered by a server this run did not start
+# 7.79.1: the configured port is answered by a server this run did not start
 # and could not stop (see stop_configured_server and confirm_restarted_server).
 # Whatever was installed, the server this install is for is not running, and
 # an exit 0 here was how another user's server got reported as this install's

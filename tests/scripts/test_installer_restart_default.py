@@ -404,7 +404,7 @@ SH_FUNCTIONS = (
     "desktop_shell_candidates",
     "installed_desktop_shells",
     "desktop_shell_is_running",
-    # 7.78.11: the rule asks whether this is WSL before it looks at a display.
+    # 7.79.1: the rule asks whether this is WSL before it looks at a display.
     "running_under_wsl",
     "desktop_skip_reason",
 )
@@ -561,7 +561,7 @@ def test_the_posix_rule_refuses_ci_and_no_desktop(tmp_path: Path) -> None:
 def test_the_posix_rule_never_opens_a_linux_app_inside_wsl(
     tmp_path: Path, how: str
 ) -> None:
-    """7.78.11: WSL is server only. WSLg reports a display, and the Linux app
+    """7.79.1: WSL is server only. WSLg reports a display, and the Linux app
     may even be installed there -- the rule still says no, by the product's
     own WSL test (the kernel string, or WSL_DISTRO_NAME)."""
     shell_dir = tmp_path / "shell"

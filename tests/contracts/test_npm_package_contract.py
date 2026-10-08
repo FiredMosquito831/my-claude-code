@@ -285,11 +285,11 @@ for (const key of ['platform', 'arch']) {
   if (value) Object.defineProperty(process, key, { value, configurable: true });
 }
 
-// 7.78.11: who the hook runs as. `process.getuid` does not exist on Windows,
+// 7.79.1: who the hook runs as. `process.getuid` does not exist on Windows,
 // so this is also how a Linux root question is asked on a Windows runner.
 if (process.env.MCC_TEST_UID) process.getuid = () => Number(process.env.MCC_TEST_UID);
 
-// 7.78.11: the kernel string the WSL test reads is the test's to decide, never
+// 7.79.1: the kernel string the WSL test reads is the test's to decide, never
 // the machine's -- a container on a WSL2-backed Docker Desktop IS WSL by it.
 const realReadFileSync = fs.readFileSync;
 fs.readFileSync = function (file, ...rest) {
@@ -523,7 +523,7 @@ _MATRIX = [
     ("linux", "x64", {"WAYLAND_DISPLAY": "wayland-0"}, True, "a Wayland desktop"),
     ("linux", "x64", {}, False, "a headless VPS"),
     ("linux", "x64", {"WSL_DISTRO_NAME": "Ubuntu"}, False, "WSL without a display"),
-    # 7.78.11: WSL is server only, display or not -- WSLg sets both.
+    # 7.79.1: WSL is server only, display or not -- WSLg sets both.
     (
         "linux",
         "x64",
@@ -690,7 +690,7 @@ def test_install_help_lists_every_override_and_installs_nothing(
     assert calls == [], "`--help` must not install or download anything"
 
 
-# ------------------------------------------------- 7.78.11: root through sudo
+# ------------------------------------------------- 7.79.1: root through sudo
 
 #: `sudo npm install -g` with a system Node: root, on behalf of alice, on Linux.
 _SUDO = {
@@ -803,7 +803,7 @@ def test_windows_ignores_sudo_user(tmp_path: Path) -> None:
     assert "--allow-root" not in _invocation(spawns[0])
 
 
-# ---------------------- 7.78.11: a failed download fails the install (real sh)
+# ---------------------- 7.79.1: a failed download fails the install (real sh)
 
 SH = shutil.which("sh")
 requires_sh = pytest.mark.skipif(

@@ -89,7 +89,7 @@ async function main() {
   // No argv: `npm install -g` passes none. Overrides here are the environment
   // variable, which is the only channel a package manager or Dockerfile has.
   //
-  // 7.78.11: as root through sudo on behalf of a user, nothing is installed
+  // 7.79.1: as root through sudo on behalf of a user, nothing is installed
   // for root and the hook still exits 0 (`refusedStatus: 0`), so npm keeps the
   // `mcc` command it wrote -- with a system Node that is the one thing sudo
   // was needed for. The user's first `mcc` then installs the server, as them.

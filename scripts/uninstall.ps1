@@ -274,7 +274,7 @@ function Get-ShortcutTarget {
 }
 
 function Test-ShortcutOpensDesktopApp {
-    # 7.78.11: whether a shortcut target is the INSTALLED desktop app. The
+    # 7.79.1: whether a shortcut target is the INSTALLED desktop app. The
     # app's own setup (Inno, per user) and install.ps1 -Desktop write the same
     # "My Claude Code.lnk"; the app's opens MyClaudeCode.exe, install.ps1's
     # opens mcc-desktop.exe. The same test as install.ps1's -- the Windows twin
@@ -308,7 +308,7 @@ function Remove-StartMenuShortcut {
         return
     }
 
-    # 7.78.11: the desktop app's setup writes this same file. When it opens
+    # 7.79.1: the desktop app's setup writes this same file. When it opens
     # the installed app, it is the app's entry, not ours: this uninstaller does
     # not remove the app, so it does not take the app's Start Menu entry
     # either -- exactly as uninstall.sh keeps a .app with the app's identifier.

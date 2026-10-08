@@ -376,7 +376,7 @@ fi
         }
     )
     env.pop("XDG_BIN_HOME", None)
-    # 7.78.11: the sudo guard and the WSL rule read these. Every scenario
+    # 7.79.1: the sudo guard and the WSL rule read these. Every scenario
     # decides them itself rather than inheriting the machine's.
     for name in (
         "SUDO_USER",
@@ -784,7 +784,7 @@ def test_install_sh_rejects_invalid_options_before_mutation(
     assert posix_harness.calls() == []
 
 
-# ------------------------------------------------- 7.78.11: root through sudo
+# ------------------------------------------------- 7.79.1: root through sudo
 
 
 def _pretend_root(harness: PosixHarness) -> None:
@@ -867,7 +867,7 @@ def test_install_sh_proceeds_for_root_that_is_not_acting_for_a_user(
 def test_install_sh_under_wsl_writes_no_linux_launcher(
     posix_harness: PosixHarness,
 ) -> None:
-    """7.78.11: WSL is server only, even with ``--desktop`` and a display.
+    """7.79.1: WSL is server only, even with ``--desktop`` and a display.
 
     ``mcc-desktop`` refuses to run inside WSL, so the menu entry for it would
     be a tile that does nothing; the desktop app for that PC is the Windows
