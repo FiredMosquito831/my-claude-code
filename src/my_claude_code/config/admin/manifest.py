@@ -2563,9 +2563,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="2",
         description=(
             "How many times one model is retried on the same key after an "
-            "upstream 5xx or a dropped connection, before the next model is "
-            "tried. A 429 uses none of these: it routes around the model "
-            'instead, unless "Route around a rate-limited model" is off. '
+            "upstream 5xx, a dropped connection or a 429, before the next "
+            'key or model is tried. With "Route around a rate-limited '
+            'model" on, a 429 uses none of these and moves on at once. '
             "Each retry waits longer than the last, so the two shipped "
             "attempts spend about 2s before a healthy fallback is used."
         ),
@@ -3428,13 +3428,17 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "credential_health",
         "boolean",
         settings_attr="rate_limit_routes_around_model",
-        default="true",
+        default="false",
         description=(
-            "On a 429, try another model on the same provider instead of "
-            "retrying the same one and then spending the rest of the key "
-            "pool on it. One measured request spent 51 of its 57 seconds "
-            "asleep between retries of a model that was refusing in 0.2s. "
-            "Off restores retry-then-rotate."
+            "Off (the default): a 429 follows your chain order. The same key "
+            "is retried per Retries before the chain, with a short wait "
+            "between tries, then each other key of the provider gets the same "
+            "tries, and only then is the next chain entry used. On: after a "
+            "429 on a provider with several keys, a later model of the SAME "
+            "provider in your chain is tried first, on one key and with no "
+            "waits; the chain entries in between are skipped for that "
+            "request. On is faster when a gateway limits one model at a time; "
+            "off never reorders your chain."
         ),
     ),
     # ---- Cost estimation -------------------------------------------------

@@ -685,14 +685,18 @@ PROXY_COOLDOWN_MAX_SECONDS_MAX = 86400.0
 # Comma-separated seconds, the same shape CREDENTIAL_LOCKOUT_TIERS uses.
 # "60,300,3600" is 7.19.0's ladder written out, so the default changes nothing.
 PROXY_REACHABILITY_TIERS_DEFAULT = "60,300,3600"
-# What a 429 on a pooled credential means. True: it benches the (key, model)
-# pair and the executor moves to another model on the SAME provider first,
-# because a gateway that limits one model usually still answers another on the
-# same key in the same second. Nothing sleeps, no reactive block is installed
-# and no key is rotated for that 429. False restores 6.19.0 exactly --
-# retry-then-rotate, whole-key bench, and the backoff ladder in between, which
-# on one measured request spent 51 of its 57 seconds asleep.
-RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT = True
+# What a 429 on a pooled credential means. False (the default since 7.78.10)
+# follows the chain order: the same key is retried up to
+# PROVIDER_RETRY_ATTEMPTS times with the backoff ladder in between, then the
+# key is blocked for the provider's published wait and the (key, model) pair is
+# benched, the next key gets the same tries, and only then does the chain move
+# to its next entry, in order. That is 6.19.0's path. True benches the
+# (key, model) pair and the executor tries a LATER model of the SAME provider
+# first -- one key, no sleeps, no rotation -- because a gateway that limits one
+# model usually still answers another on the same key in the same second; the
+# chain entries it jumps over are not tried in that request. It shipped on from
+# 6.20.0 to 7.78.9.
+RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT = False
 # When the chain holds no other model on the rate-limited provider, one cheap
 # question decides whether the 429 was about the model or about the key. It is
 # bounded by its own clock, in the executor, and expiry means "inconclusive".

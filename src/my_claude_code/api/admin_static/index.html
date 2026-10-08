@@ -4890,10 +4890,9 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                     <strong>Retries before the chain</strong> — attempts against
                     one model on the same key after an upstream 5xx or a
                     dropped connection, before the next model is tried. Each
-                    retry waits longer than the last. A 429 uses none of them:
-                    it routes around the model instead, unless you turn
-                    <strong>Route around a rate-limited model</strong> off on
-                    the Credential health card.
+                    retry waits longer than the last. A 429 uses them too,
+                    unless <strong>Route around a rate-limited model</strong>
+                    is switched on in the Credential health card.
                   </li>
                 </ul>
                 <p>
@@ -5034,12 +5033,13 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   different models have to be rate-limited on the same key at
                   once before the key itself is benched.
                   <code>RATE_LIMIT_ROUTES_AROUND_MODEL</code> decides what
-                  happens next: on (the default) the request goes straight to
-                  the next model on the <em>same</em> provider rather than
-                  retrying the one that refused and then spending the rest of
-                  the pool on it &mdash; one measured request spent 51 of its 57
-                  seconds asleep between those retries. Off restores
-                  retry-then-rotate.
+                  happens next: off (the default) follows your chain order
+                  &mdash; the model is retried on the same key, then on each
+                  other key of the provider, with a short wait between tries,
+                  and only then does the request move to the next chain entry.
+                  On sends the request straight to a later model on the
+                  <em>same</em> provider, on one key and with no waits, and
+                  skips the chain entries in between for that request.
                   Nothing else on this page benches a key; see
                   <a href="#guide-rotation">Use more than one key safely</a>.
                 </p>

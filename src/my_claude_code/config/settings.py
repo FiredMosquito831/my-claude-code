@@ -1212,10 +1212,12 @@ class Settings(BaseSettings):
         default=CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
         validation_alias="CREDENTIAL_LOCKOUT_TIERS",
     )
-    # What a 429 means for the key that met it. True routes around the model:
-    # the (key, model) pair is benched, the executor prefers another model on
-    # the same provider, and nothing sleeps or rotates. False is 6.19.0 --
-    # retry the same model on the same key, then bench the key and rotate.
+    # What a 429 means for the key that met it. False (the default) is 6.19.0
+    # and follows the chain order: retry the same model on the same key per
+    # PROVIDER_RETRY_ATTEMPTS, block that key, rotate to the next key, then the
+    # next chain entry. True routes around the model: the (key, model) pair is
+    # benched, the executor prefers a later model on the same provider, and
+    # nothing sleeps or rotates.
     rate_limit_routes_around_model: bool = Field(
         default=RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
         validation_alias="RATE_LIMIT_ROUTES_AROUND_MODEL",
