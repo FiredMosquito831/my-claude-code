@@ -38,6 +38,7 @@
         </header>
 
         <div id="versionBanners" class="version-banners" aria-live="polite"></div>
+        <div id="proxyStoreBanner" class="proxy-store-banner" role="alert" hidden></div>
 
         <div id="adminViews" class="admin-views">
           <section id="view-get_started" class="admin-view" data-view="get_started" hidden>
@@ -350,6 +351,15 @@
               follows your model fallback chain exactly as it does now. Every
               switch spends real time inside one request and the deadlines do
               not move to make room.
+            </p>
+            <p class="field-description" id="proxyingNeverDirect">
+              With <strong>Fall back to this machine's own address</strong>
+              (Direct fallback) switched off, a chain never sends a request
+              from this computer. If every entry is paused, every address has
+              been removed or the chain file cannot be read, requests to that
+              provider are refused with a 503 that names this setting and move
+              on to your model fallback chain, and its card says so in red.
+              MCC never rewrites a chain file it cannot read.
             </p>
             <!-- Written by renderProxyCheckerNote(): whether anything is
                  measuring these addresses, what a test actually does, and

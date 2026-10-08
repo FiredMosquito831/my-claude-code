@@ -50,6 +50,7 @@ from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.proxy_chains import (
     current_proxy_chains,
     migrate_proxy_feeds,
+    settle_proxy_chains,
 )
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings, parse_lockout_tiers
@@ -404,6 +405,14 @@ class ApplicationRuntime:
             await asyncio.to_thread(prewarm_heavy_imports)
             state.mark("learned-facts")
             self._load_learned_facts()
+            # Before the first provider is built (the catalogue refresh below
+            # builds them), and on a worker thread: one read of the proxy
+            # chain file, given a few hundred milliseconds if it will not
+            # read, so a scanner holding it at boot is not mistaken for a
+            # broken file. A file that stays unreadable is said in this log,
+            # and a provider whose chain has Direct fallback off is refused
+            # rather than built to dial from this computer (7.78.8).
+            await asyncio.to_thread(settle_proxy_chains)
             # The single most expensive stage on a real config -- it probes
             # every configured provider over the network. It used to run
             # before the listener existed, which is most of why a start looked

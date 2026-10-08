@@ -17,7 +17,11 @@ from my_claude_code.config.provider_catalog import (
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
-from my_claude_code.providers.base import BaseProvider, ProviderConfig
+from my_claude_code.providers.base import (
+    BaseProvider,
+    MaskedRefusalPlan,
+    ProviderConfig,
+)
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.openai_chat import (
     GENERIC_OPENAI_PROFILE,
@@ -29,6 +33,7 @@ from my_claude_code.providers.openai_chat import (
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .config import build_provider_config
+from .masked_refusal import MaskedRefusalProvider
 from .opencode_credentials import build_opencode_provider
 from .proxy_leg import ProxiedLegRateLimiter
 from .proxy_rotating import ProxyRotatingProvider, ProxyRotationState
@@ -296,9 +301,19 @@ def _create_single_provider(
     Deliberately *below* the credential pool. Everything above keeps receiving
     one provider, and on chain exhaustion receives the same exception object it
     receives today.
+
+    A :class:`MaskedRefusalPlan` -- Direct fallback off and nothing in the chain
+    to route through (7.78.8) -- is built as a :class:`MaskedRefusalProvider`
+    in place of the leaf: the leaf would have had no proxy, so it would have
+    dialled from this computer's own address. Checked first, because a
+    refusal has no legs and the line below would build exactly that leaf.
     """
 
     plan = config.proxy_chain
+    if isinstance(plan, MaskedRefusalPlan):
+        return MaskedRefusalProvider(
+            config, provider_id=descriptor.provider_id, message=plan.reason
+        )
     if plan is None or len(plan.legs) < 2:
         # One rung is a static proxy by another name; zero is no chain at all.
         # Either way nothing rotates and nothing new is constructed.

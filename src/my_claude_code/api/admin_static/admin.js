@@ -3715,6 +3715,7 @@ async function undoProxyCandidateBulk(token) {
 function renderProxying() {
   const list = byId("proxyingList");
   const empty = byId("proxyingEmpty");
+  if (proxyState.data) setProxyStoreProblem(proxyState.data.store_problem);
   renderProxyCheckerNote();
   renderProxyFeeds();
   renderProxyCandidates();
@@ -3732,6 +3733,8 @@ function proxyCard(provider) {
   card.dataset.provider = provider.provider_id;
 
   card.appendChild(proxyCardHead(provider, draft));
+  const routing = proxyRoutingNote(provider);
+  if (routing) card.appendChild(routing);
   card.appendChild(proxyPolicyHelp(draft));
   if (provider.oauth) card.appendChild(proxyOauthNote(provider, draft));
   card.appendChild(proxyInheritedNote(provider, draft));
@@ -3741,6 +3744,58 @@ function proxyCard(provider) {
   card.appendChild(proxyAddRow(provider, draft));
   card.appendChild(proxyCardFoot(provider, draft));
   return card;
+}
+
+/* How this provider routes RIGHT NOW, when that is not what the card's chain
+ * suggests (7.78.8). Three states, each the server's own words, each shown
+ * only when the server says it:
+ *
+ *   refusal     -- Direct fallback is off and the chain has nothing to route
+ *                  through: requests are refused (a 503 naming the setting)
+ *                  and move to the next model, never sent from this computer.
+ *   not_routing -- the chain was saved but the provider could not be rebuilt,
+ *                  so the one built before the save is still routing.
+ *   chain_inert -- a subscription login's chain is not acknowledged yet, so
+ *                  it is not in use at all (by design).
+ *
+ * Returns null for a card with nothing to say, which is every card on an
+ * install where everything routes as configured. */
+function proxyRoutingNote(provider) {
+  const notes = [];
+  // The server's sentences open with their own verdict ("Not sent: ...",
+  // "Saved -- not routing yet: ..."), so they carry no lead of the page's.
+  if (provider.refusal) {
+    notes.push(["proxy-routing-refused", "", provider.refusal]);
+  }
+  if (provider.not_routing) {
+    notes.push(["proxy-routing-stale", "", provider.not_routing]);
+  }
+  if (provider.chain_inert) {
+    notes.push([
+      "proxy-routing-inert",
+      "Not in use. ",
+      `This chain is inert until you tick "I understand, give this provider ` +
+        `a chain" below: ${provider.display_name} goes out ` +
+        (provider.inherited_label
+          ? `through ${provider.inherited_label}.`
+          : "from this machine's own address."),
+    ]);
+  }
+  if (!notes.length) return null;
+  const box = document.createElement("div");
+  box.className = "proxy-routing";
+  notes.forEach(([kind, lead, text]) => {
+    const note = document.createElement("p");
+    note.className = `proxy-routing-note ${kind}`;
+    if (lead) {
+      const strong = document.createElement("strong");
+      strong.textContent = lead;
+      note.appendChild(strong);
+    }
+    note.appendChild(document.createTextNode(text));
+    box.appendChild(note);
+  });
+  return box;
 }
 
 function proxyCardHead(provider, draft) {
@@ -3865,8 +3920,16 @@ function proxyInheritedNote(provider, draft) {
       : `Inherited from this provider's stored proxy: ${provider.inherited_label}.`;
     return note;
   }
+  // A switched-on chain with Direct fallback off and nothing to route through
+  // is refused, never sent from this machine (7.78.8): saying it "goes out on
+  // this machine's own address" here would contradict the red note above. An
+  // unacknowledged subscription chain is inert, so it is not that case.
+  const inert = provider.oauth && !draft.oauth_acknowledged;
   note.textContent =
-    "No proxy configured. Requests go out on this machine's own address.";
+    draft.enabled && draft.direct_fallback === false && !inert
+      ? "No proxy configured, and Direct fallback is off: requests to this " +
+        "provider are refused, never sent from this machine's own address."
+      : "No proxy configured. Requests go out on this machine's own address.";
   return note;
 }
 
@@ -5018,6 +5081,15 @@ async function saveProxyChain(provider, draft, button, remove = false) {
     // separate documents on the server and separate edits on the page.
     proxyState.drafts.delete(provider.provider_id);
     renderProxying();
+    // A save whose rebuild failed is on disk and NOT routing (7.78.8): it
+    // used to be announced exactly like one that worked.
+    const failed = proxyState.data && proxyState.data.republish_failed;
+    if (failed) {
+      const sentence = `${provider.display_name}: ${failed}`;
+      announceProxy(sentence);
+      showMessage(sentence, "warn");
+      return;
+    }
     announceProxy(
       remove
         ? `${provider.display_name} follows its stored proxy again. Its ` +
@@ -5028,6 +5100,15 @@ async function saveProxyChain(provider, draft, button, remove = false) {
             "zero -- the old numbers were not wrong, the pools they were " +
             "measured on are gone.",
     );
+    // Saved and rebuilt, and refused by its own rule: Direct fallback off
+    // with nothing in the chain to route through. Said at once rather than
+    // left for the first request to discover.
+    const saved = ((proxyState.data && proxyState.data.providers) || []).find(
+      (item) => item.provider_id === provider.provider_id,
+    );
+    if (!remove && saved && saved.refusal) {
+      showMessage(`${provider.display_name}: ${saved.refusal}`, "warn");
+    }
   } catch (error) {
     button.disabled = false;
     announceProxy(error.message);
@@ -5262,6 +5343,7 @@ async function loadConfigDir() {
     const data = await api("/admin/api/config-dir");
     state.configDir = data;
     renderConfigDirBanner();
+    setProxyStoreProblem(data && data.proxyChainsProblem);
   } catch (err) {
     // A pre-6.40.0 server has no such route; fail quietly and leave the
     // checklist on its own.
@@ -5286,6 +5368,34 @@ function renderConfigDirBanner() {
   text.className = "config-dir-banner-text";
   text.textContent = data.banner;
   banner.appendChild(text);
+}
+
+/* The proxy chain file cannot be read (7.78.8): a red banner on every page.
+ *
+ * Fed by the two answers that know: the config-dir status the page loads at
+ * start, and the Proxying page's own payload, so it appears the moment either
+ * says so and goes away the moment the file reads again. The sentence is the
+ * server's, naming the file, the providers refused because of it, and what to
+ * do -- the page keeps no opinion of its own about any of that. */
+function setProxyStoreProblem(problem) {
+  state.proxyStoreProblem = typeof problem === "string" ? problem : "";
+  renderProxyStoreBanner();
+}
+
+function renderProxyStoreBanner() {
+  const banner = byId("proxyStoreBanner");
+  if (!banner) return;
+  const problem = state.proxyStoreProblem || "";
+  banner.textContent = "";
+  banner.hidden = !problem;
+  if (!problem) return;
+  const title = document.createElement("strong");
+  title.className = "proxy-store-banner-title";
+  title.textContent = "The proxy chain file cannot be read.";
+  const detail = document.createElement("p");
+  detail.className = "proxy-store-banner-text";
+  detail.textContent = problem;
+  banner.append(title, detail);
 }
 
 // The first incomplete required step is "next" — the one worth walking

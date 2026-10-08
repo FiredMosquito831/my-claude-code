@@ -388,6 +388,23 @@ def _isolate_harness_tiers(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _reset_proxy_chain_not_routing():
+    """No test may inherit another's "Saved -- not routing yet" (7.78.8).
+
+    The Proxying page remembers, per provider, a chain save whose provider
+    rebuild failed, until a rebuild of that provider succeeds. It is process
+    state on purpose -- the card must keep saying it across page loads -- so a
+    test that makes a rebuild fail would otherwise leave every later test's
+    card saying it too.
+    """
+    from my_claude_code.api import admin_proxy_routes
+
+    admin_proxy_routes._NOT_ROUTING.clear()
+    yield
+    admin_proxy_routes._NOT_ROUTING.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_desktop_shell(monkeypatch, tmp_path):
     """No test may download the desktop shell, or install one at the developer.
 

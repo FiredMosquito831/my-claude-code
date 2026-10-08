@@ -2384,6 +2384,10 @@ const ROUTES = {
     // "every address that passed is already in a chain" apart from "you
     // discarded them", and the page must read it as a number, not truthiness.
     chained_passing: 1,
+    // The chain file cannot be read (7.78.8): the red banner's sentence. Sent
+    // only while it is true; here so the banner is seen rendering it.
+    store_problem:
+      "C:/Users/u/.mcc/proxy_chains.json cannot be parsed: it is not valid JSON (Expecting value: line 1 column 1 (char 0)). Refused until it can be read, never sent from this computer's address: nvidia_nim. MCC does not rewrite the file and saves on the Proxying page are refused while it cannot be read: fix or remove it, then restart MCC.",
     providers: [
       {
         provider_id: "nvidia_nim",
@@ -2427,6 +2431,13 @@ const ROUTES = {
               health: { state: "unknown", checked: false, requests: 0, successes: 0, failures: 0, cooldown_remaining: 0, refused: false, reason: null } },
           ],
         },
+        /* How this provider routes right now (7.78.8), each the server's own
+           sentence, rendered as given. The server sends a key only when it has
+           something to say; both are here so the card is seen rendering each. */
+        refusal:
+          "Not sent: NVIDIA NIM's proxy chain has no usable entry (all 3 entries are paused) and Direct fallback is off, so this request would have gone out from this computer's own address. Resume or add an entry, or switch Direct fallback on: Proxying page -> NVIDIA NIM -> \"Fall back to this machine's own address\".",
+        not_routing:
+          "Saved -- not routing yet: the provider could not be rebuilt (RuntimeError: boom). Requests still go the way they went before this save. Restart MCC, or press Save again.",
       },
       {
         provider_id: "chatgpt_oauth",
@@ -3890,6 +3901,20 @@ if (withChain) {
   )
     .replace(/\s+/g, " ")
     .trim();
+  // 7.78.8: the card's routing notes, and the red banner above every page.
+  proxying.routingNotes = Array.from(
+    withChain.querySelectorAll(".proxy-routing-note"),
+  ).map((note) => ({ cls: note.className, text: note.textContent.trim() }));
+  proxying.routingNotesOnTheOtherCard = (
+    proxyCardFor("chatgpt_oauth")?.querySelectorAll(".proxy-routing-note") || []
+  ).length;
+  const storeBanner = doc.querySelector("#proxyStoreBanner");
+  proxying.storeBanner = {
+    present: Boolean(storeBanner),
+    hidden: storeBanner ? storeBanner.hidden : null,
+    title: (storeBanner?.querySelector(".proxy-store-banner-title")?.textContent || "").trim(),
+    text: (storeBanner?.querySelector(".proxy-store-banner-text")?.textContent || "").trim(),
+  };
 
   // The checker's own surfaces, read before anything on the card is clicked.
   proxying.checkerNote = (doc.querySelector("#proxyingChecker")?.textContent || "")

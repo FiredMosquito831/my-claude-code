@@ -8946,6 +8946,65 @@ audio.req-media-preview {
   margin: 0;
 }
 
+/* How a chained provider routes right now, when that is not what its chain
+   suggests (7.78.8): refused by its own Direct-fallback rule, saved but not
+   rebuilt, or an unacknowledged subscription chain. */
+.proxy-routing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.proxy-routing-note {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-md);
+  background: var(--warn-bg);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.proxy-routing-refused {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.proxy-routing-stale,
+.proxy-routing-inert {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+/* The proxy chain file cannot be read (7.78.8): on every page, in red. */
+.proxy-store-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 24px;
+  padding: 16px 20px;
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-lg);
+  background: var(--error-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.proxy-store-banner[hidden] {
+  display: none;
+}
+
+.proxy-store-banner-title {
+  color: var(--text-strong);
+}
+
+.proxy-store-banner-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .proxy-inherited {
   margin: 0;
   font-size: 12px;

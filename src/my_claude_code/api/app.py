@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from my_claude_code.application.errors import ApplicationError
 from my_claude_code.config.admin.env_io import SettingsFileBusyError
+from my_claude_code.config.proxy_chains import ProxyChainsUnreadableError
 from my_claude_code.core.anthropic import anthropic_error_payload
 from my_claude_code.core.diagnostics import (
     redacted_exception_traceback,
@@ -136,6 +137,24 @@ def create_app(services: ApiServices) -> FastAPI:
         transient failure, and what the dashboard's ``api()`` shows -- rather
         than an internal error. Registered once here, so no saving route can
         forget it.
+        """
+
+        return await starlette_http_exception_handler(
+            request, StarletteHTTPException(status_code=503, detail=str(exc))
+        )
+
+    @app.exception_handler(ProxyChainsUnreadableError)
+    async def proxy_chains_unreadable_handler(
+        request: Request, exc: ProxyChainsUnreadableError
+    ):
+        """A proxy-chain save refused before anything was written (7.78.8).
+
+        The chain file is there and cannot be read, so a document derived from
+        that read would replace every chain in it. Every route that saves the
+        store -- a chain edit, a check's verdicts, an offer, an undo -- reaches
+        this one answer: 503 with the sentence naming the file and what to do,
+        exactly as a busy settings file does. Registered once here, so no
+        saving route can forget it.
         """
 
         return await starlette_http_exception_handler(

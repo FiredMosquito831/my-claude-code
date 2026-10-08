@@ -52,7 +52,9 @@ class ProxyOrderTimer:
     def __init__(
         self,
         settings: Callable[[], object],
-        republish: Callable[[Iterable[str]], Awaitable[None]],
+        # ``object``: the republish answers why a rebuild failed (7.78.8),
+        # which this loop has no card to show; the card shows it.
+        republish: Callable[[Iterable[str]], Awaitable[object]],
         *,
         sleep: Callable[[float], object] | None = None,
         tick_seconds: float = PROXY_ORDER_TICK_SECONDS,

@@ -91,6 +91,29 @@ class ProxyChainPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class MaskedRefusalPlan(ProxyChainPlan):
+    """A chain that has nothing to route through and may not go direct (7.78.8).
+
+    What ``resolve_proxy_chain`` returns for a chain that is switched on, has
+    Direct fallback off and no usable entry -- every entry paused, every
+    address removed, or a chain file that could not be read -- when no
+    ``<PROVIDER>_PROXY`` is left to carry the provider either. Before it, that
+    chain resolved to no plan and no proxy, and the provider was built to dial
+    from this computer's own address.
+
+    The construction seams (``factory._create_single_provider`` and the media
+    registry's ``_single``) build a refusal in its place: every call answers
+    ``reason`` as a 503 and nothing is dialled. A subclass rather than a new
+    field so that every plan that is *not* a refusal is the exact object it
+    was, field for field.
+    """
+
+    #: The sentence a refused call answers with: the provider, the cause, and
+    #: the setting and page that change it.
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderConfig:
     """Resolved immutable configuration for one provider instance.
 

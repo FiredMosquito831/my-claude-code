@@ -34,6 +34,7 @@ The release that adds the runtime seam adds the republish with it.
 """
 
 import asyncio
+import re
 import threading
 import time
 from collections.abc import Iterable
@@ -114,7 +115,9 @@ from my_claude_code.config.proxy_chains import (
     current_proxy_chains,
     is_valid_proxy_url,
     load_proxy_chains,
+    masked_refusal_sentence,
     normalise_policy,
+    proxy_chains_problem,
     save_proxy_chains,
 )
 from my_claude_code.config.proxy_feeds import (
@@ -127,11 +130,15 @@ from my_claude_code.config.proxy_feeds import (
     normalise_parser,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.diagnostics import redact_sensitive_error_text
 from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.core.proxy_rotation import PROXY_HEALTH, PROXY_INTERCEPTION
 
 router = APIRouter()
+
+#: ``scheme://user:pass@`` in free text, so it can be cut to ``scheme://``.
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@")
 
 # One writer at a time. Two chain edits landing together would each derive a
 # new document from a base read before the other committed, and the second
@@ -150,6 +157,15 @@ _CHAIN_WRITE_LOCK = PROXY_CHAINS_WRITE_LOCK
 #: ``/republish`` is still picked up by the next chain write of any provider.
 #: Touched only on the event loop.
 _UNROUTED: set[str] = set()
+
+#: Providers whose chain was saved but whose rebuild failed, and why (7.78.8).
+#: The save is on disk; the provider object still routing is the one built
+#: before it, so the card says "Saved -- not routing yet" until a rebuild of
+#: that provider succeeds. Before this the only trace was a log line, and a
+#: provider whose old object had no chain kept going out from this computer's
+#: own address while the page showed the new chain as if it were in use.
+#: Touched only on the event loop.
+_NOT_ROUTING: dict[str, str] = {}
 
 #: What each policy actually does to a per-address allowance. This is the point
 #: of the feature for an operator whose quota is metered by IP, and it is the
@@ -291,8 +307,8 @@ async def put_proxy_chain(
 
     if payload.remove:
         await asyncio.to_thread(_commit, provider_id, None)
-        await _republish(services, {provider_id})
-        return await asyncio.to_thread(_payload, services)
+        failure = await _republish(services, {provider_id})
+        return await _answer(services, failure)
 
     _reject_bad_policy(payload)
     _reject_bad_triggers(payload.on)
@@ -326,8 +342,22 @@ async def put_proxy_chain(
     )
     # Only this provider: a chain is read by its own provider alone, and
     # ``_commit_chain`` writes no other chain's legs (see ``_republish``).
-    await _republish(services, {provider_id})
-    return await asyncio.to_thread(_payload, services)
+    failure = await _republish(services, {provider_id})
+    return await _answer(services, failure)
+
+
+async def _answer(services: ApiServices, republish_failure: str) -> dict[str, Any]:
+    """The refreshed page state, plus -- only when it happened -- a failed rebuild.
+
+    ``republish_failed`` is the sentence the save's toast shows: the chain is
+    on disk and is not routing yet (7.78.8). Absent on every save that
+    worked, so a successful save answers exactly what it always answered.
+    """
+
+    refreshed = await asyncio.to_thread(_payload, services)
+    if republish_failure:
+        refreshed["republish_failed"] = republish_failure
+    return refreshed
 
 
 class ProxyCheckPayload(BaseModel):
@@ -450,7 +480,7 @@ def _ids_to_check(
     return tuple(proxy_id for proxy_id in ids if proxy_id == requested)
 
 
-async def _republish(services: ApiServices, provider_ids: Iterable[str] | None) -> None:
+async def _republish(services: ApiServices, provider_ids: Iterable[str] | None) -> str:
     """Publish a new provider generation so the new chain is what routes.
 
     A proxy is read once, in a provider's constructor, and baked into a
@@ -483,19 +513,27 @@ async def _republish(services: ApiServices, provider_ids: Iterable[str] | None) 
     the new chain is what routes the instant the save answers. What is gone is
     the sweep, and the hourly rediscovery still refreshes the catalogues on its
     own schedule exactly as it did.
+
+    Returns ``""`` once the new chain routes, or the sentence the save answer
+    and the card show when it does not (see :func:`republish_chains`).
     """
 
-    await republish_chains(services.admin, provider_ids)
+    return await republish_chains(services.admin, provider_ids)
 
 
 async def republish_chains(
     admin: AdminRuntimePort, provider_ids: Iterable[str] | None
-) -> None:
+) -> str:
     """:func:`_republish` for a caller that holds the runtime, not a request.
 
     The one body both share, so the automatic speed order (7.56.0) rebuilds
     exactly what a chain save of the same provider would -- that provider,
     plus any a stopped bulk add still owes -- and nothing else.
+
+    Returns ``""`` when the rebuild ran, and otherwise the sentence the page
+    shows: the chain is saved, and the provider still routing is the one
+    built before it (7.78.8: until then the save answered as if it had worked,
+    and the only trace was this log line).
     """
 
     rebuild = (
@@ -504,19 +542,46 @@ async def republish_chains(
     # Never fail the write for it. The chain is already on disk, and a
     # republish that could not run leaves the operator with a saved chain that
     # starts routing at the next restart -- worse than a 500 that suggests
-    # nothing was saved at all.
+    # nothing was saved at all. But say so, on the card and in the answer.
     try:
         with loop_health().working("a proxy chain is being republished"):
             await admin.reload_providers(
                 "proxy_chains", sweep=False, rebuild_provider_ids=rebuild
             )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("PROXY CHAINS: saved, but could not republish: {}", exc)
-        return
+    except Exception as exc:
+        affected = (
+            sorted(current_proxy_chains().chains)
+            if rebuild is None
+            else sorted(rebuild)
+        )
+        # A provider constructor can quote the proxy URL it was handed, and a
+        # proxy URL can carry a password: never into a log line or the page.
+        detail = _URL_USERINFO.sub(r"\1", redact_sensitive_error_text(str(exc).strip()))
+        logger.warning(
+            "PROXY CHAINS: saved, but could not republish {}: {}: {}. The "
+            "providers built before this save keep routing until a rebuild "
+            "succeeds (restart MCC, or Save the chain again).",
+            ", ".join(affected) if affected else "every provider",
+            type(exc).__name__,
+            detail,
+        )
+        failure = (
+            "Saved -- not routing yet: the provider could not be rebuilt "
+            f"({type(exc).__name__}{': ' + detail if detail else ''}). "
+            "Requests still go the way they went before this save. Restart "
+            "MCC, or press Save again."
+        )
+        for provider_id in affected:
+            _NOT_ROUTING[provider_id] = failure
+        return failure
     if rebuild is None:
         _UNROUTED.clear()
+        _NOT_ROUTING.clear()
     else:
         _UNROUTED.difference_update(rebuild)
+        for provider_id in rebuild:
+            _NOT_ROUTING.pop(provider_id, None)
+    return ""
 
 
 def _chain_inputs(store: ProxyChains, key: str) -> object:
@@ -2001,6 +2066,13 @@ def _commit_undo(token: str) -> tuple[str, frozenset[str]]:
         if not token or _UNDO_SLOT.get("token") != token:
             return "unknown", frozenset()
         current = load_proxy_chains()
+        if current.unreadable:
+            # The file cannot be read, so whether anything moved since the
+            # gesture is unknown -- and the restore is a whole document that
+            # would replace it. Refused like any other save (7.78.8): handing
+            # the store its own marked read raises the refusal that names the
+            # file, and writes nothing.
+            save_proxy_chains(current)
         if current.as_document() != _UNDO_SLOT.get("after"):
             return "moved", frozenset()
         restored = ProxyChains.from_document(_UNDO_SLOT["before"])
@@ -2125,7 +2197,18 @@ def _payload(services: ApiServices) -> dict[str, Any]:
             _provider_payload(entry, store, settings)
             for entry in _configured_providers(settings)
         ],
-    }
+    } | _store_problem_payload()
+
+
+def _store_problem_payload() -> dict[str, Any]:
+    """``{"store_problem": <sentence>}`` while the chain file cannot be used.
+
+    The red banner's text (7.78.8). Empty -- no key at all -- whenever the
+    file reads, so the page of every healthy install is what it was.
+    """
+
+    problem = proxy_chains_problem()
+    return {"store_problem": problem} if problem else {}
 
 
 def _chained_passing(store: ProxyChains) -> int:
@@ -2386,6 +2469,29 @@ def _provider_payload(
         if chain is not None
         else None
     )
+    # What the card says about how this provider routes right now (7.78.8).
+    # Each key is present only when it has something to say, so the card of
+    # every provider that routes as configured is exactly what it was.
+    provider_id = str(entry["provider_id"])
+    if chain is not None and not chain.direct_fallback and not inherited:
+        # The same sentence a request to it is refused with: Direct fallback
+        # off and nothing in the chain to route through.
+        refusal = masked_refusal_sentence(
+            store, provider_id, str(entry["display_name"])
+        )
+        if refusal:
+            payload["refusal"] = refusal
+    if (
+        chain is not None
+        and chain.enabled
+        and provider_id in OAUTH_PROVIDER_IDS
+        and not chain.oauth_acknowledged
+    ):
+        # By design: a subscription login's chain is inert until the operator
+        # acknowledges it -- said, rather than left to look as if it routes.
+        payload["chain_inert"] = True
+    if provider_id in _NOT_ROUTING:
+        payload["not_routing"] = _NOT_ROUTING[provider_id]
     return payload
 
 

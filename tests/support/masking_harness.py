@@ -75,8 +75,9 @@ class SeenRequest:
     body: bytes
 
 
-#: What the host answers: ``(status, json bytes)``.
-Responder = Callable[[SeenRequest], tuple[int, bytes]]
+#: What the host answers: ``(status, json bytes)``, or ``(status, bytes,
+#: content type)`` for an answer that is not JSON -- an SSE stream, a picture.
+Responder = Callable[[SeenRequest], tuple[int, bytes] | tuple[int, bytes, str]]
 
 
 def _ok_responder(request: SeenRequest) -> tuple[int, bytes]:
@@ -217,10 +218,11 @@ class FakeProviderHost(_Listener):
             )
             with self._lock:
                 self._requests.append(seen)
-            status, payload = self.responder(seen)
+            status, payload, *rest = self.responder(seen)
+            content_type = rest[0] if rest else "application/json"
             writer.write(
                 f"HTTP/1.1 {status} RIG\r\n"
-                "content-type: application/json\r\n"
+                f"content-type: {content_type}\r\n"
                 f"content-length: {len(payload)}\r\n\r\n".encode("ascii")
                 + payload
             )

@@ -69,7 +69,10 @@ from urllib.parse import urlsplit
 
 from loguru import logger
 
-from my_claude_code.config.atomic_json import write_json_document_atomically
+from my_claude_code.config.atomic_json import (
+    write_json_document_atomically,
+    write_json_document_atomically_if_changed,
+)
 from my_claude_code.config.constants import (
     PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
     PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
@@ -77,7 +80,7 @@ from my_claude_code.config.constants import (
     ROTATION_POLICY_ALIASES,
     ROTATION_POLICY_ORDER,
 )
-from my_claude_code.config.paths import proxy_chains_path
+from my_claude_code.config.paths import PROXY_CHAINS_FILENAME, proxy_chains_path
 from my_claude_code.config.proxy_feed_legacy import convert_legacy_feed_ids
 from my_claude_code.config.proxy_feeds import CustomFeed, mint_feed_id
 
@@ -877,10 +880,43 @@ class ProxyChains:
     #: a document that has already been through it. That emptiness is what
     #: makes the migration idempotent.
     migrated_feed_ids: tuple[str, ...] = ()
+    #: Why ``proxy_chains.json`` could not be read, when this table is *not*
+    #: what the file holds. **Never persisted**, and ``""`` on every table read
+    #: from a readable (or absent) file -- which is every table on a healthy
+    #: install, so nothing that compares tables sees it.
+    #:
+    #: Set on the stand-in :func:`current_proxy_chains` serves while the file
+    #: cannot be read or parsed (the table read before it, or the masking
+    #: record when there is none), and on the empty table
+    #: :func:`load_proxy_chains` hands a writer. It survives every ``with_*``
+    #: copy, so a document derived from a read that failed reaches
+    #: :func:`save_proxy_chains` still carrying it, and is refused there: MCC
+    #: never overwrites a chain file it could not read.
+    unreadable: str = ""
 
     @property
     def is_empty(self) -> bool:
         return not self.chains and not self.proxies and not self.feeds
+
+    def masked_provider_ids(self) -> tuple[str, ...]:
+        """Providers whose chain must never fall to this computer's address.
+
+        A chain that is switched on -- acknowledged, for a subscription login,
+        or it is inert -- with Direct fallback off. Exactly the providers the
+        runtime refuses rather than sends direct when nothing in the chain can
+        carry a request, so it is also what the masking record keeps for the
+        day the file itself cannot be read.
+        """
+
+        return tuple(
+            sorted(
+                provider_id
+                for provider_id, chain in self.chains.items()
+                if chain.enabled
+                and not chain.direct_fallback
+                and (provider_id not in OAUTH_PROVIDER_IDS or chain.oauth_acknowledged)
+            )
+        )
 
     @property
     def enabled_feed_ids(self) -> tuple[str, ...]:
@@ -1295,12 +1331,15 @@ PROXY_CHAINS_WRITE_LOCK = threading.RLock()
 
 
 def load_proxy_chains(path: Path | None = None) -> ProxyChains:
-    """Read the store, treating every failure as "no chains".
+    """Read the store for a writer, never raising.
 
-    A malformed file must never stop the proxy from starting: the worst honest
-    outcome is that every provider falls back to its ``<PROVIDER>_PROXY``,
-    which is the behaviour of every release before this one, and a log line
-    says so.
+    A malformed file must never stop the proxy from starting, so a file that
+    cannot be read or parsed comes back as a table with no chains in it -- but
+    marked :attr:`ProxyChains.unreadable`, because it is not "no chains". A
+    writer that derives its document from it is refused at
+    :func:`save_proxy_chains`: the user's file is never replaced by a document
+    built from a read that failed. Readers that only look (the checker, the
+    health re-arm, the speed order) find nothing to do in it, as before.
     """
 
     resolved_path = path if path is not None else proxy_chains_path()
@@ -1308,7 +1347,7 @@ def load_proxy_chains(path: Path | None = None) -> ProxyChains:
         return _read_proxy_chains(resolved_path)
     except OSError as exc:
         logger.warning("PROXY CHAINS: cannot read {}: {}", resolved_path, exc)
-        return EMPTY_PROXY_CHAINS
+        return ProxyChains(unreadable=f"could not be read: {exc}")
 
 
 def _read_proxy_chains(resolved_path: Path) -> ProxyChains:
@@ -1317,25 +1356,47 @@ def _read_proxy_chains(resolved_path: Path) -> ProxyChains:
     That is not "no chains". On Windows a read that lands while another
     thread is ``os.replace``-ing the file fails with a sharing violation for
     the quarter of a millisecond the rename takes; the file is fine and the
-    next read sees it. A missing, blank or unparseable file is a real answer
-    and is :data:`EMPTY_PROXY_CHAINS`.
+    next read sees it. A missing file is a real answer and is
+    :data:`EMPTY_PROXY_CHAINS`.
+
+    So, since 7.78.8, is nothing else. A file that is there but blank, not
+    UTF-8, not JSON or not a JSON object is a chain file that cannot be
+    parsed, and comes back as an empty table marked
+    :attr:`ProxyChains.unreadable` with the reason: every chain it held is
+    unknown, which is not the same as there being none. MCC writes this file
+    atomically, so none of those is a state it leaves behind.
     """
 
     try:
         raw = resolved_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return EMPTY_PROXY_CHAINS
+    except UnicodeDecodeError as exc:
+        return _unparseable(resolved_path, f"is not UTF-8 text ({exc.reason})")
 
     if not raw.strip():
-        return EMPTY_PROXY_CHAINS
+        return _unparseable(resolved_path, "is empty")
 
     try:
         document = json.loads(raw)
     except json.JSONDecodeError as exc:
-        logger.warning("PROXY CHAINS: cannot parse {}: {}", resolved_path, exc)
-        return EMPTY_PROXY_CHAINS
+        return _unparseable(resolved_path, f"is not valid JSON ({exc})")
+    if not isinstance(document, Mapping):
+        return _unparseable(resolved_path, "is not a JSON object")
 
     return ProxyChains.from_document(document)
+
+
+def _unparseable(resolved_path: Path, reason: str) -> ProxyChains:
+    logger.warning(
+        "PROXY CHAINS: cannot parse {}: it {}. It is not read as 'no chains': "
+        "the table read before it is kept, a provider whose chain has Direct "
+        "fallback off is refused rather than sent from this computer's own "
+        "address, and MCC does not rewrite the file -- fix or remove it.",
+        resolved_path,
+        reason,
+    )
+    return ProxyChains(unreadable=f"cannot be parsed: it {reason}")
 
 
 def migrate_proxy_feeds(path: Path | None = None) -> tuple[str, ...]:
@@ -1376,17 +1437,147 @@ def migrate_proxy_feeds(path: Path | None = None) -> tuple[str, ...]:
     return store.migrated_feed_ids
 
 
+class ProxyChainsUnreadableError(OSError):
+    """A save refused because the document was derived from a failed read.
+
+    An ``OSError`` so that every writer already prepared for a failed write --
+    a sharing violation on the rename, a read-only directory -- handles this
+    one the same way: nothing was written, and the caller is told.
+    """
+
+    def __init__(self, path: Path, reason: str) -> None:
+        super().__init__(
+            f"Not saved: {path} {reason}. MCC does not overwrite a chain file "
+            "it cannot read, because every chain in it would be lost. Fix or "
+            "remove the file, then restart MCC."
+        )
+        self.path = path
+        self.reason = reason
+
+
 def save_proxy_chains(chains: ProxyChains, path: Path | None = None) -> None:
     """Write the store atomically, under the writer lock, and mark the cache stale.
 
     Call it off the event loop: it is file I/O, and it may wait for another
     writer to finish.
+
+    Refused -- :class:`ProxyChainsUnreadableError`, nothing written -- for a
+    table derived from a read that failed (:attr:`ProxyChains.unreadable`):
+    the file on disk holds chains nobody could read, and a document built from
+    "nothing" would replace them all. The masking record beside the file is
+    kept current here too (:func:`_sync_masking_record`).
     """
 
     resolved_path = path if path is not None else proxy_chains_path()
+    if chains.unreadable:
+        raise ProxyChainsUnreadableError(resolved_path, chains.unreadable)
     with PROXY_CHAINS_WRITE_LOCK:
         write_json_document_atomically(resolved_path, chains.as_document())
         _invalidate_proxy_chains_cache()
+        _sync_masking_record(resolved_path, chains)
+
+
+#: The masking record: ``proxy_masking.json`` beside the chain file, listing the
+#: providers :meth:`ProxyChains.masked_provider_ids` names -- a chain switched
+#: on with Direct fallback off. Provider ids only: no address, no credential.
+#:
+#: It is read for one thing. A start that finds ``proxy_chains.json`` there but
+#: unreadable has no table to stand on, and without this would build every
+#: provider without its chain -- from this computer's own address, for exactly
+#: the providers whose operator said that must never happen. With it, those are
+#: refused and every other provider is built as it always was.
+#:
+#: Written on a save only when the list changes, and only once there is
+#: something to say: an install with no such chain never gets the file.
+MASKING_RECORD_FILENAME = "proxy_masking.json"
+MASKING_RECORD_VERSION = 1
+_MASKING_RECORD_ABOUT = (
+    "Providers whose proxy chain has Direct fallback off. MCC writes this when "
+    "proxy_chains.json is saved and reads it only when proxy_chains.json "
+    "cannot be read, so these providers are refused rather than sent from "
+    "this computer's own address."
+)
+#: What this process last wrote, or found, per record path: a save whose list
+#: has not changed costs no I/O at all.
+_MASKING_RECORDED: dict[str, tuple[str, ...]] = {}
+
+
+def masking_record_path(chains_path: Path | None = None) -> Path:
+    """Where the masking record for ``chains_path`` lives: beside it."""
+
+    resolved = chains_path if chains_path is not None else proxy_chains_path()
+    return resolved.with_name(MASKING_RECORD_FILENAME)
+
+
+def _sync_masking_record(
+    resolved_path: Path, chains: ProxyChains, *, check_disk: bool = False
+) -> None:
+    """Make the masking record say what ``chains`` says. Never raises.
+
+    Called under :data:`PROXY_CHAINS_WRITE_LOCK`: the record shares the atomic
+    writer's staging scheme, and two writers of one file at once is the race
+    7.72.1 closed for the chain file itself.
+    """
+
+    masked = chains.masked_provider_ids()
+    record = masking_record_path(resolved_path)
+    key = str(record)
+    if not check_disk and _MASKING_RECORDED.get(key) == masked:
+        return
+    try:
+        if not masked and not record.exists():
+            _MASKING_RECORDED[key] = masked
+            return
+        write_json_document_atomically_if_changed(
+            record,
+            {
+                "version": MASKING_RECORD_VERSION,
+                "about": _MASKING_RECORD_ABOUT,
+                "masked": list(masked),
+            },
+        )
+    except OSError as exc:
+        logger.warning(
+            "PROXY CHAINS: could not record which providers never go direct in {}: {}",
+            record,
+            exc,
+        )
+        return
+    _MASKING_RECORDED[key] = masked
+
+
+def _read_masking_record(resolved_path: Path) -> tuple[str, ...] | None:
+    """The providers the record names, or ``None`` when there is no record."""
+
+    record = masking_record_path(resolved_path)
+    try:
+        document = json.loads(record.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        logger.warning("PROXY CHAINS: cannot read {}: {}", record, exc)
+        return None
+    raw = document.get("masked") if isinstance(document, Mapping) else None
+    if not isinstance(raw, Sequence) or isinstance(raw, str):
+        return None
+    return tuple(
+        provider_id
+        for provider_id in (str(value).strip().lower() for value in raw)
+        if provider_id
+    )
+
+
+#: The chain a stand-in gives a provider the masking record names: switched on,
+#: Direct fallback off, nothing in it. ``resolve_proxy_chain`` refuses exactly
+#: that shape (unless a ``<PROVIDER>_PROXY`` still carries the provider), so a
+#: masked provider built while the file cannot be read never dials directly.
+_MASKED_STAND_IN_CHAIN = ProxyChain(
+    enabled=True,
+    entries=(),
+    direct_fallback=False,
+    oauth_acknowledged=True,
+    order_by_speed=False,
+)
 
 
 #: How long :func:`current_proxy_chains` keeps re-reading a store another
@@ -1408,14 +1599,25 @@ TRANSIENT_READ_RETRY_SECONDS = 0.005
 # table the file did not hold. Until 7.72.1 they were two globals, and an
 # unreadable instant was cached as EMPTY -- a provider built from that has no
 # chain and routes direct.
-_CACHE: tuple[tuple[str, int, int] | None, ProxyChains] = (None, EMPTY_PROXY_CHAINS)
+#
+# The table slot starts as :data:`_NOTHING_READ`, an empty table told apart from
+# :data:`EMPTY_PROXY_CHAINS` by identity: "this process has not read the file
+# yet", which is the one moment a stand-in has no table read before it to be
+# (7.78.8).
+_NOTHING_READ = ProxyChains()
+_CACHE: tuple[tuple[str, int, int] | None, ProxyChains] = (None, _NOTHING_READ)
 
 
 def reset_proxy_chains_cache() -> None:
-    """Forget the cached table, so the next read goes back to disk."""
+    """Forget the cached table, so the next read goes back to disk.
+
+    And what this process last wrote to the masking record, so the next save
+    compares with the record on disk rather than with a memory of it.
+    """
 
     global _CACHE
-    _CACHE = (None, EMPTY_PROXY_CHAINS)
+    _CACHE = (None, _NOTHING_READ)
+    _MASKING_RECORDED.clear()
 
 
 def _invalidate_proxy_chains_cache() -> None:
@@ -1429,13 +1631,20 @@ def _invalidate_proxy_chains_cache() -> None:
     _CACHE = (None, _CACHE[1])
 
 
-def _settled_read(resolved_path: Path) -> ProxyChains | None:
-    """Read the store, riding out another thread's rename; ``None`` if it can't."""
+def _settled_read(resolved_path: Path) -> tuple[ProxyChains, bool]:
+    """Read the store, riding out another thread's rename.
+
+    Returns the table and whether it is the file's answer for this signature:
+    ``False`` for a read that still failed past the bound -- a marked, empty
+    table that must not be cached, because the next read may well succeed. A
+    file that cannot be *parsed* is the file's answer, and is cached like any
+    other, so it is not re-read and re-logged on every provider build.
+    """
 
     deadline = time.monotonic() + TRANSIENT_READ_RETRY_SECONDS
     while True:
         try:
-            return _read_proxy_chains(resolved_path)
+            return _read_proxy_chains(resolved_path), True
         except OSError as exc:
             if time.monotonic() >= deadline:
                 logger.warning(
@@ -1444,7 +1653,27 @@ def _settled_read(resolved_path: Path) -> ProxyChains | None:
                     resolved_path,
                     exc,
                 )
-                return None
+                return ProxyChains(unreadable=f"could not be read: {exc}"), False
+
+
+def _stand_in(cached: ProxyChains, resolved_path: Path, reason: str) -> ProxyChains:
+    """What a reader is given while the file cannot be read or parsed.
+
+    The table read before, as it was -- every chain keeps routing exactly as it
+    did -- marked with the reason. With no table read before (a start that
+    finds the file already broken) the masking record decides: each provider
+    it names gets :data:`_MASKED_STAND_IN_CHAIN`, which is refused rather than
+    sent direct, and every other provider gets no chain -- what it got before
+    7.78.8 for any unreadable file.
+    """
+
+    if cached is not _NOTHING_READ:
+        return replace(cached, unreadable=reason)
+    masked = _read_masking_record(resolved_path) or ()
+    return ProxyChains(
+        chains=dict.fromkeys(masked, _MASKED_STAND_IN_CHAIN),
+        unreadable=reason,
+    )
 
 
 def current_proxy_chains(path: Path | None = None) -> ProxyChains:
@@ -1454,6 +1683,10 @@ def current_proxy_chains(path: Path | None = None) -> ProxyChains:
     :data:`EMPTY_PROXY_CHAINS` because a writer was mid-save: a file that is
     there but momentarily unreadable is not a file with no chains in it.
     Called on the event loop; it takes no lock.
+
+    Nor, since 7.78.8, because the file cannot be parsed, or could not be read
+    before anything else was: see :func:`_stand_in`. A stand-in carries
+    :attr:`ProxyChains.unreadable`, which is what the dashboard's banner reads.
     """
 
     global _CACHE
@@ -1463,21 +1696,156 @@ def current_proxy_chains(path: Path | None = None) -> ProxyChains:
     except FileNotFoundError:
         reset_proxy_chains_cache()
         return EMPTY_PROXY_CHAINS
-    except OSError:
+    except OSError as exc:
         # There, and not answering this instant: the table read before, and
         # the next call asks the file again.
-        return _CACHE[1]
+        return _stand_in(_CACHE[1], resolved_path, f"could not be read: {exc}")
 
     signature = (str(resolved_path), stat.st_mtime_ns, stat.st_size)
     cached_signature, cached = _CACHE
     if signature == cached_signature:
         return cached
-    chains = _settled_read(resolved_path)
-    if chains is None:
+    chains, settled = _settled_read(resolved_path)
+    if chains.unreadable:
+        chains = _stand_in(cached, resolved_path, chains.unreadable)
+    if not settled:
         # Not recorded under this signature, so the next call reads again.
-        return cached
+        return chains
     _CACHE = (signature, chains)
     return chains
+
+
+#: How long a server start keeps re-reading a chain file it cannot read before
+#: it builds providers from a stand-in. A few hundred milliseconds: long enough
+#: to ride out a scanner or a sync client holding the file at boot, short
+#: enough that a file that really is broken does not hold the start.
+STARTUP_READ_RETRY_SECONDS = 0.3
+STARTUP_READ_RETRY_INTERVAL_SECONDS = 0.02
+
+
+def settle_proxy_chains(
+    path: Path | None = None, *, within: float = STARTUP_READ_RETRY_SECONDS
+) -> ProxyChains:
+    """Read the store once at start-up, patiently, before any provider is built.
+
+    A file that will not read is asked again for up to ``within`` seconds.
+    One that still will not leaves the stand-in in place and says so in the
+    server log, naming the providers that are refused because of it. One that
+    reads brings the masking record up to date, so an install that has never
+    saved a chain since upgrading still has one the first time it is needed.
+
+    Call it off the event loop: it may sleep, and it takes the writer lock to
+    write the record.
+    """
+
+    resolved_path = path if path is not None else proxy_chains_path()
+    deadline = time.monotonic() + max(0.0, within)
+    table = current_proxy_chains(resolved_path)
+    while table.unreadable and time.monotonic() < deadline:
+        # A read that failed is not cached, so this asks the file again; one
+        # that could not be parsed is cached under the file's signature, so
+        # it is read again only if the file changes -- say, a sync client
+        # finishing its write -- rather than re-parsed and re-logged.
+        time.sleep(STARTUP_READ_RETRY_INTERVAL_SECONDS)
+        table = current_proxy_chains(resolved_path)
+    if not table.unreadable:
+        with PROXY_CHAINS_WRITE_LOCK:
+            _sync_masking_record(resolved_path, table, check_disk=True)
+        return table
+    refused = table.masked_provider_ids()
+    logger.error(
+        "PROXY CHAINS: {} {}. Providers whose chain has Direct fallback off are "
+        "refused until it can be read, never sent from this computer's own "
+        "address: {}. Every other provider is built without its chain. MCC "
+        "does not rewrite the file: fix or remove it, then restart MCC.",
+        resolved_path,
+        table.unreadable,
+        ", ".join(refused) if refused else "none recorded",
+    )
+    return table
+
+
+def proxy_chains_problem(path: Path | None = None) -> str:
+    """One sentence for the dashboard when the chain file cannot be used, else ``""``."""
+
+    resolved_path = path if path is not None else proxy_chains_path()
+    table = current_proxy_chains(resolved_path)
+    if not table.unreadable:
+        return ""
+    refused = table.masked_provider_ids()
+    return (
+        f"{resolved_path} {table.unreadable}. "
+        + (
+            f"Refused until it can be read, never sent from this computer's "
+            f"address: {', '.join(refused)}. "
+            if refused
+            else ""
+        )
+        + "MCC does not rewrite the file and saves on the Proxying page are "
+        "refused while it cannot be read: fix or remove it, then restart MCC."
+    )
+
+
+def unusable_chain_cause(store: ProxyChains, provider_id: str) -> str:
+    """Why ``provider_id``'s chain has no entry a request could use, or ``""``.
+
+    ``""`` -- nothing to say -- for a provider with no chain, a chain that is
+    switched off, an OAuth chain nobody acknowledged (inert by design), and a
+    chain with at least one entry a leg can be built from: not paused, and
+    either Direct or an address still in the catalogue. The same test
+    ``resolve_proxy_chain`` builds its legs with, so the two never disagree.
+    """
+
+    chain = store.chain(provider_id)
+    key = (provider_id or "").strip().lower()
+    if chain is None or not chain.enabled:
+        return ""
+    if key in OAUTH_PROVIDER_IDS and not chain.oauth_acknowledged:
+        return ""
+    if any(
+        not entry.paused
+        and (entry.is_direct or store.endpoint(entry.proxy) is not None)
+        for entry in chain.entries
+    ):
+        return ""
+    if store.unreadable and not chain.entries:
+        return f"{PROXY_CHAINS_FILENAME} {store.unreadable}"
+    if not chain.entries:
+        return "it has no entries: none was added, or every one was removed"
+    if all(entry.paused for entry in chain.entries):
+        count = len(chain.entries)
+        if count == 1:
+            return "its only entry is paused"
+        return f"all {count} entries are paused"
+    return "every entry is paused or names an address that was removed"
+
+
+def masked_refusal_sentence(store: ProxyChains, provider_id: str, name: str) -> str:
+    """What a refused request is told, naming the provider, the cause and the setting.
+
+    ``""`` when ``provider_id``'s chain has a usable entry (or no chain): the
+    caller only asks once it has found nothing to route through.
+    """
+
+    cause = unusable_chain_cause(store, provider_id)
+    if not cause:
+        return ""
+    who = name or provider_id
+    if store.unreadable and cause.startswith(PROXY_CHAINS_FILENAME):
+        return (
+            f"Not sent: {cause}, and when it was last saved {who}'s proxy chain "
+            "had Direct fallback off, so this request would have gone out from "
+            "this computer's own address. MCC does not rewrite that file: fix "
+            "or remove it, then restart MCC (Proxying page -> "
+            f"{who} -> Direct fallback)."
+        )
+    return (
+        f"Not sent: {who}'s proxy chain has no usable entry ({cause}) and "
+        "Direct fallback is off, so this request would have gone out from this "
+        "computer's own address. Resume or add an entry, or switch Direct "
+        f'fallback on: Proxying page -> {who} -> "Fall back to this '
+        "machine's own address\"."
+    )
 
 
 __all__ = [
@@ -1502,6 +1870,8 @@ __all__ = [
     "FAILURE_TLS_TIMEOUT",
     "FAILURE_TUNNEL",
     "FEEDS_KEY",
+    "MASKING_RECORD_FILENAME",
+    "MASKING_RECORD_VERSION",
     "MAX_REFUSED_ENDPOINTS",
     "MAX_SWITCHES_DEFAULT",
     "MAX_SWITCHES_MAX",
@@ -1516,6 +1886,8 @@ __all__ = [
     "SELECTABLE_TRIGGER_KINDS",
     "SOURCE_FEED",
     "SOURCE_MANUAL",
+    "STARTUP_READ_RETRY_INTERVAL_SECONDS",
+    "STARTUP_READ_RETRY_SECONDS",
     "TLS_INTERCEPTED",
     "TLS_STRICT",
     "TLS_UNKNOWN",
@@ -1526,6 +1898,7 @@ __all__ = [
     "ProxyChain",
     "ProxyChainEntry",
     "ProxyChains",
+    "ProxyChainsUnreadableError",
     "ProxyCheckRecord",
     "ProxyEndpoint",
     "ProxyFeedFacts",
@@ -1534,10 +1907,15 @@ __all__ = [
     "current_proxy_chains",
     "is_valid_proxy_url",
     "load_proxy_chains",
+    "masked_refusal_sentence",
+    "masking_record_path",
     "migrate_proxy_feeds",
     "normalise_policy",
     "normalise_scope",
     "normalise_trigger_kinds",
+    "proxy_chains_problem",
     "reset_proxy_chains_cache",
     "save_proxy_chains",
+    "settle_proxy_chains",
+    "unusable_chain_cause",
 ]
