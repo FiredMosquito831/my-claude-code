@@ -1279,7 +1279,7 @@ wheels = [
 
 [[package]]
 name = "my-claude-code"
-version = "7.78.8"
+version = "7.78.9"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
