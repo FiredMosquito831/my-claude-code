@@ -81,6 +81,10 @@ uv lock                                  # reflect the version bump
 uv build --wheel                         # produces dist/my_claude_code-*.whl
 ```
 
+`*.sh` files are LF-enforced by `.gitattributes` (`*.sh text eol=lf`), so a
+wheel built from a `core.autocrlf=true` checkout still bundles an
+`installers/install.sh` that Linux/macOS `sh` can run; do not remove that rule.
+
 Verify both packages landed in the wheel:
 
 ```bash
