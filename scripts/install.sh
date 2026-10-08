@@ -74,6 +74,20 @@ no_restart_requested=0
 no_start_requested=0
 no_desktop_requested=0
 desktop_app_started=0
+# 7.79.1: --allow-root (or MCC_INSTALL_ALLOW_ROOT=1). Without it, a run as
+# root through sudo -- root, on behalf of a real SUDO_USER -- is refused; see
+# refuse_install_through_sudo. A plain root shell is not affected.
+allow_root=0
+# 7.79.1: set when the configured port turned out to be answered by a server
+# this run did not start and could not stop. The install itself may still
+# have happened; the script then ends with exit 1 instead of a success that
+# was another server's.
+port_held_by_another=0
+# The product's own WSL test (config/paths.py, config/claude_discovery.py):
+# the kernel's release string names Microsoft. WSL_DISTRO_NAME and WSL_INTEROP
+# are the test the sign-in flows use; sudo's env_reset strips those two, the
+# kernel string it cannot.
+WSL_OSRELEASE_PATH="/proc/sys/kernel/osrelease"
 # The first release whose mcc-server understands --report-holder and
 # --stop-holder. Older builds do not REFUSE those flags: they ignore every
 # argument but --version and start a server.
@@ -144,6 +158,10 @@ Options:
                            was asked. Same as setting MCC_INSTALL_NO_START=1.
   --no-desktop             Never start the desktop app. Same as setting
                            MCC_INSTALL_NO_DESKTOP=1.
+  --allow-root             Install for root even though this runs through sudo
+                           on behalf of another user. Same as setting
+                           MCC_INSTALL_ALLOW_ROOT=1. My Claude Code installs per
+                           user, so without it a sudo run is refused.
   --dry-run                Print commands without running them.
   --help                   Show this help text.
 USAGE
@@ -602,6 +620,9 @@ parse_args() {
             --no-desktop)
                 no_desktop_requested=1
                 ;;
+            --allow-root)
+                allow_root=1
+                ;;
             --version)
                 shift
                 [ "$#" -gt 0 ] || fail "--version requires a value."
@@ -638,6 +659,52 @@ validate_args() {
     if [ -n "$torch_backend" ] && [ "$include_local" -ne 1 ]; then
         fail "--torch-backend requires --voice-local or --voice-all."
     fi
+}
+
+refuse_install_through_sudo() {
+    # 7.79.1. My Claude Code is a per-user install: uv's tool directory,
+    # ~/.local/bin and the configuration home all belong to whoever runs this.
+    # Under sudo that is root -- so a global npm install run through sudo,
+    # `curl ... | sudo sh` and `sudo mcc update` installed a second, root-owned
+    # copy in root's home and started a root-owned server on the configured
+    # port, which stopped the user's own server on the way (measured in
+    # throwaway containers, specs/INVESTIGATION-NPM-SUDO.md). The user could
+    # neither use nor update that copy.
+    #
+    # Only root acting FOR another user is refused. A root shell, a root VPS and
+    # a Docker image have no SUDO_USER (or SUDO_USER=root) and are unaffected.
+    # Runs before the update lock and before anything is downloaded, so a
+    # refused run touches nothing.
+    [ "$(id -u 2>/dev/null || printf '1')" = "0" ] || return 0
+    case "${SUDO_USER:-}" in
+        ''|root) return 0 ;;
+    esac
+    [ "$allow_root" -eq 1 ] && return 0
+    [ "${MCC_INSTALL_ALLOW_ROOT:-}" = "1" ] && return 0
+    resolve_server_address
+    {
+        printf 'WARNING: this installer is running as root through sudo, on behalf of %s.\n' "$SUDO_USER"
+        printf 'My Claude Code installs per user. Run as root it would install a second,\n'
+        printf 'root-owned copy in %s that %s cannot use or update, and start a root-owned\n' "${HOME:-/root}" "$SUDO_USER"
+        printf 'server on port %s in place of %s'"'"'s own. Nothing was installed.\n' "$server_port" "$SUDO_USER"
+        printf '\nTo install for %s, run it again as %s, without sudo:\n' "$SUDO_USER" "$SUDO_USER"
+        printf '  curl -fsSL "https://raw.githubusercontent.com/%s/main/scripts/install.sh" | sh\n' "$MCC_REPO"
+        printf 'With npm, give npm a folder %s owns and install the package again without sudo:\n' "$SUDO_USER"
+        printf '  npm config set prefix ~/.npm-global   (and add ~/.npm-global/bin to PATH)\n'
+        printf 'or keep the `mcc` command sudo installed and run `mcc install` as %s.\n' "$SUDO_USER"
+        printf '\nTo install for root on purpose, pass --allow-root (or set MCC_INSTALL_ALLOW_ROOT=1).\n'
+    } >&2
+    exit 1
+}
+
+running_under_wsl() {
+    # Whether this Linux is WSL, by the product's own test. Under WSL the
+    # desktop app to use is the WINDOWS one: mcc-desktop refuses to run here,
+    # and a Linux app inside WSL is a second, separate install (7.79.1).
+    [ -n "${WSL_DISTRO_NAME:-}" ] && return 0
+    [ -n "${WSL_INTEROP:-}" ] && return 0
+    [ -r "$WSL_OSRELEASE_PATH" ] || return 1
+    grep -qi microsoft "$WSL_OSRELEASE_PATH" 2>/dev/null
 }
 
 extract_wheel_digest() {
@@ -1278,6 +1345,14 @@ create_desktop_shortcut() {
     [ "$enable_desktop" -eq 1 ] || return 0
 
     step "Creating a desktop launcher"
+    # 7.79.1: WSL gets the server only, even when WSLg reports a display.
+    # mcc-desktop refuses to run inside WSL, so a launcher for it would be a
+    # menu entry that does nothing; the desktop app to use is the Windows one.
+    if running_under_wsl; then
+        desktop_launcher_error="this is WSL, which gets the server only -- use the Windows desktop app, or open the dashboard in a Windows browser"
+        printf 'Not writing a Linux launcher: %s.\n' "$desktop_launcher_error"
+        return 0
+    fi
     if [ "$dry_run" -eq 1 ]; then
         printf '+ export app icon and write a desktop launcher for mcc-desktop\n'
         return 0
@@ -1754,7 +1829,88 @@ enter_update_lock() {
         fi
         rm -f "$lock_file" 2>/dev/null || true
     done
-    return 1
+    # 7.79.1: nobody alive holds the lock, and it still could not be taken --
+    # the folder (or a lock file left in it) is not this user's to write. An
+    # install run as root with this HOME leaves exactly that: a root-owned
+    # updates folder. Until now this read as "An update is already running",
+    # exit 0, naming a log nobody was writing -- the update path silently dead.
+    return 2
+}
+
+pid_is_running() {
+    # Whether pid $1 exists at all, whoever owns it. `kill -0` cannot tell: for
+    # another user's process it fails exactly as it does for a dead one.
+    [ -d "/proc/$1" ] && return 0
+    command -v ps >/dev/null 2>&1 || return 1
+    ps -p "$1" >/dev/null 2>&1
+}
+
+path_owner() {
+    # The user that owns path $1, or nothing. `ls -ld` is the portable answer
+    # (GNU stat and BSD stat disagree about their flags).
+    owner_listing=$(ls -ld "$1" 2>/dev/null) || return 0
+    printf '%s\n' "$owner_listing" | {
+        read -r _mode _links owner_name _rest || true
+        printf '%s' "${owner_name:-}"
+    }
+    return 0
+}
+
+write_lock_unavailable_notice() {
+    # The honest version of "An update is already running" for the case where
+    # none is: whose lock this is, how old, and why it cannot be taken. The
+    # caller exits 1 -- nothing was installed, and saying so with exit 0 is
+    # how the false notice hid a dead update path.
+    unavailable_lock=$(update_lock_path)
+    unavailable_dir=$(dirname "$unavailable_lock")
+    unavailable_me=$(id -un 2>/dev/null || printf 'this user')
+    {
+        printf '\nThe update lock could not be taken, and no running update holds it.\n'
+        if [ -e "$unavailable_lock" ]; then
+            unavailable_pid=$(read_update_lock_field pid)
+            unavailable_source=$(read_update_lock_field source)
+            unavailable_started=$(read_update_lock_field started_at)
+            unavailable_age="age unknown"
+            case "$unavailable_started" in
+                ''|*[!0-9]*) ;;
+                *)
+                    unavailable_now=$(date -u +%s 2>/dev/null || printf '0')
+                    unavailable_seconds=$((unavailable_now - unavailable_started))
+                    if [ "$unavailable_seconds" -lt 0 ]; then
+                        unavailable_age="age unknown"
+                    elif [ "$unavailable_seconds" -lt 120 ]; then
+                        unavailable_age="written ${unavailable_seconds} s ago"
+                    else
+                        unavailable_age="written $((unavailable_seconds / 60)) min ago"
+                    fi
+                    ;;
+            esac
+            unavailable_state="no longer running"
+            case "$unavailable_pid" in
+                ''|*[!0-9]*) unavailable_pid="unknown" ;;
+                *) pid_is_running "$unavailable_pid" && unavailable_state="running, as another user" ;;
+            esac
+            printf 'Lock: %s\n' "$unavailable_lock"
+            printf '  written by %s, pid %s (%s), %s; the file belongs to %s.\n' \
+                "${unavailable_source:-an unknown installer}" "$unavailable_pid" "$unavailable_state" \
+                "$unavailable_age" "$(path_owner "$unavailable_lock")"
+            if [ -w "$unavailable_dir" ]; then
+                printf '  %s cannot remove it: it is not a file %s may delete.\n' \
+                    "$unavailable_me" "$unavailable_me"
+            else
+                printf '  %s cannot remove it: %s (owned by %s) is not writable by %s.\n' \
+                    "$unavailable_me" "$unavailable_dir" "$(path_owner "$unavailable_dir")" "$unavailable_me"
+            fi
+        else
+            printf 'Lock: %s does not exist, and %s (owned by %s) is not writable by %s.\n' \
+                "$unavailable_lock" "$unavailable_dir" "$(path_owner "$unavailable_dir")" "$unavailable_me"
+        fi
+        printf 'Nothing was installed. An install run as root (for example through sudo) with\n'
+        printf 'this home directory leaves root-owned folders like this one. Give it back with\n'
+        printf '  sudo chown -R %s "%s"\n' "$unavailable_me" "$(mcc_config_dir)"
+        printf 'and run the installer again.\n'
+    } >&2
+    return 0
 }
 
 exit_update_lock() {
@@ -1931,6 +2087,139 @@ wait_for_server_health() {
     curl -fsS -o /dev/null -m 5 "$health_url" 2>/dev/null
 }
 
+health_answer() {
+    # ONE GET of the /health URL $1, and what it says about who answered
+    # (7.79.1):
+    #   health_answer_code  the HTTP status; 000 when nothing answered at all
+    #   health_answer_pid   the pid the answer named in x-mcc-pid (every
+    #                       server since 7.70.0 sends it); "" when it named none
+    # A refused or timed-out connect is "nothing answered" and nothing more:
+    # port_is_occupied explains why silence cannot be read as "busy" on every
+    # machine. Only an actual HTTP answer is evidence of a listener.
+    health_answer_code=000
+    health_answer_pid=""
+    health_answer_headers=$(curl -s -o /dev/null -D - -m 5 "$1" 2>/dev/null) || health_answer_headers=""
+    [ -n "$health_answer_headers" ] || return 0
+    health_answer_code=$(
+        printf '%s\n' "$health_answer_headers" | tr -d '\r' |
+            sed -n '1s/^HTTP\/[0-9.]*[[:space:]]*\([0-9][0-9][0-9]\).*/\1/p'
+    )
+    [ -n "$health_answer_code" ] || health_answer_code=000
+    health_answer_pid=$(
+        printf '%s\n' "$health_answer_headers" | tr -d '\r' |
+            sed -n 's/^[Xx]-[Mm][Cc][Cc]-[Pp][Ii][Dd]:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' |
+            head -n 1
+    )
+    return 0
+}
+
+parent_pid_of() {
+    # The parent of pid $1, or nothing when it cannot be read. /proc first
+    # (Linux, readable for every user's process), then ps.
+    parent_of=""
+    if [ -r "/proc/$1/stat" ]; then
+        # Field 4, counted after the ")" that closes the command name -- which
+        # may itself contain spaces and parentheses, hence the greedy match.
+        parent_of=$(sed -n 's/^.*) [A-Za-z] \([0-9][0-9]*\) .*$/\1/p' "/proc/$1/stat" 2>/dev/null)
+    fi
+    if [ -z "$parent_of" ] && command -v ps >/dev/null 2>&1; then
+        parent_of=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
+    fi
+    case "$parent_of" in
+        ''|*[!0-9]*) parent_of="" ;;
+    esac
+    printf '%s' "$parent_of"
+}
+
+answer_is_from_started_server() {
+    # Whether the server that answered (pid $1) is the one this run started
+    # (pid $2) or runs under it -- a launcher may exec its interpreter or spawn
+    # it. 0 = ours; 1 = positively not (its parents were walked to the top
+    # without meeting ours); 2 = cannot tell (not even its own parent could be
+    # read), which the caller treats as ours, exactly as before 7.79.1.
+    answer_walk=$1
+    answer_started=$2
+    answer_depth=0
+    while [ "$answer_depth" -lt 32 ]; do
+        [ "$answer_walk" = "$answer_started" ] && return 0
+        answer_parent=$(parent_pid_of "$answer_walk")
+        if [ -z "$answer_parent" ]; then
+            [ "$answer_depth" -eq 0 ] && return 2
+            return 1
+        fi
+        case "$answer_parent" in
+            0|1) return 1 ;;
+        esac
+        answer_walk=$answer_parent
+        answer_depth=$((answer_depth + 1))
+    done
+    return 1
+}
+
+process_owner() {
+    # The user running pid $1, or nothing. ps first; /proc's Uid line where
+    # there is no ps (a minimal container image has none).
+    owner_of=""
+    if command -v ps >/dev/null 2>&1; then
+        owner_of=$(ps -o user= -p "$1" 2>/dev/null | tr -d ' ')
+    fi
+    if [ -z "$owner_of" ] && [ -r "/proc/$1/status" ]; then
+        owner_uid=$(sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "/proc/$1/status" 2>/dev/null)
+        if [ -n "$owner_uid" ]; then
+            owner_of=$(id -nu "$owner_uid" 2>/dev/null || printf 'uid %s' "$owner_uid")
+        fi
+    fi
+    printf '%s' "$owner_of"
+}
+
+port_answerer() {
+    # Who answered the last health_answer, as words: the pid it named and the
+    # user running it, when either can be read.
+    if [ -z "$health_answer_pid" ]; then
+        printf 'a server that does not name its process (an older My Claude Code, or another program)'
+        return 0
+    fi
+    answerer_owner=$(process_owner "$health_answer_pid")
+    if [ -n "$answerer_owner" ]; then
+        printf 'a My Claude Code server, pid %s, run by %s' "$health_answer_pid" "$answerer_owner"
+    else
+        printf 'a My Claude Code server, pid %s' "$health_answer_pid"
+    fi
+}
+
+why_answerer_is_not_stopped() {
+    # Why the server that answered the last health_answer is not stopped here.
+    # Another user's server cannot be; a server of this user's that the
+    # installed mcc-server could not identify (it reads the holder of a port
+    # from `ss` or `netstat`, and a minimal image has neither) is not, because
+    # which processes may be stopped is the product's decision, not this
+    # script's.
+    if [ -n "$health_answer_pid" ]; then
+        why_owner=$(process_owner "$health_answer_pid")
+        why_me=$(id -un 2>/dev/null || printf '')
+        if [ -n "$why_owner" ] && [ -n "$why_me" ] && [ "$why_owner" != "$why_me" ]; then
+            printf 'another user'"'"'s server (one started through sudo runs as root), which this installer cannot stop'
+            return 0
+        fi
+    fi
+    printf 'which the installed mcc-server could not identify as the process holding the port, so this installer does not stop it'
+}
+
+stop_hint_for_answerer() {
+    # How to stop the server that answered, or a generic sentence.
+    if [ -z "$health_answer_pid" ]; then
+        printf 'Stop whatever holds port %s' "$server_port"
+        return 0
+    fi
+    hint_owner=$(process_owner "$health_answer_pid")
+    hint_me=$(id -un 2>/dev/null || printf '')
+    if [ -n "$hint_owner" ] && [ -n "$hint_me" ] && [ "$hint_owner" != "$hint_me" ]; then
+        printf 'Stop it (it is %s'"'"'s: sudo kill %s)' "$hint_owner" "$health_answer_pid"
+    else
+        printf 'Stop it (kill %s)' "$health_answer_pid"
+    fi
+}
+
 start_server_detached() {
     # Detached, so the server outlives this installer: an installer that held
     # the server open would take it down with itself. Both streams go to this
@@ -1996,6 +2285,8 @@ stop_configured_server() {
     #   nothing-listening the port was already free
     #   foreign           a non-MCC process holds the port; nothing touched
     #   unclassifiable    the port is busy and this build cannot say by what
+    #   held-elsewhere    (7.79.1) the build saw no holder, yet /health answers:
+    #                     a server this account cannot see or stop
     #   failed            our server would not stop
     stop_launcher=$1
     stop_launcher_version=$2
@@ -2037,6 +2328,25 @@ stop_configured_server() {
     fi
 
     if [ "$mcc_holder_pid" -le 0 ]; then
+        # 7.79.1: "nothing" from --report-holder can also mean "nothing THIS
+        # account is allowed to see". A user cannot read which process owns
+        # another user's socket, so a server started through sudo -- running
+        # as root -- reads as a free port, and the installer used to start a
+        # server that abandoned its start and then report the root server's
+        # answer as its own success. The same happens with the user's OWN
+        # server where the installed build cannot read the holder of a port
+        # at all (it asks `ss` or `netstat`; a minimal image has neither):
+        # the new version was swapped in, the old server kept serving, and
+        # the run said "installed and answering". One GET of /health tells
+        # "free" from "held": only a real HTTP answer counts, so a dropped SYN
+        # never blocks a start.
+        health_answer "http://$server_reachable_host:$server_port/health"
+        if [ "$health_answer_code" != "000" ]; then
+            stop_outcome="held-elsewhere"
+            install_progress_holder=$(port_answerer)
+            stop_message="Port $server_port is answered by $install_progress_holder -- $(why_answerer_is_not_stopped). Nothing was stopped and nothing was started. $(stop_hint_for_answerer), then start yours with: mcc-server"
+            return 0
+        fi
         stop_outcome="nothing-listening"
         stop_message="Nothing was listening on port $server_port."
         return 0
@@ -2171,7 +2481,8 @@ desktop_skip_reason() {
     #   2. --no-start / MCC_INSTALL_NO_START was not given -- there is nothing
     #      for a window to attach to;
     #   3. --no-desktop / MCC_INSTALL_NO_DESKTOP was not given;
-    #   4. this is not CI and not a headless session (no DISPLAY and no
+    #   4. this is not CI, not WSL (7.79.1: the server only there, whatever
+    #      display WSLg reports) and not a headless session (no DISPLAY and no
     #      WAYLAND_DISPLAY on anything but macOS);
     #   5. the desktop shell is installed here, proved by the binary AND the
     #      receipt this product writes beside it;
@@ -2186,6 +2497,11 @@ desktop_skip_reason() {
         ""|0|false|False|FALSE) ;;
         *) printf 'this is CI'; return 0 ;;
     esac
+    # 7.79.1: WSL gets the server only, display or not (WSLg reports one).
+    if running_under_wsl; then
+        printf 'this is WSL, which gets the server only'
+        return 0
+    fi
     if [ "$(uname -s 2>/dev/null || printf 'unknown')" != "Darwin" ]; then
         if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
             printf 'this session has no display'
@@ -2296,6 +2612,16 @@ restart_after_install() {
             write_install_progress done "$stop_message"
             return 1
             ;;
+        held-elsewhere)
+            # 7.79.1: the install itself succeeded, but the server it is for
+            # cannot run on this port; the script ends with exit 1.
+            printf '\n%s\n' "$stop_message"
+            write_install_log "$stop_message"
+            install_progress_restarted=false
+            write_install_progress failed "$stop_message"
+            port_held_by_another=1
+            return 1
+            ;;
         unclassifiable)
             restart_message="$stop_message Run the installer again once this version is installed, or stop the server yourself and start it with: mcc-server"
             printf '%s\n' "$restart_message"
@@ -2356,6 +2682,32 @@ confirm_restarted_server() {
     write_install_log "Waiting for $restart_health_url."
 
     if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
+        # 7.79.1: an answer is success only when it comes from the server
+        # this run started. A server another user started on the same port
+        # (through sudo, as root) answers /health too, while the one started
+        # here finds the port served and abandons its start -- and that answer
+        # used to be reported as "installed and answering". Returns 2, which
+        # no caller treats as a reason to roll back: the new version is fine,
+        # the port is not ours.
+        health_answer "$restart_health_url"
+        if [ -n "$health_answer_pid" ] && [ "${started_server_pid:-0}" -gt 0 ]; then
+            answer_relation=0
+            answer_is_from_started_server "$health_answer_pid" "$started_server_pid" || answer_relation=$?
+            if [ "$answer_relation" -eq 1 ]; then
+                install_progress_holder=$(port_answerer)
+                restart_message="Port $server_port is answered by $install_progress_holder, not by the server this install started (pid $started_server_pid). My Claude Code $MCC_VERSION is installed, but it is not what serves that port. Nothing was stopped. $(stop_hint_for_answerer), then start yours with: mcc-server"
+                printf '\n%s\n' "$restart_message"
+                if [ -s "${restart_start_log:-}" ]; then
+                    printf 'The server this install started wrote (%s):\n' "$restart_start_log"
+                    tail -n 12 "$restart_start_log" 2>/dev/null || true
+                fi
+                write_install_log "$restart_message"
+                install_progress_restarted=false
+                write_install_progress failed "$restart_message"
+                port_held_by_another=1
+                return 2
+            fi
+        fi
         install_progress_restarted=true
         restart_message="My Claude Code $MCC_VERSION is installed and answering on port $server_port."
         printf '%s\n' "$restart_message"
@@ -2508,6 +2860,8 @@ write_install_progress() {
 
 parse_args "$@"
 validate_args
+# Before the lock and before any download: a refused run touches nothing.
+refuse_install_through_sudo
 add_known_bin_directories
 
 # What this run will do about the server, derived once so no later branch has
@@ -2526,7 +2880,17 @@ if [ "$no_desktop_requested" -eq 1 ] || [ "$start_allowed" -eq 0 ]; then desktop
 # ONE update at a time, whichever path started it (decision Q5). A second
 # installer does not queue and does not install: it names the owner, points at
 # the transcript that owner is writing, and exits 0.
-if ! enter_update_lock; then
+#
+# 7.79.1: unless NO running update holds the lock and it still could not be
+# taken (status 2) -- then it says whose lock it is and why, and exits 1.
+if enter_update_lock; then
+    :
+else
+    lock_status=$?
+    if [ "$lock_status" -eq 2 ]; then
+        write_lock_unavailable_notice
+        exit 1
+    fi
     write_watching_instead_notice
     exit 0
 fi
@@ -2693,6 +3057,15 @@ if [ "$staged_ok" -eq 1 ]; then
                 install_progress_restarted=false
                 write_install_progress failed "$restart_message"
                 exit 1
+                ;;
+            held-elsewhere)
+                # 7.79.1: a server this account cannot see or stop answers on
+                # the port. As for a foreign holder, the install still happens
+                # and nothing is started -- and the run ends with exit 1.
+                printf '\n%s\n' "$stop_message"
+                write_install_log "$stop_message"
+                stage_may_start=0
+                port_held_by_another=1
                 ;;
             *)
                 # Invariant 1: a foreign holder of the port is never killed, by
@@ -2862,18 +3235,40 @@ elif [ "$staged_swapped" -eq 1 ]; then
     # The staged path already stopped the one server this install is for and
     # swapped the environment. What is left is the start, the health gate, and
     # the rollback the previous environment was kept for.
+    #
+    # 7.79.1: the health gate's answer is read once, up front. 0 is a new
+    # server answering; 2 is "the port is answered by a server this run did
+    # not start" -- the new version is fine and stays, so that is never a
+    # rollback; anything else is the rollback it always was.
+    staged_confirm=1
+    if [ "$stage_may_start" -eq 1 ] && [ "$staged_server_started" -eq 1 ]; then
+        if confirm_restarted_server "$restart_health_url" 1; then
+            staged_confirm=0
+        else
+            staged_confirm=$?
+        fi
+    fi
     if [ "$stage_may_start" -ne 1 ]; then
         restart_message=${stop_message:-"My Claude Code $MCC_VERSION is installed. Start the server with: mcc-server"}
         printf '\n%s\n' "$restart_message"
         install_progress_restarted=false
-        write_install_progress done "$restart_message"
-    elif [ "$staged_server_started" -eq 1 ] && confirm_restarted_server "$restart_health_url" 1; then
+        if [ "$port_held_by_another" -eq 1 ]; then
+            write_install_progress failed "$restart_message"
+        else
+            write_install_progress done "$restart_message"
+        fi
+    elif [ "$staged_confirm" -eq 0 ]; then
         # Nothing is deleted until the new server answers, so the copy being
         # swept is never the one a rollback would have needed -- and the sweep
         # itself is out of the outage window, which is why it is here and not
         # beside the swap.
         rm -rf -- "$staging_dir" 2>/dev/null || true
         remove_stale_previous_environment "$(update_aside_root "$staged_tools_root" "$PREVIOUS_ENV_DIRNAME")"
+    elif [ "$staged_confirm" -eq 2 ]; then
+        # The new version is in place and was never the problem; the previous
+        # one stays aside for the ordinary sweep. confirm_restarted_server has
+        # said why nothing serves this port and written the terminal record.
+        rm -rf -- "$staging_dir" 2>/dev/null || true
     else
         # =====================================================================
         # ROLLBACK. The new version is installed and does not answer, so put
@@ -2911,4 +3306,13 @@ elif [ "$dry_run" -ne 1 ]; then
     restart_after_install || true
 else
     write_install_progress done "The new version is installed."
+fi
+
+# 7.79.1: the configured port is answered by a server this run did not start
+# and could not stop (see stop_configured_server and confirm_restarted_server).
+# Whatever was installed, the server this install is for is not running, and
+# an exit 0 here was how another user's server got reported as this install's
+# success.
+if [ "$port_held_by_another" -eq 1 ]; then
+    exit 1
 fi

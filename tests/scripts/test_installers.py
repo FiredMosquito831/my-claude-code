@@ -376,6 +376,15 @@ fi
         }
     )
     env.pop("XDG_BIN_HOME", None)
+    # 7.79.1: the sudo guard and the WSL rule read these. Every scenario
+    # decides them itself rather than inheriting the machine's.
+    for name in (
+        "SUDO_USER",
+        "MCC_INSTALL_ALLOW_ROOT",
+        "WSL_DISTRO_NAME",
+        "WSL_INTEROP",
+    ):
+        env.pop(name, None)
     return PosixHarness(tmp_path, bin_dir, fixtures, tool_bin, log, env)
 
 
@@ -773,6 +782,142 @@ def test_install_sh_rejects_invalid_options_before_mutation(
 
     assert result.returncode != 0
     assert posix_harness.calls() == []
+
+
+# ------------------------------------------------- 7.79.1: root through sudo
+
+
+def _pretend_root(harness: PosixHarness) -> None:
+    """``id -u`` says 0, through the same PATH stubbing as curl and uv.
+
+    Every other ``id`` question goes to the real one, so nothing but the uid
+    the guard reads is faked.
+    """
+    real_id = shutil.which("id", path="/usr/bin:/bin") or "/usr/bin/id"
+    _write_executable(
+        harness.bin_dir / "id",
+        f"""#!/bin/sh
+if [ "${{1:-}}" = "-u" ] && [ "$#" -eq 1 ]; then
+    echo 0
+    exit 0
+fi
+exec "{real_id}" "$@"
+""",
+    )
+
+
+@pytest.mark.local_serial
+def test_install_sh_refuses_root_acting_for_a_sudo_user(
+    posix_harness: PosixHarness,
+) -> None:
+    """``sudo npm install -g`` / ``curl … | sudo sh``: root, on behalf of alice.
+
+    Measured in throwaway containers (specs/INVESTIGATION-NPM-SUDO.md): it
+    installed a second, root-owned copy for root and started a root server on
+    the port, stopping alice's. Now it refuses before the lock and before any
+    download, says why, and says what to run instead.
+    """
+    _pretend_root(posix_harness)
+    posix_harness.env["SUDO_USER"] = "alice"
+
+    result = posix_harness.run("--dry-run")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "WARNING:" in result.stderr
+    assert "alice" in result.stderr
+    assert "without sudo" in result.stderr
+    assert (
+        "--allow-root" in result.stderr and "MCC_INSTALL_ALLOW_ROOT=1" in result.stderr
+    )
+    assert "npm config set prefix" in result.stderr
+    calls = posix_harness.calls()
+    assert not any(call.startswith(("download:", "uv:")) for call in calls), calls
+    home = Path(posix_harness.env["HOME"])
+    assert not (home / ".mcc" / "updates" / "update.lock").exists()
+    assert not (home / ".mcc").exists(), "a refused run must not touch the config home"
+
+
+@pytest.mark.local_serial
+@pytest.mark.parametrize(
+    ("argv", "environment"),
+    [
+        (["--allow-root"], {"SUDO_USER": "alice"}),
+        ([], {"SUDO_USER": "alice", "MCC_INSTALL_ALLOW_ROOT": "1"}),
+        ([], {}),
+        ([], {"SUDO_USER": "root"}),
+    ],
+    ids=["allow-root-flag", "allow-root-env", "plain-root-shell", "sudo-user-root"],
+)
+def test_install_sh_proceeds_for_root_that_is_not_acting_for_a_user(
+    posix_harness: PosixHarness, argv: list[str], environment: dict[str, str]
+) -> None:
+    """The override, and root that is just root: a root shell, a root VPS and
+    a Docker image have no SUDO_USER (or SUDO_USER=root) and are unaffected."""
+    _pretend_root(posix_harness)
+    posix_harness.env.update(environment)
+
+    result = posix_harness.run("--dry-run", *argv)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "WARNING: this installer is running as root" not in result.stderr
+    assert "Dry run complete." in result.stdout
+
+
+@pytest.mark.local_serial
+def test_install_sh_under_wsl_writes_no_linux_launcher(
+    posix_harness: PosixHarness,
+) -> None:
+    """7.79.1: WSL is server only, even with ``--desktop`` and a display.
+
+    ``mcc-desktop`` refuses to run inside WSL, so the menu entry for it would
+    be a tile that does nothing; the desktop app for that PC is the Windows
+    one. ``--no-start`` keeps this to the install itself.
+    """
+    posix_harness.env["WSL_DISTRO_NAME"] = "Ubuntu"
+    posix_harness.env["DISPLAY"] = ":0"
+
+    result = posix_harness.run("--desktop", "--no-start")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Not writing a Linux launcher: this is WSL" in result.stdout
+    assert "The desktop launcher was not created: this is WSL" in result.stdout
+    home = Path(posix_harness.env["HOME"])
+    assert not (
+        home / ".local" / "share" / "applications" / "my-claude-code.desktop"
+    ).exists()
+
+
+@pytest.mark.local_serial
+def test_install_sh_says_whose_lock_and_exits_1_when_the_lock_folder_is_not_writable(
+    posix_harness: PosixHarness,
+) -> None:
+    """The false "An update is already running", exit 0 (case a2 of the sudo
+    investigation): root had installed with alice's HOME, so alice could not
+    create the lock in her now root-owned ``~/.mcc/updates``. It now says why,
+    names the folder, and exits 1 -- before anything is downloaded."""
+    if os.geteuid() == 0:
+        pytest.skip(
+            "root writes through any mode bits, so the folder cannot be made unwritable"
+        )
+    updates = Path(posix_harness.env["HOME"]) / ".mcc" / "updates"
+    updates.mkdir(parents=True)
+    updates.chmod(0o555)
+    try:
+        result = posix_harness.run()
+    finally:
+        updates.chmod(0o755)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "An update is already running" not in result.stdout + result.stderr
+    assert (
+        "The update lock could not be taken, and no running update holds it."
+        in result.stderr
+    )
+    assert f"{updates} (owned by " in result.stderr
+    assert "sudo chown -R" in result.stderr
+    assert not any(
+        call.startswith(("download:", "uv:")) for call in posix_harness.calls()
+    )
 
 
 def _powershells() -> tuple[str, ...]:

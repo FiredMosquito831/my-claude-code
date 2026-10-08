@@ -62,6 +62,10 @@ const OVERRIDE_FLAGS = [
   // environment without any help from here.
   "--no-restart",
   "--no-start",
+  // 7.79.1: install for root even when this runs as root through sudo on
+  // behalf of another user. Passed through to install.sh, which refuses that
+  // case too; the environment form is MCC_INSTALL_ALLOW_ROOT=1.
+  "--allow-root",
 ];
 
 /**
@@ -89,7 +93,11 @@ By default it installs the server (always) and, when this machine has a
 desktop session, the desktop application in its native form: the setup.exe on
 Windows, the .dmg into ~/Applications on macOS, the .deb (or the tarball's
 per-user installer) on Linux. On a headless box, over SSH, in CI or in WSL
-without a display it installs the server only and says so.
+(display or not -- the desktop app for a Windows PC is the Windows one) it
+installs the server only and says so.
+
+My Claude Code installs per user. Run as root through sudo on behalf of
+another user, it installs nothing and says how to install for that user.
 
   --server-only      install the server, never the desktop app
   --desktop-only     install the desktop app, leave the server alone
@@ -98,6 +106,7 @@ without a display it installs the server only and says so.
   --no-restart       do not stop a My Claude Code server that is already
                      running. One is still started if nothing answers.
   --no-start         do not stop and do not start any server
+  --allow-root       install for root even under sudo (MCC_INSTALL_ALLOW_ROOT=1)
   --help             this text
 
 The official installer restarts the server on the configured port by default
@@ -120,7 +129,7 @@ the same release before it is run, and deleted if the digest does not match.`;
  * this same command runs in far more often. CI and SSH override everything:
  * both mean "no human is looking at this screen", whatever the platform says.
  */
-function displayState(platform, env) {
+function displayState(platform, env, wsl) {
   if (env.CI) return { desktop: false, why: "CI is set" };
   if (env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT) {
     return { desktop: false, why: "this is an SSH session" };
@@ -128,12 +137,37 @@ function displayState(platform, env) {
   if (platform === "win32") return { desktop: true, why: "Windows always has a session" };
   if (platform === "darwin") return { desktop: true, why: "macOS always has a session" };
   if (platform === "linux") {
+    // 7.79.1: WSL is server only, display or not. WSLg sets DISPLAY and
+    // WAYLAND_DISPLAY, so this used to install the LINUX desktop app inside
+    // WSL -- a second, separate install on a PC whose desktop app is the
+    // Windows one (and `mcc-desktop` refuses to run in WSL at all).
+    if (wsl ?? isWsl(platform, env)) {
+      return { desktop: false, why: "WSL, which gets the server only -- the desktop app for this PC is the Windows one" };
+    }
     if (env.WAYLAND_DISPLAY) return { desktop: true, why: `WAYLAND_DISPLAY=${env.WAYLAND_DISPLAY}` };
     if (env.DISPLAY) return { desktop: true, why: `DISPLAY=${env.DISPLAY}` };
-    const wsl = env.WSL_DISTRO_NAME ? "WSL without a display" : "no DISPLAY or WAYLAND_DISPLAY";
-    return { desktop: false, why: wsl };
+    return { desktop: false, why: "no DISPLAY or WAYLAND_DISPLAY" };
   }
   return { desktop: false, why: `${platform} has no desktop build` };
+}
+
+/** The kernel file the product reads to recognise WSL (config/paths.py). */
+const WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease";
+
+/**
+ * Whether this Linux is WSL, by the product's own tests: the kernel's release
+ * string names Microsoft (config/paths.py, config/claude_discovery.py), or
+ * WSL_DISTRO_NAME / WSL_INTEROP are set (the sign-in flows' test). sudo's
+ * env_reset strips the two variables; it cannot strip the kernel string.
+ */
+function isWsl(platform, env) {
+  if (platform !== "linux") return false;
+  if (env.WSL_DISTRO_NAME || env.WSL_INTEROP) return true;
+  try {
+    return /microsoft/i.test(fs.readFileSync(WSL_OSRELEASE_PATH, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 /** The overrides present in `argv`, and any argument that is not one. */
@@ -229,11 +263,15 @@ function decide(options) {
   if (flags.has("--no-start")) serverFlags.push("--no-start");
   else if (flags.has("--no-restart")) serverFlags.push("--no-restart");
   if (!desktop && !flags.has("--no-start")) serverFlags.push("--no-desktop");
+  // install.sh's own sudo guard reads the same choice. install.ps1 has no
+  // such guard (and no such switch), so Windows never passes it.
+  if (flags.has("--allow-root") && platform !== "win32") serverFlags.push("--allow-root");
 
   return {
     server,
     desktop,
     serverFlags,
+    allowRoot: flags.has("--allow-root"),
     // The server installer's `-Desktop`/`--desktop` flag adds the `mcc-desktop`
     // launcher and its shortcuts. A headless box has nowhere to put them.
     desktopFlag: desktop,
@@ -606,7 +644,59 @@ function serverInstallerCommand(platform, withDesktop, script, serverFlags) {
   }
   const posix = (withDesktop ? ["--desktop"] : []).concat(extras);
   const flag = posix.length ? ` -s -- ${posix.join(" ")}` : "";
-  return { command: "sh", args: ["-c", `curl -fsSL "${REPO_RAW}/${name}.sh" | sh${flag}`] };
+  // 7.79.1: download first, then run -- never `curl ... | sh`. A pipeline
+  // exits with its LAST command's status, and `sh` fed an empty script exits
+  // 0, so a missing curl or a failed download was reported as a successful
+  // install ("done", with nothing installed) and `mcc uninstall` as a
+  // successful uninstall. Holding the whole script before running it also
+  // means a download cut off half way is never executed. The WARNING: prefix
+  // is what the npm hook's console filter lets through.
+  const url = `${REPO_RAW}/${name}.sh`;
+  const posixCommand =
+    `command -v curl >/dev/null 2>&1 || { echo "WARNING: curl is not installed, and it is what downloads ${name}.sh. ` +
+    `Install curl (for example: sudo apt install curl) and run this again." >&2; exit 127; }; ` +
+    `script=$(curl -fsSL "${url}") || { status=$?; echo "WARNING: could not download ${url} (curl exit $status). ` +
+    `Nothing was run. Check the network (and HTTPS_PROXY, if you use one) and run this again." >&2; exit $status; }; ` +
+    `[ -n "$script" ] || { echo "WARNING: ${url} came back empty. Nothing was run." >&2; exit 1; }; ` +
+    `printf '%s\\n' "$script" | sh${flag}`;
+  return { command: "sh", args: ["-c", posixCommand] };
+}
+
+/**
+ * The user this run acts for when it is root through sudo, or null.
+ *
+ * 7.79.1. My Claude Code is a per-user install (uv's tool directory,
+ * ~/.local/bin, the config home), so `sudo npm install -g` -- which a system
+ * Node needs only to write the `mcc` command into a root-owned prefix --
+ * installed a second, root-owned copy for root and started a root server on
+ * the user's port (specs/INVESTIGATION-NPM-SUDO.md). Only root acting FOR a
+ * real user is refused: a root shell, a root VPS and a Docker image have no
+ * SUDO_USER (or SUDO_USER=root) and are unaffected.
+ */
+function sudoInvoker(platform, env, uid, allowRoot) {
+  if (platform === "win32" || uid !== 0) return null;
+  const user = env.SUDO_USER;
+  if (!user || user === "root") return null;
+  if (allowRoot || env.MCC_INSTALL_ALLOW_ROOT === "1") return null;
+  return user;
+}
+
+/** This process's uid, or -1 where there is none (Windows). */
+function currentUid() {
+  return typeof process.getuid === "function" ? process.getuid() : -1;
+}
+
+/** What a sudo run says instead of installing anything for root. */
+function sudoRefusal(user) {
+  return (
+    `this is running as root through sudo, on behalf of ${user}, and My Claude Code installs per user. ` +
+    `As root it would install a second, root-owned copy that ${user} cannot use or update, and start a root-owned ` +
+    `server on ${user}'s port in place of ${user}'s own -- so nothing was installed for root. ` +
+    `The \`mcc\` command itself is in place: run \`mcc install\` (or just \`mcc\`) as ${user}, without sudo. ` +
+    `Next time, a user-level npm prefix needs no sudo at all: \`npm config set prefix ~/.npm-global\` ` +
+    "(and add ~/.npm-global/bin to PATH), then `npm install -g @firedmosquito831/my-claude-code`. " +
+    "To install for root on purpose: MCC_INSTALL_ALLOW_ROOT=1, or `mcc install --allow-root`."
+  );
 }
 
 /**
@@ -640,6 +730,21 @@ async function performInstall(options) {
 
   // The one line the spec asks for: what, where, and why.
   log(decision.reason);
+  // 7.79.1: nothing at all for root acting for another user -- no server and
+  // no desktop app. `npm install -g` passes `refusedStatus: 0`, so the `mcc`
+  // command it wrote (the only thing sudo was needed for) stays; `mcc
+  // install` and a bare `mcc` keep the default 1 and fail honestly.
+  const invoker = sudoInvoker(
+    platform,
+    options.env ?? process.env,
+    options.uid ?? currentUid(),
+    decision.allowRoot
+  );
+  if (invoker) {
+    log(sudoRefusal(invoker));
+    if (options.onRefused) options.onRefused(invoker);
+    return options.refusedStatus ?? 1;
+  }
   if (!decision.server && !decision.desktop) {
     log("nothing to do (MCC_NPM_INSTALL=none).");
     return 0;
@@ -730,8 +835,12 @@ module.exports = {
   displayState,
   downloadVerified,
   installDesktopFrom,
+  isWsl,
   parseFlags,
   parseSums,
   sha256,
+  sudoInvoker,
+  sudoRefusal,
   windowsInstallArgv,
+  WSL_OSRELEASE_PATH,
 };

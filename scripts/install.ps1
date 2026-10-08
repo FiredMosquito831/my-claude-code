@@ -174,6 +174,15 @@ $script:InstallProgressHolder = ""
 $script:HoldsUpdateLock = $false
 $script:UpdateLockPath = ""
 $script:UpdateLockOwner = $null
+# 7.79.1: set by Enter-UpdateLock when the lock could not be taken although
+# NO running update holds it (the folder or a leftover file is not this
+# user's to write). That is not "an update is already running"; the run says
+# whose lock it is and exits 1.
+$script:UpdateLockUnavailable = $false
+# 7.79.1: set when the configured port is answered by a server this run did
+# not start (Confirm-RestartedServer). The install may have happened; the run
+# still ends with exit 1, because the server it is for is not the one serving.
+$script:PortHeldByAnother = $false
 # What the caller asked for about the server. MCC_INSTALL_NO_START is the env
 # form of -NoStart, for a caller that cannot add a switch -- the npm wrapper
 # and install.cmd both pass arguments through a layer that has its own opinions
@@ -2868,7 +2877,66 @@ function Enter-UpdateLock {
         try { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue } catch { }
     }
     $script:UpdateLockOwner = (Read-UpdateLockOwner -Path $path)
+    # 7.79.1: nobody alive holds it and it still could not be taken -- the
+    # folder, or a lock left in it, is not this user's to write. Until now
+    # this read as "An update is already running", exit 0.
+    if (-not (Test-UpdateLockOwnerAlive -Owner $script:UpdateLockOwner)) {
+        $script:UpdateLockUnavailable = $true
+    }
     return $false
+}
+
+function Get-PathOwner {
+    <# .SYNOPSIS The account that owns a file or folder, for a message. Never throws. #>
+    param([string] $Path)
+
+    try {
+        $owner = [string] ((Get-Acl -LiteralPath $Path -ErrorAction Stop).Owner)
+        if ($owner) { return $owner }
+    }
+    catch {
+    }
+    return "an account this cannot read"
+}
+
+function Write-UpdateLockUnavailableNotice {
+    <#
+        .SYNOPSIS
+        7.79.1: the honest version of "An update is already running" for the
+        case where none is -- whose lock this is, how old, and why it cannot be
+        taken. The caller exits 1: nothing was installed.
+    #>
+    param($Owner)
+
+    $path = Get-UpdateLockPath
+    $folder = Split-Path -Parent $path
+    $me = [Environment]::UserName
+    Write-Host ""
+    Write-Host "The update lock could not be taken, and no running update holds it."
+    if (Test-Path -LiteralPath $path) {
+        $ownerPid = "unknown"
+        try { if ([int] $Owner.pid -gt 0) { $ownerPid = [string] ([int] $Owner.pid) } } catch { }
+        $source = "an unknown installer"
+        try { if ($Owner.source) { $source = [string] $Owner.source } } catch { }
+        $age = "age unknown"
+        try {
+            $seconds = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long] $Owner.started_at
+            if ($seconds -ge 0 -and $seconds -lt 120) { $age = "written $seconds s ago" }
+            elseif ($seconds -ge 120) { $age = "written $([math]::Floor($seconds / 60)) min ago" }
+        }
+        catch { }
+        $state = "no longer running"
+        if ($ownerPid -ne "unknown" -and (Get-Process -Id ([int] $ownerPid) -ErrorAction SilentlyContinue)) {
+            $state = "running"
+        }
+        Write-Host "Lock: $path"
+        Write-Host "  written by $source, pid $ownerPid ($state), $age; owned by $(Get-PathOwner -Path $path)."
+        Write-Host "  $me cannot remove it from $folder (owned by $(Get-PathOwner -Path $folder))."
+    }
+    else {
+        Write-Host "Lock: $path does not exist, and $me cannot create it in $folder (owned by $(Get-PathOwner -Path $folder))."
+    }
+    Write-Host "Nothing was installed. Give $me write access to that folder again (or delete the leftover lock), then run the installer again."
 }
 
 function Exit-UpdateLock {
@@ -3888,6 +3956,80 @@ function Start-RestartedServer {
     }
 }
 
+function Get-HealthAnswerPid {
+    <#
+        .SYNOPSIS
+        7.79.1: the pid a /health answer names in `x-mcc-pid` (every server
+        since 7.70.0 sends it), or 0 when it names none or nothing answers.
+        Never throws.
+    #>
+    param([Parameter(Mandatory = $true)][string] $Url)
+
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        $value = $response.Headers['x-mcc-pid']
+        # Windows PowerShell gives a string; PowerShell 7 a string array.
+        if ($value -is [array]) { $value = $value[0] }
+        $parsed = 0
+        if ([int]::TryParse([string] $value, [ref] $parsed) -and $parsed -gt 0) {
+            return $parsed
+        }
+    }
+    catch {
+    }
+    return 0
+}
+
+function Test-AnswerIsFromStartedServer {
+    <#
+        .SYNOPSIS
+        7.79.1: whether the server that answered (`-AnswerPid`) is the one
+        this run started (`-StartedPid`) or runs under it. 0 = ours, 1 =
+        positively not, 2 = cannot tell.
+
+        .DESCRIPTION
+        The start runs a .cmd, which runs the mcc-server trampoline, which runs
+        python.exe -- the process that answers -- so ours is found by walking
+        the answering process's parents. All three wait on their child, so
+        while our server runs that chain is unbroken; a chain that ends without
+        meeting the started pid is somebody else's server. "Cannot tell" (the
+        process table could not be read, or the answering process is already
+        gone) is treated as ours by the caller: the reading before 7.79.1.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][int] $AnswerPid,
+        [Parameter(Mandatory = $true)][int] $StartedPid
+    )
+
+    if ($AnswerPid -eq $StartedPid) { return 0 }
+    $processes = $null
+    try {
+        $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    }
+    catch {
+        try {
+            $processes = @(Get-WmiObject -Class Win32_Process -ErrorAction Stop)
+        }
+        catch {
+            return 2
+        }
+    }
+    $parents = @{}
+    foreach ($process in $processes) {
+        try { $parents[[int] $process.ProcessId] = [int] $process.ParentProcessId } catch { }
+    }
+    if (-not $parents.ContainsKey($AnswerPid)) { return 2 }
+    $current = $AnswerPid
+    for ($depth = 0; $depth -lt 32; $depth++) {
+        if ($current -eq $StartedPid) { return 0 }
+        if (-not $parents.ContainsKey($current)) { return 1 }
+        $parent = $parents[$current]
+        if ($parent -le 4 -or $parent -eq $current) { return 1 }
+        $current = $parent
+    }
+    return 1
+}
+
 function Confirm-RestartedServer {
     <#
         .SYNOPSIS
@@ -3915,6 +4057,36 @@ function Confirm-RestartedServer {
     Write-Host "Waiting for it to answer $HealthUrl."
     Write-InstallLog ("Waiting for " + $HealthUrl + ".")
     if (Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)) {
+        # 7.79.1: an answer is success only when it comes from the server this
+        # run started. Another server on the same port -- one started by
+        # another user, which this account cannot identify or stop -- answers
+        # /health too, while the one started here finds the port served and
+        # gives up; that answer used to be reported as "installed and
+        # answering". Returns $false with $script:PortHeldByAnother set, which
+        # the staged path never treats as a reason to roll back: the new
+        # version is fine, the port is not ours.
+        $answerPid = Get-HealthAnswerPid -Url $HealthUrl
+        $startedPid = 0
+        try { $startedPid = [int] $Child.Id } catch { $startedPid = 0 }
+        if ($answerPid -gt 0 -and $startedPid -gt 0 -and
+            ((Test-AnswerIsFromStartedServer -AnswerPid $answerPid -StartedPid $startedPid) -eq 1)) {
+            $script:PortHeldByAnother = $true
+            $script:InstallProgressRestarted = $false
+            $holder = "a My Claude Code server, pid $answerPid"
+            $script:InstallProgressHolder = $holder
+            $message = "Port $Port is answered by $holder, not by the server this install started (pid $startedPid). My Claude Code $InstalledVersion is installed, but it is not what serves that port. Nothing was stopped. Stop that server (Stop-Process -Id $answerPid), then start yours with: mcc-server"
+            Write-Host ""
+            Write-Host $message
+            $detail = Get-ChildFailureDetail -Path $Child.StdErr
+            if (-not $detail) { $detail = Get-ChildFailureDetail -Path $Child.StdOut }
+            if ($detail) {
+                Write-Host "The server this install started wrote ($($Child.StdErr)):"
+                Write-Host $detail
+            }
+            Write-InstallLog $message
+            Write-InstallProgress -Stage 'failed' -Message $message
+            return $false
+        }
         $script:InstallProgressRestarted = $true
         $message = "My Claude Code $InstalledVersion is installed and answering on port $Port."
         Write-Host $message
@@ -4226,12 +4398,80 @@ function Write-InstallLog {
     }
 }
 
+function Get-ShortcutTarget {
+    <#
+        .SYNOPSIS
+        What a .lnk opens, or "" when there is no such file or it cannot be
+        read. Never throws.
+    #>
+    param([Parameter(Mandatory = $true)][string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $target = $shell.CreateShortcut($Path).TargetPath
+        if ($null -eq $target) { return "" }
+        return [string] $target
+    }
+    catch {
+        return ""
+    }
+}
+
+function Test-ShortcutOpensDesktopApp {
+    <#
+        .SYNOPSIS
+        Whether a shortcut target is the INSTALLED desktop app -- the one the
+        app's own setup (Inno, per user) puts in the Start Menu.
+
+        .DESCRIPTION
+        7.79.1. The app's setup and `install.ps1 -Desktop` write the SAME
+        file, "Start Menu\Programs\My Claude Code.lnk": the app's points at
+        MyClaudeCode.exe, this script's at mcc-desktop.exe. The target is the
+        only thing that tells them apart -- the Windows twin of the bundle
+        identifier install.sh and uninstall.sh read on macOS. A target that no
+        longer exists is a leftover of an app that was uninstalled, not an
+        installed app, so it does not count.
+    #>
+    param([string] $Target)
+
+    if ([string]::IsNullOrWhiteSpace($Target)) { return $false }
+    try {
+        if ([System.IO.Path]::GetFileName($Target) -ne "MyClaudeCode.exe") { return $false }
+        return [bool] (Test-Path -LiteralPath $Target -PathType Leaf)
+    }
+    catch {
+        # A target that is not even a valid path is nobody's installed app.
+        return $false
+    }
+}
+
 function New-DesktopShortcut {
     if (-not $script:EnableDesktop) {
         return
     }
 
     Write-Step "Creating a Start Menu shortcut"
+
+    # 7.79.1: ONE Start Menu entry, not a tug of war. When the desktop app is
+    # installed, its setup already put "My Claude Code" in the Start Menu and
+    # that is the better entry -- it opens the dashboard in its own window --
+    # so this steps aside exactly as install.sh does on Linux and macOS. It
+    # used to overwrite the app's shortcut with one for mcc-desktop, and
+    # whichever of the two ran last silently owned the entry.
+    $existingShortcut = ""
+    if ($env:APPDATA) {
+        $existingShortcut = Join-Path (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs") "My Claude Code.lnk"
+    }
+    if ($existingShortcut) {
+        $existingTarget = Get-ShortcutTarget -Path $existingShortcut
+        if (Test-ShortcutOpensDesktopApp -Target $existingTarget) {
+            Write-Host "The desktop app's Start Menu shortcut is already there ($existingShortcut -> $existingTarget); not replacing it with a second launcher."
+            $script:DesktopShortcutPath = $existingShortcut
+            return
+        }
+    }
+
     if ($DryRun) {
         Write-Host "+ export app-icon.ico and create a Start Menu shortcut for mcc-desktop"
         return
@@ -4849,7 +5089,14 @@ Add-KnownBinDirectories
 # ONE update at a time, whichever path started it (decision Q5). A second
 # installer does not queue and does not install: it names the owner, points at
 # the transcript that owner is writing, and exits 0.
+#
+# 7.79.1: unless NO running update holds the lock and it still could not be
+# taken -- then it says whose lock it is and why, and exits 1.
 if (-not (Enter-UpdateLock)) {
+    if ($script:UpdateLockUnavailable) {
+        Write-UpdateLockUnavailableNotice -Owner $script:UpdateLockOwner
+        exit 1
+    }
     Write-WatchingInsteadNotice -Owner $script:UpdateLockOwner
     return
 }
@@ -5331,6 +5578,13 @@ elseif ($script:StagedSwapped) {
         Remove-Item -LiteralPath $script:StagedStagingDir -Recurse -Force -ErrorAction SilentlyContinue
         Remove-StalePreviousEnvironment -Root (Get-UpdateAsideRoot -ToolsRoot (Split-Path -Parent $StagedToolDir) -Name $PreviousEnvDirName) -Keep $PreviousEnvsKept
     }
+    elseif ($script:PortHeldByAnother) {
+        # 7.79.1: the port is answered by a server this run did not start.
+        # The new version is in place and was never the problem, so this is
+        # not a rollback; Confirm-RestartedServer has said why and written the
+        # terminal record. The previous version stays aside for the sweep.
+        Remove-Item -LiteralPath $script:StagedStagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     else {
         # =====================================================================
         # ROLLBACK. The new version is installed and does not answer, so put
@@ -5380,6 +5634,15 @@ elseif ((-not $DryRun) -and (-not $script:Deferred)) {
 }
 else {
     Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'
+}
+
+# 7.79.1: the configured port is answered by a server this run did not start
+# (Confirm-RestartedServer). Whatever was installed, the server this install
+# is for is not the one serving, and an exit 0 was how another server's
+# answer got reported as this install's success. The finally below still
+# sweeps and releases the lock.
+if ($script:PortHeldByAnother) {
+    exit 1
 }
 
 }

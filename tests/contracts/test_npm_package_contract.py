@@ -285,6 +285,20 @@ for (const key of ['platform', 'arch']) {
   if (value) Object.defineProperty(process, key, { value, configurable: true });
 }
 
+// 7.79.1: who the hook runs as. `process.getuid` does not exist on Windows,
+// so this is also how a Linux root question is asked on a Windows runner.
+if (process.env.MCC_TEST_UID) process.getuid = () => Number(process.env.MCC_TEST_UID);
+
+// 7.79.1: the kernel string the WSL test reads is the test's to decide, never
+// the machine's -- a container on a WSL2-backed Docker Desktop IS WSL by it.
+const realReadFileSync = fs.readFileSync;
+fs.readFileSync = function (file, ...rest) {
+  if (String(file) === '/proc/sys/kernel/osrelease') {
+    return process.env.MCC_TEST_OSRELEASE || '6.8.0-1021-azure\\n';
+  }
+  return realReadFileSync.call(fs, file, ...rest);
+};
+
 function log(entry) {
   fs.appendFileSync(record, JSON.stringify(entry) + '\\n');
 }
@@ -509,6 +523,21 @@ _MATRIX = [
     ("linux", "x64", {"WAYLAND_DISPLAY": "wayland-0"}, True, "a Wayland desktop"),
     ("linux", "x64", {}, False, "a headless VPS"),
     ("linux", "x64", {"WSL_DISTRO_NAME": "Ubuntu"}, False, "WSL without a display"),
+    # 7.79.1: WSL is server only, display or not -- WSLg sets both.
+    (
+        "linux",
+        "x64",
+        {"WSL_DISTRO_NAME": "Ubuntu", "DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"},
+        False,
+        "WSLg reporting a display",
+    ),
+    (
+        "linux",
+        "x64",
+        {"MCC_TEST_OSRELEASE": "6.6.87.2-microsoft-standard-WSL2\n", "DISPLAY": ":0"},
+        False,
+        "WSL known only by its kernel (sudo stripped WSL_DISTRO_NAME)",
+    ),
     (
         "linux",
         "x64",
@@ -654,10 +683,232 @@ def test_install_help_lists_every_override_and_installs_nothing(
         "--desktop-only",
         "--no-desktop",
         "--yes-sudo",
+        "--allow-root",
         "MCC_NPM_INSTALL",
     ):
         assert flag in output, f"`install --help` does not mention {flag}"
     assert calls == [], "`--help` must not install or download anything"
+
+
+# ------------------------------------------------- 7.79.1: root through sudo
+
+#: `sudo npm install -g` with a system Node: root, on behalf of alice, on Linux.
+_SUDO = {
+    "MCC_TEST_PLATFORM": "linux",
+    "MCC_TEST_ARCH": "x64",
+    "MCC_TEST_UID": "0",
+    "SUDO_USER": "alice",
+}
+
+
+def _installer_spawns(calls: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        call
+        for call in _spawns(calls)
+        if "install.sh" in _invocation(call) or "install.ps1" in _invocation(call)
+    ]
+
+
+@requires_node
+@pytest.mark.local_serial
+def test_sudo_npm_install_installs_no_server_for_root(tmp_path: Path) -> None:
+    """Measured in throwaway containers (specs/INVESTIGATION-NPM-SUDO.md): the
+    hook ran as root with HOME=/root, installed a root-owned copy and started a
+    root server on alice's port. Now it installs nothing for root, keeps the
+    `mcc` command (exit 0, so npm does not roll the package back) and says how
+    alice gets the server."""
+    status, output, calls = _run_postinstall(
+        tmp_path, {"npm_config_global": "true", **_SUDO}
+    )
+    assert status == 0, output
+    assert _spawns(calls) == [], f"nothing may run for root: {calls}"
+    assert "alice" in output
+    assert "mcc install" in output
+    assert "MCC_INSTALL_ALLOW_ROOT=1" in output
+    assert "npm config set prefix" in output
+    assert "done. Open a new terminal" not in output, "nothing was installed"
+
+
+@requires_node
+@pytest.mark.local_serial
+def test_sudo_mcc_install_refuses(tmp_path: Path) -> None:
+    """`sudo mcc install`: the same refusal, and an honest exit 1."""
+    status, output, calls = _install(tmp_path, dict(_SUDO))
+    assert status == 1, output
+    assert _spawns(calls) == []
+    assert "alice" in output
+
+
+@requires_node
+@pytest.mark.local_serial
+@pytest.mark.parametrize(
+    "environment",
+    [{"MCC_TEST_UID": "0"}, {"MCC_TEST_UID": "0", "SUDO_USER": "root"}],
+    ids=["root-shell", "sudo-user-root"],
+)
+def test_a_root_only_machine_still_installs(
+    tmp_path: Path, environment: dict[str, str]
+) -> None:
+    """Docker images and root VPSes: root that is not acting for anybody."""
+    status, output, calls = _run_postinstall(
+        tmp_path,
+        {
+            "npm_config_global": "true",
+            "MCC_TEST_PLATFORM": "linux",
+            "MCC_TEST_ARCH": "x64",
+            **environment,
+        },
+    )
+    assert status == 0, output
+    assert len(_installer_spawns(calls)) == 1, calls
+
+
+@requires_node
+@pytest.mark.local_serial
+@pytest.mark.parametrize(
+    ("environment", "argv"),
+    [({"MCC_INSTALL_ALLOW_ROOT": "1"}, []), ({}, ["--allow-root"])],
+    ids=["environment", "flag"],
+)
+def test_the_root_override_installs_for_root(
+    tmp_path: Path, environment: dict[str, str], argv: list[str]
+) -> None:
+    """MCC_INSTALL_ALLOW_ROOT=1 / --allow-root: the deliberate root install.
+    The choice travels to install.sh, whose own guard reads the same thing."""
+    status, output, calls = _install(tmp_path, {**_SUDO, **environment}, argv)
+    assert status == 0, output
+    spawns = _installer_spawns(calls)
+    assert len(spawns) == 1, calls
+    if argv:
+        assert "--allow-root" in _invocation(spawns[0])
+
+
+@requires_node
+@pytest.mark.local_serial
+def test_windows_ignores_sudo_user(tmp_path: Path) -> None:
+    """There is no sudo on Windows; a stray SUDO_USER decides nothing."""
+    status, output, calls = _run_postinstall(
+        tmp_path,
+        {
+            "npm_config_global": "true",
+            "MCC_TEST_PLATFORM": "win32",
+            "MCC_TEST_ARCH": "x64",
+            "MCC_NPM_INSTALL": "server",
+            "SUDO_USER": "alice",
+        },
+    )
+    assert status == 0, output
+    spawns = _installer_spawns(calls)
+    assert len(spawns) == 1, calls
+    assert "--allow-root" not in _invocation(spawns[0])
+
+
+# ---------------------- 7.79.1: a failed download fails the install (real sh)
+
+SH = shutil.which("sh")
+requires_sh = pytest.mark.skipif(
+    SH is None or sys.platform == "win32",
+    reason="the POSIX command is run by a POSIX sh with a POSIX PATH",
+)
+
+
+def _posix_command(script: str, with_desktop: bool, flags: list[str]) -> str:
+    """The exact `sh -c` text the package spawns, read from the package."""
+    assert NODE is not None
+    program = (
+        "const r = require(process.argv[1]);"
+        "const c = r.serverInstallerCommand('linux', process.argv[2] === '1', process.argv[3], JSON.parse(process.argv[4]));"
+        "if (c.command !== 'sh' || c.args[0] !== '-c') throw new Error('not sh -c');"
+        "process.stdout.write(c.args[1]);"
+    )
+    completed = subprocess.run(
+        [
+            NODE,
+            "-e",
+            program,
+            str(RUNTIME),
+            "1" if with_desktop else "0",
+            script,
+            json.dumps(flags),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
+def _run_posix_command(
+    tmp_path: Path, command: str, curl: str | None
+) -> subprocess.CompletedProcess[str]:
+    """Run it under the real sh, with PATH = a stub dir (+ sh's own dir).
+
+    `curl=None` puts no curl anywhere on PATH; the sh the script pipes into is
+    reached through a symlink, so the directory that holds the system curl is
+    never on PATH at all.
+    """
+    assert SH is not None
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    (stubs / "sh").symlink_to(SH)
+    if curl is not None:
+        stub = stubs / "curl"
+        stub.write_text(curl, encoding="utf-8", newline="\n")
+        stub.chmod(0o755)
+    return subprocess.run(
+        [SH, "-c", command],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={"PATH": str(stubs), "HOME": str(tmp_path)},
+    )
+
+
+@requires_node
+@requires_sh
+@pytest.mark.parametrize("script", ["install", "uninstall"])
+def test_a_failed_installer_download_fails_with_a_warning(
+    tmp_path: Path, script: str
+) -> None:
+    """`curl … | sh` exited 0 when curl failed: a pipeline's status is its last
+    command's, and sh fed nothing exits 0. npm then printed "done" with nothing
+    installed -- and `mcc uninstall` (same function) reported success."""
+    command = _posix_command(script, False, ["--no-desktop"])
+    result = _run_posix_command(
+        tmp_path,
+        command,
+        f"#!{SH}\necho 'curl: (22) The requested URL returned error: 404' >&2\nexit 22\n",
+    )
+    assert result.returncode == 22, result.stdout + result.stderr
+    assert "WARNING: could not download" in result.stderr
+    assert f"{script}.sh" in result.stderr
+    assert "Nothing was run." in result.stderr
+
+
+@requires_node
+@requires_sh
+def test_a_missing_curl_fails_with_a_warning(tmp_path: Path) -> None:
+    command = _posix_command("install", True, [])
+    result = _run_posix_command(tmp_path, command, None)
+    assert result.returncode == 127, result.stdout + result.stderr
+    assert "WARNING: curl is not installed" in result.stderr
+
+
+@requires_node
+@requires_sh
+def test_a_good_download_runs_the_script_with_every_flag(tmp_path: Path) -> None:
+    """The script is held whole, then run -- with the flags, and its status."""
+    command = _posix_command("install", True, ["--no-restart"])
+    result = _run_posix_command(
+        tmp_path,
+        command,
+        f"#!{SH}\nprintf '%s\\n' 'echo \"ran with: $*\"' 'exit 0'\n",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ran with: --desktop --no-restart" in result.stdout
+    assert "WARNING" not in result.stderr
 
 
 # ------------------------------------------------------- download and verify
