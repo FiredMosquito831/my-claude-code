@@ -8,6 +8,13 @@ Direct fallback said. It now resolves that case, and only that case, to a
 shape that must refuse refuses, with a sentence naming the setting; and every
 other shape resolves to exactly what the 7.78.7 resolver gave it, compared
 against that resolver's own body over the whole grid.
+
+7.79.2 (PR-4, the user's decision of 2026-10-06 23:03): Direct fallback ON
+uses this computer's address only once every proxy of the chain is
+unhealthy, so a chain with nothing usable -- every entry paused, every
+address removed, no entry, an unreadable file -- is refused with it ON too.
+The grid's rule is therefore "refused iff nothing usable and no static
+proxy", and every other shape still resolves exactly as 7.78.7 did.
 """
 
 import itertools
@@ -189,8 +196,24 @@ def test_the_probe_is_refused_with_the_same_sentence(store) -> None:
 # ------------------------------------------------------- what is unchanged
 
 
-def test_direct_fallback_on_with_nothing_usable_is_what_it_always_was(store) -> None:
-    """The user's rule for this case is a later change (PR-4), not this one."""
+def _assert_direct_on_refusal(plan: ProxyChainPlan | None, *phrases: str) -> str:
+    assert isinstance(plan, MaskedRefusalPlan), plan
+    assert plan.legs == ()
+    assert plan.direct_fallback is True
+    for phrase in (
+        f"Not sent: {NAME}'s proxy chain has no usable entry",
+        "Direct fallback uses this computer's own address only once every "
+        "proxy in the chain is unhealthy",
+        "switch the chain off",
+        f"Proxying page -> {NAME}",
+        *phrases,
+    ):
+        assert phrase in plan.reason, plan.reason
+    return plan.reason
+
+
+def test_direct_fallback_on_with_every_entry_paused_is_refused_too(store) -> None:
+    """PR-4: a paused entry is not an unhealthy proxy, so no fallback to here."""
 
     store(
         _chain(
@@ -200,8 +223,24 @@ def test_direct_fallback_on_with_nothing_usable_is_what_it_always_was(store) -> 
         )
     )
 
-    assert resolve_proxy_chain(PROVIDER, "", _settings()) == ("", None)
+    _proxy, plan = resolve_proxy_chain(PROVIDER, "", _settings(), name=NAME)
+
+    _assert_direct_on_refusal(plan, "all 2 entries are paused")
+    # A static proxy still carries it, masked, exactly as before.
     assert resolve_proxy_chain(PROVIDER, STATIC, _settings(STATIC)) == (STATIC, None)
+
+
+def test_direct_fallback_on_with_no_entry_left_is_refused_too(store) -> None:
+    """Every address removed reads as no entry at all: refused, not direct."""
+
+    store(_chain(direct_fallback=True))
+
+    _proxy, plan = resolve_proxy_chain(PROVIDER, "", _settings(), name=NAME)
+
+    reason = _assert_direct_on_refusal(plan, "it has no entries")
+    exit_ = masked_exit_for(PROVIDER, "", _settings(), name=NAME)
+    assert exit_.proxy is None
+    assert exit_.refused == reason
 
 
 def test_a_static_proxy_still_carries_a_chain_with_nothing_usable(store) -> None:
@@ -366,8 +405,9 @@ def _grid() -> Iterator[tuple[str, ProxyChains, str]]:
 def test_refused_exactly_when_the_card_says_so_and_identical_otherwise(
     monkeypatch,
 ) -> None:
-    """Every chain shape: refused iff nothing usable, Direct fallback off, no
-    static proxy -- and every other shape resolves byte for byte as 7.78.7.
+    """Every chain shape: refused iff nothing usable and no static proxy --
+    whatever Direct fallback says, since 7.79.2 -- and every other shape
+    resolves byte for byte as 7.78.7.
     """
 
     settings = _settings()
@@ -384,19 +424,61 @@ def test_refused_exactly_when_the_card_says_so_and_identical_otherwise(
         assert chain is not None
         new = resolve_proxy_chain(provider_id, static, settings, name=NAME)
         sentence = masked_refusal_sentence(table, provider_id, NAME)
-        should_refuse = bool(sentence) and not chain.direct_fallback and not static
+        old = _resolve_7_78_7(provider_id, static, settings)
+        live = chain.enabled and (
+            provider_id not in OAUTH_PROVIDER_IDS or chain.oauth_acknowledged
+        )
+        # The rule, stated independently of the sentence: a live chain the
+        # 7.78.7 resolver gave no proxy and no plan has nothing usable.
+        nothing_usable = (
+            live
+            and old == (static, None)
+            and not any(
+                not entry.paused
+                and (entry.is_direct or table.endpoint(entry.proxy) is not None)
+                for entry in chain.entries
+            )
+        )
+        assert bool(sentence) == nothing_usable, (provider_id, table)
+        should_refuse = nothing_usable and not static
         if should_refuse:
             refused += 1
             assert new == (
                 "",
-                MaskedRefusalPlan(direct_fallback=False, reason=sentence),
+                MaskedRefusalPlan(
+                    direct_fallback=chain.direct_fallback, reason=sentence
+                ),
             )
         else:
             unchanged += 1
             assert not isinstance(new[1], MaskedRefusalPlan)
-            assert new == _resolve_7_78_7(provider_id, static, settings), (
+            assert new == old, (
                 provider_id,
                 table,
                 static,
             )
     assert refused and unchanged
+
+
+def test_the_openai_alias_is_gated_like_the_chatgpt_sign_in(store) -> None:
+    """C-7 (7.79.2): ``openai`` is the same ChatGPT subscription backend.
+
+    Up to 7.79.1 a chain on it routed without the acknowledgement the
+    ``chatgpt_oauth`` card asks for.
+    """
+
+    store(
+        ProxyChains(
+            proxies=PROXIES,
+            chains={
+                "openai": ProxyChain(
+                    enabled=True,
+                    entries=(ProxyChainEntry(proxy="px_one"),),
+                    oauth_acknowledged=False,
+                )
+            },
+        )
+    )
+
+    assert "openai" in OAUTH_PROVIDER_IDS
+    assert resolve_proxy_chain("openai", "", _settings()) == ("", None)

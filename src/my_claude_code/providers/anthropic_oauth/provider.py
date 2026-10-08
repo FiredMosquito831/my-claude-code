@@ -85,7 +85,13 @@ def _auth_for(config: ProviderConfig, account_id: str = "") -> AnthropicOAuthAut
     """
     raw = (config.api_key or "").strip()
     if not raw or raw == ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE:
-        return AnthropicOAuthAuth(account_id=account_id)
+        # The leg's own exit rides along (7.79.2, C-4): a refresh this
+        # instance makes leaves where its requests leave.
+        return (
+            AnthropicOAuthAuth(account_id=account_id, proxy=config.proxy)
+            if config.proxy
+            else AnthropicOAuthAuth(account_id=account_id)
+        )
     # Unchanged, and deliberately checked *before* anything about accounts:
     # a comma-separated RAW token is still refused. Multi-account OAuth is
     # several *credentials MCC can refresh*, which is the opposite of several

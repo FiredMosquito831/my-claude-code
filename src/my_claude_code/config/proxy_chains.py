@@ -255,7 +255,14 @@ CHECK_STATES: tuple[str, ...] = (
 #: operator says they understand that. Declared here rather than in the admin
 #: route because the runtime has to honour the same rule and may not import an
 #: API module to learn it.
-OAUTH_PROVIDER_IDS: frozenset[str] = frozenset({"anthropic_oauth", "chatgpt_oauth"})
+#:
+#: ``openai`` since 7.79.2 (C-7): it is the connected-account alias of the same
+#: ChatGPT subscription backend (the factory builds it with the ChatGPT
+#: provider), so a chain on it is the same subscription changing source address
+#: -- and until then it routed without the acknowledgement.
+OAUTH_PROVIDER_IDS: frozenset[str] = frozenset(
+    {"anthropic_oauth", "chatgpt_oauth", "openai"}
+)
 
 
 def is_valid_proxy_url(url: str) -> bool:
@@ -745,6 +752,14 @@ class ProxyChain:
     #: moment its free proxies die -- is not what an operator who added proxies
     #: to *reach* a provider asked for. Turn it off on a provider that must
     #: never see this machine's address.
+    #:
+    #: Since 7.79.2 "run out" means what the user decided on 2026-10-06: this
+    #: machine's address is used only once EVERY proxy of the chain is
+    #: unhealthy -- unreachable, refused for intercepting TLS, or cooling down
+    #: after a refusal, exactly the entries the rotation itself holds out of
+    #: selection. Not after a number of failed exits in one request, not when
+    #: the request's switch bound is spent, and never for a chain whose entries
+    #: are all paused or removed or whose file cannot be read.
     direct_fallback: bool = True
     #: Set by the operator on a subscription-login provider. The rail is
     #: inert until it is, because changing source address between requests on
@@ -915,6 +930,44 @@ class ProxyChains:
                 if chain.enabled
                 and not chain.direct_fallback
                 and (provider_id not in OAUTH_PROVIDER_IDS or chain.oauth_acknowledged)
+            )
+        )
+
+    def direct_when_unhealthy_provider_ids(self) -> tuple[str, ...]:
+        """Providers whose chain may go direct only once every proxy is unhealthy.
+
+        A chain that is switched on (acknowledged, for a subscription login)
+        with Direct fallback ON (7.79.2). Their health cannot be judged from a
+        file that cannot be read, so these are refused at a start that finds
+        it broken, beside :meth:`masked_provider_ids`; the masking record keeps
+        both. Left out: a chain whose every entry is a Direct entry the
+        operator wrote and did not pause -- it goes out from this computer
+        because they said so, not by falling back.
+        """
+
+        return tuple(
+            sorted(
+                provider_id
+                for provider_id, chain in self.chains.items()
+                if chain.enabled
+                and chain.direct_fallback
+                and (provider_id not in OAUTH_PROVIDER_IDS or chain.oauth_acknowledged)
+                and not (
+                    chain.entries
+                    and all(
+                        entry.is_direct and not entry.paused for entry in chain.entries
+                    )
+                )
+            )
+        )
+
+    def refused_while_unreadable_ids(self) -> tuple[str, ...]:
+        """Every provider a start with an unreadable chain file refuses."""
+
+        return tuple(
+            sorted(
+                set(self.masked_provider_ids())
+                | set(self.direct_when_unhealthy_provider_ids())
             )
         )
 
@@ -1390,9 +1443,10 @@ def _read_proxy_chains(resolved_path: Path) -> ProxyChains:
 def _unparseable(resolved_path: Path, reason: str) -> ProxyChains:
     logger.warning(
         "PROXY CHAINS: cannot parse {}: it {}. It is not read as 'no chains': "
-        "the table read before it is kept, a provider whose chain has Direct "
-        "fallback off is refused rather than sent from this computer's own "
-        "address, and MCC does not rewrite the file -- fix or remove it.",
+        "the table read before it is kept, a provider whose switched-on chain "
+        "the masking record names is refused rather than sent from this "
+        "computer's own address, and MCC does not rewrite the file -- fix or "
+        "remove it.",
         resolved_path,
         reason,
     )
@@ -1489,17 +1543,29 @@ def save_proxy_chains(chains: ProxyChains, path: Path | None = None) -> None:
 #:
 #: Written on a save only when the list changes, and only once there is
 #: something to say: an install with no such chain never gets the file.
+#:
+#: Since 7.79.2 it also names, under ``direct_only_when_unhealthy``, the chains
+#: with Direct fallback ON and at least one proxy
+#: (:meth:`ProxyChains.direct_when_unhealthy_provider_ids`): this computer's
+#: address is theirs only once every proxy is unhealthy, which nothing can say
+#: about a chain whose file cannot be read -- so they are refused there too. An
+#: added key, not a new version: a 7.78.8 server reads ``masked`` alone, as it
+#: always did, and a record it wrote reads here as naming no such chain.
 MASKING_RECORD_FILENAME = "proxy_masking.json"
 MASKING_RECORD_VERSION = 1
 _MASKING_RECORD_ABOUT = (
-    "Providers whose proxy chain has Direct fallback off. MCC writes this when "
-    "proxy_chains.json is saved and reads it only when proxy_chains.json "
-    "cannot be read, so these providers are refused rather than sent from "
-    "this computer's own address."
+    "Providers whose proxy chain must not fall back to this computer's own "
+    "address while proxy_chains.json cannot be read: 'masked' have Direct "
+    "fallback off, 'direct_only_when_unhealthy' may use it only once every "
+    "proxy in the chain is unhealthy. MCC writes this when proxy_chains.json "
+    "is saved and reads it only when proxy_chains.json cannot be read, so these "
+    "providers are refused rather than sent from this computer's own address."
 )
-#: What this process last wrote, or found, per record path: a save whose list
-#: has not changed costs no I/O at all.
-_MASKING_RECORDED: dict[str, tuple[str, ...]] = {}
+#: The record's key for :meth:`ProxyChains.direct_when_unhealthy_provider_ids`.
+_DIRECT_ON_RECORD_KEY = "direct_only_when_unhealthy"
+#: What this process last wrote, or found, per record path: a save whose lists
+#: have not changed costs no I/O at all.
+_MASKING_RECORDED: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
 
 
 def masking_record_path(chains_path: Path | None = None) -> Path:
@@ -1520,22 +1586,27 @@ def _sync_masking_record(
     """
 
     masked = chains.masked_provider_ids()
+    direct_on = chains.direct_when_unhealthy_provider_ids()
+    recorded = (masked, direct_on)
     record = masking_record_path(resolved_path)
     key = str(record)
-    if not check_disk and _MASKING_RECORDED.get(key) == masked:
+    if not check_disk and _MASKING_RECORDED.get(key) == recorded:
         return
     try:
-        if not masked and not record.exists():
-            _MASKING_RECORDED[key] = masked
+        if not masked and not direct_on and not record.exists():
+            _MASKING_RECORDED[key] = recorded
             return
-        write_json_document_atomically_if_changed(
-            record,
-            {
-                "version": MASKING_RECORD_VERSION,
-                "about": _MASKING_RECORD_ABOUT,
-                "masked": list(masked),
-            },
-        )
+        document: dict[str, Any] = {
+            "version": MASKING_RECORD_VERSION,
+            "about": _MASKING_RECORD_ABOUT,
+            "masked": list(masked),
+        }
+        if direct_on:
+            # Written only when it names someone, so the record of an install
+            # whose chains all have Direct fallback off is what 7.78.8 wrote
+            # but for the sentence that describes it.
+            document[_DIRECT_ON_RECORD_KEY] = list(direct_on)
+        write_json_document_atomically_if_changed(record, document)
     except OSError as exc:
         logger.warning(
             "PROXY CHAINS: could not record which providers never go direct in {}: {}",
@@ -1543,11 +1614,28 @@ def _sync_masking_record(
             exc,
         )
         return
-    _MASKING_RECORDED[key] = masked
+    _MASKING_RECORDED[key] = recorded
 
 
-def _read_masking_record(resolved_path: Path) -> tuple[str, ...] | None:
-    """The providers the record names, or ``None`` when there is no record."""
+def _record_ids(document: object, key: str) -> tuple[str, ...] | None:
+    raw = document.get(key) if isinstance(document, Mapping) else None
+    if not isinstance(raw, Sequence) or isinstance(raw, str):
+        return None
+    return tuple(
+        provider_id
+        for provider_id in (str(value).strip().lower() for value in raw)
+        if provider_id
+    )
+
+
+def _read_masking_record(
+    resolved_path: Path,
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """``(masked, direct_only_when_unhealthy)``, or ``None`` with no record.
+
+    A record written before 7.79.2 has no second list, which reads as empty:
+    those chains are built as that release built them.
+    """
 
     record = masking_record_path(resolved_path)
     try:
@@ -1557,14 +1645,10 @@ def _read_masking_record(resolved_path: Path) -> tuple[str, ...] | None:
     except (OSError, ValueError) as exc:
         logger.warning("PROXY CHAINS: cannot read {}: {}", record, exc)
         return None
-    raw = document.get("masked") if isinstance(document, Mapping) else None
-    if not isinstance(raw, Sequence) or isinstance(raw, str):
+    masked = _record_ids(document, "masked")
+    if masked is None:
         return None
-    return tuple(
-        provider_id
-        for provider_id in (str(value).strip().lower() for value in raw)
-        if provider_id
-    )
+    return masked, _record_ids(document, _DIRECT_ON_RECORD_KEY) or ()
 
 
 #: The chain a stand-in gives a provider the masking record names: switched on,
@@ -1575,6 +1659,19 @@ _MASKED_STAND_IN_CHAIN = ProxyChain(
     enabled=True,
     entries=(),
     direct_fallback=False,
+    oauth_acknowledged=True,
+    order_by_speed=False,
+)
+
+#: The stand-in for a provider the record names under
+#: ``direct_only_when_unhealthy`` (7.79.2): Direct fallback ON, nothing in it
+#: -- refused the same way, because since 7.79.2 a chain with nothing usable
+#: is refused whatever its Direct fallback says (no proxy in it was found
+#: unhealthy), and the refusal sentence says the switch was on.
+_DIRECT_ON_STAND_IN_CHAIN = ProxyChain(
+    enabled=True,
+    entries=(),
+    direct_fallback=True,
     oauth_acknowledged=True,
     order_by_speed=False,
 )
@@ -1664,16 +1761,18 @@ def _stand_in(cached: ProxyChains, resolved_path: Path, reason: str) -> ProxyCha
     finds the file already broken) the masking record decides: each provider
     it names gets :data:`_MASKED_STAND_IN_CHAIN`, which is refused rather than
     sent direct, and every other provider gets no chain -- what it got before
-    7.78.8 for any unreadable file.
+    7.78.8 for any unreadable file. Since 7.79.2 a provider it names under
+    ``direct_only_when_unhealthy`` gets :data:`_DIRECT_ON_STAND_IN_CHAIN` and
+    is refused the same way: whether every proxy of its chain is unhealthy is
+    the one thing nothing can say about a chain nobody can read.
     """
 
     if cached is not _NOTHING_READ:
         return replace(cached, unreadable=reason)
-    masked = _read_masking_record(resolved_path) or ()
-    return ProxyChains(
-        chains=dict.fromkeys(masked, _MASKED_STAND_IN_CHAIN),
-        unreadable=reason,
-    )
+    masked, direct_on = _read_masking_record(resolved_path) or ((), ())
+    chains: dict[str, ProxyChain] = dict.fromkeys(direct_on, _DIRECT_ON_STAND_IN_CHAIN)
+    chains.update(dict.fromkeys(masked, _MASKED_STAND_IN_CHAIN))
+    return ProxyChains(chains=chains, unreadable=reason)
 
 
 def current_proxy_chains(path: Path | None = None) -> ProxyChains:
@@ -1752,12 +1851,14 @@ def settle_proxy_chains(
         with PROXY_CHAINS_WRITE_LOCK:
             _sync_masking_record(resolved_path, table, check_disk=True)
         return table
-    refused = table.masked_provider_ids()
+    refused = table.refused_while_unreadable_ids()
     logger.error(
-        "PROXY CHAINS: {} {}. Providers whose chain has Direct fallback off are "
-        "refused until it can be read, never sent from this computer's own "
-        "address: {}. Every other provider is built without its chain. MCC "
-        "does not rewrite the file: fix or remove it, then restart MCC.",
+        "PROXY CHAINS: {} {}. Providers whose chain has Direct fallback off, or "
+        "has it on with a proxy in it (this computer's address only once every "
+        "proxy is unhealthy, which cannot be judged now), are refused until it "
+        "can be read, never sent from this computer's own address: {}. Every "
+        "other provider is built without its chain. MCC does not rewrite the "
+        "file: fix or remove it, then restart MCC.",
         resolved_path,
         table.unreadable,
         ", ".join(refused) if refused else "none recorded",
@@ -1772,7 +1873,7 @@ def proxy_chains_problem(path: Path | None = None) -> str:
     table = current_proxy_chains(resolved_path)
     if not table.unreadable:
         return ""
-    refused = table.masked_provider_ids()
+    refused = table.refused_while_unreadable_ids()
     return (
         f"{resolved_path} {table.unreadable}. "
         + (
@@ -1825,13 +1926,32 @@ def masked_refusal_sentence(store: ProxyChains, provider_id: str, name: str) -> 
 
     ``""`` when ``provider_id``'s chain has a usable entry (or no chain): the
     caller only asks once it has found nothing to route through.
+
+    Since 7.79.2 the same holds with Direct fallback ON (the user's decision
+    of 2026-10-06 23:03: this computer's address only once every proxy of the
+    chain is *unhealthy*). Entries that are all paused, addresses removed --
+    which the read drops, so a chain left with no entry at all reads the same
+    -- and a file that cannot be read are not proxies anybody found
+    unhealthy, so the switch's fallback does not apply to them; the sentence
+    says so, and names switching the chain off as the way to go direct.
     """
 
     cause = unusable_chain_cause(store, provider_id)
     if not cause:
         return ""
+    chain = store.chain(provider_id)
+    direct_on = chain is not None and chain.direct_fallback
     who = name or provider_id
     if store.unreadable and cause.startswith(PROXY_CHAINS_FILENAME):
+        if direct_on:
+            return (
+                f"Not sent: {cause}, and when it was last saved {who}'s proxy "
+                "chain was switched on with Direct fallback on -- which uses "
+                "this computer's own address only once every proxy in the chain "
+                "is unhealthy, and that cannot be judged while the file cannot "
+                "be read. MCC does not rewrite that file: fix or remove it, then "
+                f"restart MCC (Proxying page -> {who} -> Direct fallback)."
+            )
         return (
             f"Not sent: {cause}, and when it was last saved {who}'s proxy chain "
             "had Direct fallback off, so this request would have gone out from "
@@ -1839,12 +1959,28 @@ def masked_refusal_sentence(store: ProxyChains, provider_id: str, name: str) -> 
             "or remove it, then restart MCC (Proxying page -> "
             f"{who} -> Direct fallback)."
         )
+    if direct_on:
+        return (
+            f"Not sent: {who}'s proxy chain has no usable entry ({cause}). "
+            "Direct fallback uses this computer's own address only once every "
+            "proxy in the chain is unhealthy, and a paused or removed entry is "
+            "not an unhealthy proxy, so this request was not sent from it. "
+            "Resume or add an entry -- or switch the chain off to send this "
+            f"provider's requests from this computer: Proxying page -> {who}."
+        )
+    if chain is not None and not chain.entries:
+        return (
+            f"Not sent: {who}'s proxy chain has no usable entry ({cause}) and "
+            "Direct fallback is off, so this request would have gone out from "
+            "this computer's own address. Add an entry -- or switch the chain "
+            "off to send this provider's requests from this computer: Proxying "
+            f"page -> {who}."
+        )
     return (
         f"Not sent: {who}'s proxy chain has no usable entry ({cause}) and "
         "Direct fallback is off, so this request would have gone out from this "
-        "computer's own address. Resume or add an entry, or switch Direct "
-        f'fallback on: Proxying page -> {who} -> "Fall back to this '
-        "machine's own address\"."
+        "computer's own address. Resume or add an entry: Proxying page -> "
+        f"{who}."
     )
 
 

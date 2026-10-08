@@ -54,6 +54,7 @@ from my_claude_code.config.media_surfaces import (
     model_path,
     surface_for,
 )
+from my_claude_code.config.system_proxy import system_proxy_for
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.gemini_native_media import (
     GeminiAnswerError,
@@ -62,6 +63,11 @@ from my_claude_code.core.gemini_native_media import (
 )
 from my_claude_code.core.openai_images import inline_image_urls, url_only_images
 from my_claude_code.core.openai_videos import parse_job
+from my_claude_code.core.proxy_attribution import (
+    DIRECT_PROXY_LABEL,
+    record_proxy,
+    system_proxy_label,
+)
 from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
@@ -136,9 +142,15 @@ class MediaLeaf:
         surfaces: tuple[MediaSurface, ...],
         rate_limiter: ProviderRateLimiter,
         transport: httpx.AsyncBaseTransport | None = None,
+        proxy_label: str = "",
     ) -> None:
         self._provider_id = provider_id
         self._config = config
+        #: The leaf's one fixed way out, as the request log names it (7.79.2):
+        #: a static proxy's masked address, a one-entry chain's entry, or
+        #: ``direct`` for a one-entry Direct chain. Empty for a chain's leg --
+        #: its pool names the rung -- and for a leaf with no proxy at all.
+        self._proxy_label = proxy_label
         self._surfaces = surfaces
         self._rate_limiter = rate_limiter
         timeout = httpx.Timeout(
@@ -198,7 +210,15 @@ class MediaLeaf:
     def execute(
         self, attempt: MediaAttempt, *, request_id: str | None = None
     ) -> AsyncIterator[MediaChunk]:
+        if self._proxy_label:
+            record_proxy(self._dial_label())
         return self._execute(attempt, request_id=request_id)
+
+    def _dial_label(self) -> str:
+        if self._proxy_label != DIRECT_PROXY_LABEL:
+            return self._proxy_label
+        address = system_proxy_for(self._config.base_url)
+        return system_proxy_label(address) if address else self._proxy_label
 
     async def _send(
         self,

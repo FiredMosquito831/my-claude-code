@@ -68,8 +68,26 @@ class GoogleAccessTokenProvider:
     def _refresh(self, credentials: Credentials) -> None:
         with requests.Session() as session:
             if self._proxy:
-                session.proxies.update({"http": self._proxy, "https": self._proxy})
+                proxy = remote_dns_proxy(self._proxy)
+                session.proxies.update({"http": proxy, "https": proxy})
             credentials.refresh(Request(session=session))
+
+
+def remote_dns_proxy(proxy: str) -> str:
+    """``socks5://`` as ``socks5h://``, for ``requests`` only (7.79.2, C-8).
+
+    httpx hands a SOCKS5 proxy the host *name* either way, so every model
+    request's DNS already happens at the proxy. ``requests``/urllib3 do that
+    only for ``socks5h``: given ``socks5://`` they look ``oauth2.googleapis.com``
+    up on this computer first -- a DNS query a chain is meant to hide. The token
+    refresh is the only ``requests`` client on a provider's path, so it alone
+    is rewritten; the stored address is not. Anything else is returned as is.
+    """
+
+    scheme, separator, rest = proxy.partition("://")
+    if separator and scheme.lower() == "socks5":
+        return f"socks5h://{rest}"
+    return proxy
 
 
 def _google_auth_failure(exc: GoogleAuthError) -> ExecutionFailure:

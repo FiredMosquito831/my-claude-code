@@ -713,7 +713,10 @@ def test_the_connect_timeout_applies_to_a_proxied_leg_and_nothing_else() -> None
 def test_only_a_proxied_leg_gets_the_limiter_that_dials_once() -> None:
     pool = _chained_pool(7.0)
     assert isinstance(pool._pool.get(0)._rate_limiter, ProxiedLegRateLimiter)
-    direct_limiter = pool._pool.get(2)._rate_limiter
+    # 7.79.2: index 2 is the gated Direct fallback; its leaf is the one
+    # every release built there.
+    direct = pool._pool.get(2)
+    direct_limiter = getattr(direct, "leaf", direct)._rate_limiter
     assert isinstance(direct_limiter, ProviderRateLimiter)
     assert not isinstance(direct_limiter, ProxiedLegRateLimiter)
 

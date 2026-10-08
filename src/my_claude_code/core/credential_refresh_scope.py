@@ -20,6 +20,15 @@ once for its lifetime: an async generator runs in whichever context iterates
 it, so a value set before a ``yield`` would leak into the consumer between
 chunks.
 
+Since 7.79.2 the context also carries **through which exit** a refresh
+leaves (:func:`refresh_exit`): the proxy of the chain leg whose request
+needed the credential, so a provider reached through a proxy chain never
+sees this computer's address on a token refresh (C-4). Unset -- every
+caller before 7.79.2, every provider with no proxy -- is this computer's own
+address, exactly as before. A ``ContextVar`` for the same reason as the
+purpose: it reaches a synchronous refresh run under ``asyncio.to_thread``
+(which copies the context) without changing any call shape.
+
 Imports nothing from ``config/`` (``core`` is a leaf below it).
 """
 
@@ -36,6 +45,9 @@ _BACKGROUND = "background"
 _REQUEST = "request"
 
 _SCOPE: ContextVar[str] = ContextVar("mcc_credential_refresh_scope", default=_UNSET)
+
+#: The proxy URL a token refresh leaves through; ``""`` is this computer.
+_EXIT: ContextVar[str] = ContextVar("mcc_credential_refresh_exit", default="")
 
 
 def current_purpose() -> RefreshPurpose:
@@ -121,3 +133,25 @@ def claimed_scope(purpose: RefreshPurpose) -> Iterator[None]:
     finally:
         if token is not None:
             _SCOPE.reset(token)
+
+
+def current_refresh_exit() -> str:
+    """The proxy a token refresh made now leaves through; ``""`` is this computer."""
+
+    return _EXIT.get()
+
+
+@contextlib.contextmanager
+def refresh_exit(proxy: str | None) -> Iterator[None]:
+    """Run the body with token refreshes leaving through ``proxy``.
+
+    Set around the synchronous credential calls of one leg (never across a
+    ``yield``), so it names that leg's exit and nobody else's. ``None`` or
+    ``""`` is this computer's own address, explicitly.
+    """
+
+    token = _EXIT.set(proxy or "")
+    try:
+        yield
+    finally:
+        _EXIT.reset(token)

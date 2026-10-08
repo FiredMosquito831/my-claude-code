@@ -35,7 +35,7 @@ from my_claude_code.config.proxy_chains import (
 from my_claude_code.config.settings import Settings
 from tests.api.support import create_test_app, runtime_for_app
 
-NEW_KEYS = ("refusal", "not_routing", "chain_inert")
+NEW_KEYS = ("refusal", "not_routing", "chain_inert", "system_proxy")
 SECRET_URL = "socks5h://alice:hunter2@203.0.113.7:1080"
 
 
@@ -43,6 +43,8 @@ SECRET_URL = "socks5h://alice:hunter2@203.0.113.7:1080"
 def chains_path(monkeypatch, tmp_path: Path) -> Iterator[Path]:
     path = tmp_path / "proxy_chains.json"
     monkeypatch.setattr(proxy_chains, "proxy_chains_path", lambda: path)
+    # No system proxy unless a test names one (7.79.2's system_proxy key).
+    monkeypatch.setattr("my_claude_code.config.system_proxy.getproxies", dict)
     proxy_chains.reset_proxy_chains_cache()
     admin_proxy_routes._UNROUTED.clear()
     yield path
@@ -119,12 +121,39 @@ def test_a_refused_chain_shows_the_sentence_requests_are_refused_with() -> None:
     assert "Proxying page -> NVIDIA NIM" in card["refusal"]
 
 
+def test_direct_fallback_on_with_nothing_usable_is_refused_too() -> None:
+    """7.79.2 (PR-4): a paused entry is not an unhealthy proxy."""
+
+    _store(paused=True, direct_fallback=True)
+
+    card = _card(_client().get("/admin/api/proxy-chains").json())
+
+    assert card["refusal"].startswith("Not sent: NVIDIA NIM's proxy chain")
+    assert "its only entry is paused" in card["refusal"]
+    assert "only once every proxy in the chain is unhealthy" in card["refusal"]
+    assert "switch the chain off" in card["refusal"]
+
+
+def test_a_system_proxy_carrying_the_provider_is_named(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "my_claude_code.config.system_proxy.getproxies",
+        lambda: {"https": "http://alice:hunter2@corp-proxy.test:3128"},
+    )
+    _store(paused=False, direct_fallback=True)
+
+    card = _card(_client().get("/admin/api/proxy-chains").json())
+
+    assert card["system_proxy"] == "corp-proxy.test:3128"
+    assert "hunter2" not in str(card)
+
+
 @pytest.mark.parametrize(
     ("paused", "direct_fallback", "proxy"),
     [
         (False, False, ""),  # a usable entry
-        (True, True, ""),  # Direct fallback on: today's behaviour, PR-4's to change
+        (False, True, ""),  # a usable entry, Direct fallback on
         (True, False, "http://203.0.113.50:3128"),  # the static proxy carries it
+        (True, True, "http://203.0.113.50:3128"),  # ... whatever Direct fallback
     ],
 )
 def test_a_card_with_nothing_to_say_carries_none_of_the_new_keys(

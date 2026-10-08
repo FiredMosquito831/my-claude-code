@@ -251,6 +251,18 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.runtime.config",
+    ): (
+        "Owner: the Claude and ChatGPT cards' Refresh buttons (7.79.2, C-4). "
+        "Reason: a token refresh leaves through the provider's proxy chain like "
+        "its requests do, and the exit is the one masked_exit_for picks for the "
+        "Providers card's probes from the same single read real requests are "
+        "built from. A mirror in the api package would be a second answer to "
+        "where this provider may be reached from, the one question masking "
+        "cannot afford two answers to. Read-only; it sends nothing itself."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
         "my_claude_code.providers.chatgpt_oauth.codex_catalogue",
     ): (
         "Owner: admin dashboard ChatGPT subscription card. "

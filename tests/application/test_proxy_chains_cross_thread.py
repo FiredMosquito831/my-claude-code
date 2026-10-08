@@ -410,11 +410,15 @@ def test_a_save_landing_anywhere_in_a_build_gives_the_old_chain_or_the_new(
     shares no address with the current one -- land immediately before the n-th
     line of ``resolve_proxy_chain``, for every n. A build that read the chain
     from one table and its addresses from the next would find none of them.
+
+    Since 7.79.2 the body lives in ``resolve_proxy_route`` (which also names a
+    one-entry chain's entry); ``resolve_proxy_chain`` is its two-line pair
+    view, so the traced lines are the route's.
     """
 
     from my_claude_code.providers.runtime import config as runtime_config
 
-    code = runtime_config.resolve_proxy_chain.__code__
+    code = runtime_config.resolve_proxy_route.__code__
     save_proxy_chains(TABLE_ONE)
     current_proxy_chains()
     seen = 0

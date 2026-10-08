@@ -35,12 +35,37 @@ CREDENTIAL_ROTATION_POLICIES = frozenset(
 DEFAULT_CREDENTIAL_ROTATION = "single"
 
 
+@dataclass(frozen=True, slots=True)
+class ProxyRoute:
+    """What :func:`resolve_proxy_route` resolved one provider's egress to.
+
+    ``proxy`` and ``plan`` are exactly the pair :func:`resolve_proxy_chain` has
+    always returned. ``label`` is new in 7.79.2 and says only which chain entry
+    a one-entry chain collapsed to -- its name on the Proxying page -- so the
+    request log can name it; it is ``""`` in every other case.
+    """
+
+    proxy: str
+    plan: ProxyChainPlan | None = None
+    label: str = ""
+
+
 def resolve_proxy_chain(
     provider_id: str, static_proxy: str, settings: Settings, *, name: str = ""
 ) -> tuple[str, ProxyChainPlan | None]:
+    """:func:`resolve_proxy_route` as the ``(proxy, plan)`` pair it has always been."""
+
+    route = resolve_proxy_route(provider_id, static_proxy, settings, name=name)
+    return route.proxy, route.plan
+
+
+def resolve_proxy_route(
+    provider_id: str, static_proxy: str, settings: Settings, *, name: str = ""
+) -> ProxyRoute:
     """Turn the stored chain for one provider into what the runtime uses.
 
-    Returns ``(proxy, plan)``. The whole upgrade story is in the first branch:
+    Returns the ``(proxy, plan)`` pair as a :class:`ProxyRoute`, with the
+    one-entry chain's ``label`` beside it. The whole upgrade story is in the first branch:
     a provider absent from the store -- or one whose chain is switched off, or
     empty once its paused rungs are dropped -- keeps its ``<PROVIDER>_PROXY``
     untouched and gets no plan at all, which is byte-for-byte the behaviour of
@@ -57,8 +82,17 @@ def resolve_proxy_chain(
     resolves to a :class:`MaskedRefusalPlan` instead, which every construction
     seam builds as a refusal (a 503 naming the setting), and which the
     Providers card's probes read as "not sent". ``name`` is the provider as
-    the operator knows it, for that sentence. With Direct fallback on, or with
-    a ``<PROVIDER>_PROXY`` to fall back to, nothing changes.
+    the operator knows it, for that sentence. With a ``<PROVIDER>_PROXY`` to
+    fall back to, nothing changes.
+
+    Since 7.79.2 the same refusal holds with Direct fallback ON for a chain
+    that has entries but none usable (every one paused or naming a removed
+    address) or that stands in for an unreadable file: Direct fallback uses
+    this computer's address only once every proxy is *unhealthy* (the user's
+    decision of 2026-10-06 23:03), and paused, removed or unreadable is not
+    that -- nor is a switched-on chain with no entry at all, which is what a
+    chain whose addresses were all removed reads as. Switching the chain
+    off is the operator's way to send it from this computer.
 
     One rung collapses to a static proxy rather than a pool: there is nothing
     to move between, and a one-entry pool would build a second client, a second
@@ -77,12 +111,12 @@ def resolve_proxy_chain(
     store = current_proxy_chains()
     chain = store.chain(provider_id)
     if chain is None or not chain.enabled:
-        return static_proxy, None
+        return ProxyRoute(static_proxy)
     if provider_id in OAUTH_PROVIDER_IDS and not chain.oauth_acknowledged:
         # A subscription login whose operator has not said they understand what
         # changing source address means for it. The rail is inert on the page
         # and the chain is inert here, or the acknowledgement would be theatre.
-        return static_proxy, None
+        return ProxyRoute(static_proxy)
 
     legs: list[ProxyLeg] = []
     for entry in chain.entries:
@@ -105,32 +139,38 @@ def resolve_proxy_chain(
         )
 
     if not legs:
-        if chain.direct_fallback or static_proxy:
-            # Today's answer, and a masked one when ``static_proxy`` is set:
-            # the chain stands aside and ``<PROVIDER>_PROXY`` carries it.
-            return static_proxy, None
+        if static_proxy:
+            # A masked answer: the chain stands aside and ``<PROVIDER>_PROXY``
+            # carries it, as it always has.
+            return ProxyRoute(static_proxy)
         who = name or provider_id
-        return "", MaskedRefusalPlan(
-            direct_fallback=False,
-            reason=masked_refusal_sentence(store, provider_id, who)
-            # Unreachable -- the cause and the legs are the same test -- but
-            # this line runs on the way to a refusal and must not be empty.
-            or (
-                f"Not sent: {who}'s proxy chain has no usable entry and Direct "
-                f"fallback is off (Proxying page -> {who})."
+        return ProxyRoute(
+            "",
+            MaskedRefusalPlan(
+                direct_fallback=chain.direct_fallback,
+                reason=masked_refusal_sentence(store, provider_id, who)
+                # Unreachable -- the cause and the legs are the same test -- but
+                # this line runs on the way to a refusal and must not be empty.
+                or (
+                    f"Not sent: {who}'s proxy chain has no usable entry and Direct "
+                    f"fallback is off (Proxying page -> {who})."
+                ),
             ),
         )
     if len(legs) == 1:
-        return legs[0].url, None
-    return "", ProxyChainPlan(
-        legs=tuple(legs),
-        policy=chain.policy,
-        on=frozenset(chain.on),
-        scope=chain.scope,
-        max_switches=min(
-            chain.max_switches, int(settings.proxy_max_switches_per_request)
+        return ProxyRoute(legs[0].url, label=legs[0].label)
+    return ProxyRoute(
+        "",
+        ProxyChainPlan(
+            legs=tuple(legs),
+            policy=chain.policy,
+            on=frozenset(chain.on),
+            scope=chain.scope,
+            max_switches=min(
+                chain.max_switches, int(settings.proxy_max_switches_per_request)
+            ),
+            direct_fallback=chain.direct_fallback,
         ),
-        direct_fallback=chain.direct_fallback,
     )
 
 
@@ -338,14 +378,15 @@ def build_provider_config(
             f"{descriptor.provider_id.upper()}_BASE_URL is not set. "
             f"Configure the base URL for provider {descriptor.provider_id!r}."
         )
-    proxy, proxy_chain = resolve_proxy_chain(
+    route = resolve_proxy_route(
         descriptor.provider_id,
         string_setting(settings, descriptor.proxy_attr),
         settings,
         name=descriptor.display_name,
     )
     return ProviderConfig(
-        proxy_chain=proxy_chain,
+        proxy_chain=route.plan,
+        proxy_label=route.label,
         api_key=api_keys[0] if api_keys else credential,
         base_url=resolved_base_url,
         rate_limit=settings.provider_rate_limit,
@@ -354,7 +395,7 @@ def build_provider_config(
         http_read_timeout=settings.http_read_timeout,
         http_write_timeout=settings.http_write_timeout,
         http_connect_timeout=settings.http_connect_timeout,
-        proxy=proxy,
+        proxy=route.proxy,
         log_raw_sse_events=settings.log_raw_sse_events,
         log_api_error_tracebacks=settings.log_api_error_tracebacks,
         api_keys=api_keys,
@@ -390,14 +431,15 @@ def _build_dynamic_provider_config(
     rotation = entry.credential_rotation
     if rotation not in CREDENTIAL_ROTATION_POLICIES:
         rotation = DEFAULT_CREDENTIAL_ROTATION
-    proxy, proxy_chain = resolve_proxy_chain(
+    route = resolve_proxy_route(
         descriptor.provider_id,
         entry.proxy or "",
         settings,
         name=entry.display_name,
     )
     return ProviderConfig(
-        proxy_chain=proxy_chain,
+        proxy_chain=route.plan,
+        proxy_label=route.label,
         api_key=entry.api_keys[0] if entry.api_keys else "",
         base_url=entry.base_url,
         rate_limit=settings.provider_rate_limit,
@@ -406,7 +448,7 @@ def _build_dynamic_provider_config(
         http_read_timeout=settings.http_read_timeout,
         http_write_timeout=settings.http_write_timeout,
         http_connect_timeout=settings.http_connect_timeout,
-        proxy=proxy,
+        proxy=route.proxy,
         log_raw_sse_events=settings.log_raw_sse_events,
         log_api_error_tracebacks=settings.log_api_error_tracebacks,
         api_keys=entry.api_keys,

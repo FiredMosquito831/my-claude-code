@@ -87,6 +87,7 @@ from my_claude_code.providers.oauth_names import (
     seed_default_name,
 )
 from my_claude_code.providers.oauth_ownership import record_decision
+from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .constants import (
     CLAUDE_CODE_CLIENT_ID,
@@ -1344,7 +1345,21 @@ def _refresh_lock(account_id: str = "") -> asyncio.Lock:
     return lock
 
 
-async def _post_refresh(refresh_token: str) -> httpx.Response:
+def _refresh_client(proxy: str) -> httpx.AsyncClient:
+    """The token endpoint's client: this computer's own, or the leg's exit.
+
+    With no proxy -- every provider with no chain, and a chain's Direct leg
+    -- exactly the client every release built. With one (7.79.2, C-4), the
+    exit of the leg about to send: the provider whose chain hides this
+    computer's address never learns it from a refresh either. A SOCKS
+    proxy resolves the token host itself, as every leg's client does.
+    """
+    if not proxy:
+        return httpx.AsyncClient(timeout=30.0)
+    return bound_socks_handshake(httpx.AsyncClient(timeout=30.0, proxy=proxy))
+
+
+async def _post_refresh(refresh_token: str, *, proxy: str = "") -> httpx.Response:
     """POST the refresh, falling back to the pre-2.1.258 token host.
 
     Claude Code 2.1.258 moved the token endpoint to ``platform.claude.com``
@@ -1352,11 +1367,14 @@ async def _post_refresh(refresh_token: str) -> httpx.Response:
     or that the new one answers for this client id, so a 404/301/308 from the
     current host retries the legacy one exactly once rather than turning a
     host migration into a forced re-login.
+
+    ``proxy`` is the exit of the chain leg about to send (7.79.2); ``""``
+    is this computer's own address, as it always was.
     """
     headers = token_endpoint_headers()
     payload = _refresh_payload(refresh_token)
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with _refresh_client(proxy) as client:
             response = await client.post(TOKEN_URL, json=payload, headers=headers)
             if (
                 response.status_code in (301, 308, 404)
@@ -1414,7 +1432,9 @@ def is_shared_credential(tokens: OAuthTokens, account_id: str = "") -> bool:
     return index is not None and records[index].is_shared
 
 
-async def refresh_tokens(tokens: OAuthTokens, *, account_id: str = "") -> OAuthTokens:
+async def refresh_tokens(
+    tokens: OAuthTokens, *, account_id: str = "", proxy: str = ""
+) -> OAuthTokens:
     """Exchange a refresh token for a fresh credential and store it.
 
     **NATIVE credentials only** since 7.69.1. A credential shared with Claude
@@ -1433,6 +1453,11 @@ async def refresh_tokens(tokens: OAuthTokens, *, account_id: str = "") -> OAuthT
     second finds a fresh credential already stored and returns that rather
     than spending the refresh token a second time. Two *different* accounts
     never wait on each other.
+
+    ``proxy`` (7.79.2) is the exit of the chain leg whose request found the
+    credential ageing: the token POST leaves through it, so a provider
+    reached through a proxy chain never sees this computer's address on a
+    refresh. ``""`` -- no chain, or a Direct leg -- is today's client.
     """
     if is_shared_credential(tokens, account_id):
         raise SharedCredentialRefused(
@@ -1448,7 +1473,7 @@ async def refresh_tokens(tokens: OAuthTokens, *, account_id: str = "") -> OAuthT
         try:
             async with hold(native_refresh_lock_path(), REFRESH_LOCK_TIMING) as held:
                 return await _refresh_native_locked(
-                    tokens, account_id=account_id, waited=held.waited
+                    tokens, account_id=account_id, waited=held.waited, proxy=proxy
                 )
         except LockBusy as error:
             record_decision(PROVIDER_ID, account_id or "mcc", "native:lock-busy")
@@ -1458,7 +1483,7 @@ async def refresh_tokens(tokens: OAuthTokens, *, account_id: str = "") -> OAuthT
 
 
 async def _refresh_native_locked(
-    tokens: OAuthTokens, *, account_id: str, waited: bool
+    tokens: OAuthTokens, *, account_id: str, waited: bool, proxy: str = ""
 ) -> OAuthTokens:
     """The NATIVE refresh, inside both the in-process and the file lock."""
     assert tokens.refresh_token is not None
@@ -1476,7 +1501,14 @@ async def _refresh_native_locked(
             record_decision(PROVIDER_ID, account_id or "mcc", "native:waited")
         return stored
 
-    response = await _post_refresh(tokens.refresh_token)
+    # The one-argument call when there is no exit to name, so a caller that
+    # replaced ``_post_refresh`` (the test suite's doubles) sees exactly the
+    # call it always saw.
+    response = (
+        await _post_refresh(tokens.refresh_token, proxy=proxy)
+        if proxy
+        else await _post_refresh(tokens.refresh_token)
+    )
     if response.status_code >= 400:
         failure = classify_refresh_failure(response)
         logger.warning(

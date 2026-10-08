@@ -145,7 +145,8 @@ def test_factory_builds_dynamic_provider_with_generic_profile(make_settings) -> 
 
     assert isinstance(provider, RotatingProvider)
     assert len(provider._providers) == 2
-    sub = provider._providers[0]
+    # 7.79.2: the stored proxy's leaf, inside the leg that names it in the log.
+    sub = getattr(provider._providers[0], "leaf", provider._providers[0])
     assert isinstance(sub, OpenAIChatProvider)
     assert sub._profile is GENERIC_OPENAI_PROFILE
     assert sub._api_key == "sk-acme-1"
@@ -159,6 +160,8 @@ def test_factory_single_key_dynamic_provider_is_not_rotated(
     with patch("my_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
         provider = create_provider("custom_acme_ai", make_settings())
 
+    # 7.79.2: the stored proxy's leaf, inside the leg that names it in the log.
+    provider = getattr(provider, "leaf", provider)
     assert isinstance(provider, OpenAIChatProvider)
     assert provider._api_key == "sk-only"
 
