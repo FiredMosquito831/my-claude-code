@@ -1,3 +1,9 @@
+# Shell scripts are LF in every checkout, whatever core.autocrlf says. The
+# wheel bundles scripts/install.sh and the Linux/macOS dashboard Update runs it
+# with `sh`; a wheel built from a CRLF checkout shipped it with CR line endings
+# and `sh` refused it at line 2 (`set: Illegal option -`; 7.78.8 and earlier).
+*.sh text eol=lf
+
 desktop-shell/** text=auto eol=lf
 desktop-shell/src-tauri/icons/** binary
 
