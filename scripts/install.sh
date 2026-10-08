@@ -981,16 +981,8 @@ complete_environment_swap() {
     complete_staging_env=$2
     complete_rewritten=0
     for complete_entry in "$swap_tool_dir"/bin/*; do
-        [ -f "$complete_entry" ] || continue
-        head -n 1 "$complete_entry" 2>/dev/null | grep -q '^#!' || continue
-        grep -q -- "$complete_staging_env" "$complete_entry" 2>/dev/null || continue
-        if sed "s|$complete_staging_env|$swap_tool_dir|g" "$complete_entry" \
-            > "$complete_entry.mcc-new" 2>/dev/null; then
-            chmod 755 "$complete_entry.mcc-new" 2>/dev/null || true
-            mv "$complete_entry.mcc-new" "$complete_entry" 2>/dev/null &&
-                complete_rewritten=$((complete_rewritten + 1))
-        else
-            rm -f "$complete_entry.mcc-new" 2>/dev/null || true
+        if repoint_entry_script "$complete_entry" "$complete_staging_env" "$swap_tool_dir"; then
+            complete_rewritten=$((complete_rewritten + 1))
         fi
     done
     write_install_log "Re-pointed $complete_rewritten launcher(s) inside the new environment."
@@ -1009,6 +1001,26 @@ complete_environment_swap() {
         fi
     fi
     return 0
+}
+
+repoint_entry_script() {
+    # Rewrite one entry script of the swapped-in environment so its interpreter
+    # line names the canonical environment instead of the staging one. Returns
+    # 0 when it rewrote the file. Split out of complete_environment_swap in
+    # 7.78.9 so the ONE script the start needs can be fixed before the start.
+    repoint_entry=$1
+    repoint_from=$2
+    repoint_to=$3
+    [ -f "$repoint_entry" ] || return 1
+    head -n 1 "$repoint_entry" 2>/dev/null | grep -q '^#!' || return 1
+    grep -q -- "$repoint_from" "$repoint_entry" 2>/dev/null || return 1
+    if sed "s|$repoint_from|$repoint_to|g" "$repoint_entry" \
+        > "$repoint_entry.mcc-new" 2>/dev/null; then
+        chmod 755 "$repoint_entry.mcc-new" 2>/dev/null || true
+        mv "$repoint_entry.mcc-new" "$repoint_entry" 2>/dev/null && return 0
+    fi
+    rm -f "$repoint_entry.mcc-new" 2>/dev/null || true
+    return 1
 }
 
 missing_launcher_shims() {
@@ -2737,6 +2749,17 @@ if [ "$staged_ok" -eq 1 ]; then
         # gate below then rolls back to the previous version.
         if [ "$stage_may_start" -eq 1 ]; then
             if [ -x "$staged_tool_dir/bin/python" ]; then
+                # 7.78.9: the one entry script the start runs gets the
+                # canonical interpreter line FIRST. uv's bin entries here are
+                # symlinks into <tool dir>/bin, and the staged install wrote
+                # the STAGING interpreter into every script there, so a start
+                # before the tidy-up below died with "nohup: failed
+                # to run command ... mcc-server: No such file or directory"
+                # (exit 127) and the health gate rolled back. Every update
+                # until now ran the false "This release adds ..." reinstall
+                # first, which rewrote them all and hid this; with that gone,
+                # the install-smoke Linux leg showed it.
+                repoint_entry_script "$staged_tool_dir/bin/mcc-server" "$staging_env" "$staged_tool_dir" || true
                 start_restarted_server "$restart_launcher"
                 staged_server_started=1
             else

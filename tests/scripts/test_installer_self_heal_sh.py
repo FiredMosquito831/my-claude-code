@@ -440,5 +440,59 @@ def test_the_posix_update_path_wires_the_fixes_in_order() -> None:
     assert body.index('if [ -x "$staged_tool_dir/bin/python" ]; then') < body.index(
         'start_restarted_server "$restart_launcher"'
     )
+    # The script the start runs names the canonical interpreter BEFORE the
+    # start; the other entry scripts are still fixed after it.
+    repoint = body.index(
+        'repoint_entry_script "$staged_tool_dir/bin/mcc-server" "$staging_env" "$staged_tool_dir"'
+    )
+    assert repoint < body.index('start_restarted_server "$restart_launcher"')
+    assert body.index('start_restarted_server "$restart_launcher"') < body.index(
+        'complete_environment_swap "$staged_tool_dir" "$staging_env"'
+    )
     cleanup = _extract(text, "cleanup")
     assert cleanup.index("remove_update_leftovers") < cleanup.index("exit_update_lock")
+
+
+@pytest.mark.parametrize(("name", "shell"), SHELLS, ids=lambda v: v)
+def test_the_script_the_start_runs_names_the_canonical_interpreter_sh(
+    name: str, shell: str, tmp_path: Path
+) -> None:
+    """After the swap every entry script still names the STAGING interpreter;
+    uv's bin entries are symlinks to them, so a start before the rewrite died
+    with "nohup: failed to run command ... No such file or directory" (exit
+    127; install-smoke, Linux). The rewrite is per script, idempotent, and
+    complete_environment_swap still counts the rest."""
+
+    _require(shell)
+    staging_env = (
+        tmp_path / "uv" / ".mcc-staging" / "20261008-170000" / "my-claude-code"
+    )
+    tool_dir = tmp_path / "uv" / "tools" / "my-claude-code"
+    for entry in ("mcc-server", "mcc-claude"):
+        _touch(
+            tool_dir / "bin" / entry,
+            f"#!{_p(staging_env)}/bin/python\nimport sys\n",
+        )
+    body = f"""
+if repoint_entry_script '{_p(tool_dir / "bin" / "mcc-server")}' '{_p(staging_env)}' '{_p(tool_dir)}'; then echo FIRST=rewritten; fi
+if repoint_entry_script '{_p(tool_dir / "bin" / "mcc-server")}' '{_p(staging_env)}' '{_p(tool_dir)}'; then echo SECOND=rewritten; else echo SECOND=nothing-to-do; fi
+complete_environment_swap '{_p(tool_dir)}' '{_p(staging_env)}'
+"""
+    script = tmp_path / "repoint.sh"
+    script.write_text(
+        _harness(("repoint_entry_script", "complete_environment_swap"), body),
+        encoding="utf-8",
+        newline="\n",
+    )
+    completed = _run(shell, script)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    out = completed.stdout
+    assert "FIRST=rewritten" in out
+    assert "SECOND=nothing-to-do" in out
+    assert "LOG: Re-pointed 1 launcher(s) inside the new environment." in out
+    for entry in ("mcc-server", "mcc-claude"):
+        first_line = (
+            (tool_dir / "bin" / entry).read_text(encoding="utf-8").splitlines()[0]
+        )
+        assert first_line == f"#!{_p(tool_dir)}/bin/python", first_line
