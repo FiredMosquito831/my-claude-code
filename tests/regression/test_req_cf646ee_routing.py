@@ -413,8 +413,9 @@ def test_the_shipped_defaults_no_longer_buy_that_ladder() -> None:
     two tries and a five second ceiling; the shipped defaults were worse.
     6.68.0 adopted that install's numbers as the shipped ones, so an
     operator who changes nothing now gets the ladder the incident report
-    recommended -- 2 tries, 5 s ceiling -- and the 429 does not walk it at
-    all.
+    recommended -- 2 tries, 5 s ceiling. Since 7.78.10 the 429 walks that
+    shorter ladder by default (RATE_LIMIT_ROUTES_AROUND_MODEL ships off, so the
+    chain order is followed); turning it on skips the ladder for a 429.
     """
     from my_claude_code.config.constants import (
         PROVIDER_RETRY_ATTEMPTS_DEFAULT,
@@ -424,7 +425,7 @@ def test_the_shipped_defaults_no_longer_buy_that_ladder() -> None:
 
     assert PROVIDER_RETRY_ATTEMPTS_DEFAULT == 2
     assert PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT == 5.0
-    assert RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT is True
+    assert RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT is False
     # And the limiter's own fallback is untouched: the factory always passes
     # ``max_retries`` explicitly, so this is not the number that moved.
     from my_claude_code.providers.rate_limit import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS

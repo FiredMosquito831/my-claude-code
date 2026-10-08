@@ -116,7 +116,7 @@ PROVIDER_CONFIG_FIELDS: dict[str, tuple[str, str, object]] = {
         "credential_model_bench_escalation",
         4,
     ),
-    "RATE_LIMIT_ROUTES_AROUND_MODEL": ("false", "routes_around_model", False),
+    "RATE_LIMIT_ROUTES_AROUND_MODEL": ("true", "routes_around_model", True),
     "LOG_API_ERROR_TRACEBACKS": ("true", "log_api_error_tracebacks", True),
 }
 
