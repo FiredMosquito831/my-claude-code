@@ -87,6 +87,11 @@ MCC_INSTALL_NO_DESKTOP
 # merged; `--version X` sets it to the tag vX on its own. Read by the batch
 # file only -- the server never sees it.
 MCC_INSTALL_REF
+# The environment form of install.sh's --allow-root (7.78.11), read by
+# install.sh and the npm package's install hook: install for root even when
+# the run is root through sudo on behalf of another user. Read by the scripts
+# only -- the server never sees it.
+MCC_INSTALL_ALLOW_ROOT
 # npm's own prefix variable (7.24.0). MCC reads it to find where a global
 # opencode/codex install landed; it belongs to npm, not to MCC, so there is
 # nothing here that could set it.

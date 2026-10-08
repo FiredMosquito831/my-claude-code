@@ -334,6 +334,19 @@ when you ask it to run something that needs one. Four situations skip the
 installer and say so in one line each — a local `npm install` or an `npx` run,
 `CI` being set, `--ignore-scripts`, and `MCC_NPM_SKIP_INSTALL=1`.
 
+**With a system Node you may need `sudo npm install -g`.** My Claude Code
+installs per user, so since 7.78.11 a run as root through `sudo` on behalf of
+your user installs only the `mcc` command — no server for root — and the server
+is installed by your first `mcc`, as you. Or give npm a user-level prefix
+(`npm config set prefix ~/.npm-global`, then add `~/.npm-global/bin` to `PATH`)
+and skip `sudo` altogether. The install scripts refuse the same case
+(`curl … | sudo sh`, `sudo mcc update`) with a message saying what to run
+instead; `--allow-root` or `MCC_INSTALL_ALLOW_ROOT=1` installs for root on
+purpose. A root shell, a root VPS or a Docker image has no `SUDO_USER` and is
+not affected. Inside WSL the npm route installs the server only, display or
+not, and on Linux and macOS a missing `curl` or a failed installer download now
+fails the install instead of reporting "done".
+
 **Uninstalling takes both halves.** `npm uninstall -g
 @firedmosquito831/my-claude-code` removes the launcher npm installed and nothing
 else; the server, the commands and the configuration home are `mcc uninstall`'s
@@ -1005,6 +1018,8 @@ curl -fsSL <install-script-url> | sh -s -- --desktop
 
 This writes a Start Menu `.lnk` on Windows, a `.desktop` entry on Linux, and a minimal `.app` bundle on macOS. It's opt-in — a plain install is unchanged — and if the shortcut can't be created, the installer warns and continues rather than failing the whole install.
 
+When the desktop app is installed it already has the menu entry, and the installer steps aside instead of adding a second one: on Linux and macOS since the app's packages shipped, and on Windows since 7.78.11 — the desktop app's setup and `install.ps1 -Desktop` write the same `My Claude Code.lnk`, and a shortcut that opens the installed `MyClaudeCode.exe` is now left alone, by the installer and by `uninstall.ps1` alike. Inside WSL `--desktop` writes no Linux launcher at all: WSL gets the server only, and the desktop app for that PC is the Windows one.
+
 <a id="what-the-uninstaller-removes"></a>
 
 <a id="what-the-uninstaller-removes"></a>
@@ -1024,7 +1039,7 @@ This writes a Start Menu `.lnk` on Windows, a `.desktop` entry on Linux, and a m
 | --- | --- | --- |
 | Command shims | the uv tool bin directory | `uv tool install` |
 | Config, logs, data and the exported icon | `~/.mcc/` (and `~/.fcc/` on a machine that was never migrated) | normal use |
-| Start Menu shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\My Claude Code.lnk` | `install.ps1 -Desktop` |
+| Start Menu shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\My Claude Code.lnk` — unless it opens the installed desktop app, whose entry it then is (kept, 7.78.11) | `install.ps1 -Desktop` |
 | Start-at-login value | `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\MyClaudeCodeDesktop` | **Start at Login** |
 | Desktop entry and icon | `~/.local/share/applications/my-claude-code.desktop`, `~/.local/share/icons/hicolor/256x256/apps/my-claude-code.png` | `install.sh --desktop` |
 | App bundle | `~/Applications/My Claude Code.app` | `install.sh --desktop` |
@@ -5458,6 +5473,23 @@ points at the transcript that updater is writing, and exits 0:
 A lock whose owner is **gone** is reclaimed rather than waited on, because a
 crashed installer must not take the machine out of updating for the rest of the
 day.
+
+When the lock cannot be taken and **no** running update holds it — the
+`updates` folder, or a lock file left in it, is not yours to write, which is
+what an install run as root with your home directory leaves behind — the
+installer no longer claims an update is running. Since 7.78.11 it says whose
+lock it is, how old it is and which folder it cannot write, names the
+`chown` that gives the folder back, and exits 1.
+
+#### A port answered by a server the installer did not start
+
+The installer's success line, "installed and answering on port N", now means
+the answer came from the server it started (every server since 7.70.0 names its
+process id on `/health`). When a server this account cannot see or stop holds
+the port — typically one another user started, for example through `sudo` —
+the installer names that server's process id and user, starts nothing, says how
+to stop it, and exits 1 (7.78.11). The new version is still installed; nothing
+is rolled back.
 
 #### The receipt keeps every episode
 

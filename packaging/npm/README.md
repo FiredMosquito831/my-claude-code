@@ -21,11 +21,31 @@ release of the right shape:
   `install.sh`), which brings `uv`, Python 3.14 and every `mcc-*` command;
 - **the native desktop application, where there is a desktop session** —
   Windows and macOS always, Linux only with `DISPLAY` or `WAYLAND_DISPLAY`.
-  Over SSH, in CI, on a headless server or in WSL without a display it
-  installs the server alone, without even the installer's desktop flag, so no
+  Over SSH, in CI, on a headless server or in WSL — with or without a display,
+  because the desktop app for a Windows PC is the Windows one — it installs
+  the server alone, without even the installer's desktop flag, so no
   shortcuts are created for a screen that does not exist.
 
-It prints one line saying what it decided and why before it does anything.
+It prints one line saying what it decided and why before it does anything
+(npm shows a hook's output only with `--foreground-scripts`).
+
+### With a system Node, sudo, and a user-level prefix
+
+My Claude Code installs **per user**. With a system Node whose global folder
+belongs to root, `sudo npm install -g` gives you the `mcc` command and nothing
+else: run as root on behalf of your user, the hook installs no server for root
+(a root-owned copy you could not use, and a root server on your port) and the
+server is installed by your first `mcc` — as you, not root. Simpler still, give
+npm a folder you own and skip sudo entirely:
+
+```sh
+npm config set prefix ~/.npm-global      # then add ~/.npm-global/bin to PATH
+npm install -g @firedmosquito831/my-claude-code
+```
+
+To install for root on purpose, set `MCC_INSTALL_ALLOW_ROOT=1` (or run
+`mcc install --allow-root`). A root shell, a root VPS or a Docker image — no
+`SUDO_USER` — is not affected.
 
 | Platform | What the desktop half installs |
 | --- | --- |
@@ -64,8 +84,10 @@ too, each printing one line saying so.
 
 If the server installs and the desktop half fails — a flaky network, a 404 —
 the install stays green and tells you how to retry just that half. A failing
-*server* install fails `npm install -g` with it; nothing is left
-half-installed.
+*server* install fails `npm install -g` with it — and that includes `curl`
+being missing or the installer download failing on Linux and macOS, which
+fail with a `WARNING:` line saying so rather than a "done" with nothing
+installed.
 
 ## Run without installing globally
 
@@ -89,7 +111,9 @@ npm uninstall -g @firedmosquito831/my-claude-code   # removes only this launcher
 
 Run `mcc uninstall` **first**: npm removes the launcher it installed and nothing
 else, so uninstalling the package on its own leaves the Python server in place.
-The desktop application is uninstalled the way its platform expects — Add or
+On Windows `mcc uninstall` keeps the Start Menu entry when it is the
+installed desktop app's own. The desktop application is uninstalled the way
+its platform expects — Add or
 remove programs on Windows, deleting it from `~/Applications` on macOS,
 `sudo dpkg -r my-claude-code-desktop` or `install-desktop.sh --uninstall` on
 Linux.

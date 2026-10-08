@@ -909,6 +909,78 @@ def test_uninstall_ps1_removes_the_start_menu_shortcut(
     assert f"remove:{shortcut}" in powershell_uninstall_harness.calls()
 
 
+def _write_real_shortcut(powershell: str, shortcut: Path, target: Path) -> None:
+    """A real .lnk, written by the same COM object both writers use."""
+    shortcut.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:FAKE_LNK); "
+            "$s.TargetPath = $env:FAKE_LNK_TARGET; $s.Save()",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=os.environ | {"FAKE_LNK": str(shortcut), "FAKE_LNK_TARGET": str(target)},
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert shortcut.is_file()
+
+
+@pytest.mark.local_serial
+def test_uninstall_ps1_keeps_the_installed_desktop_apps_start_menu_entry(
+    powershell_uninstall_harness: PowerShellUninstallHarness, tmp_path: Path
+) -> None:
+    """7.78.11. The desktop app's own setup writes the same "My Claude
+    Code.lnk" (pointing at MyClaudeCode.exe). This uninstaller does not
+    remove the app, so it must not take the app's Start Menu entry with it:
+    `mcc uninstall` on an npm machine used to leave the app with no entry."""
+
+    app = tmp_path / "Programs" / "My Claude Code" / "MyClaudeCode.exe"
+    app.parent.mkdir(parents=True)
+    app.write_bytes(b"the installed desktop app")
+    shortcut = powershell_uninstall_harness.shortcut
+    _write_real_shortcut(powershell_uninstall_harness.powershell, shortcut, app)
+
+    result = powershell_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert shortcut.is_file(), "the desktop app's Start Menu entry was deleted"
+    assert f"remove:{shortcut}" not in powershell_uninstall_harness.calls()
+    assert "Keeping the Start Menu shortcut" in result.stdout
+    assert "which this uninstaller does not remove" in result.stdout
+    assert "My Claude Code has been removed and verified." in result.stdout
+
+
+@pytest.mark.local_serial
+@pytest.mark.parametrize("target", ["mcc-desktop", "uninstalled-app"])
+def test_uninstall_ps1_still_removes_the_launcher_shortcut_and_app_leftovers(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+    tmp_path: Path,
+    target: str,
+) -> None:
+    """The launcher's own shortcut goes, as before -- and so does one that
+    names an app that is no longer there, which is nobody's entry."""
+
+    if target == "mcc-desktop":
+        destination = powershell_uninstall_harness.tool_bin / "mcc-desktop.exe"
+    else:
+        destination = tmp_path / "Programs" / "My Claude Code" / "MyClaudeCode.exe"
+    shortcut = powershell_uninstall_harness.shortcut
+    _write_real_shortcut(powershell_uninstall_harness.powershell, shortcut, destination)
+
+    result = powershell_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert not shortcut.exists()
+    assert f"remove:{shortcut}" in powershell_uninstall_harness.calls()
+    assert "Keeping the Start Menu shortcut" not in result.stdout
+
+
 @pytest.mark.local_serial
 def test_uninstall_ps1_removes_the_start_at_login_registration(
     powershell_uninstall_harness: PowerShellUninstallHarness,

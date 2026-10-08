@@ -624,6 +624,7 @@ you set in your shell, your service unit or your CI job.
 | `LOG_FILE` | the server and the CLI, at load | Where a startup failure is written — including a failure that *is* "the settings would not load". |
 | `MCC_INSTALL_NO_START` | `install.ps1` / `install.sh` / the npm wrapper | `1` installs without stopping or starting any server. The environment form of `-NoStart` / `--no-start`. |
 | `MCC_INSTALL_NO_DESKTOP` | the installers | `1` restarts the server as usual but never opens the desktop app. |
+| `MCC_INSTALL_ALLOW_ROOT` | `install.sh` / the npm wrapper | `1` installs for root even when the run is root through `sudo` on behalf of another user, which is otherwise refused (7.78.11). The environment form of `--allow-root`. |
 | `MCC_INSTALL_LOG` | the update helper | Where the in-place update writes its progress. |
 | `MCC_DESKTOP_SKIP_AUTOSTART` | `mcc-desktop` | `1` starts the tray without starting a server. |
 | `MCC_DESKTOP_SHELL_DIR`, `MCC_DESKTOP_SHELL_BASE_URL`, `MCC_DESKTOP_SHELL_TRAY`, `DESKTOP_SHELL` | the desktop **shell** | Where the shell lives, what it points at, whether it shows a tray, and whether it is used at all. The shell is a separate binary and never loads the server's settings. |

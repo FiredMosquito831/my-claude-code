@@ -404,6 +404,8 @@ SH_FUNCTIONS = (
     "desktop_shell_candidates",
     "installed_desktop_shells",
     "desktop_shell_is_running",
+    # 7.78.11: the rule asks whether this is WSL before it looks at a display.
+    "running_under_wsl",
     "desktop_skip_reason",
 )
 
@@ -429,14 +431,30 @@ def _sh() -> str:
     return resolved
 
 
-def _sh_harness(*, shell_dir: Path, desktop_allowed: int = 1) -> str:
+def _sh_harness(
+    *,
+    shell_dir: Path,
+    desktop_allowed: int = 1,
+    osrelease: str = "/nonexistent",
+    wsl_distro: str = "",
+) -> str:
     text = INSTALL_SH.read_text(encoding="utf-8")
     bodies = "\n\n".join(_extract_sh_function(text, name) for name in SH_FUNCTIONS)
+    # Whether this is WSL is pinned by the test, never read off the machine: a
+    # Linux CI runner is not WSL, but a container on a WSL2-backed Docker
+    # Desktop is, and so is a developer's WSL shell.
+    distro = (
+        f"WSL_DISTRO_NAME='{wsl_distro}'\nexport WSL_DISTRO_NAME\n"
+        if wsl_distro
+        else ""
+    )
     return f"""set -eu
 MCC_DESKTOP_SHELL_DIR='{shell_dir}'
 export MCC_DESKTOP_SHELL_DIR
 desktop_allowed={desktop_allowed}
-
+WSL_OSRELEASE_PATH='{osrelease}'
+unset WSL_DISTRO_NAME WSL_INTEROP
+{distro}
 {bodies}
 
 printf 'REASON=[%s]\\n' "$(desktop_skip_reason)"
@@ -535,3 +553,47 @@ def test_the_posix_rule_refuses_ci_and_no_desktop(tmp_path: Path) -> None:
         env=environment,
     )
     assert "REASON=[no server was started or --no-desktop was given]" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="no POSIX shell")
+@pytest.mark.parametrize("how", ["kernel", "environment"])
+@pytest.mark.local_serial
+def test_the_posix_rule_never_opens_a_linux_app_inside_wsl(
+    tmp_path: Path, how: str
+) -> None:
+    """7.78.11: WSL is server only. WSLg reports a display, and the Linux app
+    may even be installed there -- the rule still says no, by the product's
+    own WSL test (the kernel string, or WSL_DISTRO_NAME)."""
+    shell_dir = tmp_path / "shell"
+    shell_dir.mkdir()
+    (shell_dir / "MyClaudeCode").write_bytes(b"ours")
+    (shell_dir / "MyClaudeCode.receipt.json").write_text(
+        '{"tag": "v7.1.0"}', encoding="utf-8"
+    )
+    osrelease = tmp_path / "osrelease"
+    osrelease.write_text("6.6.87.2-microsoft-standard-WSL2\n", encoding="utf-8")
+
+    script = tmp_path / "rule.sh"
+    script.write_text(
+        _sh_harness(
+            shell_dir=shell_dir,
+            osrelease=osrelease.as_posix() if how == "kernel" else "/nonexistent",
+            wsl_distro="Ubuntu" if how == "environment" else "",
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    environment = dict(os.environ)
+    environment.pop("CI", None)
+    environment["DISPLAY"] = ":0"
+    environment["WAYLAND_DISPLAY"] = "wayland-0"
+    result = subprocess.run(
+        [_sh(), str(script)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "REASON=[this is WSL, which gets the server only]" in result.stdout

@@ -256,6 +256,42 @@ function Confirm-CommandsRemoved {
     }
 }
 
+function Get-ShortcutTarget {
+    # What a .lnk opens, or "" when it cannot be read. Never throws. The same
+    # function as install.ps1's.
+    param([Parameter(Mandatory = $true)][string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $target = $shell.CreateShortcut($Path).TargetPath
+        if ($null -eq $target) { return "" }
+        return [string] $target
+    }
+    catch {
+        return ""
+    }
+}
+
+function Test-ShortcutOpensDesktopApp {
+    # 7.78.11: whether a shortcut target is the INSTALLED desktop app. The
+    # app's own setup (Inno, per user) and install.ps1 -Desktop write the same
+    # "My Claude Code.lnk"; the app's opens MyClaudeCode.exe, install.ps1's
+    # opens mcc-desktop.exe. The same test as install.ps1's -- the Windows twin
+    # of the bundle identifier uninstall.sh reads on macOS. A target that no
+    # longer exists is a leftover, not an installed app.
+    param([string] $Target)
+
+    if ([string]::IsNullOrWhiteSpace($Target)) { return $false }
+    try {
+        if ([System.IO.Path]::GetFileName($Target) -ne "MyClaudeCode.exe") { return $false }
+        return [bool] (Test-Path -LiteralPath $Target -PathType Leaf)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Remove-StartMenuShortcut {
     # install.ps1 -Desktop writes "%APPDATA%\...\Start Menu\Programs\My Claude
     # Code.lnk" targeting the mcc-desktop shim. uv tool uninstall deletes the
@@ -269,6 +305,17 @@ function Remove-StartMenuShortcut {
     $shortcutPath = Join-Path $startMenuDir $StartMenuShortcutName
     if (-not (Test-Path -LiteralPath $shortcutPath)) {
         Write-Host "No Start Menu shortcut to remove: $shortcutPath"
+        return
+    }
+
+    # 7.78.11: the desktop app's setup writes this same file. When it opens
+    # the installed app, it is the app's entry, not ours: this uninstaller does
+    # not remove the app, so it does not take the app's Start Menu entry
+    # either -- exactly as uninstall.sh keeps a .app with the app's identifier.
+    $shortcutTarget = Get-ShortcutTarget -Path $shortcutPath
+    if (Test-ShortcutOpensDesktopApp -Target $shortcutTarget) {
+        Write-Host "Keeping the Start Menu shortcut ($shortcutPath). It opens the desktop app ($shortcutTarget), which this uninstaller does not remove."
+        Write-Host "Uninstall the desktop app from Settings > Apps > My Claude Code (desktop app); that removes its shortcut too."
         return
     }
 
