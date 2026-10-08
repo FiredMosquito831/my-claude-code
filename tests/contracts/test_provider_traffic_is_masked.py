@@ -951,6 +951,7 @@ NO_USABLE_ENTRY: dict[str, Callable[[TrafficWorld], None]] = {
 
 
 @pytest.mark.parametrize("row", _traffic_rows())
+@pytest.mark.local_serial
 def test_real_traffic_reaches_the_host_only_through_the_chain(
     traffic: TrafficWorld, row: TrafficClass
 ) -> None:
@@ -967,6 +968,7 @@ def test_real_traffic_reaches_the_host_only_through_the_chain(
 
 @pytest.mark.parametrize("cause", sorted(NO_USABLE_ENTRY))
 @pytest.mark.parametrize("row", _traffic_rows())
+@pytest.mark.local_serial
 def test_no_usable_entry_and_direct_fallback_off_sends_nothing(
     traffic: TrafficWorld, row: TrafficClass, cause: str
 ) -> None:
@@ -981,6 +983,7 @@ def test_no_usable_entry_and_direct_fallback_off_sends_nothing(
 
 
 @pytest.mark.parametrize("row", _traffic_rows())
+@pytest.mark.local_serial
 def test_no_usable_entry_and_direct_fallback_on_is_what_it_always_was(
     traffic: TrafficWorld, row: TrafficClass
 ) -> None:
@@ -994,6 +997,7 @@ def test_no_usable_entry_and_direct_fallback_on_is_what_it_always_was(
     assert all(not proxy.targets for proxy in traffic.rig.proxies)
 
 
+@pytest.mark.local_serial
 def test_a_refused_request_moves_on_to_the_next_model(traffic: TrafficWorld) -> None:
     """Refused exactly as any unavailable provider is: the chain carries on.
 
@@ -1020,6 +1024,7 @@ def test_a_refused_request_moves_on_to_the_next_model(traffic: TrafficWorld) -> 
     assert all(not proxy.targets for proxy in traffic.rig.proxies)
 
 
+@pytest.mark.local_serial
 def test_a_refusal_reaches_the_client_as_a_503_naming_the_setting(
     traffic: TrafficWorld,
 ) -> None:
@@ -1041,6 +1046,7 @@ def test_a_refusal_reaches_the_client_as_a_503_naming_the_setting(
     traffic.rig.assert_nothing_sent()
 
 
+@pytest.mark.local_serial
 def test_a_static_proxy_still_carries_a_chain_with_nothing_usable(
     traffic: TrafficWorld,
 ) -> None:
