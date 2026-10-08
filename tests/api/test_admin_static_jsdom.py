@@ -3944,6 +3944,36 @@ def test_jsdom_the_chain_says_it_replaces_the_env_var_without_rewriting_it(
     assert "never rewritten" in inherited
 
 
+def test_jsdom_the_card_says_how_its_provider_routes_right_now(rendered) -> None:
+    """7.78.8: refused by its own Direct-fallback rule, and saved-not-routing.
+
+    Each is the server's own sentence, shown as given; a card the server says
+    nothing about carries no note at all.
+    """
+
+    proxying = rendered["proxying"]
+    notes = proxying["routingNotes"]
+
+    assert [note["cls"] for note in notes] == [
+        "proxy-routing-note proxy-routing-refused",
+        "proxy-routing-note proxy-routing-stale",
+    ]
+    assert notes[0]["text"].startswith("Not sent: NVIDIA NIM's proxy chain")
+    assert "Direct fallback is off" in notes[0]["text"]
+    assert notes[1]["text"].startswith("Saved -- not routing yet")
+    assert proxying["routingNotesOnTheOtherCard"] == 0
+
+
+def test_jsdom_an_unreadable_chain_file_raises_the_red_banner(rendered) -> None:
+    banner = rendered["proxying"]["storeBanner"]
+
+    assert banner["present"] is True
+    assert banner["hidden"] is False
+    assert banner["title"] == "The proxy chain file cannot be read."
+    assert "proxy_chains.json cannot be parsed" in banner["text"]
+    assert "does not rewrite the file" in banner["text"]
+
+
 def test_jsdom_exactly_two_chips_are_refused_and_three_are_on(rendered) -> None:
     chips = rendered["proxying"]["chips"]
 

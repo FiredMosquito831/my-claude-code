@@ -1742,8 +1742,11 @@ def settle_proxy_chains(
     deadline = time.monotonic() + max(0.0, within)
     table = current_proxy_chains(resolved_path)
     while table.unreadable and time.monotonic() < deadline:
+        # A read that failed is not cached, so this asks the file again; one
+        # that could not be parsed is cached under the file's signature, so
+        # it is read again only if the file changes -- say, a sync client
+        # finishing its write -- rather than re-parsed and re-logged.
         time.sleep(STARTUP_READ_RETRY_INTERVAL_SECONDS)
-        _invalidate_proxy_chains_cache()
         table = current_proxy_chains(resolved_path)
     if not table.unreadable:
         with PROXY_CHAINS_WRITE_LOCK:

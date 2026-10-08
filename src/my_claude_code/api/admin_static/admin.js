@@ -3920,8 +3920,16 @@ function proxyInheritedNote(provider, draft) {
       : `Inherited from this provider's stored proxy: ${provider.inherited_label}.`;
     return note;
   }
+  // A switched-on chain with Direct fallback off and nothing to route through
+  // is refused, never sent from this machine (7.78.8): saying it "goes out on
+  // this machine's own address" here would contradict the red note above. An
+  // unacknowledged subscription chain is inert, so it is not that case.
+  const inert = provider.oauth && !draft.oauth_acknowledged;
   note.textContent =
-    "No proxy configured. Requests go out on this machine's own address.";
+    draft.enabled && draft.direct_fallback === false && !inert
+      ? "No proxy configured, and Direct fallback is off: requests to this " +
+        "provider are refused, never sent from this machine's own address."
+      : "No proxy configured. Requests go out on this machine's own address.";
   return note;
 }
 
