@@ -234,6 +234,7 @@ def _sha(raw: bytes) -> str:
 
 
 @WINDOWS_ONLY
+@pytest.mark.local_serial
 def test_a_save_while_another_process_holds_the_file_is_refused(
     managed: Path, rendered: list[str], adversary: Callable[..., Path]
 ) -> None:
@@ -260,6 +261,7 @@ def test_a_save_while_another_process_holds_the_file_is_refused(
 
 
 @WINDOWS_ONLY
+@pytest.mark.local_serial
 def test_saves_racing_a_process_that_replaces_the_file_never_lose_a_setting(
     managed: Path,
     rendered: list[str],
@@ -279,6 +281,7 @@ def test_saves_racing_a_process_that_replaces_the_file_never_lose_a_setting(
 
 
 @WINDOWS_ONLY
+@pytest.mark.local_serial
 def test_saves_racing_a_process_that_reads_the_file_never_lose_a_setting(
     managed: Path, rendered: list[str], adversary: Callable[..., Path]
 ) -> None:

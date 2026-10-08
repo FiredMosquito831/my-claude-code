@@ -170,6 +170,7 @@ def _make_settings(**overrides):
     return mock
 
 
+@pytest.mark.local_serial
 def test_importing_runtime_does_not_eager_load_other_adapters() -> None:
     """Runtime metadata must not import every provider adapter up front."""
     code = (

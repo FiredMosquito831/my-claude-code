@@ -7,10 +7,19 @@ import pytest
 
 pytest.importorskip("pystray")
 
+from my_claude_code.cli import desktop_tray
 from my_claude_code.cli.desktop import DesktopController
 from my_claude_code.cli.desktop_tray import PystrayDesktopTray
 from my_claude_code.config import desktop as desktop_config
 from my_claude_code.config.desktop import DesktopState, load_desktop_state
+from tests.support.tray_icon_classes import release_tray_icon_classes
+
+
+@pytest.fixture(autouse=True)
+def _release_tray_icon_classes(monkeypatch):
+    # The tray tests build a real pystray Icon and never run it; without this,
+    # a later Icon at a reused address fails with WinError 1410.
+    yield from release_tray_icon_classes(monkeypatch, desktop_tray)
 
 
 def _set_home(monkeypatch, tmp_path: Path) -> None:

@@ -292,6 +292,7 @@ def test_fcc_owned_entrypoints_report_version_without_side_effects(
 
 
 @pytest.mark.parametrize("entrypoint_name", ["serve", "init"])
+@pytest.mark.local_serial
 def test_version_entrypoints_do_not_import_command_runtime(
     entrypoint_name: str,
 ) -> None:
@@ -1952,6 +1953,7 @@ def test_process_replacement_logs_recovery_command_when_execv_fails() -> None:
     assert "/stable/mcc-server --example" in recovery
 
 
+@pytest.mark.local_serial
 def test_bind_failure_surfaces_the_port_owner() -> None:
     """uvicorn's SystemExit(1) on a held port is diagnosed, not a bare crash."""
     from my_claude_code.cli import commands

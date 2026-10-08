@@ -81,6 +81,7 @@ def _never_closes(monkeypatch) -> None:
     monkeypatch.setattr(asyncio.StreamWriter, "wait_closed", hang)
 
 
+@pytest.mark.local_serial
 async def test_a_close_that_never_completes_cannot_hold_a_check(
     monkeypatch, listening_port
 ):
@@ -100,6 +101,7 @@ async def test_a_close_that_never_completes_cannot_hold_a_check(
     assert elapsed < PROXY_CLOSE_TIMEOUT_SECONDS + 2.0, f"took {elapsed:.2f}s"
 
 
+@pytest.mark.local_serial
 async def test_a_check_returns_a_verdict_even_when_its_close_never_finishes(
     monkeypatch, listening_port
 ):
@@ -126,6 +128,7 @@ async def test_a_check_returns_a_verdict_even_when_its_close_never_finishes(
     assert elapsed < 10.0, f"took {elapsed:.2f}s"
 
 
+@pytest.mark.local_serial
 async def test_a_check_stuck_in_a_close_is_cancelled_at_once(
     monkeypatch, listening_port
 ):

@@ -228,7 +228,13 @@ pythonpath = ["src"]
 # `--dist loadgroup`, pytest-xdist 3.8 hands a replacement worker the crashed
 # worker's already-finished groups again, one at a time, and with nothing left
 # to run it never asks for more: the run waits forever.
-addopts = "-n auto --dist loadgroup --max-worker-restart=0"
+# `--maxprocesses=8`: `-n auto` starts one worker per logical core, which is 16
+# on the development machine. Sixteen workers plus the children the suite
+# launches (PowerShell installers, scratch servers, Codex/Claude launchers) left
+# nothing for the timing-sensitive tests, and they failed only under that load.
+# xdist takes min(auto, 8), so GitHub's 4-vCPU runners keep their 4 workers;
+# an explicit `--maxprocesses=N` on the command line overrides it.
+addopts = "-n auto --maxprocesses=8 --dist loadgroup --max-worker-restart=0"
 testpaths = ["tests"]
 # A test still running after this many seconds prints every thread's stack and
 # its process exits; under xdist that reads "worker 'gwN' crashed while running
@@ -253,6 +259,7 @@ markers = [
     "touches_registry: the test writes to the (in-memory, faked) Windows registry",
     "spawns_process: the test may launch an executable the hermeticity guard denies",
     "binds_reserved_port: the test may bind My Claude Code's default server port",
+    "local_serial: the test launches a child process, serves on a listening socket or times itself against the wall clock, so machine load can fail it; a local full run takes these out of the parallel pass (-m \"not local_serial\") and runs them afterwards on a few workers (tests/README.md). It opens no hermeticity gate (that is spawns_process)",
 ]
 
 [tool.ty.environment]

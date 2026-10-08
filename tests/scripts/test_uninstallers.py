@@ -225,6 +225,7 @@ exec /bin/rm "$@"
     return PosixUninstallHarness(home, bin_dir, tool_bin, fcc_home, log, env)
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_removes_and_verifies_only_mcc(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -249,6 +250,7 @@ def test_uninstall_sh_removes_and_verifies_only_mcc(
     ]
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_is_idempotent_when_both_tools_are_absent(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -267,6 +269,7 @@ def test_uninstall_sh_is_idempotent_when_both_tools_are_absent(
     ]
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_cleans_up_legacy_tool_when_primary_is_absent(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -281,6 +284,7 @@ def test_uninstall_sh_cleans_up_legacy_tool_when_primary_is_absent(
     )
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_tolerates_legacy_tool_absence(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -296,6 +300,7 @@ def test_uninstall_sh_tolerates_legacy_tool_absence(
 
 
 @pytest.mark.parametrize("failure", ["tool-dir", "uninstall", "stale-entrypoint"])
+@pytest.mark.local_serial
 def test_uninstall_sh_preserves_config_when_tool_removal_is_unconfirmed(
     posix_uninstall_harness: PosixUninstallHarness,
     failure: str,
@@ -308,6 +313,7 @@ def test_uninstall_sh_preserves_config_when_tool_removal_is_unconfirmed(
     assert not any(call.startswith("rm:") for call in posix_uninstall_harness.calls())
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_requires_uv_before_deleting_config(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -319,6 +325,7 @@ def test_uninstall_sh_requires_uv_before_deleting_config(
     assert posix_uninstall_harness.calls() == []
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_reports_purge_failure_after_verified_tool_removal(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -334,6 +341,7 @@ def test_uninstall_sh_reports_purge_failure_after_verified_tool_removal(
     assert "My Claude Code has been removed and verified." not in result.stdout
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_removes_every_desktop_artefact(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -386,6 +394,7 @@ def _make_app_bundle(bundle: Path, identifier: str) -> None:
     (contents / "MacOS" / "MyClaudeCode").write_text("binary\n", encoding="utf-8")
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_keeps_the_real_desktop_app_and_names_it(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -421,6 +430,7 @@ def test_uninstall_sh_keeps_the_real_desktop_app_and_names_it(
         assert part in result.stdout
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_still_removes_the_launcher_bundle_it_wrote(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -438,6 +448,7 @@ def test_uninstall_sh_still_removes_the_launcher_bundle_it_wrote(
     assert "The desktop app is also installed at" not in result.stdout
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_removes_a_bundle_with_no_readable_plist(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -459,6 +470,7 @@ def test_uninstall_sh_removes_a_bundle_with_no_readable_plist(
     assert not [str(path) for path in artefacts if path.exists()]
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_desktop_removal_is_quiet_when_nothing_was_installed(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -473,6 +485,7 @@ def test_uninstall_sh_desktop_removal_is_quiet_when_nothing_was_installed(
     )
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_dry_run_keeps_every_desktop_artefact(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -485,6 +498,7 @@ def test_uninstall_sh_dry_run_keeps_every_desktop_artefact(
     assert posix_uninstall_harness.calls() == []
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_keeps_desktop_artefacts_when_removal_is_unconfirmed(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -498,6 +512,7 @@ def test_uninstall_sh_keeps_desktop_artefacts_when_removal_is_unconfirmed(
     assert all(path.exists() for path in artefacts)
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_dry_run_is_non_mutating(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -513,6 +528,7 @@ def test_uninstall_sh_dry_run_is_non_mutating(
     assert "Dry run complete. No changes were made." in result.stdout
 
 
+@pytest.mark.local_serial
 def test_uninstall_sh_rejects_invalid_options_before_mutation(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -754,6 +770,7 @@ else {
     )
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_removes_and_verifies_only_mcc(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -778,6 +795,7 @@ def test_uninstall_ps1_removes_and_verifies_only_mcc(
     ]
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_is_idempotent_when_both_tools_are_absent(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -796,6 +814,7 @@ def test_uninstall_ps1_is_idempotent_when_both_tools_are_absent(
     ]
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_cleans_up_legacy_tool_when_primary_is_absent(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -810,6 +829,7 @@ def test_uninstall_ps1_cleans_up_legacy_tool_when_primary_is_absent(
     )
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_tolerates_legacy_tool_absence(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -825,6 +845,7 @@ def test_uninstall_ps1_tolerates_legacy_tool_absence(
 
 
 @pytest.mark.parametrize("failure", ["tool-dir", "uninstall", "stale-entrypoint"])
+@pytest.mark.local_serial
 def test_uninstall_ps1_preserves_config_when_tool_removal_is_unconfirmed(
     powershell_uninstall_harness: PowerShellUninstallHarness,
     failure: str,
@@ -839,6 +860,7 @@ def test_uninstall_ps1_preserves_config_when_tool_removal_is_unconfirmed(
     )
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_requires_uv_before_deleting_config(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -850,6 +872,7 @@ def test_uninstall_ps1_requires_uv_before_deleting_config(
     assert powershell_uninstall_harness.calls() == []
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_reports_purge_failure_after_verified_tool_removal(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -867,6 +890,7 @@ def test_uninstall_ps1_reports_purge_failure_after_verified_tool_removal(
     assert "My Claude Code has been removed and verified." not in result.stdout
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_removes_the_start_menu_shortcut(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -885,6 +909,7 @@ def test_uninstall_ps1_removes_the_start_menu_shortcut(
     assert f"remove:{shortcut}" in powershell_uninstall_harness.calls()
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_removes_the_start_at_login_registration(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -899,6 +924,7 @@ def test_uninstall_ps1_removes_the_start_at_login_registration(
     )
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_leaves_the_run_key_alone_when_no_value_is_registered(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -913,6 +939,7 @@ def test_uninstall_ps1_leaves_the_run_key_alone_when_no_value_is_registered(
     assert "No start-at-login registration to remove" in result.stdout
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_dry_run_keeps_the_shortcut_and_the_run_value(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -925,6 +952,7 @@ def test_uninstall_ps1_dry_run_keeps_the_shortcut_and_the_run_value(
     assert powershell_uninstall_harness.calls() == []
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_keeps_the_shortcut_when_removal_is_unconfirmed(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -939,6 +967,7 @@ def test_uninstall_ps1_keeps_the_shortcut_when_removal_is_unconfirmed(
     )
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_survives_a_registry_removal_failure(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -953,6 +982,7 @@ def test_uninstall_ps1_survives_a_registry_removal_failure(
     assert not powershell_uninstall_harness.fcc_home.exists()
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_dry_run_is_non_mutating(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -968,6 +998,7 @@ def test_uninstall_ps1_dry_run_is_non_mutating(
     assert "Dry run complete. No changes were made." in result.stdout
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_refuses_to_run_while_a_launcher_is_alive(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -990,6 +1021,7 @@ def test_uninstall_ps1_refuses_to_run_while_a_launcher_is_alive(
     )
 
 
+@pytest.mark.local_serial
 def test_uninstall_ps1_blocks_on_the_gui_host_image_name(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:

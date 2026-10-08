@@ -6,6 +6,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PACKAGE_ROOT = _REPO_ROOT / "src" / "my_claude_code"
 _PACKAGE_NAME = "my_claude_code"
@@ -739,6 +741,7 @@ def test_optional_dependencies_have_one_lazy_owner() -> None:
     assert sorted(offenders) == []
 
 
+@pytest.mark.local_serial
 def test_runtime_imports_without_optional_voice_dependencies() -> None:
     blocked = sorted(OPTIONAL_IMPORT_OWNERS)
     script = "\n".join(

@@ -16,6 +16,8 @@ import sys
 from dataclasses import fields
 from typing import Any
 
+import pytest
+
 from my_claude_code.api.models_page_cache import capability_half_key
 from my_claude_code.application.model_metadata import (
     ModelListingEvidence,
@@ -88,6 +90,7 @@ print(_key((_info(),)))
 """
 
 
+@pytest.mark.local_serial
 def test_the_key_is_the_same_in_two_interpreters() -> None:
     """The real failure, reproduced the way it really happens: two processes.
 

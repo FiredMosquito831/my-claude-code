@@ -363,6 +363,7 @@ class TestServerPresenceProbe:
         assert "not the MCC server" not in message
         assert spawned == [], "a drain must not be raced with a second server"
 
+    @pytest.mark.local_serial
     def test_spawn_refuses_a_foreign_port_and_names_the_holder(
         self, monkeypatch, tmp_path
     ):

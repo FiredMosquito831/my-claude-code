@@ -260,6 +260,7 @@ def _run(executable: str, script: Path) -> subprocess.CompletedProcess[str]:
 
 @pytestmark_windows
 @pytest.mark.parametrize(("name", "executable"), _powershells(), ids=lambda v: v)
+@pytest.mark.local_serial
 def test_the_installer_reads_a_scratch_port_out_of_a_scratch_env(
     name: str, executable: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -301,6 +302,7 @@ def test_the_installer_reads_a_scratch_port_out_of_a_scratch_env(
 
 @pytestmark_windows
 @pytest.mark.parametrize(("name", "executable"), _powershells(), ids=lambda v: v)
+@pytest.mark.local_serial
 def test_a_second_installer_finds_the_lock_held_and_a_dead_owner_reclaimed(
     name: str, executable: str, tmp_path: Path
 ) -> None:

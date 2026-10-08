@@ -40,6 +40,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.local_serial
+
 CHILDREN = Path(__file__).resolve().parent / "oauth_race_children"
 ENDPOINT = CHILDREN / "fake_token_endpoint.py"
 MCC = CHILDREN / "mcc_child.py"

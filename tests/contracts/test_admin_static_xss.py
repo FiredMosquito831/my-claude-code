@@ -76,12 +76,14 @@ def rendered_locked() -> dict:
     return _run("empty")
 
 
+@pytest.mark.local_serial
 def test_the_script_evaluates_cleanly_under_hostile_payloads(rendered_open) -> None:
     assert rendered_open["fatal"] is None
     assert rendered_open["scriptErrors"] == []
     assert rendered_open["consoleErrors"] == []
 
 
+@pytest.mark.local_serial
 def test_a_malicious_section_label_renders_as_text_not_elements(
     rendered_open,
 ) -> None:
@@ -93,6 +95,7 @@ def test_a_malicious_section_label_renders_as_text_not_elements(
     assert heading["elementTags"] == ["DIV", "H3", "P"]
 
 
+@pytest.mark.local_serial
 def test_a_malicious_custom_provider_name_renders_as_text_not_elements(
     rendered_open,
 ) -> None:
@@ -103,6 +106,7 @@ def test_a_malicious_custom_provider_name_renders_as_text_not_elements(
     assert provider["elementTags"] == ["STRONG", "SPAN"]
 
 
+@pytest.mark.local_serial
 def test_the_messaging_auth_notice_appears_exactly_when_platforms_are_open(
     rendered_open,
     rendered_locked,
@@ -216,6 +220,7 @@ def test_no_adjacent_html_injection_vectors_exist() -> None:
     assert not re.search(r"\.outerHTML\s*=", source), "admin.js assigns outerHTML"
 
 
+@pytest.mark.local_serial
 def test_a_coding_agent_card_renders_its_name_and_path_as_text(
     rendered_open: dict,
 ) -> None:

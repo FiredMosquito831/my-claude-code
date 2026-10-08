@@ -261,6 +261,7 @@ def _write_script(tmp_path: Path, body: str, name: str = "rule.ps1") -> Path:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the PowerShell installer")
 @pytest.mark.parametrize("edition,executable", _powershells())
+@pytest.mark.local_serial
 def test_a_binary_without_a_receipt_is_never_ours(
     tmp_path: Path, edition: str, executable: str
 ) -> None:
@@ -282,6 +283,7 @@ def test_a_binary_without_a_receipt_is_never_ours(
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the PowerShell installer")
 @pytest.mark.parametrize("edition,executable", _powershells())
+@pytest.mark.local_serial
 def test_installed_and_not_running_is_the_one_case_that_launches(
     tmp_path: Path, edition: str, executable: str
 ) -> None:
@@ -298,6 +300,7 @@ def test_installed_and_not_running_is_the_one_case_that_launches(
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the PowerShell installer")
 @pytest.mark.parametrize("edition,executable", _powershells())
+@pytest.mark.local_serial
 def test_an_already_running_app_is_never_launched_twice(
     tmp_path: Path, edition: str, executable: str
 ) -> None:
@@ -335,6 +338,7 @@ def test_an_already_running_app_is_never_launched_twice(
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the PowerShell installer")
 @pytest.mark.parametrize("edition,executable", _powershells())
+@pytest.mark.local_serial
 def test_no_desktop_and_no_start_both_refuse(
     tmp_path: Path, edition: str, executable: str
 ) -> None:
@@ -362,6 +366,7 @@ def test_no_desktop_and_no_start_both_refuse(
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the PowerShell installer")
 @pytest.mark.parametrize("edition,executable", _powershells())
+@pytest.mark.local_serial
 def test_ci_never_opens_a_window(tmp_path: Path, edition: str, executable: str) -> None:
     shell_dir = tmp_path / "shell"
     shell_dir.mkdir()
@@ -439,6 +444,7 @@ printf 'REASON=[%s]\\n' "$(desktop_skip_reason)"
 
 
 @pytest.mark.skipif(shutil.which("sh") is None, reason="no POSIX shell")
+@pytest.mark.local_serial
 def test_the_posix_rule_refuses_a_binary_without_a_receipt(tmp_path: Path) -> None:
     shell_dir = tmp_path / "shell"
     shell_dir.mkdir()
@@ -462,6 +468,7 @@ def test_the_posix_rule_refuses_a_binary_without_a_receipt(tmp_path: Path) -> No
 
 
 @pytest.mark.skipif(shutil.which("sh") is None, reason="no POSIX shell")
+@pytest.mark.local_serial
 def test_the_posix_rule_accepts_an_installed_app(tmp_path: Path) -> None:
     shell_dir = tmp_path / "shell"
     shell_dir.mkdir()
@@ -488,6 +495,7 @@ def test_the_posix_rule_accepts_an_installed_app(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("sh") is None, reason="no POSIX shell")
+@pytest.mark.local_serial
 def test_the_posix_rule_refuses_ci_and_no_desktop(tmp_path: Path) -> None:
     shell_dir = tmp_path / "shell"
     shell_dir.mkdir()

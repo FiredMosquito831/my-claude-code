@@ -2,6 +2,8 @@
 
 import socket
 
+import pytest
+
 from my_claude_code.cli.port_diagnostics import (
     diagnose_port_owner,
     is_address_in_use,
@@ -24,6 +26,7 @@ def test_probe_reports_a_free_port_as_available() -> None:
     assert probe_port_available("127.0.0.1", port) is True
 
 
+@pytest.mark.local_serial
 def test_probe_reports_a_listening_port_as_taken() -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
@@ -56,6 +59,7 @@ def test_probe_never_sends_data(monkeypatch) -> None:
     assert sent == []
 
 
+@pytest.mark.local_serial
 def test_wait_for_port_free_returns_true_once_released() -> None:
     import threading
     import time
@@ -156,6 +160,7 @@ def test_is_address_in_use_detects_eaddrinuse() -> None:
     assert is_address_in_use(OSError(13, "Permission denied")) is False
 
 
+@pytest.mark.local_serial
 def test_probe_false_on_a_real_held_socket() -> None:
     """A genuinely bound+listening ephemeral socket is reported as taken."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -169,6 +174,7 @@ def test_probe_false_on_a_real_held_socket() -> None:
         sock.close()
 
 
+@pytest.mark.local_serial
 def test_wait_for_port_free_times_out_on_a_real_held_socket() -> None:
     """Holding a real ephemeral socket makes wait_for_port_free give up."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -184,6 +190,7 @@ def test_wait_for_port_free_times_out_on_a_real_held_socket() -> None:
         sock.close()
 
 
+@pytest.mark.local_serial
 def test_wait_for_port_free_true_after_a_real_release() -> None:
     """Releasing a real socket lets wait_for_port_free return promptly."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from my_claude_code.config import desktop_shell
 
 _MODULE = "my_claude_code.config.desktop_shell"
@@ -31,6 +33,7 @@ _PROBE = "\n".join(
 )
 
 
+@pytest.mark.local_serial
 def test_building_the_asgi_app_never_imports_the_shell_fetcher() -> None:
     completed = subprocess.run(
         [sys.executable, "-c", _PROBE],

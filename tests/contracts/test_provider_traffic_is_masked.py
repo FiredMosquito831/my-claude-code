@@ -849,6 +849,7 @@ def _send(row: TrafficClass) -> TrafficDriver:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("row", _rows())
+@pytest.mark.local_serial
 async def test_a_chained_provider_is_reached_only_through_its_proxies(
     world: ProbeWorld, row: TrafficClass
 ) -> None:
@@ -865,6 +866,7 @@ async def test_a_chained_provider_is_reached_only_through_its_proxies(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("row", _rows())
+@pytest.mark.local_serial
 async def test_an_unreachable_exit_is_skipped_for_the_next_one(
     world: ProbeWorld, row: TrafficClass
 ) -> None:
@@ -882,6 +884,7 @@ async def test_an_unreachable_exit_is_skipped_for_the_next_one(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("row", _rows())
+@pytest.mark.local_serial
 async def test_no_usable_exit_and_direct_fallback_off_sends_nothing(
     world: ProbeWorld, row: TrafficClass
 ) -> None:
@@ -898,6 +901,7 @@ async def test_no_usable_exit_and_direct_fallback_off_sends_nothing(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("row", _rows())
+@pytest.mark.local_serial
 async def test_no_usable_exit_and_direct_fallback_on_goes_direct(
     world: ProbeWorld, row: TrafficClass
 ) -> None:

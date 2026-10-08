@@ -147,6 +147,7 @@ def test_no_npm_bin_name_is_a_python_console_script() -> None:
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_the_postinstall_removes_a_stale_my_claude_code_shim_it_used_to_own(
     tmp_path: Path,
 ) -> None:
@@ -183,6 +184,7 @@ def test_the_postinstall_removes_a_stale_my_claude_code_shim_it_used_to_own(
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_the_stale_shim_goes_even_when_the_install_is_opted_out_of(
     tmp_path: Path,
 ) -> None:
@@ -249,6 +251,7 @@ def test_the_published_licence_is_the_repository_licence() -> None:
 @pytest.mark.parametrize(
     "script", [LAUNCHER, POSTINSTALL, RUNTIME], ids=lambda p: p.name
 )
+@pytest.mark.local_serial
 def test_the_shipped_javascript_parses(script: Path) -> None:
     """A syntax error in a published bin is a broken install, not a red test."""
     assert NODE is not None
@@ -380,6 +383,7 @@ def _invocation(spawn: dict[str, object]) -> str:
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_an_npx_run_or_a_local_install_installs_nothing(tmp_path: Path) -> None:
     """`npx … --version` must stay cheap and must not touch the machine."""
     status, output, spawns = _run_postinstall(tmp_path, {})
@@ -389,6 +393,7 @@ def test_an_npx_run_or_a_local_install_installs_nothing(tmp_path: Path) -> None:
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_ci_never_triggers_a_machine_wide_install(tmp_path: Path) -> None:
     status, output, spawns = _run_postinstall(
         tmp_path, {"npm_config_global": "true", "CI": "true"}
@@ -399,6 +404,7 @@ def test_ci_never_triggers_a_machine_wide_install(tmp_path: Path) -> None:
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_the_opt_out_is_honoured_on_a_global_install(tmp_path: Path) -> None:
     status, output, spawns = _run_postinstall(
         tmp_path, {"npm_config_global": "true", "MCC_NPM_SKIP_INSTALL": "1"}
@@ -409,6 +415,7 @@ def test_the_opt_out_is_honoured_on_a_global_install(tmp_path: Path) -> None:
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_ignore_scripts_is_honoured_even_when_npm_still_runs_the_hook(
     tmp_path: Path,
 ) -> None:
@@ -422,6 +429,7 @@ def test_ignore_scripts_is_honoured_even_when_npm_still_runs_the_hook(
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_a_global_install_runs_the_official_installer_not_a_copy(
     tmp_path: Path,
 ) -> None:
@@ -525,6 +533,7 @@ _MATRIX = [
     _MATRIX,
     ids=[row[4] for row in _MATRIX],
 )
+@pytest.mark.local_serial
 def test_the_runtime_decides_which_shape_to_install(
     tmp_path: Path,
     platform: str,
@@ -591,6 +600,7 @@ def test_the_runtime_decides_which_shape_to_install(
     ],
     ids=lambda value: str(value),
 )
+@pytest.mark.local_serial
 def test_the_overrides_beat_the_detected_runtime(
     tmp_path: Path,
     argv: list[str],
@@ -619,6 +629,7 @@ def test_the_overrides_beat_the_detected_runtime(
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_an_unknown_value_for_the_environment_override_is_refused(
     tmp_path: Path,
 ) -> None:
@@ -630,6 +641,7 @@ def test_an_unknown_value_for_the_environment_override_is_refused(
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_install_help_lists_every_override_and_installs_nothing(
     tmp_path: Path,
 ) -> None:
@@ -652,6 +664,7 @@ def test_install_help_lists_every_override_and_installs_nothing(
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_the_windows_installer_runs_silently_and_per_user(tmp_path: Path) -> None:
     """/VERYSILENT because a postinstall hook has no console to answer a dialog."""
     status, output, calls = _install(
@@ -685,6 +698,7 @@ def test_the_windows_installer_runs_silently_and_per_user(tmp_path: Path) -> Non
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_a_verified_download_is_written_before_it_is_run(tmp_path: Path) -> None:
     status, output, _ = _install(
         tmp_path,
@@ -702,6 +716,7 @@ def test_a_verified_download_is_written_before_it_is_run(tmp_path: Path) -> None
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_a_bad_digest_refuses_to_run_the_file_and_deletes_it(tmp_path: Path) -> None:
     """The one failure mode with a security consequence, so it is asserted twice.
 
@@ -728,6 +743,7 @@ def test_a_bad_digest_refuses_to_run_the_file_and_deletes_it(tmp_path: Path) -> 
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_a_failed_desktop_half_still_leaves_the_server_installed(
     tmp_path: Path,
 ) -> None:
@@ -748,6 +764,7 @@ def test_a_failed_desktop_half_still_leaves_the_server_installed(
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_a_failed_server_half_reports_what_actually_landed(tmp_path: Path) -> None:
     """It must never claim "nothing was left half-installed" -- it cannot know.
 
@@ -778,6 +795,7 @@ def test_a_failed_server_half_reports_what_actually_landed(tmp_path: Path) -> No
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_linux_prints_the_sudo_line_instead_of_escalating(tmp_path: Path) -> None:
     """A package manager that silently calls sudo is one nobody should install."""
     status, output, calls = _install(
@@ -800,6 +818,7 @@ def test_linux_prints_the_sudo_line_instead_of_escalating(tmp_path: Path) -> Non
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_yes_sudo_is_the_only_thing_that_runs_dpkg(tmp_path: Path) -> None:
     status, output, calls = _install(
         tmp_path,
@@ -819,6 +838,7 @@ def test_yes_sudo_is_the_only_thing_that_runs_dpkg(tmp_path: Path) -> None:
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_a_linux_desktop_without_dpkg_takes_the_per_user_tarball(
     tmp_path: Path,
 ) -> None:
@@ -844,6 +864,7 @@ def test_a_linux_desktop_without_dpkg_takes_the_per_user_tarball(
 
 
 @requires_node
+@pytest.mark.local_serial
 def test_every_download_url_is_the_versionless_latest_one(tmp_path: Path) -> None:
     """`releases/latest/download/...` so a new release needs no npm publish."""
     _, _, calls = _install(

@@ -162,6 +162,7 @@ def test_recovered_is_part_of_the_stage_vocabulary() -> None:
     assert "failed" in UPDATE_PROGRESS_STAGES
 
 
+@pytest.mark.local_serial
 def test_this_processs_own_id_is_seen_as_running() -> None:
     """The liveness oracle itself, against the one pid known to be alive."""
 
@@ -225,6 +226,7 @@ def test_handing_off_does_not_end_the_episode() -> None:
     assert helper_is_alive({"stage": "verifying"})
 
 
+@pytest.mark.local_serial
 def test_the_report_names_the_transcript_a_window_can_tail(
     monkeypatch, tmp_path
 ) -> None:
@@ -347,6 +349,7 @@ def test_the_episode_marker_never_moves_an_episode_backwards():
     assert UPDATE_PROGRESS_STAGES[0] == EPISODE_MARKER_STAGE
 
 
+@pytest.mark.local_serial
 def test_a_live_lock_owner_is_believed_and_a_dead_one_is_not(monkeypatch, tmp_path):
     """Decision Q5: the pid decides, so a crashed updater is reclaimable.
 

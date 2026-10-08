@@ -169,6 +169,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_the_powershell_receipt_function_actually_writes_a_record(
     name: str, executable: str, tmp_path: Path
 ) -> None:
@@ -221,6 +222,7 @@ def test_the_powershell_receipt_function_actually_writes_a_record(
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_the_installer_transcript_is_written_where_the_record_says(
     name: str, executable: str, tmp_path: Path
 ) -> None:
@@ -244,6 +246,7 @@ def test_the_installer_transcript_is_written_where_the_record_says(
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_a_shared_transcript_is_appended_to_rather_than_replaced(
     name: str, executable: str, tmp_path: Path
 ) -> None:
@@ -280,6 +283,7 @@ def test_a_shared_transcript_is_appended_to_rather_than_replaced(
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_a_failed_install_still_writes_a_terminal_record(
     name: str, executable: str, tmp_path: Path
 ) -> None:
@@ -314,6 +318,7 @@ def test_a_failed_install_still_writes_a_terminal_record(
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_the_receipt_never_goes_backwards(
     name: str, executable: str, tmp_path: Path
 ) -> None:
@@ -359,6 +364,7 @@ NATIVE = (
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_running_a_command_does_not_return_what_it_printed(
     name: str, executable: str, tmp_path: Path
 ) -> None:
@@ -435,6 +441,7 @@ Write-Output ("QUIET=" + $silent.Count)
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_the_install_returns_one_version_and_not_a_transcript(
     name: str, executable: str, tmp_path: Path
 ) -> None:
@@ -528,6 +535,7 @@ Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_the_installer_emits_every_stage_of_a_restart_run(
     name: str, executable: str, tmp_path: Path
 ) -> None:
@@ -596,6 +604,7 @@ def test_the_installer_emits_every_stage_of_a_restart_run(
 @pytest.mark.parametrize(
     ("name", "executable"), _powershells(), ids=lambda value: value
 )
+@pytest.mark.local_serial
 def test_the_v1_stage_order_really_did_lose_the_stopping_record(
     name: str, executable: str, tmp_path: Path
 ) -> None:

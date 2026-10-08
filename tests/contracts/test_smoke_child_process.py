@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from my_claude_code.config.settings import Settings
 from smoke.lib import child_process
 from smoke.lib import server as smoke_server
@@ -100,6 +102,7 @@ def test_run_captured_text_uses_utf8_replacement(monkeypatch, tmp_path: Path) ->
     assert calls["check"] is False
 
 
+@pytest.mark.local_serial
 def test_run_captured_text_replaces_invalid_utf8_bytes(tmp_path: Path) -> None:
     result = run_captured_text(
         cmd_python_c(

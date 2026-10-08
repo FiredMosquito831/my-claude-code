@@ -3,6 +3,8 @@
 import subprocess
 import sys
 
+import pytest
+
 from my_claude_code.core.anthropic import (
     MessagesRequest as PublicMessagesRequest,
 )
@@ -110,6 +112,7 @@ def test_anthropic_response_models_are_protocol_owned() -> None:
     assert TokenCountResponse.__module__ == "my_claude_code.core.anthropic.models"
 
 
+@pytest.mark.local_serial
 def test_protocol_facades_are_import_order_independent() -> None:
     import_orders = (
         (

@@ -70,6 +70,8 @@ from tests.support.masking_harness import (
     start_masking_rig,
 )
 
+pytestmark = pytest.mark.local_serial
+
 MODEL = "rig-model"
 ZEN = "opencode"
 ZEN_KEY = "sk-rigzen-0000aaaa1111bbbb"

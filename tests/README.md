@@ -97,3 +97,37 @@ no explicit values picks up whatever credentials the developer has exported.
 Five tests were pinned against that (see
 `tests/support/websearch_credentials.py`), but the general rule stands -- state
 the credentials a case needs rather than inheriting them.
+
+## Running the whole suite on a development machine
+
+`pyproject.toml` runs the suite under xdist with `-n auto --maxprocesses=8`:
+one worker per logical core, at most eight. The development machine has 16
+logical cores (8 physical); GitHub's 4-vCPU runners keep their four. Sixteen
+workers plus the processes the suite itself launches saturated that machine,
+and the tests that wait on a child process or time themselves then failed only
+under that load.
+
+Those tests carry `@pytest.mark.local_serial`: the test launches a child
+process (the PowerShell installers, a second interpreter, `node`, a scratch
+server, or `tasklist`/`netstat` through the code under test), serves on a
+listening socket, or asserts a wall-clock bound. A full local run takes them
+out of the parallel pass and runs them afterwards on three workers:
+
+```
+uv run --offline pytest -q -p no:randomly --ignore=tests/api/test_admin_static_jsdom.py -m "not local_serial"
+uv run --offline pytest -q -p no:randomly --ignore=tests/api/test_admin_static_jsdom.py -m local_serial -n 3
+```
+
+Three, not one: the marked tests mostly wait (on PowerShell, on timeouts), so
+three at a time adds little load, and `--dist loadgroup` still keeps each
+PowerShell installer group on one worker. Measured on the development machine
+(2026-10-08): the old single pass took 570 s; the two passes take 369 + 235 s,
+or 369 + 612 s with `-n 0` in the second. CI runs everything in one pass and
+ignores the marker.
+
+`local_serial` opens no gate. It is not `spawns_process`, which lets a test
+launch an executable the guard denies; a test that launches one carries both
+markers. Mark a new test `local_serial` when it launches a process or listens.
+On Windows `socket.socketpair()` is emulated with a short-lived listening
+socket and every asyncio event loop makes one; that is not a server and needs
+no marker.

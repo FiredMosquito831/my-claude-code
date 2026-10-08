@@ -38,6 +38,7 @@ OUTER = 15.0
 
 @pytest.mark.parametrize("depth", [CHECK_DEPTH_REQUEST, CHECK_DEPTH_TLS])
 @pytest.mark.parametrize("behaviour", [SILENT, GREET_THEN_STALL])
+@pytest.mark.local_serial
 async def test_a_stalling_socks5_candidate_is_a_verdict_not_a_worker(depth, behaviour):
     socks = FakeSocks5Server(behaviour)
     await socks.start()

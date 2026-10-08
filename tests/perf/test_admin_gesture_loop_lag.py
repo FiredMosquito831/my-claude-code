@@ -35,6 +35,8 @@ import pytest
 from my_claude_code.config.admin import persistence, sources
 from my_claude_code.config.admin.manifest import FIELDS
 
+pytestmark = pytest.mark.local_serial
+
 #: The bar the spec sets for a Pause/Resume click: the loop back inside
 #: 300 ms. Asserted at 400 ms to leave a loaded runner room without leaving
 #: room for a two-second hold.

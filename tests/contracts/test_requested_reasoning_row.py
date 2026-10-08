@@ -65,6 +65,7 @@ def _helper_source() -> str:
         ({"reasoning": "control=on,effort=max", "requested_reasoning": None}, ""),
     ],
 )
+@pytest.mark.local_serial
 def test_the_requested_row_appears_only_when_it_differs(row, expected) -> None:
     node = shutil.which("node")
     if node is None:

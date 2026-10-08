@@ -111,6 +111,7 @@ def test_the_upstream_fix_shape_would_not_be_recognised() -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="checks the non-Windows path")
+@pytest.mark.local_serial
 def test_off_windows_the_module_is_inert() -> None:
     assert windows_accept.install_keep_accepting().state == "not-windows"
     probe = (
@@ -314,6 +315,7 @@ async def test_a_failure_to_re_arm_settles_the_accept_with_that_error() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.local_serial
 async def test_a_burst_of_resets_is_one_warning_and_one_count() -> None:
     loop = asyncio.get_running_loop()
     report = windows_accept._ResetReport()

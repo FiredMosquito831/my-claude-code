@@ -370,6 +370,7 @@ def _dist_info_member(wheel: zipfile.ZipFile, name: str) -> str:
     return matches[0]
 
 
+@pytest.mark.local_serial
 def test_the_wheel_ships_both_license_documents(built_wheel) -> None:
     license_entry = _dist_info_member(built_wheel, "LICENSE")
     shipped = built_wheel.read(license_entry).decode("utf-8")
@@ -390,6 +391,7 @@ def test_the_wheel_ships_both_license_documents(built_wheel) -> None:
         )
 
 
+@pytest.mark.local_serial
 def test_the_wheel_metadata_declares_the_license(built_wheel) -> None:
     metadata = built_wheel.read(_dist_info_member(built_wheel, "METADATA")).decode(
         "utf-8"

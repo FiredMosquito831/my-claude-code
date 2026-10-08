@@ -81,6 +81,7 @@ def built_wheel(tmp_path_factory) -> zipfile.ZipFile:
 
 
 @pytest.mark.spawns_process
+@pytest.mark.local_serial
 def test_the_wheel_contains_a_docs_bundle(built_wheel) -> None:
     """A silent naming change would make the assertion below vacuous."""
 
@@ -94,6 +95,7 @@ def test_the_wheel_contains_a_docs_bundle(built_wheel) -> None:
 
 
 @pytest.mark.spawns_process
+@pytest.mark.local_serial
 def test_every_curated_document_is_inside_the_built_wheel(built_wheel) -> None:
     names = set(built_wheel.namelist())
 
@@ -110,6 +112,7 @@ def test_every_curated_document_is_inside_the_built_wheel(built_wheel) -> None:
 
 
 @pytest.mark.spawns_process
+@pytest.mark.local_serial
 def test_the_bundled_documents_are_not_empty(built_wheel) -> None:
     """A zero-byte entry satisfies a name check and renders to nothing."""
 
@@ -119,6 +122,7 @@ def test_the_bundled_documents_are_not_empty(built_wheel) -> None:
 
 
 @pytest.mark.spawns_process
+@pytest.mark.local_serial
 def test_the_bundled_names_are_unique(built_wheel) -> None:
     """The bundle is flat: two documents with the same basename would
     silently overwrite each other and one page would show the other's text.
@@ -129,6 +133,7 @@ def test_the_bundled_names_are_unique(built_wheel) -> None:
 
 
 @pytest.mark.spawns_process
+@pytest.mark.local_serial
 def test_developer_only_documents_are_not_shipped(built_wheel) -> None:
     """The list is curated to what someone *running* MCC needs. Agent specs,
     the release checklist and the ADRs are written for whoever builds it.

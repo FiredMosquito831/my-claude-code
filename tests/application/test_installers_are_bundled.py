@@ -71,6 +71,7 @@ def test_an_installer_that_is_not_there_is_reported_not_guessed_at() -> None:
 
 
 @pytest.mark.spawns_process
+@pytest.mark.local_serial
 def test_both_installers_are_inside_a_really_built_wheel(tmp_path) -> None:
     """The end-to-end check. Opt-in: it nests one uv inside another."""
 

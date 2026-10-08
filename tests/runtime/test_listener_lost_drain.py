@@ -119,6 +119,7 @@ def _new_connection(port: int) -> str:
         return type(exc).__name__
 
 
+@pytest.mark.local_serial
 def test_a_lost_listener_finishes_the_stream_in_flight_then_exits_75(
     startup: None, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -82,6 +82,7 @@ def test_ci_sh_runs_ci_checks_in_order() -> None:
     assert "uv self update" not in text
 
 
+@pytest.mark.local_serial
 def test_ci_sh_dry_run_does_not_require_uv() -> None:
     result = subprocess.run(
         [
@@ -110,6 +111,7 @@ def test_ci_sh_dry_run_does_not_require_uv() -> None:
         ("ruff-check", "+ uv run ruff check --fix"),
     ],
 )
+@pytest.mark.local_serial
 def test_ci_sh_dry_run_prints_local_ruff_repair_commands(
     check_id: str, command: str
 ) -> None:
@@ -133,6 +135,7 @@ def test_ci_sh_dry_run_prints_local_ruff_repair_commands(
     assert "uv is required" not in result.stderr
 
 
+@pytest.mark.local_serial
 def test_ci_sh_suppression_only_does_not_require_uv() -> None:
     result = subprocess.run(
         [
@@ -153,6 +156,7 @@ def test_ci_sh_suppression_only_does_not_require_uv() -> None:
     assert "uv is required" not in result.stderr
 
 
+@pytest.mark.local_serial
 def test_ci_sh_is_tracked_executable() -> None:
     result = subprocess.run(
         ["git", "ls-files", "--stage", "scripts/ci.sh"],
@@ -209,6 +213,7 @@ def test_ci_ps1_runs_ci_checks_in_order() -> None:
     assert "uv self update" not in text
 
 
+@pytest.mark.local_serial
 def test_ci_ps1_dry_run_does_not_require_uv() -> None:
     result = subprocess.run(
         [
@@ -239,6 +244,7 @@ def test_ci_ps1_dry_run_does_not_require_uv() -> None:
         ("ruff-check", "+ uv run ruff check --fix"),
     ],
 )
+@pytest.mark.local_serial
 def test_ci_ps1_dry_run_prints_local_ruff_repair_commands(
     check_id: str, command: str
 ) -> None:
@@ -264,6 +270,7 @@ def test_ci_ps1_dry_run_prints_local_ruff_repair_commands(
     assert "uv is required" not in result.stderr
 
 
+@pytest.mark.local_serial
 def test_ci_ps1_suppression_only_does_not_require_uv() -> None:
     result = subprocess.run(
         [
