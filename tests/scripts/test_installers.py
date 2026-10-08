@@ -1396,6 +1396,17 @@ _RENAME_DEPENDENCIES = (
     "Update-UvReceiptEntrypoint",
     "Invoke-StagedInstall",
     "Invoke-RenameThenReinstall",
+    # 7.78.9: the aside copy goes beside uv's tools root (never inside it),
+    # the rollback moves the failed attempt aside instead of deleting it down
+    # to a husk, and uv's own failure lines are kept for the report.
+    "Get-UpdateAsideRoot",
+    "Remove-EmptyDirectory",
+    "Move-EnvironmentAside",
+    "Move-LegacyAsideEnvironment",
+    "Restore-AsideToolEnvironment",
+    "Get-ToolEnvironmentProblem",
+    "Test-EnvironmentInUse",
+    "Add-UvFailureDetail",
 )
 
 
@@ -1412,8 +1423,15 @@ def _rename_functions_file(installer_text: str, path: Path) -> Path:
             "$InstallFootprintMb",
             "$InstallRecommendedMb",
             "$PythonVersion",
+            "$StagingEnvDirName",
+            "$PackageEnvDirName",
+            "$script:RunStamp",
+            "$script:UvFailureDetail",
         )
     )
+    # The transcript is not what these cases are about; it needs the receipt
+    # family, which the full-run harnesses exercise.
+    preamble += "function Write-InstallLog { param([string] $Text) }\n"
     path.write_text(
         preamble
         + "".join(
@@ -2201,6 +2219,17 @@ def test_staged_install_keeps_a_locked_shim_and_repoints_the_receipt(
         + "\n"
         + _extract_function_definition(source, "Invoke-StagedInstall")
         + "\n"
+        # 7.78.9: the staged attempt is captured so a failure can name the
+        # file uv could not touch.
+        + _extract_function_definition(source, "New-CapturePath")
+        + "\n"
+        + _extract_function_definition(source, "Read-CapturedOutput")
+        + "\n"
+        + _extract_function_definition(source, "Convert-OutputLine")
+        + "\n"
+        + _extract_function_definition(source, "Add-UvFailureDetail")
+        + "\n"
+        + "$script:UvFailureDetail = @()\n"
         "$DryRun = $false\n"
         "$kept = @(Invoke-StagedInstall -UvPath $args[0] -Arguments @('install') "
         "-BinDir $args[1] -ToolDir $args[2] -Stamp 'probe')\n"

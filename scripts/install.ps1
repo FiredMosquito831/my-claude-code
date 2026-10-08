@@ -126,6 +126,15 @@ $script:RenamedWhileRunning = $false
 # canonical tool-dir path, and that path now holds the NEW install -- so these
 # are reported as "refresh on the next install", never as failures.
 $script:ShimsKeptInPlace = @()
+# 7.78.9. One stamp for everything this run creates beside uv's tools root
+# (staging, the aside copies, the wreckage of a failed repair), so the sweep
+# at the end of the run can keep what this run made and remove what earlier
+# runs left. Set once, where the install starts.
+$script:RunStamp = ""
+# The tools root that sweep works on; empty until the run has asked uv.
+$script:SweepToolsRoot = ""
+# The lines in which uv said why it failed (Add-UvFailureDetail).
+$script:UvFailureDetail = @()
 # The update receipt this install shares with the deferred helper and with the
 # desktop shell (src/my_claude_code/config/update_progress.py). EVERY ONE OF
 # THESE FIVE MUST BE ASSIGNED HERE.
@@ -1069,6 +1078,7 @@ function Install-FreeClaudeCode {
             # any of them. Three failures and eight minutes to say "the install
             # failed", when the first line uv printed said "os error 112".
             $category = Get-UvFailureCategory (Read-CapturedOutput $capturePath)
+            Add-UvFailureDetail (Read-CapturedOutput $capturePath)
             if ($category -eq "disk-full") {
                 Write-Host (Get-DiskFullMessage -UvPath $uvPath)
                 exit 1
@@ -1166,7 +1176,8 @@ function Invoke-RenameThenReinstall {
         [Parameter(Mandatory = $true)] [string] $Version
     )
 
-    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $stamp = if ($script:RunStamp) { $script:RunStamp } else { Get-Date -Format "yyyyMMdd-HHmmss" }
+    $toolsRoot = Split-Path -Parent $ToolDir
 
     # uv writes the launcher shims (PE+zipapps) into the uv tool bin dir, and it
     # writes them in ASCII order of the file name *including* the ".exe" suffix
@@ -1206,26 +1217,31 @@ function Invoke-RenameThenReinstall {
 
     $renamed = ""
     if (Test-Path -LiteralPath $ToolDir -PathType Container) {
-        # Best-effort sweep of stale .old-* dirs whose rename-lock is gone. A
-        # dir still held open by a live window fails to delete; ignore it.
-        Get-ChildItem -Path (Split-Path -Parent $ToolDir) -Directory -Filter "my-claude-code.old-*" -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-            }
+        # Stale .old-* dirs an older installer left inside uv's tools root are
+        # moved out of it (7.78.9: they used to be deleted in place, best
+        # effort, which gutted any that a live window still ran from and left
+        # it where uv warns about it). The sweep at the end of the run deletes
+        # what nothing runs from.
+        Move-LegacyAsideEnvironment -ToolsRoot $toolsRoot
 
-        $renamed = "$ToolDir.old-$stamp"
-        try {
-            Rename-Item -LiteralPath $ToolDir -NewName (Split-Path -Leaf $renamed) -ErrorAction Stop
-        }
-        catch {
-            # The rename was refused (a process holds the dir without
+        # 7.78.9: aside to the staging root, a SIBLING of uv's tools root,
+        # instead of `tools\my-claude-code.old-<stamp>` inside it -- where uv
+        # read it as a tool and warned "Ignoring malformed tool" on every
+        # command, and where the comments above this script's staging roots
+        # already said no aside directory belongs.
+        $aside = Move-EnvironmentAside -SourceDir $ToolDir -ToolsRoot $toolsRoot -Stamp $stamp -Label "aside"
+        if (-not $aside.Moved) {
+            # The move was refused (a process holds the dir without
             # share-delete). This is the one lock we cannot work around
             # in-process, so fall back to the deferred install rather than risk a
             # broken env. Put the shims back first: nothing was installed, so the
             # old ones are still the right ones.
+            Write-InstallLog ("The tool environment could not be moved aside: " + $aside.Error)
             Restore-LauncherShim -Backups $shimBackups
             return $false
         }
+        $renamed = $aside.Destination
+        Write-InstallLog ("Moved the running tool environment aside to " + $renamed + ".")
     }
 
     # With the tool dir out of the way, uv installs into a clean canonical path.
@@ -1258,6 +1274,7 @@ function Invoke-RenameThenReinstall {
     }
     catch {
         $installError = $_.Exception.Message
+        Add-UvFailureDetail (Read-CapturedOutput $capturePath)
         if ((Get-UvFailureCategory (Read-CapturedOutput $capturePath)) -eq "disk-full") {
             # The staging directory below is one more copy of the same files on
             # the same volume. Do not attempt it, and do not pretend the reason
@@ -1275,10 +1292,7 @@ function Invoke-RenameThenReinstall {
     if ((-not $installed) -and $diskFull) {
         # Put the machine back the way it was before this function moved things
         # aside, then say the one true thing about it.
-        Remove-Item -LiteralPath $ToolDir -Recurse -Force -ErrorAction SilentlyContinue
-        if ((-not [string]::IsNullOrWhiteSpace($renamed)) -and (Test-Path -LiteralPath $renamed -PathType Container)) {
-            Rename-Item -LiteralPath $renamed -NewName (Split-Path -Leaf $ToolDir) -ErrorAction SilentlyContinue
-        }
+        $null = Restore-AsideToolEnvironment -ToolDir $ToolDir -Renamed $renamed -Stamp $stamp
         Restore-LauncherShim -Backups $shimBackups
         Write-Host (Get-DiskFullMessage -UvPath $UvPath)
         exit 1
@@ -1304,10 +1318,7 @@ function Invoke-RenameThenReinstall {
         # Everything was tried. Roll the old install back (dir and shims) so the
         # user is never left without a working tool, and report it rather than
         # pretending the install succeeded.
-        Remove-Item -LiteralPath $ToolDir -Recurse -Force -ErrorAction SilentlyContinue
-        if ((-not [string]::IsNullOrWhiteSpace($renamed)) -and (Test-Path -LiteralPath $renamed -PathType Container)) {
-            Rename-Item -LiteralPath $renamed -NewName (Split-Path -Leaf $ToolDir) -ErrorAction SilentlyContinue
-        }
+        $null = Restore-AsideToolEnvironment -ToolDir $ToolDir -Renamed $renamed -Stamp $stamp
         Restore-LauncherShim -Backups $shimBackups
         throw "My Claude Code install failed: $installError"
     }
@@ -1315,15 +1326,78 @@ function Invoke-RenameThenReinstall {
     # New install succeeded. The old dir and the renamed-aside shims may still
     # be held open by a live window; remove them best-effort. Whatever is still
     # locked stays behind as orphaned garbage that the sweeps above reap on a
-    # later install.
+    # later install. 7.78.9: an old dir a live window still runs from is kept
+    # whole (Test-EnvironmentInUse) instead of deleted down to its mapped
+    # files under that window; the end-of-run sweep of a later install takes
+    # it once nothing runs from it.
     if (-not [string]::IsNullOrWhiteSpace($renamed)) {
-        Remove-Item -LiteralPath $renamed -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-EnvironmentInUse -Directory $renamed) {
+            Write-InstallLog ("Kept " + $renamed + ": a running window still uses it.")
+        }
+        else {
+            Remove-Item -LiteralPath $renamed -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-EmptyDirectory -Path (Split-Path -Parent $renamed)
+        }
     }
     if ($canStage) {
         Remove-StaleShimBackup -BinDir $binDir
     }
     $script:RenamedWhileRunning = $true
     return $true
+}
+
+function Restore-AsideToolEnvironment {
+    <#
+        .SYNOPSIS
+        Undo Invoke-RenameThenReinstall's move after an install that did not
+        happen: what the failed install left at the canonical path goes aside,
+        and the environment that was moved aside comes back. Returns $true when
+        a runnable environment is at the canonical path again.
+
+        .DESCRIPTION
+        7.78.9. This used to be `Remove-Item -Recurse -Force` on the canonical
+        path followed by a rename back. When a process held a file in what
+        uv had left there, the delete removed everything else and stopped,
+        the rename back then failed because the directory still existed, and
+        both failures were silenced: the canonical path stayed a husk with
+        only `Scripts\pythonw.exe` in it while the good environment sat under
+        a `.old-` name nothing would ever look at again (2026-10-08 16:03).
+        A MOVE succeeds where that delete fails -- a running image may be
+        renamed, just not deleted -- so the failed attempt is moved beside the
+        aside copy, and the delete is only the fallback.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $ToolDir,
+        [string] $Renamed = "",
+        [Parameter(Mandatory = $true)] [string] $Stamp
+    )
+
+    if (Test-Path -LiteralPath $ToolDir -PathType Container) {
+        $failed = Move-EnvironmentAside -SourceDir $ToolDir -ToolsRoot (Split-Path -Parent $ToolDir) -Stamp $Stamp -Label "inplace-failed"
+        if ($failed.Moved) {
+            Write-InstallLog ("Moved what the failed install left to " + $failed.Destination + ".")
+        }
+        else {
+            Write-InstallLog ("What the failed install left could not be moved aside (" + $failed.Error + "); deleting it instead.")
+            Remove-Item -LiteralPath $ToolDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if ((-not [string]::IsNullOrWhiteSpace($Renamed)) -and (Test-Path -LiteralPath $Renamed -PathType Container)) {
+        if (Test-Path -LiteralPath $ToolDir) {
+            Write-InstallLog ("The previous environment could not be put back: " + $ToolDir + " is still there. It is at " + $Renamed + ".")
+            return $false
+        }
+        try {
+            [System.IO.Directory]::Move($Renamed, $ToolDir)
+            Remove-EmptyDirectory -Path (Split-Path -Parent $Renamed)
+            Write-InstallLog "The environment that was moved aside is back at the canonical path."
+        }
+        catch {
+            Write-InstallLog ("The previous environment could not be put back: " + $_.Exception.Message)
+            return $false
+        }
+    }
+    return (-not (Get-ToolEnvironmentProblem -ToolDir $ToolDir)) -and (Test-Path -LiteralPath $ToolDir -PathType Container)
 }
 
 function Invoke-StagedInstall {
@@ -1348,9 +1422,17 @@ function Invoke-StagedInstall {
     New-Item -ItemType Directory -Path $stageBin | Out-Null
     $hadBinDirVariable = Test-Path Env:\UV_TOOL_BIN_DIR
     $previousBinDir = if ($hadBinDirVariable) { $env:UV_TOOL_BIN_DIR } else { "" }
+    # 7.78.9: captured, so a failure can name the file uv could not touch.
+    $stageCapture = New-CapturePath
     try {
         $env:UV_TOOL_BIN_DIR = $stageBin
-        Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments
+        try {
+            Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments -CaptureTo $stageCapture
+        }
+        catch {
+            Add-UvFailureDetail (Read-CapturedOutput $stageCapture)
+            throw
+        }
     }
     finally {
         if ($hadBinDirVariable) {
@@ -1359,6 +1441,7 @@ function Invoke-StagedInstall {
         else {
             Remove-Item Env:\UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue
         }
+        Remove-Item -LiteralPath $stageCapture -Force -ErrorAction SilentlyContinue
     }
 
     # Place each staged shim. A destination that is still locked keeps the file
@@ -1842,6 +1925,24 @@ function Get-MissingLauncherShim {
         case falls through to the in-place install, which is now a repair --
         and it runs against a fully warm cache, because the staging pass just
         filled it.
+
+        7.78.9: ONLY THIS PACKAGE'S OWN ENTRY POINTS COUNT. Until now the
+        caller passed the environment's `Scripts\` directory, which also holds
+        the console scripts of every DEPENDENCY (fastapi, uvicorn, typer, tqdm,
+        ddgs, ...). uv never links those into its bin directory, so every one
+        of them read as "missing" on every update, and every update ran the
+        destructive in-place `uv tool install --force` straight after a
+        successful swap. With the desktop app or an `mcc-claude` window
+        holding a file, that `--force` failed half way and left the tool
+        directory a husk holding only `Scripts\pythonw.exe` (2026-10-08 16:03,
+        "This release adds agent-detector, cffi-gen-src, ddgs, ...").
+
+        The caller now passes the staging `.bin` directory, which holds
+        exactly what uv linked for this package and nothing else. Given an
+        environment's `Scripts\` directory instead (it holds `python.exe`, a
+        bin directory never does), only the names uv's receipt records as this
+        package's entry points are compared; with no receipt to read, only the
+        product's own command family is.
     #>
     param(
         [Parameter(Mandatory = $true)] [string] $BinDir,
@@ -1852,13 +1953,64 @@ function Get-MissingLauncherShim {
     if (-not (Test-Path -LiteralPath $StagingBinOrEnvScripts -PathType Container)) {
         return $missing
     }
+    $entryPoints = $null
+    if (Test-Path -LiteralPath (Join-Path $StagingBinOrEnvScripts "python.exe") -PathType Leaf) {
+        $entryPoints = @(Get-PackageEntryPointName -EnvironmentDir (Split-Path -Parent $StagingBinOrEnvScripts))
+    }
     foreach ($file in @(Get-ChildItem -Path $StagingBinOrEnvScripts -Filter "*.exe" -ErrorAction SilentlyContinue)) {
         if ([IO.Path]::GetFileNameWithoutExtension($file.Name) -in @("python", "pythonw", "pip")) { continue }
+        if ($null -ne $entryPoints) {
+            if ($entryPoints.Count -gt 0) {
+                if ($entryPoints -notcontains $file.Name.ToLowerInvariant()) { continue }
+            }
+            elseif (-not (Test-ProductCommandName -FileName $file.Name)) {
+                continue
+            }
+        }
         if (-not (Test-Path -LiteralPath (Join-Path $BinDir $file.Name) -PathType Leaf)) {
             $missing += [IO.Path]::GetFileNameWithoutExtension($file.Name)
         }
     }
     return $missing
+}
+
+function Test-ProductCommandName {
+    <#
+        .SYNOPSIS
+        Whether an executable's file name belongs to My Claude Code's own
+        command family -- the same family pattern Get-ManagedShimName uses.
+    #>
+    param([Parameter(Mandatory = $true)] [string] $FileName)
+
+    $lower = $FileName.ToLowerInvariant()
+    if ($lower -match "^(mcc|fcc)-.+\.exe$") { return $true }
+    return ($lower -in @("my-claude-code.exe", "free-claude-code.exe"))
+}
+
+function Get-PackageEntryPointName {
+    <#
+        .SYNOPSIS
+        The `.exe` names uv's receipt records as THIS package's entry points,
+        lower-cased; nothing when the environment has no readable receipt.
+
+        .DESCRIPTION
+        uv writes one `{ name = ..., install-path = ... }` per entry point of
+        the installed package, and only of that package -- a dependency's
+        console scripts are in `Scripts\` but never in the receipt. The same
+        regex Get-ManagedShimName reads the receipt with.
+    #>
+    param([Parameter(Mandatory = $true)] [string] $EnvironmentDir)
+
+    $receipt = Join-Path $EnvironmentDir "uv-receipt.toml"
+    if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { return }
+    $text = ""
+    try { $text = [IO.File]::ReadAllText($receipt) } catch { return }
+    foreach ($match in [regex]::Matches($text, 'install-path\s*=\s*"([^"]+)"')) {
+        $leaf = Split-Path -Leaf ($match.Groups[1].Value.Replace("\\", "\"))
+        if ($leaf -like "*.exe") {
+            $leaf.ToLowerInvariant()
+        }
+    }
 }
 
 function Restore-PreviousEnvironment {
@@ -1905,11 +2057,429 @@ function Restore-PreviousEnvironment {
     }
 }
 
+function Undo-InPlaceFinish {
+    <#
+        .SYNOPSIS
+        The rollback for an in-place finish that failed AFTER a successful
+        swap: put the previous environment back, start the server this run
+        stopped from it, and say what happened -- the real failure, uv's own
+        words and who holds the files. The caller exits non-zero.
+
+        .DESCRIPTION
+        7.78.9. The swap had already moved the version that was running to
+        `.mcc-previous\<stamp>`, and that copy is the only one this run can
+        PROVE works: the in-place `uv tool install --force` may have emptied
+        the swapped-in one before it failed. So that is what goes back, by the
+        same Restore-PreviousEnvironment the health-gate rollback uses; what
+        is at the canonical path now -- a husk or not -- is kept under
+        `.mcc-staging\<stamp>-failed` for the next run's sweep.
+
+        The server is started again only if this run stopped it (`-MayStart`:
+        not with -NoStart, not when -NoRestart found one running or the port
+        belongs to something else) and only from an environment that has an
+        interpreter.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $Reason,
+        [Parameter(Mandatory = $true)] [string] $ToolDir,
+        [string] $BinDir = "",
+        [string] $ServerLauncher = "",
+        [bool] $MayStart = $false,
+        [string] $HealthUrl = "",
+        [int] $Port = 0
+    )
+
+    Write-Host ""
+    $headline = "The install could not be finished in place: $Reason"
+    Write-Host $headline
+    Write-InstallLog $headline
+    Write-RepairFailureDetail -Roots @($BinDir, $ToolDir) -ToolRoot $ToolDir
+    Write-InstallProgress -Stage 'rolling-back' -Message 'The install could not be finished, so the previous version is being put back.'
+
+    $restored = $false
+    if ($script:StagedPreviousEnv -and (Test-Path -LiteralPath $script:StagedPreviousEnv -PathType Container)) {
+        $restored = Restore-PreviousEnvironment `
+            -ToolDir $ToolDir `
+            -AsideEnv $script:StagedPreviousEnv `
+            -StagingRoot $script:StagedStagingRoot `
+            -Stamp $script:StagedStamp `
+            -PreviousDir $script:StagedPreviousDir
+    }
+    else {
+        Write-InstallLog ("There is no previous environment to put back (" + $script:StagedPreviousEnv + ").")
+    }
+
+    $runnable = (Test-Path -LiteralPath (Join-Path $ToolDir "Scripts\python.exe") -PathType Leaf)
+    $restartedPrevious = $false
+    $startAttempted = $false
+    if ($restored -and $runnable -and $MayStart -and $ServerLauncher -and $HealthUrl) {
+        $startAttempted = $true
+        $updatesDir = Join-Path (Get-MccConfigDir) "updates"
+        $startOut = Join-Path $updatesDir ("server-start-rollback-" + $script:StagedStamp + ".log")
+        $startErr = Join-Path $updatesDir ("server-start-rollback-" + $script:StagedStamp + ".err.log")
+        try {
+            $child = Start-MccServerDetached -Launcher $ServerLauncher -StdOutPath $startOut -StdErrPath $startErr
+            Write-Host "Started the previous version's mcc-server (pid $($child.Id))."
+            Write-InstallLog ("Started the previous version's mcc-server, pid " + $child.Id + ".")
+            $restartedPrevious = Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)
+        }
+        catch {
+            Write-InstallLog ("The previous version could not be started: " + $_.Exception.Message)
+        }
+    }
+
+    if ($restored -and $restartedPrevious) {
+        $message = "The previous version was put back and is answering on port $Port. Nothing was lost; the update did not happen."
+    }
+    elseif ($restored -and $startAttempted) {
+        $message = "The previous version was put back, but it did not answer on port $Port either. Start it with: mcc-server"
+    }
+    elseif ($restored) {
+        $message = "The previous version was put back."
+        if ($MayStart -and (-not $runnable)) {
+            $message = $message + " It has no Scripts\python.exe, so no server was started from it."
+        }
+    }
+    else {
+        $message = "The previous version could not be put back. No server was started from $ToolDir. Close the programs named above and run the install command again: it repairs a broken install by itself."
+    }
+    Write-Host $message
+    Write-InstallLog $message
+    $script:InstallProgressRestarted = $restartedPrevious
+    Write-InstallProgress -Stage 'recovered' -Message ($headline + " " + $message)
+}
+
+function Test-EnvironmentInUse {
+    <#
+        .SYNOPSIS
+        Whether a process is running out of a tool environment under this
+        directory. $true means "leave it alone".
+
+        .DESCRIPTION
+        7.78.9. A uv environment's `Scripts\python.exe` / `pythonw.exe` is a
+        launcher that stays alive, as the parent, for as long as the
+        interpreter it started runs -- so its image is mapped, and Windows
+        refuses to open a mapped image for writing. Measured on 2026-10-08 on
+        PowerShell 7 and 5.1: an exclusive READ open of a running launcher
+        succeeds (useless as a probe), an exclusive READ-WRITE open fails with
+        "being used by another process", and both succeed once it exits.
+
+        The probe exists because `Remove-Item -Recurse -Force` on a live
+        environment does not fail cleanly: it deletes every file it can and
+        stops at the mapped ones, so the process running out of it -- a
+        desktop tray started weeks ago, an `mcc-claude` window -- loses every
+        module it has not imported yet. A process's own path is no help here:
+        Windows reports the path an image was STARTED from, and every one of
+        these environments has been moved since. Any error opening the file is
+        read as "in use": keeping a directory costs disk, deleting a live one
+        costs the user a crash.
+    #>
+    param([Parameter(Mandatory = $true)] [string] $Directory)
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { return $false }
+    $scriptDirs = @(Join-Path $Directory "Scripts")
+    foreach ($child in @(Get-ChildItem -LiteralPath $Directory -Directory -Force -ErrorAction SilentlyContinue)) {
+        $scriptDirs += (Join-Path $child.FullName "Scripts")
+    }
+    foreach ($scriptDir in $scriptDirs) {
+        foreach ($image in @("python.exe", "pythonw.exe")) {
+            $candidate = Join-Path $scriptDir $image
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+            try {
+                $stream = [System.IO.File]::Open($candidate, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+                $stream.Dispose()
+            }
+            catch {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Get-ToolEnvironmentProblem {
+    <#
+        .SYNOPSIS
+        Why the installed tool environment cannot be trusted, or "" when it
+        can (or when there is none at all -- "not installed" is not broken).
+
+        .DESCRIPTION
+        7.78.9. A HUSK is what `uv tool install --force` leaves on Windows when
+        it fails half way: it deletes every file it can before it writes a new
+        one, stops at a file a running process holds, and exits. On
+        2026-10-08 at 16:03 that left `tools\my-claude-code` holding nothing
+        but `Scripts\pythonw.exe`: no interpreter for the launchers to run, no
+        receipt for uv to read (`uv tool list`: "Ignoring malformed tool
+        `my-claude-code`"). Every launcher in uv's bin directory then fails
+        with "uv trampoline failed to canonicalize script path", because each
+        of them runs exactly `<tool dir>\Scripts\python.exe`.
+
+        The three checks are the three ways the machine itself says so: the
+        interpreter is missing, the receipt is missing, or uv -- asked with
+        `-UvPath` -- calls the tool malformed (a receipt it cannot parse).
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $ToolDir,
+        [string] $UvPath = ""
+    )
+
+    if (-not (Test-Path -LiteralPath $ToolDir -PathType Container)) { return "" }
+    $problems = @()
+    if (-not (Test-Path -LiteralPath (Join-Path $ToolDir "Scripts\python.exe") -PathType Leaf)) {
+        $problems += "it has no Scripts\python.exe"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $ToolDir "uv-receipt.toml") -PathType Leaf)) {
+        $problems += "it has no uv-receipt.toml"
+    }
+    if (($problems.Count -eq 0) -and $UvPath) {
+        $name = Split-Path -Leaf $ToolDir
+        $previousPreference = $ErrorActionPreference
+        # uv prints the verdict on stderr, and under "Stop" Windows PowerShell
+        # 5.1 would turn the first stderr line into a terminating error.
+        $ErrorActionPreference = "Continue"
+        try {
+            $listed = (& $UvPath tool list 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String)
+            if ($listed -match ("malformed tool ``" + [regex]::Escape($name) + "``")) {
+                $problems += "uv tool list reports it as malformed"
+            }
+        }
+        catch {
+        }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
+    }
+    return ($problems -join "; ")
+}
+
+function Remove-EmptyDirectory {
+    <#
+        .SYNOPSIS
+        Remove a directory only if it is empty. Never prompts, never throws.
+
+        .DESCRIPTION
+        `Remove-Item` without `-Recurse` on a directory that turns out to have
+        children PROMPTS for confirmation in an interactive host, which would
+        stall the one-liner at a question nobody expects. A non-recursive
+        Directory.Delete simply refuses.
+    #>
+    param([string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    try { [System.IO.Directory]::Delete($Path, $false) } catch { }
+}
+
+function Move-EnvironmentAside {
+    <#
+        .SYNOPSIS
+        Move a tool environment OUT of uv's tools root, into
+        `<tools root>\..\.mcc-staging\<stamp>-<label>\my-claude-code`.
+        Returns `Moved`, `Destination` and `Error`.
+
+        .DESCRIPTION
+        7.78.9. The aside copies this script makes used to be renamed in
+        place, to `tools\my-claude-code.old-<stamp>` -- INSIDE the tools root,
+        where uv reads every directory as a tool and warns about each one
+        ("Ignoring malformed tool `my-claude-code-old-...`") on every `uv
+        tool` command. The staging root is a sibling of the tools root, so uv
+        never sees it, and it is on the same volume, so this is still a
+        rename: a running process keeps executing out of the moved directory
+        (measured: a directory holding a running interpreter moves).
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $SourceDir,
+        [Parameter(Mandatory = $true)] [string] $ToolsRoot,
+        [Parameter(Mandatory = $true)] [string] $Stamp,
+        [Parameter(Mandatory = $true)] [string] $Label
+    )
+
+    $result = [pscustomobject]@{ Moved = $false; Destination = ""; Error = "" }
+    $stagingRoot = Get-UpdateAsideRoot -ToolsRoot $ToolsRoot -Name $StagingEnvDirName
+    if ([string]::IsNullOrWhiteSpace($stagingRoot)) {
+        $result.Error = "uv's tools root has no parent directory to move it to"
+        return $result
+    }
+    $container = Join-Path $stagingRoot ($Stamp + "-" + $Label)
+    $suffix = 1
+    while (Test-Path -LiteralPath (Join-Path $container $PackageEnvDirName)) {
+        $suffix = $suffix + 1
+        $container = Join-Path $stagingRoot ($Stamp + "-" + $Label + "-" + $suffix)
+    }
+    $destination = Join-Path $container $PackageEnvDirName
+    try {
+        New-Item -ItemType Directory -Path $container -Force | Out-Null
+        [System.IO.Directory]::Move($SourceDir, $destination)
+        $result.Moved = $true
+        $result.Destination = $destination
+    }
+    catch {
+        $result.Error = $_.Exception.Message
+        Remove-EmptyDirectory -Path $container
+    }
+    return $result
+}
+
+function Move-LegacyAsideEnvironment {
+    <#
+        .SYNOPSIS
+        Move every `<distribution>.old-<stamp>` directory an older installer
+        left INSIDE uv's tools root out to the staging root, where uv does not
+        look. The sweep at the end of the run deletes what nothing runs from.
+
+        .DESCRIPTION
+        These used to be deleted in place, best effort. A delete that meets a
+        running image removes everything else and leaves the directory
+        behind -- still inside the tools root, still warned about by uv, and
+        now gutted under the process running out of it. A move does neither.
+        The same two names src/my_claude_code/application/release_updates.py
+        sweeps on a server start.
+    #>
+    param([Parameter(Mandatory = $true)] [string] $ToolsRoot)
+
+    if (-not (Test-Path -LiteralPath $ToolsRoot -PathType Container)) { return }
+    foreach ($pattern in @("my-claude-code.old-*", "free-claude-code.old-*")) {
+        foreach ($legacy in @(Get-ChildItem -LiteralPath $ToolsRoot -Directory -Filter $pattern -ErrorAction SilentlyContinue)) {
+            $legacyStamp = $legacy.Name.Substring($legacy.Name.IndexOf(".old-") + 5)
+            $moved = Move-EnvironmentAside -SourceDir $legacy.FullName -ToolsRoot $ToolsRoot -Stamp $legacyStamp -Label "aside"
+            if ($moved.Moved) {
+                Write-InstallLog ("Moved " + $legacy.Name + " out of uv's tools root to " + $moved.Destination + ".")
+            }
+            else {
+                Write-InstallLog ("Could not move " + $legacy.FullName + " out of uv's tools root: " + $moved.Error)
+            }
+        }
+    }
+}
+
+function Remove-UpdateLeftover {
+    <#
+        .SYNOPSIS
+        Sweep what earlier runs left in the staging root and keep exactly
+        `-Keep` previous environments. Runs at the end of EVERY run, the
+        failed ones included. Never throws.
+
+        .DESCRIPTION
+        7.78.9. Until now the staging directory was removed only after a new
+        server answered /health, so every run that failed or crashed before
+        that point left a whole environment behind -- eight of them, on the
+        machine this was found on. The rules are the ones the success path and
+        the server's own start-up sweep already apply: every staging entry
+        goes, one previous environment stays as the rollback. Two additions:
+        what THIS run made (its stamp is the prefix) is kept until the next
+        run, so a failure can still be looked at, and nothing that a process
+        is running out of is deleted (Test-EnvironmentInUse).
+    #>
+    param(
+        [string] $ToolsRoot = "",
+        [string] $KeepPrefix = "",
+        [int] $Keep = 1
+    )
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($ToolsRoot)) { return }
+        $stagingRoot = Get-UpdateAsideRoot -ToolsRoot $ToolsRoot -Name $StagingEnvDirName
+        if ($stagingRoot -and (Test-Path -LiteralPath $stagingRoot -PathType Container)) {
+            foreach ($entry in @(Get-ChildItem -LiteralPath $stagingRoot -Directory -Force -ErrorAction SilentlyContinue)) {
+                if ($KeepPrefix -and $entry.Name.StartsWith($KeepPrefix)) { continue }
+                if (Test-EnvironmentInUse -Directory $entry.FullName) {
+                    Write-InstallLog ("Kept " + $entry.FullName + ": a process is running out of it.")
+                    continue
+                }
+                try {
+                    Remove-Item -LiteralPath $entry.FullName -Recurse -Force -ErrorAction Stop
+                    Write-InstallLog ("Removed the leftover " + $entry.FullName + ".")
+                }
+                catch {
+                    # The server this run started sweeps the same root once it
+                    # is ready (release_updates.sweep_superseded_environments),
+                    # so the two can meet in one directory: an error from a
+                    # tree that is gone afterwards is a removal, not a failure.
+                    if (Test-Path -LiteralPath $entry.FullName) {
+                        Write-InstallLog ("Could not remove " + $entry.FullName + ": " + $_.Exception.Message)
+                    }
+                    else {
+                        Write-InstallLog ("Removed the leftover " + $entry.FullName + ".")
+                    }
+                }
+            }
+        }
+        $previousRoot = Get-UpdateAsideRoot -ToolsRoot $ToolsRoot -Name $PreviousEnvDirName
+        Remove-StalePreviousEnvironment -Keep $Keep -Root $previousRoot
+    }
+    catch {
+        Write-InstallLog ("The leftover sweep stopped: " + $_.Exception.Message)
+    }
+}
+
+function Add-UvFailureDetail {
+    <#
+        .SYNOPSIS
+        Keep the lines in which uv said WHY it failed, for the one report a
+        failed repair ends with.
+
+        .DESCRIPTION
+        7.78.9. A failure was reported as "Command failed with exit code 2:
+        <the whole command line>", while uv's own diagnosis -- "failed to
+        copy ... mcc-claude.exe ... being used by another process (os error
+        32)" -- scrolled past above it. These are the lines that name the
+        locked file.
+    #>
+    param([string] $Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed) { continue }
+        if ($trimmed -match "^(error|Caused by)" -or $trimmed -match "os error \d+") {
+            if ($script:UvFailureDetail -notcontains $trimmed) {
+                $script:UvFailureDetail += $trimmed
+            }
+        }
+    }
+}
+
+function Write-RepairFailureDetail {
+    <#
+        .SYNOPSIS
+        Say what uv reported and which My Claude Code processes hold the files,
+        on the console and in the transcript. Reporting only: nothing is
+        stopped (Get-McmHolders).
+    #>
+    param([string[]] $Roots = @(), [string] $ToolRoot = "")
+
+    if ($script:UvFailureDetail.Count -gt 0) {
+        Write-Host "uv said:"
+        Write-InstallLog "uv said:"
+        foreach ($line in $script:UvFailureDetail) {
+            Write-Host "  $line"
+            Write-InstallLog ("  " + $line)
+        }
+    }
+    $holders = @()
+    try { $holders = @(Get-McmHolders -Roots $Roots -ToolRoot $ToolRoot) } catch { $holders = @() }
+    if ($holders.Count -gt 0) {
+        Write-Host "These My Claude Code processes hold those files:"
+        Write-InstallLog "These My Claude Code processes hold those files:"
+        foreach ($holder in $holders) {
+            $line = "  pid $($holder.ProcessId)  $($holder.Name)  started $($holder.Started)  $($holder.Path)"
+            Write-Host $line
+            Write-InstallLog $line
+        }
+        Write-Host "Close them (the desktop app, mcc-claude and other mcc-* windows) and run the install command again."
+        Write-InstallLog "Close them (the desktop app, mcc-claude and other mcc-* windows) and run the install command again."
+    }
+}
+
 function Remove-StalePreviousEnvironment {
     <#
         .SYNOPSIS
         Keep exactly one previous environment: it is the rollback, and a second
         one is only disk. Swept after /health answers, never before.
+
+        .DESCRIPTION
+        7.78.9: an environment that a process runs out of is kept, and the
+        transcript says so (Test-EnvironmentInUse), rather than deleted down to
+        the files Windows would not let go of.
     #>
     param([string] $Root, [int] $Keep = 1)
 
@@ -1918,12 +2488,23 @@ function Remove-StalePreviousEnvironment {
     $all = @(Get-ChildItem -Path $Root -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
     if ($all.Count -le $Keep) { return }
     foreach ($old in $all[$Keep..($all.Count - 1)]) {
+        if (Test-EnvironmentInUse -Directory $old.FullName) {
+            Write-InstallLog ("Kept the previous environment " + $old.Name + ": a process is running out of it.")
+            continue
+        }
         try {
             Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction Stop
             Write-InstallLog ("Removed the superseded previous environment " + $old.Name + ".")
         }
         catch {
-            Write-InstallLog ("Could not remove " + $old.FullName + ": " + $_.Exception.Message)
+            # Gone afterwards = removed (the started server sweeps this root
+            # too; see Remove-UpdateLeftover).
+            if (Test-Path -LiteralPath $old.FullName) {
+                Write-InstallLog ("Could not remove " + $old.FullName + ": " + $_.Exception.Message)
+            }
+            else {
+                Write-InstallLog ("Removed the superseded previous environment " + $old.Name + ".")
+            }
         }
     }
 }
@@ -2968,12 +3549,20 @@ function Get-InstalledServerVersion {
     $ErrorActionPreference = "Continue"
     try {
         $text = (& $Launcher --version 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0) { return "" }
+        if ($LASTEXITCODE -ne 0) {
+            # Said once, in the transcript: "" is a legitimate answer (the
+            # callers treat it as "version unknown"), but the reason the
+            # launcher could not answer is the first thing anyone reading a
+            # failed update needs, and until 7.78.9 it was thrown away.
+            Write-InstallLog ("The installed mcc-server could not report its version (exit " + $LASTEXITCODE + "): " + $text)
+            return ""
+        }
         $match = [regex]::Match($text, "(\d+\.\d+\.\d+)")
         if ($match.Success) { return $match.Groups[1].Value }
         return ""
     }
     catch {
+        Write-InstallLog ("The installed mcc-server could not be run: " + $_.Exception.Message)
         return ""
     }
     finally {
@@ -3001,9 +3590,18 @@ function Stop-ConfiguredServer {
           unclassifiable     the port is busy and this build cannot say by what
           failed             our server would not stop
     #>
+    # 7.78.9: `[AllowEmptyString()]` on $LauncherVersion. An EMPTY version is
+    # an answer this function has always handled (the "version unknown"
+    # branch below), and Get-InstalledServerVersion returns "" by design
+    # whenever the installed launcher cannot run. But a Mandatory [string]
+    # parameter REJECTS "" before the body runs ("Cannot bind argument to
+    # parameter 'LauncherVersion' because it is an empty string"), so from
+    # 6.82.0 to 7.78.8 a broken install -- the one install that most needs
+    # this script -- died here, before the swap that would have repaired it,
+    # on every re-run. Measured on the reporter's machine on 2026-10-08 16:12.
     param(
         [Parameter(Mandatory = $true)][string] $Launcher,
-        [Parameter(Mandatory = $true)][string] $LauncherVersion,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $LauncherVersion,
         [Parameter(Mandatory = $true)][object] $Address
     )
 
@@ -3138,8 +3736,10 @@ function Invoke-RestartAfterInstall {
         busy, by a TCP connect, and a busy port means the running server stays
         and nothing is started.
     #>
+    # `[AllowEmptyString()]` for the same reason as Stop-ConfiguredServer's
+    # $LauncherVersion (7.78.9): this value is passed straight into it.
     param(
-        [Parameter(Mandatory = $true)][string] $InstalledVersion,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $InstalledVersion,
         [switch] $NoStop
     )
 
@@ -3207,7 +3807,10 @@ function Invoke-RestartAfterInstall {
         }
     }
 
-    return (Start-AndProveServer -Launcher $launcher -InstalledVersion $InstalledVersion -HealthUrl $healthUrl -Port $address.Port)
+    $toolDir = ""
+    try { $toolDir = Get-UvToolDir -UvPath (Resolve-UvPath "the restart") } catch { $toolDir = "" }
+    if ($null -eq $toolDir) { $toolDir = "" }
+    return (Start-AndProveServer -Launcher $launcher -InstalledVersion $InstalledVersion -HealthUrl $healthUrl -Port $address.Port -ToolDir $toolDir)
 }
 
 function Start-RestartedServer {
@@ -3232,8 +3835,25 @@ function Start-RestartedServer {
     param(
         [Parameter(Mandatory = $true)][string] $Launcher,
         [Parameter(Mandatory = $true)][string] $InstalledVersion,
-        [switch] $RollbackAvailable
+        [switch] $RollbackAvailable,
+        # 7.78.9: the environment the launcher runs. Given, a start from an
+        # environment with no interpreter is refused with the reason instead
+        # of being attempted: every launcher runs exactly
+        # `<tool dir>\Scripts\python.exe`, and on 2026-10-08 a server was
+        # "started" from a husk and died in the uv trampoline.
+        [string] $ToolDir = ""
     )
+
+    if ($ToolDir -and (-not (Test-Path -LiteralPath (Join-Path $ToolDir "Scripts\python.exe") -PathType Leaf))) {
+        $message = "The server was not started: $ToolDir has no Scripts\python.exe, so mcc-server cannot run from it."
+        Write-Host $message
+        Write-InstallLog $message
+        $script:InstallProgressRestarted = $false
+        if (-not $RollbackAvailable) {
+            Write-InstallProgress -Stage 'failed' -Message $message
+        }
+        return $null
+    }
 
     Write-InstallProgress -Stage 'starting' -Message "Starting My Claude Code $InstalledVersion."
     $updatesDir = Join-Path (Get-MccConfigDir) "updates"
@@ -3361,10 +3981,11 @@ function Start-AndProveServer {
         [Parameter(Mandatory = $true)][string] $InstalledVersion,
         [Parameter(Mandatory = $true)][string] $HealthUrl,
         [Parameter(Mandatory = $true)][int] $Port,
-        [switch] $RollbackAvailable
+        [switch] $RollbackAvailable,
+        [string] $ToolDir = ""
     )
 
-    $child = Start-RestartedServer -Launcher $Launcher -InstalledVersion $InstalledVersion -RollbackAvailable:$RollbackAvailable
+    $child = Start-RestartedServer -Launcher $Launcher -InstalledVersion $InstalledVersion -RollbackAvailable:$RollbackAvailable -ToolDir $ToolDir
     if ($null -eq $child) {
         return $false
     }
@@ -4329,11 +4950,58 @@ if (-not $DryRun) {
     catch {
         $StagedBinDir = ""
     }
+    $script:RunStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $BrokenEnvironmentFound = $false
+    if ($toolsRoot) {
+        # The end-of-run sweep (the `finally` at the bottom) works on this root,
+        # whichever way the run ends.
+        $script:SweepToolsRoot = $toolsRoot
+        # Aside copies an older installer left INSIDE uv's tools root make uv
+        # warn about a ghost tool on every command. Out of the way first.
+        Move-LegacyAsideEnvironment -ToolsRoot $toolsRoot
+    }
+    # =======================================================================
+    # SELF-HEAL (7.78.9). A broken environment at the canonical path is
+    # treated as NOT INSTALLED: it is moved aside, out of uv's tools root, and
+    # the fresh in-place path below installs a whole new one. That is exactly
+    # the recovery that brought the reporter's machine back on 2026-10-08
+    # (rename `tools\my-claude-code` aside, re-run the one-liner), done by the
+    # installer itself.
+    #
+    # Before it, a husk took the STAGED path, because the only test was "does
+    # the directory exist": its launcher could not report a version, the stop
+    # step crashed on the empty answer, and every re-run crashed the same way
+    # before the swap that would have repaired it. Even with that crash gone,
+    # staging beside a husk would make the husk "the previous version" -- the
+    # one a rollback restores and the sweep keeps.
+    # =======================================================================
+    if ($StagedToolDir) {
+        $brokenBecause = Get-ToolEnvironmentProblem -ToolDir $StagedToolDir -UvPath $StagedUvPath
+        if ($brokenBecause) {
+            $BrokenEnvironmentFound = $true
+            $foundMessage = "Found a broken My Claude Code environment at ${StagedToolDir}: $brokenBecause."
+            Write-Host $foundMessage
+            Write-InstallLog $foundMessage
+            $asideBroken = Move-EnvironmentAside -SourceDir $StagedToolDir -ToolsRoot $toolsRoot -Stamp $script:RunStamp -Label "broken"
+            if ($asideBroken.Moved) {
+                $healMessage = "Moved it aside to $($asideBroken.Destination) and installing a fresh copy in its place."
+            }
+            else {
+                $healMessage = "It could not be moved aside ($($asideBroken.Error)); installing over it in place instead."
+            }
+            Write-Host $healMessage
+            Write-InstallLog $healMessage
+            if (-not $asideBroken.Moved) {
+                Write-RepairFailureDetail -Roots @($StagedBinDir, $StagedToolDir) -ToolRoot $StagedToolDir
+            }
+        }
+    }
     $canStage = $toolsRoot `
         -and $StagedToolDir -and (Test-Path -LiteralPath $StagedToolDir -PathType Container) `
-        -and $StagedBinDir -and (Test-Path -LiteralPath $StagedBinDir -PathType Container)
+        -and $StagedBinDir -and (Test-Path -LiteralPath $StagedBinDir -PathType Container) `
+        -and (-not $BrokenEnvironmentFound)
     if ($canStage) {
-        $script:StagedStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $script:StagedStamp = $script:RunStamp
         Write-InstallProgress -Stage 'staging' -Message 'Building the new version beside the running one.'
         Write-Host "Building My Claude Code $($Plan.Version) beside the running one; nothing is replaced until it is proved."
         $Staged = New-StagedEnvironment -UvPath $StagedUvPath -Arguments $Plan.Arguments -ToolsRoot $toolsRoot -Stamp $script:StagedStamp
@@ -4458,10 +5126,18 @@ if ($null -ne $Staged) {
         # -- rare, and only on releases that add an entry point -- is finished
         # by uv in place, against a cache the staging pass just filled. The
         # previous environment is already aside, so it is still safe.
-        $missing = @(Get-MissingLauncherShim -BinDir $StagedBinDir -StagingBinOrEnvScripts (Join-Path $StagedToolDir "Scripts"))
+        #
+        # Compared against the STAGING bin directory: exactly the entry points
+        # uv linked for this package. The environment's own Scripts\ also
+        # holds every dependency's console scripts, which uv never links --
+        # comparing against it reported "this release adds fastapi, uvicorn,
+        # ..." on every update and ran the destructive in-place finish every
+        # time (7.78.9; see Get-MissingLauncherShim).
+        $missing = @(Get-MissingLauncherShim -BinDir $StagedBinDir -StagingBinOrEnvScripts $Staged.StagingBin)
         if ($missing.Count -gt 0) {
             Write-Host "This release adds $($missing -join ', '); uv has to write the launcher(s), so the install is finished in place."
             Write-InstallLog ("This release adds " + ($missing -join ", ") + "; finishing in place.")
+            $finishFailure = ""
             try {
                 # The same plan, and so the same already-verified wheel: the
                 # temp directory holding it is swept below rather than by
@@ -4470,8 +5146,39 @@ if ($null -ne $Staged) {
                 $InstalledVersion = Install-FreeClaudeCode -Plan $Plan
             }
             catch {
-                Write-InstallLog ("The in-place finish failed: " + $_.Exception.Message)
+                $finishFailure = $_.Exception.Message
+                Write-InstallLog ("The in-place finish failed: " + $finishFailure)
                 $InstalledVersion = $Plan.Version
+            }
+            # =================================================================
+            # 7.78.9: THE IN-PLACE FINISH HAS A ROLLBACK. `uv tool install
+            # --force` empties the environment before it writes a byte, so a
+            # failure here can leave the canonical path a husk -- and until now
+            # the failure was logged and the run carried on as if the swap had
+            # finished: it set the version, "started" a server from the husk
+            # and left the user with no server and no working launcher
+            # (2026-10-08 16:03). Whatever uv said, the environment the server
+            # would start from is checked here; if the finish failed or that
+            # environment cannot run, the previous version goes back, the
+            # server this run stopped is started from it, and the run ends
+            # non-zero with what uv reported and who holds the files.
+            # =================================================================
+            $finishProblem = Get-ToolEnvironmentProblem -ToolDir $StagedToolDir
+            if (-not (Test-Path -LiteralPath $StagedToolDir -PathType Container)) {
+                $finishProblem = "$StagedToolDir does not exist"
+            }
+            if ($finishFailure -or $finishProblem) {
+                $reason = if ($finishFailure) { $finishFailure } else { "the environment it left cannot run: $finishProblem" }
+                Undo-InPlaceFinish `
+                    -Reason $reason `
+                    -ToolDir $StagedToolDir `
+                    -BinDir $StagedBinDir `
+                    -ServerLauncher $(if ($ServerLauncher) { [string] $ServerLauncher } else { "" }) `
+                    -MayStart $MayStart `
+                    -HealthUrl $HealthUrl `
+                    -Port $(if ($null -ne $Address) { [int] $Address.Port } else { 0 })
+                Remove-Item -LiteralPath (Split-Path -Parent $Plan.WheelPath) -Recurse -Force -ErrorAction SilentlyContinue
+                exit 1
             }
         }
         # ---- start, before the post-install work rather than after it -------
@@ -4484,7 +5191,8 @@ if ($null -ne $Staged) {
             $StartedServer = Start-RestartedServer `
                 -Launcher $ServerLauncher `
                 -InstalledVersion $InstalledVersion `
-                -RollbackAvailable
+                -RollbackAvailable `
+                -ToolDir $StagedToolDir
         }
         # AFTER the start: neither of these is needed to run the new server --
         # it is launched through the bin directory's trampoline, which was
@@ -4510,6 +5218,11 @@ if (-not $InstalledVersion) {
     catch {
         $script:InstallProgressRestarted = $false
         Write-InstallProgress -Stage 'failed' -Message 'The install failed.'
+        # 7.78.9: say what uv reported and who holds the files before the
+        # exception ends the run; the exception itself names only the command.
+        if ($StagedToolDir) {
+            Write-RepairFailureDetail -Roots @($StagedBinDir, $StagedToolDir) -ToolRoot $StagedToolDir
+        }
         throw
     }
 }
@@ -4671,5 +5384,15 @@ else {
 
 }
 finally {
+    # 7.78.9: on EVERY way out -- success, a failure that exits 1, a throw --
+    # sweep what earlier runs left beside uv's tools root and keep one
+    # previous environment. Before, only a run whose new server answered
+    # /health swept anything, so every failed or crashed update left a whole
+    # staged environment behind. What this run made is kept (its stamp is the
+    # prefix) and nothing a process runs from is touched. Under the update
+    # lock, so no other install can be using what it removes.
+    if ((-not $DryRun) -and $script:SweepToolsRoot) {
+        Remove-UpdateLeftover -ToolsRoot $script:SweepToolsRoot -KeepPrefix $script:RunStamp -Keep $PreviousEnvsKept
+    }
     Exit-UpdateLock
 }

@@ -293,7 +293,16 @@ run_uv_capturing() {
 }
 
 cleanup() {
-    # The lock first: every other path out of this script is an exit, and a
+    # 7.78.9: sweep what earlier runs left beside uv's tools root on EVERY way
+    # out, the failed ones included. It runs just BEFORE the lock is released,
+    # and has to: an install that started the moment the lock was free would
+    # be staging into that same root under a stamp of its own, which this
+    # sweep would take for a leftover. Keeps what this run made and one
+    # previous environment; never fails the script.
+    if [ "${dry_run:-0}" -ne 1 ] && [ -n "${leftover_sweep_root:-}" ]; then
+        remove_update_leftovers "$leftover_sweep_root" "${staged_stamp:-}" || true
+    fi
+    # Then the lock: every other path out of this script is an exit, and a
     # lock that outlives its owner locks the machine out of updating.
     exit_update_lock
     if [ -n "$temporary_script" ] && [ -e "$temporary_script" ]; then
@@ -972,16 +981,8 @@ complete_environment_swap() {
     complete_staging_env=$2
     complete_rewritten=0
     for complete_entry in "$swap_tool_dir"/bin/*; do
-        [ -f "$complete_entry" ] || continue
-        head -n 1 "$complete_entry" 2>/dev/null | grep -q '^#!' || continue
-        grep -q -- "$complete_staging_env" "$complete_entry" 2>/dev/null || continue
-        if sed "s|$complete_staging_env|$swap_tool_dir|g" "$complete_entry" \
-            > "$complete_entry.mcc-new" 2>/dev/null; then
-            chmod 755 "$complete_entry.mcc-new" 2>/dev/null || true
-            mv "$complete_entry.mcc-new" "$complete_entry" 2>/dev/null &&
-                complete_rewritten=$((complete_rewritten + 1))
-        else
-            rm -f "$complete_entry.mcc-new" 2>/dev/null || true
+        if repoint_entry_script "$complete_entry" "$complete_staging_env" "$swap_tool_dir"; then
+            complete_rewritten=$((complete_rewritten + 1))
         fi
     done
     write_install_log "Re-pointed $complete_rewritten launcher(s) inside the new environment."
@@ -1002,25 +1003,228 @@ complete_environment_swap() {
     return 0
 }
 
+repoint_entry_script() {
+    # Rewrite one entry script of the swapped-in environment so its interpreter
+    # line names the canonical environment instead of the staging one. Returns
+    # 0 when it rewrote the file. Split out of complete_environment_swap in
+    # 7.78.9 so the ONE script the start needs can be fixed before the start.
+    repoint_entry=$1
+    repoint_from=$2
+    repoint_to=$3
+    [ -f "$repoint_entry" ] || return 1
+    head -n 1 "$repoint_entry" 2>/dev/null | grep -q '^#!' || return 1
+    grep -q -- "$repoint_from" "$repoint_entry" 2>/dev/null || return 1
+    if sed "s|$repoint_from|$repoint_to|g" "$repoint_entry" \
+        > "$repoint_entry.mcc-new" 2>/dev/null; then
+        chmod 755 "$repoint_entry.mcc-new" 2>/dev/null || true
+        mv "$repoint_entry.mcc-new" "$repoint_entry" 2>/dev/null && return 0
+    fi
+    rm -f "$repoint_entry.mcc-new" 2>/dev/null || true
+    return 1
+}
+
 missing_launcher_shims() {
     # Commands this release publishes for which no entry exists in uv's bin
     # directory yet. A release that ADDS an entry point cannot be finished by a
     # rename, so it falls through to the in-place install -- against a cache
     # the staging pass just filled.
+    #
+    # 7.78.9: ONLY THIS PACKAGE'S OWN ENTRY POINTS COUNT. The caller used to
+    # pass the environment's own bin/ directory, which also holds the console
+    # scripts of every DEPENDENCY (fastapi, uvicorn, typer, tqdm, ...). uv
+    # never links those into its bin directory, so every update reported
+    # "This release adds fastapi, ..." and ran `uv tool install --force` over
+    # the environment the swap had just put in place -- a second full install
+    # inside the outage, and on failure `fail` ended the script with the server
+    # stopped, nothing restarted and nothing rolled back. The caller now passes
+    # the STAGING bin directory: exactly what uv linked for this package. Its
+    # entries are symlinks into the staged environment, which the swap moved,
+    # so they DANGLE by now -- `-L` counts them, `-f` alone would skip them
+    # all. Given an environment's bin/ instead (it holds `python`), only the
+    # entry points uv's receipt records count; with no receipt, only the
+    # product's own command family.
     missing_bin=$1
     missing_scripts=$2
     missing_names=""
+    missing_entry_points=""
+    missing_filter=0
     [ -d "$missing_scripts" ] || return 0
+    if [ -e "$missing_scripts/python" ] || [ -L "$missing_scripts/python" ]; then
+        missing_filter=1
+        missing_entry_points=$(package_entry_point_names "$(dirname "$missing_scripts")")
+    fi
     for missing_candidate in "$missing_scripts"/*; do
-        [ -f "$missing_candidate" ] || continue
+        [ -f "$missing_candidate" ] || [ -L "$missing_candidate" ] || continue
         missing_leaf=$(basename "$missing_candidate")
         case "$missing_leaf" in
             python|python3|python3.*|pip|pip3|activate*|Activate*) continue ;;
         esac
+        if [ "$missing_filter" -eq 1 ]; then
+            if [ -n "$missing_entry_points" ]; then
+                case " $missing_entry_points " in
+                    *" $missing_leaf "*) ;;
+                    *) continue ;;
+                esac
+            else
+                case "$missing_leaf" in
+                    mcc-*|fcc-*|my-claude-code|free-claude-code) ;;
+                    *) continue ;;
+                esac
+            fi
+        fi
         [ -e "$missing_bin/$missing_leaf" ] && continue
+        [ -L "$missing_bin/$missing_leaf" ] && continue
         missing_names="$missing_names $missing_leaf"
     done
     printf '%s' "${missing_names# }"
+}
+
+package_entry_point_names() {
+    # The names uv's receipt records as THIS package's entry points, one line,
+    # space separated; nothing when the environment has no receipt. uv writes
+    # one `{ name = ..., install-path = ... }` per entry point of the installed
+    # package and of no other -- a dependency's console scripts are in bin/ but
+    # never in the receipt.
+    entry_receipt="$1/uv-receipt.toml"
+    [ -f "$entry_receipt" ] || return 0
+    tr ',{}' '\n\n\n' <"$entry_receipt" 2>/dev/null |
+        sed -n 's/^[[:space:]]*install-path[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' |
+        sed 's|.*/||' | tr '\n' ' ' | sed 's/ *$//'
+}
+
+tool_environment_problem() {
+    # Why the installed tool environment cannot be trusted, in $tool_problem;
+    # empty when it can, or when there is none ("not installed" is not
+    # broken). 7.78.9. The three ways the machine itself says so: the
+    # interpreter every launcher runs is missing (`-x` follows the symlink, so
+    # a managed Python that was removed counts too), uv's receipt is missing,
+    # or uv calls the tool malformed.
+    tool_problem=""
+    problem_dir=$1
+    [ -d "$problem_dir" ] || return 0
+    if [ ! -x "$problem_dir/bin/python" ]; then
+        tool_problem="it has no runnable bin/python"
+    fi
+    if [ ! -f "$problem_dir/uv-receipt.toml" ]; then
+        tool_problem="${tool_problem:+$tool_problem; }it has no uv-receipt.toml"
+    fi
+    if [ -z "$tool_problem" ] && [ -n "${uv_bin:-}" ]; then
+        problem_name=$(basename "$problem_dir")
+        if "$uv_bin" tool list 2>&1 | grep -F "malformed tool \`$problem_name\`" >/dev/null 2>&1; then
+            tool_problem="uv tool list reports it as malformed"
+        fi
+    fi
+    return 0
+}
+
+move_environment_aside() {
+    # Move a tool environment OUT of uv's tools root, to
+    # <tools root>/../.mcc-staging/<stamp>-<label>/my-claude-code, where uv
+    # never looks. Same filesystem, so a rename. Sets $moved_aside_to.
+    aside_source=$1
+    aside_tools_root=$2
+    aside_stamp=$3
+    aside_label=$4
+    moved_aside_to=""
+    aside_staging_root=$(update_aside_root "$aside_tools_root" "$STAGING_ENV_DIRNAME") || return 1
+    aside_container="$aside_staging_root/$aside_stamp-$aside_label"
+    aside_suffix=1
+    while [ -e "$aside_container/$PACKAGE_ENV_DIRNAME" ]; do
+        aside_suffix=$((aside_suffix + 1))
+        aside_container="$aside_staging_root/$aside_stamp-$aside_label-$aside_suffix"
+    done
+    mkdir -p "$aside_container" 2>/dev/null || return 1
+    if mv "$aside_source" "$aside_container/$PACKAGE_ENV_DIRNAME" 2>/dev/null; then
+        moved_aside_to="$aside_container/$PACKAGE_ENV_DIRNAME"
+        return 0
+    fi
+    rmdir "$aside_container" 2>/dev/null || true
+    return 1
+}
+
+remove_update_leftovers() {
+    # 7.78.9. Runs on EVERY way out of this script (cleanup, the EXIT trap):
+    # sweep what earlier runs left in the staging root and keep one previous
+    # environment -- the rules the success path already applied, which until
+    # now ran only after a new server answered /health, so every failed or
+    # killed update left a whole staged environment behind. What THIS run made
+    # (its stamp is the prefix) is kept until the next run so a failure can be
+    # looked at. Never fails the script.
+    leftover_tools_root=$1
+    leftover_keep_prefix=$2
+    [ -n "$leftover_tools_root" ] || return 0
+    leftover_staging_root=$(update_aside_root "$leftover_tools_root" "$STAGING_ENV_DIRNAME") || return 0
+    if [ -d "$leftover_staging_root" ]; then
+        for leftover_entry in "$leftover_staging_root"/* "$leftover_staging_root"/.[!.]*; do
+            [ -d "$leftover_entry" ] || continue
+            leftover_name=$(basename "$leftover_entry")
+            if [ -n "$leftover_keep_prefix" ]; then
+                case "$leftover_name" in
+                    "$leftover_keep_prefix"*) continue ;;
+                esac
+            fi
+            if rm -rf -- "$leftover_entry" 2>/dev/null; then
+                write_install_log "Removed the leftover $leftover_entry."
+            else
+                write_install_log "Could not remove $leftover_entry."
+            fi
+        done
+    fi
+    leftover_previous_root=$(update_aside_root "$leftover_tools_root" "$PREVIOUS_ENV_DIRNAME") || return 0
+    remove_stale_previous_environment "$leftover_previous_root" || true
+    return 0
+}
+
+undo_in_place_finish() {
+    # 7.78.9. The rollback for an in-place finish that failed AFTER a
+    # successful swap. `uv tool install --force` removes the environment
+    # before it writes the new one, so the swapped-in copy may be gone; the
+    # one this run can PROVE works is the previous version the swap moved
+    # aside. That goes back (restore_previous_environment, the same rollback
+    # the health gate uses), the server this run stopped is started from it,
+    # and the script exits non-zero saying so -- instead of `fail` ending the
+    # run with the server stopped and nothing put back.
+    undo_reason=$1
+    undo_headline="The install could not be finished in place: $undo_reason"
+    printf '\n%s\n' "$undo_headline"
+    write_install_log "$undo_headline"
+    if [ -n "${install_progress_log:-}" ]; then
+        printf "uv's own output is above and in %s.\n" "$install_progress_log"
+    fi
+    write_install_progress rolling-back "The install could not be finished, so the previous version is being put back."
+    undo_restored=0
+    undo_started=0
+    undo_attempted=0
+    if restore_previous_environment "$staged_tool_dir"; then
+        undo_restored=1
+    fi
+    if [ "$undo_restored" -eq 1 ] && [ "$stage_may_start" -eq 1 ] && [ -x "$staged_tool_dir/bin/python" ]; then
+        undo_attempted=1
+        undo_log="$(mcc_config_dir)/updates/server-start-rollback-$staged_stamp.log"
+        mkdir -p "$(dirname "$undo_log")" 2>/dev/null || true
+        start_server_detached "$restart_launcher" "$undo_log"
+        printf "Started the previous version's mcc-server (pid %s).\n" "$started_server_pid"
+        if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
+            undo_started=1
+        fi
+    fi
+    if [ "$undo_restored" -eq 1 ] && [ "$undo_started" -eq 1 ]; then
+        undo_message="The previous version was put back and is answering on port $server_port. Nothing was lost; the update did not happen."
+        install_progress_restarted=true
+    elif [ "$undo_restored" -eq 1 ] && [ "$undo_attempted" -eq 1 ]; then
+        undo_message="The previous version was put back, but it did not answer on port $server_port either. Start it with: mcc-server"
+        install_progress_restarted=false
+    elif [ "$undo_restored" -eq 1 ]; then
+        undo_message="The previous version was put back."
+        install_progress_restarted=false
+    else
+        undo_message="The previous version could not be put back. No server was started from $staged_tool_dir. Run the install command again: it repairs a broken install by itself."
+        install_progress_restarted=false
+    fi
+    printf '%s\n' "$undo_message"
+    write_install_log "$undo_message"
+    write_install_progress recovered "$undo_headline $undo_message"
+    exit 1
 }
 
 restore_previous_environment() {
@@ -2395,7 +2599,34 @@ if [ "$dry_run" -ne 1 ]; then
     staged_tools_root=$(uv_tools_root) || staged_tools_root=""
     [ -n "$staged_tools_root" ] && staged_tool_dir="$staged_tools_root/$PACKAGE_ENV_DIRNAME"
     staged_bin_dir=$("$uv_bin" tool dir --bin 2>/dev/null | head -n 1) || staged_bin_dir=""
-    if [ -n "$staged_tool_dir" ] && [ -d "$staged_tool_dir" ] && [ -n "$staged_bin_dir" ] && [ -d "$staged_bin_dir" ]; then
+    # The end-of-run sweep (cleanup, on every exit) works on this root.
+    leftover_sweep_root=$staged_tools_root
+    # =======================================================================
+    # SELF-HEAL (7.78.9). A broken environment at the canonical path is
+    # treated as NOT INSTALLED: moved aside, out of uv's tools root, and the
+    # fresh in-place path installs a whole one -- the recovery that brought
+    # the reporter's machine back on 2026-10-08, done by the installer itself.
+    # Staging beside a broken environment would make it "the previous
+    # version": the copy a rollback restores and the sweep keeps.
+    # =======================================================================
+    staged_broken=0
+    if [ -n "$staged_tool_dir" ] && [ -d "$staged_tool_dir" ]; then
+        tool_environment_problem "$staged_tool_dir"
+        if [ -n "$tool_problem" ]; then
+            staged_broken=1
+            heal_message="Found a broken My Claude Code environment at $staged_tool_dir: $tool_problem."
+            printf '%s\n' "$heal_message"
+            write_install_log "$heal_message"
+            if move_environment_aside "$staged_tool_dir" "$staged_tools_root" "$staged_stamp" broken; then
+                heal_message="Moved it aside to $moved_aside_to and installing a fresh copy in its place."
+            else
+                heal_message="It could not be moved aside; installing over it in place instead."
+            fi
+            printf '%s\n' "$heal_message"
+            write_install_log "$heal_message"
+        fi
+    fi
+    if [ "$staged_broken" -ne 1 ] && [ -n "$staged_tool_dir" ] && [ -d "$staged_tool_dir" ] && [ -n "$staged_bin_dir" ] && [ -d "$staged_bin_dir" ]; then
         write_install_progress staging "Building the new version beside the running one."
         printf 'Building My Claude Code %s beside the running one; nothing is replaced until it is proved.\n' "$MCC_VERSION"
         stage_new_environment "$staged_tools_root" || true
@@ -2480,7 +2711,11 @@ if [ "$staged_ok" -eq 1 ]; then
     write_install_progress swapping "Putting the new version in place."
     staged_server_started=0
     if swap_environment "$staged_tool_dir"; then
-        staged_missing=$(missing_launcher_shims "$staged_bin_dir" "$staged_tool_dir/bin")
+        # Against the STAGING bin directory -- exactly the entry points uv
+        # linked for this package -- never the environment's own bin/, which
+        # holds every dependency's console scripts too (7.78.9; see
+        # missing_launcher_shims).
+        staged_missing=$(missing_launcher_shims "$staged_bin_dir" "$staging_bin")
         if [ -n "$staged_missing" ]; then
             # A release that ADDS a command has no entry anywhere carrying the
             # canonical path for it. That case is finished by uv in place,
@@ -2488,15 +2723,50 @@ if [ "$staged_ok" -eq 1 ]; then
             # environment is already aside, so it is still safe.
             printf 'This release adds %s; uv has to write the launcher(s), so the install is finished in place.\n' "$staged_missing"
             write_install_log "This release adds $staged_missing; finishing in place."
-            install_my_claude_code || true
+            # 7.78.9: in a SUBSHELL, and with a rollback. `fail` (inside
+            # run_uv_capturing) exits; called directly, a failed finish ended
+            # the whole script with the server stopped before the swap, the
+            # environment possibly emptied by `--force`, nothing started and
+            # nothing put back. The subshell turns that exit into a status.
+            if ( install_my_claude_code ); then
+                finish_failure=""
+            else
+                finish_failure="uv tool install --force exited non-zero"
+            fi
+            tool_environment_problem "$staged_tool_dir"
+            [ -d "$staged_tool_dir" ] || tool_problem="$staged_tool_dir does not exist"
+            if [ -n "$finish_failure" ]; then
+                undo_in_place_finish "$finish_failure"
+            elif [ -n "$tool_problem" ]; then
+                undo_in_place_finish "the environment it left cannot run: $tool_problem"
+            fi
         fi
         # Started BEFORE the post-install work rather than after it. The outage
         # ends when a listener answers, so everything between the swap and the
         # start is outage; the verification below checks the canonical install
         # and cannot move ahead of the swap, but it can move beside the boot.
+        # 7.78.9: never from an environment with no interpreter; the health
+        # gate below then rolls back to the previous version.
         if [ "$stage_may_start" -eq 1 ]; then
-            start_restarted_server "$restart_launcher"
-            staged_server_started=1
+            if [ -x "$staged_tool_dir/bin/python" ]; then
+                # 7.78.9: the one entry script the start runs gets the
+                # canonical interpreter line FIRST. uv's bin entries here are
+                # symlinks into <tool dir>/bin, and the staged install wrote
+                # the STAGING interpreter into every script there, so a start
+                # before the tidy-up below died with "nohup: failed
+                # to run command ... mcc-server: No such file or directory"
+                # (exit 127) and the health gate rolled back. Every update
+                # until now ran the false "This release adds ..." reinstall
+                # first, which rewrote them all and hid this; with that gone,
+                # the install-smoke Linux leg showed it.
+                repoint_entry_script "$staged_tool_dir/bin/mcc-server" "$staging_env" "$staged_tool_dir" || true
+                start_restarted_server "$restart_launcher"
+                staged_server_started=1
+            else
+                restart_message="The server was not started: $staged_tool_dir has no runnable bin/python, so mcc-server cannot run from it."
+                printf '%s\n' "$restart_message"
+                write_install_log "$restart_message"
+            fi
         fi
         # AFTER the start: none of it is needed to run the new server, and all
         # of it would otherwise sit inside the outage.
