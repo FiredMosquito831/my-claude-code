@@ -208,6 +208,10 @@ def _settings(key: str = OPERATOR_KEY, credential: str = "public") -> Settings:
     by_alias: dict[str, Any] = {
         "OPENCODE_API_KEY": key,
         "OPENCODE_FREE_TIER_CREDENTIAL": credential,
+        # Pinned to the value these tests were written against: the shipped
+        # default turned off in 7.78.10, and the shared-slot 429 case below
+        # proves the route-around path, which is unchanged.
+        "RATE_LIMIT_ROUTES_AROUND_MODEL": "true",
     }
     return Settings(**by_alias)
 
