@@ -25,6 +25,10 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+  # TEMPORARY, removed before merge: workflow_dispatch needs the file on the
+  # default branch, so the first measurement runs on a push to this branch.
+  push:
+    branches: [ci/windows-full-suite-nightly]
 
 concurrency:
   # One run per ref at a time. A second nightly queues behind the first
