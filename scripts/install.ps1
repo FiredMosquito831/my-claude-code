@@ -2390,7 +2390,16 @@ function Remove-UpdateLeftover {
                     Write-InstallLog ("Removed the leftover " + $entry.FullName + ".")
                 }
                 catch {
-                    Write-InstallLog ("Could not remove " + $entry.FullName + ": " + $_.Exception.Message)
+                    # The server this run started sweeps the same root once it
+                    # is ready (release_updates.sweep_superseded_environments),
+                    # so the two can meet in one directory: an error from a
+                    # tree that is gone afterwards is a removal, not a failure.
+                    if (Test-Path -LiteralPath $entry.FullName) {
+                        Write-InstallLog ("Could not remove " + $entry.FullName + ": " + $_.Exception.Message)
+                    }
+                    else {
+                        Write-InstallLog ("Removed the leftover " + $entry.FullName + ".")
+                    }
                 }
             }
         }
@@ -2488,7 +2497,14 @@ function Remove-StalePreviousEnvironment {
             Write-InstallLog ("Removed the superseded previous environment " + $old.Name + ".")
         }
         catch {
-            Write-InstallLog ("Could not remove " + $old.FullName + ": " + $_.Exception.Message)
+            # Gone afterwards = removed (the started server sweeps this root
+            # too; see Remove-UpdateLeftover).
+            if (Test-Path -LiteralPath $old.FullName) {
+                Write-InstallLog ("Could not remove " + $old.FullName + ": " + $_.Exception.Message)
+            }
+            else {
+                Write-InstallLog ("Removed the superseded previous environment " + $old.Name + ".")
+            }
         }
     }
 }

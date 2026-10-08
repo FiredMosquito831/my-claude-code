@@ -27,11 +27,11 @@ canonicalize script path" when it is missing.
 """
 
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
-import textwrap
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,9 +41,13 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INSTALL_PS1 = REPO_ROOT / "scripts" / "install.ps1"
 
-pytestmark = pytest.mark.skipif(
-    os.name != "nt", reason="the PowerShell installer is a Windows fact"
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.name != "nt", reason="the PowerShell installer is a Windows fact"
+    ),
+    # Every case launches PowerShell; the full runs also serve /health.
+    pytest.mark.local_serial,
+]
 
 OLD_VERSION = "9.9.8"
 NEW_VERSION = "9.9.9"
@@ -185,7 +189,9 @@ def test_the_7_78_8_parameter_really_crashed_on_an_empty_version(
 
     _require(executable)
     text = _installer_text()
-    declaration = "[Parameter(Mandatory = $true)][AllowEmptyString()][string] $LauncherVersion"
+    declaration = (
+        "[Parameter(Mandatory = $true)][AllowEmptyString()][string] $LauncherVersion"
+    )
     assert declaration in text
     reverted = text.replace(
         declaration, "[Parameter(Mandatory = $true)][string] $LauncherVersion"
@@ -206,7 +212,7 @@ def test_the_7_78_8_parameter_really_crashed_on_an_empty_version(
 def test_a_launcher_that_cannot_run_reports_no_version_and_says_why(
     edition: str, executable: str, tmp_path: Path
 ) -> None:
-    """"" is a legitimate answer, but the reason is now in the transcript."""
+    """ "" is a legitimate answer, but the reason is now in the transcript."""
 
     _require(executable)
     launcher = tmp_path / "mcc-server.cmd"
@@ -275,7 +281,14 @@ def test_dependency_console_scripts_are_never_a_missing_launcher(
     bin_dir = tmp_path / "bin"
     env_dir = tmp_path / "tools" / "my-claude-code"
     scripts = env_dir / "Scripts"
-    for name in ("python", "pythonw", "pip", *DEPENDENCY_SCRIPTS, "mcc-server", "mcc-claude"):
+    for name in (
+        "python",
+        "pythonw",
+        "pip",
+        *DEPENDENCY_SCRIPTS,
+        "mcc-server",
+        "mcc-claude",
+    ):
         _touch(scripts / f"{name}.exe")
     for name in ("mcc-server", "mcc-claude"):
         _touch(bin_dir / f"{name}.exe")
@@ -286,7 +299,13 @@ def test_dependency_console_scripts_are_never_a_missing_launcher(
     for name in ("mcc-server", "mcc-claude", "mcc-newcmd"):
         _touch(staging_bin / f"{name}.exe")
     adds_env = tmp_path / "adds" / "my-claude-code"
-    for name in ("python", *DEPENDENCY_SCRIPTS, "mcc-server", "mcc-claude", "mcc-newcmd"):
+    for name in (
+        "python",
+        *DEPENDENCY_SCRIPTS,
+        "mcc-server",
+        "mcc-claude",
+        "mcc-newcmd",
+    ):
         _touch(adds_env / "Scripts" / f"{name}.exe")
     (env_dir / "uv-receipt.toml").write_text(
         _receipt(["mcc-server", "mcc-claude"], bin_dir), encoding="utf-8"
@@ -375,7 +394,9 @@ Write-Host ('DEST=' + $moved.Destination)
     assert "ABSENT=\n" in out.replace("\r\n", "\n"), out
     assert "UNPARSEABLE=uv tool list reports it as malformed" in out, out
     assert "MOVED=True" in out
-    destination = tmp_path / "uv" / ".mcc-staging" / "20261008-161206-broken" / "my-claude-code"
+    destination = (
+        tmp_path / "uv" / ".mcc-staging" / "20261008-161206-broken" / "my-claude-code"
+    )
     assert f"DEST={destination}" in out, out
     assert (destination / "Scripts" / "pythonw.exe").is_file()
     assert not husk.exists()
@@ -409,7 +430,13 @@ def test_the_sweep_keeps_this_run_one_previous_and_anything_in_use(
     _touch(staging / "20261008-160415" / "my-claude-code" / "pyvenv.cfg")
     held = staging / "20261008-161208" / "my-claude-code" / "Scripts" / "python.exe"
     _touch(held)
-    _touch(staging / "20261008-170000-failed" / "my-claude-code" / "Scripts" / "pythonw.exe")
+    _touch(
+        staging
+        / "20261008-170000-failed"
+        / "my-claude-code"
+        / "Scripts"
+        / "pythonw.exe"
+    )
     for stamp in ("20260928-113903", "20261003-221036", "20261008-160332"):
         _touch(previous / stamp / "my-claude-code" / "Scripts" / "python.exe")
 
@@ -434,10 +461,13 @@ Write-Host 'SWEPT'
         "20261008-170000-failed",
     ]
     assert sorted(p.name for p in previous.iterdir()) == ["20261008-160332"]
-    assert f"LOG: Kept {staging / '20261008-161208'}: a process is running out of it." in (
-        completed.stdout
+    assert (
+        f"LOG: Kept {staging / '20261008-161208'}: a process is running out of it."
+        in (completed.stdout)
     )
-    assert f"LOG: Removed the leftover {staging / '20261008-160332'}." in completed.stdout
+    assert (
+        f"LOG: Removed the leftover {staging / '20261008-160332'}." in completed.stdout
+    )
 
 
 # ---------------------------------------------------------------- full runs
@@ -564,17 +594,14 @@ static class FakeLauncher
 }
 """
 
-# Every name Get-LauncherCommands lists: the verification step checks each one.
-LAUNCHER_COMMANDS = (
-    "fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init "
-    "fcc-chatgpt-oauth-login fcc-compact-log free-claude-code "
-    "fcc-anthropic-oauth-login fcc-rtk fcc-help fcc-desktop mcc-server mcc-claude "
-    "mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo "
-    "mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider "
-    "mcc-droid mcc-gemini mcc-init mcc-chatgpt-oauth-login mcc-compact-log "
-    "mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-migrate mcc-apps mcc-desktop "
-    "my-claude-code fcc-migrate"
-).split()
+# Every name Get-LauncherCommands lists -- read from the function itself, so
+# the fake installs exactly what the verification step will check.
+LAUNCHER_COMMANDS = tuple(
+    re.findall(
+        r'"([a-z][a-z0-9-]+)"',
+        _extract_function(_installer_text(), "Get-LauncherCommands"),
+    )
+)
 
 FAKE_UV_PY = r'''
 """A uv that does what uv does to the files, and nothing else."""
@@ -792,8 +819,20 @@ class FullRun:
     def install(self, version: str) -> None:
         """Put a whole installed version in place, as the fake uv writes it."""
         result = subprocess.run(
-            [sys.executable, str(self.root / "fake_uv.py"), "tool", "install", "--force", "spec"],
-            env=self.env | {"FAKE_RELEASE_VERSION": version, "FAKE_FINISH_FAILS": "0", "FAKE_NEW_COMMAND": "0"},
+            [
+                sys.executable,
+                str(self.root / "fake_uv.py"),
+                "tool",
+                "install",
+                "--force",
+                "spec",
+            ],
+            env=self.env
+            | {
+                "FAKE_RELEASE_VERSION": version,
+                "FAKE_FINISH_FAILS": "0",
+                "FAKE_NEW_COMMAND": "0",
+            },
             capture_output=True,
             text=True,
             timeout=60,
@@ -805,7 +844,14 @@ class FullRun:
 
     def run(self, executable: str, **extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [executable, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.wrapper)],
+            [
+                executable,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(self.wrapper),
+            ],
             capture_output=True,
             text=True,
             timeout=240,
@@ -816,15 +862,27 @@ class FullRun:
     def started_versions(self) -> list[str]:
         if not self.started.exists():
             return []
-        return [line.split()[0] for line in self.started.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return [
+            line.split()[0]
+            for line in self.started.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     def transcript_text(self) -> str:
-        return self.transcript.read_text(encoding="utf-8") if self.transcript.exists() else ""
+        return (
+            self.transcript.read_text(encoding="utf-8")
+            if self.transcript.exists()
+            else ""
+        )
 
     def uv_calls(self) -> list[str]:
         if not self.calls.exists():
             return []
-        return [line for line in self.calls.read_text(encoding="utf-8").splitlines() if line.startswith("uv:")]
+        return [
+            line
+            for line in self.calls.read_text(encoding="utf-8").splitlines()
+            if line.startswith("uv:")
+        ]
 
     def stop_everything_it_started(self) -> None:
         """Every process here is one this test started; each is stopped by its
@@ -839,7 +897,12 @@ class FullRun:
                         pids.append(int(parts[-1]))
         for pid in pids:
             probe = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue).Path"],
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue).Path",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -847,7 +910,12 @@ class FullRun:
             )
             image = probe.stdout.strip()
             if image and image.lower().startswith(str(self.root).lower()):
-                subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, timeout=60, check=False)
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/F"],
+                    capture_output=True,
+                    timeout=60,
+                    check=False,
+                )
 
 
 @pytest.fixture
@@ -856,7 +924,14 @@ def full_run(tmp_path: Path, fake_launcher: Path) -> Iterator[FullRun]:
     tools = root / "app-data" / "uv" / "tools"
     bin_dir = root / "home" / ".local" / "bin"
     config = root / "mcc-config"
-    for path in (tools, bin_dir, config, root / "fake-path", root / "temp", root / "local-app-data"):
+    for path in (
+        tools,
+        bin_dir,
+        config,
+        root / "fake-path",
+        root / "temp",
+        root / "local-app-data",
+    ):
         path.mkdir(parents=True, exist_ok=True)
     port = _free_port()
     (config / ".env").write_text(f"HOST=127.0.0.1\nPORT={port}\n", encoding="utf-8")
@@ -870,7 +945,9 @@ def full_run(tmp_path: Path, fake_launcher: Path) -> Iterator[FullRun]:
     marker = "\nif ($Help) {"
     assert text.count(marker) == 1
     script = root / "install-under-test.ps1"
-    script.write_text(text.replace(marker, "\n" + INJECTED_STUBS + marker[1:]), encoding="utf-8")
+    script.write_text(
+        text.replace(marker, "\n" + INJECTED_STUBS + marker[1:]), encoding="utf-8"
+    )
     wrapper = root / "run-installer.ps1"
     wrapper.write_text(
         "Set-StrictMode -Version Latest\n$ErrorActionPreference = 'Stop'\n"
@@ -882,13 +959,25 @@ def full_run(tmp_path: Path, fake_launcher: Path) -> Iterator[FullRun]:
     env = {
         key: value
         for key, value in os.environ.items()
-        if key.upper() not in {"PORT", "HOST", "MCC_CONFIG_DIR", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "MCC_INSTALL_LOG"}
+        if key.upper()
+        not in {
+            "PORT",
+            "HOST",
+            "MCC_CONFIG_DIR",
+            "UV_TOOL_DIR",
+            "UV_TOOL_BIN_DIR",
+            "MCC_INSTALL_LOG",
+        }
     }
     env.update(
         {
             "PATH": os.pathsep.join(
-                [str(root / "fake-path"), str(Path(system_root) / "System32"), system_root,
-                 str(Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0")]
+                [
+                    str(root / "fake-path"),
+                    str(Path(system_root) / "System32"),
+                    system_root,
+                    str(Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0"),
+                ]
             ),
             "PATHEXT": ".COM;.EXE;.BAT;.CMD",
             "USERPROFILE": str(root / "home"),
@@ -956,9 +1045,14 @@ def test_a_healthy_update_swaps_once_and_never_finishes_in_place(
     assert "This release adds" not in out
     assert "This release adds" not in transcript
     assert "Swapped in " in transcript
-    assert f"My Claude Code {NEW_VERSION} is installed and answering on port {full_run.port}." in out
+    assert (
+        f"My Claude Code {NEW_VERSION} is installed and answering on port {full_run.port}."
+        in out
+    )
     assert full_run.started_versions() == [NEW_VERSION]
-    installs = [call for call in full_run.uv_calls() if call.startswith("uv:tool install")]
+    installs = [
+        call for call in full_run.uv_calls() if call.startswith("uv:tool install")
+    ]
     assert len(installs) == 1, installs
     assert "--force" not in installs[0]
     assert (full_run.previous_root()).is_dir()
@@ -983,9 +1077,15 @@ def test_an_installed_launcher_that_cannot_report_its_version_still_swaps_and_st
         "The installed mcc-server could not report its version (exit 1): "
         "error: simulated --version failure"
     ) in transcript
-    assert "The installed mcc-server (version unknown) predates --report-holder; not asking it." in transcript
+    assert (
+        "The installed mcc-server (version unknown) predates --report-holder; not asking it."
+        in transcript
+    )
     assert "Swapped in " in transcript
-    assert f"My Claude Code {NEW_VERSION} is installed and answering on port {full_run.port}." in out
+    assert (
+        f"My Claude Code {NEW_VERSION} is installed and answering on port {full_run.port}."
+        in out
+    )
     assert full_run.started_versions() == [NEW_VERSION]
 
 
@@ -1028,10 +1128,19 @@ def test_a_husk_is_moved_aside_and_installed_fresh(
         f"Found a broken My Claude Code environment at {canonical}: "
         "it has no Scripts\\python.exe; it has no uv-receipt.toml."
     ) in out
-    assert "Moved it aside to " in out and "-broken\\my-claude-code and installing a fresh copy in its place." in out
-    assert "There is no existing tool environment to stage beside; installing in place." in transcript
+    assert (
+        "Moved it aside to " in out
+        and "-broken\\my-claude-code and installing a fresh copy in its place." in out
+    )
+    assert (
+        "There is no existing tool environment to stage beside; installing in place."
+        in transcript
+    )
     assert f"My Claude Code {NEW_VERSION} is installed and verified." in out
-    assert f"My Claude Code {NEW_VERSION} is installed and answering on port {full_run.port}." in out
+    assert (
+        f"My Claude Code {NEW_VERSION} is installed and answering on port {full_run.port}."
+        in out
+    )
     assert full_run.started_versions() == [NEW_VERSION]
     assert (canonical / "Scripts" / "python.exe").is_file()
     assert (canonical / "VERSION").read_text(encoding="utf-8") == NEW_VERSION
@@ -1071,8 +1180,14 @@ def test_a_failed_in_place_finish_puts_the_previous_version_back(
     transcript = full_run.transcript_text()
 
     assert completed.returncode == 1, out + completed.stderr
-    assert "This release adds mcc-newcmd; uv has to write the launcher(s), so the install is finished in place." in out
-    assert "The install could not be finished in place: My Claude Code install failed:" in out
+    assert (
+        "This release adds mcc-newcmd; uv has to write the launcher(s), so the install is finished in place."
+        in out
+    )
+    assert (
+        "The install could not be finished in place: My Claude Code install failed:"
+        in out
+    )
     assert "uv said:" in out
     assert "(os error 32)" in out
     assert "Access is denied. (os error 5)" in out
