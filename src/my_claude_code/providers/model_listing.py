@@ -1,12 +1,14 @@
 """Provider model-list response parsing helpers."""
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelDefaultParameters,
     ModelDefaultParameterValue,
     ModelReasoningCapability,
+    ProviderModelDeclaration,
 )
 from my_claude_code.application.model_metadata import (
     ProviderModelInfo as _ProviderModelInfo,
@@ -148,9 +150,14 @@ def extract_openai_model_infos(
         if not included:
             continue
 
+        declared = declared_from_row(item)
         model_infos.setdefault(
             model_id,
-            _ProviderModelInfo(model_id=model_id, supports_thinking=supports_thinking),
+            _ProviderModelInfo(
+                model_id=model_id,
+                supports_thinking=supports_thinking,
+                declared=declared,
+            ),
         )
         if aliases_field is not None:
             aliases = _field(item, aliases_field)
@@ -166,10 +173,14 @@ def extract_openai_model_infos(
                         provider_name,
                         f"expected every {aliases_field} item to be a model id",
                     )
+                # An alias is the same row under another name, so it states
+                # what its row states.
                 model_infos.setdefault(
                     alias,
                     _ProviderModelInfo(
-                        model_id=alias, supports_thinking=supports_thinking
+                        model_id=alias,
+                        supports_thinking=supports_thinking,
+                        declared=declared,
                     ),
                 )
 
@@ -404,6 +415,7 @@ def _openrouter_dialect_model_info(
             supports_thinking="reasoning" in supported_parameter_names,
             supported_parameter_names=supported_parameter_names,
         ),
+        declared=declared_from_row(item),
     )
 
 
@@ -547,6 +559,142 @@ def _openrouter_accepts_images(item: Any) -> bool | None:
         isinstance(modality, str) and modality.strip().lower() == "image"
         for modality in modalities
     )
+
+
+#: Where a ``/models`` row states what a model accepts and produces, as pairs
+#: of paths read together, first pair that states wins. Data, not branches:
+#: the reader reads whatever shape a provider publishes and never asks which
+#: provider it is.
+#:
+#: - ``architecture.input_modalities``/``output_modalities``: the OpenRouter
+#:   dialect (OpenRouter, Nous Portal, Kilo);
+#: - ``input_modalities``/``output_modalities``: Novita, chutes, zenmux, xAI;
+#: - ``modalities.input``/``modalities.output``: Vercel's AI Gateway.
+_MODALITY_PAIR_PATHS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("architecture", "input_modalities"), ("architecture", "output_modalities")),
+    (("input_modalities",), ("output_modalities",)),
+    (("modalities", "input"), ("modalities", "output")),
+)
+#: The OpenRouter dialect's one-string summary, ``"text+image->text"``. Read
+#: only when no row path above states a list pair, because the lists are the
+#: richer statement and the string is their abbreviation.
+_MODALITY_SUMMARY_PATH: tuple[str, ...] = ("architecture", "modality")
+_MODALITY_SUMMARY_ARROW = "->"
+#: A provider's one-word model type: Novita ``model_type``, Vercel and
+#: together ``type``, deepinfra ``reported_type``. First that states wins.
+_MODEL_TYPE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("model_type",),
+    ("type",),
+    ("reported_type",),
+)
+#: The endpoints a provider says serve a model: new-api's
+#: ``supported_endpoint_types``, Command Code's and LiteLLM proxies'
+#: ``supported_endpoints``, Novita's ``endpoints``. First that states wins.
+_ENDPOINT_PATHS: tuple[tuple[str, ...], ...] = (
+    ("supported_endpoint_types",),
+    ("supported_endpoints",),
+    ("endpoints",),
+)
+
+
+def declared_from_row(item: Any) -> ProviderModelDeclaration | None:
+    """What one ``/models`` row says the model is, or ``None`` if it says nothing.
+
+    Never raises. Every path here is optional -- no profile requires it and no
+    parser has ever read it -- so a row that publishes one of them in a shape
+    this cannot read has simply not stated it, and discovery goes on exactly
+    as it did before this reader existed. A malformed path defers to the next
+    path that states the same thing, as a ``None`` rung defers on the ladder.
+
+    The words are kept as published: lower-cased, de-duplicated, sorted, and
+    otherwise untouched. Mapping them onto kinds is the job of whoever reads
+    them, never of the parser that recorded them.
+    """
+
+    try:
+        modalities = _declared_modalities(item)
+        model_type = _first_stated(item, _MODEL_TYPE_PATHS, _word)
+        endpoints = _first_stated(item, _ENDPOINT_PATHS, _words)
+    except Exception:
+        # Belt and braces for a payload object whose attribute access itself
+        # misbehaves: an optional field is never worth a failed sweep.
+        return None
+    if modalities is None and model_type is None and endpoints is None:
+        return None
+    return ProviderModelDeclaration(
+        modalities=modalities, model_type=model_type, endpoints=endpoints
+    )
+
+
+def _declared_modalities(item: Any) -> DeclaredModalities | None:
+    for input_path, output_path in _MODALITY_PAIR_PATHS:
+        inputs = _words(_stated_path(item, input_path))
+        outputs = _words(_stated_path(item, output_path))
+        if inputs is not None and outputs is not None:
+            return DeclaredModalities(inputs=inputs, outputs=outputs)
+    return _modalities_from_summary(_stated_path(item, _MODALITY_SUMMARY_PATH))
+
+
+def _modalities_from_summary(value: Any) -> DeclaredModalities | None:
+    """``"text+image->text"`` as a pair, or ``None`` for anything else."""
+
+    if not isinstance(value, str) or value.count(_MODALITY_SUMMARY_ARROW) != 1:
+        return None
+    left, right = value.split(_MODALITY_SUMMARY_ARROW)
+    inputs = _words(left.split("+"))
+    outputs = _words(right.split("+"))
+    if inputs is None or outputs is None:
+        return None
+    return DeclaredModalities(inputs=inputs, outputs=outputs)
+
+
+def _first_stated[T](
+    item: Any,
+    paths: tuple[tuple[str, ...], ...],
+    read: Callable[[Any], T | None],
+) -> T | None:
+    for path in paths:
+        value = read(_stated_path(item, path))
+        if value is not None:
+            return value
+    return None
+
+
+def _stated_path(item: Any, path: tuple[str, ...]) -> Any:
+    current = item
+    for name in path:
+        current = _field(current, name)
+        if current is None:
+            return None
+    return current
+
+
+def _word(value: Any) -> str | None:
+    """One published word, or ``None`` when it is not a non-empty string."""
+
+    if not isinstance(value, str):
+        return None
+    word = value.strip().lower()
+    return word or None
+
+
+def _words(value: Any) -> tuple[str, ...] | None:
+    """A published word list, or ``None`` unless every entry is a word.
+
+    An empty list states nothing -- Nous publishes ``[]`` for models it has
+    not described -- and a list with one entry that is not a word is a list
+    this cannot vouch for, so neither is half a statement.
+    """
+
+    if not _is_sequence(value):
+        return None
+    words: set[str] = set()
+    for entry in value:
+        word = _word(entry)
+        if word is None:
+            return None
+        words.add(word)
+    return tuple(sorted(words)) if words else None
 
 
 def _field(item: Any, name: str) -> Any:

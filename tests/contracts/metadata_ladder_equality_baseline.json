@@ -1,0 +1,5326 @@
+{
+ "admin/catalogue-models": {
+  "bytes": 222292,
+  "sha256": "9e1cb51d2ae8b9077fb33329ef72dbb4cc9957de7a1f8812f79d1f0864fbcf06"
+ },
+ "admin/catalogue-models?provenance=1": {
+  "bytes": 364248,
+  "sha256": "9af8e614e7720b4779b26ffda4ce8c19217d7cd7e677963f879d7b40faf7f8e9"
+ },
+ "canonical/cline": [
+  "ProviderModelInfo(model_id=s:cline-pass/deepseek-v4.1-flash,supports_thinking=~,supports_vision=true,context_length=n:1000000,input_price=n:0.15,output_price=n:0.6,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)"
+ ],
+ "canonical/commandcode": [
+  "ProviderModelInfo(model_id=s:claude-sonnet-5-5,supports_thinking=~,supports_vision=true,context_length=n:1000000,input_price=n:2.0,output_price=n:10.0,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)",
+  "ProviderModelInfo(model_id=s:deepseek/deepseek-v4-flash-fast,supports_thinking=~,supports_vision=~,context_length=n:1000000,input_price=~,output_price=~,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)",
+  "ProviderModelInfo(model_id=s:gpt-6-astra,supports_thinking=~,supports_vision=true,context_length=n:1050000,input_price=n:10.0,output_price=n:50.0,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)"
+ ],
+ "canonical/hypercharm": [
+  "ProviderModelInfo(model_id=s:deepseek-v4.1-flash,supports_thinking=~,supports_vision=true,context_length=n:1048576,input_price=n:0.33,output_price=n:1.31,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)"
+ ],
+ "canonical/kilo": [
+  "ProviderModelInfo(model_id=s:kilo-auto/efficient,supports_thinking=true,supports_vision=true,context_length=n:1000000,input_price=n:0.325,output_price=n:1.95,max_output_tokens=n:65536,supported_parameters={s:include_reasoning,s:max_tokens,s:reasoning,s:temperature,s:tools},default_parameters=~,reasoning_capability=ModelReasoningCapability(can_reason=true,supports_effort_control=~,supports_toggle_control=true,supports_budget_control=true,supported_efforts=~,mandatory=~,default_enabled=~),listing=~)"
+ ],
+ "canonical/nous_portal": [
+  "ProviderModelInfo(model_id=s:anthropic/claude-sonnet-5,supports_thinking=true,supports_vision=true,context_length=n:1000000,input_price=n:2.0,output_price=n:10.0,max_output_tokens=~,supported_parameters={s:reasoning,s:tools},default_parameters=[],reasoning_capability=ModelReasoningCapability(can_reason=true,supports_effort_control=~,supports_toggle_control=true,supports_budget_control=true,supported_efforts=~,mandatory=~,default_enabled=~),listing=~)",
+  "ProviderModelInfo(model_id=s:tencent/hy3,supports_thinking=true,supports_vision=false,context_length=n:262144,input_price=n:0.13,output_price=n:0.53,max_output_tokens=n:131072,supported_parameters={s:frequency_penalty,s:include_reasoning,s:logit_bias,s:max_completion_tokens,s:max_tokens,s:min_p,s:presence_penalty,s:reasoning,s:reasoning_effort,s:repetition_penalty,s:response_format,s:seed,s:stop,s:structured_outputs,s:temperature,s:tool_choice,s:tools,s:top_k,s:top_p},default_parameters=[[s:temperature,n:0.9],[s:top_p,n:1]],reasoning_capability=ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=true,supports_budget_control=~,supported_efforts={e:high,e:low},mandatory=false,default_enabled=true),listing=~)"
+ ],
+ "canonical/novita": [
+  "ProviderModelInfo(model_id=s:ming-image-0.1-design,supports_thinking=~,supports_vision=~,context_length=~,input_price=~,output_price=~,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)",
+  "ProviderModelInfo(model_id=s:ming-image-0.1-design-layer,supports_thinking=~,supports_vision=~,context_length=~,input_price=~,output_price=~,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)",
+  "ProviderModelInfo(model_id=s:zai-org/glm-5.3-flash,supports_thinking=~,supports_vision=true,context_length=n:1048576,input_price=n:0.15,output_price=n:0.5,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)"
+ ],
+ "canonical/nvidia_nim": [
+  "ProviderModelInfo(model_id=s:01-ai/yi-large,supports_thinking=~,supports_vision=~,context_length=~,input_price=~,output_price=~,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)",
+  "ProviderModelInfo(model_id=s:moonshotai/kimi-k3,supports_thinking=~,supports_vision=true,context_length=n:1048576,input_price=n:0.0,output_price=n:0.0,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)"
+ ],
+ "canonical/open_router": [
+  "ProviderModelInfo(model_id=s:stepfun/step-5-preview,supports_thinking=true,supports_vision=true,context_length=n:1000000,input_price=n:1.0,output_price=n:2.7,max_output_tokens=n:64000,supported_parameters={s:frequency_penalty,s:include_reasoning,s:logprobs,s:max_tokens,s:reasoning,s:reasoning_effort,s:response_format,s:stop,s:structured_outputs,s:temperature,s:tools,s:top_logprobs,s:top_p},default_parameters=[],reasoning_capability=ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=~,supported_efforts={e:high,e:low,e:medium},mandatory=true,default_enabled=~),listing=~)"
+ ],
+ "canonical/opencode_go": [
+  "ProviderModelInfo(model_id=s:minimax-m3,supports_thinking=~,supports_vision=true,context_length=n:1000000,input_price=n:0.3,output_price=n:1.2,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)"
+ ],
+ "canonical/vercel": [
+  "ProviderModelInfo(model_id=s:alibaba/qwen-3-14b,supports_thinking=~,supports_vision=false,context_length=n:40960,input_price=n:0.12,output_price=n:0.24,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)",
+  "ProviderModelInfo(model_id=s:alibaba/qwen3-embedding-0.6b,supports_thinking=~,supports_vision=false,context_length=n:32768,input_price=~,output_price=~,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)",
+  "ProviderModelInfo(model_id=s:bfl/flux-2-flex,supports_thinking=~,supports_vision=false,context_length=~,input_price=~,output_price=~,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)",
+  "ProviderModelInfo(model_id=s:fish-audio/transcribe-1,supports_thinking=~,supports_vision=false,context_length=~,input_price=~,output_price=~,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)"
+ ],
+ "capabilities/cline/cline-pass/deepseek-v4.1-flash": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.003
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.15
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 384000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.6
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": [
+     "high",
+     "low",
+     "max"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/commandcode/claude-sonnet-5-5": {
+  "cache_read_price": {
+   "approximate": true,
+   "reference": false,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 7,
+   "tier_label": "cross-provider, exact id",
+   "value": 0.2
+  },
+  "cache_write_price": {
+   "approximate": true,
+   "reference": false,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 7,
+   "tier_label": "cross-provider, exact id",
+   "value": 2.5
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 2.0
+  },
+  "max_output_tokens": {
+   "agreement": 1.0,
+   "approximate": true,
+   "match_count": 15,
+   "reference": false,
+   "reporters": 15,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 7,
+   "tier_label": "cross-provider, exact id",
+   "value": 128000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 10.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": [
+     "high",
+     "low",
+     "max",
+     "medium",
+     "xhigh"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": true,
+   "reference": false,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 7,
+   "tier_label": "cross-provider, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/commandcode/deepseek/deepseek-v4-flash-fast": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  }
+ },
+ "capabilities/commandcode/gpt-6-astra": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 1.0
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 12.5
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1050000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 10.0
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 128000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 50.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": [
+     "high",
+     "low",
+     "max",
+     "medium",
+     "xhigh"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/hypercharm/deepseek-v4.1-flash": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.03
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1048576
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.33
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 262144
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1.31
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": [
+     "high",
+     "low",
+     "xhigh"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/kilo/kilo-auto/efficient": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.0325
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.40625
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.325
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 65536
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1.95
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.0
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "temperature",
+    "tools"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/nous_portal/anthropic/claude-sonnet-5": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 0.2
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 2.5
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": []
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 2.0
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 128000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 10.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": [
+     "high",
+     "low",
+     "max",
+     "medium",
+     "xhigh"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "reasoning",
+    "tools"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/nous_portal/tencent/hy3": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 0.033
+  },
+  "cache_write_price": {
+   "approximate": true,
+   "reference": false,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 9,
+   "tier_label": "cross-provider, bare model + tag",
+   "value": 0.0
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 262144
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    [
+     "temperature",
+     0.9
+    ],
+    [
+     "top_p",
+     1
+    ]
+   ]
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.13
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 131072
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.53
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": false
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": [
+     "high",
+     "low"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "capabilities/novita/ming-image-0.1-design": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  }
+ },
+ "capabilities/novita/ming-image-0.1-design-layer": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  }
+ },
+ "capabilities/novita/zai-org/glm-5.3-flash": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1048576
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.15
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.5
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/nvidia_nim/01-ai/yi-large": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  }
+ },
+ "capabilities/nvidia_nim/moonshotai/kimi-k3": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1048576
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.0
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 131072
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": [
+     "high",
+     "low",
+     "max"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/open_router/stepfun/step-5-preview": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": []
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1.0
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 64000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 2.7
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": [
+     "high",
+     "low",
+     "medium"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tools",
+    "top_logprobs",
+    "top_p"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/opencode_go/minimax-m3": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.06
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.3
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 131072
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1.2
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": {
+   "approximate": false,
+   "label": "chat_completions (profile)",
+   "note": "no registry entry for this model",
+   "offered": [
+    {
+     "label": "Chat Completions (/chat/completions)",
+     "value": "chat_completions"
+    },
+    {
+     "label": "Responses (/responses)",
+     "value": "responses"
+    },
+    {
+     "label": "Messages (/messages)",
+     "value": "messages"
+    }
+   ],
+   "override": "",
+   "reference": false,
+   "source": "profile",
+   "source_label": "this provider's declared first door",
+   "tier": null,
+   "tier_label": null,
+   "value": "chat_completions"
+  },
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "capabilities/vercel/alibaba/qwen-3-14b": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 40960
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.12
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 16384
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.24
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "capabilities/vercel/alibaba/qwen3-embedding-0.6b": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 32768
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 32768
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": false
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "capabilities/vercel/bfl/flux-2-flex": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": false
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "capabilities/vercel/fish-audio/transcribe-1": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": false
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "page": {
+  "bytes": 205645,
+  "sha256": "173c4088ae8a2eaf4066b01637271a6754540b61cb6c20789d75e93c367400ee"
+ },
+ "prices/cline/cline-pass/deepseek-v4.1-flash": [
+  "RateCard(source=s:models_dev,input_price=n:1.5e-07,output_price=n:6e-07,cache_read_price=n:3e-09,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:1.5e-07,output_price=n:6e-07,cache_read_price=n:3e-09,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)"
+ ],
+ "prices/commandcode/claude-sonnet-5-5": [
+  "RateCard(source=s:cross_provider,input_price=n:2e-06,output_price=n:1e-05,cache_read_price=n:2.0000000000000002e-07,cache_write_price=n:2.5e-06,reasoning_price=~,tier_label=s:cross_provider_exact)"
+ ],
+ "prices/commandcode/deepseek/deepseek-v4-flash-fast": [],
+ "prices/commandcode/gpt-6-astra": [
+  "RateCard(source=s:models_dev,input_price=n:1e-05,output_price=n:5e-05,cache_read_price=n:1e-06,cache_write_price=n:1.25e-05,reasoning_price=~,tier_label=s:openrouter_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:1e-05,output_price=n:5e-05,cache_read_price=n:1e-06,cache_write_price=n:1.25e-05,reasoning_price=~,tier_label=s:openrouter_exact)"
+ ],
+ "prices/hypercharm/deepseek-v4.1-flash": [
+  "RateCard(source=s:models_dev,input_price=n:3.3e-07,output_price=n:1.31e-06,cache_read_price=n:3e-08,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:3.3e-07,output_price=n:1.31e-06,cache_read_price=n:3e-08,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)"
+ ],
+ "prices/kilo/kilo-auto/efficient": [
+  "RateCard(source=s:models_dev,input_price=n:3.25e-07,output_price=n:1.95e-06,cache_read_price=n:3.25e-08,cache_write_price=n:4.0625e-07,reasoning_price=n:0.0,tier_label=s:models_dev_bucket_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:3.25e-07,output_price=n:1.95e-06,cache_read_price=n:3.25e-08,cache_write_price=n:4.0625e-07,reasoning_price=n:0.0,tier_label=s:models_dev_bucket_exact)"
+ ],
+ "prices/nous_portal/anthropic/claude-sonnet-5": [
+  "RateCard(source=s:models_dev,input_price=n:2e-06,output_price=n:1e-05,cache_read_price=n:2.0000000000000002e-07,cache_write_price=n:2.5e-06,reasoning_price=~,tier_label=s:openrouter_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:2e-06,output_price=n:1e-05,cache_read_price=n:2.0000000000000002e-07,cache_write_price=n:2.5e-06,reasoning_price=~,tier_label=s:openrouter_exact)"
+ ],
+ "prices/nous_portal/tencent/hy3": [
+  "RateCard(source=s:models_dev,input_price=n:1.3200000000000002e-07,output_price=n:5.280000000000001e-07,cache_read_price=n:3.3000000000000004e-08,cache_write_price=~,reasoning_price=~,tier_label=s:openrouter_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:1.3200000000000002e-07,output_price=n:5.280000000000001e-07,cache_read_price=n:3.3000000000000004e-08,cache_write_price=n:0.0,reasoning_price=~,tier_label=s:cross_provider_bare_tagged)"
+ ],
+ "prices/novita/ming-image-0.1-design": [],
+ "prices/novita/ming-image-0.1-design-layer": [],
+ "prices/novita/zai-org/glm-5.3-flash": [],
+ "prices/nvidia_nim/01-ai/yi-large": [],
+ "prices/nvidia_nim/moonshotai/kimi-k3": [
+  "RateCard(source=s:models_dev,input_price=n:0.0,output_price=n:0.0,cache_read_price=~,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:0.0,output_price=n:0.0,cache_read_price=~,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)"
+ ],
+ "prices/open_router/stepfun/step-5-preview": [],
+ "prices/opencode_go/minimax-m3": [
+  "RateCard(source=s:models_dev,input_price=n:3e-07,output_price=n:1.2e-06,cache_read_price=n:6e-08,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:3e-07,output_price=n:1.2e-06,cache_read_price=n:6e-08,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)"
+ ],
+ "prices/vercel/alibaba/qwen-3-14b": [
+  "RateCard(source=s:models_dev,input_price=n:1.2e-07,output_price=n:2.4e-07,cache_read_price=~,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)",
+  "RateCard(source=s:cross_provider,input_price=n:1.2e-07,output_price=n:2.4e-07,cache_read_price=~,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)"
+ ],
+ "prices/vercel/alibaba/qwen3-embedding-0.6b": [],
+ "prices/vercel/bfl/flux-2-flex": [],
+ "prices/vercel/fish-audio/transcribe-1": [],
+ "records/cline/enriched": [
+  {
+   "context_length": 1000000,
+   "default_parameters": null,
+   "input_price": 0.15,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "cline-pass/deepseek-v4.1-flash",
+   "output_price": 0.6,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": true
+  }
+ ],
+ "records/cline/parsed": [
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "cline-pass/deepseek-v4.1-flash",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  }
+ ],
+ "records/commandcode/enriched": [
+  {
+   "context_length": 1000000,
+   "default_parameters": null,
+   "input_price": 2.0,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "claude-sonnet-5-5",
+   "output_price": 10.0,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": true
+  },
+  {
+   "context_length": 1000000,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "deepseek/deepseek-v4-flash-fast",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": 1050000,
+   "default_parameters": null,
+   "input_price": 10.0,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "gpt-6-astra",
+   "output_price": 50.0,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": true
+  }
+ ],
+ "records/commandcode/parsed": [
+  {
+   "context_length": 1000000,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "claude-sonnet-5-5",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": 1000000,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "deepseek/deepseek-v4-flash-fast",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": 1050000,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "gpt-6-astra",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  }
+ ],
+ "records/hypercharm/enriched": [
+  {
+   "context_length": 1048576,
+   "default_parameters": null,
+   "input_price": 0.33,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "deepseek-v4.1-flash",
+   "output_price": 1.31,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": true
+  }
+ ],
+ "records/hypercharm/parsed": [
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "deepseek-v4.1-flash",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  }
+ ],
+ "records/kilo/enriched": [
+  {
+   "context_length": 1000000,
+   "default_parameters": null,
+   "input_price": 0.325,
+   "listing": null,
+   "max_output_tokens": 65536,
+   "model_id": "kilo-auto/efficient",
+   "output_price": 1.95,
+   "reasoning_capability": {
+    "can_reason": true,
+    "default_enabled": null,
+    "mandatory": null,
+    "supported_efforts": null,
+    "supports_budget_control": true,
+    "supports_effort_control": null,
+    "supports_toggle_control": true
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "temperature",
+    "tools"
+   ],
+   "supports_thinking": true,
+   "supports_vision": true
+  }
+ ],
+ "records/kilo/parsed": [
+  {
+   "context_length": 1000000,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": 65536,
+   "model_id": "kilo-auto/efficient",
+   "output_price": null,
+   "reasoning_capability": {
+    "can_reason": true,
+    "default_enabled": null,
+    "mandatory": null,
+    "supported_efforts": null,
+    "supports_budget_control": true,
+    "supports_effort_control": null,
+    "supports_toggle_control": true
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "temperature",
+    "tools"
+   ],
+   "supports_thinking": true,
+   "supports_vision": true
+  }
+ ],
+ "records/nous_portal/enriched": [
+  {
+   "context_length": 1000000,
+   "default_parameters": [],
+   "input_price": 2.0,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "anthropic/claude-sonnet-5",
+   "output_price": 10.0,
+   "reasoning_capability": {
+    "can_reason": true,
+    "default_enabled": null,
+    "mandatory": null,
+    "supported_efforts": null,
+    "supports_budget_control": true,
+    "supports_effort_control": null,
+    "supports_toggle_control": true
+   },
+   "supported_parameters": [
+    "reasoning",
+    "tools"
+   ],
+   "supports_thinking": true,
+   "supports_vision": true
+  },
+  {
+   "context_length": 262144,
+   "default_parameters": [
+    [
+     "temperature",
+     0.9
+    ],
+    [
+     "top_p",
+     1
+    ]
+   ],
+   "input_price": 0.13,
+   "listing": null,
+   "max_output_tokens": 131072,
+   "model_id": "tencent/hy3",
+   "output_price": 0.53,
+   "reasoning_capability": {
+    "can_reason": true,
+    "default_enabled": true,
+    "mandatory": false,
+    "supported_efforts": [
+     "high",
+     "low"
+    ],
+    "supports_budget_control": null,
+    "supports_effort_control": true,
+    "supports_toggle_control": true
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ],
+   "supports_thinking": true,
+   "supports_vision": false
+  }
+ ],
+ "records/nous_portal/parsed": [
+  {
+   "context_length": 1000000,
+   "default_parameters": [],
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "anthropic/claude-sonnet-5",
+   "output_price": null,
+   "reasoning_capability": {
+    "can_reason": true,
+    "default_enabled": null,
+    "mandatory": null,
+    "supported_efforts": null,
+    "supports_budget_control": true,
+    "supports_effort_control": null,
+    "supports_toggle_control": true
+   },
+   "supported_parameters": [
+    "reasoning",
+    "tools"
+   ],
+   "supports_thinking": true,
+   "supports_vision": null
+  },
+  {
+   "context_length": 262144,
+   "default_parameters": [
+    [
+     "temperature",
+     0.9
+    ],
+    [
+     "top_p",
+     1
+    ]
+   ],
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": 131072,
+   "model_id": "tencent/hy3",
+   "output_price": null,
+   "reasoning_capability": {
+    "can_reason": true,
+    "default_enabled": true,
+    "mandatory": false,
+    "supported_efforts": [
+     "high",
+     "low"
+    ],
+    "supports_budget_control": null,
+    "supports_effort_control": true,
+    "supports_toggle_control": true
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ],
+   "supports_thinking": true,
+   "supports_vision": false
+  }
+ ],
+ "records/novita/enriched": [
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "ming-image-0.1-design",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "ming-image-0.1-design-layer",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": 1048576,
+   "default_parameters": null,
+   "input_price": 0.15,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "zai-org/glm-5.3-flash",
+   "output_price": 0.5,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": true
+  }
+ ],
+ "records/novita/parsed": [
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "ming-image-0.1-design",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "ming-image-0.1-design-layer",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "zai-org/glm-5.3-flash",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  }
+ ],
+ "records/nvidia_nim/enriched": [
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "01-ai/yi-large",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": 1048576,
+   "default_parameters": null,
+   "input_price": 0.0,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "moonshotai/kimi-k3",
+   "output_price": 0.0,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": true
+  }
+ ],
+ "records/nvidia_nim/parsed": [
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "01-ai/yi-large",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "moonshotai/kimi-k3",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  }
+ ],
+ "records/open_router/enriched": [
+  {
+   "context_length": 1000000,
+   "default_parameters": [],
+   "input_price": 1.0,
+   "listing": null,
+   "max_output_tokens": 64000,
+   "model_id": "stepfun/step-5-preview",
+   "output_price": 2.7,
+   "reasoning_capability": {
+    "can_reason": true,
+    "default_enabled": null,
+    "mandatory": true,
+    "supported_efforts": [
+     "high",
+     "low",
+     "medium"
+    ],
+    "supports_budget_control": null,
+    "supports_effort_control": true,
+    "supports_toggle_control": false
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tools",
+    "top_logprobs",
+    "top_p"
+   ],
+   "supports_thinking": true,
+   "supports_vision": true
+  }
+ ],
+ "records/open_router/parsed": [
+  {
+   "context_length": 1000000,
+   "default_parameters": [],
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": 64000,
+   "model_id": "stepfun/step-5-preview",
+   "output_price": null,
+   "reasoning_capability": {
+    "can_reason": true,
+    "default_enabled": null,
+    "mandatory": true,
+    "supported_efforts": [
+     "high",
+     "low",
+     "medium"
+    ],
+    "supports_budget_control": null,
+    "supports_effort_control": true,
+    "supports_toggle_control": false
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tools",
+    "top_logprobs",
+    "top_p"
+   ],
+   "supports_thinking": true,
+   "supports_vision": true
+  }
+ ],
+ "records/opencode_go/enriched": [
+  {
+   "context_length": 1000000,
+   "default_parameters": null,
+   "input_price": 0.3,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "minimax-m3",
+   "output_price": 1.2,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": true
+  }
+ ],
+ "records/opencode_go/parsed": [
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "minimax-m3",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  }
+ ],
+ "records/vercel/enriched": [
+  {
+   "context_length": 40960,
+   "default_parameters": null,
+   "input_price": 0.12,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "alibaba/qwen-3-14b",
+   "output_price": 0.24,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": false
+  },
+  {
+   "context_length": 32768,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "alibaba/qwen3-embedding-0.6b",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": false
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "bfl/flux-2-flex",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": false
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "fish-audio/transcribe-1",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": false
+  }
+ ],
+ "records/vercel/parsed": [
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "alibaba/qwen-3-14b",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "alibaba/qwen3-embedding-0.6b",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "bfl/flux-2-flex",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  },
+  {
+   "context_length": null,
+   "default_parameters": null,
+   "input_price": null,
+   "listing": null,
+   "max_output_tokens": null,
+   "model_id": "fish-audio/transcribe-1",
+   "output_price": null,
+   "reasoning_capability": null,
+   "supported_parameters": null,
+   "supports_thinking": null,
+   "supports_vision": null
+  }
+ ],
+ "routing/cline/cline-pass/deepseek-v4.1-flash": {
+  "context_length": 1000000,
+  "output_limit": 384000,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=false,supported_efforts={e:high,e:low,e:max},mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:medium,e:minimal},toggle=false,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:,budget_field=s:,origin=e:default,learned_rejections=[])",
+  "thinking": null,
+  "vision": true
+ },
+ "routing/commandcode/claude-sonnet-5-5": {
+  "context_length": 1000000,
+  "output_limit": 128000,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=false,supported_efforts={e:high,e:low,e:max,e:medium,e:xhigh},mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values=~,toggle=true,budget=true,off=true,adaptive=true,effort_field=s:,toggle_field=s:thinking.type,budget_field=s:thinking.budget_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": true
+ },
+ "routing/commandcode/deepseek/deepseek-v4-flash-fast": {
+  "context_length": 1000000,
+  "output_limit": null,
+  "reasoning_capability": "~",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:xhigh},toggle=true,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:reasoning_effort,budget_field=s:,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": null
+ },
+ "routing/commandcode/gpt-6-astra": {
+  "context_length": 1050000,
+  "output_limit": 128000,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=false,supported_efforts={e:high,e:low,e:max,e:medium,e:xhigh},mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:xhigh},toggle=true,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:reasoning_effort,budget_field=s:,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": true
+ },
+ "routing/hypercharm/deepseek-v4.1-flash": {
+  "context_length": 1048576,
+  "output_limit": 262144,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=false,supported_efforts={e:high,e:low,e:xhigh},mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:medium,e:minimal},toggle=false,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:,budget_field=s:,origin=e:default,learned_rejections=[])",
+  "thinking": null,
+  "vision": true
+ },
+ "routing/kilo/kilo-auto/efficient": {
+  "context_length": 1000000,
+  "output_limit": 65536,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=false,supports_toggle_control=true,supports_budget_control=true,supported_efforts=~,mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:minimal,e:xhigh},toggle=true,budget=true,off=true,adaptive=false,effort_field=s:reasoning.effort,toggle_field=s:reasoning.enabled,budget_field=s:reasoning.max_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": true,
+  "vision": true
+ },
+ "routing/nous_portal/anthropic/claude-sonnet-5": {
+  "context_length": 1000000,
+  "output_limit": 128000,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=true,supports_budget_control=true,supported_efforts={e:high,e:low,e:max,e:medium,e:xhigh},mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:minimal,e:xhigh},toggle=true,budget=true,off=true,adaptive=false,effort_field=s:reasoning.effort,toggle_field=s:reasoning.enabled,budget_field=s:reasoning.max_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": true,
+  "vision": true
+ },
+ "routing/nous_portal/tencent/hy3": {
+  "context_length": 262144,
+  "output_limit": 131072,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=true,supports_budget_control=false,supported_efforts={e:high,e:low},mandatory=false,default_enabled=true)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:minimal,e:xhigh},toggle=true,budget=true,off=true,adaptive=false,effort_field=s:reasoning.effort,toggle_field=s:reasoning.enabled,budget_field=s:reasoning.max_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": true,
+  "vision": false
+ },
+ "routing/novita/ming-image-0.1-design": {
+  "context_length": null,
+  "output_limit": null,
+  "reasoning_capability": "~",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:medium,e:minimal},toggle=false,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:,budget_field=s:,origin=e:default,learned_rejections=[])",
+  "thinking": null,
+  "vision": null
+ },
+ "routing/novita/ming-image-0.1-design-layer": {
+  "context_length": null,
+  "output_limit": null,
+  "reasoning_capability": "~",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:medium,e:minimal},toggle=false,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:,budget_field=s:,origin=e:default,learned_rejections=[])",
+  "thinking": null,
+  "vision": null
+ },
+ "routing/novita/zai-org/glm-5.3-flash": {
+  "context_length": 1048576,
+  "output_limit": null,
+  "reasoning_capability": "~",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:medium,e:minimal},toggle=false,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:,budget_field=s:,origin=e:default,learned_rejections=[])",
+  "thinking": null,
+  "vision": true
+ },
+ "routing/nvidia_nim/01-ai/yi-large": {
+  "context_length": null,
+  "output_limit": null,
+  "reasoning_capability": "~",
+  "reasoning_dialect": "ReasoningDialect(effort_values=~,toggle=true,budget=true,off=true,adaptive=false,effort_field=s:,toggle_field=s:chat_template_kwargs.thinking,budget_field=s:chat_template_kwargs.reasoning_budget,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": null
+ },
+ "routing/nvidia_nim/moonshotai/kimi-k3": {
+  "context_length": 1048576,
+  "output_limit": 131072,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=true,supports_budget_control=false,supported_efforts={e:high,e:low,e:max},mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values=~,toggle=true,budget=true,off=true,adaptive=false,effort_field=s:,toggle_field=s:chat_template_kwargs.thinking,budget_field=s:chat_template_kwargs.reasoning_budget,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": true
+ },
+ "routing/open_router/stepfun/step-5-preview": {
+  "context_length": 1000000,
+  "output_limit": 64000,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=~,supported_efforts={e:high,e:low,e:medium},mandatory=true,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:minimal,e:xhigh},toggle=true,budget=true,off=true,adaptive=false,effort_field=s:reasoning.effort,toggle_field=s:reasoning.enabled,budget_field=s:reasoning.max_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": true,
+  "vision": true
+ },
+ "routing/opencode_go/minimax-m3": {
+  "context_length": 1000000,
+  "output_limit": 131072,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=false,supports_toggle_control=true,supports_budget_control=false,supported_efforts=~,mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:medium,e:minimal},toggle=false,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:,budget_field=s:,origin=e:default,learned_rejections=[])",
+  "thinking": null,
+  "vision": true
+ },
+ "routing/vercel/alibaba/qwen-3-14b": {
+  "context_length": 40960,
+  "output_limit": 16384,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=false,supports_toggle_control=true,supports_budget_control=false,supported_efforts=~,mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:minimal,e:xhigh},toggle=true,budget=true,off=true,adaptive=false,effort_field=s:reasoning.effort,toggle_field=s:reasoning.enabled,budget_field=s:reasoning.max_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": false
+ },
+ "routing/vercel/alibaba/qwen3-embedding-0.6b": {
+  "context_length": 32768,
+  "output_limit": 32768,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=false,supports_effort_control=~,supports_toggle_control=~,supports_budget_control=~,supported_efforts=~,mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:minimal,e:xhigh},toggle=true,budget=true,off=true,adaptive=false,effort_field=s:reasoning.effort,toggle_field=s:reasoning.enabled,budget_field=s:reasoning.max_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": false
+ },
+ "routing/vercel/bfl/flux-2-flex": {
+  "context_length": null,
+  "output_limit": null,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=false,supports_effort_control=~,supports_toggle_control=~,supports_budget_control=~,supported_efforts=~,mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:minimal,e:xhigh},toggle=true,budget=true,off=true,adaptive=false,effort_field=s:reasoning.effort,toggle_field=s:reasoning.enabled,budget_field=s:reasoning.max_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": false
+ },
+ "routing/vercel/fish-audio/transcribe-1": {
+  "context_length": null,
+  "output_limit": null,
+  "reasoning_capability": "ModelReasoningCapability(can_reason=false,supports_effort_control=~,supports_toggle_control=~,supports_budget_control=~,supported_efforts=~,mandatory=~,default_enabled=~)",
+  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:minimal,e:xhigh},toggle=true,budget=true,off=true,adaptive=false,effort_field=s:reasoning.effort,toggle_field=s:reasoning.enabled,budget_field=s:reasoning.max_tokens,origin=e:declared,learned_rejections=[])",
+  "thinking": null,
+  "vision": false
+ },
+ "serialiser/aider": {
+  "bytes": 14671,
+  "sha256": "b89d543831f7fcc4f1d8638123d550dada96bf5e7036e441b8f20434646cfaca"
+ },
+ "serialiser/cline": {
+  "bytes": 4232,
+  "sha256": "aa744d5786b9ce3c6d3c413958ddfabf5959c7d33b1b8671d9ff8edeee28abfd"
+ },
+ "serialiser/codex": {
+  "bytes": 42368,
+  "sha256": "cd596c865f4812c761ea4009a61deb50769518cff3676e501409d4ce83176f57"
+ },
+ "serialiser/commandcode": {
+  "bytes": 9532,
+  "sha256": "7d21e8968920910db5a2da519cae0eeffe3dcfb18c887d65bd960d51802d0758"
+ },
+ "serialiser/crush": {
+  "bytes": 17494,
+  "sha256": "a166aeeb73278ac5829b0a6a1a607c3b96ec9e6cef08047c962b8e13ae9d850a"
+ },
+ "serialiser/droid": {
+  "bytes": 10417,
+  "sha256": "2ef589f9660b9c8c1fa124d90d49675f609d28317455c6e3929be702e10a269e"
+ },
+ "serialiser/gemini_cli": {
+  "bytes": 8245,
+  "sha256": "8c63dc9c78fb29ec3a51b78f8625efb3c628a3b1ffa5c3178462e579308ab9e5"
+ },
+ "serialiser/goose": {
+  "bytes": 9895,
+  "sha256": "69f46955fe5cf69716f792ad181129c61788bac0e457fb02f8b769c53d98df17"
+ },
+ "serialiser/kilo": {
+  "bytes": 11348,
+  "sha256": "286a979923feb6644c6aef02cfcd343952f6693f5f895ef5d8cadf1a8e593698"
+ },
+ "serialiser/kimi": {
+  "bytes": 8189,
+  "sha256": "483e0c47a6a4b88d3eade3f29e9804dafcc693ea05eebc85bfdbe634883289fa"
+ },
+ "serialiser/opencode": {
+  "bytes": 13544,
+  "sha256": "6d054fc1db02bd1185f304d0e02e31f1e8e38eb844b4352851395c10759452ec"
+ },
+ "serialiser/pi": {
+  "bytes": 11108,
+  "sha256": "8d363de6473819e219d29582c6919a2c965e1c6e267da29b06e9bd6dccfcb1a2"
+ },
+ "serialiser/qwen": {
+  "bytes": 11337,
+  "sha256": "e68a1bb1bbc02784319b20410aa21e17d126d4bbe8e00b16fbdd825d531eb582"
+ },
+ "serialiser/vscode": {
+  "bytes": 7082,
+  "sha256": "3af12c264f80551e171eaa935f5a6e513f34c17ea8fd7a9e9d9c530302beb58b"
+ },
+ "v1/models": {
+  "data": [
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/test-model",
+    "id": "anthropic/nvidia_nim/test-model",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/test-model (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nvidia_nim/test-model",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/01-ai/yi-large",
+    "id": "anthropic/nvidia_nim/01-ai/yi-large",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/01-ai/yi-large (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nvidia_nim/01-ai/yi-large",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/moonshotai/kimi-k3",
+    "id": "anthropic/nvidia_nim/moonshotai/kimi-k3",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/moonshotai/kimi-k3 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nvidia_nim/moonshotai/kimi-k3",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "open_router/stepfun/step-5-preview",
+    "id": "anthropic/open_router/stepfun/step-5-preview",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "open_router/stepfun/step-5-preview (no thinking)",
+    "id": "claude-3-freecc-no-thinking/open_router/stepfun/step-5-preview",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "opencode_go/minimax-m3",
+    "id": "anthropic/opencode_go/minimax-m3",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "opencode_go/minimax-m3 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/opencode_go/minimax-m3",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "vercel/alibaba/qwen-3-14b",
+    "id": "anthropic/vercel/alibaba/qwen-3-14b",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "vercel/alibaba/qwen-3-14b (no thinking)",
+    "id": "claude-3-freecc-no-thinking/vercel/alibaba/qwen-3-14b",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "vercel/alibaba/qwen3-embedding-0.6b",
+    "id": "anthropic/vercel/alibaba/qwen3-embedding-0.6b",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "vercel/alibaba/qwen3-embedding-0.6b (no thinking)",
+    "id": "claude-3-freecc-no-thinking/vercel/alibaba/qwen3-embedding-0.6b",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/ming-image-0.1-design",
+    "id": "anthropic/novita/ming-image-0.1-design",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/ming-image-0.1-design (no thinking)",
+    "id": "claude-3-freecc-no-thinking/novita/ming-image-0.1-design",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/ming-image-0.1-design-layer",
+    "id": "anthropic/novita/ming-image-0.1-design-layer",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/ming-image-0.1-design-layer (no thinking)",
+    "id": "claude-3-freecc-no-thinking/novita/ming-image-0.1-design-layer",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/zai-org/glm-5.3-flash",
+    "id": "anthropic/novita/zai-org/glm-5.3-flash",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/zai-org/glm-5.3-flash (no thinking)",
+    "id": "claude-3-freecc-no-thinking/novita/zai-org/glm-5.3-flash",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nous_portal/anthropic/claude-sonnet-5",
+    "id": "anthropic/nous_portal/anthropic/claude-sonnet-5",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nous_portal/anthropic/claude-sonnet-5 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nous_portal/anthropic/claude-sonnet-5",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nous_portal/tencent/hy3",
+    "id": "anthropic/nous_portal/tencent/hy3",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nous_portal/tencent/hy3 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nous_portal/tencent/hy3",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "kilo/kilo-auto/efficient",
+    "id": "anthropic/kilo/kilo-auto/efficient",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "kilo/kilo-auto/efficient (no thinking)",
+    "id": "claude-3-freecc-no-thinking/kilo/kilo-auto/efficient",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/claude-sonnet-5-5",
+    "id": "anthropic/commandcode/claude-sonnet-5-5",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/claude-sonnet-5-5 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/commandcode/claude-sonnet-5-5",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/deepseek/deepseek-v4-flash-fast",
+    "id": "anthropic/commandcode/deepseek/deepseek-v4-flash-fast",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/deepseek/deepseek-v4-flash-fast (no thinking)",
+    "id": "claude-3-freecc-no-thinking/commandcode/deepseek/deepseek-v4-flash-fast",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/gpt-6-astra",
+    "id": "anthropic/commandcode/gpt-6-astra",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/gpt-6-astra (no thinking)",
+    "id": "claude-3-freecc-no-thinking/commandcode/gpt-6-astra",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "cline/cline-pass/deepseek-v4.1-flash",
+    "id": "anthropic/cline/cline-pass/deepseek-v4.1-flash",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "cline/cline-pass/deepseek-v4.1-flash (no thinking)",
+    "id": "claude-3-freecc-no-thinking/cline/cline-pass/deepseek-v4.1-flash",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "hypercharm/deepseek-v4.1-flash",
+    "id": "anthropic/hypercharm/deepseek-v4.1-flash",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "hypercharm/deepseek-v4.1-flash (no thinking)",
+    "id": "claude-3-freecc-no-thinking/hypercharm/deepseek-v4.1-flash",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2026-06-09T00:00:00Z",
+    "display_name": "Claude Mythos 5.1",
+    "id": "claude-mythos-5.1",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2026-06-09T00:00:00Z",
+    "display_name": "Claude Mythos 5",
+    "id": "claude-mythos-5",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2026-06-09T00:00:00Z",
+    "display_name": "Claude Fable 5",
+    "id": "claude-fable-5",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2025-05-14T00:00:00Z",
+    "display_name": "Claude Opus 4",
+    "id": "claude-opus-4-20250514",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2025-05-14T00:00:00Z",
+    "display_name": "Claude Sonnet 4",
+    "id": "claude-sonnet-4-20250514",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2025-05-14T00:00:00Z",
+    "display_name": "Claude Haiku 4",
+    "id": "claude-haiku-4-20250514",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2024-02-29T00:00:00Z",
+    "display_name": "Claude 3 Opus",
+    "id": "claude-3-opus-20240229",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2024-10-22T00:00:00Z",
+    "display_name": "Claude 3.5 Sonnet",
+    "id": "claude-3-5-sonnet-20241022",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2024-03-07T00:00:00Z",
+    "display_name": "Claude 3 Haiku",
+    "id": "claude-3-haiku-20240307",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2024-10-22T00:00:00Z",
+    "display_name": "Claude 3.5 Haiku",
+    "id": "claude-3-5-haiku-20241022",
+    "is_family_default": null,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "mythos",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Mythos (nvidia_nim/test-model)",
+    "id": "mcc/cyber",
+    "is_family_default": true,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "mythos",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Mythos (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/cyber",
+    "is_family_default": false,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "fable",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Best (nvidia_nim/test-model)",
+    "id": "mcc/best",
+    "is_family_default": true,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "fable",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Best (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/best",
+    "is_family_default": false,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "opus",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Good (nvidia_nim/test-model)",
+    "id": "mcc/good",
+    "is_family_default": true,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "opus",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Good (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/good",
+    "is_family_default": false,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "sonnet",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Medium (nvidia_nim/test-model)",
+    "id": "mcc/medium",
+    "is_family_default": true,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "sonnet",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Medium (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/medium",
+    "is_family_default": false,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "haiku",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Cheap (nvidia_nim/test-model)",
+    "id": "mcc/cheap",
+    "is_family_default": true,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "haiku",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Cheap (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/cheap",
+    "is_family_default": false,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "sonnet",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Vision (nvidia_nim/test-model)",
+    "id": "mcc/vision",
+    "is_family_default": false,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "sonnet",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Vision (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/vision",
+    "is_family_default": false,
+    "object": "model",
+    "owned_by": "free-claude-code",
+    "type": "model"
+   }
+  ],
+  "first_id": "anthropic/nvidia_nim/test-model",
+  "has_more": false,
+  "last_id": "anthropic/mcc/vision",
+  "object": "list"
+ },
+ "v1beta/models": {
+  "models": [
+   {
+    "displayName": "Mythos (nvidia_nim/test-model)",
+    "name": "models/anthropic/mcc/cyber",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "Best (nvidia_nim/test-model)",
+    "name": "models/anthropic/mcc/best",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "Good (nvidia_nim/test-model)",
+    "name": "models/anthropic/mcc/good",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "Medium (nvidia_nim/test-model)",
+    "name": "models/anthropic/mcc/medium",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "Cheap (nvidia_nim/test-model)",
+    "name": "models/anthropic/mcc/cheap",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "Vision (nvidia_nim/test-model)",
+    "name": "models/anthropic/mcc/vision",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "nvidia_nim/test-model",
+    "name": "models/anthropic/nvidia_nim/test-model",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "nvidia_nim/01-ai/yi-large",
+    "name": "models/anthropic/nvidia_nim/01-ai/yi-large",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "nvidia_nim/moonshotai/kimi-k3",
+    "inputTokenLimit": 1048576,
+    "name": "models/anthropic/nvidia_nim/moonshotai/kimi-k3",
+    "outputTokenLimit": 131072,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "open_router/stepfun/step-5-preview",
+    "inputTokenLimit": 1000000,
+    "name": "models/anthropic/open_router/stepfun/step-5-preview",
+    "outputTokenLimit": 64000,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "opencode_go/minimax-m3",
+    "inputTokenLimit": 1000000,
+    "name": "models/anthropic/opencode_go/minimax-m3",
+    "outputTokenLimit": 131072,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "vercel/alibaba/qwen-3-14b",
+    "inputTokenLimit": 40960,
+    "name": "models/anthropic/vercel/alibaba/qwen-3-14b",
+    "outputTokenLimit": 16384,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "vercel/alibaba/qwen3-embedding-0.6b",
+    "inputTokenLimit": 32768,
+    "name": "models/anthropic/vercel/alibaba/qwen3-embedding-0.6b",
+    "outputTokenLimit": 32768,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "novita/ming-image-0.1-design",
+    "name": "models/anthropic/novita/ming-image-0.1-design",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "novita/ming-image-0.1-design-layer",
+    "name": "models/anthropic/novita/ming-image-0.1-design-layer",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "novita/zai-org/glm-5.3-flash",
+    "inputTokenLimit": 1048576,
+    "name": "models/anthropic/novita/zai-org/glm-5.3-flash",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "nous_portal/anthropic/claude-sonnet-5",
+    "inputTokenLimit": 1000000,
+    "name": "models/anthropic/nous_portal/anthropic/claude-sonnet-5",
+    "outputTokenLimit": 128000,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "nous_portal/tencent/hy3",
+    "inputTokenLimit": 262144,
+    "name": "models/anthropic/nous_portal/tencent/hy3",
+    "outputTokenLimit": 131072,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "kilo/kilo-auto/efficient",
+    "inputTokenLimit": 1000000,
+    "name": "models/anthropic/kilo/kilo-auto/efficient",
+    "outputTokenLimit": 65536,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "commandcode/claude-sonnet-5-5",
+    "inputTokenLimit": 1000000,
+    "name": "models/anthropic/commandcode/claude-sonnet-5-5",
+    "outputTokenLimit": 128000,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "commandcode/deepseek/deepseek-v4-flash-fast",
+    "inputTokenLimit": 1000000,
+    "name": "models/anthropic/commandcode/deepseek/deepseek-v4-flash-fast",
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "commandcode/gpt-6-astra",
+    "inputTokenLimit": 1050000,
+    "name": "models/anthropic/commandcode/gpt-6-astra",
+    "outputTokenLimit": 128000,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "cline/cline-pass/deepseek-v4.1-flash",
+    "inputTokenLimit": 1000000,
+    "name": "models/anthropic/cline/cline-pass/deepseek-v4.1-flash",
+    "outputTokenLimit": 384000,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   },
+   {
+    "displayName": "hypercharm/deepseek-v4.1-flash",
+    "inputTokenLimit": 1048576,
+    "name": "models/anthropic/hypercharm/deepseek-v4.1-flash",
+    "outputTokenLimit": 262144,
+    "supportedGenerationMethods": [
+     "generateContent",
+     "streamGenerateContent",
+     "countTokens"
+    ]
+   }
+  ]
+ }
+}

@@ -27377,6 +27377,14 @@ function buildCapabilityPanel(capabilities, labels, model) {
     rows.push(["output limit", capabilities.max_output_tokens]);
     rows.push(["context length", capabilities.context_length]);
     rows.push(["reads images", capabilities.supports_vision]);
+    /* What the provider's own model list says this model is (7.79.0): what it
+       accepts and produces, its type word and the endpoints that serve it,
+       kept in the provider's own words. The first walks the ladder (the
+       provider's row, then models.dev); the other two only a provider
+       publishes. Shown, never acted on: no kind, list or route reads them. */
+    rows.push(["accepts → produces", capabilities.declared_modalities]);
+    rows.push(["model type (provider's word)", capabilities.declared_type]);
+    rows.push(["endpoints (provider's words)", capabilities.declared_endpoints]);
     /* The prices resolved long before anything read them: the ladder has
        returned a rate and a tier for every (provider, model) since 6.35.0 and
        no surface showed either. They carry the same provenance badge as every

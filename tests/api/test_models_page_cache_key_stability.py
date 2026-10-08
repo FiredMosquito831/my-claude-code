@@ -13,16 +13,18 @@ import os
 import pathlib
 import subprocess
 import sys
-from dataclasses import fields
+from dataclasses import fields, replace
 from typing import Any
 
 import pytest
 
 from my_claude_code.api.models_page_cache import capability_half_key
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelListingEvidence,
     ModelListingProvenance,
     ModelReasoningCapability,
+    ProviderModelDeclaration,
     ProviderModelInfo,
     canonical_model_info,
 )
@@ -72,6 +74,11 @@ def _info(parameters: tuple[str, ...] = _PARAMETERS) -> ProviderModelInfo:
             retirement_at="2027-01-01",
             replacement_model_id="prov/model-2",
             offered_by_default=True,
+        ),
+        declared=ProviderModelDeclaration(
+            modalities=DeclaredModalities(inputs=("image", "text"), outputs=("text",)),
+            model_type="chat",
+            endpoints=("/chat/completions", "/responses"),
         ),
     )
 
@@ -130,9 +137,23 @@ def test_a_catalogue_that_really_changed_gets_a_different_key() -> None:
 def test_every_field_of_the_catalogue_entry_reaches_the_digest() -> None:
     """A field the encoding skips is a change the key cannot see."""
     encoded = canonical_model_info(_info())
-    for record in (ProviderModelInfo, ModelReasoningCapability, ModelListingEvidence):
+    for record in (
+        ProviderModelInfo,
+        ModelReasoningCapability,
+        ModelListingEvidence,
+        ProviderModelDeclaration,
+        DeclaredModalities,
+    ):
         for field in fields(record):
             assert f"{field.name}=" in encoded
+
+
+def test_a_changed_declaration_is_a_different_catalogue() -> None:
+    """What the provider says a model is reaches the key like every other field."""
+    info = _info()
+    assert info.declared is not None
+    retyped = replace(info, declared=replace(info.declared, model_type="language"))
+    assert _key((info,)) != _key((retyped,))
 
 
 def test_an_unencodable_value_is_refused_rather_than_dropped() -> None:

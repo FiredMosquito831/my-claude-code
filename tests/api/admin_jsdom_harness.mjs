@@ -7025,6 +7025,45 @@ if (modelsLink) {
   models.surfaceMultiDoor = describeSurfacePanel(alpha.models[6]);
   models.surfaceSingleDoor = describeSurfacePanel(alpha.models[0]);
 
+  /* --- what the provider's own list says the model is (7.79.0): three rows
+     drawn by the panel's one row builder, each with its badge and rung. Built
+     from a capability record directly, as the surface rows above are. */
+  const declaredPanel = window.eval("buildCapabilityPanel")(
+    {
+      declared_modalities: {
+        value: "image, text → text",
+        source: "provider",
+        source_label: "provider /models",
+        approximate: false,
+        tier: 1,
+        tier_label: "provider /models, exact id",
+        inputs: ["image", "text"],
+        outputs: ["text"],
+      },
+      declared_type: {
+        value: "chat",
+        source: "provider",
+        source_label: "provider /models",
+        approximate: false,
+        tier: 1,
+        tier_label: "provider /models, exact id",
+      },
+      declared_endpoints: {
+        value: null,
+        source: "unknown",
+        source_label: "unknown",
+        approximate: false,
+        tier: null,
+        tier_label: null,
+      },
+    },
+    MODEL_ADMIN_PAGE.source_labels || {},
+    alpha.models[0],
+  );
+  models.declaredRows = Array.from(declaredPanel.querySelectorAll("tr")).map(
+    (row) => Array.from(row.children).map(flat),
+  );
+
   models.preferences = {};
   [0, 1, 2, 3, 4, 5, 6].forEach((index) => {
     const model = alpha.models[index];
