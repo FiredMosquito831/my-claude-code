@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
@@ -41,11 +42,28 @@ PROBE = {
     "display_name": "<img src=x onerror=alert(2)>Evil <b>Provider</b>",
 }
 
+# CI must not quietly pass the five jsdom tests below without running them.
+# The ordinary Linux pytest job has no jsdom, so this file runs in the `jsdom`
+# job of tests.yml, which sets MCC_CI=1; there a missing node or a missing
+# jsdom is the job's own bug and fails. Locally it still skips.
+ON_CI = os.environ.get("MCC_CI", "") not in ("", "0", "false")
+
+
+def _missing(reason: str) -> NoReturn:
+    if ON_CI:
+        pytest.fail(
+            f"MCC_CI=1 and {reason}. These are the only tests that run "
+            "admin.js against markup-shaped payloads; skipping them on CI "
+            "leaves the XSS contract unproven. Install Node and "
+            "`npm ci --prefix tests`."
+        )
+    pytest.skip(reason)
+
 
 def _run(auth_open_mode: str) -> dict:
     node = shutil.which("node")
     if node is None:
-        pytest.skip("node is not on PATH")
+        _missing("node is not on PATH")
     result = subprocess.run(
         [node, str(HARNESS), str(STATIC_DIR)],
         capture_output=True,
@@ -60,7 +78,7 @@ def _run(auth_open_mode: str) -> dict:
     )
     if result.returncode != 0:
         if "Cannot find package 'jsdom'" in result.stderr:
-            pytest.skip("jsdom is not installed")
+            _missing("jsdom is not installed")
         pytest.fail(f"harness failed: {result.stderr[-2000:]}")
     return json.loads(result.stdout)
 
