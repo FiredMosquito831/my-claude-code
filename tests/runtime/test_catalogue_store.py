@@ -12,11 +12,15 @@ import time
 from dataclasses import fields
 from typing import Any
 
+import pytest
+
 from my_claude_code.application import model_metadata
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelListingEvidence,
     ModelListingProvenance,
     ModelReasoningCapability,
+    ProviderModelDeclaration,
     ProviderModelInfo,
     canonical_model_info,
     model_info_document,
@@ -66,6 +70,11 @@ def _rich(model_id: str) -> ProviderModelInfo:
             retirement_at="2027-01-01",
             replacement_model_id=f"{model_id}-2",
             offered_by_default=True,
+        ),
+        declared=ProviderModelDeclaration(
+            modalities=DeclaredModalities(inputs=("image", "text"), outputs=("text",)),
+            model_type="chat",
+            endpoints=("anthropic", "chat/completions", "responses"),
         ),
     )
 
@@ -120,6 +129,76 @@ def test_every_field_is_carried_by_the_codec() -> None:
     assert {field.name for field in fields(ModelListingEvidence)} == set(
         model_metadata._LISTING_FIELDS
     )
+    assert {field.name for field in fields(ProviderModelDeclaration)} == set(
+        model_metadata._DECLARATION_FIELDS
+    )
+    assert {field.name for field in fields(DeclaredModalities)} == set(
+        model_metadata._MODALITIES_FIELDS
+    )
+
+
+def test_what_a_provider_declared_round_trips_in_every_partial_shape() -> None:
+    """Each of the three statements survives alone, and ``None`` stays ``None``."""
+    for declared in (
+        ProviderModelDeclaration(endpoints=("/messages",)),
+        ProviderModelDeclaration(model_type="language"),
+        ProviderModelDeclaration(
+            modalities=DeclaredModalities(inputs=("audio",), outputs=("text",))
+        ),
+        ProviderModelDeclaration(),
+        None,
+    ):
+        info = ProviderModelInfo("x/y", declared=declared)
+        assert model_info_from_document(model_info_document(info)) == info
+
+
+def test_the_declared_key_is_last_so_every_older_key_keeps_its_place() -> None:
+    """A 7.78 document is a 7.79 document with one trailing key fewer."""
+    document = model_info_document(_rich("x/y"))
+    assert list(document)[-1] == "declared"
+    assert list(document)[:-1] == list(model_metadata._MODEL_INFO_FIELDS[:-1])
+
+
+def test_a_document_from_before_declared_existed_loads_with_none() -> None:
+    """What 7.78.10 wrote: every key but ``declared``."""
+    document = model_info_document(_rich("x/y"))
+    del document["declared"]
+    restored = model_info_from_document(document)
+    assert restored is not None
+    assert restored.declared is None
+    assert restored == ProviderModelInfo(
+        **{
+            field.name: getattr(_rich("x/y"), field.name)
+            for field in fields(ProviderModelInfo)
+            if field.name != "declared"
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "damaged",
+    ["chat", 7, [], None, True],
+)
+def test_a_damaged_declared_value_is_dropped_and_the_record_kept(damaged) -> None:
+    """A cache is never a reason to fail a start."""
+    document = model_info_document(_rich("x/y"))
+    document["declared"] = damaged
+    restored = model_info_from_document(document)
+    assert restored is not None
+    assert restored.declared is None
+    assert restored.context_length == 200_000
+
+
+def test_damaged_inner_values_read_as_unstated() -> None:
+    document = model_info_document(_bare("x/y"))
+    document["declared"] = {
+        "modalities": {"inputs": "text", "outputs": ["text"]},
+        "model_type": 7,
+        "endpoints": "chat/completions",
+    }
+    restored = model_info_from_document(document)
+    assert restored is not None
+    assert restored.declared == ProviderModelDeclaration()
 
 
 def test_the_document_is_json_and_deterministic() -> None:

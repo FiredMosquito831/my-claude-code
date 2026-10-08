@@ -1,0 +1,459 @@
+{
+ "open_router": {
+  "dialect": "openrouter",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "stepfun/step-5-preview",
+    "created": 1791462849,
+    "name": "StepFun: Step 5 Preview",
+    "context_length": 1000000,
+    "top_provider": {
+     "context_length": 1000000,
+     "max_completion_tokens": 64000,
+     "is_moderated": false
+    },
+    "supported_parameters": [
+     "frequency_penalty",
+     "include_reasoning",
+     "logprobs",
+     "max_tokens",
+     "reasoning",
+     "reasoning_effort",
+     "response_format",
+     "stop",
+     "structured_outputs",
+     "temperature",
+     "tools",
+     "top_logprobs",
+     "top_p"
+    ],
+    "default_parameters": {
+     "temperature": null,
+     "top_p": null,
+     "top_k": null,
+     "frequency_penalty": null,
+     "presence_penalty": null,
+     "repetition_penalty": null
+    },
+    "reasoning": {
+     "mandatory": true,
+     "supported_efforts": [
+      "high",
+      "medium",
+      "low"
+     ],
+     "default_effort": "medium"
+    },
+    "architecture": {
+     "modality": "text+image+video->text",
+     "input_modalities": [
+      "text",
+      "image",
+      "video"
+     ],
+     "output_modalities": [
+      "text"
+     ],
+     "tokenizer": "Other",
+     "instruct_type": null
+    }
+   }
+  ]
+ },
+ "nous_portal": {
+  "dialect": "openrouter",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "anthropic/claude-sonnet-5",
+    "created": 1782850235,
+    "name": "Claude Sonnet 5",
+    "context_length": 1000000,
+    "top_provider": {
+     "context_length": 1000000
+    },
+    "supported_parameters": [
+     "reasoning",
+     "tools"
+    ],
+    "default_parameters": {},
+    "architecture": {}
+   },
+   {
+    "id": "tencent/hy3",
+    "created": 1783344048,
+    "name": "Tencent: Hy3",
+    "context_length": 262144,
+    "top_provider": {
+     "context_length": 262144,
+     "max_completion_tokens": 131072,
+     "is_moderated": false
+    },
+    "supported_parameters": [
+     "frequency_penalty",
+     "include_reasoning",
+     "logit_bias",
+     "max_completion_tokens",
+     "max_tokens",
+     "min_p",
+     "presence_penalty",
+     "reasoning",
+     "reasoning_effort",
+     "repetition_penalty",
+     "response_format",
+     "seed",
+     "stop",
+     "structured_outputs",
+     "temperature",
+     "tool_choice",
+     "tools",
+     "top_k",
+     "top_p"
+    ],
+    "default_parameters": {
+     "temperature": 0.9,
+     "top_p": 1,
+     "top_k": null,
+     "frequency_penalty": null,
+     "presence_penalty": null,
+     "repetition_penalty": null
+    },
+    "reasoning": {
+     "mandatory": false,
+     "default_enabled": true,
+     "supported_efforts": [
+      "high",
+      "low",
+      "none"
+     ],
+     "default_effort": "high"
+    },
+    "architecture": {
+     "modality": "text->text",
+     "input_modalities": [
+      "text"
+     ],
+     "output_modalities": [
+      "text"
+     ],
+     "tokenizer": "Other",
+     "instruct_type": null
+    }
+   }
+  ]
+ },
+ "kilo": {
+  "dialect": "openrouter",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "kilo-auto/efficient",
+    "created": 0,
+    "name": "Auto Efficient",
+    "context_length": 1000000,
+    "top_provider": {
+     "is_moderated": false,
+     "context_length": 1000000,
+     "max_completion_tokens": 65536
+    },
+    "supported_parameters": [
+     "max_tokens",
+     "temperature",
+     "tools",
+     "reasoning",
+     "include_reasoning"
+    ],
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ],
+     "tokenizer": "Other"
+    }
+   }
+  ]
+ },
+ "novita": {
+  "dialect": "generic",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "ming-image-0.1-design",
+    "object": "model",
+    "created": 1789699451,
+    "owned_by": "novita",
+    "display_name": "ming image 0.1 design",
+    "model_type": "chat",
+    "input_modalities": [
+     "text",
+     "image",
+     "video",
+     "audio"
+    ],
+    "output_modalities": [
+     "text",
+     "image",
+     "video",
+     "audio"
+    ],
+    "tags": []
+   },
+   {
+    "id": "ming-image-0.1-design-layer",
+    "object": "model",
+    "created": 1789699811,
+    "owned_by": "novita",
+    "display_name": "ming image 0.1 design layer",
+    "model_type": "chat",
+    "input_modalities": [
+     "text",
+     "image",
+     "video",
+     "audio"
+    ],
+    "output_modalities": [
+     "text",
+     "image",
+     "video",
+     "audio"
+    ],
+    "tags": []
+   },
+   {
+    "id": "zai-org/glm-5.3-flash",
+    "object": "model",
+    "created": 1787754787,
+    "owned_by": "novita",
+    "display_name": "GLM 5.3 Flash",
+    "max_output_tokens": 131072,
+    "model_type": "chat",
+    "input_modalities": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "endpoints": [
+     "chat/completions",
+     "anthropic",
+     "responses"
+    ],
+    "tags": []
+   }
+  ]
+ },
+ "vercel": {
+  "dialect": "generic",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "alibaba/qwen-3-14b",
+    "object": "model",
+    "created": 1755815280,
+    "owned_by": "alibaba",
+    "name": "Qwen3-14B",
+    "context_window": 40960,
+    "supported_parameters": [
+     "max_tokens",
+     "temperature",
+     "stop",
+     "tools",
+     "tool_choice",
+     "reasoning",
+     "include_reasoning",
+     "response_format",
+     "structured_outputs"
+    ],
+    "type": "language",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "tags": [
+     "reasoning",
+     "tool-use",
+     "structured-output"
+    ]
+   },
+   {
+    "id": "bfl/flux-2-flex",
+    "object": "model",
+    "created": 1755815280,
+    "owned_by": "bfl",
+    "name": "FLUX.2 [flex]",
+    "context_window": 0,
+    "type": "image",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "image"
+     ]
+    },
+    "tags": [
+     "image-generation"
+    ]
+   },
+   {
+    "id": "alibaba/qwen3-embedding-0.6b",
+    "object": "model",
+    "created": 1755815280,
+    "owned_by": "alibaba",
+    "name": "Qwen3 Embedding 0.6B",
+    "context_window": 32768,
+    "type": "embedding",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "fish-audio/transcribe-1",
+    "object": "model",
+    "created": 1755815280,
+    "owned_by": "fish-audio",
+    "name": "Transcribe-1",
+    "type": "transcription",
+    "modalities": {
+     "input": [
+      "audio"
+     ],
+     "output": [
+      "text"
+     ]
+    }
+   }
+  ]
+ },
+ "commandcode": {
+  "dialect": "commandcode",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "claude-sonnet-5-5",
+    "object": "model",
+    "created": 1791464961,
+    "owned_by": "command-code",
+    "name": "Claude Sonnet 5.5",
+    "context_length": 1000000,
+    "supported_endpoints": [
+     "/messages"
+    ]
+   },
+   {
+    "id": "gpt-6-astra",
+    "object": "model",
+    "created": 1791464961,
+    "owned_by": "command-code",
+    "name": "GPT-6 Astra",
+    "context_length": 1050000,
+    "supported_endpoints": [
+     "/chat/completions",
+     "/responses"
+    ]
+   },
+   {
+    "id": "deepseek/deepseek-v4-flash-fast",
+    "object": "model",
+    "created": 1791464961,
+    "owned_by": "command-code",
+    "name": "DeepSeek V4 Flash Fast",
+    "context_length": 1000000,
+    "supported_endpoints": [
+     "/chat/completions"
+    ]
+   }
+  ]
+ },
+ "nvidia_nim": {
+  "dialect": "generic",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "01-ai/yi-large",
+    "object": "model",
+    "created": 735790403,
+    "owned_by": "01-ai"
+   },
+   {
+    "id": "moonshotai/kimi-k3",
+    "object": "model",
+    "created": 735790403,
+    "owned_by": "moonshotai"
+   }
+  ]
+ },
+ "opencode_go": {
+  "dialect": "generic",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "minimax-m3",
+    "object": "model",
+    "created": 1791464958,
+    "owned_by": "opencode"
+   }
+  ]
+ },
+ "hypercharm": {
+  "dialect": "generic",
+  "collection_field": "data",
+  "rows": [
+   {
+    "id": "deepseek-v4.1-flash",
+    "object": "model",
+    "created": 0,
+    "owned_by": "hyper",
+    "display_name": "DeepSeek V4.1 Flash",
+    "context_window": 1048576,
+    "max_output_tokens": 262144,
+    "reasoning": {
+     "effort_levels": [
+      {
+       "value": "low",
+       "display": "Low"
+      },
+      {
+       "value": "high",
+       "display": "High"
+      },
+      {
+       "value": "xhigh",
+       "display": "X-High"
+      }
+     ],
+     "default_effort_level": "high"
+    },
+    "capabilities": {
+     "vision": true
+    }
+   }
+  ]
+ },
+ "cline": {
+  "dialect": "generic",
+  "collection_field": "clinePass",
+  "rows": [
+   {
+    "id": "cline-pass/deepseek-v4.1-flash",
+    "name": "cline-pass/deepseek-v4.1-flash",
+    "tags": []
+   }
+  ]
+ }
+}

@@ -155,6 +155,35 @@ class DeclaredModalities:
     outputs: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderModelDeclaration:
+    """What the provider's own ``/models`` row states the model is (7.79.0).
+
+    The words a provider publishes about a model's kind, kept as it published
+    them: lower-cased, de-duplicated and sorted, nothing mapped or translated.
+    ``None`` in any field means that row did not say -- or said it in a shape
+    that could not be read, which is the same answer, because discovery must
+    never start failing on a field nobody required.
+
+    Read at the provider's own rung of the ladder (tier 1 or 2, exactly as
+    every other field of :class:`ProviderModelInfo`). Display only in this
+    release: routing, limits, prices, kinds and every existing field never
+    read it.
+    """
+
+    #: Both halves from ONE row, or nothing: half a statement is not one, and
+    #: a provider half paired with another source's half would be a pair no
+    #: source ever stated.
+    modalities: DeclaredModalities | None = None
+    #: The provider's one-word model type -- Novita ``model_type`` ("chat"),
+    #: Vercel ``type`` ("language", "image", "embedding" ...).
+    model_type: str | None = None
+    #: The endpoints the provider says serve this model -- Command Code
+    #: ``supported_endpoints`` ("/chat/completions", "/messages"), Novita
+    #: ``endpoints`` ("chat/completions", "anthropic", "responses").
+    endpoints: tuple[str, ...] | None = None
+
+
 type ModelDefaultParameterValue = str | int | float | bool
 """A scalar a provider may pin as a per-model default request parameter."""
 
@@ -213,6 +242,11 @@ class ProviderModelInfo:
     # provenance record for the admin page and for the operator's own
     # judgement. ``None`` means nobody recorded one.
     listing: ModelListingEvidence | None = None
+    # What the provider's own list row says this model is: its modalities, its
+    # type word, its endpoint words. Appended last so no existing field moves.
+    # ``None`` means the row stated none of the three (or the record did not
+    # come from a row at all). Display only; nothing routes on it.
+    declared: ProviderModelDeclaration | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,13 +407,13 @@ def _canonical(value: object) -> str:
     raise TypeError(f"No canonical encoding for {type(value).__name__}")
 
 
-#: Every field of the three records a stored catalogue entry is made of. The
-#: codec below is written out by hand rather than driven by type hints, because
-#: a hand-written one says what each field means on the wire; these tuples are
+#: Every field of the records a stored catalogue entry is made of. The codec
+#: below is written out by hand rather than driven by type hints, because a
+#: hand-written one says what each field means on the wire; these tuples are
 #: what stops it drifting from the dataclasses, through
 #: ``test_every_field_is_carried_by_the_codec``. Adding a field to any of the
-#: three and not to its tuple fails that test rather than silently dropping the
-#: field from every restored catalogue.
+#: records and not to its tuple fails that test rather than silently dropping
+#: the field from every restored catalogue.
 _MODEL_INFO_FIELDS: tuple[str, ...] = (
     "model_id",
     "supports_thinking",
@@ -392,6 +426,16 @@ _MODEL_INFO_FIELDS: tuple[str, ...] = (
     "default_parameters",
     "reasoning_capability",
     "listing",
+    "declared",
+)
+_DECLARATION_FIELDS: tuple[str, ...] = (
+    "modalities",
+    "model_type",
+    "endpoints",
+)
+_MODALITIES_FIELDS: tuple[str, ...] = (
+    "inputs",
+    "outputs",
 )
 _REASONING_FIELDS: tuple[str, ...] = (
     "can_reason",
@@ -434,6 +478,7 @@ def model_info_document(info: ProviderModelInfo) -> dict[str, object]:
 
     reasoning = info.reasoning_capability
     listing = info.listing
+    declared = info.declared
     return {
         "model_id": info.model_id,
         "supports_thinking": info.supports_thinking,
@@ -476,6 +521,29 @@ def model_info_document(info: ProviderModelInfo) -> dict[str, object]:
                 "offered_by_default": listing.offered_by_default,
             }
         ),
+        # Last, so every key a 7.78 reader knows sits exactly where it did and
+        # that reader -- which reads keys by name -- passes over this one.
+        "declared": _declaration_document(declared),
+    }
+
+
+def _declaration_document(
+    declared: ProviderModelDeclaration | None,
+) -> dict[str, object] | None:
+    if declared is None:
+        return None
+    modalities = declared.modalities
+    return {
+        "modalities": (
+            None
+            if modalities is None
+            else {
+                "inputs": list(modalities.inputs),
+                "outputs": list(modalities.outputs),
+            }
+        ),
+        "model_type": declared.model_type,
+        "endpoints": None if declared.endpoints is None else list(declared.endpoints),
     }
 
 
@@ -539,6 +607,40 @@ def _listing_from_document(value: object) -> ModelListingEvidence | None:
     )
 
 
+def _words_from_document(value: object) -> tuple[str, ...] | None:
+    if not isinstance(value, list):
+        return None
+    return tuple(item for item in value if isinstance(item, str))
+
+
+def _modalities_from_document(value: object) -> DeclaredModalities | None:
+    if not isinstance(value, dict):
+        return None
+    inputs = _words_from_document(value.get("inputs"))
+    outputs = _words_from_document(value.get("outputs"))
+    if inputs is None or outputs is None:
+        # Both halves or neither, exactly as the parser states them.
+        return None
+    return DeclaredModalities(inputs=inputs, outputs=outputs)
+
+
+def _declaration_from_document(value: object) -> ProviderModelDeclaration | None:
+    """The stored declaration, or ``None`` -- never a raise.
+
+    A document written before 7.79.0 has no ``declared`` key at all, and one
+    damaged on disk may hold anything there: both read as "the row said
+    nothing", which is what a fresh sweep would replace it with anyway.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    return ProviderModelDeclaration(
+        modalities=_modalities_from_document(value.get("modalities")),
+        model_type=_str_or_none(value.get("model_type")),
+        endpoints=_words_from_document(value.get("endpoints")),
+    )
+
+
 def model_info_from_document(document: object) -> ProviderModelInfo | None:
     """Rebuild one catalogue entry, or ``None`` if the data is not one.
 
@@ -581,4 +683,5 @@ def model_info_from_document(document: object) -> ProviderModelInfo | None:
             document.get("reasoning_capability")
         ),
         listing=_listing_from_document(document.get("listing")),
+        declared=_declaration_from_document(document.get("declared")),
     )

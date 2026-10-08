@@ -35,9 +35,11 @@ from my_claude_code.application.model_kinds import (
     resolve_model_kind,
 )
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
     ModelListingEvidence,
     ModelListingProvenance,
     ModelReasoningCapability,
+    ProviderModelDeclaration,
     ProviderModelInfo,
     ResponseSurface,
     ResponseSurfaceSource,
@@ -81,6 +83,7 @@ from my_claude_code.providers.openai_chat import (
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
     declared_modalities_lookup,
+    declared_modalities_tiered,
     model_context_length_tiered,
     model_output_limit_tiered,
     model_output_modalities_tiered,
@@ -709,12 +712,78 @@ def attach_learned_facts(
     return rendered
 
 
+def _modalities_text(modalities: DeclaredModalities) -> str:
+    """``"text, image → text"``: what a model accepts, then what it produces."""
+
+    return f"{', '.join(modalities.inputs)} → {', '.join(modalities.outputs)}"
+
+
+def declared_payload(
+    provider_id: str,
+    model_id: str,
+    declared: ProviderModelDeclaration | None,
+    provider_tier: ResolutionTier | None,
+    modalities_lookup: ModalitiesLookup | None = None,
+) -> dict[str, dict[str, Any]]:
+    """What the provider's own list says this model is, beside the ladder (7.79.0).
+
+    Three rows, each in the capability panel's own shape:
+
+    - ``declared_modalities`` walks the ladder like every other field: the
+      provider's own row first (tier 1 or 2, as the record was found), then
+      models.dev's declared pair down its ten rungs -- the same pair the kind
+      is read from today. ``inputs``/``outputs`` carry the winning pair as
+      lists so nothing has to parse the arrow back apart.
+    - ``declared_type`` and ``declared_endpoints`` have no second source: only
+      a provider's list publishes them, so they are the provider's words or
+      "unknown".
+
+    Display only. Nothing here feeds a kind, a list, a route or a price.
+    """
+
+    provider_modalities = None if declared is None else declared.modalities
+    resolved, resolved_tier = (None, None)
+    if provider_modalities is None:
+        lookup = (
+            modalities_lookup
+            if modalities_lookup is not None
+            else declared_modalities_tiered
+        )
+        resolved, resolved_tier = lookup(provider_id, model_id)
+    shown = provider_modalities if provider_modalities is not None else resolved
+    model_type = None if declared is None else declared.model_type
+    endpoints = None if declared is None else declared.endpoints
+    return {
+        "declared_modalities": _laddered(
+            None
+            if provider_modalities is None
+            else _modalities_text(provider_modalities),
+            SOURCE_PROVIDER,
+            provider_tier,
+            (None if resolved is None else _modalities_text(resolved), resolved_tier),
+            inputs=None if shown is None else list(shown.inputs),
+            outputs=None if shown is None else list(shown.outputs),
+        ),
+        "declared_type": (
+            _sourced(None, SOURCE_UNKNOWN)
+            if model_type is None
+            else _sourced(model_type, SOURCE_PROVIDER, provider_tier)
+        ),
+        "declared_endpoints": (
+            _sourced(None, SOURCE_UNKNOWN)
+            if endpoints is None
+            else _sourced(list(endpoints), SOURCE_PROVIDER, provider_tier)
+        ),
+    }
+
+
 def capability_payload(
     provider_id: str,
     model_id: str,
     info: ProviderModelInfo | None,
     provider_tier: ResolutionTier | None = None,
     dialect: ReasoningDialect | None = None,
+    modalities_lookup: ModalitiesLookup | None = None,
 ) -> dict[str, Any]:
     """Read-only capability record for one model, tier-tagged per field.
 
@@ -722,6 +791,10 @@ def capability_payload(
     tier 1 for an exact id, tier 2 when the pricing tag had to be stripped.
     It defaults to tier 1 because every existing caller looks the model up by
     its exact id.
+
+    ``modalities_lookup`` is models.dev's declared-modalities lookup, bound
+    once by a caller rendering many rows (the Models page binds it for the
+    kind column already); ``None`` binds one for this row alone.
     """
 
     described = models_dev_describes_provider(provider_id)
@@ -860,6 +933,15 @@ def capability_payload(
         # this model to, and why. ``None`` -- and therefore no row at all --
         # for every provider that has one surface, which is 39 of the 41.
         "response_surface": response_surface_payload(provider_id, model_id),
+        # What the provider's own list says the model is (7.79.0). Appended
+        # last: every key above is exactly what it was before.
+        **declared_payload(
+            provider_id,
+            model_id,
+            None if info is None else info.declared,
+            provider_tier,
+            modalities_lookup,
+        ),
     }
 
 
@@ -1631,6 +1713,7 @@ def _model_entry(
         dialect=(
             None if dialect_lookup is None else dialect_lookup(provider_id, model_id)
         ),
+        modalities_lookup=kind_modalities,
     )
     learned_facts = attach_learned_facts(
         capabilities,

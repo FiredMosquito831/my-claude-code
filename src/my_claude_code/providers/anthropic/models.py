@@ -4,7 +4,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
-from my_claude_code.providers.model_listing import ModelListResponseError
+from my_claude_code.providers.model_listing import (
+    ModelListResponseError,
+    declared_from_row,
+)
 
 
 def extract_anthropic_model_infos(
@@ -30,7 +33,13 @@ def extract_anthropic_model_infos(
         model_id = _field(item, "id")
         if not isinstance(model_id, str) or not model_id.strip():
             raise _malformed(provider_name, "expected every data item to include id")
-        model_infos.add(ProviderModelInfo(model_id=model_id.strip()))
+        # The same generic reader every listing parser calls: whatever this
+        # row states about the model's kind is kept, as published.
+        model_infos.add(
+            ProviderModelInfo(
+                model_id=model_id.strip(), declared=declared_from_row(item)
+            )
+        )
 
     if not model_infos:
         raise _malformed(provider_name, "response did not include any models")

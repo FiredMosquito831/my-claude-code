@@ -2182,6 +2182,21 @@ def test_the_surface_override_offers_only_the_doors_the_host_declares(
     assert panel["selected"] == ""
 
 
+def test_the_models_page_draws_what_the_provider_list_says(rendered) -> None:
+    """7.79.0: three rows in the provider's own words, badged like every row."""
+
+    rows = {row[0]: row[1:] for row in rendered["models"]["declaredRows"]}
+
+    modalities = rows["accepts → produces"]
+    assert modalities[0] == "image, text → text"
+    assert "provider /models" in modalities[1]
+    assert "tier 1 of 11" in modalities[1]
+    assert rows["model type (provider's word)"][0] == "chat"
+    endpoints = rows["endpoints (provider's words)"]
+    assert endpoints[0] == "not reported"
+    assert endpoints[1] == "unknown"
+
+
 def test_a_single_surface_model_is_offered_no_choice_at_all(rendered) -> None:
     """39 of the 41 providers, and every custom entry that did not opt in."""
 
