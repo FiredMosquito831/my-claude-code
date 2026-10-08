@@ -1,11 +1,12 @@
 # The whole pytest suite on Windows, off the merge path.
 #
-# tests.yml runs the suite on ubuntu-latest for every pull request. About 70
-# tests run only on Windows (the PowerShell installers and uninstallers, the
-# install-progress runs, the proactor listener, the desktop controller,
-# Windows process times), and every other test meets Windows paths, file
-# locks and CRLF checkouts only on a Windows machine. Until this workflow the
-# implementer's own machine was the only place either ran. This job runs them
+# tests.yml runs the suite on ubuntu-latest for every pull request. About 150
+# test cases run only on Windows (the PowerShell installers and uninstallers,
+# the install-progress runs, the proactor listener, the desktop controller and
+# tray, held-file log rotation, Windows process times), and every other test
+# meets Windows paths, file locks and CRLF checkouts only on a Windows
+# machine. Until this workflow the implementer's own machine was the only
+# place either ran. This job runs them
 # nightly on main, on every published release and on demand -- never on
 # pull_request, so it can never block a merge. A red run is a finding to fix
 # at its root, never a reason to mark a test flaky.
@@ -25,10 +26,6 @@ on:
   release:
     types: [published]
   workflow_dispatch:
-  # TEMPORARY, removed before merge: workflow_dispatch needs the file on the
-  # default branch, so the first measurement runs on a push to this branch.
-  push:
-    branches: [ci/windows-full-suite-nightly]
 
 concurrency:
   # One run per ref at a time. A second nightly queues behind the first
