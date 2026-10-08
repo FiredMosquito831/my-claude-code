@@ -35,6 +35,8 @@ from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.request_log import get_request_log_store
 from tests.api.support import create_test_app
 
+pytestmark = pytest.mark.local_serial
+
 MODEL = "nvidia_nim/test-model"
 
 SURFACES: dict[str, tuple[str, dict[str, Any], str]] = {

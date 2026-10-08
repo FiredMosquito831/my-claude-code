@@ -470,6 +470,7 @@ KNOWN_BAD_OPENINGS = (
 )
 
 
+@pytest.mark.local_serial
 def test_child_processes_install_the_block() -> None:
     assert _install_problem(_OPENING, "<opening>") is None
     for source in KNOWN_BAD_OPENINGS:

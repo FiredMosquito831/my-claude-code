@@ -51,6 +51,8 @@ from my_claude_code.core.anthropic import image_downscale
 from my_claude_code.core.anthropic.image_downscale import image_downscale_cache_info
 from my_claude_code.core.anthropic.models import MessagesRequest
 
+pytestmark = pytest.mark.local_serial
+
 IMAGES = 20
 #: Seven rungs where Anthropic's token budget binds (anthropic, and hosts that
 #: publish no formula), five where only the pixel cap does.
@@ -68,6 +70,7 @@ CHAIN = (
     "azure_openai/m10",
     "groq/m11",
 )
+
 POLICIES = 2
 
 

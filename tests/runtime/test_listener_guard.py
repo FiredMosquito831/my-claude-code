@@ -62,6 +62,7 @@ def _lost_lines(stderr: str) -> list[str]:
     return [line for line in stderr.splitlines() if "lost its listening socket" in line]
 
 
+@pytest.mark.local_serial
 def test_an_open_listener_is_published_as_listening(listener: socket.socket) -> None:
     lost = MagicMock()
     guard = ListenerGuard(lambda: listener, lost)
@@ -78,6 +79,7 @@ def test_nothing_is_watched_before_the_supervisor_binds() -> None:
     assert server_listening() is None
 
 
+@pytest.mark.local_serial
 def test_a_closed_listener_is_reported_once_and_handed_to_the_stop(
     listener: socket.socket,
     capsys: pytest.CaptureFixture[str],
@@ -111,6 +113,7 @@ def test_a_closed_listener_is_reported_once_and_handed_to_the_stop(
     }
 
 
+@pytest.mark.local_serial
 def test_a_requested_stop_is_not_a_lost_listener(
     listener: socket.socket,
     capsys: pytest.CaptureFixture[str],
@@ -131,6 +134,7 @@ def test_a_requested_stop_is_not_a_lost_listener(
     guard_logger.critical.assert_not_called()
 
 
+@pytest.mark.local_serial
 def test_a_failing_report_step_never_costs_the_stop(listener: socket.socket) -> None:
     lost = MagicMock()
     guard = ListenerGuard(lambda: listener, lost)
@@ -147,6 +151,7 @@ def test_a_failing_report_step_never_costs_the_stop(listener: socket.socket) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.local_serial
 async def test_the_guard_notices_from_the_loop_within_one_interval(
     listener: socket.socket,
 ) -> None:
@@ -167,6 +172,7 @@ async def test_the_guard_notices_from_the_loop_within_one_interval(
 
 
 @pytest.mark.asyncio
+@pytest.mark.local_serial
 async def test_closing_the_guard_is_prompt(listener: socket.socket) -> None:
     guard = ListenerGuard(lambda: listener, MagicMock(), interval_seconds=60.0)
     guard.start()
@@ -264,6 +270,7 @@ async def _drive_lifespan(app: RuntimeASGIApp, between: Any) -> list[str]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.local_serial
 async def test_the_asgi_lifespan_starts_and_stops_the_guard(
     listener: socket.socket, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -301,6 +308,7 @@ def test_without_a_socket_there_is_no_guard() -> None:
     assert app.listener_guard is None
 
 
+@pytest.mark.local_serial
 def test_the_composition_root_hands_the_socket_and_the_stop_to_the_guard(
     listener: socket.socket,
 ) -> None:

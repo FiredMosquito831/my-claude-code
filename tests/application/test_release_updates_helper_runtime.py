@@ -108,6 +108,7 @@ def _short_lived_parent() -> subprocess.Popen:
     )
 
 
+@pytest.mark.local_serial
 def test_the_installer_runs_only_after_the_parent_is_gone(tmp_path) -> None:
     """The installer must not touch the environment the server runs out of.
 
@@ -168,6 +169,7 @@ def test_the_installer_runs_only_after_the_parent_is_gone(tmp_path) -> None:
     assert (tmp_path / "progress.json").read_bytes()[:3] != b"\xef\xbb\xbf"
 
 
+@pytest.mark.local_serial
 def test_an_installer_that_fails_silently_still_ends_the_episode(tmp_path) -> None:
     """No watcher may be left waiting for a record that never comes.
 
@@ -202,6 +204,7 @@ def test_an_installer_that_fails_silently_still_ends_the_episode(tmp_path) -> No
     assert records[-1]["helper_done"] is True
 
 
+@pytest.mark.local_serial
 def test_the_helper_does_not_overrule_a_terminal_record_the_installer_wrote(
     tmp_path,
 ) -> None:
@@ -241,6 +244,7 @@ def test_the_helper_does_not_overrule_a_terminal_record_the_installer_wrote(
     assert [record["stage"] for record in records].count("failed") == 0
 
 
+@pytest.mark.local_serial
 def test_a_missing_installer_is_reported_rather_than_guessed_at(tmp_path) -> None:
     """The bundled installer is the only one this helper will run."""
 

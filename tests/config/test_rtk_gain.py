@@ -232,6 +232,7 @@ def _write_stub(tmp_path: Path, body: str) -> Path:
     return stub
 
 
+@pytest.mark.local_serial
 def test_real_stub_executable_end_to_end(monkeypatch, tmp_path):
     """Exercise the real subprocess path against an on-disk stub binary."""
 

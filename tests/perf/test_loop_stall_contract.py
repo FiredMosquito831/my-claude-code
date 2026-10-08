@@ -23,6 +23,8 @@ import pytest
 from my_claude_code.api.request_capture import RequestCapture
 from my_claude_code.core.request_log import RequestLogStore
 
+pytestmark = pytest.mark.local_serial
+
 #: The bound the spec sets. A tick that is late by more than this means some
 #: coroutine held the loop, which is the only thing under test here.
 MAX_LOOP_GAP_MS = 150.0

@@ -91,6 +91,7 @@ def _callback_url(server: _CallbackHTTPServer, flow: _BrowserLoginFlow, **extra)
     return f"http://127.0.0.1:{port}/auth/callback?" + urllib.parse.urlencode(params)
 
 
+@pytest.mark.local_serial
 def test_browser_login_callback_completes_flow(callback_server, tmp_path):
     flow = _begin_flow(callback_server)
 
@@ -116,6 +117,7 @@ def test_browser_login_callback_completes_flow(callback_server, tmp_path):
     assert saved["tokens"]["id_token"] == "id_browser_1"
 
 
+@pytest.mark.local_serial
 def test_browser_login_callback_rejects_bad_state(callback_server, tmp_path):
     flow = _begin_flow(callback_server)
 
@@ -134,6 +136,7 @@ def test_browser_login_callback_rejects_bad_state(callback_server, tmp_path):
     assert status["status"] == "error"
 
 
+@pytest.mark.local_serial
 def test_browser_login_callback_surfaces_oauth_error(callback_server):
     flow = _begin_flow(callback_server)
 
@@ -155,6 +158,7 @@ def test_browser_login_callback_surfaces_oauth_error(callback_server):
     assert flow.error == "User denied access"
 
 
+@pytest.mark.local_serial
 def test_browser_login_callback_validates_state_before_oauth_error(callback_server):
     flow = _begin_flow(callback_server)
     params = urllib.parse.urlencode(
@@ -189,6 +193,7 @@ def test_callback_page_escapes_oauth_error_content():
     assert "&lt;img" in body
 
 
+@pytest.mark.local_serial
 def test_start_browser_login_uses_server_port(callback_server):
     payload = browser_login.start_browser_login(allow_remote=True)
 
@@ -284,6 +289,7 @@ def test_start_browser_login_rejects_wsl_before_binding(monkeypatch):
         browser_login.start_browser_login()
 
 
+@pytest.mark.local_serial
 def test_explicit_same_device_browser_allows_wsl_override(
     callback_server,
     monkeypatch,

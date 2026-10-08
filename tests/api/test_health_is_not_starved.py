@@ -192,6 +192,7 @@ def live() -> Iterator[_Live]:
         stop_deadline().clear()
 
 
+@pytest.mark.local_serial
 def test_health_answers_the_same_document_it_always_has(live: _Live) -> None:
     elapsed_ms, status, head = _request(live.port, "/health")
 
@@ -201,6 +202,7 @@ def test_health_answers_the_same_document_it_always_has(live: _Live) -> None:
     assert elapsed_ms < 50.0, f"an idle /health took {elapsed_ms:.1f} ms"
 
 
+@pytest.mark.local_serial
 def test_health_answers_under_50ms_while_the_loop_is_saturated(live: _Live) -> None:
     """The bar from the spec, against the shape of busy this release is about.
 
@@ -248,6 +250,7 @@ def test_health_answers_under_50ms_while_the_loop_is_saturated(live: _Live) -> N
     )
 
 
+@pytest.mark.local_serial
 def test_a_blocking_hold_makes_the_next_answer_say_busy_and_why(live: _Live) -> None:
     """What the answer says after a hold -- and, honestly, when it arrives.
 
@@ -278,6 +281,7 @@ def test_a_blocking_hold_makes_the_next_answer_say_busy_and_why(live: _Live) -> 
     print(f"\n/health during a {HOLD_SECONDS}s blocking hold: {elapsed_ms:.0f} ms")
 
 
+@pytest.mark.local_serial
 def test_the_marker_is_gone_again_once_the_loop_catches_up(live: _Live) -> None:
     _request(live.port, "/hold")
     time.sleep(BEAT_SECONDS * 6)

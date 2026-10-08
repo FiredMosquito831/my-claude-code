@@ -297,6 +297,7 @@ async def _get(client: httpx.AsyncClient, url: str):
     return response.status_code, response.text
 
 
+@pytest.mark.local_serial
 async def test_a_socks5_dial_reports_its_connect_and_its_handshake() -> None:
     upstream = FakeUpstream()
     await upstream.start()
@@ -316,6 +317,7 @@ async def test_a_socks5_dial_reports_its_connect_and_its_handshake() -> None:
         await upstream.stop()
 
 
+@pytest.mark.local_serial
 async def test_a_stalled_socks5_dial_has_a_connect_and_no_handshake() -> None:
     upstream = FakeUpstream()
     await upstream.start()
@@ -336,6 +338,7 @@ async def test_a_stalled_socks5_dial_has_a_connect_and_no_handshake() -> None:
         await upstream.stop()
 
 
+@pytest.mark.local_serial
 async def test_an_http_connect_dial_reports_its_handshake_at_the_tls_start() -> None:
     """The rig's origin speaks no TLS, so the request fails *after* the tunnel.
 
@@ -367,6 +370,7 @@ async def test_an_http_connect_dial_reports_its_handshake_at_the_tls_start() -> 
         await upstream.stop()
 
 
+@pytest.mark.local_serial
 async def test_a_proxied_answer_is_byte_identical_with_the_stopwatch() -> None:
     upstream = FakeUpstream(body=b'{"ok": true, "bytes": "\\u00e9"}')
     await upstream.start()
@@ -385,6 +389,7 @@ async def test_a_proxied_answer_is_byte_identical_with_the_stopwatch() -> None:
         await upstream.stop()
 
 
+@pytest.mark.local_serial
 async def test_a_real_chain_switches_off_a_stalled_socks5_rung() -> None:
     """Pool, retry frame, sockets and ladder together, end to end.
 

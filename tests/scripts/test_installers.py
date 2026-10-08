@@ -379,6 +379,7 @@ fi
     return PosixHarness(tmp_path, bin_dir, fixtures, tool_bin, log, env)
 
 
+@pytest.mark.local_serial
 def test_install_sh_fresh_install_is_verified(posix_harness: PosixHarness) -> None:
     result = posix_harness.run()
 
@@ -417,6 +418,7 @@ def test_install_sh_fresh_install_is_verified(posix_harness: PosixHarness) -> No
     ), calls
 
 
+@pytest.mark.local_serial
 def test_install_sh_digest_comes_from_the_asset_not_the_release_body(
     posix_harness: PosixHarness,
 ) -> None:
@@ -444,6 +446,7 @@ def test_install_sh_digest_comes_from_the_asset_not_the_release_body(
     assert "is installed and verified." in result.stdout
 
 
+@pytest.mark.local_serial
 def test_install_sh_pinned_version_installs_verified_from_tag_feed(
     posix_harness: PosixHarness,
 ) -> None:
@@ -461,6 +464,7 @@ def test_install_sh_pinned_version_installs_verified_from_tag_feed(
     assert f"download:{FCC_LATEST_RELEASE_URL}" not in calls
 
 
+@pytest.mark.local_serial
 def test_install_sh_pinned_version_proceeds_unverified_when_feed_unreachable(
     posix_harness: PosixHarness,
 ) -> None:
@@ -476,6 +480,7 @@ def test_install_sh_pinned_version_proceeds_unverified_when_feed_unreachable(
     assert not any(call.startswith("sha256sum:") for call in calls)
 
 
+@pytest.mark.local_serial
 def test_install_sh_pinned_version_refuses_target_asset_without_digest(
     posix_harness: PosixHarness,
 ) -> None:
@@ -491,6 +496,7 @@ def test_install_sh_pinned_version_refuses_target_asset_without_digest(
     assert not any("uv:tool install" in call for call in posix_harness.calls())
 
 
+@pytest.mark.local_serial
 def test_install_sh_refuses_latest_release_asset_without_digest(
     posix_harness: PosixHarness,
 ) -> None:
@@ -506,6 +512,7 @@ def test_install_sh_refuses_latest_release_asset_without_digest(
     assert not any("uv:tool install" in call for call in posix_harness.calls())
 
 
+@pytest.mark.local_serial
 def test_install_sh_replaces_obsolete_uv(posix_harness: PosixHarness) -> None:
     posix_harness.add_uv("0.5.9")
 
@@ -530,6 +537,7 @@ def test_install_sh_replaces_obsolete_uv(posix_harness: PosixHarness) -> None:
         "fcc-verify",
     ],
 )
+@pytest.mark.local_serial
 def test_install_sh_stops_without_success_on_each_failure(
     posix_harness: PosixHarness,
     failure: str,
@@ -558,6 +566,7 @@ def test_install_sh_stops_without_success_on_each_failure(
         assert not any(forbidden in call for call in posix_harness.calls())
 
 
+@pytest.mark.local_serial
 def test_install_sh_dry_run_never_executes_commands(
     posix_harness: PosixHarness,
 ) -> None:
@@ -571,6 +580,7 @@ def test_install_sh_dry_run_never_executes_commands(
     assert "is installed and verified." not in result.stdout
 
 
+@pytest.mark.local_serial
 def test_install_sh_rejects_unparseable_existing_uv(
     posix_harness: PosixHarness,
 ) -> None:
@@ -582,6 +592,7 @@ def test_install_sh_rejects_unparseable_existing_uv(
     assert not any("astral.sh" in call for call in posix_harness.calls())
 
 
+@pytest.mark.local_serial
 def test_install_sh_voice_flags_only_change_fcc_spec(
     posix_harness: PosixHarness,
 ) -> None:
@@ -679,6 +690,7 @@ def _run_create_macos_app_bundle(
 @pytest.mark.skipif(
     os.name == "nt", reason="POSIX installer scenarios run on POSIX hosts"
 )
+@pytest.mark.local_serial
 def test_install_sh_writes_the_launcher_bundle_when_the_app_is_absent(
     tmp_path: Path,
 ) -> None:
@@ -701,6 +713,7 @@ def test_install_sh_writes_the_launcher_bundle_when_the_app_is_absent(
 @pytest.mark.skipif(
     os.name == "nt", reason="POSIX installer scenarios run on POSIX hosts"
 )
+@pytest.mark.local_serial
 def test_install_sh_steps_aside_for_the_desktop_app_in_the_home_directory(
     tmp_path: Path,
 ) -> None:
@@ -724,6 +737,7 @@ def test_install_sh_steps_aside_for_the_desktop_app_in_the_home_directory(
 @pytest.mark.skipif(
     os.name == "nt", reason="POSIX installer scenarios run on POSIX hosts"
 )
+@pytest.mark.local_serial
 def test_install_sh_replaces_its_own_earlier_launcher_bundle(tmp_path: Path) -> None:
     """Stepping aside is for the app only; its own bundle is rewritten."""
 
@@ -751,6 +765,7 @@ def test_install_sh_reads_the_bundle_identifier_and_not_the_bundle_name() -> Non
     assert '_bundle_plist="$1/Contents/Info.plist"' in text
 
 
+@pytest.mark.local_serial
 def test_install_sh_rejects_invalid_options_before_mutation(
     posix_harness: PosixHarness,
 ) -> None:
@@ -1094,6 +1109,7 @@ $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_INSTALLER))
     )
 
 
+@pytest.mark.local_serial
 def test_install_ps1_fresh_install_is_verified(
     powershell_harness: PowerShellHarness,
 ) -> None:
@@ -1125,6 +1141,7 @@ def test_install_ps1_fresh_install_is_verified(
     ), calls
 
 
+@pytest.mark.local_serial
 def test_install_ps1_replaces_obsolete_uv(
     powershell_harness: PowerShellHarness,
 ) -> None:
@@ -1152,6 +1169,7 @@ def test_install_ps1_replaces_obsolete_uv(
         "fcc-verify",
     ],
 )
+@pytest.mark.local_serial
 def test_install_ps1_stops_without_success_on_each_failure(
     powershell_harness: PowerShellHarness,
     failure: str,
@@ -1179,6 +1197,7 @@ def test_install_ps1_stops_without_success_on_each_failure(
         assert not any(forbidden in call for call in powershell_harness.calls())
 
 
+@pytest.mark.local_serial
 def test_install_ps1_dry_run_never_executes_commands(
     powershell_harness: PowerShellHarness,
 ) -> None:
@@ -1205,6 +1224,7 @@ def test_install_ps1_dry_run_never_executes_commands(
     assert "is installed and verified." not in result.stdout
 
 
+@pytest.mark.local_serial
 def test_install_ps1_rejects_unparseable_existing_uv(
     powershell_harness: PowerShellHarness,
 ) -> None:
@@ -1216,6 +1236,7 @@ def test_install_ps1_rejects_unparseable_existing_uv(
     assert not any("astral.sh" in call for call in powershell_harness.calls())
 
 
+@pytest.mark.local_serial
 def test_install_ps1_voice_flags_only_change_fcc_spec(
     powershell_harness: PowerShellHarness,
 ) -> None:
@@ -1247,6 +1268,7 @@ def test_install_ps1_deferred_helper_invokes_uv_as_command() -> None:
     assert "$argumentsLiteral" not in powershell
 
 
+@pytest.mark.local_serial
 def test_install_ps1_deferred_helper_runs_uv(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -1418,6 +1440,7 @@ def _braced_or_assignment(installer_text: str, name: str) -> str:
     raise AssertionError(f"install.ps1 no longer assigns {name}")
 
 
+@pytest.mark.local_serial
 def test_install_ps1_rename_reinstall_renames_tool_dir_and_runs_uv(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -1511,6 +1534,7 @@ Write-Host "RENAME_REINSTALL_OK"
     assert "RENAME_REINSTALL_OK" in result.stdout, result.stdout + result.stderr
 
 
+@pytest.mark.local_serial
 def test_install_ps1_rename_reinstall_restores_old_dir_on_failed_install(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -1600,6 +1624,7 @@ Write-Host "RENAME_ROLLBACK_OK"
     assert "RENAME_ROLLBACK_OK" in result.stdout, result.stdout + result.stderr
 
 
+@pytest.mark.local_serial
 def test_install_ps1_renames_every_launcher_shim_before_uv_install(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -1726,6 +1751,7 @@ Write-Host "SHIM_RENAME_DONE"
     assert "ruff.exe" in left
 
 
+@pytest.mark.local_serial
 def test_install_ps1_never_reports_verified_with_missing_commands(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -2031,6 +2057,7 @@ def test_installer_reports_kept_shims_as_refreshing_not_as_failures() -> None:
 
 
 @pytest.mark.parametrize("powershell", _powershells())
+@pytest.mark.local_serial
 def test_shim_rename_reports_a_lock_it_cannot_break(
     tmp_path: Path,
     powershell: str,
@@ -2099,6 +2126,7 @@ def test_shim_rename_reports_a_lock_it_cannot_break(
 
 
 @pytest.mark.parametrize("powershell", _powershells())
+@pytest.mark.local_serial
 def test_staged_install_keeps_a_locked_shim_and_repoints_the_receipt(
     tmp_path: Path,
     powershell: str,
@@ -2262,6 +2290,7 @@ def test_readme_install_section_has_no_manual_git_prerequisite() -> None:
 
 
 @pytest.mark.parametrize("powershell", _powershells())
+@pytest.mark.local_serial
 def test_install_ps1_falls_back_when_pshome_executable_is_unavailable(
     tmp_path: Path,
     powershell: str,
@@ -2509,6 +2538,7 @@ def test_the_desktop_entry_function_is_still_extractable() -> None:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX installer scenarios need /bin/sh")
+@pytest.mark.local_serial
 def test_install_sh_writes_its_launcher_when_the_desktop_app_is_absent(
     tmp_path: Path,
 ) -> None:
@@ -2524,6 +2554,7 @@ def test_install_sh_writes_its_launcher_when_the_desktop_app_is_absent(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX installer scenarios need /bin/sh")
+@pytest.mark.local_serial
 def test_install_sh_steps_aside_when_the_desktop_app_is_registered(
     tmp_path: Path,
 ) -> None:
@@ -2627,6 +2658,7 @@ _CURL_HINTS = (
 )
 
 
+@pytest.mark.local_serial
 def test_install_sh_exits_one_with_the_curl_hint_when_curl_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -2732,6 +2764,7 @@ def test_installers_still_do_not_install_coding_agents() -> None:
         assert "install whichever of those you use yourself" in text
 
 
+@pytest.mark.local_serial
 def test_install_sh_stops_when_the_python_download_fails(
     posix_harness: PosixHarness,
 ) -> None:
@@ -2860,6 +2893,7 @@ def _populated_tool_bin(tmp_path: Path) -> Path:
     return tool_bin
 
 
+@pytest.mark.local_serial
 def test_install_ps1_verifies_the_file_in_the_uv_bin_dir_not_what_path_resolves(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -2898,6 +2932,7 @@ def test_install_ps1_verifies_the_file_in_the_uv_bin_dir_not_what_path_resolves(
     assert "is installed and verified." in result.stdout
 
 
+@pytest.mark.local_serial
 def test_install_ps1_names_the_shadowing_program_and_the_npm_remedy(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -2924,6 +2959,7 @@ def test_install_ps1_names_the_shadowing_program_and_the_npm_remedy(
     assert "is installed and verified." in result.stdout
 
 
+@pytest.mark.local_serial
 def test_install_ps1_still_refuses_when_a_launcher_is_absent_from_the_uv_bin_dir(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -2943,6 +2979,7 @@ def test_install_ps1_still_refuses_when_a_launcher_is_absent_from_the_uv_bin_dir
         assert name in result.stdout
 
 
+@pytest.mark.local_serial
 def test_a_full_disk_stops_the_install_instead_of_retrying_around_locked_files(
     powershell_harness: PowerShellHarness,
 ) -> None:
@@ -2974,6 +3011,7 @@ def test_a_full_disk_stops_the_install_instead_of_retrying_around_locked_files(
     assert "is installed and verified." not in output
 
 
+@pytest.mark.local_serial
 def test_a_locked_shim_still_takes_the_rename_and_staged_ladder(
     powershell_harness: PowerShellHarness,
 ) -> None:
@@ -3001,6 +3039,7 @@ def test_a_locked_shim_still_takes_the_rename_and_staged_ladder(
     assert len(installs) > 1, f"the ladder was skipped for a real lock: {installs}"
 
 
+@pytest.mark.local_serial
 def test_install_sh_warns_about_a_shadowing_program_without_failing(
     posix_harness: PosixHarness,
 ) -> None:
@@ -3028,6 +3067,7 @@ def test_install_sh_warns_about_a_shadowing_program_without_failing(
     assert "is installed and verified." in output
 
 
+@pytest.mark.local_serial
 def test_install_sh_stops_on_no_space_left_on_device(
     posix_harness: PosixHarness,
 ) -> None:
@@ -3256,6 +3296,7 @@ def test_the_smoke_job_calls_the_batch_file_rather_than_chaining_to_it() -> None
         )
 
 
+@pytest.mark.local_serial
 def test_install_ps1_behaves_the_same_under_scriptblock_and_file(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,

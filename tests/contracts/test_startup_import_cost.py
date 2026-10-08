@@ -51,6 +51,7 @@ _PROBE = "\n".join(
 )
 
 
+@pytest.mark.local_serial
 def test_building_the_asgi_app_imports_no_deferred_heavyweight() -> None:
     """A fresh interpreter that imports the app builder loads none of them."""
     completed = subprocess.run(
@@ -167,6 +168,7 @@ _PRINT_STATUS_PROBE = "\n".join(
 )
 
 
+@pytest.mark.local_serial
 def test_print_status_imports_nothing_heavyweight(tmp_path) -> None:
     """A fresh interpreter that answers ``--print-status`` stays cheap."""
     import os

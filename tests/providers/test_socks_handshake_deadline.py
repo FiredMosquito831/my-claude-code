@@ -163,6 +163,7 @@ async def _close(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.parametrize("behaviour", STALLING)
+@pytest.mark.local_serial
 async def test_the_library_parks_for_ever_on_a_stalling_socks5_rung(behaviour):
     """Before-picture, pinned: without the bound the request is still pending.
 
@@ -185,6 +186,7 @@ async def test_the_library_parks_for_ever_on_a_stalling_socks5_rung(behaviour):
 
 @pytest.mark.parametrize("surface", sorted(BUILDERS))
 @pytest.mark.parametrize("behaviour", STALLING)
+@pytest.mark.local_serial
 async def test_a_stalling_socks5_rung_fails_connect_shaped_within_the_budget(
     surface, behaviour
 ):
@@ -214,6 +216,7 @@ async def test_a_stalling_socks5_rung_fails_connect_shaped_within_the_budget(
 
 
 @pytest.mark.parametrize("surface", sorted(BUILDERS))
+@pytest.mark.local_serial
 async def test_an_honest_socks5_rung_is_untouched(surface):
     """The control. A proxy that behaves gets exactly the request it got."""
 
@@ -234,6 +237,7 @@ async def test_an_honest_socks5_rung_is_untouched(surface):
 
 
 @pytest.mark.parametrize("behaviour", [CLOSE_MID, BAD_AUTH])
+@pytest.mark.local_serial
 async def test_a_rung_that_answers_badly_answers_exactly_as_before(behaviour):
     """The two behaviours that already failed fast fail identically.
 
@@ -267,6 +271,7 @@ async def test_a_rung_that_answers_badly_answers_exactly_as_before(behaviour):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.local_serial
 async def test_an_http_connect_rung_was_already_bounded_and_still_is():
     """The other rung type, pinned rather than asserted from the source.
 

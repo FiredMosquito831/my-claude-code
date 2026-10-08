@@ -91,6 +91,7 @@ async def test_a_task_parked_on_a_sleep_names_sleep() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.local_serial
 async def test_a_task_parked_on_a_socket_read_names_the_read() -> None:
     """The shape of an upstream that accepted and then said nothing."""
 

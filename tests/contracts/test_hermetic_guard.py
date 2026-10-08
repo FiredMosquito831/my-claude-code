@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.local_serial
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # The child reads the stand-in profile from here: inside the child, ``HOME`` has

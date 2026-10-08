@@ -87,6 +87,7 @@ def test_an_unknown_legacy_name_still_says_the_family_is_gone() -> None:
     assert "7.0.0" in message
 
 
+@pytest.mark.local_serial
 def test_running_a_stub_prints_one_line_on_stderr_and_exits_one() -> None:
     """Exit 1, not 0: a script that still calls the old name must fail loudly."""
 

@@ -372,6 +372,7 @@ def test_a_holder_that_leaves_while_asked_is_never_taken_from(
 # ------------------------------------------------- one row against a real holder
 
 
+@pytest.mark.local_serial
 def test_a_real_answering_holder_on_loopback_survives_a_start(
     monkeypatch, capsys
 ) -> None:

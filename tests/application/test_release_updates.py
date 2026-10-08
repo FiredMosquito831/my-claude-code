@@ -575,6 +575,7 @@ def test_pending_upgrade_result_parses_a_utf8_bom_receipt(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows process times")
+@pytest.mark.local_serial
 def test_process_creation_filetime_matches_powershell() -> None:
     """The value must be comparable with Process.StartTime.ToFileTimeUtc()."""
 

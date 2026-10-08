@@ -195,6 +195,7 @@ def _silent_holder() -> Iterator[int]:
         sock.close()
 
 
+@pytest.mark.local_serial
 def test_a_real_healthy_holder_is_answering_and_names_its_pid() -> None:
     with _http_holder(
         200,
@@ -209,6 +210,7 @@ def test_a_real_healthy_holder_is_answering_and_names_its_pid() -> None:
     assert probe.tries == 1
 
 
+@pytest.mark.local_serial
 def test_an_answer_on_the_third_rung_still_counts() -> None:
     """A holder that answers late but inside the ladder is a live server."""
 
@@ -221,6 +223,7 @@ def test_an_answer_on_the_third_rung_still_counts() -> None:
     assert probe.pid == 77
 
 
+@pytest.mark.local_serial
 def test_a_silent_holder_is_silent_after_the_whole_ladder() -> None:
     with _silent_holder() as port:
         started = time.monotonic()
@@ -233,6 +236,7 @@ def test_a_silent_holder_is_silent_after_the_whole_ladder() -> None:
     assert elapsed < 10.0
 
 
+@pytest.mark.local_serial
 def test_a_holder_that_leaves_while_asked_is_free() -> None:
     with _silent_holder() as port:
         probe = probe_holder(
@@ -242,6 +246,7 @@ def test_a_holder_that_leaves_while_asked_is_free() -> None:
     assert probe.tries == 1
 
 
+@pytest.mark.local_serial
 def test_the_probe_never_goes_through_a_proxy(monkeypatch) -> None:
     """A loopback probe routed to ``HTTP_PROXY`` would never reach the holder."""
 

@@ -19,6 +19,8 @@ import pytest
 from my_claude_code.config.settings import Settings
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
+pytestmark = pytest.mark.local_serial
+
 #: What one upstream "request" costs, in seconds. Small, and identical for
 #: every request, so every millisecond of spread is MCC's own.
 UPSTREAM_SECONDS = 0.02

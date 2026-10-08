@@ -63,6 +63,7 @@ def _call(result: dict) -> str:
     return json.loads(completed.stdout)
 
 
+@pytest.mark.local_serial
 def test_the_banner_names_both_files_before_the_server_stops() -> None:
     text = _call(
         {
@@ -78,6 +79,7 @@ def test_the_banner_names_both_files_before_the_server_stops() -> None:
     assert "desktop app" in text
 
 
+@pytest.mark.local_serial
 def test_a_response_with_no_paths_says_nothing_rather_than_a_blank_heading() -> None:
     """The POSIX path installs in-process: there is no transcript to name."""
 
@@ -85,6 +87,7 @@ def test_a_response_with_no_paths_says_nothing_rather_than_a_blank_heading() -> 
     assert _call({"ok": True, "log_path": None, "progress_path": None}) == ""
 
 
+@pytest.mark.local_serial
 def test_one_path_alone_is_still_worth_showing() -> None:
     text = _call({"ok": True, "log_path": "/home/u/.mcc/updates/install-1.log"})
     assert "/home/u/.mcc/updates/install-1.log" in text

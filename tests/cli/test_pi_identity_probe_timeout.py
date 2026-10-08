@@ -112,6 +112,7 @@ def _slow_fake_pi(tmp_path: Path, seconds: float) -> Path:
     return launcher
 
 
+@pytest.mark.local_serial
 def test_a_real_pi_slower_than_five_seconds_is_launched(tmp_path: Path) -> None:
     """End to end through ``launch``: a real process that answers after 6 s.
 

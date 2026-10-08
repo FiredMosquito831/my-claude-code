@@ -211,6 +211,7 @@ def _presence(monkeypatch, presence: str) -> None:
     )
 
 
+@pytest.mark.local_serial
 def test_emits_every_documented_key(config_dir, monkeypatch) -> None:
     """The golden key set: nothing added silently, nothing dropped silently."""
     _presence(monkeypatch, "healthy")
@@ -287,6 +288,7 @@ def test_the_draining_presence_is_only_reported_to_a_caller_that_asked(
     assert desktop_status(presence_v2=True)["server_presence"] == "draining"
 
 
+@pytest.mark.local_serial
 def test_a_stranger_on_the_port_is_still_foreign_while_draining_exists(
     config_dir, monkeypatch
 ) -> None:
@@ -319,6 +321,7 @@ def test_a_stranger_on_the_port_is_still_foreign_while_draining_exists(
     assert "nginx.exe (pid 99)" in payload["port_conflict"]
 
 
+@pytest.mark.local_serial
 def test_reconnect_restatus_seconds_is_in_the_golden_key_set(
     config_dir, monkeypatch
 ) -> None:
@@ -335,6 +338,7 @@ def test_reconnect_restatus_seconds_is_in_the_golden_key_set(
     assert desktop_status()["reconnect_restatus_seconds"] == 12.5
 
 
+@pytest.mark.local_serial
 def test_the_update_key_is_informational_and_is_never_required(
     config_dir, monkeypatch
 ) -> None:
@@ -370,6 +374,7 @@ def test_the_update_key_is_informational_and_is_never_required(
     assert "informational, never required" in source.lower()
 
 
+@pytest.mark.local_serial
 def test_server_start_retries_is_in_the_golden_key_set(config_dir, monkeypatch) -> None:
     """How many attempts a start gets before the window calls it a failure.
 
@@ -432,6 +437,7 @@ def test_the_start_budget_keys_are_still_the_two_the_shell_reads(
     assert payload["start_timeout_seconds"] > 0
 
 
+@pytest.mark.local_serial
 def test_carries_the_port_conflict_message_when_foreign(
     config_dir, monkeypatch
 ) -> None:
@@ -555,6 +561,7 @@ def test_reports_a_legacy_fcc_home(tmp_path, monkeypatch) -> None:
     assert payload["config_dir_is_legacy"] is True
 
 
+@pytest.mark.local_serial
 def test_maps_a_wildcard_bind_to_loopback(config_dir, monkeypatch) -> None:
     """``0.0.0.0`` is a bind, not an address a window can navigate to."""
     _settings(monkeypatch, host="0.0.0.0", port=8199)
@@ -569,6 +576,7 @@ def test_maps_a_wildcard_bind_to_loopback(config_dir, monkeypatch) -> None:
     assert payload["health_url"] == "http://127.0.0.1:8199/health"
 
 
+@pytest.mark.local_serial
 def test_prints_one_json_document_and_exits_zero(config_dir, monkeypatch) -> None:
     """Stdout is a machine's input: one parseable document, nothing else."""
     _presence(monkeypatch, "healthy")
@@ -612,6 +620,7 @@ def test_an_unknown_flag_after_print_status_is_still_a_usage_error(
     assert exit_info.value.code == 2
 
 
+@pytest.mark.local_serial
 def test_never_prints_a_key_or_a_token(config_dir, monkeypatch) -> None:
     """The document is safe to paste into a bug report."""
     _settings(
@@ -631,6 +640,7 @@ def test_never_prints_a_key_or_a_token(config_dir, monkeypatch) -> None:
     )
 
 
+@pytest.mark.local_serial
 def test_reconnect_budget_follows_the_configured_drain(config_dir, monkeypatch) -> None:
     """C9's number is the dashboard's number, recomputed, never a copy."""
     from my_claude_code.application import release_updates
@@ -646,6 +656,7 @@ def test_reconnect_budget_follows_the_configured_drain(config_dir, monkeypatch) 
     assert desktop_status()["reconnect_timeout_seconds"] == 1065.0
 
 
+@pytest.mark.local_serial
 def test_reconnect_timeout_matches_release_updates_for_a_300_second_drain(
     config_dir, monkeypatch
 ) -> None:
@@ -674,6 +685,7 @@ def test_reconnect_timeout_matches_release_updates_for_a_300_second_drain(
     assert reconnect_timeout_seconds(default_settings) == 1040.0
 
 
+@pytest.mark.local_serial
 def test_reports_that_autostart_reconciliation_is_switched_off(
     config_dir, monkeypatch
 ) -> None:
@@ -700,6 +712,7 @@ def test_reports_that_autostart_reconciliation_is_switched_off(
         assert desktop_status()["autostart_reconcile"] is True, value
 
 
+@pytest.mark.local_serial
 def test_close_to_tray_is_resolved_for_the_window_that_reads_it(
     config_dir, monkeypatch
 ) -> None:
@@ -738,6 +751,7 @@ def test_close_to_tray_is_resolved_for_the_window_that_reads_it(
     assert desktop_status()["close_to_tray"] is False
 
 
+@pytest.mark.local_serial
 def test_a_starting_server_is_reported_as_starting_with_its_stage(
     config_dir, monkeypatch
 ) -> None:
@@ -760,6 +774,7 @@ def test_a_starting_server_is_reported_as_starting_with_its_stage(
     assert payload["port_conflict"] is None
 
 
+@pytest.mark.local_serial
 def test_the_starting_presence_is_only_reported_to_a_caller_that_asked(
     config_dir, monkeypatch
 ) -> None:
@@ -777,6 +792,7 @@ def test_the_starting_presence_is_only_reported_to_a_caller_that_asked(
     assert desktop_status(presence_v2=True)["server_presence"] == "starting"
 
 
+@pytest.mark.local_serial
 def test_every_other_presence_reports_no_starting_stage(
     config_dir, monkeypatch
 ) -> None:
@@ -785,6 +801,7 @@ def test_every_other_presence_reports_no_starting_stage(
         assert desktop_status(presence_v2=True)["server_starting_stage"] is None
 
 
+@pytest.mark.local_serial
 def test_mcc_holding_the_port_in_silence_is_not_reported_as_foreign(
     config_dir, monkeypatch
 ) -> None:
@@ -808,6 +825,7 @@ def test_mcc_holding_the_port_in_silence_is_not_reported_as_foreign(
     assert desktop_status()["server_presence"] == "foreign"
 
 
+@pytest.mark.local_serial
 def test_a_genuine_stranger_on_the_port_is_still_foreign(
     config_dir, monkeypatch
 ) -> None:
@@ -825,6 +843,7 @@ def test_a_genuine_stranger_on_the_port_is_still_foreign(
 # --- 7.26.0: a busy server is not an absent one ---------------------------
 
 
+@pytest.mark.local_serial
 def test_the_escalating_probe_ladder_ships_five_ten_fifteen(
     config_dir, monkeypatch
 ) -> None:

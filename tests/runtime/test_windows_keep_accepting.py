@@ -139,6 +139,7 @@ def _answered(result: dict[str, Any]) -> bool:
     return isinstance(fresh, bytes) and fresh.startswith(b"HTTP/1.1 200")
 
 
+@pytest.mark.local_serial
 def test_the_composition_root_keeps_the_listener_through_resets_in_a_hold() -> None:
     """The fix as shipped: building the app is what installs it.
 
@@ -158,6 +159,7 @@ def test_the_composition_root_keeps_the_listener_through_resets_in_a_hold() -> N
     assert windows_accept.accept_resets_survived() >= 1, result
 
 
+@pytest.mark.local_serial
 def test_cpython_still_closes_the_listener_without_keep_accepting() -> None:
     """Pins the upstream bug this fix exists for.
 
@@ -175,6 +177,7 @@ def test_cpython_still_closes_the_listener_without_keep_accepting() -> None:
     assert not _answered(result), result
 
 
+@pytest.mark.local_serial
 def test_resets_are_reported_once_per_burst_never_as_errors() -> None:
     windows_accept.install_keep_accepting()
     # The module's logger, stubbed: a loguru sink here sees each record twice
@@ -194,6 +197,7 @@ def test_resets_are_reported_once_per_burst_never_as_errors() -> None:
     assert "Task exception was never retrieved" not in result["messages"], result
 
 
+@pytest.mark.local_serial
 def test_a_non_per_connection_accept_error_still_reaches_start_serving() -> None:
     """Only a dropped *connection* is re-armed; anything else surfaces as before."""
 
@@ -233,6 +237,7 @@ def test_a_non_per_connection_accept_error_still_reaches_start_serving() -> None
     assert "Accept failed on a socket" in messages
 
 
+@pytest.mark.local_serial
 def test_closing_the_server_cancels_the_rearmed_accept_cleanly() -> None:
     windows_accept.install_keep_accepting()
     sock = _mcc_socket()
@@ -279,6 +284,7 @@ def test_install_is_idempotent() -> None:
     assert second.state == "already-installed"
 
 
+@pytest.mark.local_serial
 def test_an_unrecognised_accept_loop_is_left_alone() -> None:
     with patch.object(windows_accept, "KNOWN_AFFECTED", frozenset()):
         result = windows_accept.install_keep_accepting()
@@ -308,6 +314,7 @@ class _HoldApp:
         await send({"type": "http.response.body", "body": b"ok"})
 
 
+@pytest.mark.local_serial
 def test_uvicorn_as_mcc_drives_it_survives_a_reset_storm() -> None:
     """``uvicorn.Server.run(sockets=[sock])`` on MCC's socket, as cli/commands does."""
 

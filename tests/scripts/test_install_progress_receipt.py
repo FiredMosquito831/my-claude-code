@@ -77,6 +77,7 @@ def test_the_installer_always_writes_a_terminal_record(script: Path) -> None:
     assert INSTALL_FAILED_MESSAGE in text
 
 
+@pytest.mark.local_serial
 def test_a_record_the_installer_writes_reads_as_a_live_installer() -> None:
     """The shape the scripts emit, run through the reader that gates on it."""
 

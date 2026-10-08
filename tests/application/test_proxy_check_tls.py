@@ -392,6 +392,7 @@ def mitm_proxy(pki: dict[str, Path]) -> Iterator[_ConnectProxy]:
 # ----------------------------------------------------------------- the proof
 
 
+@pytest.mark.local_serial
 async def test_a_clean_proxy_passes_with_strict_tls(
     origin: _Origin, clean_proxy: _ConnectProxy
 ) -> None:
@@ -410,6 +411,7 @@ async def test_a_clean_proxy_passes_with_strict_tls(
     assert record.at
 
 
+@pytest.mark.local_serial
 async def test_a_proxy_that_terminates_tls_is_marked_intercepted(
     origin: _Origin, mitm_proxy: _ConnectProxy
 ) -> None:
@@ -432,6 +434,7 @@ async def test_a_proxy_that_terminates_tls_is_marked_intercepted(
     assert "certificate validation" in record.detail
 
 
+@pytest.mark.local_serial
 async def test_an_intercepting_proxy_is_refused_across_the_process(
     origin: _Origin, mitm_proxy: _ConnectProxy, clean_proxy: _ConnectProxy
 ) -> None:
@@ -464,6 +467,7 @@ async def test_an_intercepting_proxy_is_refused_across_the_process(
     assert PROXY_INTERCEPTION.is_refused(good_label) is False
 
 
+@pytest.mark.local_serial
 async def test_a_dead_address_walks_the_reachability_ladder(origin: _Origin) -> None:
     """A proxy that is not listening is benched without the operator doing anything.
 
@@ -493,6 +497,7 @@ async def test_a_dead_address_walks_the_reachability_ladder(origin: _Origin) -> 
     assert PROXY_INTERCEPTION.is_refused(label) is False
 
 
+@pytest.mark.local_serial
 async def test_a_refusal_survives_the_proxy_simply_going_offline(
     origin: _Origin, mitm_proxy: _ConnectProxy
 ) -> None:
@@ -545,6 +550,7 @@ async def test_a_refusal_survives_the_proxy_simply_going_offline(
 # ------------------------------------------------------ 7.22.2: the two depths
 
 
+@pytest.mark.local_serial
 async def test_the_tls_depth_passes_an_honest_proxy_and_sends_the_origin_nothing(
     origin: _Origin, clean_proxy: _ConnectProxy
 ) -> None:
@@ -574,6 +580,7 @@ async def test_the_tls_depth_passes_an_honest_proxy_and_sends_the_origin_nothing
     assert origin.requests == [], origin.requests
 
 
+@pytest.mark.local_serial
 async def test_the_request_depth_still_sends_exactly_one_request(
     origin: _Origin, clean_proxy: _ConnectProxy
 ) -> None:
@@ -599,6 +606,7 @@ async def test_the_request_depth_still_sends_exactly_one_request(
     assert origin.requests[0].startswith(b"HEAD ")
 
 
+@pytest.mark.local_serial
 async def test_the_default_depth_of_the_checker_itself_is_the_request(
     origin: _Origin, clean_proxy: _ConnectProxy
 ) -> None:
@@ -620,6 +628,7 @@ async def test_the_default_depth_of_the_checker_itself_is_the_request(
     assert len(origin.requests) == 1, origin.requests
 
 
+@pytest.mark.local_serial
 async def test_the_tls_depth_refuses_an_intercepting_proxy(
     origin: _Origin, mitm_proxy: _ConnectProxy
 ) -> None:
@@ -645,6 +654,7 @@ async def test_the_tls_depth_refuses_an_intercepting_proxy(
     assert PROXY_INTERCEPTION.is_refused(mask_proxy_label(url)) is True
 
 
+@pytest.mark.local_serial
 async def test_the_tls_depth_calls_a_dead_address_dead(origin: _Origin) -> None:
     """An address with nothing accepting on it is dead, and never an interception.
 
@@ -721,6 +731,7 @@ def _count_dials(monkeypatch: pytest.MonkeyPatch, delay: float = 0.0) -> list[in
     return tally
 
 
+@pytest.mark.local_serial
 async def test_the_tls_depth_opens_one_socket_per_address(
     origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -747,6 +758,7 @@ async def test_the_tls_depth_opens_one_socket_per_address(
     assert tally[0] == 1, f"the tls depth opened {tally[0]} sockets"
 
 
+@pytest.mark.local_serial
 async def test_the_request_depth_still_dials_before_it_builds_a_client(
     origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -779,6 +791,7 @@ async def test_the_request_depth_still_dials_before_it_builds_a_client(
     assert calls == [("127.0.0.1", clean_proxy.port)]
 
 
+@pytest.mark.local_serial
 async def test_the_tls_depth_keeps_the_reachability_wording_and_carries_no_latency(
     origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -812,6 +825,7 @@ async def test_the_tls_depth_keeps_the_reachability_wording_and_carries_no_laten
     assert record.latency_ms is None
 
 
+@pytest.mark.local_serial
 async def test_the_tls_depth_latency_is_the_handshake_and_never_the_dial(
     origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -870,6 +884,7 @@ class _TlsFrontedProxy(_Server):
             conn.close()
 
 
+@pytest.mark.local_serial
 async def test_an_https_proxys_own_bad_certificate_is_interception_not_death(
     origin: _Origin, pki: dict[str, Path]
 ) -> None:
@@ -903,6 +918,7 @@ async def test_an_https_proxys_own_bad_certificate_is_interception_not_death(
 # ---------------------------------------------------- 7.53.0: phase timings
 
 
+@pytest.mark.local_serial
 async def test_phase_timings_recorded(
     origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -957,6 +973,7 @@ async def test_phase_timings_recorded(
     assert "connect_ms" not in loaded.as_document()
 
 
+@pytest.mark.local_serial
 async def test_only_a_real_refusal_is_called_refused(
     origin: _Origin, clean_proxy: _ConnectProxy, monkeypatch: pytest.MonkeyPatch
 ) -> None:

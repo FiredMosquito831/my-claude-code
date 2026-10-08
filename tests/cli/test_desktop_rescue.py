@@ -620,6 +620,7 @@ def test_the_rescue_never_signals_a_pid_to_ask_if_it_is_alive() -> None:
     assert "terminate" not in calls
 
 
+@pytest.mark.local_serial
 def test_pid_is_alive_tells_a_live_process_from_an_exited_one() -> None:
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait(timeout=30)

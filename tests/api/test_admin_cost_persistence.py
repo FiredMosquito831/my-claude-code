@@ -79,6 +79,7 @@ def _settle(name: str = "cost-breakdown-local-hide") -> None:
         time.sleep(0.01)
 
 
+@pytest.mark.local_serial
 def test_the_first_call_computes_and_the_second_is_served_from_disk(
     client, seeded, config_home
 ) -> None:
@@ -131,6 +132,7 @@ def test_a_new_request_makes_the_stored_answer_stale_without_a_wait(
     assert refreshed["totals"]["priced"] == 5
 
 
+@pytest.mark.local_serial
 def test_a_new_request_recomputes_at_most_once_a_minute(
     client, seeded, config_home, tmp_path, monkeypatch
 ) -> None:

@@ -14,6 +14,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from my_claude_code.cli import migrate_config_dir
 
 
@@ -116,6 +118,7 @@ def test_refuses_when_dot_mcc_already_exists(tmp_path: Path, monkeypatch) -> Non
     assert (tmp_path / ".mcc").is_dir()
 
 
+@pytest.mark.local_serial
 def test_holder_detection_names_processes_on_windows(
     tmp_path: Path, monkeypatch
 ) -> None:

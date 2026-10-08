@@ -41,6 +41,7 @@ def _wait_for(path: Path, *, timeout: float = 30.0) -> None:
     sys.platform != "win32",
     reason="os.replace of an open file does not fail on POSIX",
 )
+@pytest.mark.local_serial
 def test_a_start_that_cannot_rotate_a_held_log_keeps_its_content(tmp_path) -> None:
     log_path = tmp_path / "server.log"
     log_path.write_text("the run that is being investigated\n", encoding="utf-8")
