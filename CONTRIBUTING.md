@@ -63,6 +63,10 @@ uv run pytest tests/api/test_admin_static_jsdom.py -n 0
 - `npm install` is fine locally, but `tests/package-lock.json` is the pin CI installs from — change the version in `tests/package.json` and regenerate the lockfile together.
 - CI runs this in its own `jsdom` job, with `MCC_CI=1` so a missing `node` or a missing jsdom **fails** instead of skipping. The ordinary `pytest` job excludes the file for exactly that reason.
 
+### The Windows full suite
+
+The pull-request `pytest` job runs on Linux, where about 150 Windows-only test cases (the PowerShell installers and uninstallers, the desktop controller and tray, the Windows listener, held-file log rotation) skip. The `Windows full suite` workflow (`.github/workflows/windows-full-suite.yml`) runs the whole suite, then the jsdom file, on `windows-latest`: nightly on `main`, on every published release, and on demand from *Run workflow*. It never runs on pull requests, so it cannot block a merge. Each run attaches its junit reports and a `failures.txt` as an artifact and lists the failing tests in the job summary. A red run is fixed at its root, never by marking a test flaky.
+
 ## Project Standards
 
 - Target Python 3.14 and rely on native lazy annotations; do not add `from __future__ import annotations`.
