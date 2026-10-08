@@ -664,12 +664,12 @@ validate_args() {
 refuse_install_through_sudo() {
     # 7.79.1. My Claude Code is a per-user install: uv's tool directory,
     # ~/.local/bin and the configuration home all belong to whoever runs this.
-    # Under sudo that is root -- so `sudo npm install -g`, `curl ... | sudo sh`
-    # and `sudo mcc update` installed a second, root-owned copy in root's home
-    # and started a root-owned server on the configured port, which stopped the
-    # user's own server on the way (measured in throwaway containers,
-    # specs/INVESTIGATION-NPM-SUDO.md). The user could neither use nor update
-    # that copy.
+    # Under sudo that is root -- so a global npm install run through sudo,
+    # `curl ... | sudo sh` and `sudo mcc update` installed a second, root-owned
+    # copy in root's home and started a root-owned server on the configured
+    # port, which stopped the user's own server on the way (measured in
+    # throwaway containers, specs/INVESTIGATION-NPM-SUDO.md). The user could
+    # neither use nor update that copy.
     #
     # Only root acting FOR another user is refused. A root shell, a root VPS and
     # a Docker image have no SUDO_USER (or SUDO_USER=root) and are unaffected.
@@ -689,9 +689,8 @@ refuse_install_through_sudo() {
         printf 'server on port %s in place of %s'"'"'s own. Nothing was installed.\n' "$server_port" "$SUDO_USER"
         printf '\nTo install for %s, run it again as %s, without sudo:\n' "$SUDO_USER" "$SUDO_USER"
         printf '  curl -fsSL "https://raw.githubusercontent.com/%s/main/scripts/install.sh" | sh\n' "$MCC_REPO"
-        printf 'With npm, give npm a folder %s owns instead of using sudo:\n' "$SUDO_USER"
+        printf 'With npm, give npm a folder %s owns and install the package again without sudo:\n' "$SUDO_USER"
         printf '  npm config set prefix ~/.npm-global   (and add ~/.npm-global/bin to PATH)\n'
-        printf '  npm install -g @firedmosquito831/my-claude-code\n'
         printf 'or keep the `mcc` command sudo installed and run `mcc install` as %s.\n' "$SUDO_USER"
         printf '\nTo install for root on purpose, pass --allow-root (or set MCC_INSTALL_ALLOW_ROOT=1).\n'
     } >&2
@@ -1889,7 +1888,7 @@ write_lock_unavailable_notice() {
             unavailable_state="no longer running"
             case "$unavailable_pid" in
                 ''|*[!0-9]*) unavailable_pid="unknown" ;;
-                *) pid_is_running "$unavailable_pid" && unavailable_state="still running, as another user" ;;
+                *) pid_is_running "$unavailable_pid" && unavailable_state="running, as another user" ;;
             esac
             printf 'Lock: %s\n' "$unavailable_lock"
             printf '  written by %s, pid %s (%s), %s; the file belongs to %s.\n' \

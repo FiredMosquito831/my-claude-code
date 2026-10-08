@@ -2927,7 +2927,7 @@ function Write-UpdateLockUnavailableNotice {
         catch { }
         $state = "no longer running"
         if ($ownerPid -ne "unknown" -and (Get-Process -Id ([int] $ownerPid) -ErrorAction SilentlyContinue)) {
-            $state = "still running"
+            $state = "running"
         }
         Write-Host "Lock: $path"
         Write-Host "  written by $source, pid $ownerPid ($state), $age; owned by $(Get-PathOwner -Path $path)."
