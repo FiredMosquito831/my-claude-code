@@ -170,6 +170,9 @@ def resolve_proxy_route(
                 chain.max_switches, int(settings.proxy_max_switches_per_request)
             ),
             direct_fallback=chain.direct_fallback,
+            # 7.81.0. Bounded by the same ``max_switches`` above -- the user's
+            # decision of 2026-10-06 19:49 keeps the existing switch limit.
+            until_served=chain.until_served,
         ),
     )
 

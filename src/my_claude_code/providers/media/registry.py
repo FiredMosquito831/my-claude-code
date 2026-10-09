@@ -45,6 +45,7 @@ from my_claude_code.providers.base import MaskedRefusalPlan, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.runtime.config import build_provider_config
+from my_claude_code.providers.runtime.exit_rotation import credential_identity
 from my_claude_code.providers.runtime.proxy_leg import ProxiedLegRateLimiter
 
 from .jobs import PinnedMediaClient
@@ -257,7 +258,7 @@ class MediaRegistry:
                     dataclasses.replace(config, proxy=url, proxy_chain=None),
                     proxied_leg=False,
                 )
-            return self._leaf(
+            leaf = self._leaf(
                 descriptor,
                 dataclasses.replace(
                     config,
@@ -267,13 +268,27 @@ class MediaRegistry:
                 ),
                 proxied_leg=True,
             )
+            limiter = leaf.rate_limiter
+            if plan.until_served and isinstance(limiter, ProxiedLegRateLimiter):
+                # Chat's rule for a ticked chain (7.81.0): what the exit
+                # refused or dropped is not retried on the same exit.
+                limiter.arm_exit_stops(
+                    transport=True, rate_limit="rate_limit" in plan.on
+                )
+            return leaf
 
+        credential, credential_label = (
+            credential_identity(config) if plan.until_served else ("", "")
+        )
         state = MediaProxyRotationState(
             len(legs),
             plan.policy,
             labels=labels,
             provider_id=descriptor.provider_id,
             scope=plan.scope,
+            until_served=plan.until_served,
+            credential=credential,
+            credential_label=credential_label,
         )
         return MediaProxyPool(
             build_leg,

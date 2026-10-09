@@ -1174,6 +1174,9 @@ function proxyDraft(provider) {
         // existed has no key, the server reads that as off, and so must the
         // card -- the one reading an existing chain may never get is "on".
         order_by_speed: chain.order_by_speed === true,
+        // 7.81.0. Strictly `=== true`, the same reading as the server: a
+        // chain stored before the box existed has no key and reads off.
+        until_served: chain.until_served === true,
         entries: (chain.entries || []).map((entry) => ({ ...entry })),
         existing: true,
       }
@@ -1188,6 +1191,8 @@ function proxyDraft(provider) {
         // On for a chain being created: the user's decision, and the server's
         // default for a new chain too.
         order_by_speed: true,
+        // 7.81.0: on for a chain being created, as the server's default is.
+        until_served: true,
         entries: [],
         existing: false,
       };
@@ -4415,6 +4420,16 @@ function proxyEntryRow(provider, draft, entry, index) {
   // read back is worse than no sentence.
   state.title = health.title || state.textContent;
 
+  // 7.81.0: what MCC remembers about this exit for this provider, if
+  // anything -- its own cell, so the bounded health word never cuts it.
+  const memory = proxyEntryMemory(provider, entry);
+  const memoryCell = document.createElement("span");
+  if (memory.text) {
+    memoryCell.className = "proxy-entry-memory";
+    memoryCell.textContent = memory.text;
+    memoryCell.title = memory.title;
+  }
+
   const readout = proxyCheckReadout(entry);
   const check = document.createElement("span");
   check.className = "proxy-entry-check";
@@ -4507,7 +4522,9 @@ function proxyEntryRow(provider, draft, entry, index) {
     if (chip) speedCell.appendChild(chip);
   }
 
-  row.append(select, handle, position, label, scheme, state, check, speedCell, actions);
+  row.append(select, handle, position, label, scheme, state);
+  if (memory.text) row.appendChild(memoryCell);
+  row.append(check, speedCell, actions);
   return row;
 }
 
@@ -4866,6 +4883,8 @@ function proxyCardFoot(provider, draft) {
         "chain as they did before 7.19.0.";
   directLabel.append(directInput, directText);
 
+  const servedLabel = proxyUntilServedControl(draft);
+
   const actions = document.createElement("div");
   actions.className = "proxy-card-actions";
 
@@ -4898,6 +4917,25 @@ function proxyCardFoot(provider, draft) {
     actions.appendChild(removeMany);
   }
 
+  // 7.81.0: what a ticked chain remembers about its exits, forgotten on
+  // request. Offered on a saved chain that has the box ticked, which is the
+  // only kind of chain that remembers anything.
+  if (provider.chain && provider.chain.until_served === true) {
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "secondary-button proxy-forget-memory";
+    const remembered = proxyRememberedCount(provider.chain);
+    forget.textContent = remembered
+      ? `Forget exit memory (${remembered})`
+      : "Forget exit memory";
+    forget.title =
+      "Forget which exits were spent or blocked for their country for " +
+      `${provider.display_name}, and let its unreachable exits be tried again. ` +
+      "The next request tries them as if new. Nothing is saved or rebuilt.";
+    forget.addEventListener("click", () => forgetProxyMemory(provider, forget));
+    actions.appendChild(forget);
+  }
+
   const save = document.createElement("button");
   save.type = "button";
   save.className = "primary-button";
@@ -4916,8 +4954,110 @@ function proxyCardFoot(provider, draft) {
     actions.appendChild(remove);
   }
 
-  foot.append(boundLabel, scopeLabel, directLabel, actions);
+  foot.append(boundLabel, scopeLabel, directLabel, servedLabel, actions);
   return foot;
+}
+
+/* "Keep trying exits until one answers" (7.81.0): the box on a chain's card.
+ *
+ * For a provider whose limit follows the address -- OpenCode Zen's free
+ * models are the case it was built for. Ticked, a request an exit refused or
+ * dropped goes to another exit on the same model instead of retrying the same
+ * exit or moving to the next model, still within "Switches per request"; the
+ * refused exits are remembered, so later requests skip them for free. */
+function proxyUntilServedControl(draft) {
+  const label = document.createElement("label");
+  label.className = "proxy-control proxy-until-served";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.className = "proxy-until-served-input";
+  input.checked = draft.until_served === true;
+  input.addEventListener("change", () => {
+    draft.until_served = input.checked;
+    renderProxying();
+  });
+  const text = document.createElement("span");
+  text.textContent = "Keep trying exits until one answers";
+  label.title = input.checked
+    ? "For a provider whose limit follows the address. A request an exit " +
+      "refused or dropped -- a free-usage limit (429), a refusal for the " +
+      "exit's country, a dead or dropping proxy -- goes to another exit of " +
+      "this chain on the same model, instead of being retried on the same " +
+      'exit or moved to the next model. It still stops after "Switches per ' +
+      'request" refusals (and PROXY_MAX_LIVE_FAILURES failed exits), then ' +
+      "moves to the next model of the fallback chain without pausing it. " +
+      "Refused exits are remembered -- spent until the wait the provider " +
+      "stated, blocked for PROXY_COOLDOWN_SECONDS -- across saves and " +
+      "re-sorts, so later requests skip them; Forget exit memory clears it."
+    : "Off: this chain moves on the failures you ticked above, up to " +
+      '"Switches per request", as it always has, and retries a dropped ' +
+      "connection on the same exit.";
+  label.append(input, text);
+  return label;
+}
+
+/* How many exits a saved chain's entries say are remembered (7.81.0). */
+function proxyRememberedCount(chain) {
+  return ((chain && chain.entries) || []).filter(
+    (entry) => Array.isArray(entry.memory) && entry.memory.length > 0,
+  ).length;
+}
+
+/* "remembered spent until 14:05" for one entry's memory, or "" (7.81.0).
+ *
+ * Read from the SAVED chain the server last sent, never from the card's
+ * draft: the draft is a copy taken when editing began, and what MCC remembers
+ * changes under it (a request, Forget exit memory) without anyone editing. */
+function proxyEntryMemory(provider, entry) {
+  const saved = ((provider.chain && provider.chain.entries) || []).find((item) =>
+    entry.direct ? item.direct : Boolean(entry.proxy) && item.proxy === entry.proxy,
+  );
+  const rows = saved && Array.isArray(saved.memory) ? saved.memory : [];
+  if (!rows.length) return { text: "", title: "" };
+  const first = rows[0];
+  const until = Date.parse(String(first.until || ""));
+  const when = Number.isFinite(until) ? ` until ${clockTime(until / 1000)}` : "";
+  const word = first.state === "blocked" ? "blocked for its country" : "spent";
+  const more = rows.length > 1 ? ` (+${rows.length - 1})` : "";
+  const lines = rows.map((row) => {
+    const stated =
+      row.state === "spent"
+        ? row.stated_wait != null
+          ? `, stated ${row.stated_wait} s`
+          : ", no wait stated"
+        : "";
+    const who = row.credential ? ` for key ${row.credential}` : "";
+    const left = Math.round(Number(row.remaining_s) || 0);
+    return `${row.rail}: ${row.state} (${row.reason})${who}, ${left} s left${stated}`;
+  });
+  return {
+    text: `remembered ${word}${when}${more}`,
+    title:
+      "MCC skips this exit for this provider until then, because it refused a " +
+      `request: ${lines.join("; ")}. Forget exit memory on this card clears it.`,
+  };
+}
+
+async function forgetProxyMemory(provider, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/forget", {
+      method: "POST",
+      body: JSON.stringify({ provider: provider.provider_id }),
+    });
+    renderProxying();
+    const forgotten = (proxyState.data && proxyState.data.forgotten) || {};
+    const count = Number(forgotten.remembered || 0);
+    announceProxy(
+      `${provider.display_name}: forgot ${count} remembered ` +
+        `exit${count === 1 ? "" : "s"}; unreachable exits may be tried again. ` +
+        "The next request tries every exit as new.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
 }
 
 /* "Keep the fastest healthy proxy first" (7.56.0), and the two explicit
@@ -5194,6 +5334,8 @@ async function saveProxyChain(provider, draft, button, remove = false) {
         // Always named, so the server never has to guess: omitted, it would
         // read as "on" for a chain this save creates.
         order_by_speed: draft.order_by_speed === true,
+        // 7.81.0. Always named, for the same reason as the line above.
+        until_served: draft.until_served === true,
         entries: draft.entries.map((entry) => ({
           proxy: entry.proxy || "",
           url: entry.url || "",
@@ -21537,6 +21679,8 @@ function dialText(dial, position) {
         : "never completed",
     );
   }
+  // 7.81.0: what MCC now remembers about this exit, on a ticked chain.
+  if (dial.memory) parts.push(dial.memory);
   return parts.join(" · ");
 }
 
@@ -21550,7 +21694,19 @@ function dialText(dial, position) {
  */
 function appendDials(item, ladder) {
   const dials = ladderDials(ladder);
-  if (!dials.length) return;
+  // 7.81.0: a ticked chain's exits skipped because MCC remembered them.
+  const skipped = Number((ladder && ladder.exits_skipped_by_memory) || 0);
+  if (!dials.length) {
+    if (skipped > 0) {
+      const none = document.createElement("p");
+      none.className = "req-chain-dials-title";
+      none.textContent =
+        `No exit dialled · ${skipped} skipped from memory ` +
+        "(spent, blocked for their country, or unreachable)";
+      item.appendChild(none);
+    }
+    return;
+  }
   const switches = dials.filter((dial) => dial.outcome === "switched").length;
   const title = document.createElement("p");
   title.className = "req-chain-dials-title";
@@ -21559,6 +21715,7 @@ function appendDials(item, ladder) {
   if (Number(ladder.dials_dropped || 0) > 0) {
     words.push(`${ladder.dials_dropped} more not stored`);
   }
+  if (skipped > 0) words.push(`${skipped} skipped from memory`);
   title.textContent = words.join(" · ");
   item.appendChild(title);
 

@@ -1986,6 +1986,7 @@
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-media">Generate images through the proxy</a>
                 <a href="#guide-proxy-chains">What a proxy chain hides</a>
+                <a href="#guide-proxy-keep-trying">Keep trying exits until one answers</a>
                 <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
@@ -3658,6 +3659,58 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                     proxy host:port</code> when the operating system's proxy (a VPN
                     app, a corporate proxy) carried a Direct dial.</li>
                 </ul>
+
+                <h3 id="guide-proxy-keep-trying">Keep trying exits until one answers</h3>
+                <p>
+                  Some providers count their free allowance <strong>per address</strong>:
+                  OpenCode Zen's free models answer a spent address with a
+                  <code>429 FreeUsageLimitError</code> while another address still gets
+                  answers. Tick <em>Keep trying exits until one answers</em> on that
+                  provider's chain card (new chains start with it ticked; a chain saved
+                  before 7.81.0 keeps working as before until you tick it). Then:
+                </p>
+                <ul>
+                  <li>A request that an exit <strong>refuses because of the
+                    exit</strong> goes to another exit of the chain, on the
+                    <strong>same model</strong>: a free-usage or rate limit (with the
+                    <code>rate_limit</code> chip ticked), a refusal for the exit's
+                    country (the host's own words, such as <code>RegionError</code>), a
+                    proxy that cannot be reached, or one that drops the connection
+                    before the first byte. It is <strong>not retried on the same
+                    exit</strong>.</li>
+                  <li>Your existing limits still apply: it moves on at most
+                    <em>Switches per request</em> times for refusals (and
+                    <code>PROXY_MAX_LIVE_FAILURES</code> failed exits in all). After that
+                    the request moves to the next model of your fallback chain, and the
+                    model is <strong>not paused</strong> for the exits that refused &mdash;
+                    the key is not charged either.</li>
+                  <li>MCC <strong>remembers</strong> each refused exit for that provider:
+                    <em>spent</em> until the wait the provider stated (or your
+                    <code>PROXY_COOLDOWN_SECONDS</code> when it stated none),
+                    <em>blocked for its country</em> for
+                    <code>PROXY_COOLDOWN_SECONDS</code>. Later requests skip those exits
+                    without dialling them, a chain save or a speed re-sort does not
+                    forget them, and the model is only skipped while no exit of the chain
+                    can serve. Each entry shows what is remembered;
+                    <em>Forget exit memory</em> on the card clears it (and lets
+                    unreachable exits be tried again). A restart forgets it too.</li>
+                  <li>Direct fallback keeps its rule: this computer's address only once
+                    every proxy is unhealthy, and a remembered exit counts as unhealthy.
+                    Reaching the switch limit never ends in Direct.</li>
+                  <li>The request detail shows each exit dialled, what it answered and
+                    what MCC now remembers about it, how many exits were skipped from
+                    memory, and &mdash; when every usable exit refused &mdash; one sentence
+                    saying so.</li>
+                </ul>
+                <p>
+                  Time: each bad exit costs what it costs today (a refused connect up to
+                  <code>PROXY_CONNECT_TIMEOUT_SECONDS</code>, a 429 a second or two, a
+                  silent exit up to <code>HTTP_READ_TIMEOUT</code>), but only once per
+                  memory window instead of once per request. Output is never moved: once
+                  the first byte has reached your client the request stays on its exit.
+                  A drop while a model is still thinking (before any answer text) counts
+                  as after the first byte.
+                </p>
 
                 <h3 id="guide-advanced">Where the advanced settings went</h3>
                 <p>

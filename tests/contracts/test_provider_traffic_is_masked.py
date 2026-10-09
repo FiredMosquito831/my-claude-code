@@ -46,6 +46,14 @@ Filled by 7.79.2 (PR-4, PR-5, PR-6 in one change):
   proxy.
 
 Every traffic class in the grid is now driven; none is a placeholder.
+
+Filled by 7.81.0 ("Keep trying exits until one answers", PR-7/8/9): a ticked
+chain moves a request an exit refused (a free-usage 429, a country refusal) to
+the next exit -- through proxies only, the same bytes on every exit, never
+retried on the exit that refused; at its switch limit it never goes direct and
+the next model answers; with every exit remembered spent it sends nothing when
+Direct fallback is off and goes direct only when it is on (the 7.79.2 rule
+sees the memory); media does the same.
 """
 
 import asyncio
@@ -70,6 +78,7 @@ from google.auth.credentials import Credentials as GoogleCredentials
 from my_claude_code.application.model_metadata import ResponseSurface
 from my_claude_code.application.ports import PooledCredentialPort
 from my_claude_code.config.constants import CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE
+from my_claude_code.config.credential_names import credential_fingerprint
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -84,6 +93,11 @@ from my_claude_code.config.proxy_chains import (
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.failures import ExecutionFailure
+from my_claude_code.core.proxy_exit_memory import (
+    EXIT_MEMORY,
+    MEDIA_EXIT_MEMORY,
+    SPENT,
+)
 from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY, reset_proxy_health
 from my_claude_code.core.request_log import store_from_settings
 from my_claude_code.providers.anthropic_oauth import credentials as claude_creds
@@ -441,6 +455,18 @@ class TrafficWorld:
     chat_failures_left: int = 0
     #: A proxy address nothing listens on, for a dead exit.
     dead_url: str = ""
+    #: 7.81.0: what the host answers a chat or image request arriving through
+    #: the rig's exit N -- the host reads which proxy carried it from the
+    #: peer it sees, the way a provider metering per address does.
+    exit_answers: dict[int, tuple[int, bytes]] = dataclasses.field(default_factory=dict)
+
+    def exit_of(self, request: SeenRequest) -> int | None:
+        """Which of the rig's proxies carried ``request``, if any did."""
+
+        for index, proxy in enumerate(self.rig.proxies):
+            if request.peer in proxy.outbound:
+                return index
+        return None
 
     @property
     def masked_ids(self) -> tuple[str, ...]:
@@ -466,6 +492,13 @@ class TrafficWorld:
             ).encode()
         if path.endswith("/files/kite.png"):
             return 200, PICTURE, "image/png"
+        if self.exit_answers and (
+            path.endswith("/images/generations") or path.endswith("/chat/completions")
+        ):
+            carried = self.exit_of(request)
+            answer = None if carried is None else self.exit_answers.get(carried)
+            if answer is not None:
+                return answer
         if path.endswith("/images/generations"):
             url = f"{self.rig.host.base_url(path='')}/files/kite.png"
             return 200, json.dumps({"created": 1, "data": [{"url": url}]}).encode()
@@ -495,6 +528,7 @@ class TrafficWorld:
         dead_first: bool = False,
         on: tuple[str, ...] | None = None,
         max_switches: int | None = None,
+        until_served: bool = False,
     ) -> None:
         """The rig's three exits, in order, on every masked provider.
 
@@ -515,6 +549,8 @@ class TrafficWorld:
             extra["on"] = on
         if max_switches is not None:
             extra["max_switches"] = max_switches
+        if until_served:
+            extra["until_served"] = True
         chain = ProxyChain(
             enabled=True,
             policy="failover",
@@ -1771,3 +1807,180 @@ def test_the_refresh_button_sends_nothing_when_no_exit_may_carry_it(
     assert "Direct fallback is off" in text
     assert "Proxying page" in text
     refresh_world.rig.assert_nothing_sent()
+
+
+# ============================== 7.81.0: keep trying exits until one answers
+#
+# A chain with "Keep trying exits until one answers" ticked. The host answers
+# by the exit that carried the request: a free-usage 429, a country refusal,
+# or the ordinary answer.
+
+FREE_USAGE_429 = (
+    429,
+    b'{"type":"error","error":{"type":"FreeUsageLimitError",'
+    b'"message":"Rate limit exceeded. Please try again later."}}',
+)
+REGION_403 = (
+    403,
+    b'{"type":"error","error":{"type":"RegionError",'
+    b'"message":"This model is not available in your country."}}',
+)
+
+
+#: A 429 the leaf would retry on the same exit (``RATE_LIMIT_ROUTES_AROUND_MODEL``
+#: off, the user's value) sleeps a real backoff first: with the world's zero
+#: backoff the frozen retry loop refuses a zero-second reactive block before
+#: it ever sleeps.
+BACKOFF = {
+    "PROVIDER_RETRY_BACKOFF_BASE_SECONDS": "0.01",
+    "PROVIDER_RETRY_BACKOFF_MAX_SECONDS": "0.01",
+    "RATE_LIMIT_ROUTES_AROUND_MODEL": "false",
+}
+
+
+def _remember_every_exit(world: TrafficWorld, name: str) -> None:
+    """Every rig exit remembered spent for ``name``'s one key (chat and media)."""
+
+    credential = credential_fingerprint(RIG_KEY)
+    for url in world.rig.proxy_urls:
+        label = mask_proxy_label(url)
+        for memory in (EXIT_MEMORY, MEDIA_EXIT_MEMORY):
+            memory.remember(
+                world.ids[name],
+                credential,
+                label,
+                state=SPENT,
+                seconds=300,
+                reason="rate_limit",
+            )
+
+
+def _exits_used(world: TrafficWorld, name: str) -> list[int | None]:
+    return [world.exit_of(seen) for seen in world.requests_for(name)]
+
+
+@pytest.mark.local_serial
+def test_a_ticked_chain_moves_a_refused_request_to_the_next_exit(
+    traffic: TrafficWorld,
+) -> None:
+    traffic.write(until_served=True, max_switches=2)
+    traffic.exit_answers = {0: FREE_USAGE_429, 1: REGION_403}
+
+    with traffic.client(**BACKOFF) as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+            )
+        )
+
+    assert outcome.ok, outcome.text
+    traffic.rig.assert_masked()
+    # One try per exit: the 429 is not retried on the exit that refused it.
+    assert _exits_used(traffic, CHAT_NAME) == [0, 1, 2]
+    bodies = {seen.body for seen in traffic.requests_for(CHAT_NAME)}
+    assert len(bodies) == 1, "the request body differs between exits"
+    keys = {
+        seen.headers.get("authorization") for seen in traffic.requests_for(CHAT_NAME)
+    }
+    assert len(keys) == 1
+    attempt = _last_attempts(traffic)[0]
+    dials = ((attempt.get("params") or {}).get("ladder") or {}).get("dials") or []
+    assert [bool(dial.get("memory")) for dial in dials] == [True, True, False]
+    assert dials[0]["memory"].startswith("remembered spent until ")
+    assert dials[1]["memory"].startswith("remembered blocked for its country")
+
+
+@pytest.mark.local_serial
+def test_a_ticked_chain_at_its_switch_limit_moves_on_and_never_goes_direct(
+    traffic: TrafficWorld,
+) -> None:
+    traffic.write(until_served=True, direct_fallback=True, max_switches=1)
+    traffic.exit_answers = {0: FREE_USAGE_429, 1: FREE_USAGE_429, 2: FREE_USAGE_429}
+    masked = traffic.ids[CHAT_NAME]
+    plain = traffic.ids[PLAIN_NAME]
+
+    with traffic.client(
+        model=f"{masked}/{MODEL}", MODEL_FALLBACKS=f"{plain}/{MODEL}", **BACKOFF
+    ) as client:
+        response = client.post(
+            "/v1/messages", json=_messages_body("claude-sonnet-4-5", stream=False)
+        )
+
+    assert response.status_code == 200, response.text
+    # Two exits tried (one switch), the third never, and never this computer.
+    assert _exits_used(traffic, CHAT_NAME) == [0, 1]
+    assert len(traffic.requests_for(PLAIN_NAME)) == 1
+    # The plain provider has no chain: its one request is the only direct peer.
+    assert traffic.rig.direct_peers() == [traffic.requests_for(PLAIN_NAME)[0].peer]
+    first = _last_attempts(traffic)[0]
+    assert first["error_kind"] == "unavailable"
+    assert "switch limit (1 per request) was reached" in first["error_message"]
+
+
+@pytest.mark.local_serial
+def test_every_exit_remembered_and_direct_fallback_off_sends_nothing(
+    traffic: TrafficWorld,
+) -> None:
+    traffic.write(until_served=True, direct_fallback=False)
+    _remember_every_exit(traffic, CHAT_NAME)
+
+    with traffic.client(**BACKOFF) as client:
+        response = client.post(
+            "/v1/messages",
+            json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+        )
+
+    assert response.status_code != 200, response.text
+    traffic.rig.assert_nothing_sent()
+    assert f"No exit in {CHAT_NAME}'s proxy chain can carry a request" in (
+        response.text
+    )
+
+
+@pytest.mark.local_serial
+def test_every_exit_remembered_and_direct_fallback_on_goes_direct(
+    traffic: TrafficWorld,
+) -> None:
+    """The 7.79.2 rule reads the rotation's skip state, which the memory feeds."""
+
+    traffic.write(until_served=True, direct_fallback=True)
+    _remember_every_exit(traffic, CHAT_NAME)
+
+    with traffic.client(**BACKOFF) as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+            )
+        )
+
+    assert outcome.ok, outcome.text
+    assert all(not proxy.targets for proxy in traffic.rig.proxies)
+    assert traffic.rig.direct_peers() == traffic.rig.host.peers
+
+
+@pytest.mark.local_serial
+def test_a_ticked_media_chain_moves_a_refused_picture_to_the_next_exit(
+    traffic: TrafficWorld,
+) -> None:
+    traffic.write(until_served=True)
+    traffic.exit_answers = {0: FREE_USAGE_429}
+
+    with traffic.client(**BACKOFF) as client:
+        response = client.post(
+            GEMINI_IMAGE_PATH,
+            json={
+                "contents": [{"role": "user", "parts": [{"text": "a red kite"}]}],
+                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    traffic.rig.assert_masked()
+    generations = [
+        traffic.exit_of(seen)
+        for seen in traffic.requests_for(MEDIA_NAME)
+        if seen.path.endswith("/images/generations")
+    ]
+    assert generations == [0, 1]

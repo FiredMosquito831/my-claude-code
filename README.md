@@ -157,6 +157,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | The provider's own words | What each provider's model list says a model accepts and produces, its type and the endpoints that serve it, kept as published and shown with its source | **Models** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
 | Model kinds, provider first | Each list offers only its own kind of model, read from the provider's own model list first, then models.dev, then the provider's type or endpoint names; the Models page names the rung that decided it | **Models** page | [Media routing](docs/MEDIA.md#which-lists-offer-a-model-7782) |
 | Model visibility | Bulk show/hide/invert per provider, with one undoable report per action | **Models** page | [Guide](docs/USAGE.md#8-providers-and-api-keys) |
+| Keep trying exits | A proxy chain whose provider limits per address moves a refused or dropped request to another exit on the same model, within your switch limit, and remembers the refused exits across saves; Forget exit memory per card | **Proxying** page | [Reference](docs/ROUTING-REFERENCE.md#keep-trying-exits-until-one-answers-7810) |
 | OAuth providers | Claude subscription (**not permitted by Anthropic**), ChatGPT, Kimi For Coding | **Providers** page | [OAuth providers](docs/OAUTH-PROVIDERS.md) |
 
 ### Agents

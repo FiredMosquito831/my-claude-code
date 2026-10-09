@@ -71,6 +71,37 @@ _REGION_PATTERN = re.compile(
 _SURFACE_STATUSES = frozenset({400, 403, 405, 422, 500, 501})
 
 
+#: How far :func:`is_region_refusal` walks an exception's causes. Providers wrap
+#: their SDK's error and carry the original on ``__cause__``; the host's words
+#: are on the original.
+_CAUSE_DEPTH = 8
+
+
+def is_region_refusal(error: BaseException) -> bool:
+    """Whether the host refused this request for the caller's *country*.
+
+    Read from the host's own words only -- a ``403`` whose complaint matches
+    :data:`_REGION_PATTERN`, the refusal the vendor documents (``RegionError``,
+    "not available in your country") -- on the error or on any cause behind it,
+    because a provider's classified failure carries the host's response on the
+    exception it wrapped. MCC's own wording of a failure is never read as
+    evidence (the same rule :func:`surface_shaped_failure` keeps), and no
+    provider or model name is consulted: a region refusal is a statement about
+    the address the request came from, which is what a proxy chain changes.
+    """
+
+    current: BaseException | None = error
+    seen = 0
+    while current is not None and seen < _CAUSE_DEPTH:
+        seen += 1
+        if isinstance(current, Exception) and upstream_status_code(current) == 403:
+            spoken = upstream_complaint(current)
+            if spoken != str(current).lower() and _REGION_PATTERN.search(spoken):
+                return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def surface_shaped_failure(error: Exception) -> str | None:
     """Return the evidence that this rejection is about the *endpoint*.
 

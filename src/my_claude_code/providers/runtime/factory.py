@@ -2,6 +2,7 @@
 
 import dataclasses
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from my_claude_code.application.errors import UnknownProviderError
 from my_claude_code.config.constants import (
@@ -34,6 +35,7 @@ from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .config import build_provider_config
 from .direct_leg import AttributedLeg, DirectFallbackLeg
+from .exit_rotation import credential_identity
 from .masked_refusal import MaskedRefusalProvider
 from .opencode_credentials import build_opencode_provider
 from .proxy_leg import ProxiedLegRateLimiter
@@ -43,6 +45,17 @@ from .rotating import RotatingProvider
 ProviderFactory = Callable[
     [ProviderConfig, Settings, ProviderRateLimiter], BaseProvider
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ExitStops:
+    """What a ticked chain's proxied leg surfaces on the first try (7.81.0).
+
+    A dropped connection always; a ``429`` only when the chain's ``rate_limit``
+    chip is armed, i.e. when the pool will move on it.
+    """
+
+    rate_limit: bool = False
 
 
 def _create_nvidia_nim(
@@ -393,24 +406,42 @@ def _create_single_provider(
         #   the provider's, untouched, on every surface.
         # * a limiter that will not dial the same dead address twice; see
         #   ``proxy_leg.ProxiedLegRateLimiter``.
+        #
+        # A leg of a chain with "Keep trying exits until one answers" ticked
+        # (7.81.0) also does not retry on the same exit what the exit refused
+        # or dropped -- the user's "try on another" -- so its limiter stops on
+        # those too and its stream gets no early-retry ladder. Every other leg
+        # is built from exactly the lines above.
+        leg_config = dataclasses.replace(
+            config,
+            proxy=url,
+            proxy_chain=None,
+            http_connect_timeout=connect_timeout,
+        )
+        if not plan.until_served:
+            return _create_leaf_provider(
+                descriptor, leg_config, settings, proxied_leg=True
+            )
         return _create_leaf_provider(
             descriptor,
-            dataclasses.replace(
-                config,
-                proxy=url,
-                proxy_chain=None,
-                http_connect_timeout=connect_timeout,
-            ),
+            dataclasses.replace(leg_config, early_retry_attempts=1),
             settings,
             proxied_leg=True,
+            exit_stops=ExitStops(rate_limit="rate_limit" in plan.on),
         )
 
+    credential, credential_label = (
+        credential_identity(config) if plan.until_served else ("", "")
+    )
     state = ProxyRotationState(
         len(legs),
         plan.policy,
         labels=labels,
         provider_id=descriptor.provider_id,
         scope=plan.scope,
+        until_served=plan.until_served,
+        credential=credential,
+        credential_label=credential_label,
     )
     return ProxyRotatingProvider(
         config,
@@ -421,6 +452,7 @@ def _create_single_provider(
         provider_id=descriptor.provider_id,
         max_open_legs=int(getattr(settings, "proxy_max_open_legs", 0) or 0),
         max_live_failures=int(getattr(settings, "proxy_max_live_failures", 0) or 0),
+        name=descriptor.display_name,
     )
 
 
@@ -430,6 +462,7 @@ def _create_leaf_provider(
     settings: Settings,
     *,
     proxied_leg: bool = False,
+    exit_stops: ExitStops | None = None,
 ) -> BaseProvider:
     """Create one provider instance bound to one credential and one address.
 
@@ -438,6 +471,10 @@ def _create_leaf_provider(
     failure to the proxy pool on the first dial instead of knocking twice on
     an address that is not answering. Everything else about the leaf --
     every window, every bound, every provider class -- is identical either way.
+
+    ``exit_stops`` is set only for a proxied leg of a ticked chain (7.81.0):
+    that limiter also surfaces a dropped connection, and a 429 when the chain
+    moves on one, on the first try (``ProxiedLegRateLimiter.arm_exit_stops``).
     """
     # ``is None`` rather than ``or``: 0 is a meaningful value for the limit
     # -- it is the shipped default and it means "pace nothing" -- and ``or``
@@ -463,6 +500,8 @@ def _create_leaf_provider(
         routes_around_model=config.routes_around_model,
         cooldown=config.rate_limit_cooldown(),
     )
+    if exit_stops is not None and isinstance(rate_limiter, ProxiedLegRateLimiter):
+        rate_limiter.arm_exit_stops(transport=True, rate_limit=exit_stops.rate_limit)
     factory = _SPECIAL_PROVIDER_FACTORIES.get(descriptor.provider_id)
     if factory is not None:
         return factory(config, settings, rate_limiter)

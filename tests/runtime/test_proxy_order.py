@@ -412,10 +412,15 @@ def test_pause_all_but_fastest_keeps_the_best_and_never_direct() -> None:
 
 
 def test_selection_engine_untouched() -> None:
-    """Option A: the two selection files are byte-identical to 7.55.0's.
+    """Option A: the speed order never edits the two selection files.
 
-    Pinned by the sha256 of their LF-normalised content at 2afe0a61 (v7.55.0),
-    so the check needs no git history.
+    Pinned by the sha256 of their LF-normalised content, so the check needs no
+    git history. ``core/proxy_rotation.py`` is still 7.55.0's (2afe0a61).
+    ``providers/runtime/proxy_rotating.py`` was re-pinned at 7.81.0, which
+    opened it as that release's stated, user-approved purpose ("Keep trying
+    exits until one answers"); a chain without the box was proven to select,
+    dial and log byte-identically to 7.80.0 (equality proofs in that PR), and
+    nothing the speed order does reaches the new code.
     """
 
     pinned = {
@@ -423,7 +428,7 @@ def test_selection_engine_untouched() -> None:
             "a4b2a3198e13eb4603661aa40736efd2492cf989522eb69eae7f641b2d43da7a"
         ),
         "src/my_claude_code/providers/runtime/proxy_rotating.py": (
-            "472b2b9095d1f30e3273076383064bb53ab95821fee2e6febdcd207d96ce91c2"
+            "0883f108d31b6c0e371886119a4add4a741860530b80382fcc244508c77aa959"
         ),
     }
     for relative, digest in pinned.items():

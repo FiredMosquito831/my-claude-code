@@ -22,6 +22,16 @@ unhealthy by media's own books (:meth:`MediaProxyRotationState.selectable_indexe
 otherwise the request is refused with the same ``UNAVAILABLE`` 503 chat's
 withheld fallback answers (``providers/runtime/direct_leg``). A Direct dial the
 system proxy carries is labelled ``direct via system proxy host:port``.
+
+Since 7.81.0 a chain with "Keep trying exits until one answers" ticked
+(``ProxyChainPlan.until_served``) behaves here exactly as it does for chat
+(``providers/runtime/proxy_rotating``, the rules in
+``providers/runtime/exit_rotation``): a country refusal and a dropped
+connection before the first byte are the exit's; refused exits are remembered
+-- in media's own :data:`MEDIA_EXIT_MEMORY`, the way media keeps its own
+reachability ledger -- and mirrored into the engine on every selection;
+selection never relaxes; running out is an ``ExitsExhausted``; the switch and
+live-failure bounds are the existing ones.
 """
 
 import asyncio
@@ -51,18 +61,35 @@ from my_claude_code.core.proxy_attribution import (
     record_proxy,
     system_proxy_label,
 )
+from my_claude_code.core.proxy_exit_memory import (
+    BLOCKED,
+    MEDIA_EXIT_MEMORY,
+    SPENT,
+    ExitMemory,
+    add_forget_listener,
+)
 from my_claude_code.core.proxy_rotation import (
     PROXY_INTERCEPTION,
     PROXY_REFUSED_TRIGGER_KINDS,
     ProxyHealthLedger,
     ReachabilityLedger,
 )
+from my_claude_code.core.upstream_ladder import record_dial_memory, record_exit_summary
 from my_claude_code.providers.base import ProxyChainPlan
 from my_claude_code.providers.http import maybe_await_aclose
+from my_claude_code.providers.recovery import is_region_refusal
 from my_claude_code.providers.runtime.direct_leg import (
     chain_exit_health,
     direct_fallback_withheld,
     direct_withheld_sentence,
+)
+from my_claude_code.providers.runtime.exit_rotation import (
+    dial_memory_text,
+    exhaustion_sentence,
+    exit_outcome_word,
+    exits_exhausted,
+    exits_ran_out,
+    proxy_transport_failure,
 )
 from my_claude_code.providers.runtime.proxy_rotating import proxy_reachability_failure
 
@@ -82,6 +109,27 @@ def reset_media_proxy_books() -> None:
         tiers=proxy_rotation.PROXY_REACHABILITY.tiers
     )
     MEDIA_PROXY_HEALTH = ProxyHealthLedger()
+    # Media's exit memory (7.81.0) lives in ``core`` so the Proxying page can
+    # show it; it is media's all the same.
+    MEDIA_EXIT_MEMORY.clear()
+
+
+def _forget_media_exits(provider_id: str, labels: frozenset[str]) -> None:
+    """The Proxying page's Forget, for media's own books (7.81.0).
+
+    The memory itself is cleared by ``core.proxy_exit_memory.forget_exits``;
+    this lets media's unreachable exits be dialled again and lifts media's
+    cooldown on each, exactly as that function does for chat's books.
+    """
+
+    for label in labels:
+        if label != DIRECT_PROXY_LABEL and MEDIA_PROXY_REACHABILITY.is_unhealthy(label):
+            MEDIA_PROXY_REACHABILITY.note_success(label)
+        if MEDIA_PROXY_HEALTH.snapshot(provider_id, label)["state"] == "cooldown":
+            MEDIA_PROXY_HEALTH.record(provider_id, label).benched_until = 0.0
+
+
+add_forget_listener(_forget_media_exits)
 
 
 class MediaProxyRotationState:
@@ -98,6 +146,10 @@ class MediaProxyRotationState:
         clock: Callable[[], float] = time.monotonic,
         reachability: ReachabilityLedger | None = None,
         health: ProxyHealthLedger | None = None,
+        until_served: bool = False,
+        credential: str = "",
+        credential_label: str = "",
+        memory: ExitMemory | None = None,
     ) -> None:
         canonical = "failover" if policy == "on_error" else policy
         if canonical not in {"single", "round_robin", "least_used", "failover"}:
@@ -115,10 +167,90 @@ class MediaProxyRotationState:
         self._lock = asyncio.Lock()
         self._reachability = reachability
         self._health = health
+        #: "Keep trying exits until one answers" (7.81.0), as chat's state.
+        self._until_served = bool(until_served)
+        self._credential = credential
+        self._credential_label = credential_label
+        self._memory = memory
 
     @property
     def policy(self) -> str:
         return self._engine.policy
+
+    @property
+    def until_served(self) -> bool:
+        return self._until_served
+
+    @property
+    def memory(self) -> ExitMemory:
+        return self._memory if self._memory is not None else MEDIA_EXIT_MEMORY
+
+    def _sync_memory(self, scope_key: str) -> None:
+        """Chat's ``ProxyRotationState._sync_memory``, over media's memory."""
+
+        if not self._until_served:
+            return
+        live = self.memory.live(self._provider_id, self._credential)
+        now = self._clock()
+        for index, label in enumerate(self._labels):
+            slot = self._engine.slot(index)
+            remaining = live.get(label)
+            if remaining is None:
+                slot.model_benches.pop(scope_key, None)
+            else:
+                slot.model_benches[scope_key] = now + remaining
+
+    def remembered_indexes(self, scope_key: str) -> frozenset[int]:
+        if not self._until_served:
+            return frozenset()
+        self._sync_memory(scope_key)
+        live = self.memory.live(self._provider_id, self._credential)
+        return frozenset(
+            index
+            for index, label in enumerate(self._labels)
+            if label in live
+            or (label != DIRECT_PROXY_LABEL and self.reachability.is_unhealthy(label))
+        )
+
+    def soonest_memory_expiry(self) -> float | None:
+        if not self._until_served:
+            return None
+        live = self.memory.live(self._provider_id, self._credential)
+        waits = [live[label] for label in self._labels if label in live]
+        return min(waits) if waits else None
+
+    def memory_verdict(self, index: int, advance: str, *, dropped: bool) -> str:
+        label = self._label(index)
+        if advance == "reachability":
+            return dial_memory_text("dropped" if dropped else "unreachable")
+        record = self.memory.recall(self._provider_id, self._credential, label)
+        if record is None:
+            return ""
+        return dial_memory_text(
+            record.state,
+            seconds=self.memory.remaining(record),
+            until_wall=record.until_wall,
+            stated_wait=record.stated_wait,
+        )
+
+    def _remember(
+        self,
+        label: str,
+        state: str,
+        seconds: float,
+        reason: str,
+        stated_wait: float | None,
+    ) -> None:
+        self.memory.remember(
+            self._provider_id,
+            self._credential,
+            label,
+            state=state,
+            seconds=seconds,
+            reason=reason,
+            stated_wait=stated_wait,
+            credential_label=self._credential_label,
+        )
 
     @property
     def reachability(self) -> ReachabilityLedger:
@@ -168,9 +300,10 @@ class MediaProxyRotationState:
         refused = self.refused()
         spent = attempted | refused
         async with self._lock:
+            self._sync_memory(scope_key)
             avoid = spent | self._unreachable()
             selected = self._engine.choose(avoid, scope_key)
-            if selected is None and relax:
+            if selected is None and relax and not self._until_served:
                 selected = self._engine.choose(spent, None)
                 if selected is None or selected in spent:
                     remaining = [index for index in range(count) if index not in spent]
@@ -185,6 +318,8 @@ class MediaProxyRotationState:
         label = self._label(index)
         async with self._lock:
             self._engine.succeed(index)
+        if self._until_served:
+            self.memory.forget_exit(self._provider_id, self._credential, label)
         self.reachability.note_success(label)
         self.health.note_success(self._provider_id, label)
 
@@ -212,12 +347,49 @@ class MediaProxyRotationState:
             )
             return "reachability"
 
+        if self._until_served and is_region_refusal(error):
+            # Chat's rule (7.81.0): a country refusal is the address's.
+            async with self._lock:
+                self._engine.fail(
+                    index, "rate_limit", retry_after=None, model=scope_key
+                )
+                slot = self._engine.slot(index)
+                until = slot.model_benches.get(scope_key)
+                benched_for = 0.0 if until is None else max(0.0, until - self._clock())
+            self.health.note_failure(
+                self._provider_id,
+                label,
+                benched_for=benched_for,
+                reason=f"country refusal -- benched {benched_for:.0f}s for {scope_key}",
+            )
+            self._remember(label, BLOCKED, benched_for, "country refusal", None)
+            return "trigger"
+
         kind = failure_kind(error)
         if (
             kind is None
             or kind.value in PROXY_REFUSED_TRIGGER_KINDS
             or kind.value not in triggers
         ):
+            dropped = (
+                proxy_transport_failure(
+                    error,
+                    proxied=label != DIRECT_PROXY_LABEL,
+                    before_first_chunk=before_first_chunk,
+                )
+                if self._until_served
+                else None
+            )
+            if dropped is not None:
+                # Chat's rule (7.81.0): dropped before the first byte.
+                benched = self.reachability.note_failure(label, f"dropped: {dropped}")
+                self.health.note_failure(
+                    self._provider_id,
+                    label,
+                    reason=f"dropped ({dropped}) before the first byte -- "
+                    f"benched {benched:.0f}s",
+                )
+                return "reachability"
             return ""
 
         failure = find_execution_failure(error)
@@ -239,9 +411,12 @@ class MediaProxyRotationState:
             benched_for=benched_for,
             reason=f"{kind.value} -- benched {benched_for:.0f}s for {scope_key}",
         )
+        if self._until_served:
+            self._remember(label, SPENT, benched_for, kind.value, retry_after)
         return "trigger"
 
     def selectable_indexes(self, scope_key: str) -> tuple[int, ...]:
+        self._sync_memory(scope_key)
         held_out = self._unreachable() | self.refused()
         return tuple(
             index
@@ -271,6 +446,11 @@ class _MediaLegPool:
 
     def providers(self) -> tuple[MediaNode, ...]:
         return tuple(self._open.values())
+
+    def opened(self) -> dict[int, MediaNode]:
+        """Every leg that holds a client, by index. Never builds one."""
+
+        return dict(self._open)
 
     def get(self, index: int) -> MediaNode:
         provider = self._open.pop(index, None)
@@ -362,6 +542,8 @@ class MediaProxyPool:
         self._max_live_failures = max(0, int(max_live_failures))
         self._direct_fallback = bool(plan.direct_fallback)
         self._direct_index = len(self._labels)
+        #: "Keep trying exits until one answers" (7.81.0), as chat's pool.
+        self._until_served = bool(getattr(plan, "until_served", False))
 
     @property
     def state(self) -> MediaProxyRotationState:
@@ -409,10 +591,42 @@ class MediaProxyPool:
         self._pool.get(0).preflight(attempt)
 
     def throttle_remaining(self, model: str | None = None) -> float:
+        if self._until_served:
+            return self._served_throttle(model)
         return min(
             (provider.throttle_remaining(model) for provider in self._pool.providers()),
             default=0.0,
         )
+
+    def _served_throttle(self, model: str | None) -> float:
+        """Chat's ``ProxyRotatingProvider._served_throttle`` (7.81.0)."""
+
+        opened = self._pool.opened()
+        credential = (
+            opened[0].credential_label
+            if self._plan.scope == "credential" and 0 in opened
+            else None
+        )
+        selectable = self._state.selectable_indexes(self._state.scope_key(credential))
+        waits: list[float] = []
+        for index in selectable:
+            leg = opened.get(index)
+            wait = 0.0 if leg is None else leg.throttle_remaining(model)
+            if wait <= 0:
+                return 0.0
+            waits.append(wait)
+        if (
+            not selectable
+            and self._direct_fallback
+            and DIRECT_PROXY_LABEL not in self._labels
+        ):
+            direct = opened.get(self._direct_index)
+            return 0.0 if direct is None else direct.throttle_remaining(model)
+        soonest = self._state.soonest_memory_expiry()
+        if soonest is not None:
+            waits.append(soonest)
+        positive = [wait for wait in waits if wait > 0]
+        return min(positive) if positive else 0.0
 
     async def cleanup(self) -> None:
         await self._pool.close_all()
@@ -427,6 +641,62 @@ class MediaProxyPool:
             return None
         return self._pool.get(0).credential_label
 
+    async def _acquire(
+        self, attempted: frozenset[int], scope_key: str, *, relax: bool
+    ) -> int:
+        """Chat's ``ProxyRotatingProvider._acquire`` (7.81.0)."""
+
+        if self._until_served:
+            opened = self._pool.opened()
+            waiting = frozenset(
+                index
+                for index, leg in opened.items()
+                if index < len(self._labels) and leg.throttle_remaining() > 0
+            )
+            if waiting - attempted:
+                index = await self._state.acquire(
+                    attempted | waiting, scope_key, relax=relax
+                )
+                if index >= 0:
+                    return index
+        return await self._state.acquire(attempted, scope_key, relax=relax)
+
+    def _skipped(self, attempted: set[int], scope_key: str) -> int:
+        return len(self._state.remembered_indexes(scope_key) - attempted)
+
+    def _note_skipped(self, attempted: set[int], scope_key: str) -> None:
+        record_exit_summary(skipped=self._skipped(attempted, scope_key))
+
+    def _exhausted(
+        self,
+        attempted: set[int],
+        scope_key: str,
+        outcomes: list[str],
+        *,
+        cap_reached: bool,
+    ) -> Exception:
+        """Chat's ``ProxyRotatingProvider._exhausted`` (7.81.0)."""
+
+        skipped = self._skipped(attempted, scope_key)
+        refused = len(self._state.refused() - attempted)
+        sentence = exhaustion_sentence(
+            self._name,
+            outcomes=outcomes,
+            skipped=skipped,
+            switch_limit=self._max_switches if cap_reached else None,
+            soonest=self._state.soonest_memory_expiry(),
+            refused=refused,
+        )
+        record_exit_summary(skipped=skipped, exhausted=sentence)
+        logger.info(
+            "PROXY CHAIN: {}: media exits exhausted -- tried {}, {} skipped from "
+            "memory; the request moves to its next model",
+            self._provider_id,
+            len(outcomes),
+            skipped,
+        )
+        return exits_exhausted(sentence)
+
     async def _execute_with_rotation(
         self, attempt: MediaAttempt, *, request_id: str | None
     ) -> AsyncIterator[MediaChunk]:
@@ -436,18 +706,22 @@ class MediaProxyPool:
         live_failures = 0
         scope_key = self._state.scope_key(self._scope_credential())
         relax = not self._direct_fallback
+        #: What each dialled exit answered (ticked chains, 7.81.0).
+        outcomes: list[str] = []
+        last_advance = ""
+        last_region = False
 
         while len(attempted) < len(self._labels):
             if self._max_live_failures and live_failures >= self._max_live_failures:
                 break
-            index = await self._state.acquire(
-                frozenset(attempted), scope_key, relax=relax
-            )
+            index = await self._acquire(frozenset(attempted), scope_key, relax=relax)
             if index < 0 or index in attempted:
                 break
             attempted.add(index)
             outcome = await self._attempt(index, attempt, request_id, scope_key)
             if outcome[0] == "done":
+                if self._until_served:
+                    self._note_skipped(attempted, scope_key)
                 async for chunk in outcome[1]:
                     yield chunk
                 return
@@ -458,12 +732,26 @@ class MediaProxyPool:
             if not advance:
                 raise error
             live_failures += 1
+            region = (
+                self._until_served and advance == "trigger" and is_region_refusal(error)
+            )
+            last_advance, last_region = advance, region
+            if self._until_served:
+                outcomes.append(exit_outcome_word(error, advance, region=region))
             if advance == "trigger":
                 if switches >= self._max_switches:
+                    if self._until_served and exits_ran_out(
+                        error, advance, region=region
+                    ):
+                        raise self._exhausted(
+                            attempted, scope_key, outcomes, cap_reached=True
+                        ) from error
                     raise error
                 switches += 1
 
         if self._direct_fallback and DIRECT_PROXY_LABEL not in self._labels:
+            if self._until_served:
+                self._note_skipped(attempted, scope_key)
             # 7.79.2: only once every proxy of the chain is unhealthy. Asked
             # before anything is announced, so a withheld fallback dials
             # nothing and the log names no dial.
@@ -489,6 +777,16 @@ class MediaProxyPool:
             if outcome[2] is not None:
                 raise outcome[2]
             return
+
+        if self._until_served and exits_ran_out(
+            last_error, last_advance, region=last_region
+        ):
+            exhausted = self._exhausted(
+                attempted, scope_key, outcomes, cap_reached=False
+            )
+            if last_error is not None:
+                raise exhausted from last_error
+            raise exhausted
 
         if last_error is not None:
             raise last_error
@@ -539,6 +837,14 @@ class MediaProxyPool:
             advance = await self._settle_failure(
                 index, label, error, scope_key, before_first_chunk=True
             )
+            if self._until_served and advance:
+                dropped = (
+                    advance == "reachability"
+                    and proxy_reachability_failure(error, proxied=True) is None
+                )
+                verdict = self._state.memory_verdict(index, advance, dropped=dropped)
+                if verdict:
+                    record_dial_memory(verdict)
             return ("failed", _no_chunks(), error, advance)
         return (
             "done",

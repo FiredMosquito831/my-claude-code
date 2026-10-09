@@ -3614,6 +3614,21 @@ window.fetch = async (url, options = {}) => {
   /* 7.56.0 "Keep the fastest healthy proxy first": the switch, "Sort by
      speed now" and "Pause all but the fastest N", emulated against the same
      document the page reads back, the way the real routes answer. */
+  /* 7.81.0 "Forget exit memory": the route drops what is remembered for the
+     provider; emulated the same way, on the document the page reads back. */
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/forget") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const provider = state.providers.find((item) => item.provider_id === sent.provider);
+    let dropped = 0;
+    for (const entry of provider.chain.entries) {
+      if (Array.isArray(entry.memory)) dropped += entry.memory.length;
+      delete entry.memory;
+    }
+    const answer = JSON.parse(JSON.stringify(state));
+    answer.forgotten = { provider: sent.provider, remembered: dropped };
+    return { ok: true, status: 200, json: async () => answer, text: async () => "" };
+  }
   if (String(url).split("?")[0] === "/admin/api/proxy-chains/order") {
     const sent = JSON.parse(options.body);
     const state = ROUTES["/admin/api/proxy-chains"];
@@ -5211,6 +5226,96 @@ if (withChain) {
   await reload();
 }
 
+/* 7.81.0: "Keep trying exits until one answers". The fixture's NVIDIA chain
+   carries no `until_served` key -- a chain stored before the box existed -- so
+   it reads unticked and offers no Forget button. Ticked, with one remembered
+   exit, the entry says so in its own cell and Forget posts the provider only.
+   The fixture is put back afterwards. */
+{
+  const state = ROUTES["/admin/api/proxy-chains"];
+  const nim = state.providers.find((item) => item.provider_id === "nvidia_nim");
+  const savedChain = JSON.parse(JSON.stringify(nim.chain));
+  const reload = async () => {
+    navLinks.find((link) => link.dataset.view === "providers").click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    navLinks.find((link) => link.dataset.view === "proxying").click();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+  };
+  const card = () => proxyCardFor("nvidia_nim");
+  const box = () => card().querySelector("input.proxy-until-served-input");
+  const forgetButton = () => card().querySelector("button.proxy-forget-memory");
+  const chips = () =>
+    Array.from(card().querySelectorAll(".proxy-entry")).map((row) => {
+      const chip = row.querySelector(".proxy-entry-memory");
+      return chip ? { text: chip.textContent, title: chip.title } : null;
+    });
+  const served = {};
+  await reload();
+  served.existing = {
+    hasKey: Object.prototype.hasOwnProperty.call(nim.chain, "until_served"),
+    present: Boolean(box()),
+    checked: box() ? box().checked : null,
+    label: (card().querySelector(".proxy-until-served")?.textContent || "").trim(),
+    title: card().querySelector(".proxy-until-served")?.title || "",
+    forget: Boolean(forgetButton()),
+    chips: chips(),
+  };
+
+  nim.chain.until_served = true;
+  const until = new Date(Date.now() + 290000).toISOString();
+  nim.chain.entries[0].memory = [
+    {
+      rail: "chat",
+      state: "spent",
+      reason: "rate_limit",
+      remaining_s: 290.0,
+      until,
+      stated_wait: 300.0,
+      credential: "nvap…6789",
+    },
+  ];
+  await reload();
+  served.ticked = {
+    checked: box() ? box().checked : null,
+    title: card().querySelector(".proxy-until-served")?.title || "",
+    forget: forgetButton() ? forgetButton().textContent : "",
+    forgetTitle: forgetButton() ? forgetButton().title : "",
+    chips: chips(),
+    untilClock: window.clockTime(Date.parse(until) / 1000),
+  };
+
+  const since = fetchBodies.length;
+  forgetButton().click();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  served.forgot = {
+    writes: fetchBodies
+      .slice(since)
+      .filter((entry) => entry.path.startsWith("/admin/api/proxy-chains"))
+      .map((entry) => ({ path: entry.path, method: entry.method, body: entry.body })),
+    chips: chips(),
+    forget: forgetButton() ? forgetButton().textContent : "",
+    announcement: (doc.querySelector("#proxyingStatus")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  };
+
+  // Unticking is part of the draft and goes out with Save, always named.
+  box().checked = false;
+  box().dispatchEvent(new window.Event("change", { bubbles: true }));
+  const saveFrom = fetchBodies.length;
+  proxyButton(card(), "Save").click();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  served.saved =
+    fetchBodies
+      .slice(saveFrom)
+      .filter((entry) => entry.path === "/admin/api/proxy-chains")
+      .pop() || null;
+  proxying.untilServed = served;
+
+  nim.chain = savedChain;
+  await reload();
+}
+
 /* The card's own bulk remove: tick two entries, press once, and the draft is
    shorter without anything having been written. */
 {
@@ -6305,6 +6410,84 @@ const requestDetail = {
                 reason: "429",
               },
             ],
+          },
+        },
+      }),
+    ],
+  }),
+  /* 7.81.0: a ticked chain's dials carry what MCC now remembers about each
+     exit, the attempt says how many exits it skipped from memory, and an
+     attempt that dialled nothing at all because every exit was remembered
+     still says so. */
+  proxyExitMemory: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "unavailable",
+        error_message: "Every exit this request could use in Zen's proxy chain refused or failed it: tried 2.",
+        params: {
+          ladder: {
+            tries: [
+              { source: "upstream", key_index: 0, status: 429, upstream_ms: 1200, proxy: "203.0.113.1:1080" },
+              { source: "upstream", key_index: 0, status: 403, upstream_ms: 900, proxy: "203.0.113.2:1080" },
+            ],
+            summary: {
+              tries: 2,
+              statuses_by_code: { 429: 1, 403: 1 },
+              keys: 1,
+              time_sleeping_ms: 0,
+              time_limiter_ms: 0,
+              tries_dropped: 0,
+            },
+            credentials: [],
+            root_cause: "Every exit this request could use in Zen's proxy chain refused or failed it: tried 2.",
+            dials: [
+              {
+                at_try: 0,
+                proxy: "203.0.113.1:1080",
+                verdict_ms: 1200,
+                outcome: "switched",
+                switch_ms: 4,
+                reason: "429",
+                memory: "remembered spent until 14:05:12 UTC (stated 412 s)",
+              },
+              {
+                at_try: 1,
+                proxy: "203.0.113.2:1080",
+                verdict_ms: 900,
+                outcome: "failed",
+                idle_ms: 10,
+                reason: "403",
+                memory: "remembered blocked for its country until 14:05:12 UTC (300 s)",
+              },
+            ],
+            exits_skipped_by_memory: 4,
+            exits_exhausted: "Every exit this request could use in Zen's proxy chain refused or failed it: tried 2.",
+          },
+        },
+      }),
+      detailAttempt({
+        attempt: 1,
+        outcome: "failed",
+        error_kind: "unavailable",
+        error_message: "No exit in Zen's proxy chain can carry a request right now.",
+        params: {
+          ladder: {
+            tries: [],
+            summary: {
+              tries: 0,
+              statuses_by_code: {},
+              keys: 0,
+              time_sleeping_ms: 0,
+              time_limiter_ms: 0,
+              tries_dropped: 0,
+            },
+            credentials: [],
+            root_cause: "No exit in Zen's proxy chain can carry a request right now.",
+            exits_skipped_by_memory: 3,
+            exits_exhausted: "No exit in Zen's proxy chain can carry a request right now.",
           },
         },
       }),

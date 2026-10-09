@@ -88,6 +88,15 @@ class ProxyChainPlan:
     #: own address rather than failing. True for every chain that has not said
     #: otherwise, including every chain stored before the field existed.
     direct_fallback: bool = True
+    #: "Keep trying exits until one answers" (7.81.0): a request the exit
+    #: refused or dropped -- a free-usage limit, a country refusal, a dead or
+    #: dropping proxy -- moves to another exit of the same chain on the same
+    #: model, within the switch and live-failure bounds above; the refused
+    #: exits are remembered across rebuilds; running out is an ``UNAVAILABLE``
+    #: that moves to the next model without benching it. False -- every chain
+    #: that has not ticked it, including every chain stored before the field
+    #: existed -- is exactly the rotation of every earlier release.
+    until_served: bool = False
 
 
 @dataclass(frozen=True, slots=True)
