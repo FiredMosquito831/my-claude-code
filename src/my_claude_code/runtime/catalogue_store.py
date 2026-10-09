@@ -300,6 +300,29 @@ def read_stored_provider_rows(
     return provider_rows_from_document(entry.payload), entry.computed_at
 
 
+def provider_rows_source_digest(
+    catalogues: Mapping[str, tuple[ProviderModelInfo, ...]], key: str
+) -> str:
+    """What a rows document would be built from: the scope and every row's text.
+
+    Cheap (a hash over text the records already hold), so a caller can skip
+    :func:`store_provider_rows` -- the scrub and the compare -- for a sweep
+    whose rows are exactly the ones it last stored.
+    """
+
+    digest = hashlib.sha256(key.encode("utf-8"))
+    for provider_id in sorted(catalogues):
+        digest.update(b"\x00p\x00" + provider_id.encode("utf-8"))
+        for info in catalogues[provider_id]:
+            digest.update(b"\x00m\x00" + info.model_id.encode("utf-8") + b"\x00")
+            digest.update(
+                b"~"
+                if info.published_row is None
+                else info.published_row.encode("utf-8")
+            )
+    return digest.hexdigest()
+
+
 def store_provider_rows(
     catalogues: Mapping[str, tuple[ProviderModelInfo, ...]],
     key: str,
@@ -345,6 +368,7 @@ __all__ = [
     "catalogues_from_document",
     "provider_rows_document",
     "provider_rows_from_document",
+    "provider_rows_source_digest",
     "read_stored_catalogue",
     "read_stored_provider_rows",
     "store_catalogue",

@@ -76,6 +76,7 @@ from my_claude_code.providers.runtime.validation import ConfiguredModelValidator
 from my_claude_code.runtime.catalogue_store import (
     catalogue_scope_key,
     provider_rows_mark,
+    provider_rows_source_digest,
     read_stored_catalogue,
     read_stored_provider_rows,
     store_catalogue,
@@ -195,6 +196,10 @@ class ProviderRuntimeManager:
             ]
             | None
         ) = None
+        # What the rows document was last written from (7.86.0): a sweep whose
+        # rows are the same as the last one's skips the scrub and the compare,
+        # which cost about a second of CPU on a 2,000-model catalogue.
+        self._provider_rows_written: str | None = None
         self._next_generation_id = 2
         self._retired: dict[int, _ProviderGeneration] = {}
         # How many live generations hold each carried provider object, keyed
@@ -879,7 +884,10 @@ class ProviderRuntimeManager:
         # 7.86.0: each record's own list row, beside the catalogue and never
         # inside it, for the Models page's "Everything known" view.
         try:
-            store_provider_rows(catalogues, key, computed_at=computed_at)
+            source = provider_rows_source_digest(catalogues, key)
+            if source != self._provider_rows_written:
+                store_provider_rows(catalogues, key, computed_at=computed_at)
+                self._provider_rows_written = source
         except Exception as exc:
             logger.debug("Provider list rows could not be stored: {}", exc)
 

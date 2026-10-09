@@ -15,6 +15,7 @@ from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.derived_cache import DerivedCache
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
+from my_claude_code.runtime import provider_manager
 from my_claude_code.runtime.catalogue_store import (
     PROVIDER_ROWS_ENTRY,
     catalogue_document,
@@ -151,3 +152,32 @@ def test_the_runtime_stores_both_and_serves_the_stored_row(
     # Nothing is stored for a model that has no row, and no OpenRouter or
     # LiteLLM rows are asked for without their files.
     assert manager.model_published_rows("custom_acme", "acme/plain", ("x/y",)) == ()
+
+
+def test_a_sweep_with_the_same_rows_skips_the_scrub(monkeypatch, tmp_path) -> None:
+    """The rows document is rebuilt only when some row (or the scope) changed."""
+
+    monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path))
+    manager = ProviderRuntimeManager(Settings.model_validate({}))
+    manager._model_cache = ProviderModelCache(("custom_acme", "nvidia_nim"))
+    for provider_id, infos in _catalogues().items():
+        manager._model_cache.cache_model_infos(provider_id, infos)
+    calls: list[float] = []
+    real = provider_manager.store_provider_rows
+
+    def counting(*args: Any, **kwargs: Any) -> bool:
+        calls.append(kwargs["computed_at"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(provider_manager, "store_provider_rows", counting)
+    manager._store_catalogue(1.0)
+    manager._store_catalogue(2.0)
+    assert calls == [1.0]
+    changed = {"id": "nv/model", "owned_by": "someone else"}
+    manager._model_cache.cache_model_infos(
+        "nvidia_nim", (_record("nv/model", changed),)
+    )
+    manager._store_catalogue(3.0)
+    assert calls == [1.0, 3.0]
+    (row,) = manager.model_published_rows("nvidia_nim", "nv/model", ())
+    assert row.row == changed
