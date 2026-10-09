@@ -299,6 +299,17 @@ def test_fetch_now_sends_nothing_when_that_chain_says_no(
     assert card["offers"] == []
 
 
+def test_a_provider_no_longer_configured_refuses_the_fetch() -> None:
+    from my_claude_code.api.admin_proxy_routes import vendor_fetch_exit
+
+    exit_ = vendor_fetch_exit(
+        Settings.model_validate({"nvidia_nim_api_key": "nim-key"}), "gone"
+    )
+
+    assert exit_.proxy is None
+    assert exit_.refused.startswith("Not sent: 'gone' is not a configured")
+
+
 def test_a_chain_that_is_not_a_configured_provider_is_refused(fetched) -> None:
     response = _client().put(
         "/admin/api/proxy-sources",

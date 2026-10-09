@@ -129,6 +129,10 @@ async def test_a_fetch_that_records_nothing_never_spins(monkeypatch) -> None:
 
     async def busy(settings, source_id, republish) -> FetchOutcome:
         calls.append(source_id)
+        if len(calls) > 10:
+            # A loop that asks again at once would never sleep: stop it
+            # here rather than hang the run.
+            raise asyncio.CancelledError
         return FetchOutcome(
             source_id, False, "A fetch of this source is already running."
         )

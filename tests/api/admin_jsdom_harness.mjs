@@ -6176,6 +6176,12 @@ if (withChain) {
   const field = (kind, name) => form(kind).querySelector(`.${name}`);
   const card = (kind) => block(kind).querySelector(".proxy-vendor-source");
   const status = () => text(doc.querySelector("#proxyingStatus p"));
+  // The markup, and every field's live value (which innerHTML omits).
+  const vendorPageHolds = (secret) =>
+    doc.body.innerHTML.includes(secret) ||
+    Array.from(doc.querySelectorAll("input, textarea")).some((input) =>
+      String(input.value || "").includes(secret),
+    );
   const puts = (since) =>
     fetchBodies
       .slice(since)
@@ -6219,8 +6225,8 @@ if (withChain) {
   await wait(160);
   out.accountSaved = {
     puts: puts(since),
-    pageHasPassword: doc.body.innerHTML.includes("nord-secret-pass-7"),
-    pageHasUser: doc.body.innerHTML.includes("service-user-1"),
+    pageHasPassword: vendorPageHolds("nord-secret-pass-7"),
+    pageHasUser: vendorPageHolds("service-user-1"),
     head: text(card("account").querySelector(".proxy-vendor-head")),
     status: text(card("account").querySelector(".proxy-vendor-status")),
     offers: Array.from(card("account").querySelectorAll(".proxy-vendor-offer-name")).map(text),
@@ -6282,7 +6288,7 @@ if (withChain) {
   await wait(160);
   out.gatewaySaved = {
     puts: puts(since),
-    pageHasPassword: doc.body.innerHTML.includes("oxy-secret-pass-5"),
+    pageHasPassword: vendorPageHolds("oxy-secret-pass-5"),
     head: text(card("gateway").querySelector(".proxy-vendor-head")),
     offers: Array.from(card("gateway").querySelectorAll(".proxy-vendor-offer-name")).map(text),
     buttons: Array.from(card("gateway").querySelectorAll(".proxy-vendor-actions button")).map(text),
@@ -6323,7 +6329,7 @@ if (withChain) {
   await wait(160);
   out.listSaved = {
     puts: puts(since),
-    pageHasToken: doc.body.innerHTML.includes("JSDOM-TOKEN-77"),
+    pageHasToken: vendorPageHolds("JSDOM-TOKEN-77"),
     head: text(card("list").querySelector(".proxy-vendor-head")),
     none: text(card("list").querySelector(".proxy-vendor-none")),
     announcement: status(),
