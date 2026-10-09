@@ -7,6 +7,8 @@ from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.providers.model_listing import (
     ModelListResponseError,
     declared_from_row,
+    published_parameters_from_row,
+    record_with_declared,
 )
 
 
@@ -22,7 +24,9 @@ def extract_anthropic_model_infos(
     Every optional field is therefore left unset rather than guessed: a ``None``
     reads as "not reported", which is what lets the models.dev enrichment fill
     it, and what keeps vision routing from diverting a model whose image
-    support is merely unknown.
+    support is merely unknown. The generic reader still runs on every row
+    (7.83.0), so a number or flag the list does publish one day is kept at the
+    provider rung exactly as every other list's is.
     """
     data = _field(payload, "data")
     if not _is_sequence(data):
@@ -34,10 +38,15 @@ def extract_anthropic_model_infos(
         if not isinstance(model_id, str) or not model_id.strip():
             raise _malformed(provider_name, "expected every data item to include id")
         # The same generic reader every listing parser calls: whatever this
-        # row states about the model's kind is kept, as published.
+        # row states about the model's kind is kept, as published, and any
+        # number or flag it states fills the record at the provider rung.
         model_infos.add(
-            ProviderModelInfo(
-                model_id=model_id.strip(), declared=declared_from_row(item)
+            record_with_declared(
+                ProviderModelInfo(
+                    model_id=model_id.strip(),
+                    supported_parameters=published_parameters_from_row(item),
+                    declared=declared_from_row(item),
+                )
             )
         )
 

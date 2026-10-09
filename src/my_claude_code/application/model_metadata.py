@@ -166,9 +166,18 @@ class ProviderModelDeclaration:
     never start failing on a field nobody required.
 
     Read at the provider's own rung of the ladder (tier 1 or 2, exactly as
-    every other field of :class:`ProviderModelInfo`). Display only in this
-    release: routing, limits, prices, kinds and every existing field never
-    read it.
+    every other field of :class:`ProviderModelInfo`). The three kind words are
+    read by the kind ladder (7.80.0) and nothing else.
+
+    Since 7.83.0 it also keeps the row's own numbers and flags for fields the
+    record already carries -- context window, output limit, listed prices,
+    reasoning and tool-call support. The listing parsers copy each one into the
+    record's field of the same name wherever their own dialect left it unset,
+    which is what makes the provider rung 1 of the ladder for those fields;
+    models.dev only fills what is still unset after that. They are kept here
+    as well because the record's own fields have models.dev merged into them
+    by the discovery-time fill, which records no rung, and this is how the
+    Models page can still say which of the two answered.
     """
 
     #: Both halves from ONE row, or nothing: half a statement is not one, and
@@ -182,6 +191,28 @@ class ProviderModelDeclaration:
     #: ``supported_endpoints`` ("/chat/completions", "/messages"), Novita
     #: ``endpoints`` ("chat/completions", "anthropic", "responses").
     endpoints: tuple[str, ...] | None = None
+    # -- 7.83.0: the row's own numbers and flags, appended so nothing above
+    # -- moves. ``None`` everywhere means the row did not state it.
+    #: The routed deployment's own context window, in tokens -- Novita
+    #: ``context_size``, HyperCharm/Vercel ``context_window``, the OpenRouter
+    #: dialect's ``top_provider.context_length``.
+    context_length: int | None = None
+    #: Its own ceiling on generated tokens -- ``max_output_tokens``, the
+    #: OpenRouter dialect's ``top_provider.max_completion_tokens``, Vercel's
+    #: ``max_tokens``.
+    max_output_tokens: int | None = None
+    #: Its own listed price per million uncached input tokens, in USD: the
+    #: record's unit, whatever unit the row wrote it in.
+    input_price: float | None = None
+    #: The same for output tokens.
+    output_price: float | None = None
+    #: Whether the row states the model reasons. A capability WORD list (Novita
+    #: ``features``, Vercel ``tags``) can only state ``True`` -- or ``False``
+    #: through an explicit ``non-reasoning`` word -- because a word missing from
+    #: a tag list is not a denial; an explicit boolean states either.
+    reasoning: bool | None = None
+    #: Whether the row states the model takes tool calls, under the same rule.
+    tool_calls: bool | None = None
 
 
 type ModelDefaultParameterValue = str | int | float | bool
@@ -243,9 +274,11 @@ class ProviderModelInfo:
     # judgement. ``None`` means nobody recorded one.
     listing: ModelListingEvidence | None = None
     # What the provider's own list row says this model is: its modalities, its
-    # type word, its endpoint words. Appended last so no existing field moves.
-    # ``None`` means the row stated none of the three (or the record did not
-    # come from a row at all). Display only; nothing routes on it.
+    # type word, its endpoint words, and (7.83.0) its own numbers and flags.
+    # Appended last so no existing field moves. ``None`` means the row stated
+    # nothing the reader keeps (or the record did not come from a row at all).
+    # Nothing routes on it directly: routing reads the record's own fields
+    # above, which the parsers fill from it at the provider rung.
     declared: ProviderModelDeclaration | None = None
 
 
@@ -432,6 +465,12 @@ _DECLARATION_FIELDS: tuple[str, ...] = (
     "modalities",
     "model_type",
     "endpoints",
+    "context_length",
+    "max_output_tokens",
+    "input_price",
+    "output_price",
+    "reasoning",
+    "tool_calls",
 )
 _MODALITIES_FIELDS: tuple[str, ...] = (
     "inputs",
@@ -544,6 +583,14 @@ def _declaration_document(
         ),
         "model_type": declared.model_type,
         "endpoints": None if declared.endpoints is None else list(declared.endpoints),
+        # 7.83.0, appended: a 7.79-7.82 reader reads the three keys above by
+        # name and passes over these.
+        "context_length": declared.context_length,
+        "max_output_tokens": declared.max_output_tokens,
+        "input_price": declared.input_price,
+        "output_price": declared.output_price,
+        "reasoning": declared.reasoning,
+        "tool_calls": declared.tool_calls,
     }
 
 
@@ -629,7 +676,8 @@ def _declaration_from_document(value: object) -> ProviderModelDeclaration | None
 
     A document written before 7.79.0 has no ``declared`` key at all, and one
     damaged on disk may hold anything there: both read as "the row said
-    nothing", which is what a fresh sweep would replace it with anyway.
+    nothing", which is what a fresh sweep would replace it with anyway. One
+    written by 7.79-7.82 has no number or flag keys, which read as unstated.
     """
 
     if not isinstance(value, dict):
@@ -638,6 +686,12 @@ def _declaration_from_document(value: object) -> ProviderModelDeclaration | None
         modalities=_modalities_from_document(value.get("modalities")),
         model_type=_str_or_none(value.get("model_type")),
         endpoints=_words_from_document(value.get("endpoints")),
+        context_length=_int_or_none(value.get("context_length")),
+        max_output_tokens=_int_or_none(value.get("max_output_tokens")),
+        input_price=_float_or_none(value.get("input_price")),
+        output_price=_float_or_none(value.get("output_price")),
+        reasoning=_bool_or_none(value.get("reasoning")),
+        tool_calls=_bool_or_none(value.get("tool_calls")),
     )
 
 

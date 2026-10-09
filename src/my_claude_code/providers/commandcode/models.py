@@ -7,6 +7,8 @@ from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.providers.model_listing import (
     ModelListResponseError,
     declared_from_row,
+    published_parameters_from_row,
+    record_with_declared,
 )
 
 
@@ -41,13 +43,19 @@ def extract_commandcode_model_infos(
                 "expected context_length to be a positive integer",
             )
         model_infos.add(
-            ProviderModelInfo(
-                model_id=model_id,
-                context_length=context_length,
-                # ``supported_endpoints`` -- which of the three doors serve
-                # this model, in Command Code's own words. Recorded, never
-                # routed on: ``is_anthropic_messages_model`` still decides.
-                declared=declared_from_row(item),
+            # The same generic reader every listing parser calls (7.83.0): a
+            # number or flag the row states beyond its own ``context_length``
+            # fills the record at the provider rung.
+            record_with_declared(
+                ProviderModelInfo(
+                    model_id=model_id,
+                    context_length=context_length,
+                    supported_parameters=published_parameters_from_row(item),
+                    # ``supported_endpoints`` -- which of the three doors serve
+                    # this model, in Command Code's own words. Recorded, never
+                    # routed on: ``is_anthropic_messages_model`` still decides.
+                    declared=declared_from_row(item),
+                )
             )
         )
 

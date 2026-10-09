@@ -10,7 +10,9 @@ parser reads were kept.
 What these hold: each provider's own shape is read by the same table, a row
 that says nothing yields ``None``, a malformed optional field is "not stated"
 and never a failed sweep, and nothing any parser produced before this reader
-existed changes.
+existed changes. Since 7.83.0 the same reader also keeps the row's own numbers
+and flags (``tests/providers/test_model_listing_provider_numbers.py``); where a
+row below states one, the expected declaration here names it too.
 """
 
 from dataclasses import replace
@@ -127,7 +129,8 @@ COMMANDCODE_ROWS: list[dict[str, Any]] = [
         "supported_endpoints": ["/chat/completions"],
     },
 ]
-#: Rows of lists that publish none of the three statements.
+#: Rows of lists that publish none of the three kind statements -- and nothing
+#: else the reader keeps.
 SILENT_ROWS: list[dict[str, Any]] = [
     {
         "id": "01-ai/yi-large",
@@ -142,22 +145,23 @@ SILENT_ROWS: list[dict[str, Any]] = [
         "owned_by": "opencode",
     },
     {
-        "id": "deepseek-v4.1-flash",
-        "object": "model",
-        "created": 0,
-        "owned_by": "hyper",
-        "display_name": "DeepSeek V4.1 Flash",
-        "context_window": 1048576,
-        "max_output_tokens": 262144,
-        "capabilities": {"vision": True},
-    },
-    {
         "id": "cline-pass/deepseek-v4.1-flash",
         "name": "cline-pass/deepseek-v4.1-flash",
         "description": "Smarter and more efficient, with 1M context window",
         "tags": [],
     },
 ]
+#: HyperCharm states no kind word, but its own limits (7.83.0 keeps those).
+HYPERCHARM_ROW: dict[str, Any] = {
+    "id": "deepseek-v4.1-flash",
+    "object": "model",
+    "created": 0,
+    "owned_by": "hyper",
+    "display_name": "DeepSeek V4.1 Flash",
+    "context_window": 1048576,
+    "max_output_tokens": 262144,
+    "capabilities": {"vision": True},
+}
 
 
 def _by_id(infos: frozenset[ProviderModelInfo]) -> dict[str, ProviderModelInfo]:
@@ -176,7 +180,9 @@ def test_the_openrouter_dialect_keeps_both_modality_lists() -> None:
     )["stepfun/step-5-preview"]
 
     assert info.declared == ProviderModelDeclaration(
-        modalities=_pair(("image", "text", "video"), ("text",))
+        modalities=_pair(("image", "text", "video"), ("text",)),
+        # 7.83.0: its parameter list names ``reasoning``.
+        reasoning=True,
     )
     # Everything the dialect read before is read exactly as before.
     assert info.supports_vision is True
@@ -272,14 +278,17 @@ def test_command_code_keeps_its_endpoint_words_and_nothing_else_moves() -> None:
         extract_commandcode_model_infos({"data": COMMANDCODE_ROWS}, provider_name="CC")
     )
 
+    # 7.83.0: the row's own ``context_length`` is kept beside its endpoints.
     assert infos["claude-sonnet-5-5"].declared == ProviderModelDeclaration(
-        endpoints=("/messages",)
+        endpoints=("/messages",), context_length=1000000
     )
     assert infos["gpt-6-astra"].declared == ProviderModelDeclaration(
-        endpoints=("/chat/completions", "/responses")
+        endpoints=("/chat/completions", "/responses"), context_length=1050000
     )
     assert infos["deepseek/deepseek-v4-flash-fast"].declared == (
-        ProviderModelDeclaration(endpoints=("/chat/completions",))
+        ProviderModelDeclaration(
+            endpoints=("/chat/completions",), context_length=1000000
+        )
     )
     assert replace(infos["gpt-6-astra"], declared=None) == ProviderModelInfo(
         model_id="gpt-6-astra", context_length=1050000
@@ -296,9 +305,19 @@ def test_a_row_that_states_nothing_yields_none(row: dict[str, Any]) -> None:
 
 def test_cline_rows_under_their_own_collection_are_read_too() -> None:
     (info,) = extract_openai_model_infos(
-        {"clinePass": [SILENT_ROWS[3]]}, provider_name="C", collection_field="clinePass"
+        {"clinePass": [SILENT_ROWS[2]]}, provider_name="C", collection_field="clinePass"
     )
     assert info.declared is None
+
+
+def test_a_row_with_no_kind_word_states_only_its_numbers() -> None:
+    declared = declared_from_row(HYPERCHARM_ROW)
+    assert declared is not None
+    assert (declared.modalities, declared.model_type, declared.endpoints) == (
+        None,
+        None,
+        None,
+    )
 
 
 def test_an_anthropic_row_keeps_its_type_word_verbatim() -> None:
@@ -326,7 +345,7 @@ def test_the_summary_string_is_read_only_when_no_list_pair_exists() -> None:
     ) == ProviderModelDeclaration(modalities=_pair(("image", "text"), ("text",)))
     # The lists are the richer statement: they win over their own abbreviation.
     assert declared_from_row(OPENROUTER_ROW) == ProviderModelDeclaration(
-        modalities=_pair(("image", "text", "video"), ("text",))
+        modalities=_pair(("image", "text", "video"), ("text",)), reasoning=True
     )
     for summary in ("text", "text->", "->text", "text->image->text", 7):
         assert declared_from_row({"architecture": {"modality": summary}}) is None
@@ -386,13 +405,29 @@ def _poisoned(row: dict[str, Any]) -> dict[str, Any]:
         "supported_endpoint_types": "chat",
         "supported_endpoints": [None],
         "endpoints": [{"path": "/chat/completions"}],
+        # 7.83.0 paths, every one in a shape the reader cannot vouch for.
+        "context_length": "1M",
+        "context_window": 0,
+        "context_size": -1,
+        "max_context_length": True,
+        "top_provider": {"context_length": None, "max_completion_tokens": "64k"},
+        "max_output_tokens": 0.5,
+        "max_completion_tokens": [],
+        "max_tokens": None,
+        "pricing": {"prompt": "free", "completion": -1, "input": True, "output": {}},
+        "features": "reasoning",
+        "supported_features": [None],
+        "tags": [{"name": "tool-use"}],
+        "capabilities": {"reasoning": "yes", "function_calling": 1},
+        "reasoning": {"mandatory": False},
+        "reasoning_options": {},
     }
 
 
 def test_every_declared_path_malformed_never_fails_a_sweep() -> None:
     """Optional fields nobody required must never turn into a failed sweep."""
 
-    generic_rows = [*NOVITA_ROWS, *VERCEL_ROWS, *SILENT_ROWS[:3]]
+    generic_rows = [*NOVITA_ROWS, *VERCEL_ROWS, *SILENT_ROWS[:2], HYPERCHARM_ROW]
     poisoned_generic = extract_openai_model_infos(
         {"data": [_poisoned(row) for row in generic_rows]}, provider_name="G"
     )
@@ -408,12 +443,29 @@ def test_every_declared_path_malformed_never_fails_a_sweep() -> None:
     assert {info.model_id for info in poisoned_dialect} == {
         row["id"] for row in dialect_rows
     }
-    assert all(info.declared is None for info in poisoned_dialect)
-
-    poisoned_cc = extract_commandcode_model_infos(
-        {"data": [_poisoned(row) for row in COMMANDCODE_ROWS]}, provider_name="CC"
+    # The dialect's own parameter list is kept as it always was, so the only
+    # statement left is the one that list makes about reasoning (7.83.0).
+    assert all(
+        info.declared is None
+        or info.declared == ProviderModelDeclaration(reasoning=True)
+        for info in poisoned_dialect
     )
-    assert all(info.declared is None for info in poisoned_cc)
+
+    # Command Code's own parser validates ``context_length`` strictly, as it
+    # always has; that field stays well-formed and is the one thing kept.
+    poisoned_cc = extract_commandcode_model_infos(
+        {
+            "data": [
+                {**_poisoned(row), "context_length": row["context_length"]}
+                for row in COMMANDCODE_ROWS
+            ]
+        },
+        provider_name="CC",
+    )
+    assert all(
+        info.declared == ProviderModelDeclaration(context_length=info.context_length)
+        for info in poisoned_cc
+    )
 
 
 def test_an_attribute_that_raises_is_not_stated() -> None:

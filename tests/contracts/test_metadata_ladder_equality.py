@@ -39,18 +39,38 @@ because the kinds left it. ``test_7_80_0_states_kinds_and_moves_no_stated_one``
 holds the rule the user set: a kind nobody stated may become stated, and a
 stated kind never changes.
 
+**7.83.0 (PR-K4) puts each list's own numbers and flags at rung 1, on purpose**
+(user decisions 2026-10-08 20:57-21:00: provider official first, then gap
+filling down the ladder, field by field). The committed rows gained the real
+fields their listings publish for that -- prices, Novita's ``context_size`` and
+``features``, Vercel's ``max_tokens``, HyperCharm's ``pricing`` -- copied from
+the same keyless copies; 7.82.0 reads none of them, and its snapshot over the
+extended rows is byte-identical to its snapshot over the old ones (checked when
+the baseline was cut). Every entry whose answer 7.83.0 moves holds both answers,
+``v7.82.0`` (generated on a detached worktree at ``7f255ac0``, the commit 7.83.0
+forked from, with this same snapshot) and ``v7.83.0``; every other entry is one
+value, identical on both. Canonical encodings are recorded without the fields
+7.83.0 fills (the record documents carry those in full). Each large digested
+output has a ``k4-blanked/`` twin built with those fields blanked, which must
+stay one value: equal bytes there prove the digest moved for no other reason.
+``test_7_83_0_moves_only_what_the_provider_published`` holds the rule: only
+those fields move, a replaced number is the provider's own, and no request is
+priced differently -- ``prices/`` entries never move.
+
 A diff in this file means the equality contract is broken and the PR must be
 re-cut. It is not a file to regenerate.
 """
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.api import admin_harness_routes
 from my_claude_code.api.gemini_model_catalog import build_gemini_models_payload
 from my_claude_code.api.model_admin import (
     REASONING_MEASUREMENT_DAYS,
@@ -60,7 +80,10 @@ from my_claude_code.api.model_admin import (
 from my_claude_code.api.model_catalog import settings_model_visibility
 from my_claude_code.api.request_pricing import rate_cards
 from my_claude_code.application import model_metadata
-from my_claude_code.application.catalogue_model import build_catalogue_models
+from my_claude_code.application.catalogue_model import (
+    CatalogueModel,
+    build_catalogue_models,
+)
 from my_claude_code.application.catalogues import (
     SERIALISERS,
     serialise,
@@ -106,6 +129,63 @@ KIND_PREFIX = "kinds/"
 PICKER_KINDS_KEY = "picker-kinds"
 BEFORE_K2 = "v7.79.2"
 AFTER_K2 = "v7.80.0"
+
+#: Where 7.83.0 records an entry it moves on purpose: both answers, under these.
+BEFORE_K4 = "v7.82.0"
+AFTER_K4 = "v7.83.0"
+#: The record fields 7.83.0 fills from the row's own statement.
+K4_RECORD_FIELDS = (
+    "context_length",
+    "max_output_tokens",
+    "input_price",
+    "output_price",
+    "supports_thinking",
+    "supported_parameters",
+)
+#: The declaration's new keys, and the record field each one fills.
+K4_DECLARED_FIELDS: dict[str, str | None] = {
+    "context_length": "context_length",
+    "max_output_tokens": "max_output_tokens",
+    "input_price": "input_price",
+    "output_price": "output_price",
+    "reasoning": "supports_thinking",
+    "tool_calls": None,
+}
+#: Models page capability rows that show those fields (``reasoning_dialect``
+#: because a generic row's own parameter list may narrow it).
+K4_CAPABILITY_KEYS = (
+    "context_length",
+    "max_output_tokens",
+    "input_price",
+    "output_price",
+    "supports_tool_calls",
+    "supported_parameters",
+    "reasoning",
+    "reasoning_dialect",
+)
+#: Preference entries the page derives from the output limit and reasoning rows.
+K4_PREFERENCE_KEYS = {
+    "max_output_tokens": ("limit", "limit_source_label", "limit_tier_label", "note"),
+    "reasoning_preference": ("options", "can_reason"),
+}
+#: The routing lookups those fields reach.
+K4_ROUTING_KEYS = (
+    "output_limit",
+    "context_length",
+    "reasoning_capability",
+    "reasoning_dialect",
+    "thinking",
+)
+#: The catalogue record's fields that carry them.
+K4_CATALOGUE_FIELDS = (
+    "context_length",
+    "max_output_tokens",
+    "input_price",
+    "output_price",
+    "supports_tool_calls",
+    "reasoning",
+    "supported_parameters",
+)
 
 #: Fake credentials of the right shape, one per provider the rows come from, so
 #: each provider's records are in scope exactly as a configured install's are.
@@ -155,10 +235,57 @@ def _document(info: ProviderModelInfo) -> dict[str, Any]:
     return document
 
 
-def _canonical_without_declared(info: ProviderModelInfo) -> str:
-    text = canonical_model_info(info)
+def _canonical_without_new_fields(info: ProviderModelInfo) -> str:
+    """The canonical encoding, minus ``declared`` and the fields 7.83.0 fills."""
+
+    neutral = replace(info, **dict.fromkeys(K4_RECORD_FIELDS))
+    text = canonical_model_info(neutral)
     marker = f",{NEW_DOCUMENT_KEY}="
     return text[: text.rindex(marker)] + ")" if marker in text else text
+
+
+def _declared_k4(info: ProviderModelInfo) -> dict[str, Any]:
+    """What the row itself stated for the 7.83.0 fields (all ``None`` before it)."""
+
+    return {name: getattr(info.declared, name, None) for name in K4_DECLARED_FIELDS}
+
+
+def _blank_k4_model(model: CatalogueModel) -> CatalogueModel:
+    return replace(
+        model,
+        **dict.fromkeys(K4_CATALOGUE_FIELDS),
+        field_provenance={
+            name: entry
+            for name, entry in model.field_provenance.items()
+            if name not in K4_CAPABILITY_KEYS and not name.startswith("reasoning.")
+        },
+    )
+
+
+def _catalogue_k4(model: CatalogueModel) -> dict[str, Any]:
+    return {name: _canon(getattr(model, name)) for name in K4_CATALOGUE_FIELDS}
+
+
+def _page_without_k4(page: dict[str, Any]) -> dict[str, Any]:
+    blanked = json.loads(json.dumps(page, default=str))
+    for provider in blanked["providers"]:
+        for model in provider["models"]:
+            for key in K4_CAPABILITY_KEYS:
+                model["capabilities"].pop(key, None)
+            for section, keys in K4_PREFERENCE_KEYS.items():
+                entry = (model.get("preferences") or {}).get(section)
+                if isinstance(entry, dict):
+                    for key in keys:
+                        entry.pop(key, None)
+    return blanked
+
+
+def _v1beta_without_limits(payload: dict[str, Any]) -> dict[str, Any]:
+    blanked = json.loads(json.dumps(payload, default=str))
+    for model in blanked.get("models", []):
+        model.pop("inputTokenLimit", None)
+        model.pop("outputTokenLimit", None)
+    return blanked
 
 
 def _without_new_rows(capabilities: dict[str, Any]) -> dict[str, Any]:
@@ -223,8 +350,11 @@ def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
         out[f"records/{provider_id}/parsed"] = [_document(info) for info in parsed]
         out[f"records/{provider_id}/enriched"] = [_document(info) for info in enriched]
         out[f"canonical/{provider_id}"] = [
-            _canonical_without_declared(info) for info in enriched
+            _canonical_without_new_fields(info) for info in enriched
         ]
+        out[f"declared-k4/{provider_id}"] = {
+            info.model_id: _declared_k4(info) for info in enriched
+        }
         for info in enriched:
             out[f"capabilities/{provider_id}/{info.model_id}"] = _without_new_rows(
                 capability_payload(provider_id, info.model_id, info)
@@ -281,23 +411,51 @@ def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     for ref, kind in _take_page_kinds(page).items():
         out[f"{KIND_PREFIX}{ref}"] = kind
     out["page"] = page
+    out["k4-blanked/page"] = _page_without_k4(page)
     client = TestClient(app, client=("127.0.0.1", 50000))
     pickers = client.get("/admin/api/models").json()
     out[PICKER_KINDS_KEY] = pickers.pop("kinds")
     out["admin/models"] = pickers
     out["v1/models"] = client.get("/v1/models").json()
     out["v1beta/models"] = build_gemini_models_payload(settings, manager)
+    out["k4-blanked/v1beta/models"] = _v1beta_without_limits(out["v1beta/models"])
     out["admin/catalogue-models"] = client.get("/admin/api/catalogue-models").json()
     out["admin/catalogue-models?provenance=1"] = _catalogue_route_without_new_rows(
         client.get("/admin/api/catalogue-models?provenance=1").json()
     )
+    real_build = admin_harness_routes.build_catalogue_models
+
+    def blanked_build(*args: Any, **kwargs: Any) -> tuple[CatalogueModel, ...]:
+        return tuple(_blank_k4_model(m) for m in real_build(*args, **kwargs))
+
+    monkeypatch.setattr(admin_harness_routes, "build_catalogue_models", blanked_build)
+    try:
+        out["k4-blanked/admin/catalogue-models"] = client.get(
+            "/admin/api/catalogue-models"
+        ).json()
+        out["k4-blanked/admin/catalogue-models?provenance=1"] = (
+            _catalogue_route_without_new_rows(
+                client.get("/admin/api/catalogue-models?provenance=1").json()
+            )
+        )
+    finally:
+        monkeypatch.setattr(admin_harness_routes, "build_catalogue_models", real_build)
     models = build_catalogue_models(settings, manager)
+    blanked = tuple(_blank_k4_model(model) for model in models)
+    for model in models:
+        out[f"catalogue-k4/{model.gateway_id}"] = _catalogue_k4(model)
     for format_id in sorted(SERIALISERS):
         document, defaulted = serialise(format_id, models)
         out[f"serialiser/{format_id}"] = {
             "document": document,
             "defaulted": defaulted.as_document(),
             "sidecar": serialise_sidecar(format_id, models),
+        }
+        document, defaulted = serialise(format_id, blanked)
+        out[f"k4-blanked/serialiser/{format_id}"] = {
+            "document": document,
+            "defaulted": defaulted.as_document(),
+            "sidecar": serialise_sidecar(format_id, blanked),
         }
     return out
 
@@ -306,7 +464,16 @@ def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
 #: each is large and is built from records whose every field is already kept in
 #: full above it (the page repeats the capability rows; the catalogue route
 #: repeats the serialiser documents). Equal digests are equal bytes.
-DIGESTED_PREFIXES = ("page", "admin/", "serialiser/")
+DIGESTED_PREFIXES = (
+    "page",
+    "admin/",
+    "serialiser/",
+    "k4-blanked/page",
+    "k4-blanked/admin/",
+    "k4-blanked/serialiser/",
+)
+#: The digested outputs 7.83.0 may move, each through K4 fields only.
+K4_DIGESTED = ("page", "admin/catalogue-models", "serialiser/")
 
 
 def _encoded(value: Any) -> str:
@@ -333,6 +500,18 @@ def _is_kind_entry(key: str) -> bool:
     return key.startswith(KIND_PREFIX) or key == PICKER_KINDS_KEY
 
 
+def _is_k4_entry(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {BEFORE_K4, AFTER_K4}
+
+
+def _expected(key: str, value: Any) -> Any:
+    if _is_k4_entry(value):
+        return value[AFTER_K4]
+    if _is_kind_entry(key):
+        return value[AFTER_K2]
+    return value
+
+
 def test_every_output_is_byte_identical_to_v7_78_10(monkeypatch, tmp_path) -> None:
     baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
     current = recorded(snapshot(monkeypatch, tmp_path))
@@ -341,10 +520,62 @@ def test_every_output_is_byte_identical_to_v7_78_10(monkeypatch, tmp_path) -> No
     differing = [
         key
         for key in sorted(baseline)
-        if _encoded(current[key])
-        != _encoded(baseline[key][AFTER_K2] if _is_kind_entry(key) else baseline[key])
+        if _encoded(current[key]) != _encoded(_expected(key, baseline[key]))
     ]
     assert not differing, differing
+
+
+def _changed_keys(before: Any, after: Any) -> set[str]:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return {"<whole value>"}
+    return {str(k) for k in set(before) | set(after) if before.get(k) != after.get(k)}
+
+
+def test_7_83_0_moves_only_what_the_provider_published() -> None:
+    """The user's rule for K4, held over every entry the snapshot covers.
+
+    Provider official first, then gap filling down the whole ladder, field by
+    field. So an entry may move only through the fields the provider's own row
+    now answers at rung 1; a number that replaced one stated before is the
+    row's own; the large digested outputs move only through those fields
+    (their ``k4-blanked/`` twin is one value); and no request is priced
+    differently, because the rate cards never read the record.
+    """
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {key: value for key, value in baseline.items() if _is_k4_entry(value)}
+    assert moved, "the fixture would prove nothing if no value moved"
+    record_field_of = {v: k for k, v in K4_DECLARED_FIELDS.items() if v is not None}
+    by_the_row = 0
+    for key, entry in moved.items():
+        before, after = entry[BEFORE_K4], entry[AFTER_K4]
+        if key.startswith("records/"):
+            stated = baseline[f"declared-k4/{key.split('/')[1]}"]
+            stated = stated[AFTER_K4] if _is_k4_entry(stated) else stated
+            assert len(before) == len(after), key
+            for old, new in zip(before, after, strict=True):
+                changed = _changed_keys(old, new)
+                assert changed <= set(K4_RECORD_FIELDS), (key, changed)
+                for field in sorted(changed - {"supported_parameters"}):
+                    # A gap filled or a value replaced: either way it is the
+                    # number or flag the provider's own row stated.
+                    row = stated[new["model_id"]]
+                    assert new[field] == row[record_field_of[field]], (key, field)
+                    by_the_row += 1
+        elif key.startswith("capabilities/"):
+            assert _changed_keys(before, after) <= set(K4_CAPABILITY_KEYS), key
+        elif key.startswith("routing/"):
+            assert _changed_keys(before, after) <= set(K4_ROUTING_KEYS), key
+        elif key.startswith(("declared-k4/", "catalogue-k4/")):
+            continue
+        elif key.startswith(K4_DIGESTED) or key == "v1beta/models":
+            twin = baseline[f"k4-blanked/{key}"]
+            assert not _is_k4_entry(twin), f"{key} moved for a reason other than K4"
+        else:
+            raise AssertionError(f"{key} is not something 7.83.0 may move")
+    assert by_the_row, "the fixture would prove nothing if no record value moved"
+    assert not [key for key in moved if key.startswith("prices/")]
+    assert not [key for key in moved if key.startswith("k4-blanked/")]
 
 
 def test_7_80_0_states_kinds_and_moves_no_stated_one() -> None:
@@ -422,6 +653,10 @@ def test_the_snapshot_covers_every_dialect_and_every_list() -> None:
     for key in baseline:
         if _is_kind_entry(key):
             assert set(baseline[key]) == {BEFORE_K2, AFTER_K2}, key
+    # Each digested output 7.83.0 may move has its K4-blanked twin.
+    for key in baseline:
+        if key.startswith(K4_DIGESTED) or key == "v1beta/models":
+            assert f"k4-blanked/{key}" in baseline, key
 
 
 def test_the_rows_really_carry_what_the_reader_keeps() -> None:
@@ -434,3 +669,16 @@ def test_the_rows_really_carry_what_the_reader_keeps() -> None:
             1 for info in _parse(provider_id, spec) if info.declared is not None
         )
     assert stated >= 12
+
+
+def test_the_rows_really_carry_the_numbers_7_83_0_reads() -> None:
+    """Each 7.83.0 field is stated by at least one committed row."""
+
+    rows: dict[str, Any] = json.loads(ROWS_PATH.read_text(encoding="utf-8"))
+    stated: set[str] = set()
+    for provider_id, spec in rows.items():
+        for info in _parse(provider_id, spec):
+            for name in K4_DECLARED_FIELDS:
+                if getattr(info.declared, name, None) is not None:
+                    stated.add(name)
+    assert stated == set(K4_DECLARED_FIELDS)

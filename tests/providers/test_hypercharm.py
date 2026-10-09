@@ -780,13 +780,19 @@ def test_generic_extractor_reads_every_live_id():
     assert len(infos) == 32
 
 
-def test_vendor_keys_are_ignored_rather_than_mis_parsed():
-    """The five vendor keys are a third dialect; none of them is read here.
+def test_vendor_keys_are_read_at_rung_one_and_never_mis_parsed():
+    """The vendor keys are a third dialect, read as the provider's own rung (7.83.0).
 
-    ``reasoning`` in particular must NOT become "supports thinking": 21 of the
-    32 entries omit it while still reasoning on the wire, so reading it would
-    mark 21 reasoning-capable models as non-reasoning. Capability comes from
-    the models.dev bucket instead.
+    Since 7.83.0 the generic reader keeps HyperCharm's own ``context_window``,
+    ``max_output_tokens`` and ``pricing.input``/``output`` (USD per million,
+    written as numbers) as rung 1 of the ladder for those fields -- the user's
+    decision of 2026-10-08: provider official first, then models.dev for what
+    the list left out. Its ``capabilities.vision`` is still not read.
+
+    ``reasoning`` must still NOT become "does not reason": 21 of the 32 entries
+    omit it while still reasoning on the wire, so an absent block states
+    nothing -- only a published effort list states that the model reasons, and
+    nothing here ever states that it does not.
     """
     infos = {
         info.model_id: info
@@ -795,17 +801,23 @@ def test_vendor_keys_are_ignored_rather_than_mis_parsed():
         )
     }
 
-    published_ladder = infos["gpt-oss-120b"]
-    no_ladder = infos["qwen3.6-flash"]
-
-    for info in (published_ladder, no_ladder):
-        assert info.supports_thinking is None
+    omitted = 0
+    for entry in _LIVE_MODELS_PAYLOAD["data"]:
+        info = infos[entry["id"]]
+        assert info.context_length == entry["context_window"], entry["id"]
+        assert info.max_output_tokens == entry["max_output_tokens"], entry["id"]
+        assert info.input_price == entry["pricing"]["input"], entry["id"]
+        assert info.output_price == entry["pricing"]["output"], entry["id"]
         assert info.supports_vision is None
-        assert info.context_length is None
-        assert info.max_output_tokens is None
-        assert info.input_price is None
-        assert info.output_price is None
         assert info.supported_parameters is None
+        if "reasoning" in entry:
+            assert info.supports_thinking is True, entry["id"]
+        else:
+            omitted += 1
+            assert info.supports_thinking is None, entry["id"]
+    assert omitted == 21
+    assert infos["gpt-oss-120b"].supports_thinking is True
+    assert infos["qwen3.6-flash"].supports_thinking is None
 
 
 def test_the_payload_really_is_the_third_dialect():

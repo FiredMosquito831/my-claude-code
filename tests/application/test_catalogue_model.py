@@ -10,6 +10,7 @@ from my_claude_code.application.catalogue_model import (
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
     ModelReasoningCapability,
+    ProviderModelDeclaration,
     ProviderModelInfo,
 )
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
@@ -208,6 +209,29 @@ def test_prices_and_parameters_come_from_the_cached_provider_row() -> None:
     assert entry.output_price == 0.000015
     assert entry.supports_tool_calls is True
     assert entry.default_parameters == (("top_p", 0.95),)
+
+
+def test_the_rows_own_tool_word_answers_before_models_dev() -> None:
+    """7.83.0: no parameter list, but the row said ``function-calling``."""
+
+    stated = ProviderModelInfo(
+        "novita/stated", declared=ProviderModelDeclaration(tool_calls=True)
+    )
+    silent = ProviderModelInfo("novita/silent")
+    runtime = FakeRuntime(
+        settings=_settings(),
+        cached_infos=(stated, silent),
+        tool_calls={"novita/stated": False, "novita/silent": False},
+    )
+
+    entries = {
+        model.gateway_id: model
+        for model in build_catalogue_models(runtime.current_settings(), runtime)
+    }
+
+    assert entries["anthropic/novita/stated"].supports_tool_calls is True
+    # Where the row said nothing, models.dev still answers, as before.
+    assert entries["anthropic/novita/silent"].supports_tool_calls is False
 
 
 def test_no_thinking_variant_advertises_no_reasoning_capability() -> None:

@@ -57,6 +57,11 @@
      ],
      "tokenizer": "Other",
      "instruct_type": null
+    },
+    "pricing": {
+     "prompt": "0.000001",
+     "completion": "0.0000027",
+     "input_cache_read": "0.00000005"
     }
    }
   ]
@@ -78,7 +83,12 @@
      "tools"
     ],
     "default_parameters": {},
-    "architecture": {}
+    "architecture": {},
+    "pricing": {
+     "prompt": "0.0000020000",
+     "completion": "0.0000100000",
+     "input_cache_read": "0.0000002000"
+    }
    },
    {
     "id": "tencent/hy3",
@@ -139,6 +149,11 @@
      ],
      "tokenizer": "Other",
      "instruct_type": null
+    },
+    "pricing": {
+     "prompt": "0.0000001300",
+     "completion": "0.0000005300",
+     "input_cache_read": "0.0000000330"
     }
    }
   ]
@@ -173,6 +188,10 @@
       "text"
      ],
      "tokenizer": "Other"
+    },
+    "pricing": {
+     "prompt": "-1",
+     "completion": "-1"
     }
    }
   ]
@@ -200,7 +219,27 @@
      "video",
      "audio"
     ],
-    "tags": []
+    "tags": [],
+    "context_size": 0,
+    "features": [
+     "serverless"
+    ],
+    "pricing": {
+     "prompt": {
+      "origin_price_per_m": 10000,
+      "price_per_m": 10000,
+      "origin_price_per_m_decimal": "1",
+      "price_per_m_decimal": "1"
+     },
+     "completion": {
+      "origin_price_per_m": 10000,
+      "price_per_m": 10000,
+      "origin_price_per_m_decimal": "1",
+      "price_per_m_decimal": "1"
+     }
+    },
+    "input_token_price_per_m": 10000,
+    "output_token_price_per_m": 10000
    },
    {
     "id": "ming-image-0.1-design-layer",
@@ -221,7 +260,27 @@
      "video",
      "audio"
     ],
-    "tags": []
+    "tags": [],
+    "context_size": 0,
+    "features": [
+     "serverless"
+    ],
+    "pricing": {
+     "prompt": {
+      "origin_price_per_m": 10000,
+      "price_per_m": 10000,
+      "origin_price_per_m_decimal": "1",
+      "price_per_m_decimal": "1"
+     },
+     "completion": {
+      "origin_price_per_m": 10000,
+      "price_per_m": 10000,
+      "origin_price_per_m_decimal": "1",
+      "price_per_m_decimal": "1"
+     }
+    },
+    "input_token_price_per_m": 10000,
+    "output_token_price_per_m": 10000
    },
    {
     "id": "zai-org/glm-5.3-flash",
@@ -244,7 +303,36 @@
      "anthropic",
      "responses"
     ],
-    "tags": []
+    "tags": [],
+    "context_size": 1048576,
+    "features": [
+     "function-calling",
+     "structured-outputs",
+     "reasoning",
+     "serverless"
+    ],
+    "pricing": {
+     "prompt": {
+      "origin_price_per_m": 1500,
+      "price_per_m": 1500,
+      "origin_price_per_m_decimal": "0.15",
+      "price_per_m_decimal": "0.15"
+     },
+     "completion": {
+      "origin_price_per_m": 5000,
+      "price_per_m": 5000,
+      "origin_price_per_m_decimal": "0.5",
+      "price_per_m_decimal": "0.5"
+     },
+     "input_cache_read": {
+      "origin_price_per_m": 300,
+      "price_per_m": 300,
+      "origin_price_per_m_decimal": "0.03",
+      "price_per_m_decimal": "0.03"
+     }
+    },
+    "input_token_price_per_m": 1500,
+    "output_token_price_per_m": 5000
    }
   ]
  },
@@ -283,7 +371,17 @@
      "reasoning",
      "tool-use",
      "structured-output"
-    ]
+    ],
+    "max_tokens": 16384,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     }
+    ],
+    "pricing": {
+     "input": "0.00000012",
+     "output": "0.00000024"
+    }
    },
    {
     "id": "bfl/flux-2-flex",
@@ -303,7 +401,9 @@
     },
     "tags": [
      "image-generation"
-    ]
+    ],
+    "max_tokens": 0,
+    "pricing": {}
    },
    {
     "id": "alibaba/qwen3-embedding-0.6b",
@@ -320,6 +420,10 @@
      "output": [
       "text"
      ]
+    },
+    "max_tokens": 32768,
+    "pricing": {
+     "input": "0.00000001"
     }
    },
    {
@@ -336,6 +440,9 @@
      "output": [
       "text"
      ]
+    },
+    "pricing": {
+     "input": "0.0000000001"
     }
    }
   ]
@@ -441,6 +548,10 @@
     },
     "capabilities": {
      "vision": true
+    },
+    "pricing": {
+     "input": 0.33,
+     "output": 1.31
     }
    }
   ]
