@@ -952,6 +952,11 @@ const proxyState = {
   // 7.90.0: which Tor source's form is open -- a source id, "new" for the
   // add form, or "" for none. Never holds a typed control password.
   torEditing: "",
+  // 7.91.0: which vendor form is open -- { kind, id } ("" id for a new one)
+  // or null -- and the presets it prefills from, asked for once, when a form
+  // first opens. Never holds a typed password, login or download link.
+  vendorEditing: null,
+  presets: null,
   // How many candidate rows are drawn. Paged rather than capped: hundreds of
   // tested, working addresses is the ordinary result now, and "narrow the
   // filter" is not an answer when every one of them is usable.
@@ -3945,6 +3950,8 @@ function renderProxySources() {
   renderProxyLocalSource(panel, data);
   // 7.90.0: a tor the user runs themselves, after the scan's listeners.
   renderProxyTor(panel, data);
+  // 7.91.0: VPN accounts, commercial gateways and proxy lists.
+  PROXY_VENDOR_KINDS.forEach((kind) => renderProxyVendorKind(panel, data, kind));
 }
 
 function renderProxyLocalSource(panel, data) {
@@ -4636,6 +4643,722 @@ async function removeProxyTor(source, button) {
     announceProxy(
       "Removed your tor's ports from the offers and forgot any stored control " +
         "password. A chain that took a port keeps it; tor itself was not touched.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+/* ------------------------------- VPN accounts, gateways, lists (7.91.0)
+   PR-S4 + PR-S5. Three more kinds of source, each a card like the Tor one:
+   its addresses on offer, Add to chain / Add all to chain, and the buttons
+   that make sense for it. A preset prefills the form from the vendor's own
+   documentation -- host, port, session syntax, link, the day it was read --
+   and nothing is stored or contacted until Save. Passwords, logins and
+   download links are write-only: sent once, never held after, never shown. */
+
+const PROXY_VENDOR_KINDS = ["account", "gateway", "list"];
+
+const PROXY_VENDOR_TEXT = {
+  account: {
+    title: "VPN accounts",
+    intro:
+      "A VPN that offers a SOCKS5 or HTTP proxy with service credentials " +
+      "(NordVPN, Private Internet Access, IPVanish, TorGuard), or one reachable " +
+      "inside its own tunnel (Mullvad, IVPN): each host becomes one chain " +
+      "address. Proton VPN, Surfshark, ExpressVPN and Windscribe have no proxy " +
+      "at all -- see the Guide.",
+    add: "Add a VPN account",
+  },
+  gateway: {
+    title: "Commercial proxy gateways",
+    intro:
+      "A gateway that gives a new address per session (Bright Data datacenter " +
+      "or ISP zones, Oxylabs, IPRoyal, Decodo): MCC spells N sessions in the " +
+      "vendor's own syntax, each its own chain address with its own name.",
+    add: "Add a gateway",
+  },
+  list: {
+    title: "Proxy lists from your provider",
+    intro:
+      "A list of ip:port:username:password rows your proxy provider gave you " +
+      "(Webshare's free plan first): paste it, or give its download link. " +
+      "Each row becomes one chain address.",
+    add: "Add a proxy list",
+  },
+};
+
+const PROXY_VENDOR_REFRESH = [
+  [0, "Only when I press Fetch now"],
+  [6, "Every 6 hours"],
+  [24, "Every 24 hours"],
+  [168, "Every 7 days"],
+];
+
+function proxyVendorSources(data, kind) {
+  return data ? (data.sources || []).filter((source) => source.kind === kind) : [];
+}
+
+function proxyVendorPresets(kind) {
+  const presets = (proxyState.presets && proxyState.presets.presets) || [];
+  return presets.filter((preset) => preset.kind === kind);
+}
+
+function proxyVendorPreset(id) {
+  const presets = (proxyState.presets && proxyState.presets.presets) || [];
+  return presets.find((preset) => preset.id === id) || null;
+}
+
+function renderProxyVendorKind(panel, data, kind) {
+  const text = PROXY_VENDOR_TEXT[kind];
+  const block = document.createElement("div");
+  block.className = `proxy-vendor proxy-vendor-${kind}`;
+  block.dataset.kind = kind;
+  const title = document.createElement("h4");
+  title.className = "proxy-vendor-title";
+  title.textContent = text.title;
+  const intro = document.createElement("p");
+  intro.className = "proxy-note proxy-vendor-intro";
+  intro.textContent = text.intro;
+  block.append(title, intro);
+  const sources = proxyVendorSources(data, kind);
+  const editing = proxyState.vendorEditing;
+  if (
+    editing &&
+    editing.kind === kind &&
+    editing.id &&
+    !sources.some((source) => source.id === editing.id)
+  ) {
+    proxyState.vendorEditing = null;
+  }
+  sources.forEach((source) => {
+    const open =
+      proxyState.vendorEditing &&
+      proxyState.vendorEditing.kind === kind &&
+      proxyState.vendorEditing.id === source.id;
+    block.appendChild(open ? proxyVendorForm(kind, source) : proxyVendorCard(source));
+  });
+  const adding =
+    proxyState.vendorEditing &&
+    proxyState.vendorEditing.kind === kind &&
+    !proxyState.vendorEditing.id;
+  if (adding) {
+    block.appendChild(proxyVendorForm(kind, null));
+  } else {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "ghost-button proxy-vendor-add";
+    add.textContent = text.add;
+    add.addEventListener("click", () => openProxyVendorForm(kind, "", add));
+    block.appendChild(add);
+  }
+  panel.appendChild(block);
+}
+
+async function openProxyVendorForm(kind, id, button) {
+  if (!proxyState.presets) {
+    if (button) button.disabled = true;
+    try {
+      proxyState.presets = await api("/admin/api/proxy-sources/presets");
+    } catch (error) {
+      if (button) button.disabled = false;
+      announceProxy(error.message);
+      showMessage(error.message, "error");
+      return;
+    }
+  }
+  proxyState.vendorEditing = { kind, id };
+  renderProxySources();
+}
+
+function proxyVendorDoc(preset, observed) {
+  const line = document.createElement("p");
+  line.className = "proxy-note proxy-vendor-doc";
+  const doc = preset ? String(preset.doc || "") : "";
+  if (!doc.startsWith("https://")) return line;
+  const link = document.createElement("a");
+  link.href = doc;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = `${preset.name}'s documentation`;
+  const when = observed || preset.observed || "";
+  line.append("From ", link, when ? ` (read ${when}).` : ".");
+  return line;
+}
+
+function proxyVendorFetchLine(fetch, where) {
+  if (!fetch) return "";
+  const via = fetch.via
+    ? `through ${proxyProviderNames([fetch.via])[0]}'s chain`
+    : "from this computer";
+  const schedule = Number(fetch.refresh_hours) > 0
+    ? `fetched every ${fetch.refresh_hours} h`
+    : "fetched only when you press Fetch now";
+  const last = fetch.fetched_at
+    ? `Last: ${proxyCheckedAgo(fetch.fetched_at) || fetch.fetched_at} -- ${fetch.note || ""}`
+    : "Not fetched yet.";
+  return `${where} -- ${schedule}, ${via}. ${last}`;
+}
+
+function proxyVendorHead(source) {
+  const head = document.createElement("p");
+  head.className = "proxy-vendor-head";
+  const name = document.createElement("strong");
+  name.className = "proxy-vendor-name";
+  name.textContent = source.name;
+  const detail = document.createElement("span");
+  detail.className = "proxy-vendor-detail";
+  const parts = [];
+  if (source.kind === "account") {
+    parts.push(source.scheme === "socks5h" ? "SOCKS5" : String(source.scheme).toUpperCase());
+    parts.push(
+      source.secret_set
+        ? `logs in as ${source.secret_label || "…"} (stored, never shown)`
+        : "no login",
+    );
+  } else if (source.kind === "gateway") {
+    parts.push(`${source.host}:${source.port}`);
+    parts.push(`${source.count} session${source.count === 1 ? "" : "s"}`);
+    if (source.zone) parts.push(`zone ${source.zone} (${source.zone_type})`);
+    if (source.country) parts.push(`country ${source.country}`);
+    if (source.minutes) parts.push(`${source.minutes} min sessions`);
+    parts.push(`logs in as ${source.secret_label || "…"} (stored, never shown)`);
+  } else {
+    parts.push(source.scheme === "socks5h" ? "SOCKS5" : String(source.scheme).toUpperCase());
+    parts.push(source.url_set ? `download link at ${source.url_host}` : "pasted");
+  }
+  detail.textContent = ` · ${parts.join(" · ")}`;
+  head.append(name, detail);
+  return head;
+}
+
+function proxyVendorOfferState(row) {
+  const parts = [];
+  if (row.country) parts.push(row.city ? `${row.country}, ${row.city}` : row.country);
+  const chained = proxyProviderNames(row.chained);
+  parts.push(chained.length ? `in ${chained.join(", ")}` : "on offer");
+  return parts.join(" · ");
+}
+
+function proxyVendorOfferRow(row) {
+  const item = document.createElement("li");
+  item.className = "proxy-vendor-offer";
+  const name = document.createElement("span");
+  name.className = "proxy-vendor-offer-name";
+  name.textContent = row.label || row.host || row.session || "";
+  const state = document.createElement("span");
+  state.className = "proxy-vendor-offer-state";
+  state.textContent = proxyVendorOfferState(row);
+  item.append(name, state);
+  if (row.offered && row.proxy) {
+    const pick = proxyTorProviderPicker(`Add ${name.textContent} to which chain`);
+    pick.classList.add("proxy-vendor-provider");
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "secondary-button proxy-vendor-offer-add";
+    add.textContent = "Add to chain";
+    add.disabled = !pick.options.length || Boolean(proxyState.run);
+    add.addEventListener("click", () =>
+      runProxyCandidateBulk({ action: "add", providerId: pick.value, proxies: [row.proxy] }),
+    );
+    item.append(pick, add);
+  }
+  return item;
+}
+
+function proxyVendorCard(source) {
+  const card = document.createElement("div");
+  card.className = "proxy-vendor-source";
+  card.dataset.source = source.id;
+  card.appendChild(proxyVendorHead(source));
+  const status = document.createElement("p");
+  status.className = "proxy-vendor-status";
+  if (source.kind === "account" && source.host_list) {
+    const list = source.host_list;
+    status.textContent = proxyVendorFetchLine(
+      list,
+      `Server list at ${list.url_host}` +
+        (list.countries && list.countries.length
+          ? ` (kept: ${list.countries.join(", ")})`
+          : ""),
+    );
+  } else if (source.kind === "list" && source.url_set) {
+    status.textContent = proxyVendorFetchLine(source.fetch, `List at ${source.url_host}`);
+  } else if (source.kind === "gateway") {
+    status.textContent =
+      "Each session is its own address at the vendor; New sessions mints fresh ids " +
+      "(never reused) for fresh addresses.";
+  }
+  if (source.kind === "list" && source.fetch && source.fetch.fetched_at && !source.fetch.ok) {
+    status.classList.add("proxy-vendor-status-failed");
+  }
+  if (source.kind === "account" && source.host_list && source.host_list.fetched_at && !source.host_list.ok) {
+    status.classList.add("proxy-vendor-status-failed");
+  }
+  if (status.textContent) card.appendChild(status);
+  if (source.tunnel) {
+    const tunnel = document.createElement("p");
+    tunnel.className = "proxy-vendor-tunnel";
+    tunnel.textContent = source.tunnel;
+    card.appendChild(tunnel);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "proxy-vendor-actions";
+  const fetchable =
+    (source.kind === "account" && source.host_list) ||
+    (source.kind === "list" && source.url_set);
+  if (fetchable) {
+    const fetchButton = document.createElement("button");
+    fetchButton.type = "button";
+    fetchButton.className = "secondary-button proxy-vendor-fetch";
+    fetchButton.textContent = "Fetch now";
+    fetchButton.title =
+      "Reads the list from the URL you confirmed -- through the chain you chose " +
+      "for it, or from this computer -- and offers what it lists.";
+    fetchButton.addEventListener("click", () => fetchProxyVendor(source, fetchButton));
+    actions.appendChild(fetchButton);
+  }
+  if (source.kind === "gateway") {
+    const renew = document.createElement("button");
+    renew.type = "button";
+    renew.className = "ghost-button proxy-vendor-renew";
+    renew.textContent = "New sessions";
+    renew.title =
+      "Mints new session ids for every address. A chain using an old session " +
+      "keeps it until you remove it there.";
+    renew.addEventListener("click", () => renewProxyGateway(source, renew));
+    actions.appendChild(renew);
+  }
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "ghost-button proxy-vendor-edit";
+  edit.textContent = "Change";
+  edit.addEventListener("click", () => openProxyVendorForm(source.kind, source.id, edit));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost-button proxy-vendor-remove";
+  remove.textContent = "Remove";
+  remove.title =
+    "Withdraw these offers and forget the stored login or link. A chain that " +
+    "took an address keeps it.";
+  remove.addEventListener("click", () => removeProxyVendor(source, remove));
+  actions.append(edit, remove);
+  card.appendChild(actions);
+
+  const offers = source.offers || [];
+  const offered = offers.filter((row) => row.offered && row.proxy);
+  if (offered.length > 1) {
+    const all = document.createElement("div");
+    all.className = "proxy-vendor-add-all";
+    const label = document.createElement("span");
+    label.className = "proxy-vendor-add-all-label";
+    label.textContent = `All ${offered.length} addresses:`;
+    const pick = proxyTorProviderPicker(`Add every ${source.name} address to which chain`);
+    pick.classList.add("proxy-vendor-provider");
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "secondary-button proxy-vendor-add-all-button";
+    add.textContent = "Add all to chain";
+    add.title =
+      "Each is tested against that provider's own host first. With two or more " +
+      "in a chain and Keep trying exits until one answers ticked, a refused " +
+      "request moves to the next one at once.";
+    add.disabled = !pick.options.length || Boolean(proxyState.run);
+    add.addEventListener("click", () =>
+      runProxyCandidateBulk({
+        action: "add",
+        providerId: pick.value,
+        proxies: offered.map((row) => row.proxy),
+      }),
+    );
+    all.append(label, pick, add);
+    card.appendChild(all);
+  }
+  if (offers.length) {
+    const wrap = document.createElement("details");
+    wrap.className = "proxy-vendor-offers-wrap";
+    wrap.open = offers.length <= 12;
+    const summary = document.createElement("summary");
+    summary.className = "proxy-vendor-offers-summary";
+    summary.textContent = `${offers.length} address${offers.length === 1 ? "" : "es"}`;
+    const list = document.createElement("ul");
+    list.className = "proxy-vendor-offers";
+    offers.forEach((row) => list.appendChild(proxyVendorOfferRow(row)));
+    wrap.append(summary, list);
+    card.appendChild(wrap);
+  } else {
+    const none = document.createElement("p");
+    none.className = "proxy-note proxy-vendor-none";
+    none.textContent = fetchable
+      ? "Nothing on offer yet: press Fetch now to read the list."
+      : "Nothing on offer.";
+    card.appendChild(none);
+  }
+  const sees = document.createElement("p");
+  sees.className = "proxy-note proxy-vendor-sees";
+  sees.textContent = source.sees || "";
+  card.appendChild(sees);
+  if (source.doc) {
+    card.appendChild(
+      proxyVendorDoc({ name: source.vendor || source.name, doc: source.doc }, source.observed),
+    );
+  }
+  return card;
+}
+
+function proxyVendorInput(className, placeholder, label, value = "", type = "text") {
+  const input = document.createElement("input");
+  input.type = type;
+  input.className = `proxy-vendor-input ${className}`;
+  input.autocomplete = type === "password" ? "new-password" : "off";
+  input.placeholder = placeholder;
+  input.setAttribute("aria-label", label);
+  input.value = value;
+  return input;
+}
+
+function proxyVendorSelect(className, label, options, value) {
+  const select = document.createElement("select");
+  select.className = `proxy-vendor-select ${className}`;
+  select.setAttribute("aria-label", label);
+  options.forEach(([optionValue, text]) => {
+    const option = document.createElement("option");
+    option.value = String(optionValue);
+    option.textContent = text;
+    select.appendChild(option);
+  });
+  select.value = String(value);
+  return select;
+}
+
+function proxyVendorSchemes() {
+  return [
+    ["socks5h", "SOCKS5 (names resolved at the exit)"],
+    ["http", "HTTP proxy"],
+    ["https", "HTTPS proxy (TLS to the proxy)"],
+  ];
+}
+
+function proxyVendorViaOptions() {
+  const providers = (proxyState.data && proxyState.data.providers) || [];
+  return [["", "Fetch from this computer"]].concat(
+    providers.map((provider) => [
+      provider.provider_id,
+      `Fetch through ${provider.display_name}'s chain`,
+    ]),
+  );
+}
+
+function proxyVendorForm(kind, source) {
+  const form = document.createElement("div");
+  form.className = "proxy-vendor-form";
+  form.dataset.kind = kind;
+  const presets = proxyVendorPresets(kind);
+  const startPreset = source
+    ? source.preset || ""
+    : kind === "list"
+      ? "webshare"
+      : (presets[0] && presets[0].id) || "";
+  const choices = presets.map((preset) => [preset.id, preset.name]);
+  if (kind !== "gateway") choices.push(["", "Another vendor (type it yourself)"]);
+  const pick = proxyVendorSelect("proxy-vendor-preset", "Which vendor", choices, startPreset);
+  pick.disabled = Boolean(source);
+  const note = document.createElement("div");
+  note.className = "proxy-vendor-preset-note";
+  const fields = document.createElement("div");
+  fields.className = "proxy-vendor-fields";
+  const draw = () => {
+    const preset = proxyVendorPreset(pick.value);
+    note.textContent = "";
+    if (preset) {
+      const what = document.createElement("p");
+      what.className = "proxy-note proxy-vendor-preset-text";
+      what.textContent = [preset.note, preset.credentials, preset.alternative && `Also: ${preset.alternative}.`]
+        .filter(Boolean)
+        .join(" ");
+      note.append(what, proxyVendorDoc(preset));
+    }
+    fields.textContent = "";
+    proxyVendorFields(kind, fields, preset, source);
+  };
+  pick.addEventListener("change", draw);
+  draw();
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary-button proxy-vendor-save";
+  save.textContent = source ? "Save" : "Save and offer";
+  save.addEventListener("click", () => saveProxyVendor(kind, source, pick.value, fields, save));
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost-button proxy-vendor-cancel";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    proxyState.vendorEditing = null;
+    renderProxySources();
+  });
+  const buttons = document.createElement("div");
+  buttons.className = "proxy-vendor-form-buttons";
+  buttons.append(save, cancel);
+  const saving = document.createElement("p");
+  saving.className = "proxy-note proxy-vendor-form-note";
+  saving.textContent =
+    "Saving contacts nothing: each address is offered here, and Add to chain " +
+    "tests it against that provider's own host first. A password, login or " +
+    "download link is kept readable by you only and never shown again.";
+  form.append(pick, note, fields, buttons, saving);
+  return form;
+}
+
+function proxyVendorFields(kind, fields, preset, source) {
+  const s = source || {};
+  const name = proxyVendorInput(
+    "proxy-vendor-name-input",
+    "name, e.g. NordVPN",
+    "Name for this source",
+    s.name || (preset ? preset.name : ""),
+  );
+  fields.appendChild(name);
+  if (kind === "account") {
+    const hosts = document.createElement("textarea");
+    hosts.className = "proxy-vendor-hosts";
+    hosts.rows = 3;
+    hosts.setAttribute("aria-label", "Proxy hosts, one per line");
+    hosts.placeholder = "proxy hosts, one per line (host or host:port)";
+    hosts.value = source ? (s.hosts_typed || []).join("\n") : preset ? (preset.hosts || []).join("\n") : "";
+    const scheme = proxyVendorSelect(
+      "proxy-vendor-scheme",
+      "Proxy scheme",
+      proxyVendorSchemes(),
+      s.scheme || (preset ? preset.scheme : "socks5h"),
+    );
+    const port = proxyVendorInput("proxy-vendor-port", "port", "Proxy port", String(s.port || (preset ? preset.port : 1080)), "number");
+    const user = proxyVendorInput(
+      "proxy-vendor-username",
+      s.secret_set ? "stored -- type to replace" : "service user name",
+      "Service user name",
+    );
+    const pass = proxyVendorInput("proxy-vendor-password", s.secret_set ? "stored -- type to replace" : "service password", "Service password", "", "password");
+    fields.append(hosts, scheme, port, user, pass);
+    const reader = preset ? preset.reader : "";
+    const list = s.host_list || null;
+    if (reader === "nordvpn_servers" || list) {
+      const url = proxyVendorInput(
+        "proxy-vendor-list-url",
+        list ? `stored (${list.url_host}) -- type to replace` : "server list URL",
+        "The vendor's server list URL",
+        list ? "" : preset ? preset.list_url : "",
+      );
+      const countries = proxyVendorInput(
+        "proxy-vendor-countries",
+        "countries to keep, e.g. NL, SE (empty: all)",
+        "Countries to keep from the server list",
+        list ? (list.countries || []).join(", ") : "",
+      );
+      const via = proxyVendorSelect("proxy-vendor-via", "Where the fetch leaves from", proxyVendorViaOptions(), list ? list.via : "");
+      const refresh = proxyVendorSelect("proxy-vendor-refresh", "How often to fetch", PROXY_VENDOR_REFRESH, list ? list.refresh_hours : 0);
+      fields.append(url, countries, via, refresh);
+    }
+  } else if (kind === "gateway") {
+    const host = proxyVendorInput("proxy-vendor-host", "gateway host", "Gateway host", s.host || (preset ? preset.host : ""));
+    const port = proxyVendorInput("proxy-vendor-port", "port", "Gateway port", String(s.port || (preset ? preset.port : "")), "number");
+    const scheme = proxyVendorSelect("proxy-vendor-scheme", "Proxy scheme", proxyVendorSchemes(), s.scheme || (preset ? preset.scheme : "socks5h"));
+    const user = proxyVendorInput(
+      "proxy-vendor-username",
+      s.secret_set ? "stored -- type to replace" : preset && preset.id === "brightdata" ? "customer id" : "proxy user name",
+      "Gateway user name or customer id",
+    );
+    const pass = proxyVendorInput("proxy-vendor-password", s.secret_set ? "stored -- type to replace" : "password", "Gateway password", "", "password");
+    fields.append(host, port, scheme, user, pass);
+    if (preset && preset.id === "brightdata") {
+      const zone = proxyVendorInput("proxy-vendor-zone", "zone name", "Bright Data zone name", s.zone || "");
+      const zoneType = proxyVendorSelect(
+        "proxy-vendor-zone-type",
+        "Bright Data zone type",
+        [
+          ["datacenter", "Datacenter zone"],
+          ["isp", "ISP zone"],
+          ["residential", "Residential zone (refused)"],
+          ["mobile", "Mobile zone (refused)"],
+        ],
+        s.zone_type || "datacenter",
+      );
+      fields.append(zone, zoneType);
+    }
+    const country = proxyVendorInput("proxy-vendor-country", "country, e.g. us (optional)", "Exit country", s.country || "");
+    fields.appendChild(country);
+    if (preset && Number(preset.minutes_max) > 0) {
+      const minutes = proxyVendorInput(
+        "proxy-vendor-minutes",
+        `session minutes (1-${preset.minutes_max})`,
+        "Session lifetime in minutes",
+        String(s.minutes || preset.minutes),
+        "number",
+      );
+      fields.appendChild(minutes);
+    }
+    const count = proxyVendorInput("proxy-vendor-count", "how many sessions", "How many sessions", String(s.count || 2), "number");
+    fields.appendChild(count);
+  } else {
+    const scheme = proxyVendorSelect("proxy-vendor-scheme", "Proxy scheme", proxyVendorSchemes(), s.scheme || (preset ? preset.scheme : "socks5h"));
+    const paste = document.createElement("textarea");
+    paste.className = "proxy-vendor-paste";
+    paste.rows = 4;
+    paste.setAttribute("aria-label", "Paste the list");
+    paste.placeholder = source
+      ? "paste a new list to replace the rows (optional)"
+      : "ip:port:username:password, one per line";
+    const url = proxyVendorInput(
+      "proxy-vendor-list-url",
+      s.url_set ? `stored (${s.url_host}) -- type to replace` : "or the list's download link (kept like a password)",
+      "The list's download link",
+      "",
+      "password",
+    );
+    const fetch = s.fetch || {};
+    const via = proxyVendorSelect("proxy-vendor-via", "Where the fetch leaves from", proxyVendorViaOptions(), fetch.via || "");
+    const refresh = proxyVendorSelect("proxy-vendor-refresh", "How often to fetch", PROXY_VENDOR_REFRESH, fetch.refresh_hours || 0);
+    fields.append(scheme, paste, url, via, refresh);
+  }
+}
+
+function proxyVendorValue(fields, className) {
+  const field = fields.querySelector(`.${className}`);
+  return field ? field.value : "";
+}
+
+function proxyVendorBlock(kind, presetId, fields) {
+  const value = (className) => proxyVendorValue(fields, className);
+  const number = (className, fallback) => {
+    const text = String(value(className) || "").trim();
+    return /^\d+$/.test(text) ? Number(text) : fallback;
+  };
+  if (kind === "account") {
+    return {
+      name: value("proxy-vendor-name-input"),
+      preset: presetId,
+      scheme: value("proxy-vendor-scheme"),
+      port: number("proxy-vendor-port", 0),
+      hosts: value("proxy-vendor-hosts"),
+      username: value("proxy-vendor-username"),
+      password: value("proxy-vendor-password"),
+      list_url: value("proxy-vendor-list-url"),
+      countries: String(value("proxy-vendor-countries") || "")
+        .split(/[\s,;]+/)
+        .filter(Boolean),
+      fetch_via: value("proxy-vendor-via"),
+      refresh_hours: number("proxy-vendor-refresh", 0),
+    };
+  }
+  if (kind === "gateway") {
+    return {
+      preset: presetId,
+      name: value("proxy-vendor-name-input"),
+      host: value("proxy-vendor-host"),
+      port: number("proxy-vendor-port", 0),
+      scheme: value("proxy-vendor-scheme"),
+      user: value("proxy-vendor-username"),
+      password: value("proxy-vendor-password"),
+      zone: value("proxy-vendor-zone"),
+      zone_type: value("proxy-vendor-zone-type"),
+      country: value("proxy-vendor-country"),
+      minutes: number("proxy-vendor-minutes", 0),
+      count: number("proxy-vendor-count", 0),
+    };
+  }
+  return {
+    name: value("proxy-vendor-name-input"),
+    preset: presetId,
+    scheme: value("proxy-vendor-scheme"),
+    paste: value("proxy-vendor-paste"),
+    url: value("proxy-vendor-list-url"),
+    fetch_via: value("proxy-vendor-via"),
+    refresh_hours: number("proxy-vendor-refresh", 0),
+  };
+}
+
+async function sendProxyVendor(body, button) {
+  if (button) button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    proxyState.vendorEditing = null;
+    renderProxying();
+    const result = proxyState.data.source_result || {};
+    announceProxy(result.sentence || "Saved.");
+    return true;
+  } catch (error) {
+    if (button) button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+    return false;
+  }
+}
+
+function saveProxyVendor(kind, source, presetId, fields, button) {
+  const block = proxyVendorBlock(kind, presetId, fields);
+  const key = kind === "list" ? "proxy_list" : kind;
+  return sendProxyVendor({ source: source ? source.id : "", kind, [key]: block }, button);
+}
+
+function renewProxyGateway(source, button) {
+  return sendProxyVendor(
+    {
+      source: source.id,
+      kind: "gateway",
+      gateway: {
+        preset: source.preset,
+        name: source.name,
+        host: source.host,
+        port: source.port,
+        scheme: source.scheme,
+        zone: source.zone,
+        zone_type: source.zone_type,
+        country: source.country,
+        minutes: source.minutes,
+        count: source.count,
+        renew: true,
+      },
+    },
+    button,
+  );
+}
+
+async function fetchProxyVendor(source, button) {
+  button.disabled = true;
+  button.textContent = "Fetching...";
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources/fetch", {
+      method: "POST",
+      body: JSON.stringify({ source: source.id }),
+    });
+    renderProxying();
+    const result = proxyState.data.fetch_result || {};
+    announceProxy(result.sentence || "");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Fetch now";
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function removeProxyVendor(source, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources", {
+      method: "PUT",
+      body: JSON.stringify({ source: source.id, remove: true }),
+    });
+    proxyState.vendorEditing = null;
+    renderProxying();
+    announceProxy(
+      `Removed ${source.name}: its offers are withdrawn and its stored login or ` +
+        "link forgotten. A chain that took an address keeps it.",
     );
   } catch (error) {
     button.disabled = false;

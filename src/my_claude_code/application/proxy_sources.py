@@ -44,6 +44,8 @@ from my_claude_code.config.proxy_chains import (
     ProxyChains,
     ProxyEndpoint,
 )
+from my_claude_code.config.proxy_presets import preset
+from my_claude_code.config.proxy_source_readers import url_host
 from my_claude_code.config.proxy_sources import (
     AUTH_NONE,
     AUTH_UNSUPPORTED,
@@ -55,14 +57,21 @@ from my_claude_code.config.proxy_sources import (
     LOCAL_SOURCE_NAME,
     PROTOCOL_HTTP,
     PROTOCOL_SOCKS5,
+    SECRET_USERPASS,
     SOURCE_KINDS,
     TOR_SOURCE_PREFIX,
+    AccountSettings,
+    FetchState,
+    GatewaySettings,
+    ListSettings,
     LocalListener,
     ProxySource,
     ProxySources,
     SourceSecret,
     TorSettings,
+    account_host_key,
     mint_secret_id,
+    vendor_offer_id,
 )
 
 #: How long one port gets to answer each question. Loopback answers in well
@@ -90,6 +99,20 @@ TOR_LINE = (
 TOR_SEES = (
     "Tor's first relay sees your address and its exit sees the "
     "destination's name; no single relay sees both."
+)
+#: What a VPN's proxy, a gateway or a listed proxy sees (spec §5.9), on the
+#: vendor cards of 7.91.0.
+VENDOR_SEES = (
+    "The company running it also sees your real address, so it knows you "
+    "talked to this provider. Over SOCKS5 or plain HTTP the proxy's login "
+    "crosses the network unencrypted -- a proxy-only login, never your API "
+    "key, which TLS keeps."
+)
+#: An in-tunnel proxy (Mullvad's, IVPN's): the login-free SOCKS5 is only
+#: reachable through the vendor's own tunnel.
+IN_TUNNEL_SEES = (
+    "These addresses answer only while the {name} app's tunnel is connected; "
+    "the proxy needs no login because only the tunnel reaches it."
 )
 
 
@@ -569,11 +592,182 @@ def _tor_payload(
     return payload
 
 
+def _offer_payload(
+    proxy_id: str, chains: ProxyChains, offered: set[str]
+) -> dict[str, Any]:
+    """One vendor address on its card: its name and state, never its URL."""
+
+    endpoint = chains.endpoint(proxy_id) if proxy_id else None
+    check = None if endpoint is None else endpoint.last_check
+    return {
+        "proxy": proxy_id if endpoint is not None else "",
+        "label": chains.ledger_label(proxy_id) if endpoint is not None else "",
+        "offered": proxy_id in offered,
+        "chained": _chained_in(chains, proxy_id),
+        "last_check": None if check is None else check.as_document(),
+    }
+
+
+def _fetch_payload(fetch: FetchState) -> dict[str, Any]:
+    return {
+        "via": fetch.via,
+        "refresh_hours": fetch.refresh_hours,
+        "fetched_at": fetch.fetched_at,
+        "ok": fetch.ok,
+        "note": fetch.note,
+    }
+
+
+def _login_payload(secret: SourceSecret | None) -> dict[str, Any]:
+    """Whether a login is stored, and its user name's masked label. Never more."""
+
+    return {
+        "secret_set": secret is not None,
+        "secret_label": secret.label
+        if secret is not None and secret.type == SECRET_USERPASS
+        else "",
+    }
+
+
+def _account_payload(
+    source: ProxySource,
+    account: AccountSettings,
+    chains: ProxyChains,
+    sources: ProxySources,
+    offered: set[str],
+) -> dict[str, Any]:
+    host_list = account.host_list
+    countries = set(host_list.countries) if host_list is not None else set()
+    hosts: list[dict[str, Any]] = []
+    for typed, listed in account.all_hosts():
+        if listed is not None and countries and listed.country not in countries:
+            continue
+        hosts.append(
+            {
+                "host": typed.host,
+                "port": typed.port or account.port,
+                "typed": listed is None,
+                "country": listed.country if listed is not None else "",
+                "city": listed.city if listed is not None else "",
+            }
+            | _offer_payload(
+                vendor_offer_id(source.id, account_host_key(typed)), chains, offered
+            )
+        )
+    payload: dict[str, Any] = {
+        "scheme": account.scheme,
+        "port": account.port,
+        "hosts_typed": [item.text for item in account.hosts],
+        "in_tunnel": account.in_tunnel,
+        "offers": hosts,
+    } | _login_payload(sources.secret(account.secret))
+    if host_list is not None:
+        # The URL itself stays in the owner-only file: its host is enough to
+        # say whose list this is.
+        payload["host_list"] = {
+            "parser": host_list.parser,
+            "url_host": url_host(host_list.url),
+            "countries": list(host_list.countries),
+            "found": list(host_list.found),
+            "listed": len(host_list.hosts),
+        } | _fetch_payload(host_list.fetch)
+    return payload
+
+
+def _gateway_payload(
+    source: ProxySource,
+    gateway: GatewaySettings,
+    chains: ProxyChains,
+    sources: ProxySources,
+    offered: set[str],
+) -> dict[str, Any]:
+    return {
+        "host": gateway.host,
+        "port": gateway.port,
+        "scheme": gateway.scheme,
+        "zone": gateway.zone,
+        "zone_type": gateway.zone_type,
+        "country": gateway.country,
+        "minutes": gateway.minutes,
+        "count": len(gateway.sessions),
+        "offers": [
+            {"session": session}
+            | _offer_payload(
+                vendor_offer_id(source.id, f"session:{session}"), chains, offered
+            )
+            for session in gateway.sessions
+        ],
+    } | _login_payload(sources.secret(gateway.secret))
+
+
+def _list_payload(
+    settings: ListSettings,
+    chains: ProxyChains,
+    sources: ProxySources,
+    offered: set[str],
+) -> dict[str, Any]:
+    return {
+        "parser": settings.parser,
+        "scheme": settings.scheme,
+        # A download link carries the vendor's token: whether one is stored,
+        # and its host, are all the page gets.
+        "url_set": sources.secret(settings.secret) is not None,
+        "url_host": settings.url_host,
+        "fetch": _fetch_payload(settings.fetch),
+        "offers": [
+            {"host": row.host, "port": row.port, "login": row.login}
+            | _offer_payload(row.proxy, chains, offered)
+            for row in settings.rows
+        ],
+    }
+
+
+def _vendor_payload(
+    source: ProxySource, chains: ProxyChains, sources: ProxySources
+) -> dict[str, Any]:
+    """A vendor source's card (7.91.0): masked through and through.
+
+    Whether a login is stored and its user name's ``first4…last4``; a list
+    URL's host; each address's name and state. Never a password, a user
+    name, a session password, a download link or an address's URL.
+    """
+
+    offered = set(chains.source_offers.get(source.id, ()))
+    settings = source.vendor
+    vendor = preset(settings.preset if settings is not None else "")
+    payload: dict[str, Any] = {
+        "id": source.id,
+        "kind": source.kind,
+        "built": True,
+        "name": source.name,
+        "enabled": source.enabled,
+        "added_at": source.added_at,
+        "preset": vendor.id if vendor is not None else "",
+        "vendor": vendor.name if vendor is not None else "",
+        "doc": vendor.doc if vendor is not None else "",
+        "observed": vendor.observed if vendor is not None else "",
+        "sees": VENDOR_SEES,
+    }
+    if source.account is not None:
+        payload |= _account_payload(source, source.account, chains, sources, offered)
+        if source.account.in_tunnel:
+            payload["tunnel"] = IN_TUNNEL_SEES.format(
+                name=vendor.name.split(" (")[0] if vendor is not None else source.name
+            )
+    elif source.gateway is not None:
+        payload |= _gateway_payload(source, source.gateway, chains, sources, offered)
+    elif source.proxy_list is not None:
+        payload |= _list_payload(source.proxy_list, chains, sources, offered)
+    return payload
+
+
 def _source_payload(
     source: ProxySource, chains: ProxyChains, sources: ProxySources
 ) -> dict[str, Any]:
     if source.tor is not None:
         return _tor_payload(source, source.tor, chains, sources)
+    if source.vendor is not None:
+        return _vendor_payload(source, chains, sources)
     offered = set(chains.source_offers.get(source.id, ()))
     base: dict[str, Any] = {
         "id": source.id,

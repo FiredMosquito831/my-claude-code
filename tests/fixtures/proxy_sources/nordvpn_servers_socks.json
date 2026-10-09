@@ -1,0 +1,88 @@
+[
+  {
+    "id": 900001,
+    "created_at": "2025-02-11 09:12:44",
+    "updated_at": "2026-09-25 07:40:02",
+    "name": "Netherlands #1",
+    "station": "192.0.2.11",
+    "ipv6_station": "",
+    "hostname": "socks-nl1.nordvpn.com",
+    "load": 21,
+    "status": "online",
+    "locations": [
+      {
+        "id": 1,
+        "latitude": 52.35,
+        "longitude": 4.9166667,
+        "country": {
+          "id": 153,
+          "name": "Netherlands",
+          "code": "NL",
+          "city": {"id": 6076868, "name": "Amsterdam", "latitude": 52.35, "longitude": 4.9166667, "dns_name": "amsterdam", "hub_score": 0}
+        }
+      }
+    ],
+    "technologies": [
+      {"id": 7, "name": "Socks 5", "identifier": "socks", "metadata": [], "pivot": {"technology_id": 7, "server_id": 900001, "status": "online"}}
+    ]
+  },
+  {
+    "id": 900002,
+    "name": "Netherlands #2",
+    "station": "192.0.2.12",
+    "hostname": "socks-nl2.nordvpn.com",
+    "load": 9,
+    "status": "online",
+    "locations": [{"country": {"name": "Netherlands", "code": "NL", "city": {"name": "Amsterdam"}}}],
+    "technologies": [{"identifier": "socks"}]
+  },
+  {
+    "id": 900003,
+    "name": "Sweden #1",
+    "station": "192.0.2.21",
+    "hostname": "socks-se1.nordvpn.com",
+    "load": 33,
+    "status": "online",
+    "locations": [{"country": {"name": "Sweden", "code": "SE", "city": {"name": "Stockholm"}}}],
+    "technologies": [{"identifier": "socks"}]
+  },
+  {
+    "id": 900004,
+    "name": "United States #1",
+    "station": "192.0.2.31",
+    "hostname": "socks-us1.nordvpn.com",
+    "load": 47,
+    "status": "online",
+    "locations": [{"country": {"name": "United States", "code": "US", "city": {"name": "Chicago"}}}],
+    "technologies": [{"identifier": "socks"}, {"identifier": "proxy_ssl"}]
+  },
+  {
+    "id": 900005,
+    "name": "Sweden #2",
+    "station": "192.0.2.22",
+    "hostname": "socks-se2.nordvpn.com",
+    "load": 0,
+    "status": "offline",
+    "locations": [{"country": {"name": "Sweden", "code": "SE", "city": {"name": "Stockholm"}}}],
+    "technologies": [{"identifier": "socks"}]
+  },
+  {
+    "id": 900006,
+    "name": "United Kingdom #765",
+    "station": "192.0.2.41",
+    "hostname": "uk765.nordvpn.com",
+    "load": 12,
+    "status": "online",
+    "locations": [{"country": {"name": "United Kingdom", "code": "GB", "city": {"name": "London"}}}],
+    "technologies": [{"identifier": "openvpn_tcp"}, {"identifier": "proxy_ssl"}]
+  },
+  {
+    "id": 900001,
+    "name": "Netherlands #1",
+    "hostname": "socks-nl1.nordvpn.com",
+    "status": "online",
+    "locations": [{"country": {"code": "NL", "city": {"name": "Amsterdam"}}}],
+    "technologies": [{"identifier": "socks"}]
+  },
+  {"id": 900007, "name": "Broken", "hostname": "not a host!", "status": "online", "technologies": [{"identifier": "socks"}]}
+]

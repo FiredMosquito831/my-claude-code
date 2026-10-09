@@ -1,0 +1,9 @@
+198.51.100.10:6540:wsuser-a1:wspass-first
+198.51.100.11:6541:wsuser-a1:wspass-second
+198.51.100.12:6542:wsuser-a1:wspass-third
+
+# a comment line, then rows a reader must skip
+bad host:80:user:pass
+198.51.100.13:notaport:wsuser-a1:wspass
+198.51.100.10:6540:wsuser-a1:wspass-first
+198.51.100.14:6543:wsuser-a1:pass:with:colons

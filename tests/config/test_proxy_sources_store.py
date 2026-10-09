@@ -63,19 +63,20 @@ DOCUMENT = {
             ],
         },
         # A kind a later release builds: kept verbatim, never edited here.
-        "src_nord": {
-            "kind": "account",
-            "name": "NordVPN",
-            "enabled": True,
-            "scheme": "socks5h",
-            "port": 1080,
-            "hosts": ["amsterdam.nl.socks.nordhold.net"],
+        # (7.89.0 used an ``account`` source here; 7.91.0 builds that kind,
+        # so the still-unbuilt ``runner`` stands in.)
+        "src_proton": {
+            "kind": "runner",
+            "runner": "wireproxy",
+            "name": "Proton NL-FREE#12",
+            "enabled": False,
+            "ports": [41001],
             "secret": "sec_2222",
         },
     },
     "secrets": {
         "sec_1111": {"type": "userpass", "username": USERNAME, "password": PASSWORD},
-        "sec_2222": {"type": "userpass", "username": "nord-svc", "password": "pw"},
+        "sec_2222": {"type": "userpass", "username": "proton-wg", "password": "pw"},
     },
 }
 
@@ -90,9 +91,9 @@ def test_a_document_round_trips_byte_for_byte(tmp_path: Path) -> None:
 
     table = load_proxy_sources(path)
     assert table.source("src_local") is not None
-    nord = table.source("src_nord")
-    assert nord is not None
-    assert not nord.built
+    runner = table.source("src_proton")
+    assert runner is not None
+    assert not runner.built
     save_proxy_sources(table, path)
 
     assert path.read_bytes() == _raw(DOCUMENT)
@@ -103,19 +104,19 @@ def test_the_public_document_never_carries_a_secret() -> None:
 
     text = json.dumps(sources_document(ProxyChains(), table))
 
-    for secret in (USERNAME, PASSWORD, "nord-svc", '"pw"', "hunter2"):
+    for secret in (USERNAME, PASSWORD, "proton-wg", '"pw"', "hunter2"):
         assert secret not in text
     local = sources_document(ProxyChains(), table)["sources"][0]
     first = local["listeners"][0]
     assert first["secret_set"] is True
     assert first["secret_label"] == "tor-…er-7"
-    nord = sources_document(ProxyChains(), table)["sources"][1]
-    assert nord == {
-        "id": "src_nord",
-        "kind": "account",
+    runner = sources_document(ProxyChains(), table)["sources"][1]
+    assert runner == {
+        "id": "src_proton",
+        "kind": "runner",
         "built": False,
-        "name": "NordVPN",
-        "enabled": True,
+        "name": "Proton NL-FREE#12",
+        "enabled": False,
         "added_at": "",
         "scanned_at": "",
         "secret_set": True,

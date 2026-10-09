@@ -3325,6 +3325,213 @@ function torSourceFixture(sent) {
 }
 let torNewnymPresses = 0;
 
+/* 7.91.0: the presets the vendor forms prefill from -- a subset of the real
+   GET /admin/api/proxy-sources/presets answer, copied from presets_document()
+   -- and the masked card a vendor PUT answers, built from the form the page
+   sent so a test sees its own fields come back (never a password, a login or
+   a download link: the real route sends none, and neither does this). */
+const VENDOR_REFUSAL =
+  "Bright Data's residential and mobile zones need Bright Data's own " +
+  "certificate authority installed on this computer so it can decrypt your " +
+  "traffic (TLS interception). MCC never weakens certificate checking, so it " +
+  "refuses them -- use a datacenter or ISP zone, which Bright Data does not " +
+  "list as needing it.";
+let vendorPresetGets = 0;
+const VENDOR_PRESETS_FIXTURE = {
+  "presets": [
+    {
+      "id": "nordvpn",
+      "kind": "account",
+      "name": "NordVPN",
+      "scheme": "socks5h",
+      "port": 1080,
+      "hosts": [
+        "nl.socks.nordhold.net",
+        "se.socks.nordhold.net",
+        "us.socks.nordhold.net"
+      ],
+      "host": "",
+      "alternative": "",
+      "credentials": "Service credentials, not your login: Nord Account -> Set up NordVPN manually -> service credentials (an e-mailed code confirms).",
+      "in_tunnel": false,
+      "reader": "nordvpn_servers",
+      "list_url": "https://api.nordvpn.com/v1/servers?filters[servers_technologies][identifier]=socks&limit=200",
+      "template": "",
+      "minutes": 0,
+      "minutes_max": 0,
+      "doc": "https://support.nordvpn.com/hc/en-us/articles/20195967385745",
+      "observed": "2026-10-06",
+      "evidence": "V",
+      "note": "SOCKS5 servers exist in the Netherlands, Sweden and the United States only (71 listed on 2026-09-25); at most 10 connections at once per account. Nord also documents an HTTPS proxy on port 89: it is untested with MCC (an httpx user reported a TLS error through it), so it is not offered."
+    },
+    {
+      "id": "mullvad",
+      "kind": "account",
+      "name": "Mullvad (inside its tunnel)",
+      "scheme": "socks5h",
+      "port": 1080,
+      "hosts": [
+        "10.64.0.1"
+      ],
+      "host": "",
+      "alternative": "",
+      "credentials": "None: Mullvad's SOCKS5 proxies take no login.",
+      "in_tunnel": true,
+      "reader": "",
+      "list_url": "",
+      "template": "",
+      "minutes": 0,
+      "minutes_max": 0,
+      "doc": "https://mullvad.net/en/help/socks5-proxy",
+      "observed": "2026-10-06",
+      "evidence": "V",
+      "note": "Answers only while the Mullvad app's WireGuard tunnel is connected. 10.64.0.1 is the server you are connected to; each other server's proxy is <country>-<city>-wg-socks5-<number>.relays.mullvad.net (e.g. nl-ams-wg-socks5-001.relays.mullvad.net), reachable from any Mullvad server -- add the ones you want, one per line."
+    },
+    {
+      "id": "brightdata",
+      "kind": "gateway",
+      "name": "Bright Data",
+      "scheme": "socks5h",
+      "port": 22228,
+      "hosts": [],
+      "host": "brd.superproxy.io",
+      "alternative": "HTTP proxy on port 44445 (22225 and 33335 retired 2026-09-25)",
+      "credentials": "Your customer id (brd-customer-<id>), the zone's name and the zone's password, from the zone's Access parameters.",
+      "in_tunnel": false,
+      "reader": "",
+      "list_url": "",
+      "template": "brightdata",
+      "minutes": 0,
+      "minutes_max": 0,
+      "doc": "https://docs.brightdata.com/proxy-networks/socks5",
+      "observed": "2026-10-06",
+      "evidence": "V",
+      "note": "SOCKS5 takes host names only (socks5h). Each unique session id gets its own address. Datacenter and ISP zones only: residential and mobile zones need Bright Data's certificate installed, which MCC refuses.",
+      "zone_types": [
+        "datacenter",
+        "isp",
+        "residential",
+        "mobile"
+      ],
+      "zones_refused": [
+        "residential",
+        "mobile"
+      ],
+      "refusal": "Bright Data's residential and mobile zones need Bright Data's own certificate authority installed on this computer so it can decrypt your traffic (TLS interception). MCC never weakens certificate checking, so it refuses them -- use a datacenter or ISP zone, which Bright Data does not list as needing it."
+    },
+    {
+      "id": "oxylabs",
+      "kind": "gateway",
+      "name": "Oxylabs",
+      "scheme": "socks5h",
+      "port": 7777,
+      "hosts": [],
+      "host": "pr.oxylabs.io",
+      "alternative": "",
+      "credentials": "Your Oxylabs proxy user name and password.",
+      "in_tunnel": false,
+      "reader": "",
+      "list_url": "",
+      "template": "oxylabs",
+      "minutes": 30,
+      "minutes_max": 1440,
+      "doc": "https://developers.oxylabs.io/products/proxies/residential-proxies/session-control",
+      "observed": "2026-10-06",
+      "evidence": "V",
+      "note": "A session keeps its address for its session time or until it is idle 60 s, whichever comes first; 30 minutes or more keeps a quiet thinking pause from changing the address mid-answer."
+    },
+    {
+      "id": "webshare",
+      "kind": "list",
+      "name": "Webshare",
+      "scheme": "socks5h",
+      "port": 0,
+      "hosts": [],
+      "host": "",
+      "alternative": "the same ports answer HTTP (unverified)",
+      "credentials": "Paste your list (ip:port:username:password, one per line), or the list's download link from your Webshare dashboard -- the link carries your token, so MCC keeps it like a password.",
+      "in_tunnel": false,
+      "reader": "webshare_list",
+      "list_url": "https://proxy.webshare.io/api/v2/proxy/list/download/YOUR-TOKEN/-/any/username/direct/-/",
+      "template": "",
+      "minutes": 0,
+      "minutes_max": 0,
+      "doc": "https://apidocs.webshare.io/proxy-list/download",
+      "observed": "2026-10-06",
+      "evidence": "CS",
+      "note": "The free plan has 10 datacenter proxies and 1 GB a month, shared with other users, and some sites block them (Webshare's own words, page dated 2024-10-04)."
+    }
+  ],
+  "readers": [
+    "nordvpn_servers",
+    "webshare_list"
+  ],
+  "templates": [
+    "brightdata",
+    "oxylabs",
+    "iproyal",
+    "decodo"
+  ]
+};
+
+function vendorSourceFixture(sent, previous) {
+  const kind = sent.kind || (previous && previous.kind);
+  const key = kind === "list" ? "proxy_list" : kind;
+  const block = sent[key] || {};
+  const id = previous ? previous.id : `src_v_${kind}`;
+  const name = block.name || (previous && previous.name) || kind;
+  const base = {
+    id, kind, built: true, name, enabled: true, added_at: new Date().toISOString(),
+    preset: block.preset || "", vendor: name,
+    doc: (VENDOR_PRESETS_FIXTURE.presets.find((item) => item.id === block.preset) || {}).doc || "",
+    observed: "2026-10-06",
+    sees: "The company running it also sees your real address, so it knows you talked to this provider.",
+  };
+  const offer = (label, extra) => ({
+    proxy: `px_${label.replace(/[^a-z0-9]+/gi, "").slice(-12)}`,
+    label, offered: true, chained: [], last_check: null, ...extra,
+  });
+  if (kind === "account") {
+    const hosts = String(block.hosts || "").split(/[\s,;]+/).filter(Boolean);
+    const login = Boolean(block.username) || Boolean(previous && previous.secret_set);
+    return {
+      ...base,
+      scheme: block.scheme, port: block.port, hosts_typed: hosts, in_tunnel: false,
+      secret_set: login, secret_label: login ? "serv…ce-1" : "",
+      offers: hosts.map((host) => offer(`${name} · ${host}`, { host, port: block.port, typed: true, country: "", city: "" })),
+      host_list: block.list_url || (previous && previous.host_list)
+        ? {
+            parser: "nordvpn_servers", url_host: "https://api.nordvpn.com",
+            countries: block.countries || [], found: [], listed: 0,
+            via: block.fetch_via || "", refresh_hours: block.refresh_hours || 0,
+            fetched_at: "", ok: false, note: "",
+          }
+        : undefined,
+    };
+  }
+  if (kind === "gateway") {
+    const count = Number(block.count) || 1;
+    const sessions = Array.from({ length: count }, (_, index) =>
+      `${block.renew ? "renew" : "first"}${String(index + 1).padStart(3, "0")}`,
+    );
+    return {
+      ...base,
+      host: block.host, port: block.port, scheme: block.scheme, zone: block.zone || "",
+      zone_type: block.zone_type || "", country: block.country || "",
+      minutes: block.minutes || 0, count, secret_set: true, secret_label: "acme…user",
+      offers: sessions.map((session) => offer(`${name} · session ${session}`, { session })),
+    };
+  }
+  return {
+    ...base,
+    parser: "webshare_list", scheme: block.scheme,
+    url_set: Boolean(block.url) || Boolean(previous && previous.url_set),
+    url_host: "https://proxy.webshare.io",
+    fetch: { via: block.fetch_via || "", refresh_hours: block.refresh_hours || 0, fetched_at: "", ok: false, note: "" },
+    offers: [],
+  };
+}
+
 // Pause-route fault injection. Null means the route behaves normally.
 let pauseRefusal = null;
 let pauseHttpFailure = null;
@@ -3822,6 +4029,94 @@ window.fetch = async (url, options = {}) => {
           "Saved. Paste the torrc lines into your tor's torrc, restart tor, then press Check Tor.",
       };
     }
+    return { ok: true, status: 200, json: async () => answer, text: async () => "" };
+  }
+  /* 7.91.0: the vendor routes -- presets (data only), a vendor PUT that
+     answers the masked card the real route would, and Fetch now -- emulated
+     on the document the page reads back. A Bright Data residential zone is
+     refused with the server's sentence, as the real route refuses it. */
+  if (String(url).split("?")[0] === "/admin/api/proxy-sources/presets") {
+    vendorPresetGets += 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(JSON.stringify(VENDOR_PRESETS_FIXTURE)),
+      text: async () => "",
+    };
+  }
+  if (
+    String(url).split("?")[0] === "/admin/api/proxy-sources" &&
+    String((options && options.method) || "GET").toUpperCase() === "PUT" &&
+    (["account", "gateway", "list"].includes(JSON.parse(options.body).kind) ||
+      String(JSON.parse(options.body).source).startsWith("src_v_"))
+  ) {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    if (!state.sources) {
+      state.sources = JSON.parse(JSON.stringify(PROXY_SOURCES_FIXTURE));
+      state.sources.sources = [];
+    }
+    if (sent.gateway && sent.gateway.zone_type === "residential") {
+      return {
+        ok: false,
+        status: 422,
+        statusText: "Unprocessable Entity",
+        json: async () => ({ detail: VENDOR_REFUSAL }),
+        text: async () => VENDOR_REFUSAL,
+      };
+    }
+    const previous = state.sources.sources.find((source) => source.id === sent.source);
+    state.sources.sources = state.sources.sources.filter(
+      (source) => source.id !== sent.source,
+    );
+    const answer = { source_result: null };
+    if (!sent.remove) {
+      const built = vendorSourceFixture(sent, previous);
+      state.sources.sources.push(built);
+      answer.source_result = {
+        action: "saved",
+        source: built.id,
+        kind: built.kind,
+        offered: built.offers.length,
+        sentence: built.offers.length
+          ? `Saved: ${built.offers.length} on offer. Nothing was contacted.`
+          : "Saved. Nothing is on offer yet: press Fetch now to read the list from the vendor.",
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ...JSON.parse(JSON.stringify(state)), ...answer }),
+      text: async () => "",
+    };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-sources/fetch") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const source = state.sources.sources.find((item) => item.id === sent.source);
+    const fetch = {
+      via: "", refresh_hours: 0, fetched_at: new Date().toISOString(), ok: true,
+      note: source.kind === "list" ? "Fetched: 2 proxies." : "Fetched: 2 SOCKS5 servers (NL); 2 kept for NL.",
+    };
+    if (source.kind === "list") {
+      source.fetch = fetch;
+      source.offers = ["198.51.100.10:6540", "198.51.100.11:6541"].map((address, index) => ({
+        host: address.split(":")[0], port: Number(address.split(":")[1]), login: true,
+        proxy: `px_list${index}`, label: `${source.name} · ${address}`,
+        offered: true, chained: [], last_check: null,
+      }));
+    } else {
+      Object.assign(source.host_list, fetch);
+      source.offers = ["socks-nl1.nordvpn.com", "socks-nl2.nordvpn.com"].map((host, index) => ({
+        host, port: 1080, typed: false, country: "NL", city: "Amsterdam",
+        proxy: `px_nord${index}`, label: `${source.name} · ${host}`,
+        offered: true, chained: [], last_check: null,
+      }));
+    }
+    const answer = JSON.parse(JSON.stringify(state));
+    answer.fetch_result = {
+      source: source.id, ok: true, offered: source.offers.length, sentence: fetch.note,
+    };
     return { ok: true, status: 200, json: async () => answer, text: async () => "" };
   }
   if (String(url).split("?")[0] === "/admin/api/proxy-sources/scan") {
@@ -5858,6 +6153,201 @@ if (withChain) {
 
   delete state.sources;
   torNewnymPresses = 0;
+  await reload();
+}
+
+/* 7.91.0: VPN accounts, gateways and proxy lists -- each form prefilled from
+   a preset (asked for once, when a form first opens), saved once, its card
+   with its offers and buttons, Fetch now, New sessions, Add all through the
+   one bulk add, the Bright Data residential refusal, and removal. No
+   password, login or download link may stay on the page after a save. */
+{
+  const state = ROUTES["/admin/api/proxy-chains"];
+  const text = (node) => (node ? node.textContent.replace(/\s+/g, " ").trim() : "");
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const reload = async () => {
+    navLinks.find((link) => link.dataset.view === "providers").click();
+    await wait(80);
+    navLinks.find((link) => link.dataset.view === "proxying").click();
+    await wait(160);
+  };
+  const block = (kind) => doc.querySelector(`.proxy-vendor[data-kind="${kind}"]`);
+  const form = (kind) => block(kind).querySelector(".proxy-vendor-form");
+  const field = (kind, name) => form(kind).querySelector(`.${name}`);
+  const card = (kind) => block(kind).querySelector(".proxy-vendor-source");
+  const status = () => text(doc.querySelector("#proxyingStatus p"));
+  const puts = (since) =>
+    fetchBodies
+      .slice(since)
+      .filter((entry) => entry.path === "/admin/api/proxy-sources")
+      .map((entry) => entry.body);
+  const out = {};
+
+  await reload();
+  out.empty = {
+    titles: ["account", "gateway", "list"].map((kind) =>
+      text(block(kind) && block(kind).querySelector(".proxy-vendor-title")),
+    ),
+    adds: ["account", "gateway", "list"].map((kind) =>
+      text(block(kind) && block(kind).querySelector("button.proxy-vendor-add")),
+    ),
+    cards: doc.querySelectorAll(".proxy-vendor-source").length,
+    presetGets: vendorPresetGets,
+    terms: Array.from(doc.querySelectorAll(".proxy-sources-terms")).map(text),
+  };
+
+  // A VPN account: the NordVPN preset prefills, the operator adds a login.
+  block("account").querySelector("button.proxy-vendor-add").click();
+  await wait(120);
+  out.accountForm = {
+    presetGets: vendorPresetGets,
+    preset: field("account", "proxy-vendor-preset").value,
+    choices: Array.from(field("account", "proxy-vendor-preset").options).map((o) => o.textContent),
+    hosts: field("account", "proxy-vendor-hosts").value,
+    scheme: field("account", "proxy-vendor-scheme").value,
+    port: field("account", "proxy-vendor-port").value,
+    listUrl: field("account", "proxy-vendor-list-url").value,
+    note: text(form("account").querySelector(".proxy-vendor-preset-text")),
+    doc: (form("account").querySelector(".proxy-vendor-doc a") || {}).href || "",
+    passwordType: field("account", "proxy-vendor-password").type,
+  };
+  let since = fetchBodies.length;
+  field("account", "proxy-vendor-username").value = "service-user-1";
+  field("account", "proxy-vendor-password").value = "nord-secret-pass-7";
+  field("account", "proxy-vendor-countries").value = "nl, SE";
+  form("account").querySelector("button.proxy-vendor-save").click();
+  await wait(160);
+  out.accountSaved = {
+    puts: puts(since),
+    pageHasPassword: doc.body.innerHTML.includes("nord-secret-pass-7"),
+    pageHasUser: doc.body.innerHTML.includes("service-user-1"),
+    head: text(card("account").querySelector(".proxy-vendor-head")),
+    status: text(card("account").querySelector(".proxy-vendor-status")),
+    offers: Array.from(card("account").querySelectorAll(".proxy-vendor-offer-name")).map(text),
+    buttons: Array.from(card("account").querySelectorAll(".proxy-vendor-actions button")).map(text),
+    form: Boolean(block("account").querySelector(".proxy-vendor-form")),
+    announcement: status(),
+  };
+
+  since = fetchBodies.length;
+  card("account").querySelector("button.proxy-vendor-fetch").click();
+  await wait(160);
+  out.accountFetched = {
+    posts: fetchBodies
+      .slice(since)
+      .map((entry) => ({ path: entry.path, body: entry.body })),
+    offers: Array.from(card("account").querySelectorAll(".proxy-vendor-offer-name")).map(text),
+    states: Array.from(card("account").querySelectorAll(".proxy-vendor-offer-state")).map(text),
+    status: text(card("account").querySelector(".proxy-vendor-status")),
+    announcement: status(),
+  };
+
+  // A gateway: Bright Data residential is refused; Oxylabs is saved with 3.
+  block("gateway").querySelector("button.proxy-vendor-add").click();
+  await wait(120);
+  out.gatewayForm = {
+    presetGets: vendorPresetGets,
+    preset: field("gateway", "proxy-vendor-preset").value,
+    choices: Array.from(field("gateway", "proxy-vendor-preset").options).map((o) => o.textContent),
+    host: field("gateway", "proxy-vendor-host").value,
+    port: field("gateway", "proxy-vendor-port").value,
+    zoneTypes: Array.from(field("gateway", "proxy-vendor-zone-type").options).map((o) => o.textContent),
+  };
+  since = fetchBodies.length;
+  field("gateway", "proxy-vendor-username").value = "hl_customer";
+  field("gateway", "proxy-vendor-password").value = "zone-secret-pass-3";
+  field("gateway", "proxy-vendor-zone").value = "res_zone";
+  field("gateway", "proxy-vendor-zone-type").value = "residential";
+  form("gateway").querySelector("button.proxy-vendor-save").click();
+  await wait(160);
+  out.gatewayRefused = {
+    puts: puts(since).length,
+    announcement: status(),
+    formStillOpen: Boolean(form("gateway")),
+  };
+  const pick = field("gateway", "proxy-vendor-preset");
+  pick.value = "oxylabs";
+  pick.dispatchEvent(new window.Event("change"));
+  out.oxylabsForm = {
+    host: field("gateway", "proxy-vendor-host").value,
+    port: field("gateway", "proxy-vendor-port").value,
+    minutes: field("gateway", "proxy-vendor-minutes").value,
+    zone: Boolean(form("gateway").querySelector(".proxy-vendor-zone")),
+  };
+  since = fetchBodies.length;
+  field("gateway", "proxy-vendor-username").value = "acme-user";
+  field("gateway", "proxy-vendor-password").value = "oxy-secret-pass-5";
+  field("gateway", "proxy-vendor-count").value = "3";
+  form("gateway").querySelector("button.proxy-vendor-save").click();
+  await wait(160);
+  out.gatewaySaved = {
+    puts: puts(since),
+    pageHasPassword: doc.body.innerHTML.includes("oxy-secret-pass-5"),
+    head: text(card("gateway").querySelector(".proxy-vendor-head")),
+    offers: Array.from(card("gateway").querySelectorAll(".proxy-vendor-offer-name")).map(text),
+    buttons: Array.from(card("gateway").querySelectorAll(".proxy-vendor-actions button")).map(text),
+    addAll: text(card("gateway").querySelector("button.proxy-vendor-add-all-button")),
+  };
+
+  since = fetchBodies.length;
+  card("gateway").querySelector(".proxy-vendor-add-all select").value = "nvidia_nim";
+  card("gateway").querySelector("button.proxy-vendor-add-all-button").click();
+  await wait(200);
+  out.gatewayAddedAll = fetchBodies
+    .slice(since)
+    .filter((entry) => entry.path === "/admin/api/proxy-chains/candidates/bulk")
+    .map((entry) => entry.body);
+
+  since = fetchBodies.length;
+  card("gateway").querySelector("button.proxy-vendor-renew").click();
+  await wait(160);
+  out.gatewayRenewed = {
+    puts: puts(since),
+    offers: Array.from(card("gateway").querySelectorAll(".proxy-vendor-offer-name")).map(text),
+  };
+
+  // A proxy list: Webshare, by its download link (a token: never shown).
+  block("list").querySelector("button.proxy-vendor-add").click();
+  await wait(120);
+  out.listForm = {
+    preset: field("list", "proxy-vendor-preset").value,
+    urlType: field("list", "proxy-vendor-list-url").type,
+    refresh: Array.from(field("list", "proxy-vendor-refresh").options).map((o) => o.textContent),
+    refreshValue: field("list", "proxy-vendor-refresh").value,
+    via: Array.from(field("list", "proxy-vendor-via").options).map((o) => o.textContent),
+  };
+  since = fetchBodies.length;
+  field("list", "proxy-vendor-list-url").value =
+    "https://proxy.webshare.io/api/v2/proxy/list/download/JSDOM-TOKEN-77/-/any/username/direct/-/";
+  form("list").querySelector("button.proxy-vendor-save").click();
+  await wait(160);
+  out.listSaved = {
+    puts: puts(since),
+    pageHasToken: doc.body.innerHTML.includes("JSDOM-TOKEN-77"),
+    head: text(card("list").querySelector(".proxy-vendor-head")),
+    none: text(card("list").querySelector(".proxy-vendor-none")),
+    announcement: status(),
+  };
+  since = fetchBodies.length;
+  card("list").querySelector("button.proxy-vendor-fetch").click();
+  await wait(160);
+  out.listFetched = {
+    posts: fetchBodies.slice(since).map((entry) => ({ path: entry.path, body: entry.body })),
+    offers: Array.from(card("list").querySelectorAll(".proxy-vendor-offer-name")).map(text),
+    announcement: status(),
+  };
+
+  since = fetchBodies.length;
+  card("gateway").querySelector("button.proxy-vendor-remove").click();
+  await wait(160);
+  out.removed = {
+    puts: puts(since),
+    gatewayCards: block("gateway").querySelectorAll(".proxy-vendor-source").length,
+    presetGets: vendorPresetGets,
+  };
+  proxying.vendors = out;
+
+  delete state.sources;
   await reload();
 }
 

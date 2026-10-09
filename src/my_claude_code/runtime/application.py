@@ -31,6 +31,7 @@ from my_claude_code.application.proxy_health_store import (
     remove_listener,
 )
 from my_claude_code.application.proxy_speed_store import load_speed
+from my_claude_code.application.proxy_vendor_sources import SOURCE_SCHEDULE
 from my_claude_code.config.admin.manifest import update_affects_providers
 from my_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
@@ -114,6 +115,7 @@ from .provider_manager import ProviderRuntimeManager
 from .proxy_check_timer import ProxyCheckTimer, ProxyHealthTimer
 from .proxy_feed_timer import ProxyFeedTimer
 from .proxy_order import ProxyOrderTimer
+from .proxy_source_timer import ProxySourceTimer
 from .stall_watchdog import StallWatchdog
 
 RestartCallback = Callable[[], Awaitable[None] | None]
@@ -363,6 +365,14 @@ class ApplicationRuntime:
             lambda: self.settings,
             lambda provider_ids: republish_chains(self, provider_ids),
         )
+        # A vendor source's list on the schedule its operator chose (7.91.0).
+        # Every source starts with none, so on start this reads the store once
+        # on a worker thread, finds nothing due and ends; a source save that
+        # switches a schedule on re-arms it through ``SOURCE_SCHEDULE``.
+        self._proxy_source_timer = ProxySourceTimer(
+            lambda: self.settings,
+            lambda provider_ids: republish_chains(self, provider_ids),
+        )
 
     @property
     def settings(self) -> Settings:
@@ -478,6 +488,8 @@ class ApplicationRuntime:
             state.mark("proxy-feeds")
             await asyncio.to_thread(migrate_proxy_feeds)
             self._proxy_feed_timer.start()
+            SOURCE_SCHEDULE.attach(self._proxy_source_timer.rearm)
+            self._proxy_source_timer.start()
             state.mark("messaging")
             await self._start_messaging_if_configured()
             # One read of the models.dev cache, on a worker thread, and that is
@@ -1469,6 +1481,8 @@ class ApplicationRuntime:
         await self._proxy_feed_timer.close()
         await self._proxy_health_timer.close()
         await self._proxy_order_timer.close()
+        SOURCE_SCHEDULE.detach()
+        await self._proxy_source_timer.close()
         remove_listener()
         await best_effort(
             "learned_facts.flush",
