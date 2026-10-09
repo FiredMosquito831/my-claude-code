@@ -5228,9 +5228,10 @@ if (withChain) {
 
 /* 7.81.0: "Keep trying exits until one answers". The fixture's NVIDIA chain
    carries no `until_served` key -- a chain stored before the box existed -- so
-   it reads unticked and offers no Forget button. Ticked, with one remembered
-   exit, the entry says so in its own cell and Forget posts the provider only.
-   The fixture is put back afterwards. */
+   since 7.81.1 it reads ticked and offers Forget; switched off (`false`) it
+   reads unticked and offers none. Ticked, with one remembered exit, the entry
+   says so in its own cell and Forget posts the provider only. The fixture is
+   put back afterwards. */
 {
   const state = ROUTES["/admin/api/proxy-chains"];
   const nim = state.providers.find((item) => item.provider_id === "nvidia_nim");
@@ -5259,6 +5260,14 @@ if (withChain) {
     title: card().querySelector(".proxy-until-served")?.title || "",
     forget: Boolean(forgetButton()),
     chips: chips(),
+  };
+
+  nim.chain.until_served = false;
+  await reload();
+  served.off = {
+    checked: box() ? box().checked : null,
+    title: card().querySelector(".proxy-until-served")?.title || "",
+    forget: Boolean(forgetButton()),
   };
 
   nim.chain.until_served = true;

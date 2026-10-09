@@ -783,11 +783,14 @@ class ProxyChain:
     #: free-usage limit, a country refusal, a dead or dropping proxy) moves to
     #: another exit on the same model -- within "Switches per request" and
     #: ``PROXY_MAX_LIVE_FAILURES`` -- and the refused exits are remembered
-    #: across rebuilds. FALSE for a chain stored before this key existed, and
-    #: for the dataclass default: a document without it reads back as
-    #: ``False`` and is written back without it, byte for byte. The page sends
-    #: it ticked for a chain it creates.
-    until_served: bool = False
+    #: across rebuilds. TRUE for every chain that has not been switched off --
+    #: a chain stored before this key existed, a chain created by any door,
+    #: and the dataclass default (7.81.1; the user's decision of 2026-10-06
+    #: 19:49 wants it on the chains they already have, with no box to tick).
+    #: A document without the key reads back as ``True`` and is written back
+    #: without it, byte for byte; only a chain switched off on its card
+    #: stores the key, as ``false``.
+    until_served: bool = True
 
     @property
     def is_empty(self) -> bool:
@@ -817,10 +820,12 @@ class ProxyChain:
             document["order_by_speed"] = True
         if self.order_sorted_at:
             document["order_sorted_at"] = self.order_sorted_at
-        # 7.81.0, the same rule: only when it says something, so every chain
-        # stored before it round-trips byte for byte.
-        if self.until_served:
-            document["until_served"] = True
+        # 7.81.0, the same rule: only when it says something -- and since
+        # 7.81.1 what says something is OFF, because an absent key reads on.
+        # Every chain stored without the key round-trips byte for byte, and a
+        # chain switched off keeps its ``false``.
+        if not self.until_served:
+            document["until_served"] = False
         return document
 
     @classmethod
@@ -875,9 +880,11 @@ class ProxyChain:
             # 2026-09-25). A chain created since carries the key explicitly.
             order_by_speed=raw.get("order_by_speed") is True,
             order_sorted_at=str(raw.get("order_sorted_at") or "").strip(),
-            # Absent reads False: a chain stored before 7.81.0 rotates exactly
-            # as it did until its operator ticks the box.
-            until_served=raw.get("until_served") is True,
+            # Absent reads True (7.81.1): a chain stored before 7.81.0 keeps
+            # trying exits like every other chain (the user's decision of
+            # 2026-10-06 19:49). Only an explicit ``false`` -- a chain switched
+            # off on its card -- reads off.
+            until_served=raw.get("until_served") is not False,
         )
 
 

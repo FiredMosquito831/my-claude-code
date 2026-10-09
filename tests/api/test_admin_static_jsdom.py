@@ -7952,18 +7952,22 @@ def test_the_models_page_filters_and_marks_by_kind(rendered) -> None:
 # --------------------------- 7.81.0 keep trying exits until one answers
 
 
-def test_a_chain_stored_before_the_box_reads_unticked_with_no_forget(
+def test_a_chain_stored_before_the_box_reads_ticked_and_one_switched_off_unticked(
     rendered,
 ) -> None:
     served = rendered["proxying"]["untilServed"]
     existing = served["existing"]
     assert existing["hasKey"] is False  # the fixture is a pre-7.81.0 chain
     assert existing["present"] is True
-    assert existing["checked"] is False
+    assert existing["checked"] is True  # 7.81.1: absent reads on
     assert existing["label"] == "Keep trying exits until one answers"
-    assert existing["title"].startswith("Off: this chain moves on the failures")
-    assert existing["forget"] is False
+    assert existing["title"].startswith("For a provider whose limit follows")
+    assert existing["forget"] is True
     assert existing["chips"] == [None, None, None, None]
+    off = served["off"]
+    assert off["checked"] is False
+    assert off["title"].startswith("Off: this chain moves on the failures")
+    assert off["forget"] is False
 
 
 def test_a_ticked_chain_shows_what_it_remembers_and_offers_forget(rendered) -> None:
@@ -7998,8 +8002,9 @@ def test_saving_always_names_the_box(rendered) -> None:
     saved = rendered["proxying"]["untilServed"]["saved"]
     assert saved is not None
     assert saved["body"]["until_served"] is False
-    # The first save in this file, of the pre-7.81.0 chain, names it too.
-    assert rendered["proxying"]["saved"]["body"]["until_served"] is False
+    # The first save in this file, of the pre-7.81.0 chain, names it too --
+    # ticked, the reading of a chain with no key since 7.81.1.
+    assert rendered["proxying"]["saved"]["body"]["until_served"] is True
 
 
 def test_a_dial_says_what_is_remembered_and_the_attempt_what_it_skipped(

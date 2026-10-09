@@ -1,6 +1,7 @@
 """The Proxying page's side of "Keep trying exits until one answers" (7.81.0).
 
-* the card carries the switch; a chain stored before it reads unticked;
+* the card carries the switch; a chain stored before it reads ticked (7.81.1)
+  and one switched off reads unticked;
 * a save that does not name it keeps what is stored, and a chain the save
   creates starts ticked;
 * an entry shows what MCC remembers about it, and only when it remembers
@@ -109,11 +110,16 @@ def _put(client: TestClient, **extra: Any) -> Any:
     return client.put("/admin/api/proxy-chains", json=body)
 
 
-def test_a_chain_stored_before_the_switch_reads_unticked() -> None:
+def test_a_chain_stored_before_the_switch_reads_ticked() -> None:
     _store()
+    assert b"until_served" not in Path(proxy_chains.proxy_chains_path()).read_bytes()
 
     chain = _card(_client().get("/admin/api/proxy-chains").json())["chain"]
 
+    assert chain["until_served"] is True
+
+    _store(until_served=False)
+    chain = _card(_client().get("/admin/api/proxy-chains").json())["chain"]
     assert chain["until_served"] is False
 
 
@@ -132,13 +138,21 @@ def test_a_chain_a_save_creates_starts_ticked_unless_the_save_says_otherwise() -
     assert load_proxy_chains().chains["nvidia_nim"].until_served is True
 
 
-def test_an_existing_chain_is_never_ticked_by_a_save_that_does_not_name_it() -> None:
+def test_a_save_that_does_not_name_the_switch_keeps_what_is_stored() -> None:
     _store()
 
     payload = _put(_client()).json()
 
-    assert _card(payload)["chain"]["until_served"] is False
+    assert _card(payload)["chain"]["until_served"] is True
     assert b"until_served" not in Path(proxy_chains.proxy_chains_path()).read_bytes()
+
+    _store(until_served=False)
+
+    payload = _put(_client()).json()
+
+    assert _card(payload)["chain"]["until_served"] is False
+    stored = Path(proxy_chains.proxy_chains_path()).read_bytes()
+    assert b'"until_served": false' in stored
 
 
 def test_an_entry_shows_what_is_remembered_and_only_then() -> None:
