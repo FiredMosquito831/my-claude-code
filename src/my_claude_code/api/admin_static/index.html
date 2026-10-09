@@ -372,12 +372,49 @@
                  whether an exit-IP URL is configured. Empty in the markup
                  because all three answers come from the server. -->
             <p class="field-description" id="proxyingChecker"></p>
+            <!-- 7.89.0 (PR-S2): written by renderProxyExitIdentity() -- where
+                 each address comes out, and the one-click "Use each
+                 provider's own trace" while PROXY_CHECK_EXIT_IP_URL is empty. -->
+            <div id="proxyingExitIdentity" class="proxy-exit-identity"></div>
             <!-- One live region for this page: what a reorder, a pause or a
                  save just did. Same shape as the Model Config rails' own
                  region, and separate from it because that one lives inside a
                  hidden view while this page is open. -->
             <div id="proxyingStatus" class="route-status" role="status"
               aria-live="polite" aria-atomic="true" hidden></div>
+
+            <!-- 7.89.0 (PR-S3): proxies already running on this computer,
+                 found by one press of Scan and offered as chain addresses.
+                 Filled by renderProxySources(). -->
+            <section class="settings-section" id="proxyingSourcesSection"
+              aria-labelledby="proxyingSourcesTitle">
+              <div class="section-heading">
+                <div>
+                  <h3 id="proxyingSourcesTitle">Proxies on this computer</h3>
+                  <p>
+                    A proxy you already run here &mdash; Cloudflare WARP in
+                    proxy mode, <code>ssh -D</code>, Tor, gluetun, wireproxy
+                    &mdash; can go into a chain like any other address. Press
+                    <em>Scan this computer</em> and MCC asks
+                    <code>127.0.0.1</code>, and nothing else, whether a SOCKS5
+                    or HTTP proxy answers on the ports those tools use by
+                    default (1080, 8888, 9050, 9052, 9150, 25344, 40000).
+                    Each one that does is offered below; <em>Add to chain</em>
+                    tests it against that provider&rsquo;s own host first,
+                    exactly as for an address you typed. MCC installs, starts
+                    and contacts nothing, and scans only when you press the
+                    button. See the
+                    <a href="#guide-proxy-sources">Guide</a>.
+                  </p>
+                  <p class="proxy-sources-terms">
+                    Spreading requests over many exits can conflict with a
+                    provider&rsquo;s terms &mdash; a free quota counted per
+                    address, for example. That is your choice.
+                  </p>
+                </div>
+              </div>
+              <div id="proxyingSources"></div>
+            </section>
 
             <section class="settings-section" id="proxyingFeedSection"
               aria-labelledby="proxyingFeedsTitle">
@@ -2004,6 +2041,7 @@
                 <a href="#guide-media">Generate images through the proxy</a>
                 <a href="#guide-proxy-chains">What a proxy chain hides</a>
                 <a href="#guide-proxy-keep-trying">Keep trying exits until one answers</a>
+                <a href="#guide-proxy-sources">Proxies on this computer, and where each exit comes out</a>
                 <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
@@ -3836,6 +3874,52 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   the first byte has reached your client the request stays on its exit.
                   A drop while a model is still thinking (before any answer text) counts
                   as after the first byte.
+                </p>
+
+                <h3 id="guide-proxy-sources">Proxies on this computer, and where each exit comes out</h3>
+                <p>
+                  <strong>Proxies on this computer.</strong> If you already run a proxy
+                  here &mdash; Cloudflare WARP in proxy mode, <code>ssh -D</code> to a
+                  server of yours, Tor, gluetun (a VPN in Docker), wireproxy &mdash; press
+                  <em>Scan this computer</em> on the Proxying page. MCC asks
+                  <code>127.0.0.1</code> only, on ports 1080, 8888, 9050, 9052, 9150,
+                  25344 and 40000, whether a SOCKS5 or an HTTP proxy answers, and offers
+                  each one that does. It sends the SOCKS5 greeting and, if that is not
+                  what the port speaks, an HTTP <code>CONNECT</code> to this computer's
+                  own port 9 &mdash; nothing leaves the machine, and nothing is scanned
+                  until you press the button. Choose a chain and press <em>Add to
+                  chain</em>: the address is tested against that provider's own host
+                  first, as any address is. A listener that asks for a login gets a
+                  username and password box; the login is kept in
+                  <code>proxy_sources.json</code> and in that address's URL in
+                  <code>proxy_chains.json</code>, both readable by you only, and is never
+                  shown again. A port that stops answering is withdrawn on the next scan;
+                  a chain that took it keeps it.
+                </p>
+                <p>
+                  <strong>Where each exit comes out.</strong> Set
+                  <code>PROXY_CHECK_EXIT_IP_URL=provider</code> (the Proxying page's
+                  <em>Use each provider's own trace</em>) and every Test also asks the
+                  provider's own host &mdash; its <code>/cdn-cgi/trace</code>, through the
+                  tunnel &mdash; which address it saw. Providers behind Cloudflare answer
+                  with the address, its country and whether it is WARP; others publish no
+                  trace and the row says so. It contacts nobody new, and a fetch's sweep
+                  (which sends the provider nothing) does not ask. Entries that come out
+                  of one address are grouped on their card; <em>Keep one per exit</em>
+                  pauses all but the first, removing nothing. <em>Where does Direct come
+                  out?</em> asks the same question with no proxy &mdash; so you can see a
+                  VPN app is on &mdash; but only where the chain itself would use this
+                  computer's address (no chain, a Direct entry, or every proxy unhealthy
+                  with Direct fallback on); anywhere else nothing is sent and the card
+                  says why.
+                </p>
+                <p>
+                  <strong>Two addresses on one host:port.</strong> Sessions of one
+                  gateway, or one proxy host used with two logins, used to share one
+                  health record, cooldown and history. Since 7.89.0 they are told apart
+                  as <code>host:port#1a2b</code> &mdash; a short digest of each login,
+                  never the login &mdash; and a chain that would hold the same address
+                  twice is refused with a sentence naming both entries.
                 </p>
 
                 <h3 id="guide-advanced">Where the advanced settings went</h3>

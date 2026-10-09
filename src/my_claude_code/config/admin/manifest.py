@@ -2973,9 +2973,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Optional, and empty by default. A URL of your choosing that "
             "answers with the address it saw, fetched through each proxy so "
             "you can see that the source address really changed. MCC ships no "
-            "default here: this is the one part of the check that contacts "
+            "default here: a URL is the one part of the check that contacts "
             "somebody you did not already choose to talk to, so it happens "
-            "only if you name them. It never decides whether a proxy passes."
+            "only if you name them. Or write provider: each check then asks "
+            "the provider's own host (its /cdn-cgi/trace, through the tunnel) "
+            "instead, which contacts nobody new; providers behind Cloudflare "
+            "answer with the address, its country and whether it is WARP. "
+            "JSON (ip, country, asn/org), trace and plain-text answers are "
+            "read. It never decides whether a proxy passes."
         ),
     ),
     ConfigFieldSpec(

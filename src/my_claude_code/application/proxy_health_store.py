@@ -32,7 +32,6 @@ from datetime import UTC, datetime
 
 from loguru import logger
 
-from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import (
     PROXY_CHAINS_WRITE_LOCK,
     ProxyChains,
@@ -100,10 +99,9 @@ def _take_dirty() -> set[str]:
 
 
 def _label_for(store: ProxyChains, proxy_id: str) -> str:
-    endpoint = store.proxies.get(proxy_id)
-    if endpoint is None:  # pragma: no cover - callers iterate the store
-        return ""
-    return endpoint.label or mask_proxy_label(endpoint.url)
+    # The store's ledger label (7.89.0): what the running legs are keyed on,
+    # including the credential digest that tells colliding addresses apart.
+    return store.ledger_label(proxy_id)
 
 
 def flush_health(now: float | None = None) -> int:
@@ -181,11 +179,11 @@ def arm_health_from_store(store: ProxyChains | None = None) -> int:
     table = load_proxy_chains() if store is None else store
     wall = time.time()
     armed = 0
-    for endpoint in table.proxies.values():
+    for proxy_id, endpoint in table.proxies.items():
         health = endpoint.health
         if health is None or health.failures <= 0:
             continue
-        label = endpoint.label or mask_proxy_label(endpoint.url)
+        label = table.ledger_label(proxy_id)
         PROXY_REACHABILITY.restore(
             label,
             health.failures,

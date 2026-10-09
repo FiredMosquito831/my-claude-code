@@ -59,6 +59,15 @@ retried on the exit that refused; at its switch limit it never goes direct and
 the next model answers; with every exit remembered spent it sends nothing when
 Direct fallback is off and goes direct only when it is on (the 7.79.2 rule
 sees the memory); media does the same.
+
+Filled by 7.89.0 (PR-S2, exit identity): two more kinds of traffic to the
+provider's host. The exit-identity probe (``PROXY_CHECK_EXIT_IP_URL=provider``:
+a GET of the provider's own ``/cdn-cgi/trace``) leaves through the very exit it
+is checking, by name, and never from this computer. The "Where does Direct come
+out?" readout dials the provider from this computer's address only where the
+chain itself would: no chain, an unpaused Direct entry, or every proxy
+unhealthy with Direct fallback on. A healthy chain, Direct fallback off, and
+every fail-closed state (paused, removed, unreadable) send nothing at all.
 """
 
 import asyncio
@@ -82,6 +91,11 @@ from google.auth.credentials import Credentials as GoogleCredentials
 
 from my_claude_code.application.model_metadata import ResponseSurface
 from my_claude_code.application.ports import PooledCredentialPort
+from my_claude_code.application.proxy_check import (
+    CHECK_DEPTH_REQUEST,
+    check_proxy,
+    reset_direct_exits,
+)
 from my_claude_code.config.constants import CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE
 from my_claude_code.config.credential_names import credential_fingerprint
 from my_claude_code.config.credentials import mask_proxy_label
@@ -364,6 +378,9 @@ PICTURE = b"\x89PNG\r\n\x1a\n" + b"\x07" * 64
 GEMINI_IMAGE_PATH = "/v1beta/models/mcc-image:generateContent"
 #: Every refused answer names the setting and where it lives.
 REFUSAL_WORDS = ("Direct fallback", "Proxying page")
+#: What the rig host publishes at ``/cdn-cgi/trace`` (7.89.0, PR-S2).
+RIG_TRACE_PATH = "/cdn-cgi/trace"
+RIG_TRACE = b"fl=1\nh=localhost\nip=192.0.2.200\nloc=NL\nwarp=off\n"
 
 
 def _sse(events: list[tuple[str | None, dict[str, Any] | str]]) -> bytes:
@@ -539,6 +556,9 @@ class TrafficWorld:
         self, request: SeenRequest
     ) -> tuple[int, bytes] | tuple[int, bytes, str]:
         path = request.path
+        if path == RIG_TRACE_PATH:
+            # 7.89.0: the host's Cloudflare-style trace, for the exit rows.
+            return 200, RIG_TRACE, "text/plain"
         if path.endswith("/models"):
             # The rejected model is listed: it exists in the catalogue and
             # fails only when asked, which is what makes a fallback walk to it.
@@ -2051,3 +2071,159 @@ def test_a_ticked_media_chain_moves_a_refused_picture_to_the_next_exit(
         if seen.path.endswith("/images/generations")
     ]
     assert generations == [0, 1]
+
+
+# --------------------------------------------- exit identity (7.89.0, PR-S2)
+#
+# Two more kinds of traffic to the provider's host. The exit-identity probe is
+# the provider's own ``/cdn-cgi/trace`` fetched through each exit a check
+# measures; it must leave through that exit, by name, and never from here.
+# The "Where does Direct come out?" readout fetches the same trace with no
+# proxy at all -- from this computer's address -- so it may run only where the
+# chain itself would go direct, and must send nothing anywhere else.
+
+
+def _traces(world: TrafficWorld) -> list[SeenRequest]:
+    return [seen for seen in world.rig.host.requests if seen.path == RIG_TRACE_PATH]
+
+
+@pytest.mark.asyncio
+@pytest.mark.local_serial
+async def test_the_exit_identity_probe_leaves_through_the_exit_it_checks(
+    traffic: TrafficWorld,
+) -> None:
+    destination = traffic.rig.host.base_url(path=f"/{_slug(CHAT_NAME)}/v1")
+    for index, proxy in enumerate(traffic.rig.proxy_urls):
+        traffic.rig.clear()
+
+        record = await check_proxy(
+            proxy, destination, exit_ip_url="provider", depth=CHECK_DEPTH_REQUEST
+        )
+
+        assert record.ok, record.detail
+        assert record.exit_ip == "192.0.2.200"
+        traces = _traces(traffic)
+        assert len(traces) == 1
+        assert traffic.exit_of(traces[0]) == index
+        traffic.rig.assert_masked()
+
+
+def _direct_exit(world: TrafficWorld, name: str) -> dict[str, Any]:
+    """Press "Where does Direct come out?" on ``name``'s card."""
+
+    reset_direct_exits()
+    with world.client(PROXY_CHECK_EXIT_IP_URL="provider") as client:
+        response = client.post(
+            "/admin/api/proxy-chains/direct-exit", json={"provider": world.ids[name]}
+        )
+    assert response.status_code == 200, response.text
+    card = next(
+        entry
+        for entry in response.json()["providers"]
+        if entry["provider_id"] == world.ids[name]
+    )
+    return card["direct_exit"]
+
+
+def _assert_read_direct(world: TrafficWorld, readout: dict[str, Any]) -> None:
+    traces = _traces(world)
+    assert len(traces) == 1, [seen.path for seen in world.rig.host.requests]
+    assert world.rig.direct_peers() == world.rig.host.peers
+    assert all(not proxy.targets for proxy in world.rig.proxies)
+    assert readout["ip"] == "192.0.2.200"
+    assert readout["country"] == "NL"
+    assert "refused" not in readout
+
+
+@pytest.mark.parametrize("direct_fallback", [False, True])
+@pytest.mark.local_serial
+def test_the_direct_readout_sends_nothing_while_the_chain_has_a_healthy_proxy(
+    traffic: TrafficWorld, direct_fallback: bool
+) -> None:
+    """Direct fallback off never uses this address; on, only once every proxy
+    is unhealthy (7.79.2) -- so with a healthy proxy neither may look."""
+
+    traffic.write(direct_fallback=direct_fallback)
+
+    readout = _direct_exit(traffic, CHAT_NAME)
+
+    traffic.rig.assert_nothing_sent()
+    assert readout["refused"].startswith("Not sent:")
+    assert "Proxying page" in readout["refused"]
+    assert "ip" not in readout
+
+
+@pytest.mark.parametrize("cause", sorted(NO_USABLE_ENTRY))
+@pytest.mark.parametrize("direct_fallback", [False, True])
+@pytest.mark.local_serial
+def test_the_direct_readout_sends_nothing_from_a_chain_with_nothing_usable(
+    traffic: TrafficWorld, cause: str, direct_fallback: bool
+) -> None:
+    NO_USABLE_ENTRY[cause](traffic, direct_fallback)
+
+    readout = _direct_exit(traffic, CHAT_NAME)
+
+    traffic.rig.assert_nothing_sent()
+    for words in REFUSAL_WORDS:
+        assert words in readout["refused"], readout
+
+
+@pytest.mark.local_serial
+def test_the_direct_readout_looks_once_every_proxy_is_unhealthy_with_fallback_on(
+    traffic: TrafficWorld,
+) -> None:
+    traffic.write(direct_fallback=True)
+    _mark_unhealthy(traffic, 0, 1, 2)
+
+    _assert_read_direct(traffic, _direct_exit(traffic, CHAT_NAME))
+
+
+@pytest.mark.local_serial
+def test_the_direct_readout_never_looks_when_every_proxy_is_unhealthy_and_off(
+    traffic: TrafficWorld,
+) -> None:
+    traffic.write(direct_fallback=False)
+    _mark_unhealthy(traffic, 0, 1, 2)
+
+    readout = _direct_exit(traffic, CHAT_NAME)
+
+    traffic.rig.assert_nothing_sent()
+    assert "Direct fallback" in readout["refused"]
+
+
+@pytest.mark.local_serial
+def test_the_direct_readout_looks_for_a_provider_with_no_chain(
+    traffic: TrafficWorld,
+) -> None:
+    traffic.write()
+
+    _assert_read_direct(traffic, _direct_exit(traffic, PLAIN_NAME))
+
+
+@pytest.mark.local_serial
+def test_the_direct_readout_looks_for_a_chain_with_a_direct_entry(
+    traffic: TrafficWorld,
+) -> None:
+    """The operator put this computer's address in the rotation themselves."""
+
+    proxies = {
+        f"px_{index}": ProxyEndpoint(url=url)
+        for index, url in enumerate(traffic.rig.proxy_urls)
+    }
+    chain = ProxyChain(
+        enabled=True,
+        policy="failover",
+        entries=(
+            *(ProxyChainEntry(proxy=key) for key in proxies),
+            ProxyChainEntry(proxy=""),
+        ),
+        direct_fallback=False,
+        until_served=False,
+    )
+    save_proxy_chains(
+        ProxyChains(proxies=proxies, chains=dict.fromkeys(traffic.masked_ids, chain)),
+        traffic.chains_path,
+    )
+    reset_proxy_chains_cache()
+
+    _assert_read_direct(traffic, _direct_exit(traffic, CHAT_NAME))

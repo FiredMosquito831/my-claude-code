@@ -14,6 +14,7 @@ from my_claude_code.config.proxy_chains import (
     OAUTH_PROVIDER_IDS,
     current_proxy_chains,
     masked_refusal_sentence,
+    note_built_chain_labels,
 )
 from my_claude_code.config.settings import Settings, parse_lockout_tiers
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
@@ -60,7 +61,12 @@ def resolve_proxy_chain(
 
 
 def resolve_proxy_route(
-    provider_id: str, static_proxy: str, settings: Settings, *, name: str = ""
+    provider_id: str,
+    static_proxy: str,
+    settings: Settings,
+    *,
+    name: str = "",
+    note_built: bool = False,
 ) -> ProxyRoute:
     """Turn the stored chain for one provider into what the runtime uses.
 
@@ -109,6 +115,12 @@ def resolve_proxy_route(
     # against the new catalogue -- where an address the save removed is simply
     # missing, and a chain left with no legs routes direct (7.72.1).
     store = current_proxy_chains()
+    if note_built:
+        # 7.89.0: a provider being BUILT records the ledger labels its chain
+        # dials under, so a chain write that renames one of them (two
+        # addresses colliding on host:port across chains) rebuilds it too.
+        # Probes resolve without it: they build nothing that keeps running.
+        note_built_chain_labels(provider_id, store.chain_ledger_labels(provider_id))
     chain = store.chain(provider_id)
     if chain is None or not chain.enabled:
         return ProxyRoute(static_proxy)
@@ -134,7 +146,10 @@ def resolve_proxy_route(
         legs.append(
             ProxyLeg(
                 url=endpoint.url,
-                label=endpoint.label or mask_proxy_label(endpoint.url),
+                # 7.89.0 (PR-S1): the store's ledger label -- the operator's
+                # name, else ``host:port``, told apart by a credential digest
+                # only where two addresses would otherwise share one.
+                label=store.ledger_label(entry.proxy),
             )
         )
 
@@ -295,6 +310,72 @@ def masked_exit_for(
     )
 
 
+def direct_exit_refusal(
+    provider_id: str,
+    static_proxy: str | None,
+    settings: Settings,
+    *,
+    name: str = "",
+) -> str:
+    """Why this computer may NOT dial the provider from its own address now.
+
+    ``""`` when it may: the question the Proxying card's "Where does Direct
+    come out?" (7.89.0, PR-S2) asks before it fetches the exit check with no
+    proxy -- which, for ``PROXY_CHECK_EXIT_IP_URL=provider``, is a request to
+    the provider's own host from this computer's address. It is answered by
+    the rules a real request is built with, so the readout can never be the
+    one dial the chain forbids:
+
+    * no chain (or one switched off, or not acknowledged) and no static
+      proxy, or a one-entry chain whose entry is Direct: the provider is
+      reached from this address anyway -- allowed;
+    * a static ``<PROVIDER>_PROXY`` or a one-entry proxy chain: never from
+      here -- refused;
+    * a chain with an unpaused Direct entry it can reach (the first entry,
+      under ``single``): the operator put this address in the rotation --
+      allowed;
+    * otherwise exactly :func:`masked_exit_for`'s answer: this address only
+      when every proxy is unhealthy and Direct fallback is on (7.79.2), and a
+      refusal -- nothing sent -- in every other case.
+    """
+
+    who = name or provider_id
+    proxy, plan = resolve_proxy_chain(
+        provider_id, static_proxy or "", settings, name=name
+    )
+    if isinstance(plan, MaskedRefusalPlan):
+        return plan.reason
+    if plan is None:
+        if not proxy:
+            return ""
+        return (
+            f"Not sent: {who} goes out through {mask_proxy_label(proxy)}, never "
+            "from this computer's own address, so MCC does not dial it from "
+            "here to look."
+        )
+    # Under ``single`` only the first entry is ever dialled, so a Direct
+    # entry further down is not one the chain uses (as in masked_exit_for).
+    used = plan.legs[:1] if plan.policy == "single" else plan.legs
+    if any(not leg.url for leg in used):
+        return ""
+    exit_ = masked_exit_for(provider_id, static_proxy, settings, name=name)
+    if exit_.refused:
+        return exit_.refused
+    if exit_.proxy == "":
+        return ""
+    if plan.direct_fallback:
+        return (
+            f"Not sent: {who}'s chain uses this computer's own address only "
+            "once every proxy in it is unhealthy, and at least one is not, so "
+            f"MCC does not dial {who} from it to look (Proxying page -> {who})."
+        )
+    return (
+        f"Not sent: {who}'s chain has Direct fallback off, so it never uses "
+        f"this computer's own address and MCC does not dial {who} from it to "
+        f"look (Proxying page -> {who} -> Direct fallback)."
+    )
+
+
 def string_setting(settings: Settings, attr_name: str | None, default: str = "") -> str:
     """Return a string-valued settings attribute, ignoring non-string mocks."""
     if attr_name is None:
@@ -386,6 +467,7 @@ def build_provider_config(
         string_setting(settings, descriptor.proxy_attr),
         settings,
         name=descriptor.display_name,
+        note_built=True,
     )
     return ProviderConfig(
         proxy_chain=route.plan,
@@ -439,6 +521,7 @@ def _build_dynamic_provider_config(
         entry.proxy or "",
         settings,
         name=entry.display_name,
+        note_built=True,
     )
     return ProviderConfig(
         proxy_chain=route.plan,

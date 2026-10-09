@@ -8440,3 +8440,115 @@ def test_a_dial_says_what_is_remembered_and_the_attempt_what_it_skipped(
         "Every exit this request could use in Zen's proxy chain refused or"
         " failed it: tried 2."
     ]
+
+
+# --------------------------------------------------- 7.89.0 (PR-S1/S2/S3)
+
+
+def test_nothing_new_shows_until_exit_identity_or_a_scan(rendered) -> None:
+    before = rendered["proxying"]["sourcesAndExits"]["before"]
+    assert before["groups"] is False
+    assert before["direct"] is False
+    assert before["identityButton"] == "Use each provider's own trace"
+    assert "It contacts nobody new." in before["identity"]
+    assert before["sourcesHeading"] == "Proxies on this computer"
+    assert before["sourcesStatus"] == "Not scanned yet."
+    assert before["scan"] == "Scan this computer"
+    assert before["sourceRows"] == 0
+
+
+def test_one_click_turns_the_provider_trace_on(rendered) -> None:
+    applied = rendered["proxying"]["sourcesAndExits"]["applied"]
+    assert applied == [{"values": {"PROXY_CHECK_EXIT_IP_URL": "provider"}}]
+
+
+def test_exit_identity_on_the_rows_and_the_group_on_the_card(rendered) -> None:
+    on = rendered["proxying"]["sourcesAndExits"]["on"]
+    assert on["identity"].startswith("Exit identity is on: each Test also asks")
+    assert "Each provider's own host is also asked" in on["checker"]
+    assert "short digest of this one's login" in on["labelTitle"]
+    assert "exit 104.28.1.2 · NL · WARP" in on["readout"]
+    assert "The provider's own host saw 104.28.1.2, in NL." in on["readoutTitle"]
+    assert "Cloudflare WARP exit" in on["readoutTitle"]
+    assert on["groups"].startswith(
+        "2 entries share exit 104.28.1.2 (NL, WARP): 1. 203.0.113.7:1080#1a2b, "
+        "2. 198.51.100.9:8080. The provider sees one address for all of them."
+    )
+    assert on["keep"] == "Keep one per exit"
+    assert on["direct"].startswith(
+        "Direct (this computer's own address): not checked yet."
+    )
+
+
+def test_keep_one_per_exit_pauses_the_duplicate(rendered) -> None:
+    kept = rendered["proxying"]["sourcesAndExits"]["kept"]
+    assert kept["posts"] == [
+        {
+            "path": "/admin/api/proxy-chains/keep-one-per-exit",
+            "body": {"provider": "nvidia_nim"},
+        }
+    ]
+    assert kept["paused"][:2] == [False, True]
+    assert "Paused 1 entry on NVIDIA NIM" in kept["announcement"]
+
+
+def test_the_direct_readout_is_asked_on_a_click(rendered) -> None:
+    direct = rendered["proxying"]["sourcesAndExits"]["direct"]
+    assert direct["posts"] == [
+        {
+            "path": "/admin/api/proxy-chains/direct-exit",
+            "body": {"provider": "nvidia_nim"},
+        }
+    ]
+    assert direct["line"].startswith(
+        "Direct comes out of 185.159.157.13 (NL), as integrate.api.nvidia.com saw it"
+    )
+
+
+def test_a_scan_lists_three_listeners_with_their_offers(rendered) -> None:
+    scanned = rendered["proxying"]["sourcesAndExits"]["scanned"]
+    assert scanned["posts"][0] == "/admin/api/proxy-sources/scan"
+    assert scanned["status"].endswith("3 ports answer on 127.0.0.1.")
+    assert scanned["rescan"] == "Scan again"
+    assert [row["port"] for row in scanned["rows"]] == ["1080", "9050", "40000"]
+    tor = scanned["rows"][1]
+    assert tor["name"] == "Local SOCKS5 · 127.0.0.1:9050"
+    assert tor["usually"] == "usually Tor"
+    assert tor["state"] == "SOCKS5 · in NVIDIA NIM"
+    assert tor["add"] is True
+    assert "Tor Project asks" in tor["sees"]
+    first = scanned["rows"][0]
+    assert first["state"] == "SOCKS5 · needs a username and password · on offer"
+    assert first["login"] is True
+    assert "Found 3 proxy listeners on this computer" in scanned["announcement"]
+
+
+def test_an_offer_goes_through_the_bulk_add(rendered) -> None:
+    added = rendered["proxying"]["sourcesAndExits"]["added"]
+    assert len(added) == 1
+    assert added[0]["action"] == "add"
+    assert added[0]["provider"] == "nvidia_nim"
+    assert added[0]["proxies"] == ["px_local9050"]
+
+
+def test_a_login_is_sent_once_and_never_kept_on_the_page(rendered) -> None:
+    login = rendered["proxying"]["sourcesAndExits"]["login"]
+    assert login["puts"] == [
+        {
+            "method": "PUT",
+            "body": {
+                "source": "src_local",
+                "credentials": [
+                    {
+                        "port": 1080,
+                        "username": "me-user1",
+                        "password": "pw-secret-9",
+                        "clear": False,
+                    }
+                ],
+            },
+        }
+    ]
+    assert login["state"] == "SOCKS5 · login set (me-u…ser1) · on offer"
+    assert login["pageHasPassword"] is False
+    assert login["passwordField"] == ""

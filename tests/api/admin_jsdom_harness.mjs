@@ -3244,6 +3244,53 @@ function proxyFetchStatePayload(advance) {
   );
 }
 
+/* 7.89.0 (PR-S3): what a scan of this computer answers -- three listeners,
+   one of them asking for a login. Masked as the real route masks it. */
+const PROXY_SOURCES_FIXTURE = {
+  sources: [
+    {
+      id: "src_local",
+      kind: "local",
+      built: true,
+      name: "This computer",
+      enabled: true,
+      added_at: "2026-10-09T10:00:00Z",
+      scanned_at: new Date().toISOString(),
+      listeners: [
+        {
+          port: 1080, protocol: "socks5", auth: "userpass", answering: true,
+          note: "", usually: "ssh -D, or another SOCKS5 server you run",
+          sees: "With ssh -D your VPS provider sees the destinations; your ISP sees only SSH.",
+          tor: false, proxy: "px_local1080", label: "Local SOCKS5 · 127.0.0.1:1080",
+          scheme: "socks5h", offered: true, chained: [], secret_set: false,
+          secret_label: "", last_check: null,
+        },
+        {
+          port: 9050, protocol: "socks5", auth: "none", answering: true,
+          note: "", usually: "Tor",
+          sees: "Tor's first relay sees your address and its exit sees the destination's name; no single relay sees both.",
+          tor: true, proxy: "px_local9050", label: "Local SOCKS5 · 127.0.0.1:9050",
+          scheme: "socks5h", offered: true, chained: ["nvidia_nim"], secret_set: false,
+          secret_label: "", last_check: null,
+        },
+        {
+          port: 40000, protocol: "socks5", auth: "none", answering: true,
+          note: "", usually: "Cloudflare WARP in proxy mode", sees: "Cloudflare sees your address and the destination.",
+          tor: false, proxy: "px_local40000", label: "Local SOCKS5 · 127.0.0.1:40000",
+          scheme: "socks5h", offered: true, chained: [], secret_set: false,
+          secret_label: "", last_check: null,
+        },
+      ],
+    },
+  ],
+  scan_ports: [],
+  kinds: [{ id: "local", available: true }],
+  sees: "Any exit -- a proxy, a VPN, WARP or Tor -- sees which host you contact.",
+  terms: "Spreading requests over many exits can conflict with a provider's terms.",
+  tor_line: "The Tor Project asks people not to push heavy or automated traffic through its volunteer exits.",
+  unreadable: "",
+};
+
 // Pause-route fault injection. Null means the route behaves normally.
 let pauseRefusal = null;
 let pauseHttpFailure = null;
@@ -3630,6 +3677,83 @@ window.fetch = async (url, options = {}) => {
     const answer = JSON.parse(JSON.stringify(state));
     answer.forgotten = { provider: sent.provider, remembered: dropped };
     return { ok: true, status: 200, json: async () => answer, text: async () => "" };
+  }
+  /* 7.89.0 (PR-S2/S3): the new Proxying routes, emulated on the document the
+     page reads back, the way the real routes answer. */
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/keep-one-per-exit") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const provider = state.providers.find((item) => item.provider_id === sent.provider);
+    const kept = [];
+    const paused = [];
+    (provider.chain.exit_groups || []).forEach((group) => {
+      const live = group.entries.filter((item) => !item.paused);
+      if (live.length < 2) return;
+      kept.push(live[0].label);
+      live.slice(1).forEach((item) => {
+        provider.chain.entries[item.index - 1].paused = true;
+        item.paused = true;
+        paused.push(item.label);
+      });
+    });
+    const answer = JSON.parse(JSON.stringify(state));
+    answer.kept_one_per_exit = { provider: sent.provider, kept, paused };
+    return { ok: true, status: 200, json: async () => answer, text: async () => "" };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/direct-exit") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const provider = state.providers.find((item) => item.provider_id === sent.provider);
+    provider.direct_exit = {
+      at: new Date().toISOString(),
+      host: "integrate.api.nvidia.com",
+      ip: "185.159.157.13",
+      country: "NL",
+      asn: "",
+      warp: "off",
+      via: "provider",
+    };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(JSON.stringify(state)),
+      text: async () => "",
+    };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-sources/scan") {
+    const state = ROUTES["/admin/api/proxy-chains"];
+    state.sources = JSON.parse(JSON.stringify(PROXY_SOURCES_FIXTURE));
+    const answer = JSON.parse(JSON.stringify(state));
+    answer.scan = {
+      ports: [1080, 8888, 9050, 9052, 9150, 25344, 40000],
+      answering: [1080, 9050, 40000],
+      offered: [1080, 9050, 40000],
+    };
+    return { ok: true, status: 200, json: async () => answer, text: async () => "" };
+  }
+  if (
+    String(url).split("?")[0] === "/admin/api/proxy-sources" &&
+    String((options && options.method) || "GET").toUpperCase() === "PUT"
+  ) {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    if (sent.remove) {
+      delete state.sources;
+    } else {
+      (sent.credentials || []).forEach((login) => {
+        const row = state.sources.sources[0].listeners.find(
+          (item) => item.port === login.port,
+        );
+        row.secret_set = !login.clear;
+        row.secret_label = login.clear ? "" : "me-u…ser1";
+      });
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(JSON.stringify(state)),
+      text: async () => "",
+    };
   }
   if (String(url).split("?")[0] === "/admin/api/proxy-chains/order") {
     const sent = JSON.parse(options.body);
@@ -5324,6 +5448,167 @@ if (withChain) {
   proxying.untilServed = served;
 
   nim.chain = savedChain;
+  await reload();
+}
+
+/* 7.89.0: PR-S1's told-apart label, PR-S2's exit identity (the one-click
+   trace, exit groups, Keep one per exit, the Direct readout) and PR-S3's
+   Sources section (a scan, an offer added through the bulk add, a login).
+   Every fixture change is put back afterwards. */
+{
+  const state = ROUTES["/admin/api/proxy-chains"];
+  const nim = state.providers.find((item) => item.provider_id === "nvidia_nim");
+  const savedChain = JSON.parse(JSON.stringify(nim.chain));
+  const savedChecker = JSON.parse(JSON.stringify(state.vocabulary.checker));
+  const savedApply = ROUTES["/admin/api/config/apply"];
+  const reload = async () => {
+    navLinks.find((link) => link.dataset.view === "providers").click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    navLinks.find((link) => link.dataset.view === "proxying").click();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+  };
+  const card = () => proxyCardFor("nvidia_nim");
+  const text = (node) => (node ? node.textContent.replace(/\s+/g, " ").trim() : "");
+  const out = {};
+
+  await reload();
+  out.before = {
+    groups: Boolean(card().querySelector(".proxy-exit-groups")),
+    direct: Boolean(card().querySelector(".proxy-direct-exit")),
+    identity: text(doc.querySelector("#proxyingExitIdentity")),
+    identityButton: text(doc.querySelector("#proxyingExitIdentity button")),
+    sourcesStatus: text(doc.querySelector(".proxy-sources-status")),
+    scan: text(doc.querySelector("button.proxy-sources-scan")),
+    sourceRows: doc.querySelectorAll(".proxy-source-row").length,
+    sourcesHeading: text(doc.querySelector("#proxyingSourcesTitle")),
+  };
+
+  // One click turns the provider's own trace on, through the settings route.
+  ROUTES["/admin/api/config/apply"] = {
+    applied: true, valid: true, errors: [], warnings: [], pending_fields: [],
+    restart: { required: false, automatic: false, admin_url: null, fields: [] },
+  };
+  let since = fetchBodies.length;
+  doc.querySelector("#proxyingExitIdentity button").click();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  out.applied = fetchBodies
+    .slice(since)
+    .filter((entry) => entry.path === "/admin/api/config/apply")
+    .map((entry) => entry.body);
+
+  // The trace on: a told-apart label, exit identity on the rows, a group.
+  state.vocabulary.checker.exit_ip_configured = true;
+  state.vocabulary.checker.exit_ip_mode = "provider";
+  const record = (ip, extra = {}) => ({
+    at: new Date().toISOString(), ok: true, latency_ms: 120, tls: "strict",
+    detail: "", exit_ip: ip, depth: "request", exit_via: "provider", ...extra,
+  });
+  const entries = nim.chain.entries;
+  entries[0].label = "203.0.113.7:1080#1a2b";
+  entries[0].label_disambiguated = true;
+  entries[0].last_check = record("104.28.1.2", { exit_country: "NL", exit_warp: "on" });
+  entries[1].last_check = record("104.28.1.2", { exit_country: "NL", exit_warp: "on" });
+  entries[1].paused = false;
+  nim.chain.exit_groups = [
+    {
+      exit_ip: "104.28.1.2", country: "NL", warp: "on", direct: false,
+      entries: [
+        { index: 1, proxy: entries[0].proxy, label: entries[0].label, paused: false },
+        { index: 2, proxy: entries[1].proxy, label: entries[1].label, paused: false },
+      ],
+    },
+  ];
+  await reload();
+  out.on = {
+    identity: text(doc.querySelector("#proxyingExitIdentity")),
+    checker: text(doc.querySelector("#proxyingChecker")),
+    labelTitle: card().querySelector(".proxy-entry-label")?.title || "",
+    readout: text(card().querySelector(".proxy-entry-check")),
+    readoutTitle: card().querySelector(".proxy-entry-check")?.title || "",
+    groups: text(card().querySelector(".proxy-exit-groups")),
+    keep: text(card().querySelector("button.proxy-keep-one-per-exit")),
+    direct: text(card().querySelector(".proxy-direct-exit")),
+  };
+
+  since = fetchBodies.length;
+  card().querySelector("button.proxy-keep-one-per-exit").click();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  out.kept = {
+    posts: fetchBodies
+      .slice(since)
+      .filter((entry) => entry.path.startsWith("/admin/api/proxy-chains"))
+      .map((entry) => ({ path: entry.path, body: entry.body })),
+    paused: Array.from(card().querySelectorAll(".proxy-entry")).map((row) =>
+      row.classList.contains("proxy-entry-paused"),
+    ),
+    announcement: text(doc.querySelector("#proxyingStatus")),
+  };
+
+  since = fetchBodies.length;
+  card().querySelector("button.proxy-direct-exit-check").click();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  out.direct = {
+    posts: fetchBodies
+      .slice(since)
+      .filter((entry) => entry.path.startsWith("/admin/api/proxy-chains"))
+      .map((entry) => ({ path: entry.path, body: entry.body })),
+    line: text(card().querySelector(".proxy-direct-exit-line")),
+  };
+
+  // Sources: scan, add an offer to a chain, give a listener its login.
+  since = fetchBodies.length;
+  doc.querySelector("button.proxy-sources-scan").click();
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  const rows = () => Array.from(doc.querySelectorAll(".proxy-source-row"));
+  out.scanned = {
+    posts: fetchBodies.slice(since).map((entry) => entry.path),
+    status: text(doc.querySelector(".proxy-sources-status")),
+    rows: rows().map((row) => ({
+      port: row.dataset.port,
+      name: text(row.querySelector(".proxy-source-name")),
+      usually: text(row.querySelector(".proxy-source-usually")),
+      state: text(row.querySelector(".proxy-source-state")),
+      add: Boolean(row.querySelector("button.proxy-source-add")),
+      login: Boolean(row.querySelector(".proxy-source-login")),
+      sees: text(row.querySelector(".proxy-source-sees")),
+    })),
+    announcement: text(doc.querySelector("#proxyingStatus")),
+    rescan: text(doc.querySelector("button.proxy-sources-scan")),
+  };
+
+  since = fetchBodies.length;
+  const tor = rows().find((row) => row.dataset.port === "9050");
+  tor.querySelector("select.proxy-source-provider").value = "nvidia_nim";
+  tor.querySelector("button.proxy-source-add").click();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  out.added = fetchBodies
+    .slice(since)
+    .filter((entry) => entry.path === "/admin/api/proxy-chains/candidates/bulk")
+    .map((entry) => entry.body);
+
+  since = fetchBodies.length;
+  const first = rows().find((row) => row.dataset.port === "1080");
+  first.querySelector("input.proxy-source-username").value = "me-user1";
+  first.querySelector("input.proxy-source-password").value = "pw-secret-9";
+  first.querySelector("button.proxy-source-login-save").click();
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  const after = rows().find((row) => row.dataset.port === "1080");
+  out.login = {
+    puts: fetchBodies
+      .slice(since)
+      .filter((entry) => entry.path === "/admin/api/proxy-sources")
+      .map((entry) => ({ method: entry.method, body: entry.body })),
+    state: text(after.querySelector(".proxy-source-state")),
+    pageHasPassword: doc.body.innerHTML.includes("pw-secret-9"),
+    passwordField: after.querySelector("input.proxy-source-password")?.value || "",
+  };
+  proxying.sourcesAndExits = out;
+
+  delete state.sources;
+  delete nim.direct_exit;
+  nim.chain = savedChain;
+  state.vocabulary.checker = savedChecker;
+  ROUTES["/admin/api/config/apply"] = savedApply;
   await reload();
 }
 
