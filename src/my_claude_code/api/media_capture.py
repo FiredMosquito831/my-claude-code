@@ -7,7 +7,7 @@ executor's ledger), plus the media columns -- the operation, how many images
 came back, their size and the first one's content address -- and, only when
 ``MEDIA_STORE_ENABLED`` is on, the files themselves.
 
-Hashing and file writes happen in ``asyncio.to_thread``; the row goes to the
+Hashing and file writes happen on the finalize pool; the row goes to the
 request log's own writer thread, which also trims the store to
 ``MEDIA_STORE_MAX_MB`` once a row that stored a file is committed.
 
@@ -18,7 +18,6 @@ as ``unpriced`` with no amount, never as a zero. The lookup runs on the writer
 thread (``RequestRecord.pricer``), so no request waits for it.
 """
 
-import asyncio
 import functools
 import time
 from collections.abc import Mapping
@@ -27,6 +26,7 @@ from typing import Any, Literal
 
 from loguru import logger
 
+from my_claude_code.api.finalize_pool import run_on_finalize_pool
 from my_claude_code.api.request_pricing import price_media
 from my_claude_code.application.cost import MODE_AUTO
 from my_claude_code.application.execution import RouteAttemptRecord
@@ -409,11 +409,13 @@ class MediaCapture:
             return
         self._finished = True
         media_outputs: tuple[MediaOutputRecord, ...] = self._input_records()
+        # The finalize pool, like a chat row's (7.90.1): the answer waits on
+        # this, and the default executor is where dashboard scans queue.
         if outputs is not None and outputs.items:
-            media_outputs += await asyncio.to_thread(self._write_files, outputs)
+            media_outputs += await run_on_finalize_pool(self._write_files, outputs)
         thumbnails: tuple[CapturedImage, ...] = ()
         if self._thumb_pixels > 0 and self._request.uploads:
-            thumbnails = await asyncio.to_thread(self._input_thumbnails)
+            thumbnails = await run_on_finalize_pool(self._input_thumbnails)
         image_inputs = sum(
             1
             for upload in self._request.uploads

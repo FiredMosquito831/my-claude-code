@@ -16,6 +16,7 @@ import my_claude_code.cli.managed as cli_managed
 import my_claude_code.messaging.session as messaging_session
 import my_claude_code.messaging.workflow as messaging_workflow_module
 from my_claude_code.api.admin_proxy_routes import republish_chains
+from my_claude_code.api.finalize_pool import close_finalize_pool
 from my_claude_code.api.request_pricing import backfill_pricer
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
@@ -1473,6 +1474,13 @@ class ApplicationRuntime:
         await best_effort(
             "learned_facts.flush",
             self._learned_facts.close(),
+            log_verbose_errors=self.settings.log_api_error_tracebacks,
+        )
+        # Before the flush, so a row whose finalize was still running reaches
+        # the store; bounded on its own, never queued behind a dashboard scan.
+        await best_effort(
+            "finalize_pool.close",
+            close_finalize_pool(),
             log_verbose_errors=self.settings.log_api_error_tracebacks,
         )
         await best_effort(
