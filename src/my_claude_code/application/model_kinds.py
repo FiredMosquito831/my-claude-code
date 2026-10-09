@@ -42,6 +42,13 @@ then the catalogues, gap filling down -- in this order (7.80.0):
    is that rail's kind, because the operator said so -- consulted only when
    every published source is silent, so it can never override a declaration.
 
+**LiteLLM's model map** (7.85.0) adds two rungs, and only while LiteLLM pricing
+is on (``COST_SOURCE_LITELLM_ENABLED``) and its file is on disk -- the same
+slot it holds for prices: its modality pair (spec rung 3b) where everything
+above the cross-provider vote is silent, above the vote; and its ``mode`` and
+endpoint words (5b) after the provider's own words in step 3, before the media
+rail. Off, or not on disk, the ladder is the one above, exactly.
+
 Nothing else. No ``"image" in model_id``, no provider-wide guess: a provider
 that serves image generation also serves chat models, so what it declares says
 nothing about any one model. Each answer carries the rung that stated it
@@ -61,6 +68,7 @@ ref already saved on any rail keeps being listed where it is saved.
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
+from my_claude_code.application.litellm_model_map import LiteLLMLookup, LiteLLMModel
 from my_claude_code.application.media.rails import rail_refs
 from my_claude_code.application.media.request import RAIL_SETTINGS, MediaRail
 from my_claude_code.application.model_metadata import (
@@ -104,6 +112,10 @@ KIND_SOURCE_MEDIA_RAIL = "media_rail"
 #: 7.84.0: OpenRouter's own live model list, for a provider that is not
 #: OpenRouter.
 KIND_SOURCE_OPENROUTER_LIVE = "openrouter_live"
+#: 7.85.0: LiteLLM's model map, its modality pair (3b) and its mode and
+#: endpoint words (5b) -- only while LiteLLM pricing is on.
+KIND_SOURCE_LITELLM = "litellm"
+KIND_SOURCE_LITELLM_WORDS = "litellm_words"
 
 KIND_SOURCE_LABELS: Mapping[str, str] = {
     KIND_SOURCE_MODELS_DEV: "models.dev modalities",
@@ -111,6 +123,8 @@ KIND_SOURCE_LABELS: Mapping[str, str] = {
     KIND_SOURCE_PROVIDER_LISTING: "the provider's model list",
     KIND_SOURCE_PROVIDER_WORDS: "the provider's model type or endpoints",
     KIND_SOURCE_OPENROUTER_LIVE: "OpenRouter's live model list",
+    KIND_SOURCE_LITELLM: "LiteLLM's model map",
+    KIND_SOURCE_LITELLM_WORDS: "LiteLLM's mode or endpoints",
 }
 
 #: ``(provider_id, model_id) -> (modalities, rung)``: what the ladder declares
@@ -468,6 +482,38 @@ def _live_pair(live: LiveModel | None) -> DeclaredModalities | None:
     return pair
 
 
+def _litellm_pair(model: LiteLLMModel | None) -> tuple[DeclaredModalities, str] | None:
+    """LiteLLM's pair and its rung line, if it may decide a kind (7.85.0).
+
+    Under the same vocabulary guard as OpenRouter's live pair: LiteLLM writes
+    ``code`` as an output on 8 entries, a word no kind rule reads, and an
+    unread word must not take a model out of a list.
+    """
+
+    if model is None or model.modalities is None:
+        return None
+    pair = model.modalities.value
+    words = {word.strip().lower() for word in (*pair.inputs, *pair.outputs)}
+    if not words <= LIVE_KIND_MODALITY_WORDS:
+        return None
+    return pair, model.modalities.tier_label
+
+
+def _litellm_fine_may_answer(
+    declared: DeclaredModalities | None, tier: ResolutionTier | None
+) -> bool:
+    """Whether LiteLLM's pair (3b) is reached: nothing above the vote stated one.
+
+    A provider's list (1-2), a models.dev bucket (3-4) and models.dev's
+    OpenRouter copy (5-6) all outrank it; the cross-provider vote (7-10) does
+    not -- the same slot LiteLLM holds for prices.
+    """
+
+    if declared is None:
+        return True
+    return tier is not None and tier.is_approximate
+
+
 def live_kind_alternative(kind: ModelKind, live: LiveModel | None) -> ModelKind | None:
     """OpenRouter's live statement where it differs from the kind shown (7.84.0).
 
@@ -494,6 +540,7 @@ def resolve_model_kind(
     placements: Mapping[str, frozenset[str]],
     kind_words: KindWordsLookup | None = None,
     live: LiveLookup | None = None,
+    litellm: LiteLLMLookup | None = None,
 ) -> ModelKind:
     """The stated kind of one ``provider/model`` ref, or :data:`UNKNOWN_KIND`.
 
@@ -508,6 +555,11 @@ def resolve_model_kind(
     pair, above models.dev's tiers 5-10 (which only a provider with no bucket
     reaches) and below a bucket's 3-4, and above the coarse words. ``None``
     is the ladder before 7.84.0, exactly.
+
+    ``litellm`` is LiteLLM's model map (7.85.0), bound only while LiteLLM
+    pricing is on: its pair above the vote where nothing above the vote
+    stated one (3b), its mode and endpoint words after the provider's own
+    words (5b). ``None`` is the ladder before 7.85.0, exactly.
     """
 
     if "/" in model_ref:
@@ -527,6 +579,20 @@ def resolve_model_kind(
                     source=KIND_SOURCE_OPENROUTER_LIVE,
                     match=answer.tier_label,
                 )
+        lite: LiteLLMModel | None = None
+        if litellm is not None:
+            lite = litellm(provider_id, model_id)
+            stated_pair = (
+                _litellm_pair(lite)
+                if _litellm_fine_may_answer(declared, tier)
+                else None
+            )
+            if stated_pair is not None:
+                return ModelKind(
+                    kinds=kinds_from_modalities(stated_pair[0]),
+                    source=KIND_SOURCE_LITELLM,
+                    match=stated_pair[1],
+                )
         if declared is not None:
             return ModelKind(
                 kinds=kinds_from_modalities(declared),
@@ -540,6 +606,14 @@ def resolve_model_kind(
                 return ModelKind(
                     kinds=stated, source=KIND_SOURCE_PROVIDER_WORDS, tier=words_tier
                 )
+        if lite is not None and lite.words is not None:
+            stated = kinds_from_words(lite.words.value)
+            if stated is not None:
+                return ModelKind(
+                    kinds=stated,
+                    source=KIND_SOURCE_LITELLM_WORDS,
+                    match=lite.words.tier_label,
+                )
     placed = placements.get(model_ref)
     if placed:
         return ModelKind(kinds=placed, source=KIND_SOURCE_MEDIA_RAIL)
@@ -552,6 +626,7 @@ def chat_listing_filter(
     harness_tiers: HarnessTiers | None = None,
     kind_words: KindWordsLookup | None = None,
     live: LiveLookup | None = None,
+    litellm: LiteLLMLookup | None = None,
 ) -> Callable[[str], bool]:
     """The one predicate every chat listing applies to a *discovered* ref.
 
@@ -572,6 +647,7 @@ def chat_listing_filter(
             placements=placements,
             kind_words=kind_words,
             live=live,
+            litellm=litellm,
         ).chat_listable
 
     return listable

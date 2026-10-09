@@ -1667,6 +1667,9 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     # OpenRouter's live list (7.84.0), bound once: its file mark is part of
     # the key, so a new list or the rung switched off is a new computation.
     live = services.requests.openrouter_live_catalogue()
+    # LiteLLM's map (7.85.0), bound once and only while LiteLLM pricing is on:
+    # its file mark joins the key then, and the key is unchanged while it is off.
+    litellm = services.requests.litellm_model_catalogue()
     payload = cached_payload(
         MODELS_PAGE_ENTRY,
         key=capability_half_key(
@@ -1676,6 +1679,7 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
             overrides,
             placements,
             live_mark=None if live is None else live.mark,
+            litellm_mark=None if litellm is None else litellm.mark,
         ),
         compute=lambda: build_capability_half(
             model_infos,
@@ -1690,6 +1694,7 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
             kind_modalities=services.requests.model_modalities_lookup(),
             kind_words=services.requests.model_kind_words_lookup(),
             live=live,
+            litellm=litellm,
         ),
         # 5.5 MB of JSON: indented it would be 11 MB, and half the read would
         # be whitespace.
@@ -2682,8 +2687,10 @@ def _model_options(
     placements = media_rail_placements(settings)
     modalities = services.requests.model_modalities_lookup()
     kind_words = services.requests.model_kind_words_lookup()
-    # OpenRouter's live list, the same rung every other kind consumer reads.
+    # OpenRouter's live list, the same rung every other kind consumer reads,
+    # and LiteLLM's map while LiteLLM pricing is on (7.85.0).
     live = services.requests.openrouter_live_catalogue()
+    litellm = services.requests.litellm_model_catalogue()
     kinds: dict[str, list[str]] = {}
     for ref in sorted(configured | discovered | set(placements), key=str.casefold):
         kind = resolve_model_kind(
@@ -2692,6 +2699,7 @@ def _model_options(
             placements=placements,
             kind_words=kind_words,
             live=live,
+            litellm=litellm,
         )
         if kind.kinds is not None:
             kinds[ref] = [name for name in MODEL_KINDS if name in kind.kinds]

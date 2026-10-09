@@ -7,6 +7,7 @@ from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.providers.model_listing import (
     ModelListResponseError,
     declared_from_row,
+    listing_date_field,
     published_parameters_from_row,
     record_with_declared,
 )
@@ -33,6 +34,9 @@ def extract_anthropic_model_infos(
         raise _malformed(provider_name, "expected top-level data array")
 
     model_infos: set[ProviderModelInfo] = set()
+    # 7.85.0: Anthropic's ``created_at`` is the day it released the model,
+    # read as that model's publication date where the list's values vary.
+    date_field = listing_date_field(data)
     for item in data:
         model_id = _field(item, "id")
         if not isinstance(model_id, str) or not model_id.strip():
@@ -45,7 +49,7 @@ def extract_anthropic_model_infos(
                 ProviderModelInfo(
                     model_id=model_id.strip(),
                     supported_parameters=published_parameters_from_row(item),
-                    declared=declared_from_row(item),
+                    declared=declared_from_row(item, listing_date=date_field),
                 )
             )
         )

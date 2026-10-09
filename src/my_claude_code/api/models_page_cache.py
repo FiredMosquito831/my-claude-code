@@ -34,6 +34,7 @@ from my_claude_code.api.model_admin import (
     facts_for_row,
     models_dev_cache_mark,
 )
+from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_kinds import KindWordsLookup, ModalitiesLookup
 from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
@@ -61,6 +62,7 @@ def capability_half_key(
     media_placements: Mapping[str, frozenset[str]] | None = None,
     *,
     live_mark: str | None = None,
+    litellm_mark: str | None = None,
 ) -> str:
     """A digest of everything the cached half is built from.
 
@@ -84,6 +86,11 @@ def capability_half_key(
     ``live_mark`` is OpenRouter's live list as the page read it (7.84.0): its
     file's ``mtime_ns:size``, or ``None`` when the rung is off or nothing is
     stored -- two different pages, so two different keys.
+
+    ``litellm_mark`` is LiteLLM's map as the page read it (7.85.0): its file's
+    ``mtime_ns:size`` while LiteLLM pricing is on and the file is stored. It
+    joins the digest only then, so with LiteLLM off the key is computed
+    exactly as it was before 7.85.0.
     """
 
     digest = hashlib.sha256()
@@ -116,6 +123,11 @@ def capability_half_key(
     # Every OpenRouter-live row the page shows comes from this one file.
     digest.update(b"\x00openrouter-live\x00")
     digest.update((live_mark or "inactive").encode("utf-8"))
+    # LiteLLM's kind, endpoint and retirement rows (7.85.0) come from its map,
+    # read only while LiteLLM pricing is on.
+    if litellm_mark is not None:
+        digest.update(b"\x00litellm\x00")
+        digest.update(litellm_mark.encode("utf-8"))
     return f"models-page-{digest.hexdigest()[:32]}"
 
 
@@ -131,12 +143,14 @@ def build_capability_half(
     kind_modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
     live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
 ) -> dict[str, Any]:
     """The Models page with the four moving parts deliberately left out.
 
     The two kind lookups read nothing the key above does not already cover:
     the provider's own records (the catalogue, in whole) and models.dev (its
-    file mark). ``live`` (7.84.0) is covered by its own mark.
+    file mark). ``live`` (7.84.0) is covered by its own mark, and ``litellm``
+    (7.85.0) by its.
     """
 
     return build_models_page_payload(
@@ -154,6 +168,7 @@ def build_capability_half(
         kind_modalities=kind_modalities,
         kind_words=kind_words,
         live=live,
+        litellm=litellm,
     )
 
 

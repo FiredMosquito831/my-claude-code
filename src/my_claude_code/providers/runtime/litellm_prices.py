@@ -38,8 +38,9 @@ Three traps, all of them measured, all of them handled here:
 import asyncio
 import json
 import os
+import threading
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,9 +50,15 @@ import httpx
 from loguru import logger
 
 from my_claude_code.application.cost import SOURCE_LITELLM, RateCard
+from my_claude_code.application.litellm_model_map import (
+    LiteLLMCatalogue,
+    LiteLLMModel,
+    LiteLLMStatement,
+)
 from my_claude_code.application.media_cost import MediaRateCard
+from my_claude_code.application.model_metadata import DeclaredModalities
 from my_claude_code.config.paths import config_dir_path
-from my_claude_code.config.settings import get_settings
+from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.model_ids import bare_model_id, candidate_ladder
 
 #: The commit this integration was written and measured against. Immutable, so
@@ -485,6 +492,176 @@ def litellm_media_card(
     return None
 
 
+# --------------------------------------------------------------------------
+# 7.85.0: what the map states beside prices, for the kind and display ladders
+# --------------------------------------------------------------------------
+
+
+def _litellm_words(value: Any) -> tuple[str, ...] | None:
+    """A published word list, lower-cased, de-duplicated and sorted, or ``None``.
+
+    Every entry must be a non-empty string -- a list this cannot vouch for
+    entirely states nothing -- and an empty list states nothing either.
+    """
+
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return None
+    words: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, str) or not entry.strip():
+            return None
+        words.add(entry.strip().lower())
+    return tuple(sorted(words)) if words else None
+
+
+def _litellm_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _litellm_modalities(entry: Mapping[str, Any]) -> DeclaredModalities | None:
+    """Both halves from this one entry, or nothing (16 entries state only one)."""
+
+    inputs = _litellm_words(entry.get("supported_modalities"))
+    outputs = _litellm_words(entry.get("supported_output_modalities"))
+    if inputs is None or outputs is None:
+        return None
+    return DeclaredModalities(inputs=inputs, outputs=outputs)
+
+
+def _litellm_kind_words(entry: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """One entry's ``mode`` then its endpoints, as the coarse kind rung reads them."""
+
+    words: list[str] = []
+    mode = _litellm_text(entry.get("mode"))
+    if mode is not None:
+        words.append(mode.lower())
+    words.extend(_litellm_words(entry.get("supported_endpoints")) or ())
+    return tuple(words) or None
+
+
+def litellm_model_facts(
+    index: Mapping[str, Any], provider_id: str, model_id: str
+) -> LiteLLMModel | None:
+    """What LiteLLM's map states about one routed model, or ``None``. Never raises.
+
+    The same candidate walk pricing uses (:func:`_candidate_entries`): a key
+    naming the routed provider first, then a bare key only where its own
+    ``litellm_provider`` agrees -- so ``gemini-2.5-pro`` (Vertex's entry) never
+    describes a Google AI Studio route. Each statement comes from the first
+    entry that makes it.
+    """
+
+    modalities: LiteLLMStatement[DeclaredModalities] | None = None
+    words: LiteLLMStatement[tuple[str, ...]] | None = None
+    endpoints: LiteLLMStatement[tuple[str, ...]] | None = None
+    deprecation: LiteLLMStatement[str] | None = None
+    try:
+        for key, entry, label in _candidate_entries(index, provider_id, model_id):
+            if modalities is None:
+                pair = _litellm_modalities(entry)
+                if pair is not None:
+                    modalities = LiteLLMStatement(pair, key, label)
+            if words is None:
+                said = _litellm_kind_words(entry)
+                if said is not None:
+                    words = LiteLLMStatement(said, key, label)
+            if endpoints is None:
+                served = _litellm_words(entry.get("supported_endpoints"))
+                if served is not None:
+                    endpoints = LiteLLMStatement(served, key, label)
+            if deprecation is None:
+                day = _litellm_text(entry.get("deprecation_date"))
+                if day is not None:
+                    deprecation = LiteLLMStatement(day, key, label)
+    except Exception:
+        return None
+    if (
+        modalities is None
+        and words is None
+        and endpoints is None
+        and deprecation is None
+    ):
+        return None
+    return LiteLLMModel(
+        modalities=modalities,
+        words=words,
+        endpoints=endpoints,
+        deprecation_date=deprecation,
+    )
+
+
+_map_lock = threading.Lock()
+#: path -> (file mark, parsed index): one parse per on-disk generation, so a
+#: page asking about every model reads the 2.3 MB file once, not per row.
+_map_generations: dict[Path, tuple[str, Mapping[str, Any]]] = {}
+_MAP_MAX_PATHS = 4
+
+
+def reset_litellm_model_map_cache() -> None:
+    """Forget every parsed generation (tests; a new file is noticed anyway)."""
+
+    with _map_lock:
+        _map_generations.clear()
+
+
+def _litellm_file_mark(path: Path) -> str | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def _stored_map(path: Path) -> tuple[str, Mapping[str, Any]] | None:
+    mark = _litellm_file_mark(path)
+    if mark is None:
+        return None
+    with _map_lock:
+        cached = _map_generations.get(path)
+        if cached is not None and cached[0] == mark:
+            return cached
+    cache = read_litellm_cache(path)
+    if cache is None:
+        return None
+    stored = (mark, cache.index)
+    with _map_lock:
+        if path not in _map_generations and len(_map_generations) >= _MAP_MAX_PATHS:
+            _map_generations.pop(next(iter(_map_generations)))
+        _map_generations[path] = stored
+    return stored
+
+
+def litellm_model_catalogue(
+    settings: Settings, path: Path | None = None
+) -> LiteLLMCatalogue | None:
+    """LiteLLM's map bound for one listing or page (7.85.0).
+
+    ``None`` -- which every consumer reads as "this rung does not exist" --
+    unless LiteLLM pricing is on (``COST_SOURCE_LITELLM_ENABLED``) and its
+    file is on disk and readable. The file's mark goes into the Models page's
+    cache key, so a new map is a new page.
+    """
+
+    if not bool(getattr(settings, "cost_source_litellm_enabled", False)):
+        return None
+    stored = _stored_map(path if path is not None else litellm_cache_path())
+    if stored is None:
+        return None
+    mark, index = stored
+    answers: dict[tuple[str, str], LiteLLMModel | None] = {}
+
+    def lookup(provider_id: str, model_id: str) -> LiteLLMModel | None:
+        key = (provider_id, model_id)
+        if key not in answers:
+            answers[key] = litellm_model_facts(index, provider_id, model_id)
+        return answers[key]
+
+    return LiteLLMCatalogue(mark=mark, lookup=lookup)
+
+
 __all__ = [
     "LITELLM_MAX_SHRINK_RATIO",
     "LITELLM_MIN_ENTRIES",
@@ -494,10 +671,13 @@ __all__ = [
     "LiteLLMPriceCache",
     "litellm_cache_path",
     "litellm_media_card",
+    "litellm_model_catalogue",
+    "litellm_model_facts",
     "litellm_rate_card",
     "payload_passes_integrity",
     "read_litellm_cache",
     "refresh_litellm_cache",
+    "reset_litellm_model_map_cache",
     "schedule_litellm_refresh",
     "write_litellm_cache",
 ]

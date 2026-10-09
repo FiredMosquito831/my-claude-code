@@ -27734,14 +27734,21 @@ function buildCapabilityPanel(capabilities, labels, model) {
        publishes. Shown, never acted on: no kind, list or route reads them. */
     rows.push(["accepts → produces", capabilities.declared_modalities]);
     rows.push(["model type (provider's word)", capabilities.declared_type]);
-    rows.push(["endpoints (provider's words)", capabilities.declared_endpoints]);
-    /* What OpenRouter's own live model list adds (7.84.0), present only while
-       that rung is on and a list is stored: a description, its knowledge
-       cutoff, and the day OpenRouter LISTED the model -- never its release
-       date. Shown, never acted on. */
-    rows.push(["description (OpenRouter)", capabilities.description]);
+    /* The provider's own endpoint words; with LiteLLM pricing on, LiteLLM's
+       where the provider names none (7.85.0) -- the badge says whose. */
+    rows.push(["endpoints", capabilities.declared_endpoints]);
+    /* What the model is and when (7.84.0, 7.85.0): a description and a
+       knowledge cutoff (the provider's own list, then OpenRouter's live list,
+       then models.dev), the day it was published (the provider's list, then
+       models.dev's release date), the day OpenRouter LISTED it (present only
+       while that rung is on -- never its release date), and a retirement
+       (the vendor's client, the provider's list, LiteLLM, models.dev's
+       flag). Each badged with the rung that said it; shown, never acted on. */
+    rows.push(["description", capabilities.description]);
     rows.push(["knowledge cutoff", capabilities.knowledge_cutoff]);
+    rows.push(["published", capabilities.published_at]);
     rows.push(["listed on OpenRouter", capabilities.listed_on_openrouter]);
+    rows.push(["retires", capabilities.retires_at]);
     /* The prices resolved long before anything read them: the ladder has
        returned a rate and a tier for every (provider, model) since 6.35.0 and
        no surface showed either. They carry the same provenance badge as every
@@ -27927,6 +27934,8 @@ const KIND_SOURCE_BADGES = {
   models_dev: "models_dev",
   media_rail: "media_rail",
   openrouter_live: "openrouter_live",
+  litellm: "litellm",
+  litellm_words: "litellm",
 };
 
 /* OpenRouter's live statement of a kind that differs from the one shown

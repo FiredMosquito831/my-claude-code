@@ -62,7 +62,10 @@
      "prompt": "0.000001",
      "completion": "0.0000027",
      "input_cache_read": "0.00000005"
-    }
+    },
+    "description": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional...",
+    "expiration_date": null,
+    "knowledge_cutoff": null
    }
   ]
  },
@@ -88,7 +91,8 @@
      "prompt": "0.0000020000",
      "completion": "0.0000100000",
      "input_cache_read": "0.0000002000"
-    }
+    },
+    "description": ""
    },
    {
     "id": "tencent/hy3",
@@ -154,7 +158,10 @@
      "prompt": "0.0000001300",
      "completion": "0.0000005300",
      "input_cache_read": "0.0000000330"
-    }
+    },
+    "description": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:...",
+    "expiration_date": "2026-10-08",
+    "knowledge_cutoff": null
    }
   ]
  },
@@ -192,7 +199,8 @@
     "pricing": {
      "prompt": "-1",
      "completion": "-1"
-    }
+    },
+    "description": "Routes each request to the cheapest model that gets the job done, based on continuously benchmarked accuracy and cost."
    }
   ]
  },
@@ -239,7 +247,8 @@
      }
     },
     "input_token_price_per_m": 10000,
-    "output_token_price_per_m": 10000
+    "output_token_price_per_m": 10000,
+    "description": ""
    },
    {
     "id": "ming-image-0.1-design-layer",
@@ -280,7 +289,8 @@
      }
     },
     "input_token_price_per_m": 10000,
-    "output_token_price_per_m": 10000
+    "output_token_price_per_m": 10000,
+    "description": ""
    },
    {
     "id": "zai-org/glm-5.3-flash",
@@ -332,7 +342,8 @@
      }
     },
     "input_token_price_per_m": 1500,
-    "output_token_price_per_m": 5000
+    "output_token_price_per_m": 5000,
+    "description": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while reducing compute overhead."
    }
   ]
  },
@@ -381,7 +392,10 @@
     "pricing": {
      "input": "0.00000012",
      "output": "0.00000024"
-    }
+    },
+    "description": "Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models. Built upon extensive training, Qwen3 delivers groundbreaking advancements in reasoning, instruction-following, agent capabilities, and multilingual support",
+    "knowledge": "2025-04",
+    "released": 1745798400
    },
    {
     "id": "bfl/flux-2-flex",
@@ -403,7 +417,9 @@
      "image-generation"
     ],
     "max_tokens": 0,
-    "pricing": {}
+    "pricing": {},
+    "description": "FLUX.2 is a completely new base model trained for visual intelligence, not just pixel generation, setting a new standard for both image generation and image editing. With FLUX.2 models you can expect the highest quality, higher resolutions (up to 4MP), and new capabilities like multi-ref images. FLUX.2 [flex] supports customizable image generation and editing with adjustable steps and guidance. It's better at typography and text rendering. It supports up to 10 reference images (up to 14 MP total input).\nThis provider gives the option to change the moderation level for inputs and outputs. The control is under safety tolerance and is by default 2 on a range from 0 (more strict) through 6 (more permissive).",
+    "released": 1764028800
    },
    {
     "id": "alibaba/qwen3-embedding-0.6b",
@@ -424,7 +440,9 @@
     "max_tokens": 32768,
     "pricing": {
      "input": "0.00000001"
-    }
+    },
+    "description": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. Building upon the dense foundational models of the Qwen3 series, it provides a comprehensive range of text embeddings and reranking models in various sizes (0.6B, 4B, and 8B).",
+    "released": 1763078400
    },
    {
     "id": "fish-audio/transcribe-1",
@@ -443,7 +461,9 @@
     },
     "pricing": {
      "input": "0.0000000001"
-    }
+    },
+    "description": "Turn spoken audio into accurate text \u2014 with timed segments \u2014 using Fish Audio\u2019s ASR model. Send an audio file, get back the transcript, its duration, and timestamped segments.",
+    "released": 1772323200
    }
   ]
  },
@@ -563,7 +583,8 @@
    {
     "id": "cline-pass/deepseek-v4.1-flash",
     "name": "cline-pass/deepseek-v4.1-flash",
-    "tags": []
+    "tags": [],
+    "description": "Smarter and more efficient, with 1M context window"
    }
   ]
  }

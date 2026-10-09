@@ -6828,6 +6828,7256 @@
    }
   }
  },
+ "k3/none/capabilities/cline/cline-pass/deepseek-v4.1-flash": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Smarter and more efficient, with 1M context window"
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2025-05"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2026-09-10"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/commandcode/claude-sonnet-5-5": {
+  "after": {
+   "description": {
+    "approximate": true,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": "Fast Claude model for everyday coding, agents, and knowledge work"
+   },
+   "knowledge_cutoff": {
+    "approximate": true,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": "2026-06"
+   },
+   "published_at": {
+    "approximate": true,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": "2026-09-28"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/commandcode/deepseek/deepseek-v4-flash-fast": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/commandcode/gpt-6-astra": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "GPT model for general reasoning, writing, coding, and tool-assisted tasks"
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-04-30"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-09-04"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/hypercharm/deepseek-v4.1-flash": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "DeepSeek V4.1 Flash model for reasoning and agentic coding"
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2025-05"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2026-09-10"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/kilo/kilo-auto/efficient": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Routes each request to the cheapest model that gets the job done, based on continuously benchmarked accuracy and cost."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "1970-01-01"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/nous_portal/anthropic/claude-sonnet-5": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "Everyday Claude agent model for coding, planning, browsing, and general work"
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-01-31"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-06-30"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/nous_portal/tencent/hy3": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-07-06"
+   },
+   "retires_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it stops serving this model. Shown only: the model stays listed and routable.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-10-08"
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/novita/ming-image-0.1-design": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-09-18"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/novita/ming-image-0.1-design-layer": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-09-18"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/novita/zai-org/glm-5.3-flash": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while reducing compute overhead."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-08-26"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/nvidia_nim/01-ai/yi-large": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/nvidia_nim/moonshotai/kimi-k3": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work"
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2026-07-16"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/open_router/stepfun/step-5-preview": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/opencode_go/minimax-m3": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "MiniMax multimodal coding model for long-context reasoning and agent tasks"
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2025-01"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2026-05-31"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/vercel/alibaba/qwen-3-14b": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models. Built upon extensive training, Qwen3 delivers groundbreaking advancements in reasoning, instruction-following, agent capabilities, and multilingual support"
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2025-04"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2025-04-28"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/vercel/alibaba/qwen3-embedding-0.6b": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. Building upon the dense foundational models of the Qwen3 series, it provides a comprehensive range of text embeddings and reranking models in various sizes (0.6B, 4B, and 8B)."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2025-11-14"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/vercel/bfl/flux-2-flex": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "FLUX.2 is a completely new base model trained for visual intelligence, not just pixel generation, setting a new standard for both image generation and image editing. With FLUX.2 models you can expect the highest quality, higher resolutions (up to 4MP), and new capabilities like multi-ref images. FLUX.2 [flex] supports customizable image generation and editing with adjustable steps and guidance. It's better at typography and text rendering. It supports up to 10 reference images (up to 14 MP total input).\nThis provider gives the option to change the moderation level for inputs and outputs. The control is under safety tolerance and is by default 2 on a range from 0 (more strict) through 6 (more permissive)."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2025-11-25"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/capabilities/vercel/fish-audio/transcribe-1": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Turn spoken audio into accurate text \u2014 with timed segments \u2014 using Fish Audio\u2019s ASR model. Send an audio file, get back the transcript, its duration, and timestamped segments."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-03-01"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": null,
+   "knowledge_cutoff": null
+  }
+ },
+ "k3/none/catalogue-provenance-diff": {
+  "anthropic/cline/cline-pass/deepseek-v4.1-flash": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/commandcode/claude-sonnet-5-5": {
+   "description": [
+    null,
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/commandcode/deepseek/deepseek-v4-flash-fast": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/commandcode/gpt-6-astra": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/hypercharm/deepseek-v4.1-flash": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/kilo/kilo-auto/efficient": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/best": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/cheap": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/cyber": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/good": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/medium": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/vision": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nous_portal/anthropic/claude-sonnet-5": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nous_portal/tencent/hy3": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ]
+  },
+  "anthropic/novita/ming-image-0.1-design": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/novita/ming-image-0.1-design-layer": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/novita/zai-org/glm-5.3-flash": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nvidia_nim/01-ai/yi-large": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nvidia_nim/moonshotai/kimi-k3": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nvidia_nim/test-model": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/open_router/stepfun/step-5-preview": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/opencode_go/minimax-m3": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/vercel/alibaba/qwen-3-14b": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/vercel/alibaba/qwen3-embedding-0.6b": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/cline/cline-pass/deepseek-v4.1-flash": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/commandcode/claude-sonnet-5-5": {
+   "description": [
+    null,
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/commandcode/deepseek/deepseek-v4-flash-fast": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/commandcode/gpt-6-astra": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/hypercharm/deepseek-v4.1-flash": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/kilo/kilo-auto/efficient": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nous_portal/anthropic/claude-sonnet-5": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nous_portal/tencent/hy3": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/ming-image-0.1-design": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/ming-image-0.1-design-layer": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/zai-org/glm-5.3-flash": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nvidia_nim/01-ai/yi-large": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nvidia_nim/moonshotai/kimi-k3": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nvidia_nim/test-model": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/open_router/stepfun/step-5-preview": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/opencode_go/minimax-m3": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/vercel/alibaba/qwen-3-14b": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/vercel/alibaba/qwen3-embedding-0.6b": {
+   "description": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  }
+ },
+ "k3/none/page-diff": {
+  "cline/cline-pass/deepseek-v4.1-flash": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Smarter and more efficient, with 1M context window"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2025-05"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2026-09-10"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "commandcode/claude-sonnet-5-5": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": true,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id",
+     "value": "Fast Claude model for everyday coding, agents, and knowledge work"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": true,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id",
+     "value": "2026-06"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": true,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id",
+     "value": "2026-09-28"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "commandcode/deepseek/deepseek-v4-flash-fast": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "commandcode/gpt-6-astra": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "GPT model for general reasoning, writing, coding, and tool-assisted tasks"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-04-30"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-09-04"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "hypercharm/deepseek-v4.1-flash": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "DeepSeek V4.1 Flash model for reasoning and agentic coding"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2025-05"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2026-09-10"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "kilo/kilo-auto/efficient": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Routes each request to the cheapest model that gets the job done, based on continuously benchmarked accuracy and cost."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "1970-01-01"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nous_portal/anthropic/claude-sonnet-5": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "Everyday Claude agent model for coding, planning, browsing, and general work"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-01-31"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-06-30"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nous_portal/tencent/hy3": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-07-06"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it stops serving this model. Shown only: the model stays listed and routable.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-10-08"
+    }
+   ]
+  },
+  "novita/ming-image-0.1-design": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-09-18"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "novita/ming-image-0.1-design-layer": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-09-18"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "novita/zai-org/glm-5.3-flash": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while reducing compute overhead."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-08-26"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nvidia_nim/01-ai/yi-large": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nvidia_nim/moonshotai/kimi-k3": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2026-07-16"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nvidia_nim/test-model": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "open_router/stepfun/step-5-preview": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "opencode_go/minimax-m3": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "MiniMax multimodal coding model for long-context reasoning and agent tasks"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2025-01"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2026-05-31"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/alibaba/qwen-3-14b": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models. Built upon extensive training, Qwen3 delivers groundbreaking advancements in reasoning, instruction-following, agent capabilities, and multilingual support"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2025-04"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2025-04-28"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/alibaba/qwen3-embedding-0.6b": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. Building upon the dense foundational models of the Qwen3 series, it provides a comprehensive range of text embeddings and reranking models in various sizes (0.6B, 4B, and 8B)."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2025-11-14"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/bfl/flux-2-flex": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "FLUX.2 is a completely new base model trained for visual intelligence, not just pixel generation, setting a new standard for both image generation and image editing. With FLUX.2 models you can expect the highest quality, higher resolutions (up to 4MP), and new capabilities like multi-ref images. FLUX.2 [flex] supports customizable image generation and editing with adjustable steps and guidance. It's better at typography and text rendering. It supports up to 10 reference images (up to 14 MP total input).\nThis provider gives the option to change the moderation level for inputs and outputs. The control is under safety tolerance and is by default 2 on a range from 0 (more strict) through 6 (more permissive)."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2025-11-25"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/fish-audio/transcribe-1": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Turn spoken audio into accurate text \u2014 with timed segments \u2014 using Fish Audio\u2019s ASR model. Send an audio file, get back the transcript, its duration, and timestamped segments."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-03-01"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  }
+ },
+ "k3/on/capabilities/cline/cline-pass/deepseek-v4.1-flash": {
+  "after": {
+   "description": {
+    "also_stated": {
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Smarter and more efficient, with 1M context window"
+    },
+    "approximate": false,
+    "note": "OpenRouter live, bare model + tag (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "deepseek/deepseek-v4.1-flash"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, bare model + tag",
+    "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2025-05"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2026-09-10"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, bare model + tag (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "deepseek/deepseek-v4.1-flash"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, bare model + tag",
+    "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/commandcode/claude-sonnet-5-5": {
+  "after": {
+   "description": {
+    "approximate": true,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": "Fast Claude model for everyday coding, agents, and knowledge work"
+   },
+   "knowledge_cutoff": {
+    "approximate": true,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": "2026-06"
+   },
+   "published_at": {
+    "approximate": true,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": "2026-09-28"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/commandcode/deepseek/deepseek-v4-flash-fast": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/commandcode/gpt-6-astra": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (openai/gpt-6-astra). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "openai/gpt-6-astra"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "GPT-6 Astra is OpenAI's flagship model for demanding end-to-end work. It is suited for advanced analysis, software engineering, deep research, scientific work, and document creation, with particular strengths in long-horizon..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-04-30"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-09-04"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (openai/gpt-6-astra). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "openai/gpt-6-astra"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "GPT-6 Astra is OpenAI's flagship model for demanding end-to-end work. It is suited for advanced analysis, software engineering, deep research, scientific work, and document creation, with particular strengths in long-horizon..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/hypercharm/deepseek-v4.1-flash": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "deepseek/deepseek-v4.1-flash"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2025-05"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2026-09-10"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "deepseek/deepseek-v4.1-flash"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/kilo/kilo-auto/efficient": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Routes each request to the cheapest model that gets the job done, based on continuously benchmarked accuracy and cost."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "1970-01-01"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/nous_portal/anthropic/claude-sonnet-5": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (anthropic/claude-sonnet-5). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "anthropic/claude-sonnet-5"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Sonnet 5 is Anthropic's most capable Sonnet-class model, with frontier performance across coding, agents, and professional work. It supports adaptive thinking with selectable reasoning effort levels (low, medium, high, max,..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-01-31"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-06-30"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (anthropic/claude-sonnet-5). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "anthropic/claude-sonnet-5"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Sonnet 5 is Anthropic's most capable Sonnet-class model, with frontier performance across coding, agents, and professional work. It supports adaptive thinking with selectable reasoning effort levels (low, medium, high, max,..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/nous_portal/tencent/hy3": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": "2026-07-06"
+   },
+   "retires_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it stops serving this model. Shown only: the model stays listed and routable.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-10-08"
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (tencent/hy3). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "tencent/hy3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/novita/ming-image-0.1-design": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "inclusionai/ming-image-0.1-design"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Ming Image 0.1 Design is a text-to-image model from inclusionAI aimed at graphic-design output, with an emphasis on legible text rendering inside the generated image. It generates from a prompt..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-09-18"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "inclusionai/ming-image-0.1-design"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Ming Image 0.1 Design is a text-to-image model from inclusionAI aimed at graphic-design output, with an emphasis on legible text rendering inside the generated image. It generates from a prompt..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/novita/ming-image-0.1-design-layer": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "inclusionai/ming-image-0.1-design-layer"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Ming Image 0.1 Design Layer is an image-to-image model from inclusionAI that decomposes a flattened design image into separate RGBA layers, such as a background layer and foreground elements, and..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-09-18"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "inclusionai/ming-image-0.1-design-layer"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Ming Image 0.1 Design Layer is an image-to-image model from inclusionAI that decomposes a flattened design image into separate RGBA layers, such as a background layer and foreground elements, and..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/novita/zai-org/glm-5.3-flash": {
+  "after": {
+   "description": {
+    "also_stated": {
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while reducing compute overhead."
+    },
+    "approximate": false,
+    "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "z-ai/glm-5.3-flash"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, bare model + tag",
+    "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-08-26"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "z-ai/glm-5.3-flash"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, bare model + tag",
+    "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/nvidia_nim/01-ai/yi-large": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/nvidia_nim/moonshotai/kimi-k3": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (moonshotai/kimi-k3). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "moonshotai/kimi-k3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Kimi K3 is a 2.8T parameter open-weight multimodal reasoning model from Moonshot AI. It is suited for complex coding, knowledge work, and long-horizon agentic workflows, and is particularly strong at..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2026-07-16"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (moonshotai/kimi-k3). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "moonshotai/kimi-k3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Kimi K3 is a 2.8T parameter open-weight multimodal reasoning model from Moonshot AI. It is suited for complex coding, knowledge work, and long-horizon agentic workflows, and is particularly strong at..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/open_router/stepfun/step-5-preview": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (stepfun/step-5-preview). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "stepfun/step-5-preview"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/opencode_go/minimax-m3": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (minimax/minimax-m3). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "minimax/minimax-m3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2025-01"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": "2026-05-31"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (minimax/minimax-m3). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "minimax/minimax-m3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,..."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/vercel/alibaba/qwen-3-14b": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models. Built upon extensive training, Qwen3 delivers groundbreaking advancements in reasoning, instruction-following, agent capabilities, and multilingual support"
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2025-04"
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2025-04-28"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/vercel/alibaba/qwen3-embedding-0.6b": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. Building upon the dense foundational models of the Qwen3 series, it provides a comprehensive range of text embeddings and reranking models in various sizes (0.6B, 4B, and 8B)."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2025-11-14"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/vercel/bfl/flux-2-flex": {
+  "after": {
+   "description": {
+    "approximate": false,
+    "note": "Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "FLUX.2 is a completely new base model trained for visual intelligence, not just pixel generation, setting a new standard for both image generation and image editing. With FLUX.2 models you can expect the highest quality, higher resolutions (up to 4MP), and new capabilities like multi-ref images. FLUX.2 [flex] supports customizable image generation and editing with adjustable steps and guidance. It's better at typography and text rendering. It supports up to 10 reference images (up to 14 MP total input).\nThis provider gives the option to change the moderation level for inputs and outputs. The control is under safety tolerance and is by default 2 on a range from 0 (more strict) through 6 (more permissive)."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2025-11-25"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/capabilities/vercel/fish-audio/transcribe-1": {
+  "after": {
+   "description": {
+    "also_stated": {
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Turn spoken audio into accurate text \u2014 with timed segments \u2014 using Fish Audio\u2019s ASR model. Send an audio file, get back the transcript, its duration, and timestamped segments."
+    },
+    "approximate": false,
+    "note": "OpenRouter live, exact id (fish-audio/transcribe-1). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "fish-audio/transcribe-1"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Transcribe 1 is a speech-to-text model from Fish Audio. It is suited for audio transcription with automatic language detection and can return timestamped word-level segments when alignment details are requested."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "published_at": {
+    "approximate": false,
+    "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": "2026-03-01"
+   },
+   "retires_at": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "before": {
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (fish-audio/transcribe-1). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "fish-audio/transcribe-1"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "Transcribe 1 is a speech-to-text model from Fish Audio. It is suited for audio transcription with automatic language detection and can return timestamped word-level segments when alignment details are requested."
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  }
+ },
+ "k3/on/catalogue-provenance-diff": {
+  "anthropic/cline/cline-pass/deepseek-v4.1-flash": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/commandcode/claude-sonnet-5-5": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/commandcode/deepseek/deepseek-v4-flash-fast": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/commandcode/gpt-6-astra": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/hypercharm/deepseek-v4.1-flash": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/kilo/kilo-auto/efficient": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/best": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/cheap": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/cyber": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/good": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/medium": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/mcc/vision": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nous_portal/anthropic/claude-sonnet-5": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nous_portal/tencent/hy3": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id"
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ]
+  },
+  "anthropic/novita/ming-image-0.1-design": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/novita/ming-image-0.1-design-layer": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/novita/zai-org/glm-5.3-flash": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nvidia_nim/01-ai/yi-large": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nvidia_nim/moonshotai/kimi-k3": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/nvidia_nim/test-model": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/open_router/stepfun/step-5-preview": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id"
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/opencode_go/minimax-m3": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/vercel/alibaba/qwen-3-14b": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "anthropic/vercel/alibaba/qwen3-embedding-0.6b": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/cline/cline-pass/deepseek-v4.1-flash": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/commandcode/claude-sonnet-5-5": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": true,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/commandcode/deepseek/deepseek-v4-flash-fast": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/commandcode/gpt-6-astra": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/hypercharm/deepseek-v4.1-flash": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/kilo/kilo-auto/efficient": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nous_portal/anthropic/claude-sonnet-5": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nous_portal/tencent/hy3": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id"
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/ming-image-0.1-design": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/ming-image-0.1-design-layer": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/zai-org/glm-5.3-flash": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nvidia_nim/01-ai/yi-large": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nvidia_nim/moonshotai/kimi-k3": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/nvidia_nim/test-model": {
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/open_router/stepfun/step-5-preview": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id"
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/opencode_go/minimax-m3": {
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/vercel/alibaba/qwen-3-14b": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "knowledge_cutoff": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  },
+  "claude-3-freecc-no-thinking/vercel/alibaba/qwen3-embedding-0.6b": {
+   "description": [
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    },
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "published_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id"
+    }
+   ],
+   "retires_at": [
+    null,
+    {
+     "approximate": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null
+    }
+   ]
+  }
+ },
+ "k3/on/page-diff": {
+  "cline/cline-pass/deepseek-v4.1-flash": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "note": "OpenRouter live, bare model + tag (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "deepseek/deepseek-v4.1-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+    },
+    {
+     "also_stated": {
+      "source": "provider",
+      "source_label": "provider /models",
+      "tier": 1,
+      "tier_label": "provider /models, exact id",
+      "value": "Smarter and more efficient, with 1M context window"
+     },
+     "approximate": false,
+     "note": "OpenRouter live, bare model + tag (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "deepseek/deepseek-v4.1-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2025-05"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2026-09-10"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "commandcode/claude-sonnet-5-5": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": true,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id",
+     "value": "Fast Claude model for everyday coding, agents, and knowledge work"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": true,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id",
+     "value": "2026-06"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": true,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "approximate",
+     "source_label": "approximate cross-provider",
+     "tier": 7,
+     "tier_label": "cross-provider, exact id",
+     "value": "2026-09-28"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "commandcode/deepseek/deepseek-v4-flash-fast": {
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "commandcode/gpt-6-astra": {
+   "capabilities.knowledge_cutoff": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-04-30"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-09-04"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "hypercharm/deepseek-v4.1-flash": {
+   "capabilities.knowledge_cutoff": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2025-05"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2026-09-10"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "kilo/kilo-auto/efficient": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Routes each request to the cheapest model that gets the job done, based on continuously benchmarked accuracy and cost."
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "1970-01-01"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nous_portal/anthropic/claude-sonnet-5": {
+   "capabilities.knowledge_cutoff": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-01-31"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-06-30"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nous_portal/tencent/hy3": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (tencent/hy3). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "tencent/hy3"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:..."
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:..."
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": "2026-07-06"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it stops serving this model. Shown only: the model stays listed and routable.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-10-08"
+    }
+   ]
+  },
+  "novita/ming-image-0.1-design": {
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-09-18"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "novita/ming-image-0.1-design-layer": {
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-09-18"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "novita/zai-org/glm-5.3-flash": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "z-ai/glm-5.3-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while..."
+    },
+    {
+     "also_stated": {
+      "source": "provider",
+      "source_label": "provider /models",
+      "tier": 1,
+      "tier_label": "provider /models, exact id",
+      "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while reducing compute overhead."
+     },
+     "approximate": false,
+     "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "z-ai/glm-5.3-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while..."
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-08-26"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nvidia_nim/01-ai/yi-large": {
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nvidia_nim/moonshotai/kimi-k3": {
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2026-07-16"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nvidia_nim/test-model": {
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "open_router/stepfun/step-5-preview": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (stepfun/step-5-preview). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "stepfun/step-5-preview"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional..."
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional..."
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "opencode_go/minimax-m3": {
+   "capabilities.knowledge_cutoff": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2025-01"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The vendor's release day, as models.dev catalogues it. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": "2026-05-31"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/alibaba/qwen-3-14b": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models. Built upon extensive training, Qwen3 delivers groundbreaking advancements in reasoning, instruction-following, agent capabilities, and multilingual support"
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2025-04"
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2025-04-28"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/alibaba/qwen3-embedding-0.6b": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. Building upon the dense foundational models of the Qwen3 series, it provides a comprehensive range of text embeddings and reranking models in various sizes (0.6B, 4B, and 8B)."
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2025-11-14"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/bfl/flux-2-flex": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "note": "Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "FLUX.2 is a completely new base model trained for visual intelligence, not just pixel generation, setting a new standard for both image generation and image editing. With FLUX.2 models you can expect the highest quality, higher resolutions (up to 4MP), and new capabilities like multi-ref images. FLUX.2 [flex] supports customizable image generation and editing with adjustable steps and guidance. It's better at typography and text rendering. It supports up to 10 reference images (up to 14 MP total input).\nThis provider gives the option to change the moderation level for inputs and outputs. The control is under safety tolerance and is by default 2 on a range from 0 (more strict) through 6 (more permissive)."
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2025-11-25"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/fish-audio/transcribe-1": {
+   "capabilities.description": [
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (fish-audio/transcribe-1). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "fish-audio/transcribe-1"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Transcribe 1 is a speech-to-text model from Fish Audio. It is suited for audio transcription with automatic language detection and can return timestamped word-level segments when alignment details are requested."
+    },
+    {
+     "also_stated": {
+      "source": "provider",
+      "source_label": "provider /models",
+      "tier": 1,
+      "tier_label": "provider /models, exact id",
+      "value": "Turn spoken audio into accurate text \u2014 with timed segments \u2014 using Fish Audio\u2019s ASR model. Send an audio file, get back the transcript, its duration, and timestamped segments."
+     },
+     "approximate": false,
+     "note": "OpenRouter live, exact id (fish-audio/transcribe-1). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "fish-audio/transcribe-1"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Transcribe 1 is a speech-to-text model from Fish Audio. It is suited for audio transcription with automatic language detection and can return timestamped word-level segments when alignment details are requested."
+    }
+   ],
+   "capabilities.published_at": [
+    null,
+    {
+     "approximate": false,
+     "note": "The day the provider's own model list says it published this model. Shown only; nothing reads it.",
+     "reference": false,
+     "source": "provider",
+     "source_label": "provider /models",
+     "tier": 1,
+     "tier_label": "provider /models, exact id",
+     "value": "2026-03-01"
+    }
+   ],
+   "capabilities.retires_at": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  }
+ },
  "k4-blanked/admin/catalogue-models": {
   "bytes": 225102,
   "sha256": "f224ccfe152a6eecd78617a4f952d91fdaa0455c2beee6b44b7cc65a1cb21580"

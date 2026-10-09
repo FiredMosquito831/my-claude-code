@@ -7699,6 +7699,15 @@ audio.req-media-preview {
   color: var(--warn);
 }
 
+/* LiteLLM's model map (7.85.0): read only while LiteLLM pricing is on, for a
+   kind, endpoints or a retirement day nothing above it stated. Shown, never
+   acted on by routing. */
+.models-source-litellm {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
 /* A vote across same-named rows in other providers' buckets. It is regularly
    wrong -- one free model is credited with a 1,048,576-token output limit off
    a single match -- so it never gets to look like a published number. */

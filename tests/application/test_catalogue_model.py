@@ -7,6 +7,7 @@ from my_claude_code.application.catalogue_model import (
     build_catalogue_models,
     derive_supports_tool_calls,
 )
+from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
     ModelReasoningCapability,
@@ -111,6 +112,9 @@ class FakeRuntime(RequestRuntimePort):
         if capability is None or capability.can_reason is None:
             return None, None
         return capability.can_reason, self._tiers.get(f"reason:{ref}")
+
+    def litellm_model_catalogue(self) -> LiteLLMCatalogue | None:
+        return None
 
     def openrouter_live_catalogue(self) -> LiveCatalogue | None:
         return self._live

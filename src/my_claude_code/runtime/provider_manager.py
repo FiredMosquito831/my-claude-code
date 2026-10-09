@@ -10,6 +10,7 @@ from typing import Protocol
 from loguru import logger
 
 from my_claude_code.application.errors import ApplicationUnavailableError
+from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_kinds import (
     provider_first_modalities,
     provider_kind_words,
@@ -38,6 +39,7 @@ from my_claude_code.providers.runtime.discovery import (
     ProviderModelDiscovery,
     model_cache_provider_ids_for_settings,
 )
+from my_claude_code.providers.runtime.litellm_prices import litellm_model_catalogue
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.models_dev import (
     declared_modalities_lookup,
@@ -457,6 +459,17 @@ class ProviderRuntimeManager:
         that a request is built from consults it (user decision Q5).
         """
         return openrouter_live_catalogue(self._current.settings)
+
+    def litellm_model_catalogue(self) -> LiteLLMCatalogue | None:
+        """LiteLLM's model map as a kind and display rung (7.85.0).
+
+        ``None`` unless LiteLLM pricing is on (``COST_SOURCE_LITELLM_ENABLED``,
+        off by default) and its file is on disk -- which every consumer reads
+        as "no such rung", the build before 7.85.0. Read by the kind lists and
+        the Models page at the seams that read OpenRouter's live list; never
+        by routing, and never by pricing, which keeps its own rate-card walk.
+        """
+        return litellm_model_catalogue(self._current.settings)
 
     def model_can_reason_tiered(
         self, provider_id: str, model_id: str

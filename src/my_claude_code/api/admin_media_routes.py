@@ -38,6 +38,7 @@ from my_claude_code.api.model_admin import (
     media_output_modalities,
     model_kind_payload,
 )
+from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.media.executor import media_route_health_registry
 from my_claude_code.application.media.rails import rail_refs
 from my_claude_code.application.media.request import (
@@ -231,6 +232,7 @@ def media_models_payload(
     kind_modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
     live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page's media section renders. Synchronous.
 
@@ -246,7 +248,9 @@ def media_models_payload(
     provider records' dicts, which are replaced and never mutated in place, so
     running them on the worker thread is safe. Without them the kind is read
     from models.dev alone. ``live`` is OpenRouter's live list (7.84.0), bound
-    once on the loop; its index is built once and never mutated.
+    once on the loop; its index is built once and never mutated. ``litellm``
+    is LiteLLM's map (7.85.0), present only while LiteLLM pricing is on: the
+    same two kind rungs every model list reads.
     """
 
     if bench is None:
@@ -302,7 +306,7 @@ def media_models_payload(
             descriptor = descriptors.get(provider_id)
             if ref not in rows:
                 kinds[ref] = declared_model_kind(
-                    ref, rail_placements, kind_modalities, kind_words, live
+                    ref, rail_placements, kind_modalities, kind_words, live, litellm
                 )
                 if descriptor is None:
                     provider_state = "unknown"
@@ -390,6 +394,7 @@ async def media_models(
         kind_modalities=services.requests.model_modalities_lookup(),
         kind_words=services.requests.model_kind_words_lookup(),
         live=services.requests.openrouter_live_catalogue(),
+        litellm=services.requests.litellm_model_catalogue(),
     )
 
 

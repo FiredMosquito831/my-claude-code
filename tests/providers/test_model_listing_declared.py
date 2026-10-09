@@ -295,7 +295,7 @@ def test_command_code_keeps_its_endpoint_words_and_nothing_else_moves() -> None:
     )
 
 
-@pytest.mark.parametrize("row", SILENT_ROWS, ids=lambda row: row["id"])
+@pytest.mark.parametrize("row", SILENT_ROWS[:2], ids=lambda row: row["id"])
 def test_a_row_that_states_nothing_yields_none(row: dict[str, Any]) -> None:
     assert declared_from_row(row) is None
     (info,) = extract_openai_model_infos({"data": [row]}, provider_name="S")
@@ -304,10 +304,16 @@ def test_a_row_that_states_nothing_yields_none(row: dict[str, Any]) -> None:
 
 
 def test_cline_rows_under_their_own_collection_are_read_too() -> None:
+    """Cline's row states no kind word and no number -- only its description,
+    which 7.85.0 keeps for the Models page and nothing else reads."""
+
     (info,) = extract_openai_model_infos(
         {"clinePass": [SILENT_ROWS[2]]}, provider_name="C", collection_field="clinePass"
     )
-    assert info.declared is None
+    assert info.declared == ProviderModelDeclaration(
+        description="Smarter and more efficient, with 1M context window"
+    )
+    assert replace(info, declared=None) == ProviderModelInfo(model_id=info.model_id)
 
 
 def test_a_row_with_no_kind_word_states_only_its_numbers() -> None:
@@ -421,6 +427,16 @@ def _poisoned(row: dict[str, Any]) -> dict[str, Any]:
         "capabilities": {"reasoning": "yes", "function_calling": 1},
         "reasoning": {"mandatory": False},
         "reasoning_options": {},
+        # 7.85.0 paths, likewise unreadable: a bool epoch, a list date, a number
+        # where text belongs, and a list stamp nobody can read as a date.
+        "created": True,
+        "created_at": ["2025-01-01"],
+        "released": [1765843200],
+        "expiration_date": {"day": "2026-10-09"},
+        "deprecated_at": True,
+        "knowledge_cutoff": 2025,
+        "knowledge": ["2025-04"],
+        "description": 7,
     }
 
 
