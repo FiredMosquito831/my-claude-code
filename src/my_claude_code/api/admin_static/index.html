@@ -352,6 +352,12 @@
               switch spends real time inside one request and the deadlines do
               not move to make room.
             </p>
+            <p class="field-description" id="proxyingOneEntry">
+              A chain with only one proxy in it never switches and never falls
+              back to this machine's own address: that one address carries
+              everything. For a refused request to move on, give the chain two
+              or more entries &mdash; two Tor ports, for example.
+            </p>
             <p class="field-description" id="proxyingNeverDirect">
               With <strong>Fall back to this machine's own address</strong>
               (Direct fallback) switched off, a chain never sends a request
@@ -405,6 +411,9 @@
                     and contacts nothing, and scans only when you press the
                     button. See the
                     <a href="#guide-proxy-sources">Guide</a>.
+                    A tor you run yourself, on ports of your choosing, goes in
+                    <em>Tor you run yourself</em> below (see
+                    <a href="#guide-proxy-tor">Bring your own Tor</a>).
                   </p>
                   <p class="proxy-sources-terms">
                     Spreading requests over many exits can conflict with a
@@ -2042,6 +2051,7 @@
                 <a href="#guide-proxy-chains">What a proxy chain hides</a>
                 <a href="#guide-proxy-keep-trying">Keep trying exits until one answers</a>
                 <a href="#guide-proxy-sources">Proxies on this computer, and where each exit comes out</a>
+                <a href="#guide-proxy-tor">Bring your own Tor</a>
                 <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
@@ -3920,6 +3930,95 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   as <code>host:port#1a2b</code> &mdash; a short digest of each login,
                   never the login &mdash; and a chain that would hold the same address
                   twice is refused with a sentence naming both entries.
+                </p>
+
+                <h3 id="guide-proxy-tor">Bring your own Tor</h3>
+                <p>
+                  MCC can send a provider's requests through a tor <strong>you</strong>
+                  run. It never downloads, installs or starts tor: you run it with a few
+                  lines MCC shows you, and MCC uses its SOCKS ports as chain entries and
+                  its control port for one button.
+                </p>
+                <ol>
+                  <li><strong>Choose ports.</strong> One SOCKS port per identity &mdash;
+                    two or more &mdash; and one control port. Any free ports will do. On
+                    some Windows computers 9050, 9052 and 9150 sit inside a range Windows
+                    reserves (<code>netsh int ipv4 show excludedportrange
+                    protocol=tcp</code> lists it), and nothing, tor included, can listen
+                    there. Type them on the Proxying page under <em>Proxies on this
+                    computer &rarr; Tor you run yourself</em> and press <em>Save Tor
+                    ports</em>. Saving contacts nothing.</li>
+                  <li><strong>Paste the torrc lines.</strong> The card shows one
+                    <code>SocksPort 127.0.0.1:&lt;port&gt;</code> line per port,
+                    <code>ControlPort 127.0.0.1:&lt;port&gt;</code> and
+                    <code>CookieAuthentication 1</code>, with the ports you typed.
+                    <em>Copy torrc lines</em>, paste them into the torrc your tor reads,
+                    and restart tor. Tor keeps streams from separate
+                    <code>SocksPort</code> lines on separate circuits, so each port is
+                    its own identity.</li>
+                  <li><strong>Check Tor.</strong> MCC logs in to the control port and
+                    shows tor's version, whether it has a circuit (or how far it has
+                    bootstrapped), and which of your ports tor really listens on.</li>
+                  <li><strong>Add the ports to a chain</strong> &mdash; one at a time, or
+                    <em>Add all to chain</em>. Each is tested against that provider's own
+                    host first, like any address. Each port goes by its own name,
+                    <code>Tor &middot; 127.0.0.1:&lt;port&gt;</code>, on the card, in the
+                    Analytics <em>Exit</em> column and in what MCC remembers about
+                    exits.</li>
+                  <li><strong>Tick <em>Keep trying exits until one answers</em></strong>
+                    on that chain: a 429 or a country refusal from one Tor exit then
+                    moves the same request to the next Tor port at once, and MCC
+                    remembers the exit that refused (see
+                    <a href="#guide-proxy-keep-trying">Keep trying exits until one
+                    answers</a>).</li>
+                </ol>
+                <p>
+                  <strong>One Tor port does not rotate.</strong> A chain with only one
+                  proxy in it never switches and never falls back to this machine's own
+                  address: that one address carries everything, refused or not. Put two
+                  or more Tor ports in the chain for a refusal to move on.
+                </p>
+                <p>
+                  <strong>New Tor identity.</strong> The button sends tor
+                  <code>SIGNAL NEWNYM</code>: new requests on every one of its ports get
+                  new circuits, so new exits. A connection that is already open keeps
+                  its exit until it closes (MCC lets an idle connection go after five
+                  seconds). Tor allows one new identity per 10 seconds, so MCC refuses a
+                  second press inside that window, sends nothing, and says how many
+                  seconds are left. MCC never asks for a new identity by itself &mdash;
+                  not after a refusal, not on a timer: moving a refused request to
+                  another port is the chain's job.
+                </p>
+                <p>
+                  <strong>How MCC logs in.</strong> By default, with tor's cookie: MCC
+                  asks tor where its cookie file is and reads it at the moment you press
+                  a button. It prefers <code>SAFECOOKIE</code>, where tor first proves it
+                  knows the cookie and the cookie itself never crosses the connection.
+                  The cookie is never copied into MCC's files, its logs or this page. If
+                  tor runs as another user or inside WSL, MCC may not be able to read
+                  that file: give tor a control password instead
+                  (<code>HashedControlPassword</code> followed by what
+                  <code>tor --hash-password</code> prints for it), choose <em>Log in
+                  with a control password</em> and type it. It is kept in
+                  <code>proxy_sources.json</code>, readable by you only, and never shown
+                  again. Both buttons talk to <code>127.0.0.1</code> on the control port
+                  and nowhere else: never through a chain, never to a provider.
+                </p>
+                <p>
+                  <strong>Tor is slow to connect.</strong> A fresh circuit can take
+                  longer than the 10-second default of
+                  <code>PROXY_CONNECT_TIMEOUT_SECONDS</code> (Limits &amp; Resilience
+                  &rarr; Credential health). Raise it &mdash; to 30, say &mdash; when your
+                  chains use Tor.
+                </p>
+                <p>
+                  <strong>What Tor sees, and what it asks.</strong> Tor's first relay
+                  sees your address and its exit sees the destination's name; no single
+                  relay sees both, and TLS keeps your keys, prompts and replies from
+                  every one of them. Tor exits are shared with strangers and many
+                  providers sit behind Cloudflare, which can challenge or refuse them.
+                  The Tor Project asks people not to push heavy or automated traffic
+                  through its volunteer exits.
                 </p>
 
                 <h3 id="guide-advanced">Where the advanced settings went</h3>

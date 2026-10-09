@@ -3291,6 +3291,40 @@ const PROXY_SOURCES_FIXTURE = {
   unreadable: "",
 };
 
+// 7.90.0: what the server answers for a tor the user runs, built from the
+// form the page sent, so a test sees its own ports come back.
+function torSourceFixture(sent) {
+  const ports = sent.tor.socks_ports;
+  return {
+    id: "src_tor",
+    kind: "tor",
+    built: true,
+    name: "Tor",
+    enabled: true,
+    added_at: new Date().toISOString(),
+    control_port: sent.tor.control_port,
+    auth: sent.tor.auth,
+    secret_set: sent.tor.auth === "password" && Boolean(sent.tor.password),
+    ports: ports.map((port) => ({
+      port,
+      proxy: `px_tor${port}`,
+      label: `Tor · 127.0.0.1:${port}`,
+      offered: true,
+      chained: [],
+      last_check: null,
+    })),
+    torrc:
+      [
+        "# My Claude Code: one SocksPort per identity, and the control port",
+        ...ports.map((port) => `SocksPort 127.0.0.1:${port}`),
+        `ControlPort 127.0.0.1:${sent.tor.control_port}`,
+        "CookieAuthentication 1",
+      ].join("\n") + "\n",
+    sees: "Tor's first relay sees your address and its exit sees the destination's name; no single relay sees both.",
+  };
+}
+let torNewnymPresses = 0;
+
 // Pause-route fault injection. Null means the route behaves normally.
 let pauseRefusal = null;
 let pauseHttpFailure = null;
@@ -3719,6 +3753,76 @@ window.fetch = async (url, options = {}) => {
       json: async () => JSON.parse(JSON.stringify(state)),
       text: async () => "",
     };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-sources/tor/status") {
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const tor = state.sources.sources.find((source) => source.kind === "tor");
+    tor.status = {
+      at: new Date().toISOString(),
+      ok: true,
+      sentence:
+        "Tor 0.4.8.13 · circuit established · logged in with the cookie (SAFECOOKIE).",
+      version: "0.4.8.13",
+      auth_method: "SAFECOOKIE",
+      circuit_established: true,
+      bootstrap: 100,
+      socks_listeners: [tor.ports[0].port, tor.ports[1].port],
+    };
+    const answer = JSON.parse(JSON.stringify(state));
+    answer.tor_result = {
+      action: "status", source: "src_tor", ok: true, sentence: tor.status.sentence,
+    };
+    return { ok: true, status: 200, json: async () => answer, text: async () => "" };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-sources/tor/newnym") {
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const tor = state.sources.sources.find((source) => source.kind === "tor");
+    torNewnymPresses += 1;
+    let result;
+    if (torNewnymPresses === 1) {
+      tor.newnym = { at: new Date().toISOString(), wait_seconds: 10 };
+      result = {
+        action: "newnym", accepted: true, wait_seconds: 10, refused_locally: false,
+        sentence:
+          "Tor accepted: new requests on every one of its SOCKS ports get new " +
+          "circuits, so new exits. A connection still open keeps its exit until it closes.",
+      };
+    } else {
+      tor.newnym.wait_seconds = 7;
+      result = {
+        action: "newnym", accepted: false, wait_seconds: 7, refused_locally: true,
+        sentence:
+          "Tor allows one new identity per 10 seconds: try again in 7 s. Nothing was sent.",
+      };
+    }
+    const answer = JSON.parse(JSON.stringify(state));
+    answer.tor_result = { ...result, source: "src_tor" };
+    return { ok: true, status: 200, json: async () => answer, text: async () => "" };
+  }
+  if (
+    String(url).split("?")[0] === "/admin/api/proxy-sources" &&
+    String((options && options.method) || "GET").toUpperCase() === "PUT" &&
+    (JSON.parse(options.body).kind === "tor" ||
+      JSON.parse(options.body).source === "src_tor")
+  ) {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    if (!state.sources) {
+      state.sources = JSON.parse(JSON.stringify(PROXY_SOURCES_FIXTURE));
+      state.sources.sources = [];
+    }
+    state.sources.sources = state.sources.sources.filter((source) => source.kind !== "tor");
+    if (!sent.remove) state.sources.sources.push(torSourceFixture(sent));
+    const answer = JSON.parse(JSON.stringify(state));
+    if (!sent.remove) {
+      answer.tor_result = {
+        action: "saved",
+        source: "src_tor",
+        sentence:
+          "Saved. Paste the torrc lines into your tor's torrc, restart tor, then press Check Tor.",
+      };
+    }
+    return { ok: true, status: 200, json: async () => answer, text: async () => "" };
   }
   if (String(url).split("?")[0] === "/admin/api/proxy-sources/scan") {
     const state = ROUTES["/admin/api/proxy-chains"];
@@ -5609,6 +5713,151 @@ if (withChain) {
   nim.chain = savedChain;
   state.vocabulary.checker = savedChecker;
   ROUTES["/admin/api/config/apply"] = savedApply;
+  await reload();
+}
+
+/* 7.90.0: a tor the user runs -- the form, the card with its torrc lines and
+   status, New Tor identity twice (the second refused with the seconds left),
+   and every port added to a chain through the one bulk add. */
+{
+  const state = ROUTES["/admin/api/proxy-chains"];
+  const text = (node) => (node ? node.textContent.replace(/\s+/g, " ").trim() : "");
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const reload = async () => {
+    navLinks.find((link) => link.dataset.view === "providers").click();
+    await wait(80);
+    navLinks.find((link) => link.dataset.view === "proxying").click();
+    await wait(160);
+  };
+  const block = () => doc.querySelector(".proxy-tor");
+  const card = () => doc.querySelector(".proxy-tor-source");
+  // The announcement's lead sentence (the panel also holds a Dismiss button).
+  const status = () => text(doc.querySelector("#proxyingStatus p"));
+  const out = {};
+
+  await reload();
+  out.empty = {
+    title: text(block() && block().querySelector(".proxy-tor-title")),
+    intro: text(block() && block().querySelector(".proxy-tor-intro")),
+    form: Boolean(block() && block().querySelector(".proxy-tor-form")),
+    cancel: Boolean(block() && block().querySelector(".proxy-tor-cancel")),
+    cards: doc.querySelectorAll(".proxy-tor-source").length,
+    sourceRows: doc.querySelectorAll(".proxy-source-row").length,
+    localStatus: text(doc.querySelector(".proxy-sources-status")),
+    oneEntry: text(doc.querySelector("#proxyingOneEntry")),
+  };
+
+  let since = fetchBodies.length;
+  block().querySelector("input.proxy-tor-socks").value = "19250, abc";
+  block().querySelector("input.proxy-tor-control").value = "19260";
+  block().querySelector("button.proxy-tor-save").click();
+  await wait(80);
+  out.badForm = {
+    puts: fetchBodies.slice(since).filter((entry) => entry.path === "/admin/api/proxy-sources")
+      .length,
+    announcement: status(),
+  };
+
+  since = fetchBodies.length;
+  const form = block().querySelector(".proxy-tor-form");
+  form.querySelector("input.proxy-tor-socks").value = "19250, 19251 19252";
+  form.querySelector("input.proxy-tor-control").value = "19260";
+  const auth = form.querySelector("select.proxy-tor-auth");
+  out.passwordHiddenAtFirst = form.querySelector("input.proxy-tor-password").hidden;
+  auth.value = "password";
+  auth.dispatchEvent(new window.Event("change"));
+  out.passwordShown = !form.querySelector("input.proxy-tor-password").hidden;
+  form.querySelector("input.proxy-tor-password").value = "tor-pw-secret-1";
+  form.querySelector("button.proxy-tor-save").click();
+  await wait(160);
+  out.saved = {
+    puts: fetchBodies
+      .slice(since)
+      .filter((entry) => entry.path === "/admin/api/proxy-sources")
+      .map((entry) => ({ method: entry.method, body: entry.body })),
+    pageHasPassword: doc.body.innerHTML.includes("tor-pw-secret-1"),
+    name: text(card() && card().querySelector(".proxy-tor-name")),
+    login: text(card() && card().querySelector(".proxy-tor-login")),
+    status: text(card() && card().querySelector(".proxy-tor-status")),
+    ports: Array.from(card().querySelectorAll(".proxy-tor-port")).map((row) => ({
+      port: row.dataset.port,
+      name: text(row.querySelector(".proxy-tor-port-name")),
+      state: text(row.querySelector(".proxy-tor-port-state")),
+      add: Boolean(row.querySelector("button.proxy-tor-add")),
+    })),
+    addAll: text(card().querySelector("button.proxy-tor-add-all-button")),
+    torrc: (card().querySelector("pre.proxy-tor-torrc") || {}).textContent || "",
+    copy: text(card().querySelector("button.proxy-tor-copy")),
+    sees: text(card().querySelector(".proxy-tor-sees")),
+    buttons: Array.from(card().querySelectorAll(".proxy-tor-actions button")).map(text),
+    newnymTitle: card().querySelector("button.proxy-tor-newnym").title,
+    another: text(block().querySelector("button.proxy-tor-another")),
+    form: Boolean(block().querySelector(".proxy-tor-form")),
+    announcement: status(),
+  };
+
+  since = fetchBodies.length;
+  card().querySelector("button.proxy-tor-check").click();
+  await wait(160);
+  out.checked = {
+    posts: fetchBodies.slice(since).map((entry) => ({ path: entry.path, body: entry.body })),
+    status: text(card().querySelector(".proxy-tor-status")),
+    ports: Array.from(card().querySelectorAll(".proxy-tor-port-state")).map(text),
+    announcement: status(),
+  };
+
+  since = fetchBodies.length;
+  card().querySelector("button.proxy-tor-newnym").click();
+  await wait(160);
+  out.newnym = {
+    posts: fetchBodies.slice(since).map((entry) => ({ path: entry.path, body: entry.body })),
+    note: text(card().querySelector(".proxy-tor-newnym-note")),
+    announcement: status(),
+  };
+  card().querySelector("button.proxy-tor-newnym").click();
+  await wait(160);
+  out.again = {
+    note: text(card().querySelector(".proxy-tor-newnym-note")),
+    announcement: status(),
+  };
+
+  since = fetchBodies.length;
+  card().querySelector(".proxy-tor-add-all select.proxy-tor-provider").value = "nvidia_nim";
+  card().querySelector("button.proxy-tor-add-all-button").click();
+  await wait(200);
+  out.addedAll = fetchBodies
+    .slice(since)
+    .filter((entry) => entry.path === "/admin/api/proxy-chains/candidates/bulk")
+    .map((entry) => entry.body);
+
+  since = fetchBodies.length;
+  card().querySelector("button.proxy-tor-edit").click();
+  await wait(60);
+  out.editing = {
+    socks: (block().querySelector("input.proxy-tor-socks") || {}).value || "",
+    control: (block().querySelector("input.proxy-tor-control") || {}).value || "",
+    auth: (block().querySelector("select.proxy-tor-auth") || {}).value || "",
+    passwordPlaceholder:
+      (block().querySelector("input.proxy-tor-password") || {}).placeholder || "",
+    cancel: Boolean(block().querySelector("button.proxy-tor-cancel")),
+  };
+  block().querySelector("button.proxy-tor-cancel").click();
+  await wait(60);
+  since = fetchBodies.length;
+  card().querySelector("button.proxy-tor-remove").click();
+  await wait(160);
+  out.removed = {
+    puts: fetchBodies
+      .slice(since)
+      .filter((entry) => entry.path === "/admin/api/proxy-sources")
+      .map((entry) => entry.body),
+    cards: doc.querySelectorAll(".proxy-tor-source").length,
+    form: Boolean(block().querySelector(".proxy-tor-form")),
+  };
+  proxying.tor = out;
+
+  delete state.sources;
+  torNewnymPresses = 0;
   await reload();
 }
 

@@ -9654,6 +9654,182 @@ audio.req-media-preview {
   flex-basis: 100%;
 }
 
+/* 7.90.0: a tor the user runs themselves -- its ports, buttons and torrc. */
+.proxy-tor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.proxy-tor-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-strong);
+}
+
+.proxy-tor-intro,
+.proxy-tor-form-note,
+.proxy-tor-torrc-lead,
+.proxy-tor-sees {
+  margin: 0;
+}
+
+.proxy-tor-form,
+.proxy-tor-actions,
+.proxy-tor-add-all {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.proxy-tor-form {
+  padding: var(--space-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+}
+
+.proxy-tor-form-note {
+  flex-basis: 100%;
+}
+
+.proxy-tor-socks {
+  width: 260px;
+  max-width: 100%;
+}
+
+.proxy-tor-control {
+  width: 170px;
+  max-width: 100%;
+}
+
+.proxy-tor-auth {
+  max-width: 280px;
+}
+
+.proxy-tor-password {
+  width: 200px;
+  max-width: 100%;
+}
+
+.proxy-tor-save,
+.proxy-tor-cancel,
+.proxy-tor-another,
+.proxy-tor-newnym,
+.proxy-tor-check,
+.proxy-tor-edit,
+.proxy-tor-remove,
+.proxy-tor-add,
+.proxy-tor-add-all-button,
+.proxy-tor-copy {
+  white-space: nowrap;
+}
+
+.proxy-tor-another {
+  align-self: flex-start;
+}
+
+.proxy-tor-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.proxy-tor-head,
+.proxy-tor-status,
+.proxy-tor-newnym-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.proxy-tor-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-strong);
+}
+
+.proxy-tor-login,
+.proxy-tor-newnym-note {
+  color: var(--muted);
+}
+
+.proxy-tor-status {
+  color: var(--text);
+}
+
+.proxy-tor-status-failed {
+  color: var(--error);
+}
+
+.proxy-tor-ports {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proxy-tor-port {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.proxy-tor-port-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-strong);
+}
+
+.proxy-tor-port-state,
+.proxy-tor-add-all-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.proxy-tor-port-state {
+  flex: 1 1 200px;
+}
+
+.proxy-tor-provider {
+  max-width: 220px;
+}
+
+.proxy-tor-torrc-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.proxy-tor-torrc {
+  align-self: stretch;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-muted, var(--panel));
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* What MCC remembers about one exit (7.81.0): a fact about the provider's
    answers, not a health measurement, so a muted warning tone rather than the
    health word's colours, and its own cell so the bounded health word above

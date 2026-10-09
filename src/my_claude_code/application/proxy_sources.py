@@ -35,6 +35,10 @@ from urllib.parse import urlsplit
 
 from loguru import logger
 
+from my_claude_code.application.tor_control import (
+    NEWNYM_GUARD,
+    TOR_READINGS,
+)
 from my_claude_code.config.proxy_chains import (
     SOURCE_SOURCE,
     ProxyChains,
@@ -52,10 +56,12 @@ from my_claude_code.config.proxy_sources import (
     PROTOCOL_HTTP,
     PROTOCOL_SOCKS5,
     SOURCE_KINDS,
+    TOR_SOURCE_PREFIX,
     LocalListener,
     ProxySource,
     ProxySources,
     SourceSecret,
+    TorSettings,
     mint_secret_id,
 )
 
@@ -79,6 +85,11 @@ TERMS_LINE = (
 TOR_LINE = (
     "The Tor Project asks people not to push heavy or automated traffic "
     "through its volunteer exits."
+)
+#: What Tor's relays see, on every Tor port: a scanned one or a tor source's.
+TOR_SEES = (
+    "Tor's first relay sees your address and its exit sees the "
+    "destination's name; no single relay sees both."
 )
 
 
@@ -107,27 +118,9 @@ LOCAL_SCAN_PORTS: tuple[ScanPort, ...] = (
         "The VPN provider also sees your real address, so it knows you "
         "talked to this provider.",
     ),
-    ScanPort(
-        9050,
-        "Tor",
-        "Tor's first relay sees your address and its exit sees the "
-        "destination's name; no single relay sees both.",
-        tor=True,
-    ),
-    ScanPort(
-        9052,
-        "Tor (the port opencode_lite uses)",
-        "Tor's first relay sees your address and its exit sees the "
-        "destination's name; no single relay sees both.",
-        tor=True,
-    ),
-    ScanPort(
-        9150,
-        "Tor Browser",
-        "Tor's first relay sees your address and its exit sees the "
-        "destination's name; no single relay sees both.",
-        tor=True,
-    ),
+    ScanPort(9050, "Tor", TOR_SEES, tor=True),
+    ScanPort(9052, "Tor (the port opencode_lite uses)", TOR_SEES, tor=True),
+    ScanPort(9150, "Tor Browser", TOR_SEES, tor=True),
     ScanPort(
         25344,
         "wireproxy (a WireGuard tunnel)",
@@ -273,8 +266,9 @@ def _existing_local(chains: ProxyChains, port: int, protocol: str) -> str:
     """An address the catalogue already holds for this listener, typed by hand.
 
     The same loopback port under the same family of scheme -- one the
-    operator added before the scan existed. Reused rather than duplicated, so
-    one listener never has two rows and two sets of books.
+    operator added before the scan existed, or (7.90.0) one a Tor source
+    already offers for that port. Reused rather than duplicated, so one
+    listener never has two rows and two sets of books.
     """
 
     wanted = _family("socks5" if protocol == PROTOCOL_SOCKS5 else "http")
@@ -291,7 +285,10 @@ def _existing_local(chains: ProxyChains, port: int, protocol: str) -> str:
             same_port
             and parsed.hostname in {LOCAL_HOST, "localhost"}
             and _family(parsed.scheme) == wanted
-            and endpoint.source != SOURCE_SOURCE
+            and (
+                endpoint.source != SOURCE_SOURCE
+                or endpoint.source_id.startswith(TOR_SOURCE_PREFIX)
+            )
         ):
             return proxy_id
     return ""
@@ -517,9 +514,66 @@ def _listener_payload(
     return payload
 
 
+def _tor_port_payload(
+    port: int, proxy_id: str, chains: ProxyChains, offered: set[str]
+) -> dict[str, Any]:
+    endpoint = chains.endpoint(proxy_id) if proxy_id else None
+    check = None if endpoint is None else endpoint.last_check
+    return {
+        "port": port,
+        "proxy": proxy_id if endpoint is not None else "",
+        "label": chains.ledger_label(proxy_id) if endpoint is not None else "",
+        "offered": proxy_id in offered,
+        "chained": _chained_in(chains, proxy_id),
+        "last_check": None if check is None else check.as_document(),
+    }
+
+
+def _tor_payload(
+    source: ProxySource, tor: TorSettings, chains: ProxyChains, sources: ProxySources
+) -> dict[str, Any]:
+    """A Tor source's card: its ports as offers, its torrc lines, its status.
+
+    Masked like everything else: whether a control password is stored, never
+    the password; the cookie is never anywhere to send. ``status`` and
+    ``newnym`` appear only once a button has been pressed in this process.
+    """
+
+    offered = set(chains.source_offers.get(source.id, ()))
+    payload: dict[str, Any] = {
+        "id": source.id,
+        "kind": source.kind,
+        "built": True,
+        "name": source.name,
+        "enabled": source.enabled,
+        "added_at": source.added_at,
+        "control_port": tor.control_port,
+        "auth": tor.auth,
+        "secret_set": sources.secret(tor.secret) is not None,
+        "ports": [
+            _tor_port_payload(item.port, item.proxy, chains, offered)
+            for item in tor.socks_ports
+        ],
+        "torrc": tor.torrc_lines(),
+        "sees": TOR_SEES,
+    }
+    reading = TOR_READINGS.get(source.id)
+    if reading is not None:
+        payload["status"] = reading.as_payload()
+    last = NEWNYM_GUARD.last_at(tor.control_port)
+    if last:
+        payload["newnym"] = {
+            "at": last,
+            "wait_seconds": NEWNYM_GUARD.wait_seconds(tor.control_port),
+        }
+    return payload
+
+
 def _source_payload(
     source: ProxySource, chains: ProxyChains, sources: ProxySources
 ) -> dict[str, Any]:
+    if source.tor is not None:
+        return _tor_payload(source, source.tor, chains, sources)
     offered = set(chains.source_offers.get(source.id, ()))
     base: dict[str, Any] = {
         "id": source.id,
