@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 from loguru import logger
 
+from my_claude_code.api.finalize_pool import run_on_finalize_pool
 from my_claude_code.api.request_pricing import rate_cards
 from my_claude_code.application.cost import MODE_AUTO, TokenUsage, resolve_cost
 from my_claude_code.application.execution import RouteAttemptRecord
@@ -1416,9 +1417,9 @@ class RequestCapture:
         record = self._begin_finalize(status)
         if record is None:
             return
-        work = asyncio.ensure_future(
-            asyncio.to_thread(self._compute_finalize_fields, record)
-        )
+        # Its own pool, not the default executor a dashboard scan can fill
+        # (7.90.1; ``api/finalize_pool.py``).
+        work = run_on_finalize_pool(self._compute_finalize_fields, record)
         try:
             await asyncio.shield(work)
         except asyncio.CancelledError:
