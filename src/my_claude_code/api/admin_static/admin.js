@@ -27778,7 +27778,11 @@ function buildContextWindowRow(form, key, row, capabilities, inputs) {
   });
   field.appendChild(wrap);
   inputs.set(name, { mode: mode, box: box, max: null, integer: true });
-  form.appendChild(field);
+  // Directly under max_output_tokens: the two numbers that bound a model.
+  const output = inputs.get("max_output_tokens");
+  const anchor = output && output.mode ? output.mode.closest(".models-override-row") : null;
+  if (anchor) anchor.after(field);
+  else form.appendChild(field);
 }
 
 function buildOverrideEditor(scope, key, row, editable, preferences, capabilities) {

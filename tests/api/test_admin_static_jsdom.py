@@ -5420,6 +5420,7 @@ def test_jsdom_the_context_row_shows_the_extracted_window_and_its_rung(
 
     assert ladder["present"] is True
     assert ladder["label"] == "context_length"
+    assert ladder["under"] == "max_output_tokens"
     assert ladder["mode"] == "inherit"
     assert ladder["max"] is None  # no upper bound, unlike the output cap
     assert "Also stated: 524,288 (provider /models or models.dev)." in ladder["note"]

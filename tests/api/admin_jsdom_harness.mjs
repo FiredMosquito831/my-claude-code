@@ -7678,6 +7678,10 @@ if (modelsLink) {
       value: box ? box.value : "",
       max: box ? box.getAttribute("max") : null,
       note: line ? flat(line.querySelector(".models-preference-note")) : "",
+      under:
+        line && line.previousElementSibling
+          ? flat(line.previousElementSibling.querySelector(".models-override-name") || line.previousElementSibling)
+          : "",
       refused: "",
     };
     if (box && save && status) {
