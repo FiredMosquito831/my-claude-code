@@ -10888,8 +10888,10 @@ const requestOrigin = {};
     session: cellAt(tr, "req-col-session").textContent,
     sessionTitle: (cellAt(tr, "req-col-session").querySelector("code") || {}).title || null,
     subagentBadge: Boolean(cellAt(tr, "req-col-session").querySelector(".req-subagent-badge")),
-    folder: cellAt(tr, "req-col-folder").textContent,
-    folderTitle: (cellAt(tr, "req-col-folder").querySelector(".req-folder") || {}).title || null,
+    // 7.88.0: the table's Folder column became Exit. Read as "absent" so a
+    // folder cell that came back would fail the test rather than the run.
+    folderCell: Boolean(cellAt(tr, "req-col-folder")),
+    exit: cellAt(tr, "req-col-exit").textContent,
     chip: cellAt(tr, "req-col-origin").textContent,
     chipTitle: (cellAt(tr, "req-col-origin").querySelector(".origin-chip") || {}).title || null,
     requested: cellAt(tr, "req-col-requested-model").textContent,
@@ -11106,6 +11108,178 @@ const originFilters = {};
   originFilters.errorNote = doc.getElementById("reqFolderBreakdownNote").textContent;
   window.eval("renderRequestOriginBreakdowns(null)");
   originFilters.disabledRows = doc.querySelectorAll("#reqFolderBreakdown tr").length;
+}
+
+// ------------------------------------------------- Exit column (7.88.0)
+/* The Requests table's Exit column, where Folder was: the exit of the attempt
+   the row names, "+N" when the request went out through more, every exit in
+   the title, each masked the way the Proxying page masks an address. Driven
+   through the real renderRequestsTable() and openRequestDetail(). Every
+   address is a documentation address (RFC 5737) or a made-up name, and every
+   "credential" is fake. */
+const requestExitCell = {};
+{
+  const base = {
+    harness: "claude",
+    ts_iso: "2026-10-09T10:00:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "opencode",
+    key_label: "OPENCODE_API_KEY",
+    requested_model: "claude-opus-4",
+    resolved_model: "muse-spark-1.3",
+    status: "success",
+    tokens_in: 10,
+    tokens_out: 20,
+    ttft_ms: 300,
+    duration_ms: 900,
+    project_dir: "C:\\Users\\devuser\\Projects\\demo",
+    project_short: "Projects\\demo · #3f9a21",
+    origin_provenance: {
+      project_dir: {
+        source: "prompt",
+        signal: "env-block",
+        sentence: "read from the prompt's environment block",
+      },
+    },
+  };
+  const system = "direct via system proxy 127.0.0.1:7890";
+  const secretSystem = "direct via system proxy carol:pw9x@10.0.0.1:8080";
+  const cases = {
+    chainEntry: { exit: { label: "Tokyo exit", tried: ["Tokyo exit"] } },
+    oneEntry: { exit: { label: "203.0.113.7:1080", tried: ["203.0.113.7:1080"] } },
+    staticProxy: {
+      status: "error",
+      exit: { label: "198.51.100.4:3128", tried: ["198.51.100.4:3128"] },
+    },
+    direct: { exit: { label: "direct", tried: ["direct"] } },
+    systemProxy: { exit: { label: system, tried: [system] } },
+    none: { exit: { label: null, tried: [] } },
+    missingField: {},
+    rotated: {
+      exit: {
+        label: "exit-c.example:1080",
+        tried: ["exit-a.example:1080", "exit-b.example:1080", "exit-c.example:1080"],
+      },
+    },
+    masked: {
+      exit: {
+        label: "socks5h://alice:s3cretpw@203.0.113.9:1080",
+        tried: ["bob:hunter2x@198.51.100.2:8080", "socks5h://alice:s3cretpw@203.0.113.9:1080"],
+      },
+    },
+    maskedSystem: { exit: { label: secretSystem, tried: [secretSystem] } },
+    noneThenOthers: { exit: { label: null, tried: ["exit-a.example:1080"] } },
+    media: {
+      endpoint: "/v1/images/generations",
+      params: { media: { operation: "image" } },
+      exit: { label: null, tried: [] },
+    },
+    videoJob: {
+      endpoint: "/v1/videos",
+      params: { media: { operation: "video" } },
+      exit: { label: "Tokyo exit", tried: ["Tokyo exit"] },
+    },
+  };
+  const names = Object.keys(cases);
+  const rows = names.map((name) => ({ ...base, id: `req-exit-${name}`, ...cases[name] }));
+  window.eval(`renderRequestsTable(${JSON.stringify(rows)})`);
+  const trs = Array.from(doc.getElementById("reqTableBody").querySelectorAll("tr"));
+  requestExitCell.cells = {};
+  names.forEach((name, index) => {
+    const td = trs[index] ? trs[index].querySelector("td.req-col-exit") : null;
+    requestExitCell.cells[name] = td
+      ? {
+          text: td.textContent,
+          title: td.title,
+          label: td.querySelector(".req-exit")?.textContent ?? null,
+          labelClass: td.querySelector(".req-exit") ? "req-exit" : null,
+          more: td.querySelector(".req-exit-more")?.textContent ?? null,
+          moreAria: td.querySelector(".req-exit-more")?.getAttribute("aria-label") ?? null,
+          html: td.innerHTML,
+        }
+      : null;
+  });
+  requestExitCell.folderCells = doc.querySelectorAll("#reqTableBody td.req-col-folder").length;
+  requestExitCell.options = Array.from(
+    doc.getElementById("reqExitOptions").querySelectorAll("option"),
+  ).map((option) => option.value);
+
+  // The request detail keeps its Folder row exactly as before.
+  ROUTES["/admin/api/requests/req-exit-chainEntry"] = rows[0];
+  await window.eval('openRequestDetail("req-exit-chainEntry")');
+  await settle();
+  const nodes = Array.from(doc.getElementById("reqDetailMeta").children);
+  requestExitCell.detail = nodes
+    .map((el, index) =>
+      el.tagName === "DT" ? [el.textContent, (nodes[index + 1] || {}).textContent] : null,
+    )
+    .filter(Boolean);
+  window.eval("closeRequestDetail()");
+}
+
+/* The Exit filter: the same wiring as Session and Folder (debounce, offset 0,
+   every panel, persistence, restore, the export, Clear). */
+const exitFilter = {};
+{
+  const since = (prefix) => fetchUrls.filter((url) => url.startsWith(prefix));
+  const listCalls = () => since("/admin/api/requests?");
+  const statsCalls = () => since("/admin/api/requests/stats");
+  const persisted = () =>
+    JSON.parse(window.localStorage.getItem("mcc-dashboard-state") || "{}").reqFilters ||
+    {};
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const click = (el) => el.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  const input = doc.getElementById("reqFilterExit");
+  exitFilter.label = input ? input.closest("label")?.textContent.trim() : null;
+
+  click(doc.getElementById("reqClearFilters"));
+  await wait(700);
+  exitFilter.unfilteredListUrl = listCalls()[listCalls().length - 1] || "";
+  click(doc.getElementById("reqNextPage"));
+  await wait(250);
+  exitFilter.pagedUrl = listCalls()[listCalls().length - 1] || "";
+  fetchUrls.length = 0;
+  for (const text of ["to", "tok", "Tokyo exit"]) {
+    input.value = text;
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(60);
+  }
+  exitFilter.loadsWhileTyping = statsCalls().length;
+  await wait(700);
+  exitFilter.loadsAfterPause = statsCalls().length;
+  exitFilter.urls = {
+    list: listCalls()[listCalls().length - 1] || "",
+    stats: statsCalls()[statsCalls().length - 1] || "",
+    origin: since("/admin/api/requests/origin?")[0] || "",
+    cost: since("/admin/api/requests/cost")[0] || "",
+    ttft: since("/admin/api/requests/ttft")[0] || "",
+  };
+  exitFilter.persisted = persisted().exit || null;
+
+  const saved = persisted();
+  input.value = "";
+  window.eval("restoreReqFilters(" + JSON.stringify(saved) + ")");
+  exitFilter.restored = input.value;
+
+  fetchUrls.length = 0;
+  window.eval('openExportModal("requests")');
+  try {
+    // Only the URL is the claim; the stub has no blob for the download.
+    await window.eval("runExport()");
+  } catch {
+    /* expected under the stub */
+  }
+  window.eval("closeExportModal()");
+  await wait(100);
+  exitFilter.exportUrl = since("/admin/api/export")[0] || "";
+
+  fetchUrls.length = 0;
+  click(doc.getElementById("reqClearFilters"));
+  await wait(700);
+  exitFilter.cleared = input.value;
+  exitFilter.clearedListUrl = listCalls()[listCalls().length - 1] || "";
+  exitFilter.clearedPersisted = persisted();
 }
 
 // ------------------------------------------- Key filter by name (7.78.1)
@@ -12053,6 +12227,8 @@ console.log(
       toolCatalogue,
       requestOrigin,
       originFilters,
+      requestExitCell,
+      exitFilter,
       keyFilter,
       modelKinds,
       credHints,

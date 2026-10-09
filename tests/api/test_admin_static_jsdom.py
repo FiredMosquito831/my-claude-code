@@ -1551,8 +1551,9 @@ def test_the_request_table_names_the_client_that_sent_each_row(rendered) -> None
         "Harness",
         # 7.42.0: where it came from. Origin is the narrow-width chip that
         # stands in for Session and Folder; CSS shows one form or the other.
+        # 7.88.0: Exit where Folder was (Folder is in the chip and the detail).
         "Session",
-        "Folder",
+        "Exit",
         "Origin",
         "Provider",
         "Key",
@@ -6574,14 +6575,16 @@ def test_requests_table_keeps_all_existing_columns(rendered) -> None:
 
 
 def test_requests_table_adds_three_columns(rendered) -> None:
-    """Session, Folder, Requested model -- plus the Origin chip that stands in
-    for the first two below 1200 px (CSS decides which is shown)."""
+    """Session, Exit (Folder until 7.88.0), Requested model -- plus the Origin
+    chip that stands in for Session and Folder below 1200 px (CSS decides
+    which is shown)."""
 
     classes = dict(rendered["requestOrigin"]["headerClasses"])
     added = [name for name in classes if name not in EXISTING_REQUEST_COLUMNS]
-    assert added == ["Session", "Folder", "Origin", "Requested model"]
+    assert added == ["Session", "Exit", "Origin", "Requested model"]
     assert classes["Session"] == "req-col-session"
-    assert classes["Folder"] == "req-col-folder"
+    assert classes["Exit"] == "req-col-exit"
+    assert "Folder" not in classes
     assert classes["Origin"] == "req-col-origin"
     assert classes["Requested model"] == "req-col-requested-model"
 
@@ -6593,7 +6596,7 @@ def test_every_row_has_one_cell_per_header_in_header_order(rendered) -> None:
     assert origin["cellCounts"] == [width, width]
     by_header = dict(origin["withOrigin"]["cellClassesByHeader"])
     assert by_header["Session"] == "req-col-session"
-    assert by_header["Folder"] == "req-col-folder"
+    assert by_header["Exit"] == "req-col-exit"
     assert by_header["Origin"] == "req-col-origin"
     assert by_header["Requested model"] == "req-col-requested-model"
     assert by_header["Status"] == "req-col-status"
@@ -6602,13 +6605,16 @@ def test_every_row_has_one_cell_per_header_in_header_order(rendered) -> None:
 def test_the_origin_cells_show_short_forms_with_the_full_value_in_the_tooltip(
     rendered,
 ) -> None:
+    """Folder left the table in 7.88.0 and nothing else of it did: the Session
+    cell's title and the narrow Origin chip still name it."""
+
     row = rendered["requestOrigin"]["withOrigin"]
 
     assert row["session"] == "0f3c2a1bsubagent"
     assert row["subagentBadge"] is True
     assert "Session: 0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b" in row["sessionTitle"]
-    assert row["folder"] == "Projects\\demo · #3f9a21"
-    assert row["folderTitle"] == "C:\\Users\\devuser\\Projects\\demo"
+    assert "Folder: C:\\Users\\devuser\\Projects\\demo" in row["sessionTitle"]
+    assert row["folderCell"] is False
     assert row["chip"] == "Projects\\demo · 0f3c2a1b"
     assert "Folder: C:\\Users\\devuser\\Projects\\demo" in row["chipTitle"]
     assert row["requested"] == "claude-opus-4"
@@ -6617,7 +6623,7 @@ def test_the_origin_cells_show_short_forms_with_the_full_value_in_the_tooltip(
 def test_a_row_with_no_origin_draws_dashes_not_none(rendered) -> None:
     row = rendered["requestOrigin"]["bare"]
 
-    assert (row["session"], row["folder"], row["chip"], row["requested"]) == (
+    assert (row["session"], row["exit"], row["chip"], row["requested"]) == (
         "—",
         "—",
         "—",
@@ -6640,14 +6646,17 @@ def test_the_status_colour_follows_the_status_cell_not_a_position(rendered) -> N
 
 
 def test_the_chip_replaces_session_and_folder_below_1200px() -> None:
+    """Below 1200 px Session folds into the Origin chip (which carries the
+    folder too); the Exit column that took Folder's place stays visible."""
+
     css = (STATIC_DIR / "admin.css").read_text(encoding="utf-8")
     narrow = css.split("@media (max-width: 1199px) {", 1)[1].split("\n}\n", 1)[0]
 
     assert ".requests-table .req-col-session" in narrow
-    assert ".requests-table .req-col-folder" in narrow
     assert "display: none;" in narrow
     assert ".requests-table .req-col-origin {\n    display: table-cell;" in narrow
     assert ".requests-table .req-col-origin {\n  display: none;\n}" in css
+    assert "req-col-exit" not in narrow
 
 
 def test_the_modal_shows_origin_with_its_source(rendered) -> None:
@@ -6698,6 +6707,151 @@ def test_the_export_window_offers_the_origin_group_opt_in() -> None:
     assert '{ id: "origin", label: "Request origin" }' in requests_fields
     defaults = source.split("const EXPORT_DEFAULT_FIELDS = {", 1)[1].split("]),", 1)[0]
     assert "origin" not in defaults
+
+
+# ------------------------------------------------------- Exit column (7.88.0)
+
+#: (case, text the cell shows, its title must contain) -- one per kind of
+#: stored exit. Every address is a documentation address or a made-up name.
+EXIT_CELL_CASES = [
+    ("chainEntry", "Tokyo exit", "Answered through Tokyo exit."),
+    ("oneEntry", "203.0.113.7:1080", "Answered through 203.0.113.7:1080."),
+    ("staticProxy", "198.51.100.4:3128", "Went out through 198.51.100.4:3128."),
+    ("direct", "direct", "this computer's own address"),
+    (
+        "systemProxy",
+        "direct via system proxy 127.0.0.1:7890",
+        "operating system's proxy (127.0.0.1:7890) carried",
+    ),
+    ("none", "—", "no chain and no proxy"),
+    ("missingField", "—", "no chain and no proxy"),
+    ("videoJob", "Tokyo exit", "Answered through Tokyo exit."),
+]
+
+
+@pytest.mark.parametrize(("case", "text", "title"), EXIT_CELL_CASES)
+def test_the_exit_cell_shows_the_stored_exit_as_such(
+    rendered, case: str, text: str, title: str
+) -> None:
+    cell = rendered["requestExitCell"]["cells"][case]
+
+    assert cell["text"] == text
+    assert title in cell["title"]
+    assert cell["more"] is None
+    if text == "—":
+        assert cell["label"] is None
+    else:
+        assert cell["label"] == text
+
+
+def test_a_null_exit_is_a_dash_never_a_guessed_direct(rendered) -> None:
+    cell = rendered["requestExitCell"]["cells"]["none"]
+
+    assert cell["text"] == "—"
+    assert "direct" not in cell["text"]
+    assert cell["title"].startswith("No exit recorded: no chain and no proxy.")
+    # Honest about older rows: a one-entry chain or a static proxy was not
+    # recorded before 7.79.2, so an old dash may hide one.
+    assert "Before 7.79.2" in cell["title"]
+
+
+def test_a_media_row_with_no_exit_says_why(rendered) -> None:
+    cell = rendered["requestExitCell"]["cells"]["media"]
+
+    assert cell["text"] == "—"
+    assert "media request keeps its exit only on a video job" in cell["title"]
+    assert "no chain and no proxy" not in cell["title"]
+
+
+def test_a_rotated_request_shows_the_answering_exit_plus_the_others(rendered) -> None:
+    cell = rendered["requestExitCell"]["cells"]["rotated"]
+
+    assert cell["label"] == "exit-c.example:1080"
+    assert cell["more"] == "+2"
+    assert cell["moreAria"] == "2 more exits"
+    assert cell["text"] == "exit-c.example:1080+2"
+    assert (
+        "Exits tried, in order: exit-a.example:1080, exit-b.example:1080,"
+        " exit-c.example:1080"
+    ) in cell["title"]
+
+
+def test_no_answering_exit_still_counts_the_exits_tried(rendered) -> None:
+    cell = rendered["requestExitCell"]["cells"]["noneThenOthers"]
+
+    assert cell["text"] == "—+1"
+    assert "no chain and no proxy" in cell["title"]
+    assert "Exits tried, in order: exit-a.example:1080" in cell["title"]
+
+
+def test_a_credential_in_a_label_is_masked_like_the_proxying_page(rendered) -> None:
+    cells = rendered["requestExitCell"]["cells"]
+    masked = cells["masked"]
+    system = cells["maskedSystem"]
+
+    assert masked["label"] == "203.0.113.9:1080"
+    assert masked["more"] == "+1"
+    assert (
+        "Exits tried, in order: 198.51.100.2:8080, 203.0.113.9:1080"
+        in (masked["title"])
+    )
+    assert system["label"] == "direct via system proxy 10.0.0.1:8080"
+    for cell in (masked, system):
+        for secret in ("alice", "s3cretpw", "bob", "hunter2x", "carol", "pw9x", "@"):
+            assert secret not in cell["html"], secret
+            assert secret not in cell["title"], secret
+    options = rendered["requestExitCell"]["options"]
+    assert not any("@" in option for option in options)
+
+
+def test_the_exit_filter_suggests_the_exits_on_the_page(rendered) -> None:
+    options = rendered["requestExitCell"]["options"]
+
+    assert options[:2] == ["Tokyo exit", "203.0.113.7:1080"]
+    assert "exit-b.example:1080" in options
+    assert "direct via system proxy 127.0.0.1:7890" in options
+    assert len(options) == len(set(options))
+
+
+def test_the_table_has_no_folder_cell_and_the_detail_keeps_folder(rendered) -> None:
+    exit_cells = rendered["requestExitCell"]
+
+    assert exit_cells["folderCells"] == 0
+    detail = dict(exit_cells["detail"])
+    assert detail["Folder"] == (
+        "C:\\Users\\devuser\\Projects\\demo (read from the prompt's environment block)"
+    )
+
+
+def test_the_exit_filter_follows_the_folder_filters_wiring(rendered) -> None:
+    exit_filter = rendered["exitFilter"]
+
+    assert exit_filter["label"].startswith("Exit")
+    assert "exit=" not in exit_filter["unfilteredListUrl"]
+    assert "offset=25" in exit_filter["pagedUrl"]
+    assert exit_filter["loadsWhileTyping"] == 0
+    assert exit_filter["loadsAfterPause"] == 1
+    assert "offset=0" in exit_filter["urls"]["list"]
+    for name, url in exit_filter["urls"].items():
+        assert "exit=Tokyo+exit" in url, (name, url)
+    assert exit_filter["persisted"] == "Tokyo exit"
+    assert exit_filter["restored"] == "Tokyo exit"
+    assert "exit=Tokyo+exit" in exit_filter["exportUrl"]
+    assert exit_filter["cleared"] == ""
+    assert "exit=" not in exit_filter["clearedListUrl"]
+    assert "exit" not in exit_filter["clearedPersisted"]
+
+
+def test_the_export_window_offers_the_exit_group_opt_in() -> None:
+    """Offered beside Request origin, not a default: an export that does not
+    ask for it is byte-identical to one made before 7.88.0."""
+
+    source = (STATIC_DIR / "admin.js").read_text(encoding="utf-8")
+    requests_fields = source.split("const EXPORT_FIELDS = {", 1)[1].split("],", 1)[0]
+    assert '{ id: "exit", label: "Exit" }' in requests_fields
+    assert requests_fields.index('id: "exit"') < requests_fields.index('id: "origin"')
+    defaults = source.split("const EXPORT_DEFAULT_FIELDS = {", 1)[1].split("]),", 1)[0]
+    assert '"exit"' not in defaults
 
 
 # ------------------------------------------------- origin filters (7.43.0)
@@ -6839,7 +6993,8 @@ REQUESTS_TABLE_HEADERS = [
     "Endpoint",
     "Harness",
     "Session",
-    "Folder",
+    # 7.88.0: Exit where Folder was. The in-flight table below keeps Folder.
+    "Exit",
     "Origin",
     "Provider",
     "Key",

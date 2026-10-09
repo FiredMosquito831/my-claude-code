@@ -2730,7 +2730,9 @@ textarea:focus-visible,
 /* Where the request came from (7.42.0). Session and Folder are their own
    columns at full width; below 1200 px both collapse into the one Origin chip
    cell, so the narrow table grows by one column instead of two. The full
-   values are always the tooltip and the detail modal. */
+   values are always the tooltip and the detail modal. Since 7.88.0 the
+   Requests table shows Exit where Folder was (Folder is in the Session
+   cell's title and the chip); the in-flight table keeps all three. */
 .requests-table .req-col-origin {
   display: none;
 }
@@ -2790,9 +2792,36 @@ textarea:focus-visible,
   vertical-align: bottom;
 }
 
+/* The Exit column (7.88.0), where the Requests table's Folder column was. As
+   wide as Folder was, so a chain entry's name or a host:port fits; the full
+   list of exits is the tooltip. Shown at every width: below 1200 px Session
+   and Folder still fold into the Origin chip, and Exit stays beside it. */
+.req-col-exit {
+  white-space: nowrap;
+}
+
+.req-exit {
+  display: inline-block;
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.req-exit-more {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  font-size: 10.5px;
+  color: var(--muted);
+  vertical-align: bottom;
+}
+
 @media (max-width: 1199px) {
-  .requests-table .req-col-session,
-  .requests-table .req-col-folder {
+  .requests-table .req-col-session {
     display: none;
   }
 

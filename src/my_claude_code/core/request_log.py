@@ -47,6 +47,7 @@ from my_claude_code.core.media_store import (
     media_root,
     remove_media_file,
 )
+from my_claude_code.core.proxy_attribution import exit_filter, masked_exit_label
 from my_claude_code.core.request_images import CapturedImage
 from my_claude_code.core.request_origin import (
     BACKFILL_SIGNAL,
@@ -247,6 +248,15 @@ def _like_contains(text: str) -> str:
         .replace("_", f"{_LIKE_ESCAPE}_")
     )
     return f"%{escaped}%"
+
+
+def _note_exit(tried: list[str], label: Any) -> None:
+    """Append a stored exit label to ``tried``, masked, once, in dial order."""
+    if not isinstance(label, str) or not label:
+        return
+    masked = masked_exit_label(label)
+    if masked and masked not in tried:
+        tried.append(masked)
 
 
 # Newest measured attempts pulled per ``latency_by_model`` call so its p50/p95
@@ -6927,6 +6937,85 @@ class RequestLogStore:
         ]
 
     @staticmethod
+    def _fetch_exits(
+        conn: sqlite3.Connection, answering: Mapping[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        """The exit each request went out through, for the Exit column (7.88.0).
+
+        ``answering`` maps each request id to its ``route_attempt``: the
+        attempt the row names, which is the one that answered on a success and
+        the last one tried otherwise. Per request:
+
+        * ``label`` -- that attempt's stored exit (``request_attempts
+          .proxy_label``: a chain entry's name or ``host:port``, a one-entry
+          chain's or static proxy's, ``direct``, ``direct via system proxy
+          host:port``), or ``None`` when it recorded none. ``None`` is what an
+          attempt on a provider with no chain and no proxy has always stored.
+        * ``tried`` -- every distinct exit the request went out through, in
+          the order it was dialled: each attempt's dials (7.81.0 rotation keeps
+          them on the ladder, the stored label is only the last), then its own
+          label. The answering exit is in it.
+
+        Nothing new is read that the log did not already hold, and nothing is
+        written. Media attempts record no exit; a video job does
+        (``media_jobs.proxy_label``), so a request whose attempts named none
+        takes its job's. Every label is masked again on the way out
+        (:func:`masked_exit_label`). One batched read per page, never per row.
+        """
+
+        ids = list(answering)
+        out: dict[str, dict[str, Any]] = {
+            request_id: {"label": None, "tried": []} for request_id in ids
+        }
+        if not ids:
+            return out
+        markers = ", ".join("?" * len(ids))
+        attempts = conn.execute(
+            "SELECT request_id, attempt, proxy_label,"
+            " CASE WHEN params LIKE '%\"dials\"%' AND json_valid(params)"
+            " THEN json_extract(params, '$.ladder.dials') END AS dials"
+            " FROM request_attempts"
+            f" WHERE request_id IN ({markers}) ORDER BY request_id, attempt",
+            ids,
+        ).fetchall()
+        by_request: dict[str, list[sqlite3.Row]] = {}
+        for row in attempts:
+            by_request.setdefault(str(row["request_id"]), []).append(row)
+        jobs: dict[str, list[str]] = {}
+        for row in conn.execute(
+            "SELECT request_id, proxy_label FROM media_jobs"
+            f" WHERE request_id IN ({markers}) AND proxy_label IS NOT NULL"
+            " ORDER BY created_at, job_id",
+            ids,
+        ).fetchall():
+            jobs.setdefault(str(row["request_id"]), []).append(str(row["proxy_label"]))
+
+        for request_id in ids:
+            rows = by_request.get(request_id, [])
+            tried: list[str] = []
+            label: str | None = None
+            for row in rows:
+                dials = _loads_or_none(row["dials"]) if row["dials"] else None
+                if isinstance(dials, list):
+                    for dial in dials:
+                        if isinstance(dial, Mapping):
+                            _note_exit(tried, dial.get("proxy"))
+                _note_exit(tried, row["proxy_label"])
+            if rows:
+                route_attempt = answering[request_id]
+                chosen = next(
+                    (row for row in rows if row["attempt"] == route_attempt),
+                    rows[-1],
+                )
+                label = masked_exit_label(chosen["proxy_label"]) or None
+            if not tried and request_id in jobs:
+                for job_label in jobs[request_id]:
+                    _note_exit(tried, job_label)
+                label = tried[-1] if tried else None
+            out[request_id] = {"label": label, "tried": tried}
+        return out
+
+    @staticmethod
     def _fetch_ladder_rollup(
         conn: sqlite3.Connection, request_ids: list[str]
     ) -> dict[str, dict[str, Any]]:
@@ -7568,6 +7657,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         args: list[Any] = []
@@ -7741,6 +7831,34 @@ class RequestLogStore:
                 f" WHERE o.project_dir IS NOT NULL AND {predicate}{window_sql})"
             )
             args.extend([*args_for_folder, *window_args])
+        # Which exit the request went out through (7.88.0), after the origin
+        # clauses and only when set, so a query that does not ask is the SQL
+        # it was. It matches what the Requests table's Exit cell shows: the
+        # exit each attempt ended on (``request_attempts.proxy_label``), every
+        # exit a chain dialled on the way (``params.ladder.dials``, 7.81.0
+        # rotation), and a video job's exit (media attempts record none).
+        #
+        # Correlated on the attempt's primary key, so the outer query keeps
+        # its own index and window and each row it reads costs one seek; the
+        # JSON is opened only on attempts whose params mention dials, and only
+        # when it parses. ``media_jobs`` is small (pruned an hour after its
+        # request), so it is read once as a list.
+        exit_value = exit_filter(exit)
+        if exit_value is not None:
+            pattern = _like_contains(exit_value)
+            like = f"LIKE ? ESCAPE '{_LIKE_ESCAPE}'"
+            clauses.append(
+                "(EXISTS (SELECT 1 FROM request_attempts AS xa"
+                " WHERE xa.request_id = requests.id"
+                f" AND (xa.proxy_label {like}"
+                " OR (xa.params LIKE '%\"dials\"%' AND EXISTS (SELECT 1"
+                " FROM json_each(CASE WHEN json_valid(xa.params)"
+                " THEN xa.params END, '$.ladder.dials') AS xd"
+                f" WHERE json_extract(xd.value, '$.proxy') {like}))))"
+                " OR requests.id IN (SELECT xj.request_id FROM media_jobs AS xj"
+                f" WHERE xj.proxy_label {like}))"
+            )
+            args.extend([pattern, pattern, pattern])
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, args
 
@@ -7761,6 +7879,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return (rows, total) newest-first, with bodies truncated for list views.
@@ -7785,6 +7904,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
             body_preview_chars=body_preview_chars,
             include_total=True,
         )
@@ -7807,8 +7927,10 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
         include_total: bool = True,
+        include_exits: bool = False,
     ) -> tuple[list[dict[str, Any]], int | None, bool]:
         """Return ``(rows, total, has_more)``; ``total`` is ``None`` when skipped.
 
@@ -7827,6 +7949,11 @@ class RequestLogStore:
         Page membership and ordering are identical either way -- the same
         ``WHERE``, the same ``ORDER BY ts_epoch DESC``, the same ``LIMIT``/
         ``OFFSET``. Only the count moves.
+
+        ``include_exits`` (7.88.0, the Requests table's Exit column) adds one
+        key to each row, ``exit`` (see :meth:`_fetch_exits`), read in one
+        batched query of the page's attempts. Off by default, so every other
+        caller's rows are exactly what they were.
         """
 
         where, args = self._where(
@@ -7842,6 +7969,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
@@ -7891,6 +8019,12 @@ class RequestLogStore:
                 )
                 for row in raw_rows
             ]
+            if include_exits:
+                exits = self._fetch_exits(
+                    conn, {str(row["id"]): row["route_attempt"] for row in raw_rows}
+                )
+                for row in rows:
+                    row["exit"] = exits[str(row["id"])]
         if total is not None:
             has_more = offset + len(rows) < total
         return rows, total, has_more
@@ -7910,6 +8044,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> int:
         """How many rows match, and nothing else.
 
@@ -7932,6 +8067,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         with self._connection() as conn:
             return int(
@@ -7956,6 +8092,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> dict[str, Any]:
         """What the filtered traffic cost, split by provenance, per dimension.
 
@@ -7979,8 +8116,9 @@ class RequestLogStore:
         priced.
         """
         limit = max(1, min(limit, 200))
-        # Fourteen elements, and the first is a literal string. ``stats()`` keys
-        # on a twelve-element tuple of filters, and the two live in the same dict:
+        # Fifteen elements, and the first is a literal string. ``stats()`` keys
+        # on a thirteen-element tuple of filters (``exit`` joined in 7.88.0;
+        # both grew by one together), and the two live in the same dict:
         # a different arity is what makes a collision impossible, which matters
         # here because a user really can filter on ``provider=cost_breakdown``.
         # The same shape ``reasoning_by_model`` and ``image_estimate_by_provider``
@@ -8000,6 +8138,7 @@ class RequestLogStore:
             harness,
             session,
             folder,
+            exit,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -8022,6 +8161,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         measures = (
             "SUM(CASE WHEN cost_source = 'provider' THEN cost_usd END)"
@@ -8254,6 +8394,7 @@ class RequestLogStore:
         columns: list[str],
         need_bodies: bool,
         need_ladder: bool = False,
+        need_exits: bool = False,
         provider: str | None = None,
         model: str | None = None,
         status: str | None = None,
@@ -8266,6 +8407,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
         page_size: int = 1_000,
     ) -> Generator[dict[str, Any]]:
         """Yield every matching row for an export, bypassing the 500-row page cap.
@@ -8296,6 +8438,10 @@ class RequestLogStore:
             for column in SUCCESS_REASON_SOURCE_COLUMNS
             if column not in sql_columns
         ]
+        # The Exit columns (7.88.0) name the answering attempt by the row's
+        # ``route_attempt``; topped up the same way, never into ``columns``.
+        if need_exits and "route_attempt" not in sql_columns:
+            sql_columns.append("route_attempt")
         # A stored-once column is read with its ref; ``_row_to_dict`` puts the
         # text back and drops the ref, so the row the caller projects is the
         # same either way.
@@ -8318,6 +8464,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         conn = self._connect()
         try:
@@ -8343,6 +8490,16 @@ class RequestLogStore:
                 # ``request_attempts`` is joined by no export path, so the
                 # ladder columns would otherwise be unexportable entirely.
                 ladders = self._fetch_ladder_rollup(conn, ids) if need_ladder else {}
+                # The Exit columns, from the same one batched read the
+                # Requests table's Exit cell uses, so a download and the page
+                # it came from name the same exits.
+                exits = (
+                    self._fetch_exits(
+                        conn, {str(row["id"]): row["route_attempt"] for row in rows}
+                    )
+                    if need_exits
+                    else {}
+                )
                 values = self._request_values(conn, rows)
                 for row in rows:
                     data = self._row_to_dict(
@@ -8355,6 +8512,12 @@ class RequestLogStore:
                     if need_ladder:
                         data.update(_EMPTY_LADDER_ROLLUP)
                         data.update(ladders.get(str(row["id"]), {}))
+                    if need_exits:
+                        found = exits[str(row["id"])]
+                        # Empty, not "direct", when nothing was recorded: no
+                        # chain and no proxy is not a measurement of Direct.
+                        data["exit"] = found["label"] or ""
+                        data["exits"] = "; ".join(found["tried"])
                     yield data
                 cursor = (rows[-1]["ts_epoch"], rows[-1]["id"])
         finally:
@@ -8375,6 +8538,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
         page_size: int = 1_000,
     ) -> Generator[dict[str, Any]]:
         """Yield one row per *attempt*, carrying its request's dimensions.
@@ -8412,6 +8576,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         boundaries = self.restart_boundaries()
         conn = self._connect()
@@ -8563,6 +8728,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield the aggregated (grouped) records for an export.
 
@@ -8583,6 +8749,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         group_sql = ", ".join(group_by)
         order_sql = ", ".join(group_by)
@@ -8759,6 +8926,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> dict[str, Any]:
         """Aggregate analytics, served from the rollup where it can be.
 
@@ -8766,10 +8934,11 @@ class RequestLogStore:
         came from the pre-aggregated tables, ``"rows"`` when it was computed by
         scanning ``requests``. Free-text search forces the scan -- it is a
         correlated EXISTS over compressed bodies and is not a rollup dimension
-        -- and so do ``session`` and ``folder``, which are deliberately not
-        rollup dimensions either (a session id is unbounded and would multiply
-        the hour buckets by the number of conversations in each). So does the
-        window before the one-time backfill has finished.
+        -- and so do ``session``, ``folder`` and ``exit``, which are
+        deliberately not rollup dimensions either (a session id is unbounded
+        and would multiply the hour buckets by the number of conversations in
+        each; an exit belongs to the attempts). So does the window before the
+        one-time backfill has finished.
         """
         # ``local`` belongs in the key: without it a "hide" call inside the TTL
         # would be served the "all" numbers it just cached, and the cards would
@@ -8787,6 +8956,7 @@ class RequestLogStore:
             harness,
             session,
             folder,
+            exit,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -8809,8 +8979,12 @@ class RequestLogStore:
         # A success sub-label is derived from the row for the same reason and
         # takes the same path.
         _, success_label = split_success_status_filter(status)
+        # The exit (7.88.0) is not a rollup dimension either: it lives on the
+        # attempts, not on the request row the rollup counts.
         origin_filtered = (
-            session_filter(session) is not None or folder_filter(folder) is not None
+            session_filter(session) is not None
+            or folder_filter(folder) is not None
+            or exit_filter(exit) is not None
         )
         if (
             not q
@@ -8843,6 +9017,7 @@ class RequestLogStore:
                 harness=harness,
                 session=session,
                 folder=folder,
+                exit=exit,
             )
         with self._stats_lock:
             self._stats_cache[cache_key] = (now, payload)
@@ -8866,6 +9041,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> dict[str, Any]:
         """Compute the whole payload by scanning ``requests``.
 
@@ -8888,6 +9064,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         with self._connection() as conn:
             totals = conn.execute(
@@ -9737,6 +9914,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> dict[str, Any]:
         """Overall p50/p95 time-to-first-token, over the same filters as stats.
 
@@ -9784,6 +9962,7 @@ class RequestLogStore:
             harness,
             session,
             folder,
+            exit,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -9807,6 +9986,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         with self._connection() as conn:
             percentiles = self._percentiles(
@@ -9889,6 +10069,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> dict[str, Any]:
         """The Cancelled card, split into the four things "cancelled" means.
 
@@ -9920,6 +10101,7 @@ class RequestLogStore:
             harness,
             session,
             folder,
+            exit,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -9956,6 +10138,7 @@ class RequestLogStore:
                 harness=harness,
                 session=session,
                 folder=folder,
+                exit=exit,
             )
             try:
                 with self._connection() as conn:
@@ -10000,6 +10183,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> dict[str, Any]:
         """The successes that carried no answer, split into the two shapes.
 
@@ -10042,6 +10226,7 @@ class RequestLogStore:
             harness,
             session,
             folder,
+            exit,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -10074,6 +10259,7 @@ class RequestLogStore:
                 harness=harness,
                 session=session,
                 folder=folder,
+                exit=exit,
             )
             try:
                 with self._connection() as conn:
@@ -10389,6 +10575,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> dict[str, Any]:
         """Return a cheap heartbeat: row count and latest timestamp for these filters.
 
@@ -10409,6 +10596,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         with self._connection() as conn:
             total, last_ts = conn.execute(
@@ -10431,6 +10619,7 @@ class RequestLogStore:
         harness: str | None = None,
         session: str | None = None,
         folder: str | None = None,
+        exit: str | None = None,
     ) -> dict[str, Any]:
         """Requests by folder and by session, over the same filters as ``stats``.
 
@@ -10470,6 +10659,7 @@ class RequestLogStore:
             harness,
             session,
             folder,
+            exit,
         )
         now = time.monotonic()
         with self._stats_lock:
@@ -10492,6 +10682,7 @@ class RequestLogStore:
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
         window_sql = ""
         window_args: list[Any] = []

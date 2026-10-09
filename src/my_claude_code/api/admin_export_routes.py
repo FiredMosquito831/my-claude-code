@@ -131,6 +131,7 @@ async def export_analytics(
     harness: str | None = Query(None, description="comma-separated harness names"),
     session: str | None = Query(None, description="conversation id or its prefix"),
     folder: str | None = Query(None, description="a full folder path, or part of one"),
+    exit: str | None = Query(None, description="part of an exit's label"),
     settings: Settings = Depends(get_settings),
     websearch_store: WebSearchLogStore = Depends(get_websearch_log_store),
 ):
@@ -167,6 +168,7 @@ async def export_analytics(
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
             settings=settings,
         )
     if scp == export_engine.REQUEST_SCOPE:
@@ -186,6 +188,7 @@ async def export_analytics(
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
             settings=settings,
         )
     return _websearch_export(
@@ -218,6 +221,7 @@ def _request_export(
     harness: str | None,
     session: str | None,
     folder: str | None,
+    exit: str | None,
     settings: Settings,
 ) -> StreamingResponse:
     store = _request_store(settings)
@@ -272,6 +276,7 @@ def _request_export(
             harness=harness,
             session=session,
             folder=folder,
+            exit=exit,
         )
 
         def agg_rows() -> Iterator[dict[str, Any]]:
@@ -293,6 +298,8 @@ def _request_export(
         # The ladder columns come from ``request_attempts``, which no export
         # SQL joins; the store fills them per page when they were asked for.
         need_ladder="ladder" in selected,
+        # The Exit columns (7.88.0) come from ``request_attempts`` the same way.
+        need_exits="exit" in selected,
         provider=provider,
         model=model,
         status=status,
@@ -305,6 +312,7 @@ def _request_export(
         harness=harness,
         session=session,
         folder=folder,
+        exit=exit,
     )
 
     key_names = credential_name_index()
@@ -334,6 +342,7 @@ def _attempt_export(
     harness: str | None,
     session: str | None,
     folder: str | None,
+    exit: str | None,
     settings: Settings,
 ) -> StreamingResponse:
     """Stream one row per route attempt, joined to its request's dimensions.
@@ -384,6 +393,7 @@ def _attempt_export(
         harness=harness,
         session=session,
         folder=folder,
+        exit=exit,
     )
 
     key_names = credential_name_index()

@@ -68,6 +68,8 @@ REQUEST_FIELD_IDS: tuple[str, ...] = (
     "media",
     "ladder",
     "tool_catalogue",
+    # 7.88.0, before ``origin`` so that group stays last, as it was.
+    "exit",
     "origin",
 )
 REQUEST_FIELD_LABELS: dict[str, str] = {
@@ -89,6 +91,7 @@ REQUEST_FIELD_LABELS: dict[str, str] = {
     "ladder": "Upstream retry ladder",
     "tool_catalogue": "Tool catalogue",
     "origin": "Request origin",
+    "exit": "Exit",
 }
 
 # Selectable fields for the web-search scope.
@@ -367,6 +370,12 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
         "project_dir",
         "origin_source",
     ),
+    # The exit the request went out through (7.88.0), the Requests table's
+    # Exit column. Derived from ``request_attempts`` like the ladder columns,
+    # which no export SQL joins, so it names no SQL column; the store fills
+    # it per page. Opt-in, so every export that does not ask for it is
+    # byte-identical to before -- and Folder stays where it was, in "origin".
+    "exit": (),
 }
 
 # Derived detail columns present on every request export, gated by no field.
@@ -404,6 +413,10 @@ _REQUEST_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
     # ``request_attempts``, so ``request_detail_columns()`` must not name them
     # to the ``requests`` SELECT.
     "ladder": ("ladder_tries", "ladder_statuses", "ladder_root_cause"),
+    # The answering attempt's exit, and every exit tried in dial order joined
+    # with "; " -- the cell's text and its title. Empty when none was
+    # recorded (no chain and no proxy), never a made-up "direct".
+    "exit": ("exit", "exits"),
 }
 
 # Reverse map: column -> gating field id.
@@ -478,6 +491,8 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "ladder_tries",
     "ladder_statuses",
     "ladder_root_cause",
+    "exit",
+    "exits",
 )
 
 _REQUEST_COLUMN_LABELS: dict[str, str] = {
@@ -546,6 +561,8 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "ladder_tries": "Upstream tries",
     "ladder_statuses": "Upstream statuses",
     "ladder_root_cause": "Root cause",
+    "exit": "Exit",
+    "exits": "Exits tried",
 }
 
 

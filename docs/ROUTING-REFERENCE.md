@@ -531,6 +531,8 @@ Every saved entry has a **Test** button, and each card has **Test all**. One pre
 
 Two places, both in the request log. Every rung of the ladder in an attempt's modal names the address that try went out through, and each attempt row carries a `proxy_label` column you can group by. The value is `host:port` with any `user:pass` stripped — never the URL — and the literal `direct` is a rung you chose, distinct from an empty cell, which means "not measured".
 
+Since 7.88.0 the Analytics requests table shows it too, in the **Exit** column (where Folder was): the `proxy_label` of the attempt that answered, **+N** when the request went out through more exits (every dial below and every attempt's label, in order, in the tooltip), a dash when nothing was recorded. The **Exit** box in the toolbar filters the page — and its exports — to the requests that went out through an exit whose name contains what you typed.
+
 `proxy_label` is the address the attempt *ended* on. Every address it dialled is listed under the attempt, in order, as **proxy dials** (since 7.45.1): the address, the TCP connect to the proxy and the tunnel handshake after it (the SOCKS5 negotiation or the HTTP `CONNECT`) when a new connection was opened, what the address answered and how long that took, and what the chain did next:
 
 - **switched in N ms**: another address followed. The row names the answer that made the chain move on (`429`, `ConnectTimeout`, …) and the time MCC took to move.
