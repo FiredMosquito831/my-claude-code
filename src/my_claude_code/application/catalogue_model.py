@@ -188,7 +188,10 @@ def build_catalogue_models(
     # a model whose stated kind is not chat (an image, speech or video model)
     # is not offered as one. A configured ref is listed whatever its kind.
     chat_listable = chat_listing_filter(
-        settings, runtime.model_modalities_lookup(), harness_tiers
+        settings,
+        runtime.model_modalities_lookup(),
+        harness_tiers,
+        kind_words=runtime.model_kind_words_lookup(),
     )
     primary_ref = settings.model.strip()
     infos_by_ref: dict[str, ProviderModelInfo] = {}

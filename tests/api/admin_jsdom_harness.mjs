@@ -7082,6 +7082,60 @@ if (modelsLink) {
     (row) => Array.from(row.children).map(flat),
   );
 
+  /* --- which rung stated the kind (7.80.0): one "kind" row per panel, drawn
+     from the row's `kind` by the same row builder, with the rung as its note
+     and the badge class of the source that stated it. */
+  const kindRow = (kind) => {
+    const panel = window.eval("buildCapabilityPanel")(
+      alpha.models[0].capabilities,
+      MODEL_ADMIN_PAGE.source_labels || {},
+      { ...alpha.models[0], kind },
+    );
+    const row = Array.from(panel.querySelectorAll("tr")).find(
+      (tr) => flat(tr.querySelector("th")) === "kind",
+    );
+    if (!row) return null;
+    const badge = row.querySelector(".models-source");
+    return {
+      cells: Array.from(row.children).map(flat),
+      badgeClass: badge ? badge.className : "",
+    };
+  };
+  models.kindRows = {
+    providerList: kindRow({
+      kinds: ["chat", "asr"],
+      labels: ["Chat", "Transcription"],
+      source: "provider_listing",
+      source_label: "the provider's model list",
+      tier: "provider /models, exact id",
+      approximate: false,
+    }),
+    providerWords: kindRow({
+      kinds: ["image"],
+      labels: ["Image"],
+      source: "provider_words",
+      source_label: "the provider's model type or endpoints",
+      tier: "provider /models, tag stripped",
+      approximate: false,
+    }),
+    voted: kindRow({
+      kinds: ["chat"],
+      labels: ["Chat"],
+      source: "models_dev",
+      source_label: "models.dev modalities",
+      tier: "cross-provider, exact id",
+      approximate: true,
+    }),
+    unknown: kindRow({
+      kinds: null,
+      labels: [],
+      source: null,
+      source_label: null,
+      tier: null,
+      approximate: false,
+    }),
+  };
+
   models.preferences = {};
   [0, 1, 2, 3, 4, 5, 6].forEach((index) => {
     const model = alpha.models[index];

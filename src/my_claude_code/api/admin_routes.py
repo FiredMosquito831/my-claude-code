@@ -1677,6 +1677,10 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
             dialect_lookup=services.requests.model_reasoning_dialect,
             measured_days=REASONING_MEASUREMENT_DAYS,
             media_placements=placements,
+            # The runtime's own kind ladder, so a row's kind here is the kind
+            # `/v1/models`, the catalogues and the pickers act on (7.80.0).
+            kind_modalities=services.requests.model_modalities_lookup(),
+            kind_words=services.requests.model_kind_words_lookup(),
         ),
         # 5.5 MB of JSON: indented it would be 11 MB, and half the read would
         # be whitespace.
@@ -2668,9 +2672,12 @@ def _model_options(
     # can say what the value it is holding is.
     placements = media_rail_placements(settings)
     modalities = services.requests.model_modalities_lookup()
+    kind_words = services.requests.model_kind_words_lookup()
     kinds: dict[str, list[str]] = {}
     for ref in sorted(configured | discovered | set(placements), key=str.casefold):
-        kind = resolve_model_kind(ref, modalities=modalities, placements=placements)
+        kind = resolve_model_kind(
+            ref, modalities=modalities, placements=placements, kind_words=kind_words
+        )
         if kind.kinds is not None:
             kinds[ref] = [name for name in MODEL_KINDS if name in kind.kinds]
     # Only models the provider *says* reject images. An unreported capability

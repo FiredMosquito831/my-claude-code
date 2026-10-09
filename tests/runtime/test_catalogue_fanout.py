@@ -106,6 +106,11 @@ class FakeRuntime(RequestRuntimePort):
     ) -> Callable[[str, str], tuple[DeclaredModalities | None, ResolutionTier | None]]:
         return lambda _provider_id, _model_id: (None, None)
 
+    def model_kind_words_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[tuple[str, ...] | None, ResolutionTier | None]]:
+        return lambda _provider_id, _model_id: (None, None)
+
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos
 

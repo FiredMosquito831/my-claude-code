@@ -23,9 +23,21 @@ Inputs, all committed beside this file:
 Every existing output is covered: each record's stored document and canonical
 encoding, the Models page capability panel and kind, the six routing lookups,
 the price cards, ``/v1/models``, ``/v1beta/models``, every harness catalogue
-document and ``/admin/api/catalogue-models``. The only things removed before
-comparing are what 7.79.0 adds: the record's trailing ``declared`` key and the
-three ``declared_*`` capability rows.
+document, ``/admin/api/catalogue-models`` and (since 7.80.0) the pickers'
+``/admin/api/models``. The only things removed before comparing are what 7.79.0
+adds: the record's trailing ``declared`` key and the three ``declared_*``
+capability rows.
+
+**7.80.0 (PR-K2) reads that field for the kind, on purpose.** So each Models
+page row's ``kind`` and the pickers' ``kinds`` map are kept OUT of the page and
+picker digests and recorded per ref beside them, each entry holding both
+answers: ``v7.79.2`` (generated on a detached worktree at ``ef5d9cc3``, the
+commit 7.80.0 forked from) and ``v7.80.0`` (what this branch states). Every
+other entry was regenerated on ``ef5d9cc3`` with this same snapshot and is
+byte-identical to the 7.79.0 entries above; the page's digest moved only
+because the kinds left it. ``test_7_80_0_states_kinds_and_moves_no_stated_one``
+holds the rule the user set: a kind nobody stated may become stated, and a
+stated kind never changes.
 
 A diff in this file means the equality contract is broken and the PR must be
 re-cut. It is not a file to regenerate.
@@ -87,6 +99,13 @@ MODELS_DEV_PATH = HERE / "metadata_ladder_models_dev.json"
 NEW_CAPABILITY_KEYS = ("declared_modalities", "declared_type", "declared_endpoints")
 #: What 7.79.0 adds to a stored record document, removed before compare.
 NEW_DOCUMENT_KEY = "declared"
+
+#: Where 7.80.0 records each Models page row's ``kind`` and the pickers' map.
+#: Their baseline entries hold the answer before and after, under these names.
+KIND_PREFIX = "kinds/"
+PICKER_KINDS_KEY = "picker-kinds"
+BEFORE_K2 = "v7.79.2"
+AFTER_K2 = "v7.80.0"
 
 #: Fake credentials of the right shape, one per provider the rows come from, so
 #: each provider's records are in scope exactly as a configured install's are.
@@ -151,6 +170,25 @@ def _page_without_new_rows(page: dict[str, Any]) -> dict[str, Any]:
         for model in provider["models"]:
             model["capabilities"] = _without_new_rows(model["capabilities"])
     return page
+
+
+def _take_page_kinds(page: dict[str, Any]) -> dict[str, Any]:
+    """Each row's ``kind``, lifted out of the page (7.80.0 states it on purpose)."""
+
+    kinds: dict[str, Any] = {}
+    for provider in page["providers"]:
+        for model in provider["models"]:
+            kinds[model["model_ref"]] = model.pop("kind")
+    return kinds
+
+
+def _page_kind_lookups(manager: Any) -> dict[str, Any]:
+    """The runtime's own kind ladder, which the Models page route hands in."""
+
+    return {
+        "kind_modalities": manager.model_modalities_lookup(),
+        "kind_words": manager.model_kind_words_lookup(),
+    }
 
 
 def _catalogue_route_without_new_rows(body: dict[str, Any]) -> dict[str, Any]:
@@ -224,7 +262,7 @@ def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
                 for card in rate_cards(provider_id, model_id, litellm_enabled=False)
             ]
 
-    out["page"] = _page_without_new_rows(
+    page = _page_without_new_rows(
         build_models_page_payload(
             manager.cached_prefixed_model_infos(),
             configured_chat_model_refs(settings),
@@ -237,9 +275,16 @@ def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
             catalogue_refresh=None,
             image_estimates=None,
             media_placements={},
+            **_page_kind_lookups(manager),
         )
     )
+    for ref, kind in _take_page_kinds(page).items():
+        out[f"{KIND_PREFIX}{ref}"] = kind
+    out["page"] = page
     client = TestClient(app, client=("127.0.0.1", 50000))
+    pickers = client.get("/admin/api/models").json()
+    out[PICKER_KINDS_KEY] = pickers.pop("kinds")
+    out["admin/models"] = pickers
     out["v1/models"] = client.get("/v1/models").json()
     out["v1beta/models"] = build_gemini_models_payload(settings, manager)
     out["admin/catalogue-models"] = client.get("/admin/api/catalogue-models").json()
@@ -284,6 +329,10 @@ def recorded(outputs: dict[str, Any]) -> dict[str, Any]:
     return stored
 
 
+def _is_kind_entry(key: str) -> bool:
+    return key.startswith(KIND_PREFIX) or key == PICKER_KINDS_KEY
+
+
 def test_every_output_is_byte_identical_to_v7_78_10(monkeypatch, tmp_path) -> None:
     baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
     current = recorded(snapshot(monkeypatch, tmp_path))
@@ -292,9 +341,45 @@ def test_every_output_is_byte_identical_to_v7_78_10(monkeypatch, tmp_path) -> No
     differing = [
         key
         for key in sorted(baseline)
-        if _encoded(current[key]) != _encoded(baseline[key])
+        if _encoded(current[key])
+        != _encoded(baseline[key][AFTER_K2] if _is_kind_entry(key) else baseline[key])
     ]
     assert not differing, differing
+
+
+def test_7_80_0_states_kinds_and_moves_no_stated_one() -> None:
+    """The user's rule for K2, held over every row the snapshot covers.
+
+    Provider official first, then gap filling; nothing existing breaks. So a
+    row whose kind was stated before 7.80.0 keeps exactly those kinds -- its
+    source may only become the provider's own list, which states the same
+    pair -- and a row nobody had stated a kind for may become stated. The
+    pickers' map keeps every entry it had and gains only those rows.
+    """
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    rows = {k: v for k, v in baseline.items() if k.startswith(KIND_PREFIX)}
+    assert rows
+    newly_stated: list[str] = []
+    for key, entry in rows.items():
+        before, after = entry[BEFORE_K2], entry[AFTER_K2]
+        if before["kinds"] is None:
+            if after["kinds"] is not None:
+                newly_stated.append(key.removeprefix(KIND_PREFIX))
+                assert after["source"] in {"provider_listing", "provider_words"}, key
+            continue
+        assert after["kinds"] == before["kinds"], key
+        assert after["labels"] == before["labels"], key
+        if after["source"] != before["source"]:
+            assert after["source"] == "provider_listing", key
+            assert before["source"] == "models_dev", key
+    assert newly_stated, "the fixture would prove nothing if no kind became stated"
+
+    pickers = baseline[PICKER_KINDS_KEY]
+    before_map, after_map = pickers[BEFORE_K2], pickers[AFTER_K2]
+    for ref, kinds in before_map.items():
+        assert after_map[ref] == kinds, ref
+    assert set(after_map) - set(before_map) <= set(newly_stated)
 
 
 def test_the_snapshot_covers_every_dialect_and_every_list() -> None:
@@ -309,13 +394,34 @@ def test_the_snapshot_covers_every_dialect_and_every_list() -> None:
     }
     for provider_id in rows:
         assert f"records/{provider_id}/enriched" in baseline
-    for key in ("page", "v1/models", "v1beta/models", "admin/catalogue-models"):
+    for key in (
+        "page",
+        "v1/models",
+        "v1beta/models",
+        "admin/catalogue-models",
+        "admin/models",
+        PICKER_KINDS_KEY,
+    ):
         assert key in baseline
     assert {key for key in baseline if key.startswith("serialiser/")} == {
         f"serialiser/{format_id}" for format_id in SERIALISERS
     }
     row_count = sum(len(spec["rows"]) for spec in rows.values())
     assert sum(1 for key in baseline if key.startswith("capabilities/")) == row_count
+    # Every page row's kind is recorded, before and after: each record's row,
+    # plus the configured refs the page lists with no record behind them.
+    capability_refs = {
+        key.removeprefix("capabilities/")
+        for key in baseline
+        if key.startswith("capabilities/")
+    }
+    kind_refs = {
+        key.removeprefix(KIND_PREFIX) for key in baseline if key.startswith(KIND_PREFIX)
+    }
+    assert capability_refs <= kind_refs
+    for key in baseline:
+        if _is_kind_entry(key):
+            assert set(baseline[key]) == {BEFORE_K2, AFTER_K2}, key
 
 
 def test_the_rows_really_carry_what_the_reader_keeps() -> None:

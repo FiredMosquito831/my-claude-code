@@ -12003,9 +12003,10 @@ function setModelOptions(models) {
   });
 }
 
-/* 7.78.2: what kind of model each ref is stated to be -- by its models.dev
-   modalities, or else by the media rail the operator saved it on; never by
-   its name. Each picker offers only its own kind: a chat route chat models,
+/* 7.78.2: what kind of model each ref is stated to be -- by its provider's
+   own model list (7.80.0), else its models.dev modalities, else the
+   provider's model type or endpoint words, else the media rail the operator
+   saved it on; never by its name. Each picker offers only its own kind: a chat route chat models,
    the Image rail image models, and so on. A ref with no entry is of unknown
    kind and stays where it always was -- inline in a chat picker, and under
    its own "Kind not known" group in a media one. Hide-only: nothing here
@@ -25562,8 +25563,18 @@ function mediaPlacementChips(row) {
 
 function mediaModalityChips(modalities) {
   const output = modalities && Array.isArray(modalities.output) ? modalities.output : null;
-  if (!output) return [mediaChip("unknown", "muted", "models.dev does not describe this model")];
-  const tier = modalities.tier ? `models.dev: ${modalities.tier}` : "models.dev";
+  if (!output) {
+    return [
+      mediaChip(
+        "unknown",
+        "muted",
+        "The provider's model list does not describe this model, and nor does models.dev",
+      ),
+    ];
+  }
+  // 7.80.0: the provider's own list answers first; `source_label` says who.
+  const who = modalities.source_label || "models.dev";
+  const tier = modalities.tier ? `${who}: ${modalities.tier}` : who;
   return output.map((name) =>
     mediaChip(modalities.approximate ? `≈ ${name}` : name, "", tier),
   );
@@ -27509,6 +27520,11 @@ function buildCapabilityPanel(capabilities, labels, model) {
     rows.push(["output limit", capabilities.max_output_tokens]);
     rows.push(["context length", capabilities.context_length]);
     rows.push(["reads images", capabilities.supports_vision]);
+    /* What kind of model this is -- which lists offer it -- and the rung of
+       the ladder that stated it (7.80.0): the provider's own model list, then
+       models.dev, then the provider's model type or endpoint words, then the
+       media rail you saved it on. Drawn from the row's `kind`. */
+    rows.push(["kind", kindCapabilityField(model && model.kind)]);
     /* What the provider's own model list says this model is (7.79.0): what it
        accepts and produces, its type word and the endpoints that serve it,
        kept in the provider's own words. The first walks the ladder (the
@@ -27689,6 +27705,44 @@ function buildDialectPanel(dialect) {
     wrap.appendChild(learned);
   }
   return wrap;
+}
+
+/* A row's `kind` in the capability panel's own row shape (7.80.0), so it is
+   badged like every field: green for the provider's own statements, the
+   models.dev colour for models.dev (red when only a cross-provider vote said
+   it), neutral for the rail you saved it on. The rung goes in the note. An
+   unknown kind says so -- such a model stays in every list. */
+const KIND_SOURCE_BADGES = {
+  provider_listing: "provider",
+  provider_words: "provider",
+  models_dev: "models_dev",
+  media_rail: "media_rail",
+};
+
+function kindCapabilityField(kind) {
+  if (!kind) return null;
+  if (!Array.isArray(kind.kinds)) {
+    return {
+      value: "not known",
+      source: "unknown",
+      source_label: "no source states it — offered in every list",
+      approximate: false,
+      note: null,
+    };
+  }
+  const labels = Array.isArray(kind.labels) ? kind.labels : [];
+  const stated = kind.source_label || kind.source || "a declared source";
+  return {
+    value: labels.length ? labels.join(" + ") : "none of the five (stated)",
+    source: kind.approximate
+      ? "approximate"
+      : KIND_SOURCE_BADGES[kind.source] || "unknown",
+    // Named on the badge itself, as the other guessed rows are; the vote's
+    // sample size is not part of a kind, so no agreement line follows it.
+    source_label: kind.approximate ? `${stated} — guessed` : stated,
+    approximate: false,
+    note: kind.tier || null,
+  };
 }
 
 function buildCapabilityRow(label, field, labels, format) {

@@ -155,6 +155,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | Learned facts | Every negative this install taught MCC, shown with its evidence, expiring on a clock, forgettable per row | **Models** page | [Guide](docs/USAGE.md#8-providers-and-api-keys) |
 | Hourly catalogue refresh | Every usable provider's model list refetched in the background, with last/next times | **Models** page | [Guide](docs/USAGE.md#8-providers-and-api-keys) |
 | The provider's own words | What each provider's model list says a model accepts and produces, its type and the endpoints that serve it, kept as published and shown with its source | **Models** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
+| Model kinds, provider first | Each list offers only its own kind of model, read from the provider's own model list first, then models.dev, then the provider's type or endpoint names; the Models page names the rung that decided it | **Models** page | [Media routing](docs/MEDIA.md#which-lists-offer-a-model-7782) |
 | Model visibility | Bulk show/hide/invert per provider, with one undoable report per action | **Models** page | [Guide](docs/USAGE.md#8-providers-and-api-keys) |
 | OAuth providers | Claude subscription (**not permitted by Anthropic**), ChatGPT, Kimi For Coding | **Providers** page | [OAuth providers](docs/OAUTH-PROVIDERS.md) |
 

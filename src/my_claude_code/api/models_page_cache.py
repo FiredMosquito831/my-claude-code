@@ -34,6 +34,7 @@ from my_claude_code.api.model_admin import (
     facts_for_row,
     models_dev_cache_mark,
 )
+from my_claude_code.application.model_kinds import KindWordsLookup, ModalitiesLookup
 from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
     canonical_model_info,
@@ -117,8 +118,15 @@ def build_capability_half(
     dialect_lookup: Any,
     measured_days: int,
     media_placements: Mapping[str, frozenset[str]] | None = None,
+    kind_modalities: ModalitiesLookup | None = None,
+    kind_words: KindWordsLookup | None = None,
 ) -> dict[str, Any]:
-    """The Models page with the four moving parts deliberately left out."""
+    """The Models page with the four moving parts deliberately left out.
+
+    The two kind lookups read nothing the key above does not already cover:
+    the provider's own records (the catalogue, in whole) and models.dev (its
+    file mark).
+    """
 
     return build_models_page_payload(
         model_infos,
@@ -132,6 +140,8 @@ def build_capability_half(
         catalogue_refresh=None,
         image_estimates=None,
         media_placements=media_placements,
+        kind_modalities=kind_modalities,
+        kind_words=kind_words,
     )
 
 

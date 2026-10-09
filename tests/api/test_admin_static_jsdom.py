@@ -2197,6 +2197,32 @@ def test_the_models_page_draws_what_the_provider_list_says(rendered) -> None:
     assert endpoints[1] == "unknown"
 
 
+def test_the_models_page_says_which_rung_stated_the_kind(rendered) -> None:
+    """7.80.0: a "kind" row, badged by the source, the rung in its note."""
+
+    rows = rendered["models"]["kindRows"]
+
+    listed = rows["providerList"]
+    assert listed["cells"][0] == "kind"
+    assert listed["cells"][1] == "Chat + Transcription"
+    assert "the provider's model list" in listed["cells"][2]
+    assert "provider /models, exact id" in listed["cells"][2]
+    assert "models-source-provider" in listed["badgeClass"]
+
+    words = rows["providerWords"]
+    assert words["cells"][1] == "Image"
+    assert "the provider's model type or endpoints" in words["cells"][2]
+    assert "tag stripped" in words["cells"][2]
+
+    voted = rows["voted"]
+    assert "models.dev modalities — guessed" in voted["cells"][2]
+    assert "models-source-approximate" in voted["badgeClass"]
+
+    unknown = rows["unknown"]
+    assert unknown["cells"][1] == "not known"
+    assert "offered in every list" in unknown["cells"][2]
+
+
 def test_a_single_surface_model_is_offered_no_choice_at_all(rendered) -> None:
     """39 of the 41 providers, and every custom entry that did not opt in."""
 
