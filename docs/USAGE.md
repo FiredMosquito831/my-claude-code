@@ -3203,6 +3203,17 @@ of the same address show up as one exit; **Where does Direct come out?** shows
 the address a connected VPN app gives this computer. See
 [Proxies on this computer](ROUTING-REFERENCE.md#proxies-on-this-computer-7890).
 
+**A tor you run yourself (7.90.0).** Under **Tor you run yourself** on the
+**Proxying** page, give your tor's SOCKS ports (two or more, any free ports)
+and its control port: each port becomes its own chain address, named
+`Tor · 127.0.0.1:<port>`, and the card shows the torrc lines to paste. Put the
+ports in the Zen chain with **Keep trying exits until one answers** ticked and
+a refused request moves to the next Tor port. **New Tor identity** asks tor for
+new circuits (at most once per 10 seconds; MCC never asks by itself). MCC never
+downloads or starts tor. Raise `PROXY_CONNECT_TIMEOUT_SECONDS` (to 30, say)
+when you use Tor. See
+[Bring your own Tor](ROUTING-REFERENCE.md#bring-your-own-tor-7900).
+
 ### OpenCode Zen serves different models on different endpoints
 
 **New in 6.74.0.** OpenCode Zen is not one API. It is a front door onto four,
@@ -5627,7 +5638,7 @@ Loopback-only (`HOST=127.0.0.1`) is the shipped default.
 
 ### What never leaves the machine
 
-Provider API keys are never sent to your agent, never written to the analytics stores, and never included in configuration snapshots — only masked `first4…last4` labels. Proxy credentials are stripped from any recorded URL. Since 7.89.0 the two files that can hold a proxy login, `proxy_chains.json` and `proxy_sources.json`, are written readable by you only (POSIX `0600`; on Windows you, `SYSTEM` and Administrators, nothing inherited).
+Provider API keys are never sent to your agent, never written to the analytics stores, and never included in configuration snapshots — only masked `first4…last4` labels. Proxy credentials are stripped from any recorded URL. Since 7.89.0 the two files that can hold a proxy login, `proxy_chains.json` and `proxy_sources.json`, are written readable by you only (POSIX `0600`; on Windows you, `SYSTEM` and Administrators, nothing inherited). Since 7.90.0 `proxy_sources.json` may also hold a tor control password; tor's cookie is never stored anywhere — it is read from the file tor names at the moment you press a Tor button.
 
 ---
 

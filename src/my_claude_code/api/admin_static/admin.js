@@ -949,6 +949,9 @@ const proxyState = {
      re-attach to a sweep that is still running instead of losing it. */
   fetch: null,
   fetchPoll: 0,
+  // 7.90.0: which Tor source's form is open -- a source id, "new" for the
+  // add form, or "" for none. Never holds a typed control password.
+  torEditing: "",
   // How many candidate rows are drawn. Paged rather than capped: hundreds of
   // tested, working addresses is the ordinary result now, and "narrow the
   // filter" is not an answer when every one of them is usable.
@@ -3939,6 +3942,12 @@ function renderProxySources() {
   if (!panel) return;
   panel.textContent = "";
   const data = proxySourcesData();
+  renderProxyLocalSource(panel, data);
+  // 7.90.0: a tor the user runs themselves, after the scan's listeners.
+  renderProxyTor(panel, data);
+}
+
+function renderProxyLocalSource(panel, data) {
   const local = data ? (data.sources || []).find((source) => source.kind === "local") : null;
   const head = document.createElement("div");
   head.className = "proxy-sources-head";
@@ -4177,6 +4186,456 @@ async function removeProxySource(source, button) {
     announceProxy(
       "Forgot the scan of this computer. Its offers are withdrawn; a chain " +
         "that took one keeps it.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+/* ------------------------------------------------ your own tor (7.90.0)
+   Bring-your-own Tor. MCC never downloads or starts tor: the user says which
+   SOCKS ports and which control port their tor has, each SOCKS port is
+   offered as one chain address (one identity, its own name), and the card
+   shows the torrc lines that match. Two buttons speak to the control port --
+   Check Tor and New Tor identity -- and nothing presses either on its own.
+   A control password is write-only: sent once on save, never held after. */
+
+function proxyTorSources(data) {
+  return data ? (data.sources || []).filter((source) => source.kind === "tor") : [];
+}
+
+function proxyProviderNames(ids) {
+  const providers = (proxyState.data && proxyState.data.providers) || [];
+  return (ids || []).map((id) => {
+    const provider = providers.find((entry) => entry.provider_id === id);
+    return provider ? provider.display_name : id;
+  });
+}
+
+function renderProxyTor(panel, data) {
+  const block = document.createElement("div");
+  block.className = "proxy-tor";
+  const title = document.createElement("h4");
+  title.className = "proxy-tor-title";
+  title.textContent = "Tor you run yourself";
+  const intro = document.createElement("p");
+  intro.className = "proxy-note proxy-tor-intro";
+  intro.textContent =
+    "MCC never downloads or starts tor. Give the ports your tor has: each " +
+    "SOCKS port becomes one chain address -- one Tor identity, with its own " +
+    "name -- and the control port carries the New Tor identity button. Any " +
+    "free ports will do: on some Windows computers 9050, 9052 and 9150 sit " +
+    "in a reserved range where nothing can listen.";
+  block.append(title, intro);
+  const sources = proxyTorSources(data);
+  if (
+    proxyState.torEditing &&
+    proxyState.torEditing !== "new" &&
+    !sources.some((source) => source.id === proxyState.torEditing)
+  ) {
+    // The source being edited is gone (removed in another tab, say).
+    proxyState.torEditing = "";
+  }
+  sources.forEach((source) => {
+    block.appendChild(
+      proxyState.torEditing === source.id
+        ? proxyTorForm(source, true)
+        : proxyTorCard(source, data),
+    );
+  });
+  if (!sources.length || proxyState.torEditing === "new") {
+    block.appendChild(proxyTorForm(null, sources.length > 0));
+  } else if (!proxyState.torEditing) {
+    const another = document.createElement("button");
+    another.type = "button";
+    another.className = "ghost-button proxy-tor-another";
+    another.textContent = "Add another tor";
+    another.title = "A second tor of your own, with its own ports and control port.";
+    another.addEventListener("click", () => {
+      proxyState.torEditing = "new";
+      renderProxySources();
+    });
+    block.appendChild(another);
+  }
+  panel.appendChild(block);
+}
+
+function proxyTorForm(source, cancellable) {
+  const form = document.createElement("div");
+  form.className = "proxy-tor-form";
+  const ports = document.createElement("input");
+  ports.type = "text";
+  ports.className = "proxy-tor-socks";
+  ports.autocomplete = "off";
+  ports.placeholder = "SOCKS ports, e.g. 19250, 19251, 19252";
+  ports.setAttribute("aria-label", "Your tor's SOCKS ports, separated by commas");
+  ports.value = source ? (source.ports || []).map((row) => row.port).join(", ") : "";
+  const control = document.createElement("input");
+  control.type = "number";
+  control.min = "1";
+  control.max = "65535";
+  control.className = "proxy-tor-control";
+  control.placeholder = "control port, e.g. 19260";
+  control.setAttribute("aria-label", "Your tor's control port");
+  control.value = source ? String(source.control_port) : "";
+  const auth = document.createElement("select");
+  auth.className = "proxy-tor-auth";
+  auth.setAttribute("aria-label", "How MCC logs in to your tor's control port");
+  [
+    ["cookie", "Log in with the cookie file tor names"],
+    ["password", "Log in with a control password"],
+  ].forEach(([value, text]) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    auth.appendChild(option);
+  });
+  auth.value = source && source.auth === "password" ? "password" : "cookie";
+  const password = document.createElement("input");
+  password.type = "password";
+  password.className = "proxy-tor-password";
+  password.autocomplete = "new-password";
+  password.placeholder =
+    source && source.secret_set ? "stored -- type to replace" : "control password";
+  password.setAttribute("aria-label", "Your tor's control password");
+  password.hidden = auth.value !== "password";
+  auth.addEventListener("change", () => {
+    password.hidden = auth.value !== "password";
+  });
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary-button proxy-tor-save";
+  save.textContent = source ? "Save ports" : "Save Tor ports";
+  save.addEventListener("click", () =>
+    saveProxyTor(
+      source,
+      {
+        ports: ports.value,
+        control: control.value,
+        auth: auth.value,
+        password: password.value,
+      },
+      save,
+    ),
+  );
+  form.append(ports, control, auth, password, save);
+  if (cancellable) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost-button proxy-tor-cancel";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => {
+      proxyState.torEditing = "";
+      renderProxySources();
+    });
+    form.appendChild(cancel);
+  }
+  const note = document.createElement("p");
+  note.className = "proxy-note proxy-tor-form-note";
+  note.textContent =
+    "Saving contacts nothing: each SOCKS port is offered as a chain address " +
+    "and the card shows the torrc lines that match. The cookie file is read " +
+    "only when you press a button, and never copied; a control password is " +
+    "kept readable by you only and never shown again.";
+  form.appendChild(note);
+  return form;
+}
+
+function proxyTorPorts(text) {
+  const tokens = String(text || "")
+    .split(/[\s,;]+/)
+    .filter(Boolean);
+  if (!tokens.length || !tokens.every((token) => /^\d+$/.test(token))) return null;
+  return tokens.map(Number);
+}
+
+async function saveProxyTor(source, form, button) {
+  const ports = proxyTorPorts(form.ports);
+  const controlText = String(form.control || "").trim();
+  if (!ports || !/^\d+$/.test(controlText)) {
+    announceProxy(
+      "Give your tor's SOCKS ports as numbers separated by commas, and its " +
+        "control port as a number.",
+    );
+    return;
+  }
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources", {
+      method: "PUT",
+      body: JSON.stringify({
+        source: source ? source.id : "",
+        kind: "tor",
+        tor: {
+          socks_ports: ports,
+          control_port: Number(controlText),
+          auth: form.auth,
+          password: form.auth === "password" ? form.password : "",
+        },
+      }),
+    });
+    proxyState.torEditing = "";
+    renderProxying();
+    const result = proxyState.data.tor_result || {};
+    announceProxy(result.sentence || "Saved your tor's ports.");
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+function proxyTorStatus(source) {
+  const status = source.status;
+  if (!status) {
+    return "Not checked yet. Once tor runs with the lines below, press Check Tor.";
+  }
+  const when = proxyCheckedAgo(status.at);
+  return `${status.sentence}${when ? ` (${when})` : ""}`;
+}
+
+function proxyTorNewnymNote(source) {
+  const last = source.newnym;
+  if (!last) return "";
+  const at = new Date(last.at);
+  const clock = Number.isFinite(at.getTime()) ? at.toLocaleTimeString() : "";
+  const wait =
+    Number(last.wait_seconds) > 0
+      ? ` Tor allows the next one in ${last.wait_seconds} s.`
+      : "";
+  return `Last new identity${clock ? ` at ${clock}` : ""}.${wait}`;
+}
+
+function proxyTorPortState(row, source) {
+  const parts = [];
+  const listeners =
+    source.status && Array.isArray(source.status.socks_listeners)
+      ? source.status.socks_listeners
+      : null;
+  if (listeners) {
+    parts.push(
+      listeners.includes(row.port)
+        ? "tor listens here"
+        : "tor does not list this port -- paste the lines below and restart tor",
+    );
+  }
+  const chained = proxyProviderNames(row.chained);
+  parts.push(chained.length ? `in ${chained.join(", ")}` : "on offer");
+  return parts.join(" · ");
+}
+
+function proxyTorProviderPicker(label) {
+  const pick = document.createElement("select");
+  pick.className = "proxy-tor-provider";
+  pick.setAttribute("aria-label", label);
+  proxyCandidateProviders().forEach((provider) => {
+    const option = document.createElement("option");
+    option.value = provider.provider_id;
+    option.textContent = provider.display_name;
+    pick.appendChild(option);
+  });
+  return pick;
+}
+
+function proxyTorPortRow(row, source) {
+  const item = document.createElement("li");
+  item.className = "proxy-tor-port";
+  item.dataset.port = String(row.port);
+  const name = document.createElement("span");
+  name.className = "proxy-tor-port-name";
+  name.textContent = row.label || `Tor · 127.0.0.1:${row.port}`;
+  const state = document.createElement("span");
+  state.className = "proxy-tor-port-state";
+  state.textContent = proxyTorPortState(row, source);
+  item.append(name, state);
+  if (row.offered && row.proxy) {
+    const pick = proxyTorProviderPicker(`Add ${name.textContent} to which chain`);
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "secondary-button proxy-tor-add";
+    add.textContent = "Add to chain";
+    add.disabled = !pick.options.length || Boolean(proxyState.run);
+    add.addEventListener("click", () =>
+      runProxyCandidateBulk({ action: "add", providerId: pick.value, proxies: [row.proxy] }),
+    );
+    item.append(pick, add);
+  }
+  return item;
+}
+
+function proxyTorCard(source, data) {
+  const card = document.createElement("div");
+  card.className = "proxy-tor-source";
+  card.dataset.source = source.id;
+  const head = document.createElement("p");
+  head.className = "proxy-tor-head";
+  const name = document.createElement("strong");
+  name.className = "proxy-tor-name";
+  name.textContent = `${source.name || "Tor"} · control port 127.0.0.1:${source.control_port}`;
+  const login = document.createElement("span");
+  login.className = "proxy-tor-login";
+  login.textContent =
+    source.auth === "password"
+      ? source.secret_set
+        ? " · logs in with the control password (stored, never shown)"
+        : " · no control password is stored"
+      : " · logs in with the cookie file tor names, read only when you press a button";
+  head.append(name, login);
+  const status = document.createElement("p");
+  status.className = "proxy-tor-status";
+  if (source.status && !source.status.ok) status.classList.add("proxy-tor-status-failed");
+  status.textContent = proxyTorStatus(source);
+  card.append(head, status);
+  const note = proxyTorNewnymNote(source);
+  if (note) {
+    const line = document.createElement("p");
+    line.className = "proxy-tor-newnym-note";
+    line.textContent = note;
+    card.appendChild(line);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "proxy-tor-actions";
+  const identity = document.createElement("button");
+  identity.type = "button";
+  identity.className = "secondary-button proxy-tor-newnym";
+  identity.textContent = "New Tor identity";
+  identity.title =
+    "Asks your tor for new circuits (SIGNAL NEWNYM): new requests on every " +
+    "one of its ports come out of new exits; a connection still open keeps " +
+    "its exit. Tor allows one per 10 seconds. MCC never sends one by itself.";
+  identity.addEventListener("click", () => pressProxyTor(source, "newnym", identity));
+  const check = document.createElement("button");
+  check.type = "button";
+  check.className = "ghost-button proxy-tor-check";
+  check.textContent = "Check Tor";
+  check.title =
+    "Logs in to 127.0.0.1:" +
+    source.control_port +
+    " and reads tor's version, whether it has a circuit, and which SOCKS ports it listens on.";
+  check.addEventListener("click", () => pressProxyTor(source, "status", check));
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "ghost-button proxy-tor-edit";
+  edit.textContent = "Change ports";
+  edit.addEventListener("click", () => {
+    proxyState.torEditing = source.id;
+    renderProxySources();
+  });
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost-button proxy-tor-remove";
+  remove.textContent = "Remove";
+  remove.title =
+    "Withdraw these ports' offers and forget a stored control password. A " +
+    "chain that took a port keeps it. Tor itself is not touched.";
+  remove.addEventListener("click", () => removeProxyTor(source, remove));
+  actions.append(identity, check, edit, remove);
+  card.appendChild(actions);
+
+  const list = document.createElement("ul");
+  list.className = "proxy-tor-ports";
+  (source.ports || []).forEach((row) => list.appendChild(proxyTorPortRow(row, source)));
+  card.appendChild(list);
+
+  const offered = (source.ports || []).filter((row) => row.offered && row.proxy);
+  if (offered.length > 1) {
+    const all = document.createElement("div");
+    all.className = "proxy-tor-add-all";
+    const label = document.createElement("span");
+    label.className = "proxy-tor-add-all-label";
+    label.textContent = `All ${offered.length} ports:`;
+    const pick = proxyTorProviderPicker("Add every Tor port to which chain");
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "secondary-button proxy-tor-add-all-button";
+    add.textContent = "Add all to chain";
+    add.title =
+      "Each port is tested against that provider's own host first. With two " +
+      "or more Tor ports in a chain and Keep trying exits until one answers " +
+      "ticked, a refused request moves to the next port at once.";
+    add.disabled = !pick.options.length || Boolean(proxyState.run);
+    add.addEventListener("click", () =>
+      runProxyCandidateBulk({
+        action: "add",
+        providerId: pick.value,
+        proxies: offered.map((row) => row.proxy),
+      }),
+    );
+    all.append(label, pick, add);
+    card.appendChild(all);
+  }
+
+  const torrc = document.createElement("div");
+  torrc.className = "proxy-tor-torrc-wrap";
+  const lead = document.createElement("p");
+  lead.className = "proxy-note proxy-tor-torrc-lead";
+  lead.textContent = "Paste these lines into your tor's torrc, then restart tor:";
+  const pre = document.createElement("pre");
+  pre.className = "proxy-tor-torrc";
+  pre.textContent = source.torrc || "";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "ghost-button proxy-tor-copy";
+  copy.textContent = "Copy torrc lines";
+  copy.addEventListener("click", () => {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      announceProxy("This browser does not allow copying here: select the lines by hand.");
+      return;
+    }
+    navigator.clipboard
+      .writeText(source.torrc || "")
+      .then(() => {
+        copy.textContent = "Copied";
+        window.setTimeout(() => {
+          copy.textContent = "Copy torrc lines";
+        }, 1500);
+      })
+      .catch(() => {
+        announceProxy("The browser refused the copy: select the lines by hand.");
+      });
+  });
+  torrc.append(lead, pre, copy);
+  card.appendChild(torrc);
+
+  const sees = document.createElement("p");
+  sees.className = "proxy-note proxy-tor-sees";
+  sees.textContent = [source.sees, data && data.tor_line].filter(Boolean).join(" ");
+  card.appendChild(sees);
+  return card;
+}
+
+async function pressProxyTor(source, action, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api(`/admin/api/proxy-sources/tor/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ source: source.id }),
+    });
+    renderProxying();
+    const result = proxyState.data.tor_result || {};
+    announceProxy(result.sentence || "");
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function removeProxyTor(source, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources", {
+      method: "PUT",
+      body: JSON.stringify({ source: source.id, remove: true }),
+    });
+    proxyState.torEditing = "";
+    renderProxying();
+    announceProxy(
+      "Removed your tor's ports from the offers and forgot any stored control " +
+        "password. A chain that took a port keeps it; tor itself was not touched.",
     );
   } catch (error) {
     button.disabled = false;

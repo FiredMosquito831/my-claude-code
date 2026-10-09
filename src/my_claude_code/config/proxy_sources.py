@@ -37,6 +37,21 @@ of 2026-09-25: "option A"). Both files are written owner-only
 :meth:`ProxySources.public_document` names a secret by
 :func:`~my_claude_code.config.credentials.mask_key_label` of its username and
 whether one is set, and the routes send only that.
+
+7.90.0 adds a second built kind, ``tor``: a tor the user runs themselves
+(MCC never downloads or starts one). Its SOCKS ports -- one identity each --
+are offered as chain addresses, and its control port carries the *New Tor
+identity* button::
+
+    "src_tor": {"kind": "tor", "name": "Tor", "enabled": true,
+                "added_at": "...Z", "control_port": 19260, "auth": "cookie",
+                "socks_ports": [{"port": 19250, "proxy": "px_..."},
+                                {"port": 19251, "proxy": "px_..."}]}
+
+``auth`` is ``cookie`` -- the file tor names in its ``PROTOCOLINFO`` answer,
+read only when a button is pressed and **never copied** into any MCC file --
+or ``password``, whose secret (``{"type": "password", "password": "..."}``)
+lives under ``secrets`` like a listener's login and is never sent back.
 """
 
 import json
@@ -58,10 +73,25 @@ PROXY_SOURCES_FILENAME = "proxy_sources.json"
 DOCUMENT_VERSION = 1
 
 KIND_LOCAL = "local"
+#: A tor the user runs themselves (7.90.0). Not one of the base spec's five
+#: kinds, so it is not in :data:`SOURCE_KINDS` -- whose list the Sources
+#: payload names, byte for byte as 7.89.0 did -- but it is read, written and
+#: offered like ``local``.
+KIND_TOR = "tor"
 #: Every kind the store knows the name of, in the spec's order (§5.1). Only
 #: :data:`BUILT_KINDS` are read, written and offered by this release.
 SOURCE_KINDS: tuple[str, ...] = (KIND_LOCAL, "account", "gateway", "list", "runner")
-BUILT_KINDS: tuple[str, ...] = (KIND_LOCAL,)
+BUILT_KINDS: tuple[str, ...] = (KIND_LOCAL, KIND_TOR)
+#: Every kind a document may hold: the spec's five, and ``tor``.
+KNOWN_KINDS: tuple[str, ...] = (*SOURCE_KINDS, KIND_TOR)
+#: Tor sources are ``src_tor``, then ``src_tor_2``, ``src_tor_3`` ...
+TOR_SOURCE_PREFIX = "src_tor"
+TOR_SOURCE_NAME = "Tor"
+#: How MCC logs in to a tor's control port: the cookie file tor names, or a
+#: control password (``HashedControlPassword`` in its torrc).
+TOR_AUTH_COOKIE = "cookie"
+TOR_AUTH_PASSWORD = "password"
+TOR_AUTH_KINDS: tuple[str, ...] = (TOR_AUTH_COOKIE, TOR_AUTH_PASSWORD)
 
 PROTOCOL_SOCKS5 = "socks5"
 PROTOCOL_HTTP = "http"
@@ -73,7 +103,9 @@ AUTH_UNSUPPORTED = "unsupported"
 AUTH_KINDS: tuple[str, ...] = (AUTH_NONE, AUTH_USERPASS, AUTH_UNSUPPORTED)
 
 SECRET_USERPASS = "userpass"
-SECRET_TYPES: tuple[str, ...] = (SECRET_USERPASS,)
+#: A tor control password (7.90.0): no username, so nothing to mask either.
+SECRET_PASSWORD = "password"
+SECRET_TYPES: tuple[str, ...] = (SECRET_USERPASS, SECRET_PASSWORD)
 
 #: The one local source an install has: this computer.
 LOCAL_SOURCE_ID = "src_local"
@@ -97,11 +129,19 @@ class SourceSecret:
 
     @property
     def label(self) -> str:
-        """The masked name a page may show: the username's ``first4…last4``."""
+        """The masked name a page may show: the username's ``first4…last4``.
 
+        A control password has no username, and no part of a password is
+        ever shown, so its label is empty.
+        """
+
+        if self.type == SECRET_PASSWORD:
+            return ""
         return mask_key_label(self.username)
 
     def as_document(self) -> dict[str, Any]:
+        if self.type == SECRET_PASSWORD:
+            return {"type": self.type, "password": self.password}
         return {"type": self.type, "username": self.username, "password": self.password}
 
     @classmethod
@@ -113,7 +153,7 @@ class SourceSecret:
             return None
         return cls(
             type=kind,
-            username=str(raw.get("username") or ""),
+            username="" if kind == SECRET_PASSWORD else str(raw.get("username") or ""),
             password=str(raw.get("password") or ""),
         )
 
@@ -199,6 +239,119 @@ class LocalListener:
         )
 
 
+def _port_number(raw: object) -> int | None:
+    """A TCP port from a document value, or ``None`` for anything else."""
+
+    if isinstance(raw, bool) or not isinstance(raw, int | str):
+        return None
+    try:
+        port = int(raw)
+    except ValueError:
+        return None
+    return port if 0 < port < 65536 else None
+
+
+@dataclass(frozen=True, slots=True)
+class TorPort:
+    """One of a tor's SOCKS ports, and the catalogue id it is offered as."""
+
+    port: int
+    proxy: str = ""
+
+    def as_document(self) -> dict[str, Any]:
+        return {"port": self.port, "proxy": self.proxy}
+
+    @classmethod
+    def from_document(cls, raw: object) -> Self | None:
+        if not isinstance(raw, Mapping):
+            return None
+        port = _port_number(raw.get("port"))
+        if port is None:
+            return None
+        return cls(port=port, proxy=str(raw.get("proxy") or "").strip())
+
+
+@dataclass(frozen=True, slots=True)
+class TorSettings:
+    """A tor the user runs: where its SOCKS and control ports are, how to log in.
+
+    Each SOCKS port is one identity -- tor keeps streams arriving on separate
+    ``SocksPort`` lines on separate circuits by default -- and becomes one
+    chain address. The control port is asked only when a button is pressed.
+    """
+
+    socks_ports: tuple[TorPort, ...]
+    control_port: int
+    auth: str = TOR_AUTH_COOKIE
+    #: The ``sec_`` id of the control password, when :attr:`auth` is
+    #: ``password``. The cookie is never stored: tor names its file and MCC
+    #: reads it at the moment it logs in.
+    secret: str = ""
+
+    @property
+    def ports(self) -> tuple[int, ...]:
+        return tuple(item.port for item in self.socks_ports)
+
+    def torrc_lines(self) -> str:
+        """What the user pastes into their own torrc: the ports they chose.
+
+        Loopback only, so no other computer can use this tor. A control
+        password is never written here -- tor wants its hash, which only
+        ``tor --hash-password`` makes -- so the password form names the
+        command instead of a value.
+        """
+
+        lines = [
+            "# My Claude Code: one SocksPort per identity, and the control port",
+            *(f"SocksPort {LOCAL_HOST}:{port}" for port in self.ports),
+            f"ControlPort {LOCAL_HOST}:{self.control_port}",
+        ]
+        if self.auth == TOR_AUTH_PASSWORD:
+            lines += [
+                "# Replace the value with what `tor --hash-password <password>` prints",
+                "HashedControlPassword 16:PASTE-THE-HASH-HERE",
+            ]
+        else:
+            lines.append("CookieAuthentication 1")
+        return "\n".join(lines) + "\n"
+
+    def as_document(self) -> dict[str, Any]:
+        document: dict[str, Any] = {
+            "control_port": self.control_port,
+            "auth": self.auth,
+            "socks_ports": [item.as_document() for item in self.socks_ports],
+        }
+        if self.secret:
+            document["secret"] = self.secret
+        return document
+
+    @classmethod
+    def from_document(cls, raw: Mapping[Any, object]) -> Self | None:
+        control_port = _port_number(raw.get("control_port"))
+        raw_ports = raw.get("socks_ports")
+        ports: list[TorPort] = []
+        if isinstance(raw_ports, Sequence) and not isinstance(raw_ports, str):
+            seen: set[int] = set()
+            for item in raw_ports:
+                parsed = TorPort.from_document(item)
+                if (
+                    parsed is not None
+                    and parsed.port not in seen
+                    and parsed.port != control_port
+                ):
+                    seen.add(parsed.port)
+                    ports.append(parsed)
+        if control_port is None or not ports:
+            return None
+        auth = str(raw.get("auth") or TOR_AUTH_COOKIE).strip().lower()
+        return cls(
+            socks_ports=tuple(ports),
+            control_port=control_port,
+            auth=auth if auth in TOR_AUTH_KINDS else TOR_AUTH_COOKIE,
+            secret=str(raw.get("secret") or "").strip(),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ProxySource:
     """One source. ``raw`` keeps a kind this release does not build, verbatim."""
@@ -211,6 +364,8 @@ class ProxySource:
     scanned_at: str = ""
     listeners: tuple[LocalListener, ...] = ()
     raw: Mapping[str, Any] = field(default_factory=dict)
+    #: A ``tor`` source's ports and login (7.90.0); ``None`` for every other kind.
+    tor: TorSettings | None = None
 
     @property
     def built(self) -> bool:
@@ -220,6 +375,8 @@ class ProxySource:
         if not self.built:
             value = self.raw.get("secret")
             return (str(value),) if isinstance(value, str) and value else ()
+        if self.tor is not None:
+            return (self.tor.secret,) if self.tor.secret else ()
         return tuple(listener.secret for listener in self.listeners if listener.secret)
 
     def listener(self, port: int) -> LocalListener | None:
@@ -228,6 +385,13 @@ class ProxySource:
     def as_document(self) -> dict[str, Any]:
         if not self.built:
             return dict(self.raw)
+        if self.tor is not None:
+            return {
+                "kind": self.kind,
+                "name": self.name,
+                "enabled": self.enabled,
+                "added_at": self.added_at,
+            } | self.tor.as_document()
         return {
             "kind": self.kind,
             "name": self.name,
@@ -245,12 +409,29 @@ class ProxySource:
             )
             return None
         kind = str(raw.get("kind") or "").strip().lower()
-        if kind not in SOURCE_KINDS:
+        if kind not in KNOWN_KINDS:
             logger.warning(
                 "PROXY SOURCES: '{}' has a kind MCC does not know; ignoring it",
                 source_id,
             )
             return None
+        if kind == KIND_TOR:
+            tor = TorSettings.from_document(raw)
+            if tor is None:
+                logger.warning(
+                    "PROXY SOURCES: '{}' names no usable SOCKS or control port; "
+                    "ignoring it",
+                    source_id,
+                )
+                return None
+            return cls(
+                id=source_id,
+                kind=kind,
+                name=str(raw.get("name") or "").strip() or TOR_SOURCE_NAME,
+                enabled=raw.get("enabled") is not False,
+                added_at=str(raw.get("added_at") or "").strip(),
+                tor=tor,
+            )
         listeners: list[LocalListener] = []
         raw_listeners = raw.get("listeners")
         if (
@@ -468,6 +649,8 @@ __all__ = [
     "DOCUMENT_VERSION",
     "EMPTY_PROXY_SOURCES",
     "KIND_LOCAL",
+    "KIND_TOR",
+    "KNOWN_KINDS",
     "LOCAL_HOST",
     "LOCAL_SOURCE_ID",
     "LOCAL_SOURCE_NAME",
@@ -475,14 +658,22 @@ __all__ = [
     "PROTOCOL_SOCKS5",
     "PROXY_SOURCES_FILENAME",
     "PROXY_SOURCES_WRITE_LOCK",
+    "SECRET_PASSWORD",
     "SECRET_TYPES",
     "SECRET_USERPASS",
     "SOURCE_KINDS",
+    "TOR_AUTH_COOKIE",
+    "TOR_AUTH_KINDS",
+    "TOR_AUTH_PASSWORD",
+    "TOR_SOURCE_NAME",
+    "TOR_SOURCE_PREFIX",
     "LocalListener",
     "ProxySource",
     "ProxySources",
     "ProxySourcesUnreadableError",
     "SourceSecret",
+    "TorPort",
+    "TorSettings",
     "current_proxy_sources",
     "load_proxy_sources",
     "mint_secret_id",

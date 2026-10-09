@@ -8552,3 +8552,136 @@ def test_a_login_is_sent_once_and_never_kept_on_the_page(rendered) -> None:
     assert login["state"] == "SOCKS5 · login set (me-u…ser1) · on offer"
     assert login["pageHasPassword"] is False
     assert login["passwordField"] == ""
+
+
+# --------------------------------------------- 7.90.0: a tor you run yourself
+
+
+def test_the_tor_form_is_there_before_anything_is_scanned(rendered) -> None:
+    empty = rendered["proxying"]["tor"]["empty"]
+    assert empty["title"] == "Tor you run yourself"
+    assert empty["intro"].startswith("MCC never downloads or starts tor.")
+    assert "9050, 9052 and 9150 sit in a reserved range" in empty["intro"]
+    assert empty["form"] is True
+    assert empty["cancel"] is False
+    assert empty["cards"] == 0
+    # The scan's own part of the section is what it was.
+    assert empty["sourceRows"] == 0
+    assert empty["localStatus"] == "Not scanned yet."
+    assert empty["oneEntry"].startswith(
+        "A chain with only one proxy in it never switches and never falls back"
+    )
+
+
+def test_a_tor_form_with_a_bad_port_sends_nothing(rendered) -> None:
+    bad = rendered["proxying"]["tor"]["badForm"]
+    assert bad["puts"] == 0
+    assert bad["announcement"].startswith("Give your tor's SOCKS ports as numbers")
+
+
+def test_saving_tor_ports_sends_them_once_and_shows_the_card(rendered) -> None:
+    tor = rendered["proxying"]["tor"]
+    assert tor["passwordHiddenAtFirst"] is True
+    assert tor["passwordShown"] is True
+    saved = tor["saved"]
+    assert saved["puts"] == [
+        {
+            "method": "PUT",
+            "body": {
+                "source": "",
+                "kind": "tor",
+                "tor": {
+                    "socks_ports": [19250, 19251, 19252],
+                    "control_port": 19260,
+                    "auth": "password",
+                    "password": "tor-pw-secret-1",
+                },
+            },
+        }
+    ]
+    assert saved["pageHasPassword"] is False
+    assert saved["name"] == "Tor · control port 127.0.0.1:19260"
+    assert saved["login"] == "· logs in with the control password (stored, never shown)"
+    assert saved["status"].startswith("Not checked yet.")
+    assert [row["name"] for row in saved["ports"]] == [
+        "Tor · 127.0.0.1:19250",
+        "Tor · 127.0.0.1:19251",
+        "Tor · 127.0.0.1:19252",
+    ]
+    assert all(row["state"] == "on offer" and row["add"] for row in saved["ports"])
+    assert saved["addAll"] == "Add all to chain"
+    assert saved["torrc"].splitlines()[1:] == [
+        "SocksPort 127.0.0.1:19250",
+        "SocksPort 127.0.0.1:19251",
+        "SocksPort 127.0.0.1:19252",
+        "ControlPort 127.0.0.1:19260",
+        "CookieAuthentication 1",
+    ]
+    assert saved["copy"] == "Copy torrc lines"
+    assert "Tor Project asks" in saved["sees"]
+    assert saved["buttons"] == [
+        "New Tor identity",
+        "Check Tor",
+        "Change ports",
+        "Remove",
+    ]
+    assert "MCC never sends one by itself" in saved["newnymTitle"]
+    assert saved["another"] == "Add another tor"
+    assert saved["form"] is False
+    assert saved["announcement"].startswith("Saved. Paste the torrc lines")
+
+
+def test_check_tor_shows_its_status_and_which_ports_tor_listens_on(rendered) -> None:
+    checked = rendered["proxying"]["tor"]["checked"]
+    assert checked["posts"] == [
+        {"path": "/admin/api/proxy-sources/tor/status", "body": {"source": "src_tor"}}
+    ]
+    assert checked["status"].startswith(
+        "Tor 0.4.8.13 · circuit established · logged in with the cookie (SAFECOOKIE)."
+    )
+    assert checked["ports"] == [
+        "tor listens here · on offer",
+        "tor listens here · on offer",
+        "tor does not list this port -- paste the lines below and restart tor "
+        "· on offer",
+    ]
+
+
+def test_a_second_new_identity_shows_the_seconds_left(rendered) -> None:
+    tor = rendered["proxying"]["tor"]
+    assert tor["newnym"]["posts"] == [
+        {"path": "/admin/api/proxy-sources/tor/newnym", "body": {"source": "src_tor"}}
+    ]
+    assert tor["newnym"]["announcement"].startswith("Tor accepted: new requests")
+    assert tor["newnym"]["note"].endswith("Tor allows the next one in 10 s.")
+    assert tor["again"]["announcement"] == (
+        "Tor allows one new identity per 10 seconds: try again in 7 s. "
+        "Nothing was sent."
+    )
+    assert tor["again"]["note"].endswith("Tor allows the next one in 7 s.")
+
+
+def test_every_tor_port_goes_into_a_chain_through_the_one_bulk_add(rendered) -> None:
+    added = rendered["proxying"]["tor"]["addedAll"]
+    assert len(added) == 1
+    assert added[0]["action"] == "add"
+    assert added[0]["provider"] == "nvidia_nim"
+    assert added[0]["proxies"] == ["px_tor19250", "px_tor19251", "px_tor19252"]
+
+
+def test_changing_tor_ports_starts_from_what_is_saved(rendered) -> None:
+    editing = rendered["proxying"]["tor"]["editing"]
+    assert editing == {
+        "socks": "19250, 19251, 19252",
+        "control": "19260",
+        "auth": "password",
+        "passwordPlaceholder": "stored -- type to replace",
+        "cancel": True,
+    }
+
+
+def test_removing_the_tor_source_brings_the_form_back(rendered) -> None:
+    removed = rendered["proxying"]["tor"]["removed"]
+    assert removed["puts"] == [{"source": "src_tor", "remove": True}]
+    assert removed["cards"] == 0
+    assert removed["form"] is True

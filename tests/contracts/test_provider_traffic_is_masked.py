@@ -68,6 +68,15 @@ out?" readout dials the provider from this computer's address only where the
 chain itself would: no chain, an unpaused Direct entry, or every proxy
 unhealthy with Direct fallback on. A healthy chain, Direct fallback off, and
 every fail-closed state (paused, removed, unreadable) send nothing at all.
+
+Filled by 7.90.0 (bring-your-own Tor): a tor the user runs is two kinds of
+traffic. Its SOCKS ports are chain entries like any address: a ticked chain of
+two Tor ports moves a refused request to the other port, through proxies only,
+each port under its own name -- and nothing contacts tor's control port on its
+own when that happens (decision 5(a): New Tor identity is a button, never a
+trigger). The two buttons, *Check Tor* and *New Tor identity*, dial
+``127.0.0.1:<control port>`` and nothing else: not through the chain, not
+around it, not the provider.
 """
 
 import asyncio
@@ -96,6 +105,7 @@ from my_claude_code.application.proxy_check import (
     check_proxy,
     reset_direct_exits,
 )
+from my_claude_code.application.tor_source import TorEdit, save_tor_source
 from my_claude_code.config.constants import CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE
 from my_claude_code.config.credential_names import credential_fingerprint
 from my_claude_code.config.credentials import mask_proxy_label
@@ -108,6 +118,11 @@ from my_claude_code.config.proxy_chains import (
     ProxyEndpoint,
     reset_proxy_chains_cache,
     save_proxy_chains,
+)
+from my_claude_code.config.proxy_sources import (
+    ProxySources,
+    reset_proxy_sources_cache,
+    save_proxy_sources,
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -142,6 +157,7 @@ from my_claude_code.providers.vertex.auth import GoogleAccessTokenProvider
 from my_claude_code.runtime.application import ApplicationRuntime
 from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.support.fake_tor_control import FakeTorControl, run_fake_tor
 from tests.support.masking_harness import (
     MaskingRig,
     SeenRequest,
@@ -2227,3 +2243,119 @@ def test_the_direct_readout_looks_for_a_chain_with_a_direct_entry(
     reset_proxy_chains_cache()
 
     _assert_read_direct(traffic, _direct_exit(traffic, CHAT_NAME))
+
+
+# ======================================== 7.90.0: a tor the user runs
+#
+# The rig's two SOCKS5 proxies stand in for two SOCKS ports of the user's
+# tor: the Tor source offers each as its own named address, and the masked
+# providers' chain is exactly those two offers. A fake control port stands in
+# for tor's control port; no real tor is ever started.
+
+
+@pytest.fixture
+def tor_control(tmp_path: Path) -> Iterator[FakeTorControl]:
+    fake = FakeTorControl(cookie_path=tmp_path / "tor-data" / "control_auth_cookie")
+    with run_fake_tor(fake) as running:
+        yield running
+
+
+def _tor_chain(world: TrafficWorld, control_port: int) -> list[str]:
+    """Save a Tor source on the rig's SOCKS5 ports and chain its two offers."""
+
+    socks = (world.rig.proxies[0].port, world.rig.proxies[2].port)
+    store, sources, source_id = save_tor_source(
+        ProxyChains(),
+        ProxySources(),
+        "",
+        TorEdit(socks_ports=socks, control_port=control_port),
+    )
+    offers = list(store.source_offers[source_id])
+    chain = ProxyChain(
+        enabled=True,
+        policy="failover",
+        entries=tuple(ProxyChainEntry(proxy=proxy_id) for proxy_id in offers),
+        direct_fallback=False,
+        until_served=True,
+        max_switches=2,
+    )
+    save_proxy_chains(
+        ProxyChains(
+            proxies=store.proxies,
+            chains=dict.fromkeys(world.masked_ids, chain),
+            source_offers=store.source_offers,
+        ),
+        world.chains_path,
+    )
+    save_proxy_sources(sources)
+    reset_proxy_chains_cache()
+    reset_proxy_sources_cache()
+    return offers
+
+
+@pytest.mark.local_serial
+def test_tor_ports_in_a_ticked_chain_move_a_refused_request_to_the_next_port(
+    traffic: TrafficWorld, tor_control: FakeTorControl
+) -> None:
+    _tor_chain(traffic, tor_control.port)
+    first, second = (traffic.rig.proxies[0].port, traffic.rig.proxies[2].port)
+    traffic.exit_answers = {0: FREE_USAGE_429}
+
+    with traffic.client(**BACKOFF) as client:
+        outcome = _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{traffic.ids[CHAT_NAME]}/{MODEL}", stream=False),
+            )
+        )
+
+    assert outcome.ok, outcome.text
+    traffic.rig.assert_masked()
+    # The refusing Tor port once, then the other Tor port: never this computer.
+    assert _exits_used(traffic, CHAT_NAME) == [0, 2]
+    assert len({seen.body for seen in traffic.requests_for(CHAT_NAME)}) == 1
+    attempt = _last_attempts(traffic)[0]
+    assert _dial_proxies(attempt) == [
+        f"Tor · 127.0.0.1:{first}",
+        f"Tor · 127.0.0.1:{second}",
+    ]
+    # Decision 5(a): a refusal moves the request; it never asks tor for a new
+    # identity -- nothing reached the control port at all.
+    assert tor_control.connections == 0
+    assert tor_control.newnyms == 0
+
+
+@pytest.mark.local_serial
+def test_the_tor_buttons_dial_only_the_control_port(
+    traffic: TrafficWorld, tor_control: FakeTorControl, monkeypatch
+) -> None:
+    _tor_chain(traffic, tor_control.port)
+    dialled: list[tuple[str, int]] = []
+    real = asyncio.open_connection
+
+    async def recording(host, port, **kwargs):
+        dialled.append((host, port))
+        return await real(host, port, **kwargs)
+
+    with traffic.client() as client:
+        traffic.rig.clear()
+        monkeypatch.setattr(asyncio, "open_connection", recording)
+        try:
+            status = client.post(
+                "/admin/api/proxy-sources/tor/status", json={"source": "src_tor"}
+            )
+            newnym = client.post(
+                "/admin/api/proxy-sources/tor/newnym", json={"source": "src_tor"}
+            )
+        finally:
+            monkeypatch.setattr(asyncio, "open_connection", real)
+
+    assert status.json()["tor_result"]["ok"] is True, status.text
+    assert newnym.json()["tor_result"]["accepted"] is True, newnym.text
+    assert tor_control.newnyms == 1
+    # Only tor's control port, on this computer's loopback...
+    assert dialled == [("127.0.0.1", tor_control.port)] * 2
+    assert {peer[0] for peer in tor_control.peers} == {"127.0.0.1"}
+    # ...and not one byte through or around the chain, nor to the provider.
+    traffic.rig.assert_nothing_sent()
+    assert [proxy.accepted for proxy in traffic.rig.proxies] == [0, 0, 0]

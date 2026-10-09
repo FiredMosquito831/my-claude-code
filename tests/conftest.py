@@ -655,6 +655,7 @@ def _isolate_proxy_sources(monkeypatch, tmp_path):
     must never put another test's provider in a republish.
     """
     from my_claude_code.application.proxy_check import reset_direct_exits
+    from my_claude_code.application.tor_control import reset_tor_control_state
     from my_claude_code.config import proxy_sources
     from my_claude_code.config.proxy_chains import reset_built_chain_labels
 
@@ -663,10 +664,13 @@ def _isolate_proxy_sources(monkeypatch, tmp_path):
     proxy_sources.reset_proxy_sources_cache()
     reset_direct_exits()
     reset_built_chain_labels()
+    # 7.90.0: a Tor card's last reading and the 10 s NEWNYM guard.
+    reset_tor_control_state()
     yield path
     proxy_sources.reset_proxy_sources_cache()
     reset_direct_exits()
     reset_built_chain_labels()
+    reset_tor_control_state()
 
 
 @pytest.fixture(autouse=True)
