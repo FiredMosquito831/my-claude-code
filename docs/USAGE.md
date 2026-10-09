@@ -3182,9 +3182,10 @@ does not move the credential.
 same minutes a few proxy exits were answered while more than forty others, and
 this machine's own address, got `429 FreeUsageLimitError` on `Bearer public`;
 the direct address stopped at about 500 answers per UTC day. So a proxy chain
-on **OpenCode Zen** does lift the 429 -- one exit at a time. Since 7.81.0 tick
-**Keep trying exits until one answers** on that chain's card (**Proxying**
-page; new chains start ticked): a request an exit refused (a free-usage 429, a
+on **OpenCode Zen** does lift the 429 -- one exit at a time. Since 7.81.1
+**Keep trying exits until one answers** is on for every chain, including the
+ones saved before 7.81.0 (untick it on a chain's card, **Proxying** page, to
+switch it off for that chain): a request an exit refused (a free-usage 429, a
 refusal for the exit's country) or dropped goes to another exit on the same
 model instead of being retried on the same exit, within your *Switches per
 request*, and MCC remembers the refused exits so later requests skip them.

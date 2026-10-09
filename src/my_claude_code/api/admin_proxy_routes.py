@@ -278,9 +278,9 @@ class ProxyChainPayload(BaseModel):
     #: "Keep trying exits until one answers" (7.81.0). ``None`` -- a client
     #: that does not name it -- means TRUE for a chain this write creates (the
     #: user's decision of 2026-10-06 19:49 wants exit rotation on chains) and
-    #: the stored value for one it updates, so an older client can neither
-    #: switch it off by omission nor switch it on for an existing chain. The
-    #: page always sends it.
+    #: the stored value for one it updates (for a chain stored before 7.81.0,
+    #: the ON its missing key reads as since 7.81.1), so a client cannot
+    #: switch it off by omission. The page always sends it.
     until_served: bool | None = None
     entries: list[ProxyEntryPayload] = Field(default_factory=list)
 
@@ -2540,7 +2540,8 @@ def _chain_payload(
         "order_by_speed": chain.order_by_speed,
         "order_sorted_at": chain.order_sorted_at,
         "order_offered": chain.policy in ORDERABLE_POLICIES,
-        # 7.81.0. False for a chain stored before the key existed.
+        # 7.81.0. Since 7.81.1 True for a chain stored before the key existed
+        # (absent reads on); False only for a chain switched off.
         "until_served": chain.until_served,
         "entries": [
             _entry_payload(item, store, provider_id, settings) for item in chain.entries

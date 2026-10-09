@@ -1174,9 +1174,10 @@ function proxyDraft(provider) {
         // existed has no key, the server reads that as off, and so must the
         // card -- the one reading an existing chain may never get is "on".
         order_by_speed: chain.order_by_speed === true,
-        // 7.81.0. Strictly `=== true`, the same reading as the server: a
-        // chain stored before the box existed has no key and reads off.
-        until_served: chain.until_served === true,
+        // 7.81.0. Since 7.81.1 the same reading as `direct_fallback`: a
+        // chain stored before the box existed has no key and reads on, as the
+        // server reads it; only an explicit false is a chain switched off.
+        until_served: chain.until_served !== false,
         entries: (chain.entries || []).map((entry) => ({ ...entry })),
         existing: true,
       }
@@ -4919,8 +4920,8 @@ function proxyCardFoot(provider, draft) {
 
   // 7.81.0: what a ticked chain remembers about its exits, forgotten on
   // request. Offered on a saved chain that has the box ticked, which is the
-  // only kind of chain that remembers anything.
-  if (provider.chain && provider.chain.until_served === true) {
+  // only kind of chain that remembers anything (absent reads ticked, 7.81.1).
+  if (provider.chain && provider.chain.until_served !== false) {
     const forget = document.createElement("button");
     forget.type = "button";
     forget.className = "secondary-button proxy-forget-memory";

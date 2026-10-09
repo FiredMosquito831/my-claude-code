@@ -4,10 +4,10 @@ Equality proofs 3 and 4 of ``specs/PR-EXIT-ROTATION-AND-REPEAT-MODELS-SPEC.md``
 A.6, and the hops a ticked chain takes from the file to its legs:
 
 * a stored chain without the key loads and saves **byte-identical**, and reads
-  ``until_served=False`` -- so every chain saved before 7.81.0 rotates exactly
-  as it did;
-* the key is written only when it is True;
-* a leg of a chain without it is built from the same lines as before -- same
+  ``until_served=True`` (7.81.1, the user's decision of 2026-10-06 19:49: the
+  chains they already have keep trying exits, with no box to tick);
+* the key is written only when it is False -- a chain switched off;
+* a leg of a chain switched off is built from the same lines as before -- same
   limiter class, no stops armed, the operator's early-retry count;
 * a leg of a ticked chain gets the two stops and no early-retry ladder, and its
   rotation state the memory's credential identity -- a fingerprint, never the
@@ -103,26 +103,40 @@ def test_a_chain_stored_before_the_key_round_trips_byte_for_byte(path) -> None:
     first = path.read_bytes()
 
     loaded = load_proxy_chains(path)
-    assert all(not chain.until_served for chain in loaded.chains.values())
+    assert all(chain.until_served for chain in loaded.chains.values())
     save_proxy_chains(loaded, path)
 
     assert path.read_bytes() == first
     assert b"until_served" not in first
     assert json.loads(first)["chains"] == STORED_BEFORE["chains"]
 
+    # A chain switched off keeps its ``false`` through the same round trip.
+    switched_off = json.loads(first)
+    switched_off["chains"]["open_router"]["until_served"] = False
+    save_proxy_chains(ProxyChains.from_document(switched_off), path)
+    second = path.read_bytes()
+    loaded = load_proxy_chains(path)
+    assert loaded.chains["open_router"].until_served is False
+    assert loaded.chains["nvidia_nim"].until_served is True
+    save_proxy_chains(loaded, path)
+    assert path.read_bytes() == second
+    assert json.loads(second)["chains"] == switched_off["chains"]
 
-def test_the_key_is_written_only_when_ticked_and_read_back(path) -> None:
+
+def test_the_key_is_written_only_when_switched_off_and_read_back(path) -> None:
     chain = ProxyChains.from_document(STORED_BEFORE).chains["nvidia_nim"]
-    ticked = dataclasses.replace(chain, until_served=True)
+    off = dataclasses.replace(chain, until_served=False)
 
-    assert ticked.as_document()["until_served"] is True
+    assert off.as_document()["until_served"] is False
     assert "until_served" not in chain.as_document()
-    assert ProxyChain.from_document(ticked.as_document(), "x") == ticked
-    # Only an explicit true reads as ticked.
-    for raw in ("true", 1, None, False):
+    assert ProxyChain.from_document(off.as_document(), "x") == off
+    # Only an explicit false reads as switched off. A 7.81.0 ``true`` reads on
+    # and is written back without the key, which means the same.
+    for raw in ("false", 0, None, True):
         document = chain.as_document() | {"until_served": raw}
         parsed = ProxyChain.from_document(document, "x")
-        assert parsed is not None and parsed.until_served is False
+        assert parsed is not None and parsed.until_served is True
+        assert "until_served" not in parsed.as_document()
 
 
 def _store(path, **chain_kwargs) -> None:
@@ -157,18 +171,19 @@ def _settings() -> Settings:
     )
 
 
-def test_the_plan_carries_the_switch_absent_reads_false(path) -> None:
+def test_the_plan_carries_the_switch_absent_reads_true(path) -> None:
     _store(path)
-    plan = build_provider_config(
-        PROVIDER_CATALOG["nvidia_nim"], _settings()
-    ).proxy_chain
-    assert plan is not None and plan.until_served is False
-
-    _store(path, until_served=True, max_switches=3)
+    assert b"until_served" not in path.read_bytes()
     plan = build_provider_config(
         PROVIDER_CATALOG["nvidia_nim"], _settings()
     ).proxy_chain
     assert plan is not None and plan.until_served is True
+
+    _store(path, until_served=False, max_switches=3)
+    plan = build_provider_config(
+        PROVIDER_CATALOG["nvidia_nim"], _settings()
+    ).proxy_chain
+    assert plan is not None and plan.until_served is False
     # The existing bound, unchanged: the smaller of the card and the global.
     assert plan.max_switches == min(3, int(_settings().proxy_max_switches_per_request))
 
@@ -177,11 +192,11 @@ def _legs(provider: ProxyRotatingProvider) -> list:
     return [provider._pool.get(index) for index in range(2)]
 
 
-def test_an_unticked_chain_s_legs_are_built_as_before(path) -> None:
+def test_a_switched_off_chain_s_legs_are_built_as_before(path) -> None:
     """Equality proof 4: same limiter class, nothing armed, the operator's
     early-retry count."""
 
-    _store(path)
+    _store(path, until_served=False)
     provider = create_provider("nvidia_nim", _settings())
     assert isinstance(provider, ProxyRotatingProvider)
 

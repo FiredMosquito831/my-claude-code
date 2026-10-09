@@ -549,13 +549,15 @@ class TrafficWorld:
             extra["on"] = on
         if max_switches is not None:
             extra["max_switches"] = max_switches
-        if until_served:
-            extra["until_served"] = True
         chain = ProxyChain(
             enabled=True,
             policy="failover",
             entries=tuple(ProxyChainEntry(proxy=key, paused=paused) for key in proxies),
             direct_fallback=direct_fallback,
+            # Always named: the box is on by default since 7.81.1, so a row
+            # about the earlier rotation stores it switched off (``false``)
+            # and a ticked row stores it the way the store does (no key).
+            until_served=until_served,
             **extra,
         )
         save_proxy_chains(

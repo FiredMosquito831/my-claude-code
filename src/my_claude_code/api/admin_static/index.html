@@ -3665,9 +3665,10 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Some providers count their free allowance <strong>per address</strong>:
                   OpenCode Zen's free models answer a spent address with a
                   <code>429 FreeUsageLimitError</code> while another address still gets
-                  answers. Tick <em>Keep trying exits until one answers</em> on that
-                  provider's chain card (new chains start with it ticked; a chain saved
-                  before 7.81.0 keeps working as before until you tick it). Then:
+                  answers. <em>Keep trying exits until one answers</em> is on for every
+                  proxy chain &mdash; new ones and, since 7.81.1, the ones saved before
+                  7.81.0 too. Untick it on a chain's card to give that chain back the
+                  rotation of earlier releases. While it is on:
                 </p>
                 <ul>
                   <li>A request that an exit <strong>refuses because of the

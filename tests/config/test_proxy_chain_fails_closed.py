@@ -396,6 +396,10 @@ def _grid() -> Iterator[tuple[str, ProxyChains, str]]:
                     entries=entries,
                     direct_fallback=fallback,
                     oauth_acknowledged=acked,
+                    # The 7.78.7 resolver below predates the switch: the
+                    # identity is claimed for a chain switched off (on by
+                    # default since 7.81.1).
+                    until_served=False,
                 )
             },
         )

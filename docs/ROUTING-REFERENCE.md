@@ -383,7 +383,7 @@ Each card on the Proxying page carries a box **What <provider> can see**, worked
 
 #### Keep trying exits until one answers (7.81.0)
 
-For a provider whose allowance follows the **address** — OpenCode Zen's free models answer a spent address with `429 FreeUsageLimitError` while other addresses still get answers — tick **Keep trying exits until one answers** on its chain card. A chain created from 7.81.0 on starts with it ticked; a chain stored before keeps rotating exactly as it did until you tick it (the stored document has no `until_served` key, and that reads as off). With it ticked, and only then:
+For a provider whose allowance follows the **address** — OpenCode Zen's free models answer a spent address with `429 FreeUsageLimitError` while other addresses still get answers — **Keep trying exits until one answers** moves the request to another exit. Since 7.81.1 it is on for every chain: a chain created from 7.81.0 on, and a chain stored before it too (the stored document has no `until_served` key, and that reads as on). Untick it on a chain's card to give that chain back the rotation of earlier releases; the store then keeps `"until_served": false` for it, and a chain left on is written without the key. With it ticked, and only then:
 
 | What the exit did | Before 7.81.0 | Ticked |
 | --- | --- | --- |

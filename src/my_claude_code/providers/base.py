@@ -93,9 +93,12 @@ class ProxyChainPlan:
     #: dropping proxy -- moves to another exit of the same chain on the same
     #: model, within the switch and live-failure bounds above; the refused
     #: exits are remembered across rebuilds; running out is an ``UNAVAILABLE``
-    #: that moves to the next model without benching it. False -- every chain
-    #: that has not ticked it, including every chain stored before the field
-    #: existed -- is exactly the rotation of every earlier release.
+    #: that moves to the next model without benching it. False -- a chain
+    #: switched off on its card -- is exactly the rotation of every earlier
+    #: release. A plan is always built with its chain's value, which since
+    #: 7.81.1 is True for every chain not switched off (including every chain
+    #: stored before the field existed); this default only serves a plan
+    #: built by hand.
     until_served: bool = False
 
 
