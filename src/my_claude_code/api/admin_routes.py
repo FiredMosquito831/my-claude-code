@@ -4080,6 +4080,7 @@ async def list_request_log(
     harness: str | None = None,
     session: str | None = None,
     folder: str | None = None,
+    exit: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Page through the persisted request log (newest first).
@@ -4131,7 +4132,12 @@ async def list_request_log(
         harness=harness,
         session=session,
         folder=folder,
+        exit=exit,
         include_total=include_total,
+        # 7.88.0: each row gains ``exit`` -- the exit its answering attempt
+        # went out through and every exit it tried -- for the table's Exit
+        # column. Added beside every existing key, never instead of one.
+        include_exits=True,
     )
     return {
         "enabled": True,
@@ -4163,6 +4169,7 @@ async def count_request_log(
     harness: str | None = None,
     session: str | None = None,
     folder: str | None = None,
+    exit: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """How many rows match these filters. The half the page no longer waits for.
@@ -4192,6 +4199,7 @@ async def count_request_log(
         harness=harness,
         session=session,
         folder=folder,
+        exit=exit,
     )
     return {"enabled": True, "total": total}
 
@@ -4211,6 +4219,7 @@ async def request_log_ttft(
     harness: str | None = None,
     session: str | None = None,
     folder: str | None = None,
+    exit: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Overall p50/p95 time-to-first-token for the same filters as ``stats``.
@@ -4245,6 +4254,7 @@ async def request_log_ttft(
         "harness": harness,
         "session": session,
         "folder": folder,
+        "exit": exit,
     }
     result = await _recent_analytics_answer(
         store, "ttft", filters, lambda: store.ttft_percentiles(**filters)
@@ -4267,6 +4277,7 @@ async def request_log_no_answer(
     harness: str | None = None,
     session: str | None = None,
     folder: str | None = None,
+    exit: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """How many successes carried no answer, split into the two shapes.
@@ -4297,6 +4308,7 @@ async def request_log_no_answer(
         "harness": harness,
         "session": session,
         "folder": folder,
+        "exit": exit,
     }
     result = await _recent_analytics_answer(
         store, "no-answer", filters, lambda: store.no_answer_breakdown(**filters)
@@ -4319,6 +4331,7 @@ async def request_log_origin(
     harness: str | None = None,
     session: str | None = None,
     folder: str | None = None,
+    exit: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Requests by folder and by session, for the same filters as ``stats``.
@@ -4351,6 +4364,7 @@ async def request_log_origin(
         "harness": harness,
         "session": session,
         "folder": folder,
+        "exit": exit,
     }
     result = await _recent_analytics_answer(
         store, "origin", filters, lambda: store.origin_breakdown(**filters)
@@ -4373,6 +4387,7 @@ async def request_log_stats(
     harness: str | None = None,
     session: str | None = None,
     folder: str | None = None,
+    exit: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Aggregate request analytics over an optional epoch-second window.
@@ -4403,6 +4418,7 @@ async def request_log_stats(
         "harness": harness,
         "session": session,
         "folder": folder,
+        "exit": exit,
     }
 
     def compute() -> dict[str, Any]:
@@ -4472,6 +4488,7 @@ async def request_log_cost(
     harness: str | None = None,
     session: str | None = None,
     folder: str | None = None,
+    exit: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """What the filtered traffic cost, per provider, model, harness and day.
@@ -4505,6 +4522,7 @@ async def request_log_cost(
         "harness": harness,
         "session": session,
         "folder": folder,
+        "exit": exit,
     }
 
     def compute() -> dict[str, Any]:
@@ -4723,6 +4741,7 @@ async def request_log_pulse(
     harness: str | None = None,
     session: str | None = None,
     folder: str | None = None,
+    exit: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Cheap heartbeat for auto-refresh: row count and latest timestamp only.
@@ -4751,6 +4770,7 @@ async def request_log_pulse(
         harness=harness,
         session=session,
         folder=folder,
+        exit=exit,
     )
     result["enabled"] = True
     # How many requests are being served right now: one ``len`` under the

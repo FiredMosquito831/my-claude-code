@@ -49,6 +49,7 @@ untrue about that announcement, and :func:`amend_proxy` is how the leg says so:
   log says where the request really went.
 """
 
+import re
 from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -79,6 +80,64 @@ def is_direct_label(label: str | None) -> bool:
     return bool(label) and (
         label == DIRECT_PROXY_LABEL or str(label).startswith(SYSTEM_PROXY_LABEL_PREFIX)
     )
+
+
+#: What a stored label reads as when masking leaves nothing of it: an exit was
+#: used, and every character that named it was a credential.
+MASKED_EXIT_LABEL = "(masked)"
+
+_SCHEME = re.compile(r"^[a-z0-9]+://", re.IGNORECASE)
+
+
+def _masked_address(text: str) -> str:
+    """``host:port`` out of anything that looks like a proxy URL; else ``text``.
+
+    The same reading as the Proxying page's ``proxyMaskedLabel`` (admin.js):
+    drop the scheme, keep the authority, keep what follows its last ``@``. A
+    label with neither a scheme nor an ``@`` -- an operator's name for an
+    address, ``host:port``, ``direct`` -- is returned exactly as stored.
+    """
+
+    if "@" not in text and "://" not in text:
+        return text
+    authority = _SCHEME.sub("", text.strip()).split("/")[0]
+    masked = authority[authority.rfind("@") + 1 :]
+    return masked or MASKED_EXIT_LABEL
+
+
+def masked_exit_label(label: str | None) -> str | None:
+    """A stored exit label as it may be shown: never with a credential in it.
+
+    Labels are masked when they are written, so this changes nothing on any
+    label MCC itself recorded. It is the second lock, on the read side, for
+    the one route that puts labels on the Requests table: whatever reached the
+    log, a ``user:pass@`` never reaches a response. ``None`` stays ``None``
+    ("not measured"); the system-proxy form keeps its words and masks only the
+    address after them.
+    """
+
+    if label is None:
+        return None
+    text = str(label)
+    if text.startswith(SYSTEM_PROXY_LABEL_PREFIX):
+        address = text[len(SYSTEM_PROXY_LABEL_PREFIX) :]
+        return f"{SYSTEM_PROXY_LABEL_PREFIX}{_masked_address(address)}"
+    return _masked_address(text)
+
+
+def exit_filter(value: object) -> str | None:
+    """How the Analytics **Exit** filter reads what was typed (7.88.0).
+
+    Part of an exit's label, matched anywhere in it and without regard to
+    ASCII case -- ``tokyo`` finds ``Tokyo exit``, ``1080`` finds every address
+    on that port, ``direct`` finds both Direct forms. ``None`` for an empty
+    value, which is "no filter".
+    """
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
 
 
 @dataclass(slots=True)

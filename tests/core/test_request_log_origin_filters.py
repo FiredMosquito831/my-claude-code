@@ -67,10 +67,12 @@ SAMPLE: dict[str, Any] = {
     "harness": "h-sample",
     "session": "s-sample",
     "folder": "f-sample",
+    # 7.88.0: the Exit filter, threaded everywhere Folder is.
+    "exit": "x-sample",
 }
 #: The rollup's own translation of the predicate. The one exception, on
-#: purpose: the rollup has no ``q``, session or folder dimension, and
-#: ``stats`` never calls it when any of the three is set.
+#: purpose: the rollup has no ``q``, session, folder or exit dimension, and
+#: ``stats`` never calls it when any of the four is set.
 ROLLUP_TRANSLATIONS = frozenset({"_rollup_where", "_stats_from_rollup"})
 #: Callers whose ``store`` is the web-search log, whose iterators share the
 #: request log's method names and none of its filters.
@@ -306,6 +308,8 @@ class TestTheViewsAgree:
         baseline = views()
         assert views(session=None, folder=None) == baseline
         assert views(session="", folder="  ") == baseline
+        assert views(session=None, folder=None, exit=None) == baseline
+        assert views(exit="   ") == baseline
         assert json.loads(baseline)["stats"]["served_from"] == "rollup"
 
 
@@ -480,7 +484,7 @@ class TestEveryStatsCallerPassesFullFilterArity:
                 parameters = set(inspect.signature(member).parameters)
                 if "harness" not in parameters:
                     continue
-                missing = {"session", "folder"} - parameters
+                missing = {"session", "folder", "exit"} - parameters
                 assert not missing, f"{module.__name__}.{name} lacks {missing}"
 
     @pytest.mark.parametrize(
@@ -544,11 +548,12 @@ class TestEveryStatsCallerPassesFullFilterArity:
             assert key not in seen, name
             seen.add(key)
         assert "session=" in baseline and "folder=" in baseline
-        # Only the page's opening question is stored on disk; a session or a
-        # folder is a question asked once, answered live.
+        assert "exit=" in baseline
+        # Only the page's opening question is stored on disk; a session, a
+        # folder or an exit is a question asked once, answered live.
         assert cost_breakdown_entry_name(**unset) == "cost-breakdown"
         assert cost_breakdown_entry_name(**{**unset, "local": "hide"}) == (
             "cost-breakdown-local-hide"
         )
-        for name in ("session", "folder"):
+        for name in ("session", "folder", "exit"):
             assert cost_breakdown_entry_name(**{**unset, name: SAMPLE[name]}) is None

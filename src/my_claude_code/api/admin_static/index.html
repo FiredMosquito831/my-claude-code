@@ -1134,6 +1134,19 @@
                 />
                 <datalist id="reqFolderOptions"></datalist>
               </label>
+              <label
+                title="Part of an exit's name: a chain entry, a host:port, a port, or direct. Matches every exit a request went out through, not only the one that answered."
+              >
+                Exit
+                <input
+                  id="reqFilterExit"
+                  type="text"
+                  list="reqExitOptions"
+                  placeholder="any"
+                  autocomplete="off"
+                />
+                <datalist id="reqExitOptions"></datalist>
+              </label>
               <label>
                 Key
                 <input
@@ -1498,7 +1511,11 @@
                     <th>Endpoint</th>
                     <th>Harness</th>
                     <th class="req-col-session">Session</th>
-                    <th class="req-col-folder">Folder</th>
+                    <!-- 7.88.0: Exit where Folder was. Folder stays in the
+                         request detail, Requests by folder, the Session
+                         title and the Origin chip. -->
+                    <th class="req-col-exit"
+                      title="The exit the request went out through: the chain entry, proxy or Direct its answering attempt used, +N when it tried more, every one in the tooltip. A dash means no chain and no proxy.">Exit</th>
                     <th class="req-col-origin">Origin</th>
                     <th>Provider</th>
                     <th>Key</th>
@@ -3759,6 +3776,13 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                     own static proxy, <code>direct</code>, or <code>direct via system
                     proxy host:port</code> when the operating system's proxy (a VPN
                     app, a corporate proxy) carried a Direct dial.</li>
+                  <li>The Analytics <strong>Exit</strong> column (where Folder was until
+                    7.88.0) shows that name for the attempt that answered, with
+                    <em>+N</em> when the request went out through more exits and every
+                    one of them, in order, in its tooltip. A dash means no chain and no
+                    proxy. The <em>Exit</em> box in the toolbar finds requests by any
+                    part of an exit's name; the export's <em>Exit</em> field adds both
+                    to a download.</li>
                 </ul>
 
                 <h3 id="guide-proxy-keep-trying">Keep trying exits until one answers</h3>
@@ -4473,7 +4497,11 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Folder is read from where Claude Code sends it</strong> (its
                   first message, since 7.87.1); press <em>Fill in folders for older
                   requests</em> once, on the Request log storage card at the bottom of
-                  Analytics, to fill the rows logged before that.
+                  Analytics, to fill the rows logged before that. Since 7.88.0 the
+                  requests table shows the <em>Exit</em> each request went out through
+                  where the Folder column was; the folder is still in each request's
+                  details (<em>View</em>), in the Session cell's tooltip, in
+                  <em>Requests by folder</em>, and in the Folder filter.
                 </p>
 
                 <h3 id="guide-deploy">Desktop &amp; RTK</h3>

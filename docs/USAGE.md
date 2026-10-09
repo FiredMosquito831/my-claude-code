@@ -4549,6 +4549,19 @@ stay apart. The full value is in the tooltip and in the detail dialog. **Request
 model the client asked for, beside the **Model** that answered. Below 1200 px wide, Session and
 Folder share one **Origin** chip so the table does not grow two columns wider.
 
+**Exit** (7.88.0) took the Folder column's place in the table: the exit the request went out
+through, read from what the request log already stores for the attempt that answered (or, for a
+failed request, the last one tried) — a chain entry's name or `host:port`, a one-entry chain's or a
+static proxy's `host:port`, `direct` for a Direct entry, or `direct via system proxy host:port` when
+the operating system's proxy carried a Direct dial. When the request went out through more than one
+exit (a fallback on another chain, or a chain that kept trying exits), the cell adds **+N** and its
+tooltip lists every exit in the order it was dialled. A dash means no exit was recorded: no chain and
+no proxy (before 7.79.2 a one-entry chain or a static proxy was not recorded either), or a media
+request, which keeps its exit only on a video job. A credential that ever reached a label is masked
+the way the Proxying page masks an address. Folder is not gone: it is in the detail dialog, in the
+Session cell's tooltip, in the narrow Origin chip, in **Requests by folder** and in the Folder
+filter, and the in-flight table keeps its Folder column.
+
 The detail dialog says how each value is known:
 
 | Detail dialog says | How MCC knows |
@@ -4583,6 +4596,16 @@ them, and they are remembered across a reload. **Session** matches the start of 
 id, so the eight characters the table shows are enough. **Folder** reads what you type two ways: a
 full path (`C:\Users\you\Projects\app`) selects exactly that folder and not `app-old` beside it;
 anything else (`phone games`) matches every folder whose path contains it, ignoring case.
+
+**Exit filter** (7.88.0) sits beside Folder and works the same way — every card, chart, breakdown,
+the cost panel and **Export** follow it, and it is remembered across a reload. It matches any part of
+an exit's name, ignoring case (`tokyo`, `1080`, `direct`), against **every** exit a request went out
+through, not only the one that answered, so a request that a chain moved off a refusing exit is found
+by either exit. Its suggestions are the exits on the page being shown. An export gains an opt-in
+**Exit** field: *Exit* (the answering exit, empty when none was recorded) and *Exits tried* (every
+exit, in dial order, separated by `; `). Like Session and Folder it is not part of the hourly
+statistics, so a filtered page is counted from the stored requests; each request it reads costs one
+lookup of its attempts.
 
 Two tables below the harness breakdown answer "who is doing what": **Requests by folder** and
 **Requests by session**. Click a folder or a session there to filter the page to it. Only requests

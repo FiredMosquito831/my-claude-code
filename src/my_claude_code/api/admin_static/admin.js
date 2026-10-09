@@ -18065,6 +18065,7 @@ function reqFilters() {
   const harness = byId("reqFilterHarness").value.trim();
   const session = byId("reqFilterSession").value.trim();
   const folder = byId("reqFilterFolder").value.trim();
+  const exit = byId("reqFilterExit").value.trim();
   const status = byId("reqFilterStatus").value;
   const search = byId("reqFilterSearch").value.trim();
   const endpoint = byId("reqFilterEndpoint").value.trim();
@@ -18078,6 +18079,8 @@ function reqFilters() {
   // and so every cache key and the pulse signature, exactly as before 7.43.0.
   if (session) params.set("session", session);
   if (folder) params.set("folder", folder);
+  // 7.88.0, the same rule: absent unless set.
+  if (exit) params.set("exit", exit);
   if (status) params.set("status", status);
   if (search) params.set("q", search);
   if (endpoint) params.set("endpoint", endpoint);
@@ -20222,7 +20225,10 @@ function buildHarnessCell(row) {
  *
  * Three cells for two facts on purpose: Session and Folder at full width, and
  * one Origin chip carrying both below 1200 px, so the narrow table grows by one
- * column instead of two. CSS decides which of the three is shown. */
+ * column instead of two. CSS decides which of the three is shown. Since 7.88.0
+ * the Requests table puts its Exit column where Folder was; Folder stays in the
+ * Session cell's title (below), in the Origin chip, in the request detail and
+ * in Requests by folder, and the in-flight table keeps all three cells. */
 function originTooltip(row) {
   const lines = [];
   if (row.session_id) lines.push(`Session: ${row.session_id}`);
@@ -20266,6 +20272,134 @@ function buildFolderCell(row) {
   name.title = row.project_dir;
   td.appendChild(name);
   return td;
+}
+
+/* The Exit column (7.88.0), where the Requests table's Folder column was.
+
+   It shows the exit the request actually went out through, read from what
+   the log already holds: `row.exit`, which the list route adds -- the stored
+   exit of the attempt the row names (the one that answered, or the last one
+   tried) and every exit the request went out through, in dial order (a
+   7.81.0 chain that kept trying exits keeps each dial on the ladder; the
+   stored label is only the last). The words are the log's own: a chain
+   entry's name or `host:port`, a one-entry chain's or static proxy's, `direct`
+   for a Direct entry, `direct via system proxy host:port` when the operating
+   system's proxy carried a Direct dial. A dash is "no exit recorded" -- no
+   chain and no proxy -- and never a guessed "direct".
+
+   Every label is masked again here exactly as the Proxying page masks an
+   address it is given (`proxyMaskedLabel`): scheme dropped, anything before
+   the last `@` dropped. Labels are masked when they are written, so this
+   changes nothing MCC recorded; it is the second lock.
+
+   Folder is not lost: it is in the request detail, in Requests by folder, in
+   the Session cell's title and in the narrow Origin chip. */
+const EXIT_SYSTEM_PROXY_PREFIX = "direct via system proxy ";
+const EXIT_MASKED_TEXT = "(masked)";
+
+function maskedExitAddress(text) {
+  if (!text.includes("@") && !text.includes("://")) return text;
+  return proxyMaskedLabel(text) || EXIT_MASKED_TEXT;
+}
+
+function maskedExitLabel(label) {
+  if (label == null || label === "") return null;
+  const text = String(label);
+  if (text.startsWith(EXIT_SYSTEM_PROXY_PREFIX)) {
+    return (
+      EXIT_SYSTEM_PROXY_PREFIX + maskedExitAddress(text.slice(EXIT_SYSTEM_PROXY_PREFIX.length))
+    );
+  }
+  return maskedExitAddress(text);
+}
+
+/** `{label, tried, others}` for one row: the answering exit, every exit in
+    dial order, and the ones besides the answering exit (the "+N"). */
+function requestExit(row) {
+  const stored = row && row.exit && typeof row.exit === "object" ? row.exit : {};
+  const label = maskedExitLabel(stored.label);
+  const tried = [];
+  (Array.isArray(stored.tried) ? stored.tried : []).forEach((value) => {
+    const masked = maskedExitLabel(value);
+    if (masked && !tried.includes(masked)) tried.push(masked);
+  });
+  if (label && !tried.includes(label)) tried.push(label);
+  return { label, tried, others: tried.filter((value) => value !== label) };
+}
+
+/** One sentence saying what an exit label means, for the cell's title. */
+function exitTitleLine(label, row) {
+  const verb = row && row.status === "success" ? "Answered through" : "Went out through";
+  if (label === "direct") {
+    return (
+      `${verb} direct: this computer's own address, by a Direct entry in the chain ` +
+      "or the chain's Direct fallback."
+    );
+  }
+  if (label.startsWith(EXIT_SYSTEM_PROXY_PREFIX)) {
+    return (
+      `${verb} ${label}: a Direct dial that the operating system's proxy ` +
+      `(${label.slice(EXIT_SYSTEM_PROXY_PREFIX.length)}) carried.`
+    );
+  }
+  return `${verb} ${label}.`;
+}
+
+function buildExitCell(row) {
+  const td = document.createElement("td");
+  td.className = "req-col-exit";
+  const { label, tried, others } = requestExit(row);
+  const lines = [];
+  if (label) {
+    const name = document.createElement("span");
+    name.className = "req-exit";
+    name.textContent = label;
+    td.appendChild(name);
+    lines.push(exitTitleLine(label, row));
+  } else {
+    td.appendChild(document.createTextNode("—"));
+    if (row && row.params && row.params.media && !tried.length) {
+      // Media attempts record no exit; only a video job keeps one.
+      lines.push("No exit recorded: a media request keeps its exit only on a video job.");
+    } else {
+      lines.push("No exit recorded: no chain and no proxy.");
+      lines.push("Before 7.79.2 a one-entry chain or a static proxy was not recorded either.");
+    }
+  }
+  if (others.length) {
+    const more = document.createElement("span");
+    more.className = "req-exit-more";
+    more.textContent = `+${others.length}`;
+    more.setAttribute(
+      "aria-label",
+      `${others.length} more ${others.length === 1 ? "exit" : "exits"}`,
+    );
+    td.appendChild(more);
+    lines.push(`Exits tried, in order: ${tried.join(", ")}`);
+  }
+  td.title = lines.join("\n");
+  return td;
+}
+
+/* The Exit filter's suggestions: the exits on the page being shown. There is
+   no exit breakdown to draw them from (Folder's come from Requests by folder),
+   and the page is what a reader is looking at when they reach for the box. */
+function populateExitFilterOptions(rows) {
+  const datalist = byId("reqExitOptions");
+  if (!datalist) return;
+  const seen = [];
+  rows.forEach((row) => {
+    requestExit(row).tried.forEach((value) => {
+      if (!seen.includes(value)) seen.push(value);
+    });
+  });
+  datalist.replaceChildren(
+    ...seen.map((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      return option;
+    }),
+  );
 }
 
 /* The narrow-width form: `Projects\demo · a1b2c3d4`, folder first because it
@@ -20465,6 +20599,9 @@ function renderRequestsTable(rows) {
     body.appendChild(tr);
     return;
   }
+  // Kept when nothing matched, so a mistyped exit can still be corrected
+  // from the suggestions the last page offered.
+  populateExitFilterOptions(rows);
   rows.forEach((row) => {
     const tr = document.createElement("tr");
     tr.className = `req-row req-status-${row.status}`;
@@ -20478,9 +20615,11 @@ function renderRequestsTable(rows) {
     // Beside Endpoint: both answer "what came in", before the columns that
     // say what MCC did with it.
     tr.appendChild(buildHarnessCell(row));
-    // Who sent it, continued: the conversation and the folder (7.42.0).
+    // Who sent it, continued: the conversation (7.42.0).
     tr.appendChild(buildSessionCell(row));
-    tr.appendChild(buildFolderCell(row));
+    // 7.88.0: the exit it went out through, where Folder was. Folder stays in
+    // the detail, in Requests by folder, in the Session title and the chip.
+    tr.appendChild(buildExitCell(row));
     tr.appendChild(buildOriginChipCell(row));
     addText(providerDisplayLabel(row.provider, row.optimization));
     // A named key reads as its name; the mask stays in the tooltip so the
@@ -20645,6 +20784,7 @@ function persistDashboardState() {
         harness: byId("reqFilterHarness")?.value?.trim() || undefined,
         session: byId("reqFilterSession")?.value?.trim() || undefined,
         folder: byId("reqFilterFolder")?.value?.trim() || undefined,
+        exit: byId("reqFilterExit")?.value?.trim() || undefined,
         search: byId("reqFilterSearch")?.value?.trim() || undefined,
         status: byId("reqFilterStatus")?.value || undefined,
         endpoint: byId("reqFilterEndpoint")?.value?.trim() || undefined,
@@ -20669,6 +20809,7 @@ function restoreReqFilters(f) {
   if (byId("reqFilterHarness")) byId("reqFilterHarness").value = f.harness || "";
   if (byId("reqFilterSession")) byId("reqFilterSession").value = f.session || "";
   if (byId("reqFilterFolder")) byId("reqFilterFolder").value = f.folder || "";
+  if (byId("reqFilterExit")) byId("reqFilterExit").value = f.exit || "";
   if (byId("reqFilterSearch")) byId("reqFilterSearch").value = f.search || "";
   if (f.status && byId("reqFilterStatus")) byId("reqFilterStatus").value = f.status;
   if (byId("reqFilterEndpoint")) byId("reqFilterEndpoint").value = f.endpoint || "";
@@ -23160,6 +23301,9 @@ const EXPORT_FIELDS = {
     { id: "media", label: "Media" },
     { id: "ladder", label: "Upstream retry ladder" },
     { id: "tool_catalogue", label: "Tool catalogue" },
+    // 7.88.0: the Requests table's Exit column -- the answering exit and every
+    // exit tried. Opt-in like the others; Folder stays in Request origin.
+    { id: "exit", label: "Exit" },
     { id: "origin", label: "Request origin" },
   ],
   /* One row per attempt rather than per request. Structural columns -- the
@@ -23548,6 +23692,7 @@ let reqFilterTypingTimer = null;
   "reqFilterHarness",
   "reqFilterSession",
   "reqFilterFolder",
+  "reqFilterExit",
   "reqFilterSearch",
   "reqFilterEndpoint",
 ].forEach(
@@ -23570,6 +23715,7 @@ byId("reqClearFilters").addEventListener("click", () => {
   byId("reqFilterHarness").value = "";
   byId("reqFilterSession").value = "";
   byId("reqFilterFolder").value = "";
+  byId("reqFilterExit").value = "";
   byId("reqFilterSearch").value = "";
   byId("reqFilterStatus").value = "";
   byId("reqFilterEndpoint").value = "";
