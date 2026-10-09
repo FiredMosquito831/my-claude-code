@@ -4046,6 +4046,22 @@ the pipeline in the application layer, where the client's own values enter it,
 rather than as body edits. With no preference set, every request body is byte
 for byte what 7.24.0 sent.
 
+**New in 7.87.0: a model's context window.** A model row may also carry
+`context_length` -- `{"models": {"custom_agnes/agnes-3.0-flash": {"context_length": 1000000}}}`
+-- edited on the same Models page row, next to `max_output_tokens`. A positive
+whole number replaces the window MCC extracted (the provider's list, then
+models.dev, then OpenRouter's live list) wherever MCC reads one: the
+output-budget headroom routing keeps, every generated agent catalogue and
+`/admin/api/catalogue-models`, and the Models page, which badges it *operator
+override* and shows the extracted number beside it as *also stated*. `null`
+makes the window unknown everywhere; absent inherits. Model rows only -- a
+provider row's `context_length` is ignored with a log line -- and a 0, a
+negative number or a fraction is refused. Routing uses it from the next
+request; the agent catalogue files under `~/.mcc`, which the `mcc-<agent>`
+launchers read, pick it up at the next model-list refresh or restart, as they
+do any catalogue change. `/v1/models` carries no window, and Claude Code
+launched by `mcc` keeps its own fixed compaction window.
+
 > **Downgrading.** An MCC below 7.25.0 does not know these two keys: it reads
 > the file, logs that they are not known request parameters, and ignores them,
 > so the preference simply stops applying. But if you then **edit any override

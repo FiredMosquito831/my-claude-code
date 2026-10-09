@@ -2777,6 +2777,16 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   that one model, and it is shown only: nothing routes, lists or
                   prices on it.
                 </p>
+                <p id="guide-context-window">
+                  <strong>Your own context window for one model.</strong> Each model
+                  row's override editor on the <strong>Models</strong> page has a
+                  <code>context_length</code> row beside <code>max_output_tokens</code>:
+                  <em>Force value</em> replaces the window MCC extracted &mdash; for the
+                  output-budget headroom routing keeps and for every generated agent
+                  catalogue &mdash; <em>Force unset</em> makes it unknown, and the
+                  extracted number stays visible beside yours as <em>also stated</em>
+                  with the rung it came from.
+                </p>
                 <p>
                   <strong>Catalogues re-read themselves.</strong> Every usable
                   provider's model list is fetched again in the background once an hour,

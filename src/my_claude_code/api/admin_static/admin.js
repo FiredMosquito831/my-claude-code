@@ -27010,6 +27010,7 @@ function fillModelBody(body, model, editable) {
       model.override,
       editable,
       model.preferences,
+      model.capabilities,
     ),
   );
   const readouts = document.createElement("div");
@@ -27691,7 +27692,100 @@ function buildOutputPreferenceInput(boxId, spec) {
   return { wrap: wrap, box: box, max: limit };
 }
 
-function buildOverrideEditor(scope, key, row, editable, preferences) {
+/* The operator's context window (7.87.0): one more row under the
+   preferences, model rows only, with the same three states. Its number has
+   no upper bound -- unlike the output cap it states the model's window, and
+   a provider's API may accept more than any catalogue extracted -- so the
+   extracted value and the rung that gave it are shown beside the box
+   instead, and the default is never out of sight. Derived from the row's own
+   `capabilities.context_length` and `override`, so nothing new is sent to
+   the page while nobody has set one. */
+const CONTEXT_WINDOW_OVERRIDE = "context_length";
+
+function contextWindowExtracted(field) {
+  if (!field) return null;
+  if (field.source === "operator") return field.also_stated || null;
+  return field.value === null || field.value === undefined ? null : field;
+}
+
+function buildContextWindowRow(form, key, row, capabilities, inputs) {
+  const name = CONTEXT_WINDOW_OVERRIDE;
+  const current = (row || {})[name];
+  const field = document.createElement("div");
+  field.className = "models-override-row";
+  const boxId = `pref-model-${key}-${name}`.replace(/[^A-Za-z0-9_-]/g, "-");
+
+  const label = document.createElement("label");
+  label.className = "models-override-name";
+  label.textContent = name;
+  label.htmlFor = `${boxId}-mode`;
+  field.appendChild(label);
+
+  const mode = document.createElement("select");
+  mode.className = "models-override-mode";
+  mode.id = `${boxId}-mode`;
+  [
+    ["inherit", "Inherit"],
+    ["unset", "Force unset"],
+    ["value", "Force value"],
+  ].forEach(([value, text]) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    mode.appendChild(option);
+  });
+  mode.value = current ? current.state : "inherit";
+  field.appendChild(mode);
+
+  const wrap = document.createElement("div");
+  wrap.className = "models-preference-value";
+  const box = document.createElement("input");
+  box.type = "number";
+  box.min = "1";
+  box.step = "1";
+  box.className = "models-override-value";
+  box.id = `${boxId}-value`;
+  box.setAttribute("aria-label", "context window");
+  box.value =
+    current && current.state === "value" && current.value != null
+      ? String(current.value)
+      : "";
+  wrap.appendChild(box);
+
+  const note = document.createElement("p");
+  note.className = "models-preference-note";
+  const extracted = contextWindowExtracted(
+    capabilities && capabilities.context_length,
+  );
+  const where = !extracted
+    ? ""
+    : extracted.source === "openrouter_live"
+      ? extracted.tier_label || extracted.source_label || ""
+      : [extracted.source_label, extracted.tier_label].filter(Boolean).join(", ");
+  note.textContent =
+    (extracted
+      ? `Also stated: ${formatCapabilityValue(extracted.value)}` +
+        (where ? ` (${where}).` : ".")
+      : "Nothing else states a window for this model.") +
+    " Force value replaces it for routing and every agent catalogue; " +
+    "Force unset makes it unknown.";
+  wrap.appendChild(note);
+
+  box.disabled = mode.value !== "value";
+  mode.addEventListener("change", () => {
+    box.disabled = mode.value !== "value";
+    if (!box.disabled) box.focus();
+  });
+  field.appendChild(wrap);
+  inputs.set(name, { mode: mode, box: box, max: null, integer: true });
+  // Directly under max_output_tokens: the two numbers that bound a model.
+  const output = inputs.get("max_output_tokens");
+  const anchor = output && output.mode ? output.mode.closest(".models-override-row") : null;
+  if (anchor) anchor.after(field);
+  else form.appendChild(field);
+}
+
+function buildOverrideEditor(scope, key, row, editable, preferences, capabilities) {
   const form = document.createElement("div");
   form.className = "models-override-editor";
   const inputs = new Map();
@@ -27701,6 +27795,7 @@ function buildOverrideEditor(scope, key, row, editable, preferences) {
      DECISION MCC makes before any body exists. Drawing them in one
      undifferentiated grid would say they are the same kind of thing. */
   buildPreferenceRows(form, scope, key, preferences, inputs);
+  if (scope === "model") buildContextWindowRow(form, key, row, capabilities, inputs);
 
   const header = document.createElement("div");
   header.className = "models-override-row models-override-head";
@@ -27772,6 +27867,7 @@ function buildOverrideEditor(scope, key, row, editable, preferences) {
     // then forced onto the upstream body as `temperature: ""`. Refuse it.
     const blank = [];
     const overCap = [];
+    const notWhole = [];
     inputs.forEach((control, name) => {
       if (control.mode.value === "inherit") {
         updates[name] =
@@ -27790,13 +27886,22 @@ function buildOverrideEditor(scope, key, row, editable, preferences) {
            request would fail on. It is still refused here, because saving a
            number that silently means a different number is the surprise this
            control exists to remove. */
-        if (control.max != null && Number(parsed) > control.max) {
+        if (control.integer && !(Number.isInteger(parsed) && parsed > 0)) {
+          notWhole.push(name);
+        } else if (control.max != null && Number(parsed) > control.max) {
           overCap.push(`${name} (limit ${control.max.toLocaleString()})`);
         } else {
           updates[name] = parsed;
         }
       }
     });
+    if (notWhole.length) {
+      const message = `${notWhole.join(", ")} must be a whole number of tokens greater than zero.`;
+      status.textContent = message;
+      status.className = "models-status error";
+      showMessage(message, "error");
+      return;
+    }
     if (overCap.length) {
       const message =
         `This model reports a lower limit than that: ${overCap.join(", ")}.`;
