@@ -2908,6 +2908,8 @@ _USED_SOURCE_COLUMNS: dict[str, tuple[str, ...]] = {
     # A wire surface's override (``ResponseSurfaceSource.OVERRIDE``); its
     # ``learned`` source is the learned column above.
     ResponseSurfaceSource.OVERRIDE.value: (KNOWLEDGE_SOURCE_OPERATOR,),
+    # The operator's own context window (7.87.0).
+    SOURCE_OPERATOR: (KNOWLEDGE_SOURCE_OPERATOR,),
     # A kind's own sources (``ModelKind.source``) where they are not spelled
     # like a field source above (``models_dev``, ``openrouter_live`` and
     # ``litellm`` are).
@@ -3328,9 +3330,19 @@ def _operator_said(
     model_row: Mapping[str, Any],
     placements: Mapping[str, frozenset[str]] | None,
 ) -> list[_Said]:
-    """What you set for this model: a wire surface, the media rails it is on."""
+    """What you set for this model: a wire surface, a context window (7.87.0),
+    the media rails it is on."""
 
     said: list[_Said] = []
+    if model_row.get(CONTEXT_LENGTH_OVERRIDE) is not None:
+        said.append(
+            _Said(
+                "context_length",
+                KNOWLEDGE_SOURCE_OPERATOR,
+                model_row[CONTEXT_LENGTH_OVERRIDE],
+                "your override",
+            )
+        )
     surface = model_row.get(RESPONSE_SURFACE_OVERRIDE)
     if isinstance(surface, str) and surface:
         said.append(

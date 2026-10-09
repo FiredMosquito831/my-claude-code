@@ -172,3 +172,21 @@ def test_nothing_stated_returns_the_row_unchanged():
     )["context_length"]
     assert unknown["value"] == 4096
     assert "also_stated" not in unknown
+
+
+def test_the_everything_known_view_names_the_override_as_the_used_value(home):
+    """7.86.0's view reads the page row, so its used cell is the operator's."""
+
+    client = _client(_app())
+    _save(client, 1_000_000)
+
+    payload = client.get("/admin/api/models/knowledge", params={"ref": EXTRA}).json()
+
+    field = next(item for item in payload["fields"] if item["key"] == "context_length")
+    assert field["used"]["source"] == "operator"
+    assert field["used_value"] == 1_000_000
+    assert field["used_source"] == "operator"
+    operator = [item for item in field["statements"] if item["source"] == "operator"]
+    assert [(item["value"], item["used"]) for item in operator] == [(1_000_000, True)]
+    # The extracted window stays beside it, as on the page.
+    assert field["used"]["also_stated"]["value"] == 524_288
