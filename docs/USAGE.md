@@ -3363,11 +3363,14 @@ Every tier can carry an ordered list of stand-ins. Press **Add fallback** under 
 
 Each chain belongs to its own tier and they are never merged: a tier with its own model tries its own chain, and a tier left on **None** tries `MODEL` and `MODEL_FALLBACKS`.
 
+**A model may appear more than once (7.82.0).** Put the tier's own model again further down, or one fallback twice, and each appearance is one more try in the place you put it — `a/x, b/y, a/x` tries `a/x`, then `b/y`, then `a/x` again. A repeat is judged when it is reached exactly like any other entry: a paused or benched model is skipped at every appearance, the same-key retries and key rotation run again, and a model whose provider is still cooling down after a rate limit is stepped over unless it is the last entry. Every row of a repeated model shows a small **×2** chip, and Apply keeps the repeat. The same holds for the Vision adapter's chain, a coding agent's own tier override and the media rails.
+
 **Reordering a chain.** Each entry has a grip on its left. Drag it and the row moves; the up/down arrows beside it do the same thing one step at a time and still work, so the whole feature has a keyboard equivalent.
 
 | Gesture | What it does |
 | --- | --- |
 | Drag a grip within one card | Reorders that chain |
+| Hold **Ctrl** (or **Cmd**) while dropping within one card | **Copies** the row into the same chain — the model is then tried once per listing |
 | Ctrl/Cmd-click a row | Adds it to the selection |
 | Shift-click a row | Selects the range from the last one you clicked |
 | Shift+Space, Shift+Up/Down on a focused grip | The same range, from the keyboard |

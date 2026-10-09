@@ -24,6 +24,7 @@ from my_claude_code.config.admin.manifest import FIELD_BY_KEY
 from my_claude_code.config.admin.values import ROUTE_PAUSE_KEYS
 from my_claude_code.config.model_refs import (
     format_model_ref_list,
+    parse_model_ref_chain,
     parse_model_ref_list,
 )
 from my_claude_code.config.settings import Settings
@@ -60,8 +61,13 @@ def updates_removing_provider(
         if primary and _names(primary, provider_id):
             updates[model_key] = ""
             removed.append(f"{model_key}={primary}")
-        for key in (chain_key, paused_key):
-            refs = parse_model_ref_list(_text(settings, key))
+        for key, parse in (
+            # A chain keeps a repeated entry (7.82.0): only the deleted
+            # provider's refs leave it. A pause list is a set.
+            (chain_key, parse_model_ref_chain),
+            (paused_key, parse_model_ref_list),
+        ):
+            refs = parse(_text(settings, key))
             kept = tuple(ref for ref in refs if not _names(ref, provider_id))
             if kept != refs:
                 updates[key] = format_model_ref_list(kept)

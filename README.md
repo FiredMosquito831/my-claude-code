@@ -123,7 +123,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | Capability | What it gives you | Where it lives | More |
 | --- | --- | --- | --- |
 | Model tiers | Fable, Opus, Sonnet and Haiku traffic each routed to a model you chose | **Model Config** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
-| Fallback chains | An ordered list of stand-ins per tier, walked when a model errors, rate-limits or refuses | **Model Config** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
+| Fallback chains | An ordered list of stand-ins per tier, walked when a model errors, rate-limits or refuses; a model listed twice is tried twice, each listing judged when it is reached | **Model Config** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
 | Per-agent tiers | A different tier map for Claude Code than for Codex or OpenCode | **Coding agents** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
 | Pause a route | Take one provider/model pair out of rotation without deleting anything | **Model Config** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
 | Vision adapter | Image requests diverted to a model that can see, with its own chain | **Model Config** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |

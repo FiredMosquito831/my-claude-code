@@ -46,10 +46,12 @@ def parse_model_name(model_ref: str) -> str:
 
 
 def parse_model_ref_list(raw: str | None) -> tuple[str, ...]:
-    """Split a comma-separated fallback chain into unique ordered model refs.
+    """Split a comma-separated list of model refs into unique ordered refs.
 
-    Duplicates are dropped rather than rejected: a chain that retries the same
-    provider/model twice would burn an attempt on something that just failed.
+    For lists that name a *set* of models -- a pause list (a pause names a ref,
+    so naming it twice means nothing) and every "which models are configured"
+    question. A fallback chain is read with :func:`parse_model_ref_chain`
+    instead, because there a ref listed twice is two tries.
     """
 
     if not raw:
@@ -58,6 +60,29 @@ def parse_model_ref_list(raw: str | None) -> tuple[str, ...]:
     for candidate in raw.split(MODEL_REF_LIST_SEPARATOR):
         model_ref = candidate.strip()
         if model_ref and model_ref not in refs:
+            refs.append(model_ref)
+    return tuple(refs)
+
+
+def parse_model_ref_chain(raw: str | None) -> tuple[str, ...]:
+    """Split a comma-separated fallback chain into its ordered entries.
+
+    Every entry is kept, repeats included: a model listed twice in a chain is
+    tried twice, at the two places it is listed (user decision 2026-10-06,
+    7.82.0). Each occurrence is judged when it is reached exactly like any
+    other entry -- its pause, its bench, the rate-limit cooldown step-over and
+    the same-key retries all apply to it as they do today -- so nothing here
+    decides whether a repeat is worth trying. Empty entries are dropped, as
+    they always were. For a chain without a repeat the answer is identical to
+    :func:`parse_model_ref_list`.
+    """
+
+    if not raw:
+        return ()
+    refs: list[str] = []
+    for candidate in raw.split(MODEL_REF_LIST_SEPARATOR):
+        model_ref = candidate.strip()
+        if model_ref:
             refs.append(model_ref)
     return tuple(refs)
 

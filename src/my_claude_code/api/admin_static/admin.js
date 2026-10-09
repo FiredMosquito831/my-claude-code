@@ -6126,8 +6126,10 @@ const ROUTE_TIERS = [
    harness this repo tests its UI with.
 
    Every gesture funnels into applyRouteDrop, which is the only function that
-   mutates a chain. Dedupe, the primary swap and the undo snapshot therefore
-   happen in exactly one place instead of once per entry point. */
+   mutates a chain. The primary swap and the undo snapshot therefore happen in
+   exactly one place instead of once per entry point. Since 7.82.0 a chain may
+   list a model more than once, so a drop never removes or refuses a row
+   because its model is already on the rail. */
 
 // Which setting holds the refs paused on a route, keyed by the route's own
 // primary model setting. Pause is per route by definition: the same ref
@@ -6479,8 +6481,13 @@ function endRouteDrag(event) {
     ? routeRailForModel(drag.target.modelKey)
     : routeRailFor(drag.target.chainKey);
   // The modifier is read at drop rather than at press, so the reader can
-  // change their mind mid-drag.
-  const copy = dest !== source && !(event && event.shiftKey);
+  // change their mind mid-drag. Onto another rail a drop copies and Shift
+  // moves; within one rail a drop moves and Ctrl/Cmd copies (7.82.0: a chain
+  // may list a model more than once, each listing one more try).
+  const copy =
+    dest !== source
+      ? !(event && event.shiftKey)
+      : Boolean(event && (event.ctrlKey || event.metaKey));
   applyRouteDrop(drag.target, drag.ids, copy);
 }
 
@@ -6509,8 +6516,9 @@ function insertRouteRow(editor, ref, index) {
  *
  * `target` is either `{chainKey, index}` -- land in front of that row -- or
  * `{modelKey}`, the rail's primary slot. `copy` leaves the source rows where
- * they are; a same-rail drop is always a move, because a rail that grew a
- * duplicate of its own row would lose it again on Apply.
+ * they are. A same-rail drop is a move unless Ctrl/Cmd was held: since 7.82.0
+ * a chain may list a model more than once, Apply keeps every listing, and
+ * each listing is one more try judged when it is reached.
  */
 function applyRouteDrop(target, ids, copy) {
   const dest = target.modelKey
@@ -6545,8 +6553,10 @@ function applyRouteDrop(target, ids, copy) {
 
   // Dragging a rail's own primary down into its own chain is the swap the
   // down arrow already performs; anywhere else in the rail would empty it.
+  // With Ctrl/Cmd held it is a copy instead, and lands like any other row.
   if (
     target.chainKey &&
+    !copy &&
     usable.length === 1 &&
     !usable[0].row &&
     usable[0].editor === dest
@@ -6593,18 +6603,15 @@ function applyRouteDrop(target, ids, copy) {
     const head = refs[0];
     const demoted = dest.primaryValue();
     dest.setPrimaryValue(head);
-    dest.rows.slice().forEach((row) => {
-      if (row.combobox.input.value.trim() === head) dest.removeRow(row);
-    });
+    // Rows already on the rail stay where they are, the same model included:
+    // since 7.82.0 a model listed twice is tried twice, so a row the reader
+    // put there is never taken away by a drop that did not carry it.
     let at = 0;
     if (demoted && demoted !== head) {
       insertRouteRow(dest, demoted, at);
       at += 1;
     }
     refs.slice(1).forEach((ref) => {
-      if (ref === head) return;
-      const existing = dest.rows.find((row) => row.combobox.input.value.trim() === ref);
-      if (existing) dest.removeRow(existing);
       insertRouteRow(dest, ref, at);
       at += 1;
     });
@@ -6616,37 +6623,18 @@ function applyRouteDrop(target, ids, copy) {
     let landed = 0;
     let firstAt = dest.rows.length;
     refs.forEach((ref) => {
-      // A chain entry equal to its own primary is dropped at resolve time, so
-      // the row could never fire: saying so beats adding a row that vanishes.
-      if (ref === dest.primaryValue()) {
-        notes.push(
-          `${routeLabelFor(dest.modelKey)} already routes to ${ref} first, so it was not added to its own chain.`,
-        );
-        return;
-      }
-      // Duplicates are dropped on save, so a second copy would be a row the
-      // reader watches disappear. Move the one that is already there instead.
-      const existing = dest.rows.find((row) => row.combobox.input.value.trim() === ref);
-      if (existing) {
-        if (existing === anchorRow) {
-          anchorRow = dest.rows[dest.rows.indexOf(existing) + 1] || null;
-        }
-        dest.removeRow(existing);
-        notes.push(
-          `${ref} was already in the ${routeLabelFor(dest.modelKey)} chain -- moved instead of copied.`,
-        );
-      }
+      // Every row lands, even one naming the rail's own primary or a model
+      // already in the chain: since 7.82.0 a model listed twice is tried
+      // twice, each listing judged when it is reached, and Apply keeps it.
       const at = anchorRow ? dest.rows.indexOf(anchorRow) : dest.rows.length;
       if (!landed) firstAt = at;
       insertRouteRow(dest, ref, at);
       landed += 1;
     });
-    if (!landed) {
-      announceRoute(notes.join(" "), null);
-      return false;
-    }
     const where = `at position ${firstAt + 1}`;
-    if (dest === usable[0].editor) {
+    if (dest === usable[0].editor && copy) {
+      sentence = `Copied ${landed} model${landed === 1 ? "" : "s"} inside the ${routeLabelFor(dest.modelKey)} chain, ${where}. The rail now lists ${landed === 1 ? "it" : "them"} more than once, and each listing is one more try.`;
+    } else if (dest === usable[0].editor) {
       sentence = `Moved ${landed} model${landed === 1 ? "" : "s"} inside the ${routeLabelFor(dest.modelKey)} chain, ${where}.`;
     } else if (copy) {
       sentence = `Copied ${landed} model${landed === 1 ? "" : "s"} into the ${routeLabelFor(dest.modelKey)} chain, ${where}. They are still in the ${sourceLabel} chain.`;
@@ -7027,6 +7015,32 @@ function routeNodeControls(node, id, label) {
 
   cell.append(chip, pause);
   return { grip, cell };
+}
+
+/** Show or hide one rail node's "×N" repeat chip (see markRepeats).
+ *
+ * Built lazily inside the pause cell, never as a new grid child: the rail's
+ * columns are explicit, and an extra child would push every control on the
+ * row one column right of the same control on the row above it. */
+function paintRouteRepeat(node, ref, times) {
+  let chip = node.querySelector(".route-repeat-chip");
+  if (!ref || times < 2) {
+    if (chip) chip.hidden = true;
+    return;
+  }
+  if (!chip) {
+    const cell = node.querySelector(".route-pause-cell");
+    if (!cell) return;
+    chip = document.createElement("span");
+    chip.className = "route-repeat-chip";
+    cell.insertBefore(chip, cell.firstChild);
+  }
+  chip.hidden = false;
+  chip.textContent = `×${times}`;
+  chip.title =
+    `${ref} is listed ${times} times on this route. Each listing is one more ` +
+    "try, judged when it is reached: a pause, a bench or a rate-limit cooldown " +
+    "applies to every listing.";
 }
 
 function routeNode(marker, control, modifier) {
@@ -10559,6 +10573,28 @@ class ModelChainEditor {
     updateDirtyState();
     // A row's ref is what a pause names, and editing the combobox changes it.
     syncRoutePauseUi();
+    this.markRepeats();
+  }
+
+  /** Mark every row of a model this rail lists more than once (7.82.0).
+   *
+   * A chain may list a model more than once -- the primary again, or one
+   * fallback twice -- and each listing is one more try, judged when it is
+   * reached. A small "×N" chip in the row's pause cell says so, so a repeat
+   * reads as deliberate. The chip is only created once a repeat exists: a
+   * rail without one renders exactly the nodes it always did. */
+  markRepeats() {
+    const primary = this.primary ? this.primaryValue() : "";
+    const refs = this.rows.map((row) => row.combobox.input.value.trim());
+    const counts = new Map();
+    [primary, ...refs].forEach((ref) => {
+      if (ref) counts.set(ref, (counts.get(ref) || 0) + 1);
+    });
+    this.rows.forEach((row, index) => {
+      paintRouteRepeat(row.wrapper, refs[index], counts.get(refs[index]) || 0);
+    });
+    const node = this.primary ? this.primary.input.closest("[data-route-id]") : null;
+    if (node) paintRouteRepeat(node, primary, counts.get(primary) || 0);
   }
 
   /** Replace every row from a comma-joined value. Used by undo, which restores
@@ -10797,6 +10833,8 @@ class ModelChainEditor {
   }
 
   renumberPrimary() {
+    // Every reorder and every edit of the primary passes through here.
+    this.markRepeats();
     if (!this.primary) return;
     const { upButton, downButton } = this.primary;
     upButton.disabled = true;
@@ -25687,8 +25725,14 @@ function mediaDeclaredChips(declared) {
 
 function mediaPlacementChips(row) {
   const chips = [];
+  // 7.82.0: a rail may list a model more than once. Each listing keeps its
+  // own position chip; what is true of the model on the whole rail -- paused,
+  // its stated kind, whether the provider serves the rail -- is said once.
+  const railsSaid = new Set();
   (row.placements || []).forEach((placement) => {
     chips.push(mediaChip(`${placement.label} · ${placement.position}`, "rail"));
+    if (railsSaid.has(placement.rail)) return;
+    railsSaid.add(placement.rail);
     if (placement.paused) chips.push(mediaChip(`${placement.label}: paused`, "paused"));
     // 7.78.2: a model whose stated kind is not this rail's -- a chat model
     // saved on the Image rail. Marked, never removed: it stays on the rail and

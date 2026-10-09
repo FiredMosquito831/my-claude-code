@@ -1,8 +1,9 @@
 """Build the ordered candidates for a media request from its rail's settings.
 
 The Vision adapter's chain (``application/routing.py`` ``_vision_adapter_chain``)
-is the pattern: primary, then fallbacks, de-duplicated, an unknown provider
-skipped with a warning rather than taking the whole rail down. Media refs are
+is the pattern: primary, then fallbacks, a ref listed twice tried twice (7.82.0,
+the same rule as chat), an unknown provider skipped with a warning rather than
+taking the whole rail down. Media refs are
 never added to the chat catalogue (``configured_chat_model_refs``), so nothing
 here is advertised to a coding agent.
 """
@@ -15,6 +16,7 @@ from my_claude_code.application.errors import ApplicationError
 from my_claude_code.application.routing import ModelRouter, ResolvedModel
 from my_claude_code.config.model_refs import (
     parse_model_name,
+    parse_model_ref_chain,
     parse_model_ref_list,
     parse_provider_type,
 )
@@ -64,22 +66,21 @@ def _resolved(original_model: str, model_ref: str) -> ResolvedModel:
 
 
 def rail_refs(settings: Settings, rail: MediaRail) -> tuple[str, ...]:
-    """The rail's configured refs in order: primary, then its fallbacks."""
+    """The rail's configured refs in order: primary, then its fallbacks.
+
+    One entry per listing: a ref listed twice is tried twice, at the two
+    places it is listed (7.82.0, the same rule as a chat chain). A caller that
+    wants the set of models on the rail de-duplicates for itself, as
+    :func:`configured_media_model_refs` does.
+    """
 
     names = RAIL_SETTINGS[rail]
     refs: list[str] = []
     primary = _setting(settings, names.model_attr).strip()
     if primary:
         refs.append(primary)
-    refs.extend(parse_model_ref_list(_setting(settings, names.fallbacks_attr)))
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for ref in refs:
-        if ref in seen:
-            continue
-        seen.add(ref)
-        ordered.append(ref)
-    return tuple(ordered)
+    refs.extend(parse_model_ref_chain(_setting(settings, names.fallbacks_attr)))
+    return tuple(refs)
 
 
 def configured_media_model_refs(settings: Settings) -> tuple[str, ...]:

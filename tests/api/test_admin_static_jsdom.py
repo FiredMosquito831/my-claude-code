@@ -1852,25 +1852,113 @@ def test_a_cross_tier_move_marks_both_chains_unsaved(rendered) -> None:
     ]
 
 
-def test_a_copy_onto_a_chain_that_already_has_the_ref_moves_it_instead(
+#: The repeat chip's sign (7.82.0), spelled by code point for RUF001.
+REPEAT_SIGN = chr(0xD7)
+
+
+def test_a_copy_onto_a_chain_that_already_has_the_ref_adds_a_second_listing(
     rendered,
 ) -> None:
-    """Duplicates are dropped on save, so a second row would just vanish."""
+    """7.82.0: a model listed twice is tried twice, and Apply keeps both."""
     routing = rendered["routing"]
 
-    assert routing["duplicateOccurrences"] == 1
-    assert "already in the Opus chain" in routing["duplicateSentence"]
-    assert "moved instead of copied" in routing["duplicateSentence"]
-
-
-def test_a_copy_is_refused_when_the_target_primary_is_that_ref(rendered) -> None:
-    """A chain entry equal to its own primary could never fire."""
-    routing = rendered["routing"]
-
-    assert routing["sonnetUnchangedByRefusal"]
-    assert routing["refusalSentence"] == (
-        "Sonnet already routes to p1/s1 first, so it was not added to its own chain."
+    assert routing["repeatChipsAtLoad"] == 0
+    assert routing["repeatChipsBeforeDuplicate"] == []
+    assert routing["duplicateOccurrences"] == 2
+    before = routing["opusBeforeDuplicate"].split(",")
+    after = routing["opusAfterDuplicateCopy"].split(",")
+    # The first copy landed at position 1, the second in front of row 5.
+    assert [index for index, ref in enumerate(after) if ref == "p1/s1"] == [0, 4]
+    assert [ref for ref in after if ref != "p1/s1"] == before
+    assert routing["duplicateSentence"].startswith(
+        "Copied 1 model into the Opus chain, at position 5."
     )
+    assert "moved instead of copied" not in routing["duplicateSentence"]
+    assert routing["repeatChipsAfterDuplicate"] == [
+        ["p1/s1", f"{REPEAT_SIGN}2"],
+        ["p1/s1", f"{REPEAT_SIGN}2"],
+    ]
+    assert "listed 2 times on this route" in routing["repeatChipTitle"]
+    assert "one more try" in routing["repeatChipTitle"]
+    # Taking one listing away takes the chips away with it -- and leaves the
+    # rail exactly where the pre-7.82.0 "moved instead of copied" left it.
+    removed = routing["opusAfterFirstListingRemoved"].split(",")
+    assert removed == [*before[:3], "p1/s1", *before[3:]]
+    assert routing["repeatChipsAfterRemoval"] == []
+
+
+def test_a_copy_of_the_target_primary_lands_as_another_listing(rendered) -> None:
+    """7.82.0: the route's own model listed again further down is allowed."""
+    routing = rendered["routing"]
+
+    assert routing["sonnetUnchangedByRefusal"] is False
+    assert routing["sonnetAfterPrimaryRefCopy"] == (
+        "p1/s1," + routing["sonnetBeforePrimaryRefCopy"]
+    )
+    assert routing["refusalSentence"].startswith(
+        "Copied 1 model into the Sonnet chain, at position 1."
+    )
+    assert "already routes to" not in routing["refusalSentence"]
+    assert routing["primaryRefCopyChips"] == [
+        ["p1/s1", f"{REPEAT_SIGN}2"],
+        ["p1/s1", f"{REPEAT_SIGN}2"],
+    ]
+    assert (
+        routing["sonnetAfterPrimaryRefCopyUndo"]
+        == routing["sonnetBeforePrimaryRefCopy"]
+    )
+
+
+def test_a_same_card_drop_moves_and_ctrl_copies(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["sonnetBeforeSameRail"] == "p1/s0,p1/s2"
+    assert routing["sonnetAfterSameRailPlainDrop"] == "p1/s2,p1/s0"
+    assert routing["sonnetAfterSameRailCopy"] == "p1/s2,p1/s0,p1/s2"
+    assert routing["sameRailCopySentence"].startswith(
+        "Copied 1 model inside the Sonnet chain, at position 1."
+    )
+    assert "more than once" in routing["sameRailCopySentence"]
+    assert routing["sameRailCopyChips"] == [
+        ["p1/s2", f"{REPEAT_SIGN}2"],
+        ["p1/s2", f"{REPEAT_SIGN}2"],
+    ]
+    assert routing["sonnetAfterSecondCopy"] == "p1/s2,p1/s2,p1/s0,p1/s2"
+    assert routing["secondCopyChips"] == [
+        ["p1/s2", f"{REPEAT_SIGN}3"],
+        ["p1/s2", f"{REPEAT_SIGN}3"],
+        ["p1/s2", f"{REPEAT_SIGN}3"],
+    ]
+
+
+def test_a_rail_rebuilt_from_a_saved_repeat_shows_it(rendered) -> None:
+    """The undo path rebuilds rows from a stored value, as a page load does."""
+    routing = rendered["routing"]
+
+    assert routing["sonnetRebuiltWithRepeat"] == "p1/s2,p1/s0,p1/s2"
+    assert routing["rebuiltRepeatChips"] == [
+        ["p1/s2", f"{REPEAT_SIGN}2"],
+        ["p1/s2", f"{REPEAT_SIGN}2"],
+    ]
+    assert routing["sonnetAfterEditingARepeat"] == "p1/s9,p1/s0,p1/s2"
+    assert routing["chipsAfterEditingARepeat"] == []
+
+
+def test_ctrl_drops_a_copy_of_the_primary_into_its_own_chain(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert (
+        routing["sonnetPrimaryAfterPrimaryCopy"]
+        == (routing["sonnetPrimaryBeforePrimaryCopy"])
+    )
+    assert routing["sonnetPrimaryAfterPrimaryCopy"] == "p1/s1"
+    assert routing["sonnetAfterPrimaryCopy"] == "p1/s9,p1/s1,p1/s0,p1/s2"
+    assert "traded places" not in routing["primaryCopySentence"]
+    # The primary node and its new row both carry the chip.
+    assert routing["primaryCopyChips"] == [
+        ["p1/s1", f"{REPEAT_SIGN}2"],
+        ["p1/s1", f"{REPEAT_SIGN}2"],
+    ]
 
 
 def test_dropping_on_the_primary_slot_swaps_and_demotes_the_old_primary(
@@ -7376,7 +7464,9 @@ def test_a_media_row_says_rail_position_pause_and_what_is_declared(rendered) -> 
     assert flux[0] == ["Image · primary"]
     assert flux[1] == ["image generate", "speech mp3/wav/raw"]
     assert flux[2] == ["image"]
-    assert groq_tts[0] == ["Speech · primary", "Speech: paused"]
+    # Listed twice on its rail (7.82.0): one position chip per listing, and
+    # what is true of the model on the whole rail is said once.
+    assert groq_tts[0] == ["Speech · primary", "Speech: paused", "Speech · fallback 1"]
     # models.dev's list is advice: an approximate rung is marked as such.
     assert groq_tts[2] == ["≈ audio"]
     assert whisper[0] == ["Transcription · primary"]

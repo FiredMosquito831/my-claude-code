@@ -199,7 +199,9 @@ async def set_harness_tier(
             )
         override = HarnessTierOverride(
             model=model,
-            fallbacks=_clean_list(payload.fallbacks),
+            # A chain keeps a repeated entry: a model listed twice is tried
+            # twice (7.82.0). A pause names a ref, so it stays a set.
+            fallbacks=_clean_list(payload.fallbacks, keep_repeats=True),
             paused=_clean_list(payload.paused),
         )
 
@@ -207,11 +209,11 @@ async def set_harness_tier(
     return await asyncio.to_thread(_harness_tiers_payload, services)
 
 
-def _clean_list(values: list[str]) -> tuple[str, ...]:
+def _clean_list(values: list[str], *, keep_repeats: bool = False) -> tuple[str, ...]:
     cleaned: list[str] = []
     for value in values:
         ref = (value or "").strip()
-        if ref and ref not in cleaned:
+        if ref and (keep_repeats or ref not in cleaned):
             cleaned.append(ref)
     return tuple(cleaned)
 
