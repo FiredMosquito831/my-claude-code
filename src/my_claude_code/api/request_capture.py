@@ -1597,6 +1597,7 @@ class RequestCapture:
                     capture_session=self._capture_session,
                     capture_folder=True,
                     system=None if request is None else request.system,
+                    messages=None if request is None else request.messages,
                 )
             )
         except Exception as exc:

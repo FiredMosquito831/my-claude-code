@@ -4555,7 +4555,7 @@ The detail dialog says how each value is known:
 | --- | --- |
 | `stated by the x-claude-code-session-id header` | Claude Code and the Claude Agent SDK send it on every request |
 | `stated by the x-claude-code-agent-id header` | a Claude Code subagent is speaking; the row also records which session it said it belongs to |
-| `read from the prompt's environment block` | Claude Code's system prompt names its working directory |
+| `read from the prompt's environment block` | Claude Code's prompt names its working directory; since 7.87.1 it is read from the first user message, where Claude Code sends it |
 | `read later from the stored prompt's environment block (backfill)` | filled in for an older row by the backfill below |
 
 What to expect per client, measured on a real log:

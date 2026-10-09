@@ -11,10 +11,13 @@ none of it into the log:
   values were never kept.
 - **Request metadata.** ``metadata.user_id`` can carry a session id. It is a
   second source for the same fact, used only when no header stated it.
-- **The prompt.** Claude Code's system prompt carries an environment block with
+- **The prompt.** Claude Code's prompt carries an environment block with
   ``Primary working directory: <path>`` (1,421 of the newest 1,500 Claude Code
-  bodies). The Agent SDK's does not (0 of 1,500), so for that harness the
-  folder is honestly unknown and stays NULL.
+  bodies). It sends it in the first user message, inside a
+  ``<system-reminder>``, not in the system blocks (1,500 of the newest 1,500
+  Claude Code rows, 2026-10-08), so both are read: the system blocks first,
+  then that one message. The Agent SDK's prompt has no such block (0 of
+  1,500), so for that harness the folder is honestly unknown and stays NULL.
 
 Extraction is declared as data -- :data:`EXTRACTORS` is the whole table -- so a
 reader can see every signal MCC trusts, for which harness, and in what order,
@@ -60,11 +63,11 @@ MAX_ID_CHARS = 128
 #: A working directory is stored verbatim up to this length.
 MAX_PROJECT_DIR_CHARS = 512
 #: The prompt extractor reads at most this many characters of the system
-#: blocks. The anchor was measured at offset 5,709 to 15,722 (median 6,570)
-#: inside the joined system text on real Claude Code traffic, so 64 KiB is
-#: four times the worst observed position and still a small fraction of a
-#: large prompt. A future client that moves the block past it fails closed:
-#: the folder is NULL, never a guess.
+#: blocks, and at most this many of the first user message. The anchor was
+#: measured at offset 5,709 to 15,722 (median 6,570) of the stored prompt on
+#: real Claude Code traffic, so 64 KiB is four times that and still a small
+#: fraction of a large prompt. A block past it fails closed: the folder is
+#: NULL, never a guess.
 PROMPT_SCAN_MAX_CHARS = 64 * 1024
 #: Longest path the prompt extractor accepts on one line. Longer lines do not
 #: match at all, which is the same closed failure.
@@ -222,7 +225,8 @@ ORIGIN_HEADERS: frozenset[str] = frozenset(
 )
 
 #: Harness ids with a declared prompt extractor. Every other harness pays
-#: nothing for the prompt scan -- not even the join of its system blocks.
+#: nothing for the prompt scan -- not even the join of its system blocks or
+#: of its first user message.
 PROMPT_HARNESSES: frozenset[str] = frozenset(
     harness
     for extractor in EXTRACTORS
@@ -298,13 +302,16 @@ def resolve_origin(
     capture_session: bool,
     capture_folder: bool,
     system: Any = None,
+    messages: Any = None,
 ) -> RequestOrigin:
     """Apply the declared table to one request.
 
-    ``system`` is the request's system prompt (a string or a list of blocks).
-    It is read only when the harness has a declared prompt extractor, the
-    folder is wanted, and no higher-ranked source already answered -- so the
-    Agent SDK, three quarters of real traffic, never pays for it.
+    ``system`` is the request's system prompt (a string or a list of blocks)
+    and ``messages`` its message list. They are read only when the harness has
+    a declared prompt extractor, the folder is wanted, and no higher-ranked
+    source already answered -- so the Agent SDK, three quarters of real
+    traffic, never pays for it. The system blocks are read first; the first
+    user message only when they state nothing (:func:`first_user_message_text`).
     """
     if not capture_session and not capture_folder:
         return EMPTY_ORIGIN
@@ -312,7 +319,8 @@ def resolve_origin(
     values: dict[str, str] = {}
     winners: dict[str, OriginExtractor] = {}
     ranked = sorted(EXTRACTORS, key=lambda item: SOURCE_ORDER.index(item.source))
-    prompt_text: str | None = None
+    system_text: str | None = None
+    message_text: str | None = None
     for extractor in ranked:
         if extractor.field in values:
             continue
@@ -331,11 +339,19 @@ def resolve_origin(
         elif extractor.source == "metadata":
             value = _metadata_value(inputs.metadata, extractor)
         elif extractor.source == "prompt" and extractor.pattern is not None:
-            if prompt_text is None:
-                prompt_text = system_prompt_text(system)
+            if system_text is None:
+                system_text = system_prompt_text(system)
             value = _pattern_value(
-                extractor.pattern, prompt_text, literal=extractor.literal
+                extractor.pattern, system_text, literal=extractor.literal
             )
+            if _clean(extractor.field, value) is None:
+                # Where Claude Code actually sends the block. Read only when
+                # the system blocks stated nothing, so they still win.
+                if message_text is None:
+                    message_text = first_user_message_text(messages)
+                value = _pattern_value(
+                    extractor.pattern, message_text, literal=extractor.literal
+                )
         cleaned = _clean(extractor.field, value)
         if cleaned is not None:
             values[extractor.field] = cleaned
@@ -370,17 +386,56 @@ def resolve_origin(
 def system_prompt_text(system: Any) -> str:
     """The system blocks joined, capped at :data:`PROMPT_SCAN_MAX_CHARS`.
 
-    System blocks only -- never the messages. A user who pastes a line that
-    looks like an environment block into a message must not move their
-    request into a different folder.
+    The first place the folder is looked for. Claude Code does not send its
+    environment block here today (see :func:`first_user_message_text`), but a
+    request that states it here is read from here, ahead of any message.
     """
-    if isinstance(system, str):
-        return system[:PROMPT_SCAN_MAX_CHARS]
-    if not isinstance(system, list):
+    return _capped_text(system)
+
+
+def first_user_message_text(messages: Any) -> str:
+    """The first user message's text, capped at :data:`PROMPT_SCAN_MAX_CHARS`.
+
+    Claude Code sends its environment block here: inside the
+    ``<system-reminder>`` it puts in the first user message, after the system
+    prompt has ended (every one of the newest 1,500 Claude Code requests --
+    CLI, SDK-CLI and Desktop -- on 2026-10-08).
+
+    Only that one message, and only if its role is ``user``: never an
+    assistant or system turn, never a later message, never a tool result or
+    an image (only text is read). It is matched with the same anchored pattern
+    as the system blocks, which needs the line to itself, so a mention inside
+    a sentence does not count. What the line cannot tell apart is a line of
+    exactly that shape written ahead of the block in the same message -- in a
+    subagent's first message the task text comes first -- which the stored
+    prompt backfill reads the same way.
+    """
+    if not isinstance(messages, (list, tuple)):
+        return ""
+    for message in messages:
+        if isinstance(message, Mapping):
+            role, content = message.get("role"), message.get("content")
+        else:
+            role = getattr(message, "role", None)
+            content = getattr(message, "content", None)
+        if role == "user":
+            return _capped_text(content)
+    return ""
+
+
+def _capped_text(value: Any) -> str:
+    """A string, or a list of text blocks joined by newlines, capped.
+
+    Only the head is ever joined: no block past :data:`PROMPT_SCAN_MAX_CHARS`
+    is copied, however large the prompt.
+    """
+    if isinstance(value, str):
+        return value[:PROMPT_SCAN_MAX_CHARS]
+    if not isinstance(value, list):
         return ""
     parts: list[str] = []
     total = 0
-    for block in system:
+    for block in value:
         text = block.get("text") if isinstance(block, Mapping) else None
         if text is None:
             text = getattr(block, "text", None)
@@ -632,6 +687,7 @@ __all__ = [
     "OriginExtractor",
     "OriginInputs",
     "RequestOrigin",
+    "first_user_message_text",
     "folder_filter",
     "format_origin_source",
     "merge_origin_source",
