@@ -27937,6 +27937,7 @@ function kindAlsoStated(kind) {
   const labels = Array.isArray(other.labels) ? other.labels : [];
   return {
     value: labels.length ? labels.join(" + ") : "none of the five (stated)",
+    source: other.source || "",
     source_label: other.source_label || other.source || "",
     tier_label: other.tier || null,
   };
@@ -28037,9 +28038,11 @@ function buildCapabilityRow(label, field, labels, format) {
     const other = field.also_stated;
     const also = document.createElement("span");
     also.className = "models-approx-note";
-    const where = [other.source_label, other.tier_label]
-      .filter(Boolean)
-      .join(", ");
+    // OpenRouter's rung line already names it ("OpenRouter live, exact id").
+    const where =
+      other.source === "openrouter_live"
+        ? other.tier_label || other.source_label || ""
+        : [other.source_label, other.tier_label].filter(Boolean).join(", ");
     also.textContent =
       `also stated: ${(format || formatCapabilityValue)(other.value)}` +
       (where ? ` (${where})` : "");

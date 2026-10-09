@@ -2318,13 +2318,10 @@ def test_the_models_page_draws_openrouter_live_and_both_statements(
 
     rows = {row["cells"][0]: row for row in rendered["models"]["liveRows"]}
 
-    tools = rows["reads images"]
-    assert tools["cells"][1] == "yes"
-    assert (
-        "also stated: no (OpenRouter live, OpenRouter live, exact id)"
-        in (tools["cells"][2])
-    )
-    assert "models-source-models_dev" in tools["badge"]
+    vision = rows["reads images"]
+    assert vision["cells"][1] == "yes"
+    assert "also stated: no (OpenRouter live, exact id)" in vision["cells"][2]
+    assert "models-source-models_dev" in vision["badge"]
 
     cache = rows["cache read price (USD / 1M)"]
     assert cache["cells"][1] == "$0.05"
@@ -2339,7 +2336,7 @@ def test_the_models_page_draws_openrouter_live_and_both_statements(
 
     kind = rows["kind"]
     assert kind["cells"][1] == "Chat + Transcription"
-    assert "also stated: Chat (OpenRouter's live model list" in kind["cells"][2]
+    assert "also stated: Chat (OpenRouter live, exact id)" in kind["cells"][2]
 
 
 def test_a_single_surface_model_is_offered_no_choice_at_all(rendered) -> None:
