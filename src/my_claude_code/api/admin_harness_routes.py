@@ -44,7 +44,11 @@ from pydantic import BaseModel, Field
 
 from my_claude_code.api.admin_routes import require_loopback_admin
 from my_claude_code.api.dependencies import get_services
-from my_claude_code.api.model_admin import capability_payload
+from my_claude_code.api.model_admin import (
+    DisplayFactsLookup,
+    bound_display_facts,
+    capability_payload,
+)
 from my_claude_code.api.ports import ApiServices
 from my_claude_code.application.catalogue_model import (
     CapabilityProvenanceLookup,
@@ -57,6 +61,7 @@ from my_claude_code.application.catalogues import (
     serialise,
     serialise_sidecar,
 )
+from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.tier_chains import (
@@ -481,9 +486,12 @@ def _catalogue_models_payload(
     settings = runtime.current_settings()
     harness_tiers = current_harness_tiers()
     # The provenance names OpenRouter's live list wherever the record took a
-    # value from it (7.84.0), from the same stored list the records read.
+    # value from it (7.84.0), from the same stored list the records read; and
+    # LiteLLM's map where the page's rows do (7.85.0, LiteLLM pricing on).
     provenance = (
-        _provenance_with(runtime.openrouter_live_catalogue())
+        _provenance_with(
+            runtime.openrouter_live_catalogue(), runtime.litellm_model_catalogue()
+        )
         if with_provenance
         else None
     )
@@ -540,13 +548,23 @@ def _catalogue_models_payload(
 
 def _provenance_with(
     live: LiveCatalogue | None,
+    litellm: LiteLLMCatalogue | None = None,
 ) -> CapabilityProvenanceLookup:
-    """:func:`capability_provenance` bound to one read of OpenRouter's live list."""
+    """:func:`capability_provenance` bound to one read of each catalogue rung."""
+
+    display_facts = bound_display_facts()
 
     def lookup(
         provider_id: str, model_id: str, info: ProviderModelInfo | None
     ) -> Mapping[str, CatalogueFieldProvenance]:
-        return capability_provenance(provider_id, model_id, info, live=live)
+        return capability_provenance(
+            provider_id,
+            model_id,
+            info,
+            live=live,
+            litellm=litellm,
+            display_facts=display_facts,
+        )
 
     return lookup
 
@@ -557,6 +575,8 @@ def capability_provenance(
     info: ProviderModelInfo | None,
     *,
     live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
+    display_facts: DisplayFactsLookup | None = None,
 ) -> Mapping[str, CatalogueFieldProvenance]:
     """Return the per-field ladder provenance the Models page already computes.
 
@@ -564,10 +584,19 @@ def capability_provenance(
     the point: a number in a generated catalogue and the same number on the
     Models page must never be able to disagree about where it came from.
     ``live`` is OpenRouter's live list (7.84.0), placed exactly as the page
-    places it.
+    places it; ``litellm`` is LiteLLM's map (7.85.0) while LiteLLM pricing is
+    on, and ``display_facts`` models.dev's display-row lookup bound once for a
+    whole document.
     """
 
-    payload = capability_payload(provider_id, model_id, info, live=live)
+    payload = capability_payload(
+        provider_id,
+        model_id,
+        info,
+        live=live,
+        litellm=litellm,
+        display_facts=display_facts,
+    )
     provenance: dict[str, CatalogueFieldProvenance] = {}
     for name, value in payload.items():
         if name == "reasoning" and isinstance(value, Mapping):

@@ -2733,6 +2733,28 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   (Model Config, catalogue card) turns it off, and then nothing
                   differs from before it existed.
                 </p>
+                <p id="guide-model-dates">
+                  <strong>When a model was published, when it retires, what it
+                  knows.</strong> Each model's panel on the <strong>Models</strong>
+                  page shows a <em>description</em>, a <em>knowledge cutoff</em>, a
+                  <em>published</em> day and a <em>retires</em> row, each badged
+                  with the source that said it, the provider's own model list first.
+                  Description and cutoff: the provider's list, then OpenRouter's
+                  live list, then models.dev &mdash; a value the panel already showed
+                  from OpenRouter stays, and where the provider's own words differ
+                  they are shown beside it. Published: the day the provider's list
+                  says it published the model (a list that stamps one value on every
+                  row says nothing, and OpenRouter's own <em>created</em> is its
+                  listing day, shown in its own row), else the vendor's release day
+                  from models.dev (where catalogues disagree evenly, the earliest).
+                  Retires: the vendor's own client catalogue, then the provider's
+                  list, then LiteLLM's map if <em>Use LiteLLM's price map too</em>
+                  is on, then models.dev's <em>deprecated</em> mark, which has no
+                  day. With that LiteLLM setting on, LiteLLM's map also fills the
+                  <em>endpoints</em> row where the provider names none, and is one
+                  more source for a model's kind &mdash; see below. All of it is
+                  shown only: nothing here changes a route, a list or a price.
+                </p>
                 <p>
                   <strong>Catalogues re-read themselves.</strong> Every usable
                   provider's model list is fetched again in the background once an hour,
@@ -3820,7 +3842,11 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   ahead of models.dev for a provider models.dev does not describe, and only
                   where models.dev is silent for one it does &mdash; then the provider's model
                   type or endpoint names, then the media rail you saved it on; never from its
-                  name. The <em>kind</em> row in a model's panel
+                  name. With <em>Use LiteLLM's price map too</em> on (Cost estimation),
+                  LiteLLM's map answers too: what it says a model accepts and produces,
+                  where nothing above the cross-provider vote did, and its mode and endpoint
+                  names after the provider's own &mdash; so turning LiteLLM on can state the
+                  kind of a model nobody had described. The <em>kind</em> row in a model's panel
                   on the <strong>Models</strong> page names the one that decided it. A model
                   whose kind is not chat is left out of
                   <code>/v1/models</code> and every coding agent's catalogue. A model nobody has

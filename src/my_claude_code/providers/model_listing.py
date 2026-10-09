@@ -3,6 +3,7 @@
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
@@ -62,11 +63,15 @@ def extract_openai_model_infos(
     """Extract routable IDs from an OpenAI-compatible model-list response."""
     model_infos: dict[str, _ProviderModelInfo] = {}
     item_location = collection_field or "root-array"
-    for item in model_list_items(
+    items = model_list_items(
         payload,
         provider_name=provider_name,
         collection_field=collection_field,
-    ):
+    )
+    # 7.85.0: whether this listing's own per-row date is a date at all, decided
+    # once over the whole list (a stamp repeats on every row).
+    date_field = listing_date_field(items)
+    for item in items:
         model_id = _field(item, id_field)
         if not isinstance(model_id, str) or not model_id.strip():
             raise _malformed(
@@ -153,7 +158,7 @@ def extract_openai_model_infos(
         if not included:
             continue
 
-        declared = declared_from_row(item)
+        declared = declared_from_row(item, listing_date=date_field)
         supported_parameters = published_parameters_from_row(item)
         model_infos.setdefault(
             model_id,
@@ -480,6 +485,9 @@ def _openrouter_dialect_model_info(
             supports_thinking="reasoning" in supported_parameter_names,
             supported_parameter_names=supported_parameter_names,
         ),
+        # No ``listing_date``: this dialect's ``created`` is the day OpenRouter
+        # listed the model -- Nous Portal and Kilo copy OpenRouter's value --
+        # never the day it was published (7.85.0).
         declared=declared_from_row(item),
     )
     return record_with_declared(record)
@@ -776,8 +784,112 @@ _REASONING_EFFORT_LIST_FIELDS: tuple[str, ...] = ("effort_levels", "supported_ef
 #: ``_reasoning_from_supported_parameters`` reads for the OpenRouter dialect.
 _REASONING_PARAMETERS = frozenset({"reasoning", "reasoning_effort"})
 
+# -- 7.85.0: what the row says beside its numbers, for the Models page only --
+#
+# Same reading rule as every table above: first path that states a usable
+# value wins; a value in a shape this cannot read states nothing.
 
-def declared_from_row(item: Any) -> ProviderModelDeclaration | None:
+#: The day the row says the model is retired from this list: the OpenRouter
+#: dialect's ``expiration_date`` (``"2026-10-09"``; OpenRouter, Nous Portal,
+#: Kilo) and Vercel's ``deprecated_at`` (an epoch in milliseconds).
+_RETIREMENT_PATHS: tuple[tuple[str, ...], ...] = (
+    ("expiration_date",),
+    ("deprecated_at",),
+)
+#: The row's own training-data cutoff: the OpenRouter dialect's
+#: ``knowledge_cutoff`` (``"2025-03-31"``), Vercel's ``knowledge`` (``"2025-04"``).
+_KNOWLEDGE_CUTOFF_PATHS: tuple[tuple[str, ...], ...] = (
+    ("knowledge_cutoff",),
+    ("knowledge",),
+)
+#: The row's own description (OpenRouter dialect, Novita, Vercel, Cline).
+_DESCRIPTION_PATHS: tuple[tuple[str, ...], ...] = (("description",),)
+#: A date the row states about the model itself, whatever the rest of the list
+#: says: Vercel's ``released`` (an epoch in seconds).
+_RELEASE_DATE_PATHS: tuple[tuple[str, ...], ...] = (("released",),)
+#: The list's own per-row date, read as the day the model was published only
+#: where the listing's values are real dates (:func:`listing_date_field`):
+#: ``created`` (OpenAI-shaped lists; an epoch in seconds) and ``created_at``
+#: (Anthropic's list; an RFC 3339 string).
+LISTING_DATE_FIELDS: tuple[str, ...] = ("created", "created_at")
+#: An epoch number at or above this is in milliseconds: as seconds it would be
+#: past the year 5000. Vercel writes ``deprecated_at`` in milliseconds and
+#: ``released`` in seconds, beside each other on the same row.
+_MILLISECOND_EPOCH_FLOOR = 100_000_000_000
+#: A date string at the epoch is the "unknown" placeholder Anthropic documents
+#: for ``created_at``, the string twin of a ``0``.
+_EPOCH_DAY = "1970-01-01"
+
+
+def listing_date_field(items: Iterable[Any]) -> str | None:
+    """Which per-row date field of a whole listing states real dates, if any (7.85.0).
+
+    A list whose every row carries the same ``created`` is stamping when it was
+    served -- NVIDIA NIM, OpenCode Zen and Go, Command Code and Vercel's AI
+    Gateway all do -- and ``0`` (HyperCharm, five Kilo routers) states nothing.
+    So the rule is data, decided over the listing rather than per provider:
+    the first of :data:`LISTING_DATE_FIELDS` whose stated values across the
+    rows are not one constant. ``None`` when none qualifies, including a list
+    of one row, where a constant and a date cannot be told apart. Never raises.
+    """
+
+    try:
+        rows = tuple(items)
+        for name in LISTING_DATE_FIELDS:
+            stated: set[str | int | float] = set()
+            for row in rows:
+                value = _field(row, name)
+                if _date_text(value) is not None:
+                    stated.add(value)
+            if len(stated) > 1:
+                return name
+    except Exception:
+        return None
+    return None
+
+
+def _date_text(value: Any) -> str | None:
+    """A published date as text: an epoch number as ``YYYY-MM-DD`` (UTC), a
+    string verbatim (trimmed). ``0``, a negative, an epoch-day placeholder or
+    anything else states nothing."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        if not math.isfinite(value) or value <= 0:
+            return None
+        seconds = value / 1000 if value >= _MILLISECOND_EPOCH_FLOOR else value
+        try:
+            return datetime.fromtimestamp(seconds, UTC).date().isoformat()
+        except OverflowError, OSError, ValueError:
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.startswith(_EPOCH_DAY):
+            return None
+        return text
+    return None
+
+
+def _text(value: Any) -> str | None:
+    """A published string, trimmed; empty or not a string states nothing."""
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _published_at(item: Any, listing_date: str | None) -> str | None:
+    released = _first_stated(item, _RELEASE_DATE_PATHS, _date_text)
+    if released is not None or listing_date is None:
+        return released
+    return _date_text(_field(item, listing_date))
+
+
+def declared_from_row(
+    item: Any, *, listing_date: str | None = None
+) -> ProviderModelDeclaration | None:
     """What one ``/models`` row says the model is, or ``None`` if it says nothing.
 
     Never raises. Every path here is optional -- no profile requires it and no
@@ -795,9 +907,20 @@ def declared_from_row(item: Any) -> ProviderModelDeclaration | None:
     USD per million), reasoning and tool-call support -- under the same
     never-raise rule. :func:`record_with_declared` is what puts them on the
     record at the provider rung.
+
+    Since 7.85.0 four display facts too: the day the model was published, the
+    day this list retires it, its knowledge cutoff and its description. They
+    fill no record field. ``listing_date`` names the listing's own per-row
+    date field when :func:`listing_date_field` found that the whole list
+    states real dates in it; ``None`` -- every OpenRouter-dialect list, whose
+    ``created`` is the day OpenRouter listed the model -- reads no such date.
     """
 
     try:
+        published_at = _published_at(item, listing_date)
+        retires_at = _first_stated(item, _RETIREMENT_PATHS, _date_text)
+        knowledge_cutoff = _first_stated(item, _KNOWLEDGE_CUTOFF_PATHS, _text)
+        description = _first_stated(item, _DESCRIPTION_PATHS, _text)
         modalities = _declared_modalities(item)
         model_type = _first_stated(item, _MODEL_TYPE_PATHS, _word)
         endpoints = _first_stated(item, _ENDPOINT_PATHS, _words)
@@ -825,6 +948,10 @@ def declared_from_row(item: Any) -> ProviderModelDeclaration | None:
         output_price=output_price,
         reasoning=reasoning,
         tool_calls=tool_calls,
+        published_at=published_at,
+        retires_at=retires_at,
+        knowledge_cutoff=knowledge_cutoff,
+        description=description,
     )
     if declaration == _NOTHING_DECLARED:
         return None

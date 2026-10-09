@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
     ModelReasoningCapability,
@@ -111,6 +112,9 @@ class FakeRuntime(RequestRuntimePort):
         self,
     ) -> Callable[[str, str], tuple[tuple[str, ...] | None, ResolutionTier | None]]:
         return lambda _provider_id, _model_id: (None, None)
+
+    def litellm_model_catalogue(self) -> LiteLLMCatalogue | None:
+        return None
 
     def openrouter_live_catalogue(self) -> LiveCatalogue | None:
         return None

@@ -671,6 +671,24 @@ def _isolate_openrouter_live(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _reset_display_fact_memos():
+    """Forget 7.85.0's two process-wide memos between tests.
+
+    models.dev's display-fact answers and LiteLLM's parsed map are each keyed by
+    the file they came from (path and mtime, or mtime_ns and size); like the
+    models.dev payload above, they are dropped between tests rather than
+    trusted to notice two payloads written within one timestamp tick.
+    """
+    from my_claude_code.providers.runtime import litellm_prices, models_dev
+
+    models_dev.reset_display_fact_cache()
+    litellm_prices.reset_litellm_model_map_cache()
+    yield
+    models_dev.reset_display_fact_cache()
+    litellm_prices.reset_litellm_model_map_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_provider_registry(monkeypatch, tmp_path):
     """Keep custom provider registry state out of the real ~/.fcc directory."""
     from my_claude_code.config import provider_registry

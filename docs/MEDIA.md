@@ -64,11 +64,16 @@ the catalogues, each rung filling only what the one above left unsaid (7.80.0):
    here too, matched by name: for a provider models.dev has no bucket for it answers before
    models.dev's OpenRouter reference and the vote; for one it describes, only where the bucket
    is silent -- it never overrides a bucket, and the Models page shows both where they differ.
-   A pair with a word no kind rule reads (OpenRouter's `decisions`) states nothing;
+   A pair with a word no kind rule reads (OpenRouter's `decisions`) states nothing.
+   **LiteLLM's model map** (7.85.0) answers here too, only while LiteLLM pricing is on
+   (`COST_SOURCE_LITELLM_ENABLED`): its `supported_modalities` / `supported_output_modalities`
+   pair, where nothing above the cross-provider vote stated one, ahead of the vote -- the slot it
+   holds for prices. A pair with a word no rule reads (LiteLLM's `code`) states nothing;
 3. otherwise the **provider's model type or endpoint names** -- Novita's `model_type`, the
    endpoints Command Code or a new-api gateway says serve the model (`/chat/completions`,
    `/images/generations`, `openai-video`, ...). These are coarser than a modality list, so they
-   only fill a gap; a word MCC does not know (Anthropic's `model`) says nothing;
+   only fill a gap; a word MCC does not know (Anthropic's `model`) says nothing. With LiteLLM
+   pricing on, LiteLLM's `mode` and `supported_endpoints` follow the provider's own words;
 4. otherwise, the media rail you saved it on, when it is on no chat rail.
 
 A model whose kind is stated and is not chat is left out of `/v1/models`, `/v1beta/models`,

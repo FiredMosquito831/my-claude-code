@@ -26,6 +26,13 @@ from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import Any
 
+from my_claude_code.application.litellm_model_map import (
+    LITELLM_SOURCE,
+    LITELLM_SOURCE_LABEL,
+    LiteLLMCatalogue,
+    LiteLLMModel,
+    LiteLLMStatement,
+)
 from my_claude_code.application.model_kinds import (
     KIND_LABELS,
     KIND_SOURCE_LABELS,
@@ -98,10 +105,12 @@ from my_claude_code.providers.openai_chat import (
     learned_effort_values,
 )
 from my_claude_code.providers.runtime.models_dev import (
+    ModelDisplayFactsLookup,
     cross_provider_match,
     declared_modalities_lookup,
     declared_modalities_tiered,
     model_context_length_tiered,
+    model_display_facts_lookup,
     model_output_limit_tiered,
     model_output_modalities_tiered,
     model_prices_tiered,
@@ -657,6 +666,7 @@ def declared_model_kind(
     modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
     live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
 ) -> ModelKind:
     """One ref's stated kind, from the ladder the caller hands in.
 
@@ -668,7 +678,8 @@ def declared_model_kind(
     (7.80.0). A caller rendering many rows passes one pair for all of them.
     With no lookup this reads models.dev alone, which is all a caller holding
     no provider record can ask. ``live`` is OpenRouter's live list (7.84.0),
-    the same rung every list reads.
+    the same rung every list reads; ``litellm`` LiteLLM's map (7.85.0), bound
+    only while LiteLLM pricing is on.
     """
 
     return resolve_model_kind(
@@ -679,6 +690,7 @@ def declared_model_kind(
         placements=placements,
         kind_words=kind_words,
         live=live,
+        litellm=litellm,
     )
 
 
@@ -936,6 +948,8 @@ def capability_payload(
     dialect: ReasoningDialect | None = None,
     modalities_lookup: ModalitiesLookup | None = None,
     live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
+    display_facts: ModelDisplayFactsLookup | None = None,
 ) -> dict[str, Any]:
     """Read-only capability record for one model, tier-tagged per field.
 
@@ -950,14 +964,29 @@ def capability_payload(
 
     ``live`` is OpenRouter's live list (7.84.0), applied by
     :func:`with_openrouter_live`; ``None`` is the record before 7.84.0.
+
+    The display rows of 7.85.0 -- publication, retirement, knowledge cutoff,
+    description -- are placed last by :func:`with_display_facts`, below
+    whatever OpenRouter's live list already stated. ``litellm`` is LiteLLM's
+    map, bound only while LiteLLM pricing is on; ``display_facts`` is
+    models.dev's lookup for those rows, bound once by a caller rendering many
+    rows (``None`` binds one for this row alone).
     """
 
     payload = _capability_payload(
         provider_id, model_id, info, provider_tier, dialect, modalities_lookup
     )
-    if live is None:
-        return payload
-    return with_openrouter_live(payload, live(provider_id, model_id))
+    if live is not None:
+        payload = with_openrouter_live(payload, live(provider_id, model_id))
+    return with_display_facts(
+        payload,
+        provider_id,
+        model_id,
+        info,
+        provider_tier,
+        display_facts=display_facts,
+        litellm=None if litellm is None else litellm(provider_id, model_id),
+    )
 
 
 def _capability_payload(
@@ -1295,6 +1324,253 @@ def with_openrouter_live(
             ),
             "openrouter_ids": list(answer.slugs),
         }
+    return out
+
+
+# -- 7.85.0: publication, retirement, knowledge cutoff, description ----------
+#
+# Display only: the four rows below are drawn on the Models page and listed in
+# the catalogue provenance, and nothing routes, lists or prices on them. Each
+# walks its own ladder, provider official first (user decisions 2026-10-08
+# 20:57-21:00 and 21:00):
+#
+# - retirement: the vendor's own client catalogue -> the provider's list ->
+#   LiteLLM's map (only while LiteLLM pricing is on) -> models.dev's
+#   ``deprecated`` flag (a flag, never a day);
+# - publication: the provider's list (a day it publishes; the OpenRouter
+#   dialect's ``created`` is OpenRouter's listing day and is never read as one)
+#   -> models.dev's release date down its ladder, a split vote to the earliest;
+# - knowledge cutoff, description: the provider's list -> OpenRouter's live
+#   list (7.84.0's rows) -> models.dev. A value 7.84.0's row already shows is
+#   kept: where the provider's own list says the same, the badge becomes the
+#   provider's; where it says something else, its words are shown beside
+#   ("also stated") and the shown value does not move.
+
+#: The four rows, in the order they are added to the record.
+DISPLAY_FACT_FIELDS: tuple[str, ...] = (
+    "description",
+    "knowledge_cutoff",
+    "retires_at",
+    "published_at",
+)
+PUBLISHED_BY_PROVIDER_NOTE = (
+    "The day the provider's own model list says it published this model. "
+    "Shown only; nothing reads it."
+)
+RELEASED_PER_MODELS_DEV_NOTE = (
+    "The vendor's release day, as models.dev catalogues it. Shown only; "
+    "nothing reads it."
+)
+RETIRES_BY_PROVIDER_NOTE = (
+    "The day the provider's own model list says it stops serving this model. "
+    "Shown only: the model stays listed and routable."
+)
+RETIRES_BY_VENDOR_CLIENT_NOTE = (
+    "The vendor's own client catalogue publishes this retirement. Shown only: "
+    "the model stays listed and routable."
+)
+RETIRES_BY_LITELLM_NOTE = (
+    "LiteLLM's model map lists this deprecation day (read because LiteLLM "
+    "pricing is on). Shown only: the model stays listed and routable."
+)
+DEPRECATED_BY_MODELS_DEV = "deprecated (no date published)"
+DEPRECATED_BY_MODELS_DEV_NOTE = (
+    "models.dev marks this model deprecated and publishes no day. Shown only: "
+    "the model stays listed and routable."
+)
+DISPLAY_ONLY_NOTE = "Shown only; nothing reads it."
+LITELLM_ENDPOINTS_NOTE = (
+    "LiteLLM's model map lists these endpoints (read because LiteLLM pricing "
+    "is on); the provider's own list names none. Shown only."
+)
+
+
+#: models.dev's display-fact lookup, named here for callers outside this module
+#: (the import policy lets only this module read ``models_dev`` directly).
+type DisplayFactsLookup = ModelDisplayFactsLookup
+
+
+def bound_display_facts() -> DisplayFactsLookup:
+    """models.dev's display-fact lookup, bound once for a caller with many rows."""
+
+    return model_display_facts_lookup()
+
+
+def _litellm_field(
+    value: Any, statement: LiteLLMStatement[Any], note: str
+) -> dict[str, Any]:
+    return {
+        "value": value,
+        "source": LITELLM_SOURCE,
+        "source_label": LITELLM_SOURCE_LABEL,
+        "approximate": False,
+        "reference": False,
+        "tier": None,
+        "tier_label": statement.tier_label,
+        "note": note,
+    }
+
+
+def _models_dev_field(
+    value: Any, tier: ResolutionTier | None, note: str
+) -> dict[str, Any]:
+    source = (
+        SOURCE_APPROXIMATE
+        if tier is not None and tier.is_approximate
+        else SOURCE_MODELS_DEV
+    )
+    return _sourced(value, source, tier, note=note)
+
+
+def _display_text_row(
+    existing: Any,
+    provider_value: str | None,
+    provider_tier: ResolutionTier | None,
+    models_dev: tuple[str | None, ResolutionTier | None],
+) -> dict[str, Any]:
+    """Knowledge cutoff or description: provider -> OpenRouter live -> models.dev.
+
+    ``existing`` is the row 7.84.0's OpenRouter live rung built (absent while
+    that rung is off). A value it shows is never replaced: the provider's
+    own statement of the same value takes the badge, a different one is
+    shown beside it. Where it shows nothing, the provider's list answers,
+    then models.dev down its ladder.
+    """
+
+    provider = (
+        None
+        if provider_value is None
+        else _sourced(
+            provider_value, SOURCE_PROVIDER, provider_tier, note=DISPLAY_ONLY_NOTE
+        )
+    )
+    if isinstance(existing, Mapping) and existing.get("value") is not None:
+        if provider is None:
+            return dict(existing)
+        if provider_value == existing.get("value"):
+            return provider
+        beside = dict(existing)
+        beside["also_stated"] = _statement(provider)
+        return beside
+    if provider is not None:
+        return provider
+    value, tier = models_dev
+    if value is None:
+        return _sourced(None, SOURCE_UNKNOWN)
+    return _models_dev_field(value, tier, DISPLAY_ONLY_NOTE)
+
+
+def _retirement_row(
+    info: ProviderModelInfo | None,
+    provider_tier: ResolutionTier | None,
+    litellm: LiteLLMModel | None,
+    deprecated: tuple[bool | None, ResolutionTier | None],
+) -> dict[str, Any]:
+    """The vendor's client -> the provider's list -> LiteLLM -> models.dev's flag."""
+
+    listing = None if info is None else info.listing
+    if listing is not None and listing.retirement_at:
+        return _sourced(
+            listing.retirement_at,
+            SOURCE_PROVIDER,
+            None,
+            source_label=PROVENANCE_LABELS.get(listing.provenance, "vendor client"),
+            note=RETIRES_BY_VENDOR_CLIENT_NOTE,
+        )
+    declared = None if info is None else info.declared
+    if declared is not None and declared.retires_at is not None:
+        return _sourced(
+            declared.retires_at,
+            SOURCE_PROVIDER,
+            provider_tier,
+            note=RETIRES_BY_PROVIDER_NOTE,
+        )
+    if litellm is not None and litellm.deprecation_date is not None:
+        statement = litellm.deprecation_date
+        return _litellm_field(statement.value, statement, RETIRES_BY_LITELLM_NOTE)
+    flag, tier = deprecated
+    if flag is True:
+        return _models_dev_field(
+            DEPRECATED_BY_MODELS_DEV, tier, DEPRECATED_BY_MODELS_DEV_NOTE
+        )
+    return _sourced(None, SOURCE_UNKNOWN)
+
+
+def _publication_row(
+    declared: ProviderModelDeclaration | None,
+    provider_tier: ResolutionTier | None,
+    released: tuple[str | None, ResolutionTier | None],
+) -> dict[str, Any]:
+    """The provider's list -> models.dev's release date. Never a listing day.
+
+    OpenRouter's live list states no publication day -- its only date is the
+    day OpenRouter listed the model, shown in its own row and never here.
+    """
+
+    if declared is not None and declared.published_at is not None:
+        return _sourced(
+            declared.published_at,
+            SOURCE_PROVIDER,
+            provider_tier,
+            note=PUBLISHED_BY_PROVIDER_NOTE,
+        )
+    value, tier = released
+    if value is None:
+        return _sourced(None, SOURCE_UNKNOWN)
+    return _models_dev_field(value, tier, RELEASED_PER_MODELS_DEV_NOTE)
+
+
+def with_display_facts(
+    payload: Mapping[str, Any],
+    provider_id: str,
+    model_id: str,
+    info: ProviderModelInfo | None,
+    provider_tier: ResolutionTier | None = None,
+    *,
+    display_facts: ModelDisplayFactsLookup | None = None,
+    litellm: LiteLLMModel | None = None,
+) -> dict[str, Any]:
+    """A capability record with the four 7.85.0 display rows placed.
+
+    Applied last, after OpenRouter's live list: ``description`` and
+    ``knowledge_cutoff`` extend that rung's rows (or are new rows when it is
+    off), ``retires_at`` and ``published_at`` are new. ``litellm`` is what
+    LiteLLM's map states about this model while LiteLLM pricing is on --
+    a retirement day, and endpoints where the provider's list names none.
+    Every other key of ``payload`` is returned exactly as it was.
+    """
+
+    out = dict(payload)
+    declared = None if info is None else info.declared
+    if provider_tier is None and info is not None:
+        provider_tier = ResolutionTier.PROVIDER_EXACT
+    lookup = display_facts if display_facts is not None else bound_display_facts()
+    facts = lookup(provider_id, model_id)
+    out["description"] = _display_text_row(
+        out.get("description"),
+        None if declared is None else declared.description,
+        provider_tier,
+        facts.description,
+    )
+    out["knowledge_cutoff"] = _display_text_row(
+        out.get("knowledge_cutoff"),
+        None if declared is None else declared.knowledge_cutoff,
+        provider_tier,
+        facts.knowledge_cutoff,
+    )
+    out["retires_at"] = _retirement_row(info, provider_tier, litellm, facts.deprecated)
+    out["published_at"] = _publication_row(declared, provider_tier, facts.release_date)
+    endpoints = out.get("declared_endpoints")
+    if (
+        litellm is not None
+        and litellm.endpoints is not None
+        and isinstance(endpoints, Mapping)
+        and endpoints.get("value") is None
+    ):
+        statement = litellm.endpoints
+        out["declared_endpoints"] = _litellm_field(
+            list(statement.value), statement, LITELLM_ENDPOINTS_NOTE
+        )
     return out
 
 
@@ -2058,18 +2334,22 @@ def _model_entry(
     kind_words: KindWordsLookup | None = None,
     catalogue_modalities: ModalitiesLookup | None = None,
     live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
+    display_facts: ModelDisplayFactsLookup | None = None,
 ) -> dict[str, Any]:
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
     model_row = overrides.models.get(normalize_override_key(model_ref), {})
-    capabilities = capability_payload(
+    # The capability record before either catalogue rung is placed: exactly
+    # what ``capability_payload`` returns with no live list (the 7.85.0 display
+    # rows are placed last, below, after OpenRouter's live list).
+    capabilities = _capability_payload(
         provider_id,
         model_id,
         info,
-        dialect=(
-            None if dialect_lookup is None else dialect_lookup(provider_id, model_id)
-        ),
-        modalities_lookup=catalogue_modalities,
+        None,
+        None if dialect_lookup is None else dialect_lookup(provider_id, model_id),
+        catalogue_modalities,
     )
     learned_facts = attach_learned_facts(
         capabilities,
@@ -2083,8 +2363,20 @@ def _model_entry(
     if live is not None:
         answer = live(provider_id, model_id) if "/" in model_ref else None
         capabilities = with_openrouter_live(capabilities, answer)
+    capabilities = with_display_facts(
+        capabilities,
+        provider_id,
+        model_id,
+        info,
+        display_facts=display_facts,
+        litellm=(
+            None
+            if litellm is None or "/" not in model_ref
+            else litellm(provider_id, model_id)
+        ),
+    )
     kind = declared_model_kind(
-        model_ref, media_placements or {}, kind_modalities, kind_words, live
+        model_ref, media_placements or {}, kind_modalities, kind_words, live, litellm
     )
     return {
         "model_ref": model_ref,
@@ -2176,6 +2468,7 @@ def build_models_page_payload(
     kind_modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
     live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page renders, in one request.
 
@@ -2191,6 +2484,8 @@ def build_models_page_payload(
 
     ``live`` is OpenRouter's live list (7.84.0), bound once for every row;
     ``None`` -- the rung off, or nothing stored -- is the page before it.
+    ``litellm`` is LiteLLM's map (7.85.0), bound once and only while LiteLLM
+    pricing is on; ``None`` is the page without its rungs.
     """
 
     configured_list = tuple(configured)
@@ -2205,6 +2500,8 @@ def build_models_page_payload(
     # models.dev's pair, for the "accepts → produces" row (7.79.0), which
     # shows the row's own record first and walks models.dev only after it.
     catalogue_modalities = declared_modalities_lookup()
+    # models.dev's four display facts (7.85.0), bound once for every row.
+    display_facts = bound_display_facts()
     if kind_modalities is None or kind_words is None:
 
         def own_record(
@@ -2237,6 +2534,8 @@ def build_models_page_payload(
                 kind_words=kind_words,
                 catalogue_modalities=catalogue_modalities,
                 live=live,
+                litellm=litellm,
+                display_facts=display_facts,
             )
         )
 

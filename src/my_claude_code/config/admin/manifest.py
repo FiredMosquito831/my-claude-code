@@ -3514,7 +3514,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "models.dev: the widest published price table there is, and the "
             "only one that names a separate reasoning rate. Costs one cached "
             "2.3 MB file and one conditional fetch a day. Fetched live and "
-            "integrity-checked on every refresh, never shipped in the package."
+            "integrity-checked on every refresh, never shipped in the package. "
+            "While on, the map's own words are read too (7.85.0): a model's kind "
+            "where no source above the cross-provider vote stated one -- which "
+            "can take a model that is not chat out of the chat lists -- its "
+            "endpoints where the provider names none, and its deprecation day, "
+            "all shown on the Models page; routing never reads them."
         ),
     ),
     ConfigFieldSpec(

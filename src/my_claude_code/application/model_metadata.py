@@ -178,6 +178,11 @@ class ProviderModelDeclaration:
     as well because the record's own fields have models.dev merged into them
     by the discovery-time fill, which records no rung, and this is how the
     Models page can still say which of the two answered.
+
+    Since 7.85.0 it keeps four display facts too -- the row's publication and
+    retirement dates, its knowledge cutoff and its description -- which are the
+    provider rung of the Models page's rows of the same names and are read by
+    nothing else: no record field is filled from them.
     """
 
     #: Both halves from ONE row, or nothing: half a statement is not one, and
@@ -213,6 +218,26 @@ class ProviderModelDeclaration:
     reasoning: bool | None = None
     #: Whether the row states the model takes tool calls, under the same rule.
     tool_calls: bool | None = None
+    # -- 7.85.0: what the row says about the model beside its numbers, appended
+    # -- so nothing above moves. Shown on the Models page; nothing routes, lists
+    # -- or prices on any of them.
+    #: The day the row says the model was published: Vercel's ``released``, or
+    #: the list's ``created``/``created_at`` where that listing's values are
+    #: real dates -- one value repeated on every row is a stamp of when the
+    #: list was served, not a date about any model, and is never read. The
+    #: OpenRouter dialect's ``created`` is the day OpenRouter listed the model
+    #: and is never read as one either. ``YYYY-MM-DD`` for an epoch number;
+    #: a published string verbatim.
+    published_at: str | None = None
+    #: The day the row says the model is retired from this list: the OpenRouter
+    #: dialect's ``expiration_date``, Vercel's ``deprecated_at``. Verbatim, or
+    #: ``YYYY-MM-DD`` for an epoch number.
+    retires_at: str | None = None
+    #: The row's own training-data cutoff, verbatim: the OpenRouter dialect's
+    #: ``knowledge_cutoff``, Vercel's ``knowledge``.
+    knowledge_cutoff: str | None = None
+    #: The row's own one-paragraph description, verbatim (trimmed).
+    description: str | None = None
 
 
 type ModelDefaultParameterValue = str | int | float | bool
@@ -471,6 +496,10 @@ _DECLARATION_FIELDS: tuple[str, ...] = (
     "output_price",
     "reasoning",
     "tool_calls",
+    "published_at",
+    "retires_at",
+    "knowledge_cutoff",
+    "description",
 )
 _MODALITIES_FIELDS: tuple[str, ...] = (
     "inputs",
@@ -591,6 +620,12 @@ def _declaration_document(
         "output_price": declared.output_price,
         "reasoning": declared.reasoning,
         "tool_calls": declared.tool_calls,
+        # 7.85.0, appended: a 7.83-7.84 reader reads every key above by name
+        # and passes over these.
+        "published_at": declared.published_at,
+        "retires_at": declared.retires_at,
+        "knowledge_cutoff": declared.knowledge_cutoff,
+        "description": declared.description,
     }
 
 
@@ -677,7 +712,8 @@ def _declaration_from_document(value: object) -> ProviderModelDeclaration | None
     A document written before 7.79.0 has no ``declared`` key at all, and one
     damaged on disk may hold anything there: both read as "the row said
     nothing", which is what a fresh sweep would replace it with anyway. One
-    written by 7.79-7.82 has no number or flag keys, which read as unstated.
+    written by 7.79-7.82 has no number or flag keys, which read as unstated,
+    and one written before 7.85.0 has no date or text keys, which read the same.
     """
 
     if not isinstance(value, dict):
@@ -692,6 +728,10 @@ def _declaration_from_document(value: object) -> ProviderModelDeclaration | None
         output_price=_float_or_none(value.get("output_price")),
         reasoning=_bool_or_none(value.get("reasoning")),
         tool_calls=_bool_or_none(value.get("tool_calls")),
+        published_at=_str_or_none(value.get("published_at")),
+        retires_at=_str_or_none(value.get("retires_at")),
+        knowledge_cutoff=_str_or_none(value.get("knowledge_cutoff")),
+        description=_str_or_none(value.get("description")),
     )
 
 

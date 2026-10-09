@@ -75,6 +75,25 @@ own and a bucket's never; models.dev's OpenRouter copy and the vote only to
 the same value, a provenance change); the rest is new rows and second
 statements shown beside an answer.
 
+**7.85.0 (K3) adds four display rows to the capability panel, on purpose**
+(spec §4.7; user decisions 2026-10-08 20:57-21:00 and 21:00): ``published_at``
+and ``retires_at`` (new), and ``description`` and ``knowledge_cutoff`` (rows
+7.84.0 added while the live list is on, now also answered by the provider's own
+list and models.dev). All four are placed by one function,
+``model_admin.with_display_facts``, applied last. Every entry above is computed
+with that function neutralised and is byte-identical to its 7.84.0 answer --
+that is the proof everything outside the four rows is untouched (records and
+their canonical encodings lose only the new ``declared`` keys, which they
+already exclude). The committed rows gained the real date, cutoff and
+description fields their listings publish; 7.84.0 reads none of them (its own
+snapshot over the extended rows passed unchanged when the baseline was cut).
+What the four rows say is recorded under ``k3/<live mode>/`` -- generated on
+this branch with this same snapshot, and nothing else in the file moved.
+``test_7_85_0_adds_display_rows_and_moves_no_stated_value`` holds the rule: a
+value 7.84.0 showed never changes (the provider's statement of the same value
+may take the badge; a different one is shown beside it); the rest are new rows
+and gap fills. LiteLLM's rungs are off throughout, as they are by default.
+
 A diff in this file means the equality contract is broken and the PR must be
 re-cut. It is not a file to regenerate.
 """
@@ -88,7 +107,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from my_claude_code.api import admin_harness_routes
+from my_claude_code.api import admin_harness_routes, model_admin
 from my_claude_code.api.gemini_model_catalog import build_gemini_models_payload
 from my_claude_code.api.model_admin import (
     REASONING_MEASUREMENT_DAYS,
@@ -165,6 +184,13 @@ KOR_CATALOGUE_FIELDS = (
     "reasoning",
 )
 LIVE_SOURCE = "openrouter_live"
+
+#: 7.85.0 (K3): where the four display rows' answers are recorded, per live mode.
+K3_PREFIX = "k3/"
+#: The rows it adds, and the two 7.84.0 rows it extends.
+K3_NEW_ROWS = ("retires_at", "published_at")
+K3_EXTENDED_ROWS = ("description", "knowledge_cutoff")
+K3_ROWS = K3_EXTENDED_ROWS + K3_NEW_ROWS
 
 #: What 7.79.0 adds to the Models page capability panel, removed before compare.
 NEW_CAPABILITY_KEYS = ("declared_modalities", "declared_type", "declared_endpoints")
@@ -416,6 +442,48 @@ def _page_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     return diff
 
 
+def _neutral_display(payload: Any, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    """7.85.0's display rows switched off: the record exactly as 7.84.0 built it."""
+
+    return dict(payload)
+
+
+def _k3_rows(
+    legacy: dict[str, Any], full: dict[str, Any], where: str
+) -> dict[str, Any]:
+    """The four rows with and without 7.85.0; everything else must be equal."""
+
+    assert {k: v for k, v in full.items() if k not in K3_ROWS} == {
+        k: v for k, v in legacy.items() if k not in K3_ROWS
+    }, where
+    return {
+        "before": {name: legacy.get(name) for name in K3_EXTENDED_ROWS},
+        "after": {name: full.get(name) for name in K3_ROWS},
+    }
+
+
+def _provenance_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """The catalogue provenance route's entries 7.85.0 changes, per gateway id."""
+
+    old = {m["gateway_id"]: m for m in before["models"]}
+    new = {m["gateway_id"]: m for m in after["models"]}
+    assert list(old) == list(new)
+    diff: dict[str, Any] = {}
+    for gateway_id, model in old.items():
+        other = new[gateway_id]
+        assert {k: v for k, v in model.items() if k != "provenance"} == {
+            k: v for k, v in other.items() if k != "provenance"
+        }, gateway_id
+        names = set(model["provenance"]) | set(other["provenance"])
+        for name in sorted(names):
+            a = model["provenance"].get(name)
+            b = other["provenance"].get(name)
+            if a != b:
+                diff.setdefault(gateway_id, {})[name] = [a, b]
+    assert before["catalogues"] == after["catalogues"]
+    return diff
+
+
 def _put_back(model: CatalogueModel, base: CatalogueModel) -> CatalogueModel:
     return replace(
         model, **{name: getattr(base, name) for name in KOR_CATALOGUE_FIELDS}
@@ -465,14 +533,31 @@ def _record_catalogue_live(
 
 
 def snapshot(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, live_mode: str | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    live_mode: str | None = None,
+    k3_out: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Every output the ladder produced before 7.79.0, from the committed rows.
 
     ``live_mode`` (7.84.0): ``None`` stores no OpenRouter live list; ``"on"``
     stores the committed one with the rung on; ``"off"`` stores it with the
     rung switched off.
+
+    Every output is built with 7.85.0's display rows switched off
+    (``with_display_facts`` neutralised), which is the build before them.
+    ``k3_out``, when given, receives what those rows say with them on: per
+    capability record, the Models page and the catalogue provenance route.
     """
+
+    real_display = model_admin.with_display_facts
+    monkeypatch.setattr(model_admin, "with_display_facts", _neutral_display)
+    k3_mode = f"{K3_PREFIX}{live_mode or 'none'}/"
+
+    def with_display_rows(compute: Any) -> Any:
+        with monkeypatch.context() as real:
+            real.setattr(model_admin, "with_display_facts", real_display)
+            return compute()
 
     monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path))
     write_models_dev_cache(json.loads(MODELS_DEV_PATH.read_text(encoding="utf-8")))
@@ -506,9 +591,19 @@ def snapshot(
             info.model_id: _declared_k4(info) for info in enriched
         }
         for info in enriched:
+            legacy = capability_payload(provider_id, info.model_id, info, live=live)
             out[f"capabilities/{provider_id}/{info.model_id}"] = _without_new_rows(
-                capability_payload(provider_id, info.model_id, info, live=live)
+                legacy
             )
+            if k3_out is not None:
+                full = with_display_rows(
+                    lambda info=info, provider_id=provider_id: capability_payload(
+                        provider_id, info.model_id, info, live=live
+                    )
+                )
+                k3_out[f"{k3_mode}capabilities/{provider_id}/{info.model_id}"] = (
+                    _k3_rows(legacy, full, f"{provider_id}/{info.model_id}")
+                )
 
     first = next(iter(catalogues["open_router"]))
     settings = Settings.model_validate(
@@ -562,6 +657,13 @@ def snapshot(
         )
 
     page = page_payload(manager.openrouter_live_catalogue())
+    if k3_out is not None:
+        k3_out[f"{k3_mode}page-diff"] = _page_diff(
+            json.loads(json.dumps(page, default=str)),
+            with_display_rows(
+                lambda: page_payload(manager.openrouter_live_catalogue())
+            ),
+        )
     if live is not None:
         out[KOR_PAGE_DIFF] = _page_diff(page_payload(None), page)
     for ref, kind in _take_page_kinds(page).items():
@@ -576,8 +678,16 @@ def snapshot(
     out["v1beta/models"] = build_gemini_models_payload(settings, manager)
     out["k4-blanked/v1beta/models"] = _v1beta_without_limits(out["v1beta/models"])
     out["admin/catalogue-models"] = client.get("/admin/api/catalogue-models").json()
+    provenance_route = client.get("/admin/api/catalogue-models?provenance=1").json()
+    if k3_out is not None:
+        k3_out[f"{k3_mode}catalogue-provenance-diff"] = _provenance_diff(
+            provenance_route,
+            with_display_rows(
+                lambda: client.get("/admin/api/catalogue-models?provenance=1").json()
+            ),
+        )
     out["admin/catalogue-models?provenance=1"] = _catalogue_route_without_new_rows(
-        client.get("/admin/api/catalogue-models?provenance=1").json()
+        provenance_route
     )
     real_build = admin_harness_routes.build_catalogue_models
 
@@ -677,8 +787,16 @@ def _is_kor_key(key: str) -> bool:
     return key.startswith((KOR_PREFIX, KOR_SUBSTITUTED))
 
 
+def _is_k3_key(key: str) -> bool:
+    """What 7.85.0's display rows say, recorded beside the snapshot."""
+
+    return key.startswith(K3_PREFIX)
+
+
 def _assert_unchanged(current: dict[str, Any], baseline: dict[str, Any]) -> None:
-    assert set(current) == {key for key in baseline if not _is_kor_key(key)}
+    assert set(current) == {
+        key for key in baseline if not _is_kor_key(key) and not _is_k3_key(key)
+    }
     differing = [
         key
         for key in sorted(current)
@@ -709,7 +827,7 @@ def test_with_the_live_list_on_only_the_recorded_entries_move(
         for key in baseline
         if key.startswith(KOR_PREFIX) and key not in (KOR_PAGE_DIFF, KOR_CATALOGUE_DIFF)
     }
-    plain = {key for key in baseline if not _is_kor_key(key)}
+    plain = {key for key in baseline if not _is_kor_key(key) and not _is_k3_key(key)}
     assert moved <= plain
     assert set(current) == plain | {
         key
@@ -1011,3 +1129,96 @@ def test_the_rows_really_carry_the_numbers_7_83_0_reads() -> None:
                 if getattr(info.declared, name, None) is not None:
                     stated.add(name)
     assert stated == set(K4_DECLARED_FIELDS)
+
+
+@pytest.mark.parametrize("live_mode", [None, "on"])
+def test_7_85_0_display_rows_are_the_recorded_ones(
+    monkeypatch, tmp_path, live_mode
+) -> None:
+    """What the four rows say, with the live list absent and on, is pinned."""
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    rows: dict[str, Any] = {}
+    snapshot(monkeypatch, tmp_path, live_mode, k3_out=rows)
+    current = recorded(rows)
+    prefix = f"{K3_PREFIX}{live_mode or 'none'}/"
+    expected = {key: value for key, value in baseline.items() if key.startswith(prefix)}
+    assert set(current) == set(expected)
+    differing = [
+        key
+        for key in sorted(current)
+        if _encoded(current[key]) != _encoded(expected[key])
+    ]
+    assert not differing, differing
+
+
+def _k3_violation(before: Any, after: Any, where: str) -> str | None:
+    """How ``after`` breaks the rule against 7.84.0's ``before``, or ``None``.
+
+    Allowed: a row 7.84.0 did not have, or showed nothing in; the same value
+    with the provider's own list now taking the badge; the same field with a
+    second statement beside it.
+    """
+
+    if not isinstance(after, dict):
+        return f"{where}: not a field"
+    if before is None or before.get("value") is None:
+        return None
+    if after.get("value") != before.get("value"):
+        return f"{where}: {before.get('value')!r} -> {after.get('value')!r}"
+    if after == before or after.get("source") == "provider":
+        return None
+    if {k: v for k, v in after.items() if k != "also_stated"} == before:
+        return None
+    return f"{where}: field changed"
+
+
+def test_7_85_0_adds_display_rows_and_moves_no_stated_value() -> None:
+    """The user's rule for 7.85.0, over every recorded record and page row.
+
+    Provider official first, then gap filling down the ladder; a value already
+    shown never moves; the four rows are display only (nothing else in any
+    record, page row or catalogue changed -- held by the snapshot itself).
+    """
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    entries = {key: value for key, value in baseline.items() if _is_k3_key(key)}
+    assert entries, "the fixture would prove nothing without recorded rows"
+    violations: list[str] = []
+    sources: set[tuple[str, str]] = set()
+    for key, entry in entries.items():
+        if "/capabilities/" in key:
+            for name in K3_NEW_ROWS:
+                field = entry["after"][name]
+                assert isinstance(field, dict) and "value" in field, (key, name)
+                sources.add((name, str(field.get("source"))))
+            for name in K3_EXTENDED_ROWS:
+                found = _k3_violation(
+                    entry["before"][name], entry["after"][name], f"{key}.{name}"
+                )
+                if found:
+                    violations.append(found)
+                sources.add((name, str(entry["after"][name].get("source"))))
+        elif key.endswith("/page-diff"):
+            for ref, changes in entry.items():
+                for path, (before, after) in changes.items():
+                    name = path.removeprefix("capabilities.")
+                    assert name in K3_ROWS, (key, ref, path)
+                    if name in K3_EXTENDED_ROWS:
+                        found = _k3_violation(before, after, f"{ref}:{path}")
+                        if found:
+                            violations.append(found)
+        else:
+            assert key.endswith("/catalogue-provenance-diff"), key
+            for gateway_id, changes in entry.items():
+                assert set(changes) <= set(K3_ROWS), (gateway_id, changes)
+    assert not violations, violations
+    # The fixture states each rung somewhere, or it would prove nothing.
+    for expected in (
+        ("published_at", "provider"),
+        ("published_at", "models_dev"),
+        ("retires_at", "provider"),
+        ("description", "provider"),
+        ("knowledge_cutoff", "provider"),
+    ):
+        assert expected in sources, expected

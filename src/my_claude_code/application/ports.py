@@ -9,6 +9,7 @@ from my_claude_code.core.anthropic import MessagesRequest
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningDialect, ReasoningPolicy
 
+from .litellm_model_map import LiteLLMCatalogue
 from .model_metadata import (
     DeclaredModalities,
     ModelReasoningCapability,
@@ -164,6 +165,8 @@ class RequestRuntimePort(Protocol):
     ) -> Callable[[str, str], tuple[tuple[str, ...] | None, ResolutionTier | None]]: ...
 
     def openrouter_live_catalogue(self) -> LiveCatalogue | None: ...
+
+    def litellm_model_catalogue(self) -> LiteLLMCatalogue | None: ...
 
     def model_can_reason_tiered(
         self, provider_id: str, model_id: str

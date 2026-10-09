@@ -81,6 +81,10 @@ def _rich(model_id: str) -> ProviderModelInfo:
             output_price=0.5,
             reasoning=True,
             tool_calls=False,
+            published_at="2026-08-26",
+            retires_at="2026-10-09",
+            knowledge_cutoff="2025-03-31",
+            description="A model, described by its own list.",
         ),
     )
 
@@ -243,6 +247,56 @@ def test_damaged_new_declared_values_read_as_unstated() -> None:
         "output_price": [],
         "reasoning": "yes",
         "tool_calls": 1,
+    }
+    restored = model_info_from_document(document)
+    assert restored is not None
+    assert restored.declared == ProviderModelDeclaration()
+
+
+def test_a_7_84_declaration_loads_with_the_display_facts_unstated() -> None:
+    """What 7.83-7.84 wrote: nine keys, no dates and no text (7.85.0)."""
+    document = model_info_document(_rich("x/y"))
+    stored = document["declared"]
+    assert isinstance(stored, dict)
+    document["declared"] = {
+        str(key): value
+        for key, value in stored.items()
+        if key not in ("published_at", "retires_at", "knowledge_cutoff", "description")
+    }
+    restored = model_info_from_document(document)
+    assert restored is not None and restored.declared is not None
+    rich = _rich("x/y").declared
+    assert rich is not None
+    assert restored.declared == ProviderModelDeclaration(
+        **{
+            field.name: getattr(rich, field.name)
+            for field in fields(ProviderModelDeclaration)
+            if field.name
+            not in ("published_at", "retires_at", "knowledge_cutoff", "description")
+        }
+    )
+
+
+def test_the_display_fact_keys_come_after_the_nine_older_ones() -> None:
+    """A 7.83-7.84 reader reads the nine by name and passes over the four."""
+    declared = model_info_document(_rich("x/y"))["declared"]
+    assert isinstance(declared, dict)
+    assert list(declared)[-4:] == [
+        "published_at",
+        "retires_at",
+        "knowledge_cutoff",
+        "description",
+    ]
+    assert list(declared)[:-4] == list(model_metadata._DECLARATION_FIELDS[:-4])
+
+
+def test_damaged_display_fact_values_read_as_unstated() -> None:
+    document = model_info_document(_bare("x/y"))
+    document["declared"] = {
+        "published_at": 1787754787,
+        "retires_at": ["2026-10-09"],
+        "knowledge_cutoff": True,
+        "description": {"text": "x"},
     }
     restored = model_info_from_document(document)
     assert restored is not None

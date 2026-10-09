@@ -2002,6 +2002,92 @@ AUDIO_PRICE_FIELDS: tuple[_LadderField[float], ...] = tuple(
 )
 
 
+# -- 7.85.0: four display facts, for the Models page only ---------------------
+#
+# New fields on the same generic ladder, and nothing else: each walks exactly
+# the rungs :func:`_model_field_tiered` walks for a price (own bucket 3-4, the
+# OpenRouter copy 5-6 for a provider with no bucket, the quorum-guarded vote
+# 7-10), through the same memo. Nothing routes, lists or prices on any of
+# them; the Models page shows them below the provider's own row and
+# OpenRouter's live list.
+
+
+def _models_dev_text(key: str) -> _MetadataReader[str]:
+    """One published string, trimmed; empty or not a string states nothing."""
+
+    def read(metadata: Mapping[str, Any]) -> str | None:
+        value = metadata.get(key)
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None
+
+    return read
+
+
+def _models_dev_deprecated(metadata: Mapping[str, Any]) -> bool | None:
+    """Whether models.dev marks the model ``status: "deprecated"``.
+
+    Every row answers: a row with any other status (``beta``) or none at all
+    is a model this catalogue lists as current, which is an answer -- so a
+    bucket that lists the model as current stops the walk there, and a vote
+    counts current rows as well as deprecated ones. It is a flag, not a date:
+    models.dev publishes no retirement day.
+    """
+
+    return metadata.get("status") == "deprecated"
+
+
+def _earliest_first(value: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """The key under which ``max`` -- the vote's tie-break -- picks the EARLIEST date.
+
+    ``YYYY-MM-DD`` and ``YYYY-MM`` compare as dates (a month alone as its first
+    day); the negated characters break any remaining tie deterministically.
+    """
+
+    parts: list[int] = []
+    for piece in value[:10].split("-"):
+        if not piece.isdigit():
+            break
+        parts.append(int(piece))
+    parts.extend([0] * (3 - len(parts)))
+    return tuple(-part for part in parts[:3]), tuple(-ord(char) for char in value)
+
+
+#: models.dev's ``release_date``: the vendor's release day. A split vote goes to
+#: the earliest of the equally attested days.
+RELEASE_DATE_FIELD: _LadderField[str] = _LadderField(
+    name="release_date",
+    reader=_models_dev_text("release_date"),
+    tie_break=_earliest_first,
+    minimum=MIN_APPROXIMATE_NUMERIC_REPORTERS,
+)
+#: models.dev's ``knowledge``: the training-data cutoff, as published
+#: (``2024-07`` or ``2024-07-31``). A split vote goes to the earliest: a
+#: later cutoff would claim knowledge the evidence does not agree on.
+KNOWLEDGE_CUTOFF_FIELD: _LadderField[str] = _LadderField(
+    name="knowledge",
+    reader=_models_dev_text("knowledge"),
+    tie_break=_earliest_first,
+    minimum=MIN_APPROXIMATE_NUMERIC_REPORTERS,
+)
+#: models.dev's ``description``. A split vote goes to the longer text.
+DESCRIPTION_FIELD: _LadderField[str] = _LadderField(
+    name="description",
+    reader=_models_dev_text("description"),
+    tie_break=lambda value: (len(value), value),
+    minimum=MIN_APPROXIMATE_NUMERIC_REPORTERS,
+)
+#: models.dev's ``status == "deprecated"``. A split vote says "not deprecated":
+#: MCC must not be the source that retires a model on half the evidence.
+DEPRECATED_FIELD: _LadderField[bool] = _LadderField(
+    name="deprecated",
+    reader=_models_dev_deprecated,
+    tie_break=lambda value: not value,
+    minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+)
+
+
 def _build_field_index[T](
     index: Mapping[str, Any], reader: _MetadataReader[T]
 ) -> dict[str, dict[str, T]]:
@@ -2411,6 +2497,100 @@ def model_audio_prices_tiered(
         field.name: _model_field_tiered(field, provider_id, model_id, path)
         for field in AUDIO_PRICE_FIELDS
     }
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDisplayFacts:
+    """models.dev's four display facts for one model, each with its rung (7.85.0).
+
+    ``(None, None)`` for a fact no rung states. ``deprecated`` is ``False``
+    where models.dev lists the model as current, which is not a retirement.
+    """
+
+    release_date: tuple[str | None, ResolutionTier | None]
+    knowledge_cutoff: tuple[str | None, ResolutionTier | None]
+    description: tuple[str | None, ResolutionTier | None]
+    deprecated: tuple[bool | None, ResolutionTier | None]
+
+
+type ModelDisplayFactsLookup = Callable[[str, str], ModelDisplayFacts]
+
+
+#: The four display facts' own memo (7.85.0), keyed exactly as
+#: :data:`_field_answer_cache` is but held apart from it: the Models page asks
+#: four more questions per model, and sharing the 20,000-entry memo would make
+#: a large catalogue clear it on every page build -- evicting the answers the
+#: request path reads -- for facts nothing but that page shows.
+_DISPLAY_FACT_LOCK = threading.Lock()
+_display_fact_cache: dict[
+    tuple[Path, float, str, str, str], tuple[Any, ResolutionTier | None]
+] = {}
+#: Four facts for up to 12,500 models; cleared wholesale, like the field memo.
+_DISPLAY_FACT_CACHE_MAX = 50000
+
+
+def reset_display_fact_cache() -> None:
+    """Forget every memoized display fact. Tests only."""
+
+    with _DISPLAY_FACT_LOCK:
+        _display_fact_cache.clear()
+
+
+def _display_fact_at[T: Hashable](
+    field: _LadderField[T],
+    provider_id: str,
+    model_id: str,
+    cache_path: Path,
+    mtime: float | None,
+) -> tuple[T | None, ResolutionTier | None]:
+    """One display fact down :func:`_resolve_model_field_tiered`, memoized apart."""
+
+    key = (
+        (cache_path, mtime, field.name, provider_id, model_id)
+        if mtime is not None
+        else None
+    )
+    if key is not None:
+        with _DISPLAY_FACT_LOCK:
+            memo = _display_fact_cache.get(key)
+        if memo is not None:
+            return memo
+    # The resolved path, never ``None``: the same index caches and the same
+    # ladder, without locating the file again on every question.
+    answer = _resolve_model_field_tiered(field, provider_id, model_id, cache_path)
+    if key is not None:
+        with _DISPLAY_FACT_LOCK:
+            if len(_display_fact_cache) >= _DISPLAY_FACT_CACHE_MAX:
+                _display_fact_cache.clear()
+            _display_fact_cache[key] = answer
+    return answer
+
+
+def model_display_facts_lookup(path: Path | None = None) -> ModelDisplayFactsLookup:
+    """models.dev's display facts, bound to the file as it is now (7.85.0).
+
+    For a caller about to ask about every model of a page, like
+    :func:`declared_modalities_lookup`: the file is located and stat'ed once,
+    and every question is a memo hit or one walk of the generic field ladder.
+    """
+
+    cache_path = path if path is not None else models_dev_cache_path()
+    mtime = _cache_mtime(cache_path)
+
+    def lookup(provider_id: str, model_id: str) -> ModelDisplayFacts:
+        def at[T: Hashable](
+            field: _LadderField[T],
+        ) -> tuple[T | None, ResolutionTier | None]:
+            return _display_fact_at(field, provider_id, model_id, cache_path, mtime)
+
+        return ModelDisplayFacts(
+            release_date=at(RELEASE_DATE_FIELD),
+            knowledge_cutoff=at(KNOWLEDGE_CUTOFF_FIELD),
+            description=at(DESCRIPTION_FIELD),
+            deprecated=at(DEPRECATED_FIELD),
+        )
+
+    return lookup
 
 
 def merge_reasoning_capabilities(

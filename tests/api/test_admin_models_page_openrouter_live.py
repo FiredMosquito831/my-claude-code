@@ -105,8 +105,12 @@ def _catalogue(answer: LiveModel | None) -> LiveCatalogue:
 def test_without_the_rung_the_page_is_unchanged() -> None:
     before = capability_payload("novita", "acme/bucketed", None)
     assert capability_payload("novita", "acme/bucketed", None, live=None) == before
-    for key in ("description", "knowledge_cutoff", "listed_on_openrouter"):
-        assert key not in before
+    assert "listed_on_openrouter" not in before
+    # 7.85.0: description and knowledge cutoff are rows of their own, from the
+    # provider's list and models.dev, whether or not the live list is on.
+    for key in ("description", "knowledge_cutoff"):
+        assert key in before
+        assert before[key]["source"] != "openrouter_live"
 
 
 def test_numbers_fill_only_gaps() -> None:
@@ -232,9 +236,16 @@ def test_openrouter_s_own_models_get_only_the_display_rows() -> None:
     after = capability_payload(
         "open_router", "acme/model", None, live=_catalogue(answer)
     )
-    added = {"description", "knowledge_cutoff", "listed_on_openrouter"}
-    assert set(after) - set(before) == added
-    assert {k: v for k, v in after.items() if k not in added} == before
+    # 7.85.0: description and knowledge cutoff exist without the live list too
+    # (provider, then models.dev); the live list adds its listing day and
+    # answers those two rows where nothing above it did.
+    assert set(after) - set(before) == {"listed_on_openrouter"}
+    display = {"description", "knowledge_cutoff", "listed_on_openrouter"}
+    assert {k: v for k, v in after.items() if k not in display} == {
+        k: v for k, v in before.items() if k not in display
+    }
+    assert after["description"]["value"] == "A model."
+    assert after["knowledge_cutoff"]["value"] == "2025-03-31"
 
 
 def test_the_accepts_produces_row_keeps_its_words() -> None:

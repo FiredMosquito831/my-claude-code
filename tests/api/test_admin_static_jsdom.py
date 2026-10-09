@@ -2280,7 +2280,8 @@ def test_the_models_page_draws_what_the_provider_list_says(rendered) -> None:
     assert "provider /models" in modalities[1]
     assert "tier 1 of 11" in modalities[1]
     assert rows["model type (provider's word)"][0] == "chat"
-    endpoints = rows["endpoints (provider's words)"]
+    # 7.85.0: the row is "endpoints"; its badge names whose words they are.
+    endpoints = rows["endpoints"]
     assert endpoints[0] == "not reported"
     assert endpoints[1] == "unknown"
 
@@ -2328,7 +2329,8 @@ def test_the_models_page_draws_openrouter_live_and_both_statements(
     assert "OpenRouter live" in cache["cells"][2]
     assert "models-source-openrouter_live" in cache["badge"]
 
-    assert rows["description (OpenRouter)"]["cells"][1] == "A model."
+    # 7.85.0: "description" -- the provider's list, OpenRouter or models.dev.
+    assert rows["description"]["cells"][1] == "A model."
     assert rows["knowledge cutoff"]["cells"][1] == "not reported"
     listed = rows["listed on OpenRouter"]
     assert listed["cells"][1] == "2026-02-11"
@@ -2337,6 +2339,41 @@ def test_the_models_page_draws_openrouter_live_and_both_statements(
     kind = rows["kind"]
     assert kind["cells"][1] == "Chat + Transcription"
     assert "also stated: Chat (OpenRouter live, exact id)" in kind["cells"][2]
+
+
+def test_the_models_page_draws_dates_cutoff_retirement_and_litellm(rendered) -> None:
+    """7.85.0: four display rows badged by their rung, LiteLLM's badge and kind."""
+
+    rows = {row["cells"][0]: row for row in rendered["models"]["datesRows"]}
+
+    published = rows["published"]
+    assert published["cells"][1] == "2026-08-26"
+    assert "provider /models" in published["cells"][2]
+    assert "models-source-provider" in published["badge"]
+
+    retires = rows["retires"]
+    assert retires["cells"][1] == "2026-06-17"
+    assert "LiteLLM model map" in retires["cells"][2]
+    assert "models-source-litellm" in retires["badge"]
+
+    cutoff = rows["knowledge cutoff"]
+    assert cutoff["cells"][1] == "2025-06"
+    assert "models-source-models_dev" in cutoff["badge"]
+
+    description = rows["description"]
+    assert description["cells"][1] == "OpenRouter's words."
+    assert "also stated: The provider's own words." in description["cells"][2]
+
+    endpoints = rows["endpoints"]
+    assert "/v1/chat/completions" in endpoints["cells"][1]
+    assert "models-source-litellm" in endpoints["badge"]
+
+    kind = rows["kind"]
+    assert kind["cells"][1] == "Chat + Transcription"
+    assert "LiteLLM's model map" in kind["cells"][2]
+    assert "models-source-litellm" in kind["badge"]
+    # No listing day was given, so that row is not drawn at all.
+    assert "listed on OpenRouter" not in rows
 
 
 def test_a_single_surface_model_is_offered_no_choice_at_all(rendered) -> None:

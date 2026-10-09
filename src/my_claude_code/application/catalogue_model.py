@@ -204,6 +204,9 @@ def build_catalogue_models(
         harness_tiers,
         kind_words=runtime.model_kind_words_lookup(),
         live=live,
+        # LiteLLM's map (7.85.0): two kind rungs, only while LiteLLM pricing is
+        # on; ``None`` otherwise, the predicate before 7.85.0 exactly.
+        litellm=runtime.litellm_model_catalogue(),
     )
     primary_ref = settings.model.strip()
     infos_by_ref: dict[str, ProviderModelInfo] = {}

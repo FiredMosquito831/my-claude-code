@@ -7410,6 +7410,79 @@ if (modelsLink) {
     badge: (row.querySelector(".models-source") || { className: "" }).className,
   }));
 
+  /* --- publication, retirement, cutoff and description (7.85.0), each
+     badged with its rung, and LiteLLM's map as a kind and endpoints source. */
+  const datesPanel = window.eval("buildCapabilityPanel")(
+    {
+      declared_endpoints: {
+        value: ["/v1/chat/completions"],
+        source: "litellm",
+        source_label: "LiteLLM model map",
+        approximate: false,
+        tier: null,
+        tier_label: "LiteLLM, prefixed key (novita/acme/model)",
+        note: "LiteLLM's model map lists these endpoints.",
+      },
+      description: {
+        value: "OpenRouter's words.",
+        source: "openrouter_live",
+        source_label: "OpenRouter live",
+        approximate: false,
+        tier: null,
+        tier_label: "OpenRouter live, exact id",
+        also_stated: {
+          value: "The provider's own words.",
+          source: "provider",
+          source_label: "provider /models",
+          tier: 1,
+          tier_label: "provider /models, exact id",
+        },
+      },
+      knowledge_cutoff: {
+        value: "2025-06",
+        source: "models_dev",
+        source_label: "models.dev",
+        approximate: false,
+        tier: 3,
+        tier_label: "models.dev bucket, exact id",
+      },
+      published_at: {
+        value: "2026-08-26",
+        source: "provider",
+        source_label: "provider /models",
+        approximate: false,
+        tier: 1,
+        tier_label: "provider /models, exact id",
+        note: "The day the provider's own model list says it published this model.",
+      },
+      retires_at: {
+        value: "2026-06-17",
+        source: "litellm",
+        source_label: "LiteLLM model map",
+        approximate: false,
+        tier: null,
+        tier_label: "LiteLLM, prefixed key (novita/acme/model)",
+        note: "LiteLLM's model map lists this deprecation day.",
+      },
+    },
+    MODEL_ADMIN_PAGE.source_labels || {},
+    {
+      ...alpha.models[0],
+      kind: {
+        kinds: ["chat", "asr"],
+        labels: ["Chat", "Transcription"],
+        source: "litellm",
+        source_label: "LiteLLM's model map",
+        tier: "LiteLLM, prefixed key (novita/acme/model)",
+        approximate: false,
+      },
+    },
+  );
+  models.datesRows = Array.from(datesPanel.querySelectorAll("tr")).map((row) => ({
+    cells: Array.from(row.children).map(flat),
+    badge: (row.querySelector(".models-source") || { className: "" }).className,
+  }));
+
   models.preferences = {};
   [0, 1, 2, 3, 4, 5, 6].forEach((index) => {
     const model = alpha.models[index];

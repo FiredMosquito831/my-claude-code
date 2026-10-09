@@ -140,7 +140,15 @@ def test_the_three_rows_are_appended_and_change_no_other_row(monkeypatch) -> Non
     before = capability_payload("open_router", "m", bare)
     after = capability_payload("open_router", "m", with_words)
 
-    assert list(after)[-3:] == list(DECLARED_KEYS)
+    # The three rows close the 7.79.0 panel; only 7.85.0's four display rows
+    # (description, knowledge cutoff, retirement, publication) follow them.
+    assert list(after)[-7:-4] == list(DECLARED_KEYS)
+    assert list(after)[-4:] == [
+        "description",
+        "knowledge_cutoff",
+        "retires_at",
+        "published_at",
+    ]
     for key in DECLARED_KEYS:
         before.pop(key)
         after.pop(key)

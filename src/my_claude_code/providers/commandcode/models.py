@@ -7,6 +7,7 @@ from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.providers.model_listing import (
     ModelListResponseError,
     declared_from_row,
+    listing_date_field,
     published_parameters_from_row,
     record_with_declared,
 )
@@ -28,6 +29,9 @@ def extract_commandcode_model_infos(
         raise _malformed(provider_name, "expected top-level data array")
 
     model_infos: set[ProviderModelInfo] = set()
+    # 7.85.0: Command Code's ``created`` is one stamp on every row today, so
+    # this finds no date; the rule is the listing's, never the provider's.
+    date_field = listing_date_field(data)
     for item in data:
         model_id = _field(item, "id")
         if not isinstance(model_id, str) or not model_id.strip():
@@ -54,7 +58,7 @@ def extract_commandcode_model_infos(
                     # ``supported_endpoints`` -- which of the three doors serve
                     # this model, in Command Code's own words. Recorded, never
                     # routed on: ``is_anthropic_messages_model`` still decides.
-                    declared=declared_from_row(item),
+                    declared=declared_from_row(item, listing_date=date_field),
                 )
             )
         )
