@@ -47,6 +47,7 @@ from my_claude_code.api.dependencies import get_services
 from my_claude_code.api.model_admin import capability_payload
 from my_claude_code.api.ports import ApiServices
 from my_claude_code.application.catalogue_model import (
+    CapabilityProvenanceLookup,
     CatalogueFieldProvenance,
     CatalogueModel,
     build_catalogue_models,
@@ -57,6 +58,7 @@ from my_claude_code.application.catalogues import (
     serialise_sidecar,
 )
 from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.tier_chains import (
     global_tier_chain,
     resolve_tier_chain,
@@ -478,10 +480,17 @@ def _catalogue_models_payload(
     runtime = services.requests
     settings = runtime.current_settings()
     harness_tiers = current_harness_tiers()
+    # The provenance names OpenRouter's live list wherever the record took a
+    # value from it (7.84.0), from the same stored list the records read.
+    provenance = (
+        _provenance_with(runtime.openrouter_live_catalogue())
+        if with_provenance
+        else None
+    )
     models = build_catalogue_models(
         settings,
         runtime,
-        provenance=capability_provenance if with_provenance else None,
+        provenance=provenance,
         harness_tiers=harness_tiers,
     )
     catalogues: dict[str, Any] = {}
@@ -499,7 +508,7 @@ def _catalogue_models_payload(
             build_catalogue_models(
                 settings,
                 runtime,
-                provenance=capability_provenance if with_provenance else None,
+                provenance=provenance,
                 harness_id=spec.id,
                 harness_tiers=harness_tiers,
             )
@@ -529,17 +538,36 @@ def _catalogue_models_payload(
     }
 
 
+def _provenance_with(
+    live: LiveCatalogue | None,
+) -> CapabilityProvenanceLookup:
+    """:func:`capability_provenance` bound to one read of OpenRouter's live list."""
+
+    def lookup(
+        provider_id: str, model_id: str, info: ProviderModelInfo | None
+    ) -> Mapping[str, CatalogueFieldProvenance]:
+        return capability_provenance(provider_id, model_id, info, live=live)
+
+    return lookup
+
+
 def capability_provenance(
-    provider_id: str, model_id: str, info: ProviderModelInfo | None
+    provider_id: str,
+    model_id: str,
+    info: ProviderModelInfo | None,
+    *,
+    live: LiveCatalogue | None = None,
 ) -> Mapping[str, CatalogueFieldProvenance]:
     """Return the per-field ladder provenance the Models page already computes.
 
     Reusing the admin capability inspector rather than re-deriving the tiers is
     the point: a number in a generated catalogue and the same number on the
     Models page must never be able to disagree about where it came from.
+    ``live`` is OpenRouter's live list (7.84.0), placed exactly as the page
+    places it.
     """
 
-    payload = capability_payload(provider_id, model_id, info)
+    payload = capability_payload(provider_id, model_id, info, live=live)
     provenance: dict[str, CatalogueFieldProvenance] = {}
     for name, value in payload.items():
         if name == "reasoning" and isinstance(value, Mapping):

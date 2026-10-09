@@ -1664,10 +1664,18 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     visibility = settings_model_visibility(settings)
     overrides = current_model_overrides()
     placements = media_rail_placements(settings)
+    # OpenRouter's live list (7.84.0), bound once: its file mark is part of
+    # the key, so a new list or the rung switched off is a new computation.
+    live = services.requests.openrouter_live_catalogue()
     payload = cached_payload(
         MODELS_PAGE_ENTRY,
         key=capability_half_key(
-            model_infos, configured, visibility, overrides, placements
+            model_infos,
+            configured,
+            visibility,
+            overrides,
+            placements,
+            live_mark=None if live is None else live.mark,
         ),
         compute=lambda: build_capability_half(
             model_infos,
@@ -1681,6 +1689,7 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
             # `/v1/models`, the catalogues and the pickers act on (7.80.0).
             kind_modalities=services.requests.model_modalities_lookup(),
             kind_words=services.requests.model_kind_words_lookup(),
+            live=live,
         ),
         # 5.5 MB of JSON: indented it would be 11 MB, and half the read would
         # be whitespace.
@@ -2673,10 +2682,16 @@ def _model_options(
     placements = media_rail_placements(settings)
     modalities = services.requests.model_modalities_lookup()
     kind_words = services.requests.model_kind_words_lookup()
+    # OpenRouter's live list, the same rung every other kind consumer reads.
+    live = services.requests.openrouter_live_catalogue()
     kinds: dict[str, list[str]] = {}
     for ref in sorted(configured | discovered | set(placements), key=str.casefold):
         kind = resolve_model_kind(
-            ref, modalities=modalities, placements=placements, kind_words=kind_words
+            ref,
+            modalities=modalities,
+            placements=placements,
+            kind_words=kind_words,
+            live=live,
         )
         if kind.kinds is not None:
             kinds[ref] = [name for name in MODEL_KINDS if name in kind.kinds]

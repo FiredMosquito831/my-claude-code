@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Protocol
 
 from loguru import logger
@@ -20,6 +21,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
     ProviderModelRefreshResult,
 )
+from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.provider_catalog import configured_credential_values
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -42,9 +44,16 @@ from my_claude_code.providers.runtime.models_dev import (
     model_context_length_tiered,
     model_output_limit_tiered,
     model_prices_tiered,
+    model_reasoning_capability_tiered,
     model_tool_call_tiered,
     model_vision_tiered,
     resolve_model_reasoning_capability,
+)
+from my_claude_code.providers.runtime.openrouter_catalogue import (
+    openrouter_live_cache_path,
+    openrouter_live_catalogue,
+    openrouter_live_is_due,
+    refresh_openrouter_live,
 )
 from my_claude_code.providers.runtime.validation import ConfiguredModelValidator
 from my_claude_code.runtime.catalogue_store import (
@@ -144,6 +153,10 @@ class ProviderRuntimeManager:
             model_cache_provider_ids_for_settings(settings, connected_provider_ids())
         )
         self._refresh_task: asyncio.Task[None] | None = None
+        # OpenRouter's live model list, fetched in the background after a
+        # sweep when it is due (7.84.0). Held so a second sweep never starts a
+        # second download and a close can cancel it.
+        self._openrouter_live_task: asyncio.Task[None] | None = None
         # When the last sweep finished, for the dashboard's "last refreshed"
         # readout. None until one has completed in this process.
         self._last_refresh_at: float | None = None
@@ -432,6 +445,82 @@ class ProviderRuntimeManager:
         reads them as the coarse kind rung, after both modality rungs.
         """
         return provider_kind_words(self._declaration_at)
+
+    def openrouter_live_catalogue(self) -> LiveCatalogue | None:
+        """OpenRouter's live model list as a rung for every provider (7.84.0).
+
+        Bound to the stored file as it is now, under the current generation's
+        settings: ``None`` when ``MODEL_METADATA_OPENROUTER_LIVE`` is off or no
+        list has been fetched yet, which every consumer reads as "no such
+        rung". Read by the Models page, the kind lists and the agent
+        catalogues at their own seams; never by routing -- no method above
+        that a request is built from consults it (user decision Q5).
+        """
+        return openrouter_live_catalogue(self._current.settings)
+
+    def model_can_reason_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        """Whether the model reasons, and the rung that said so (7.84.0).
+
+        The ``can_reason`` half of :meth:`model_reasoning_capability`, with its
+        rung: the provider's own record (tier 1-2, the same fold the cache
+        applies), else models.dev's answer at the tier it came from. The
+        catalogues need the rung to place OpenRouter's live answer, which
+        goes above models.dev's tiers 5-10 and never above a provider or a
+        bucket. Display and catalogues only.
+        """
+        found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
+        provider = self._model_cache.cached_model_reasoning_capability(
+            provider_id, model_id
+        )
+        if (
+            found is not None
+            and provider is not None
+            and provider.can_reason is not None
+        ):
+            return provider.can_reason, found[1]
+        capability, tiers = model_reasoning_capability_tiered(provider_id, model_id)
+        if capability is None or capability.can_reason is None:
+            return None, None
+        return capability.can_reason, tiers.get("can_reason")
+
+    def schedule_openrouter_live_refresh(
+        self, settings: Settings | None = None
+    ) -> None:
+        """Fetch OpenRouter's live list in the background if it is due (7.84.0).
+
+        Due = the rung is on and the stored list is absent or older than the
+        models.dev catalogue's own freshness. One download at a time; the path
+        is bound here, on the caller's thread, never inside the task. Never on
+        a request path: the sweep calls this after it has published.
+        """
+        if self._closing or self._closed:
+            return
+        task = self._openrouter_live_task
+        if task is not None and not task.done():
+            return
+        current = settings if settings is not None else self._current.settings
+        path = openrouter_live_cache_path()
+        if not openrouter_live_is_due(current, path):
+            return
+        self._openrouter_live_task = asyncio.create_task(
+            self._refresh_openrouter_live(current, path)
+        )
+
+    async def _refresh_openrouter_live(self, settings: Settings, path: Path) -> None:
+        try:
+            outcome = await refresh_openrouter_live(settings, path)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug(
+                "OpenRouter live list refresh failed: exc_type={}", type(exc).__name__
+            )
+            return
+        if outcome.status == "fetched":
+            # The agent catalogues read the rung; republish them on the new list.
+            self._publish_model_catalog()
 
     def _declaration_at(
         self, provider_id: str, model_id: str
@@ -831,6 +920,7 @@ class ProviderRuntimeManager:
             async with self._replace_lock:
                 self._closing = True
                 await self._cancel_refresh()
+                await self._cancel_openrouter_live()
                 current = self._current
                 if not current.retired:
                     current.retired = True
@@ -923,6 +1013,9 @@ class ProviderRuntimeManager:
             # is a stall on every configured provider's behalf, and nothing
             # waits for this.
             await asyncio.to_thread(self._store_catalogue, self._last_refresh_at)
+            # OpenRouter's live list rides on the sweep's cadence (7.84.0):
+            # fetched in the background when due, never awaited here.
+            self.schedule_openrouter_live_refresh(generation.settings)
             return result
         finally:
             await self._release(generation)
@@ -946,6 +1039,14 @@ class ProviderRuntimeManager:
     async def _cancel_refresh(self) -> None:
         task = self._refresh_task
         self._refresh_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _cancel_openrouter_live(self) -> None:
+        task = self._openrouter_live_task
+        self._openrouter_live_task = None
         if task is None or task.done():
             return
         task.cancel()

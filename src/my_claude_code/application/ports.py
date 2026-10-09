@@ -14,6 +14,7 @@ from .model_metadata import (
     ModelReasoningCapability,
     ProviderModelInfo,
 )
+from .openrouter_live import LiveCatalogue
 
 
 class ProviderPort(Protocol):
@@ -161,6 +162,12 @@ class RequestRuntimePort(Protocol):
     def model_kind_words_lookup(
         self,
     ) -> Callable[[str, str], tuple[tuple[str, ...] | None, ResolutionTier | None]]: ...
+
+    def openrouter_live_catalogue(self) -> LiveCatalogue | None: ...
+
+    def model_can_reason_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]: ...
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]: ...
 

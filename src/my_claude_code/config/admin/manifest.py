@@ -616,6 +616,30 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "MODEL_METADATA_OPENROUTER_LIVE",
+        "Use OpenRouter's live model list for every provider",
+        "catalogue",
+        "boolean",
+        settings_attr="model_metadata_openrouter_live",
+        default="true",
+        restart_required=False,
+        affects_providers=False,
+        description=(
+            "Reads OpenRouter's own public model list as one more rung of the "
+            "metadata ladder for every provider, matched by model name. It "
+            "fills what a model accepts and produces (so its kind), image "
+            "input, reasoning and tool support ahead of models.dev's copy for "
+            "providers models.dev does not describe, and only gaps for those "
+            "it does; window, output limit and prices only where nothing else "
+            "said. It adds a description, a knowledge cutoff and the day "
+            "OpenRouter listed the model. Shown on the Models page and in the "
+            "agent catalogues; routing, output caps and reasoning never read "
+            "it. Fetched in the background at the models.dev catalogue's "
+            "freshness, through the OpenRouter proxy chain. Off: no fetch, and "
+            "nothing changes from before the rung existed."
+        ),
+    ),
+    ConfigFieldSpec(
         "STATED_FACT_TTL_SECONDS",
         "Stated fact lifetime (seconds)",
         "catalogue",

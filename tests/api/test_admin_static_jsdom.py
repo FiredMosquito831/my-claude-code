@@ -2311,6 +2311,37 @@ def test_the_models_page_says_which_rung_stated_the_kind(rendered) -> None:
     assert "offered in every list" in unknown["cells"][2]
 
 
+def test_the_models_page_draws_openrouter_live_and_both_statements(
+    rendered,
+) -> None:
+    """7.84.0: the live rung's badge, its three rows, and a second statement."""
+
+    rows = {row["cells"][0]: row for row in rendered["models"]["liveRows"]}
+
+    tools = rows["reads images"]
+    assert tools["cells"][1] == "yes"
+    assert (
+        "also stated: no (OpenRouter live, OpenRouter live, exact id)"
+        in (tools["cells"][2])
+    )
+    assert "models-source-models_dev" in tools["badge"]
+
+    cache = rows["cache read price (USD / 1M)"]
+    assert cache["cells"][1] == "$0.05"
+    assert "OpenRouter live" in cache["cells"][2]
+    assert "models-source-openrouter_live" in cache["badge"]
+
+    assert rows["description (OpenRouter)"]["cells"][1] == "A model."
+    assert rows["knowledge cutoff"]["cells"][1] == "not reported"
+    listed = rows["listed on OpenRouter"]
+    assert listed["cells"][1] == "2026-02-11"
+    assert "not the model's release date" in listed["cells"][2]
+
+    kind = rows["kind"]
+    assert kind["cells"][1] == "Chat + Transcription"
+    assert "also stated: Chat (OpenRouter's live model list" in kind["cells"][2]
+
+
 def test_a_single_surface_model_is_offered_no_choice_at_all(rendered) -> None:
     """39 of the 41 providers, and every custom entry that did not opt in."""
 

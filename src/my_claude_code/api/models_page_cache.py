@@ -39,6 +39,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
     canonical_model_info,
 )
+from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.config.model_overrides import ModelParameterOverrides
 from my_claude_code.config.model_refs import (
     ConfiguredChatModelRef,
@@ -58,6 +59,8 @@ def capability_half_key(
     visibility: ModelVisibility,
     overrides: ModelParameterOverrides,
     media_placements: Mapping[str, frozenset[str]] | None = None,
+    *,
+    live_mark: str | None = None,
 ) -> str:
     """A digest of everything the cached half is built from.
 
@@ -77,6 +80,10 @@ def capability_half_key(
     per process -- so a ``repr``-based key named a different catalogue on every
     start and this cache, whose entire purpose is to survive a restart, missed
     on every one of them.
+
+    ``live_mark`` is OpenRouter's live list as the page read it (7.84.0): its
+    file's ``mtime_ns:size``, or ``None`` when the rung is off or nothing is
+    stored -- two different pages, so two different keys.
     """
 
     digest = hashlib.sha256()
@@ -106,6 +113,9 @@ def capability_half_key(
         rails = ",".join(sorted((media_placements or {})[ref]))
         digest.update(f"{ref}|{rails}".encode())
         digest.update(b"\x00")
+    # Every OpenRouter-live row the page shows comes from this one file.
+    digest.update(b"\x00openrouter-live\x00")
+    digest.update((live_mark or "inactive").encode("utf-8"))
     return f"models-page-{digest.hexdigest()[:32]}"
 
 
@@ -120,12 +130,13 @@ def build_capability_half(
     media_placements: Mapping[str, frozenset[str]] | None = None,
     kind_modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
+    live: LiveCatalogue | None = None,
 ) -> dict[str, Any]:
     """The Models page with the four moving parts deliberately left out.
 
     The two kind lookups read nothing the key above does not already cover:
     the provider's own records (the catalogue, in whole) and models.dev (its
-    file mark).
+    file mark). ``live`` (7.84.0) is covered by its own mark.
     """
 
     return build_models_page_payload(
@@ -142,6 +153,7 @@ def build_capability_half(
         media_placements=media_placements,
         kind_modalities=kind_modalities,
         kind_words=kind_words,
+        live=live,
     )
 
 

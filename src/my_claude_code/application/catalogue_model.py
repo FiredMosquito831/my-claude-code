@@ -38,6 +38,12 @@ from my_claude_code.application.model_metadata import (
     ModelReasoningCapability,
     ProviderModelInfo,
 )
+from my_claude_code.application.openrouter_live import (
+    LiveCatalogue,
+    LiveModel,
+    live_fills_gap,
+    live_wins_intrinsic,
+)
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.application.tier_chains import resolve_tier_chain
 from my_claude_code.config.harness_tiers import EMPTY_HARNESS_TIERS, HarnessTiers
@@ -51,6 +57,7 @@ from my_claude_code.core.gateway_model_ids import (
     gateway_model_id,
     no_thinking_gateway_model_id,
 )
+from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.model_visibility import ModelVisibility
 from my_claude_code.core.tier_refs import (
     DEFAULT_TIER,
@@ -184,6 +191,10 @@ def build_catalogue_models(
     visibility = ModelVisibility.from_raw(
         settings.model_visibility_allow, settings.model_visibility_deny
     )
+    # OpenRouter's live list (7.84.0), bound once for the whole document:
+    # ``None`` when the rung is off or nothing is stored, which builds exactly
+    # what every release before it built.
+    live = runtime.openrouter_live_catalogue()
     # Discovered models only, and the same predicate ``/v1/models`` applies:
     # a model whose stated kind is not chat (an image, speech or video model)
     # is not offered as one. A configured ref is listed whatever its kind.
@@ -192,6 +203,7 @@ def build_catalogue_models(
         runtime.model_modalities_lookup(),
         harness_tiers,
         kind_words=runtime.model_kind_words_lookup(),
+        live=live,
     )
     primary_ref = settings.model.strip()
     infos_by_ref: dict[str, ProviderModelInfo] = {}
@@ -212,6 +224,7 @@ def build_catalogue_models(
             runtime=runtime,
             info=infos_by_ref.get(ref.model_ref),
             provenance=provenance,
+            live=live,
         )
 
     for info in runtime.cached_prefixed_model_infos():
@@ -227,6 +240,7 @@ def build_catalogue_models(
             runtime=runtime,
             info=info,
             provenance=provenance,
+            live=live,
         )
 
     aliases = _tier_alias_models(
@@ -235,6 +249,7 @@ def build_catalogue_models(
         harness_id,
         models,
         runtime=runtime,
+        live=live,
     )
     if not aliases:
         return tuple(models)
@@ -259,6 +274,7 @@ def _tier_alias_models(
     models: list[CatalogueModel],
     *,
     runtime: RequestRuntimePort,
+    live: LiveCatalogue | None = None,
 ) -> tuple[CatalogueModel, ...]:
     """Build the five tier records, each a copy of the model it points at.
 
@@ -344,6 +360,7 @@ def _tier_alias_models(
                     runtime=runtime,
                     info=None,
                     provenance=None,
+                    live=live,
                 ),
                 gateway_id=gateway_model_id(primary_ref),
                 display_name=primary_ref,
@@ -377,6 +394,7 @@ def _append_variants(
     runtime: RequestRuntimePort,
     info: ProviderModelInfo | None,
     provenance: CapabilityProvenanceLookup | None,
+    live: LiveCatalogue | None = None,
 ) -> None:
     provider_id = parse_provider_type(provider_model_ref)
     model_id = parse_model_name(provider_model_ref)
@@ -389,6 +407,7 @@ def _append_variants(
         runtime=runtime,
         info=info,
         provenance=provenance,
+        live=live,
     )
 
     if supports_thinking is not False:
@@ -470,6 +489,58 @@ def _first_stated[T](cached: T | None, resolved: T | None) -> T | None:
     return resolved if cached is None else cached
 
 
+#: The catalogue record's numbers OpenRouter's live list may fill (7.84.0),
+#: each only where every rung above it said nothing.
+_LIVE_GAP_FIELDS = (
+    "context_length",
+    "max_output_tokens",
+    "input_price",
+    "output_price",
+    "cache_read_price",
+    "cache_write_price",
+)
+
+
+def _with_live(
+    model: CatalogueModel,
+    *,
+    provider_id: str,
+    model_id: str,
+    runtime: RequestRuntimePort,
+    info: ProviderModelInfo | None,
+    tool_calls_tier: ResolutionTier | None,
+    answer: LiveModel,
+) -> CatalogueModel:
+    """OpenRouter's live answer, placed per field class (7.84.0).
+
+    Intrinsic fields (image input, tool calls, whether it reasons) take the
+    live value above models.dev's tiers 5-10 and in a gap, never above the
+    provider's own statement or a bucket's (:func:`live_wins_intrinsic`).
+    Numbers (window, output limit, the four prices) take it only where every
+    rung above stated nothing. The output limit here is the catalogue's own
+    field: routing's clamp reads ``model_output_limit`` and never this record.
+    """
+
+    changes: dict[str, object] = {}
+    for name in _LIVE_GAP_FIELDS:
+        value = getattr(answer, name)
+        if live_fills_gap(getattr(model, name), value):
+            changes[name] = value
+    if info is None or info.supports_vision is None:
+        vision, vision_tier = runtime.model_vision_tiered(provider_id, model_id)
+        if live_wins_intrinsic(vision, vision_tier, answer.supports_vision):
+            changes["supports_vision"] = answer.supports_vision
+    if live_wins_intrinsic(
+        model.supports_tool_calls, tool_calls_tier, answer.supports_tool_calls
+    ):
+        changes["supports_tool_calls"] = answer.supports_tool_calls
+    can_reason, reason_tier = runtime.model_can_reason_tiered(provider_id, model_id)
+    if live_wins_intrinsic(can_reason, reason_tier, answer.can_reason):
+        base = model.reasoning or ModelReasoningCapability()
+        changes["reasoning"] = replace(base, can_reason=answer.can_reason)
+    return replace(model, **changes) if changes else model
+
+
 def _resolve(
     provider_model_ref: str,
     *,
@@ -478,6 +549,7 @@ def _resolve(
     runtime: RequestRuntimePort,
     info: ProviderModelInfo | None,
     provenance: CapabilityProvenanceLookup | None,
+    live: LiveCatalogue | None = None,
 ) -> CatalogueModel:
     reasoning: ModelReasoningCapability | None = runtime.model_reasoning_capability(
         provider_id, model_id
@@ -493,10 +565,15 @@ def _resolve(
         # No parameter list, but the row's own capability words or flag said
         # (7.83.0) -- the provider rung, before models.dev, as on the page.
         tool_calls = info.declared.tool_calls
+    # The rung the tool answer came from, for OpenRouter's live list (7.84.0):
+    # ``None`` for the provider's own statement, which it never replaces.
+    tool_calls_tier: ResolutionTier | None = None
     if tool_calls is None:
-        tool_calls = runtime.model_tool_call_tiered(provider_id, model_id)[0]
+        tool_calls, tool_calls_tier = runtime.model_tool_call_tiered(
+            provider_id, model_id
+        )
     prices = runtime.model_prices_tiered(provider_id, model_id)
-    return CatalogueModel(
+    resolved = CatalogueModel(
         gateway_id=gateway_model_id(provider_model_ref),
         provider_model_ref=provider_model_ref,
         display_name=provider_model_ref,
@@ -526,4 +603,16 @@ def _resolve(
         field_provenance=(
             {} if provenance is None else dict(provenance(provider_id, model_id, info))
         ),
+    )
+    answer = None if live is None else live(provider_id, model_id)
+    if answer is None or not answer.feeds_ladder:
+        return resolved
+    return _with_live(
+        resolved,
+        provider_id=provider_id,
+        model_id=model_id,
+        runtime=runtime,
+        info=info,
+        tool_calls_tier=tool_calls_tier,
+        answer=answer,
     )

@@ -951,3 +951,24 @@ def test_the_undownloadable_switch_reaches_the_gemini_image_request(
         )
     assert (image.status_code, speech.status_code) == (204, 204)
     assert [request.inline_urls for request in built] == [inline, False]
+
+
+@pytest.mark.parametrize(("value", "bound"), [(None, True), ("false", False)])
+def test_the_openrouter_live_switch_reaches_the_runtime_rung(
+    value: str | None, bound: bool
+) -> None:
+    """7.84.0's MODEL_METADATA_OPENROUTER_LIVE: read from the generation's settings."""
+
+    from my_claude_code.providers.runtime.openrouter_catalogue import (
+        openrouter_live_cache_path,
+        write_openrouter_live_cache,
+    )
+    from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
+
+    write_openrouter_live_cache(
+        [{"id": "acme/model", "supported_parameters": []}],
+        openrouter_live_cache_path(),
+    )
+    values = {} if value is None else {"MODEL_METADATA_OPENROUTER_LIVE": value}
+    manager = ProviderRuntimeManager(Settings.model_validate(values))
+    assert (manager.openrouter_live_catalogue() is not None) is bound

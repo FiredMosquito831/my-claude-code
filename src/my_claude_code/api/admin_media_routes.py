@@ -52,6 +52,7 @@ from my_claude_code.application.model_kinds import (
     ModelKind,
     media_rail_placements,
 )
+from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.route_health import RouteHealthRegistry
 from my_claude_code.config.admin.status import provider_config_status
 from my_claude_code.config.media_surfaces import (
@@ -229,6 +230,7 @@ def media_models_payload(
     *,
     kind_modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
+    live: LiveCatalogue | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page's media section renders. Synchronous.
 
@@ -243,7 +245,8 @@ def media_models_payload(
     kind here is the one every model list acts on. The lookups only read the
     provider records' dicts, which are replaced and never mutated in place, so
     running them on the worker thread is safe. Without them the kind is read
-    from models.dev alone.
+    from models.dev alone. ``live`` is OpenRouter's live list (7.84.0), bound
+    once on the loop; its index is built once and never mutated.
     """
 
     if bench is None:
@@ -299,7 +302,7 @@ def media_models_payload(
             descriptor = descriptors.get(provider_id)
             if ref not in rows:
                 kinds[ref] = declared_model_kind(
-                    ref, rail_placements, kind_modalities, kind_words
+                    ref, rail_placements, kind_modalities, kind_words, live
                 )
                 if descriptor is None:
                     provider_state = "unknown"
@@ -321,7 +324,7 @@ def media_models_payload(
                     "placements": placements[ref],
                     "declared": _declared(descriptor),
                     "modalities": media_output_modalities(
-                        provider_id, model_id, kind_modalities
+                        provider_id, model_id, kind_modalities, live
                     ),
                     "kind": model_kind_payload(kinds[ref]),
                     "health": bench.health[ref],
@@ -386,6 +389,7 @@ async def media_models(
         bench,
         kind_modalities=services.requests.model_modalities_lookup(),
         kind_words=services.requests.model_kind_words_lookup(),
+        live=services.requests.openrouter_live_catalogue(),
     )
 
 

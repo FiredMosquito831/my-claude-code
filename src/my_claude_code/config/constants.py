@@ -387,6 +387,10 @@ MODEL_DISCOVERY_REFRESH_MINIMUM_SECONDS = 300.0
 # requests against credentials nobody is watching, and some hosts bill or 403
 # before they validate a body.
 MODEL_PROBE_NEW_MODELS_DEFAULT = False
+# OpenRouter's own live model list as a metadata rung for every provider
+# (7.84.0). On: the user asked for the rung (2026-10-08 21:00). Display, kind
+# lists and agent catalogues only -- routing never reads it.
+MODEL_METADATA_OPENROUTER_LIVE_DEFAULT = True
 # Escalating bench for a credential the provider keeps rejecting with 401/403,
 # indexed by consecutive auth failures and clamped at the last entry. Auth is
 # the one failure a key can own outright, so it is the one ladder that stays.

@@ -47,6 +47,11 @@ Filled by 7.79.2 (PR-4, PR-5, PR-6 in one change):
 
 Every traffic class in the grid is now driven; none is a placeholder.
 
+Filled by 7.84.0 (K-OR): OpenRouter's live model list, which MCC fetches for
+every provider's metadata ladder, is traffic to a provider host too. It is
+fetched through the ``open_router`` provider's chain with the one exit a
+Providers-card probe would take, so it is asked the probe questions above.
+
 Filled by 7.81.0 ("Keep trying exits until one answers", PR-7/8/9): a ticked
 chain moves a request an exit refused (a free-usage 429, a country refusal) to
 the next exit -- through proxies only, the same bytes on every exit, never
@@ -109,7 +114,15 @@ from my_claude_code.providers.openai_chat import response_surface
 from my_claude_code.providers.openai_chat.opencode_identity import (
     OPENCODE_SESSION_HEADER,
 )
+from my_claude_code.providers.runtime import openrouter_catalogue
 from my_claude_code.providers.runtime.factory import create_provider
+from my_claude_code.providers.runtime.openrouter_catalogue import (
+    OPENROUTER_PROVIDER_ID,
+    fetch_openrouter_live,
+    openrouter_live_cache_path,
+    read_openrouter_live_rows,
+    refresh_openrouter_live,
+)
 from my_claude_code.providers.runtime.proxy_rotating import ProxyRotatingProvider
 from my_claude_code.providers.vertex.auth import GoogleAccessTokenProvider
 from my_claude_code.runtime.application import ApplicationRuntime
@@ -138,9 +151,26 @@ _PLAIN_BODY = {
 }
 
 
+#: The one row the rig serves as OpenRouter's live model list (7.84.0).
+_LIVE_LIST = {
+    "data": [
+        {
+            "id": "rig/model",
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"],
+            },
+            "supported_parameters": ["tools"],
+        }
+    ]
+}
+
+
 def _rig_answers(request: SeenRequest) -> tuple[int, bytes]:
     """What the fake host says, chosen so every probe learns something."""
 
+    if request.method == "GET" and request.path.endswith("/models"):
+        return 200, json.dumps(_LIVE_LIST).encode()
     body = json.loads(request.body or b"{}")
     content = (body.get("messages") or [{}])[0].get("content")
     if body.get("max_tokens") == 2_000_000_000:
@@ -183,7 +213,11 @@ class ProbeWorld:
         self.write_chains(
             ProxyChains(
                 proxies=proxies,
-                chains={self.custom_id: chain, IDENTITY_PROVIDER: chain},
+                chains={
+                    self.custom_id: chain,
+                    IDENTITY_PROVIDER: chain,
+                    OPENROUTER_PROVIDER_ID: chain,
+                },
             )
         )
 
@@ -205,6 +239,11 @@ def world(tmp_path, monkeypatch) -> Iterator[ProbeWorld]:
     )
     reset_proxy_chains_cache()
     reset_proxy_health()
+    # The suite refuses this download everywhere else; the row below drives
+    # the real one, against the rig.
+    monkeypatch.setattr(
+        openrouter_catalogue, "fetch_openrouter_live", fetch_openrouter_live
+    )
 
     registry = get_provider_registry()
     entry = registry.add(
@@ -272,6 +311,28 @@ async def _identity_probe(world: ProbeWorld) -> dict[str, Any]:
 
 async def _dialect_probe(world: ProbeWorld) -> dict[str, Any]:
     return await world.runtime.probe_custom_provider_dialect(world.custom_id)
+
+
+async def _openrouter_live_list(world: ProbeWorld) -> dict[str, Any]:
+    """The background fetch of OpenRouter's live model list (7.84.0)."""
+
+    path = openrouter_live_cache_path()
+    outcome = await refresh_openrouter_live(
+        world.runtime.settings,
+        path,
+        url=f"{world.rig.host.base_url()}/models?output_modalities=all",
+    )
+    if outcome.status != "not_sent":
+        assert outcome.status == "fetched", outcome
+        stored = read_openrouter_live_rows(path)
+        assert stored is not None and stored[0] == _LIVE_LIST["data"]
+    else:
+        assert read_openrouter_live_rows(path) is None
+    return {
+        "status": outcome.status,
+        "detail": outcome.detail,
+        "proxy_exit": outcome.proxy_exit,
+    }
 
 
 Driver = Callable[[ProbeWorld], Awaitable[dict[str, Any]]]
@@ -874,6 +935,7 @@ TRAFFIC: tuple[TrafficClass, ...] = (
     TrafficClass("probe_capabilities", "PR-2", _capability_probe),
     TrafficClass("identity_probe", "PR-2", _identity_probe),
     TrafficClass("dialect_probe", "PR-2", _dialect_probe),
+    TrafficClass("openrouter_live_model_list", "PR-KOR", _openrouter_live_list),
     TrafficClass("chat_completions", "PR-3", traffic=_chat_completions),
     TrafficClass("responses", "PR-3", traffic=_responses),
     TrafficClass("anthropic_messages", "PR-3", traffic=_anthropic_messages),
@@ -1022,7 +1084,10 @@ def test_every_row_names_who_fills_it() -> None:
     assert len(names) == len(set(names))
     for row in TRAFFIC:
         assert row.filled_by.startswith("PR-")
-        assert (row.driver is not None) == (row.filled_by == "PR-2")
+        # A probe-shaped row: the Providers card's (PR-2) and, since 7.84.0,
+        # the background fetch of OpenRouter's live list, which takes the one
+        # exit a probe takes.
+        assert (row.driver is not None) == (row.filled_by in {"PR-2", "PR-KOR"})
         assert (row.traffic is not None) == (row.filled_by == "PR-3")
         assert (row.refresh is not None) == (row.filled_by == "PR-5")
     # 7.79.2: no placeholder is left.

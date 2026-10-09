@@ -27735,6 +27735,13 @@ function buildCapabilityPanel(capabilities, labels, model) {
     rows.push(["accepts → produces", capabilities.declared_modalities]);
     rows.push(["model type (provider's word)", capabilities.declared_type]);
     rows.push(["endpoints (provider's words)", capabilities.declared_endpoints]);
+    /* What OpenRouter's own live model list adds (7.84.0), present only while
+       that rung is on and a list is stored: a description, its knowledge
+       cutoff, and the day OpenRouter LISTED the model -- never its release
+       date. Shown, never acted on. */
+    rows.push(["description (OpenRouter)", capabilities.description]);
+    rows.push(["knowledge cutoff", capabilities.knowledge_cutoff]);
+    rows.push(["listed on OpenRouter", capabilities.listed_on_openrouter]);
     /* The prices resolved long before anything read them: the ladder has
        returned a rate and a tier for every (provider, model) since 6.35.0 and
        no surface showed either. They carry the same provenance badge as every
@@ -27919,7 +27926,21 @@ const KIND_SOURCE_BADGES = {
   provider_words: "provider",
   models_dev: "models_dev",
   media_rail: "media_rail",
+  openrouter_live: "openrouter_live",
 };
+
+/* OpenRouter's live statement of a kind that differs from the one shown
+   (7.84.0): drawn beside it, never acted on. */
+function kindAlsoStated(kind) {
+  const other = kind && kind.also_stated;
+  if (!other) return null;
+  const labels = Array.isArray(other.labels) ? other.labels : [];
+  return {
+    value: labels.length ? labels.join(" + ") : "none of the five (stated)",
+    source_label: other.source_label || other.source || "",
+    tier_label: other.tier || null,
+  };
+}
 
 function kindCapabilityField(kind) {
   if (!kind) return null;
@@ -27944,6 +27965,7 @@ function kindCapabilityField(kind) {
     source_label: kind.approximate ? `${stated} — guessed` : stated,
     approximate: false,
     note: kind.tier || null,
+    also_stated: kindAlsoStated(kind),
   };
 }
 
@@ -28007,6 +28029,21 @@ function buildCapabilityRow(label, field, labels, format) {
         : ` across ${field.reporters} that published one`;
     warn.textContent = `guessed from ${matches} same-named row(s) in other providers, ${agreement}${reporters}`;
     source.appendChild(warn);
+  }
+  /* A second source that says something different (7.84.0): OpenRouter's
+     live list beside a provider's or a models.dev bucket's answer it never
+     overrides, or the answer it replaced. Both statements stay visible. */
+  if (field.also_stated) {
+    const other = field.also_stated;
+    const also = document.createElement("span");
+    also.className = "models-approx-note";
+    const where = [other.source_label, other.tier_label]
+      .filter(Boolean)
+      .join(", ");
+    also.textContent =
+      `also stated: ${(format || formatCapabilityValue)(other.value)}` +
+      (where ? ` (${where})` : "");
+    source.appendChild(also);
   }
   // `field.note` is rendered once, above, beside the badge it explains. A
   // second copy used to be appended here, so every row carrying a note read

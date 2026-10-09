@@ -381,6 +381,56 @@ def extract_openrouter_tool_model_infos(
     return frozenset(model_infos)
 
 
+def openrouter_row_model_info(item: Any) -> _ProviderModelInfo | None:
+    """One OpenRouter-dialect row, read exactly as the provider reads its own (7.84.0).
+
+    The same record :func:`extract_openrouter_tool_model_infos` builds for a
+    row, minus its tool-capable filter: OpenRouter's live list as a ladder rung
+    describes every model it serves, and a model that takes no tools is still
+    a model whose modalities, window and prices it states. ``None`` for a row
+    with no usable id, and for a row this cannot read at all -- never raises,
+    because one odd row in a 665-row list is not worth losing the other 664.
+    A row that publishes no ``supported_parameters`` list is read with an
+    empty one, so its record's thinking flag is ``False``; a caller that must
+    not read that silence as "no" checks :func:`published_parameters_from_row`.
+    """
+
+    try:
+        model_id = _field(item, "id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            return None
+        supported = _field(item, "supported_parameters")
+        names = (
+            {value for value in supported if isinstance(value, str)}
+            if _is_sequence(supported)
+            else set()
+        )
+        return _openrouter_dialect_model_info(
+            item,
+            model_id=model_id,
+            supported_parameter_names=names,
+            read_vision=True,
+        )
+    except Exception:
+        return None
+
+
+def listed_price_per_million(value: Any) -> float | None:
+    """One OpenRouter-dialect listed price in USD per million tokens (7.84.0).
+
+    The unit rule every listed price on the record already follows (a decimal
+    STRING is USD per token, a JSON number is USD per million), for the rates
+    the record has no field for -- ``pricing.input_cache_read``,
+    ``input_cache_write``, ``internal_reasoning``. Never raises; a negative or
+    unreadable value states nothing and ``0`` is a stated free price.
+    """
+
+    try:
+        return _price(value, "by_type")
+    except Exception:
+        return None
+
+
 # The OpenRouter dialect publishes "none" inside ``reasoning.supported_efforts``
 # alongside real effort levels. It is not an effort level -- it is the gateway
 # saying reasoning can be switched off -- so it is deliberately never mapped

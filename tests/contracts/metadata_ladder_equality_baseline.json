@@ -7616,6 +7616,5756 @@
    "tier": "provider /models, exact id"
   }
  },
+ "kor-live/admin/catalogue-models": {
+  "bytes": 222161,
+  "sha256": "17d81382f64be8f64550d2ef68468a944b942bd39fbc653f004dbb5ac21704d6"
+ },
+ "kor-live/admin/catalogue-models?provenance=1": {
+  "bytes": 387043,
+  "sha256": "3b8f8e13558c6fde48d85259258ff5aa01a00cfc80058dc406576f5996f10418"
+ },
+ "kor-live/capabilities/cline/cline-pass/deepseek-v4.1-flash": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.003
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, bare model + tag (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "deepseek/deepseek-v4.1-flash"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, bare model + tag",
+   "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.15
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, bare model + tag (deepseek/deepseek-v4.1-flash). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "deepseek/deepseek-v4.1-flash"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, bare model + tag",
+   "value": "2026-09-10"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 384000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.6
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": [
+     "high",
+     "low",
+     "max"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/commandcode/claude-sonnet-5-5": {
+  "cache_read_price": {
+   "approximate": true,
+   "reference": false,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 7,
+   "tier_label": "cross-provider, exact id",
+   "value": 0.2
+  },
+  "cache_write_price": {
+   "approximate": true,
+   "reference": false,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 7,
+   "tier_label": "cross-provider, exact id",
+   "value": 2.5
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 2.0
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "agreement": 1.0,
+   "approximate": true,
+   "match_count": 15,
+   "reference": false,
+   "reporters": 15,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 7,
+   "tier_label": "cross-provider, exact id",
+   "value": 128000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 10.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": [
+     "high",
+     "low",
+     "max",
+     "medium",
+     "xhigh"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": true,
+    "match_count": 15,
+    "reference": false,
+    "source": "approximate",
+    "source_label": "approximate cross-provider",
+    "tier": 7,
+    "tier_label": "cross-provider, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": true,
+   "reference": false,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 7,
+   "tier_label": "cross-provider, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/commandcode/deepseek/deepseek-v4-flash-fast": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  }
+ },
+ "kor-live/capabilities/commandcode/gpt-6-astra": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 1.0
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 12.5
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1050000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (openai/gpt-6-astra). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "openai/gpt-6-astra"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "GPT-6 Astra is OpenAI's flagship model for demanding end-to-end work. It is suited for advanced analysis, software engineering, deep research, scientific work, and document creation, with particular strengths in long-horizon..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 10.0
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (openai/gpt-6-astra). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "openai/gpt-6-astra"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-09-04"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 128000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 50.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "ladder_value": true,
+    "note": "OpenRouter live, exact id (openai/gpt-6-astra). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+    "openrouter_ids": [
+     "openai/gpt-6-astra"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": [
+     "high",
+     "low",
+     "max",
+     "medium",
+     "xhigh"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "ladder_value": true,
+   "note": "OpenRouter live, exact id (openai/gpt-6-astra). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+   "openrouter_ids": [
+    "openai/gpt-6-astra"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/hypercharm/deepseek-v4.1-flash": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.03
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1048576
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "deepseek/deepseek-v4.1-flash"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.33
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (deepseek/deepseek-v4.1-flash). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "deepseek/deepseek-v4.1-flash"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-09-10"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 262144
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1.31
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": [
+     "high",
+     "low",
+     "xhigh"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/kilo/kilo-auto/efficient": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.0325
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.40625
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.325
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 65536
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1.95
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.0
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "temperature",
+    "tools"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/nous_portal/anthropic/claude-sonnet-5": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 0.2
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 2.5
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": []
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (anthropic/claude-sonnet-5). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "anthropic/claude-sonnet-5"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "Sonnet 5 is Anthropic's most capable Sonnet-class model, with frontier performance across coding, agents, and professional work. It supports adaptive thinking with selectable reasoning effort levels (low, medium, high, max,..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 2.0
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (anthropic/claude-sonnet-5). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "anthropic/claude-sonnet-5"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-06-30"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 128000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 10.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": [
+     "high",
+     "low",
+     "max",
+     "medium",
+     "xhigh"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "reasoning",
+    "tools"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/nous_portal/tencent/hy3": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": true,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 5,
+   "tier_label": "OpenRouter catalogue, exact id",
+   "value": 0.033
+  },
+  "cache_write_price": {
+   "approximate": true,
+   "reference": false,
+   "source": "approximate",
+   "source_label": "approximate cross-provider",
+   "tier": 9,
+   "tier_label": "cross-provider, bare model + tag",
+   "value": 0.0
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 262144
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    [
+     "temperature",
+     0.9
+    ],
+    [
+     "top_p",
+     1
+    ]
+   ]
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (tencent/hy3). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "tencent/hy3"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.13
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (tencent/hy3). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "tencent/hy3"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-07-06"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 131072
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.53
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": false
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": [
+     "high",
+     "low"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": true,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 5,
+    "tier_label": "OpenRouter catalogue, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "kor-live/capabilities/novita/ming-image-0.1-design": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "inclusionai/ming-image-0.1-design"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "Ming Image 0.1 Design is a text-to-image model from inclusionAI aimed at graphic-design output, with an emphasis on legible text rendering inside the generated image. It generates from a prompt..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1.0
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "inclusionai/ming-image-0.1-design"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-09-22"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "ladder_value": null,
+    "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+    "openrouter_ids": [
+     "inclusionai/ming-image-0.1-design"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": false
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "ladder_value": null,
+   "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+   "openrouter_ids": [
+    "inclusionai/ming-image-0.1-design"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": false
+  },
+  "supports_vision": {
+   "approximate": false,
+   "ladder_value": null,
+   "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+   "openrouter_ids": [
+    "inclusionai/ming-image-0.1-design"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": false
+  }
+ },
+ "kor-live/capabilities/novita/ming-image-0.1-design-layer": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "inclusionai/ming-image-0.1-design-layer"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "Ming Image 0.1 Design Layer is an image-to-image model from inclusionAI that decomposes a flattened design image into separate RGBA layers, such as a background layer and foreground elements, and..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1.0
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "inclusionai/ming-image-0.1-design-layer"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-09-23"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "ladder_value": null,
+    "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+    "openrouter_ids": [
+     "inclusionai/ming-image-0.1-design-layer"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": false
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "ladder_value": null,
+   "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+   "openrouter_ids": [
+    "inclusionai/ming-image-0.1-design-layer"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": false
+  },
+  "supports_vision": {
+   "approximate": false,
+   "ladder_value": null,
+   "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+   "openrouter_ids": [
+    "inclusionai/ming-image-0.1-design-layer"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": true
+  }
+ },
+ "kor-live/capabilities/novita/zai-org/glm-5.3-flash": {
+  "cache_read_price": {
+   "approximate": false,
+   "ladder_value": null,
+   "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+   "openrouter_ids": [
+    "z-ai/glm-5.3-flash"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, bare model + tag",
+   "value": 0.03
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1048576
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "z-ai/glm-5.3-flash"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, bare model + tag",
+   "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.15
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "z-ai/glm-5.3-flash"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, bare model + tag",
+   "value": "2026-08-26"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 131072
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.5
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/nvidia_nim/01-ai/yi-large": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  }
+ },
+ "kor-live/capabilities/nvidia_nim/moonshotai/kimi-k3": {
+  "cache_read_price": {
+   "approximate": false,
+   "ladder_value": null,
+   "note": "OpenRouter live, exact id (moonshotai/kimi-k3). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+   "openrouter_ids": [
+    "moonshotai/kimi-k3"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": 0.66
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1048576
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (moonshotai/kimi-k3). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "moonshotai/kimi-k3"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "Kimi K3 is a 2.8T parameter open-weight multimodal reasoning model from Moonshot AI. It is suited for complex coding, knowledge work, and long-horizon agentic workflows, and is particularly strong at..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.0
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (moonshotai/kimi-k3). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "moonshotai/kimi-k3"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-07-16"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 131072
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": [
+     "high",
+     "low",
+     "max"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/open_router/stepfun/step-5-preview": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": []
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (stepfun/step-5-preview). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "stepfun/step-5-preview"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 1.0
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (stepfun/step-5-preview). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "stepfun/step-5-preview"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-10-08"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 64000
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 2.7
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": [
+     "high",
+     "low",
+     "medium"
+    ]
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": false
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tools",
+    "top_logprobs",
+    "top_p"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/opencode_go/minimax-m3": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 0.06
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1000000
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (minimax/minimax-m3). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "minimax/minimax-m3"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,..."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 0.3
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (minimax/minimax-m3). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "minimax/minimax-m3"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-05-31"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": 131072
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": 1.2
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": {
+   "approximate": false,
+   "label": "chat_completions (profile)",
+   "note": "no registry entry for this model",
+   "offered": [
+    {
+     "label": "Chat Completions (/chat/completions)",
+     "value": "chat_completions"
+    },
+    {
+     "label": "Responses (/responses)",
+     "value": "responses"
+    },
+    {
+     "label": "Messages (/messages)",
+     "value": "messages"
+    }
+   ],
+   "override": "",
+   "reference": false,
+   "source": "profile",
+   "source_label": "this provider's declared first door",
+   "tier": null,
+   "tier_label": null,
+   "value": "chat_completions"
+  },
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": true
+  }
+ },
+ "kor-live/capabilities/vercel/alibaba/qwen-3-14b": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 40960
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.12
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 16384
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.24
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider",
+    "source_label": "provider /models",
+    "tier": 1,
+    "tier_label": "provider /models, exact id",
+    "value": true
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": null,
+   "tier_label": null,
+   "value": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools"
+   ]
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": true
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "kor-live/capabilities/vercel/alibaba/qwen3-embedding-0.6b": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 32768
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.01
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 32768
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": false
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "kor-live/capabilities/vercel/bfl/flux-2-flex": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": false
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "kor-live/capabilities/vercel/fish-audio/transcribe-1": {
+  "cache_read_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "cache_write_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "context_length": {
+   "approximate": false,
+   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "default_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "description": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (fish-audio/transcribe-1). Shown only; nothing reads it.",
+   "openrouter_ids": [
+    "fish-audio/transcribe-1"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "Transcribe 1 is a speech-to-text model from Fish Audio. It is suited for audio transcription with automatic language detection and can return timestamped word-level segments when alignment details are requested."
+  },
+  "input_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider",
+   "source_label": "provider /models",
+   "tier": 1,
+   "tier_label": "provider /models, exact id",
+   "value": 0.0001
+  },
+  "knowledge_cutoff": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "listed_on_openrouter": {
+   "approximate": false,
+   "note": "OpenRouter live, exact id (fish-audio/transcribe-1). The day OpenRouter added it to its list -- not the model's release date.",
+   "openrouter_ids": [
+    "fish-audio/transcribe-1"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": "2026-07-29"
+  },
+  "max_output_tokens": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "output_price": {
+   "approximate": false,
+   "ladder_value": null,
+   "note": "OpenRouter live, exact id (fish-audio/transcribe-1). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+   "openrouter_ids": [
+    "fish-audio/transcribe-1"
+   ],
+   "reference": false,
+   "source": "openrouter_live",
+   "source_label": "OpenRouter live",
+   "tier": null,
+   "tier_label": "OpenRouter live, exact id",
+   "value": 0.0
+  },
+  "reasoning": {
+   "can_reason": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": false
+   },
+   "default_enabled": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "mandatory": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supported_efforts": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_budget_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_effort_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_toggle_control": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   }
+  },
+  "reasoning_dialect": {
+   "known": false,
+   "source": "unknown",
+   "source_label": "unknown"
+  },
+  "reasoning_price": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "response_surface": null,
+  "supported_parameters": {
+   "approximate": false,
+   "reference": false,
+   "source": "unknown",
+   "source_label": "unknown",
+   "tier": null,
+   "tier_label": null,
+   "value": null
+  },
+  "supports_tool_calls": {
+   "approximate": false,
+   "reference": false,
+   "source": "models_dev",
+   "source_label": "models.dev",
+   "tier": 3,
+   "tier_label": "models.dev bucket, exact id",
+   "value": false
+  },
+  "supports_vision": {
+   "approximate": false,
+   "reference": false,
+   "source": "provider_or_models_dev",
+   "source_label": "provider /models or models.dev",
+   "tier": null,
+   "tier_label": null,
+   "value": false
+  }
+ },
+ "kor-live/catalogue-diff": {
+  "anthropic/novita/ming-image-0.1-design": {
+   "reasoning": [
+    null,
+    false
+   ],
+   "supports_tool_calls": [
+    null,
+    false
+   ],
+   "supports_vision": [
+    null,
+    false
+   ]
+  },
+  "anthropic/novita/ming-image-0.1-design-layer": {
+   "reasoning": [
+    null,
+    false
+   ],
+   "supports_tool_calls": [
+    null,
+    false
+   ],
+   "supports_vision": [
+    null,
+    true
+   ]
+  },
+  "anthropic/novita/zai-org/glm-5.3-flash": {
+   "cache_read_price": [
+    null,
+    0.03
+   ]
+  },
+  "anthropic/nvidia_nim/moonshotai/kimi-k3": {
+   "cache_read_price": [
+    null,
+    0.66
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/ming-image-0.1-design": {
+   "supports_tool_calls": [
+    null,
+    false
+   ],
+   "supports_vision": [
+    null,
+    false
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/ming-image-0.1-design-layer": {
+   "supports_tool_calls": [
+    null,
+    false
+   ],
+   "supports_vision": [
+    null,
+    true
+   ]
+  },
+  "claude-3-freecc-no-thinking/novita/zai-org/glm-5.3-flash": {
+   "cache_read_price": [
+    null,
+    0.03
+   ]
+  },
+  "claude-3-freecc-no-thinking/nvidia_nim/moonshotai/kimi-k3": {
+   "cache_read_price": [
+    null,
+    0.66
+   ]
+  }
+ },
+ "kor-live/catalogue-k4/anthropic/novita/ming-image-0.1-design": {
+  "context_length": "~",
+  "input_price": "n:1.0",
+  "max_output_tokens": "~",
+  "output_price": "n:1.0",
+  "reasoning": "ModelReasoningCapability(can_reason=false,supports_effort_control=~,supports_toggle_control=~,supports_budget_control=~,supported_efforts=~,mandatory=~,default_enabled=~)",
+  "supported_parameters": "~",
+  "supports_tool_calls": "false"
+ },
+ "kor-live/catalogue-k4/anthropic/novita/ming-image-0.1-design-layer": {
+  "context_length": "~",
+  "input_price": "n:1.0",
+  "max_output_tokens": "~",
+  "output_price": "n:1.0",
+  "reasoning": "ModelReasoningCapability(can_reason=false,supports_effort_control=~,supports_toggle_control=~,supports_budget_control=~,supported_efforts=~,mandatory=~,default_enabled=~)",
+  "supported_parameters": "~",
+  "supports_tool_calls": "false"
+ },
+ "kor-live/catalogue-k4/claude-3-freecc-no-thinking/novita/ming-image-0.1-design": {
+  "context_length": "~",
+  "input_price": "n:1.0",
+  "max_output_tokens": "~",
+  "output_price": "n:1.0",
+  "reasoning": "~",
+  "supported_parameters": "~",
+  "supports_tool_calls": "false"
+ },
+ "kor-live/catalogue-k4/claude-3-freecc-no-thinking/novita/ming-image-0.1-design-layer": {
+  "context_length": "~",
+  "input_price": "n:1.0",
+  "max_output_tokens": "~",
+  "output_price": "n:1.0",
+  "reasoning": "~",
+  "supported_parameters": "~",
+  "supports_tool_calls": "false"
+ },
+ "kor-live/k4-blanked/admin/catalogue-models": {
+  "bytes": 225319,
+  "sha256": "f879653ac54b967c0fb36427914835868783c765e3a19c0f386b5c1ecf9a2554"
+ },
+ "kor-live/k4-blanked/admin/catalogue-models?provenance=1": {
+  "bytes": 283983,
+  "sha256": "f575a46df11bf9d9a4c674c95f09992df78e8c07e88f22c7cb19cc6fb983f47e"
+ },
+ "kor-live/k4-blanked/page": {
+  "bytes": 101952,
+  "sha256": "41e94f8581981d9c465b5e2477885cbad3b9092fe2bec194b47009020f478c12"
+ },
+ "kor-live/k4-blanked/serialiser/aider": {
+  "bytes": 14249,
+  "sha256": "f40b164b5809a2b410894d3e9f345df8d0253538a906bebc1b666ffee61cb69d"
+ },
+ "kor-live/k4-blanked/serialiser/codex": {
+  "bytes": 48709,
+  "sha256": "abb5da8bba5ca8e579b83e13fd697fc0f9352df0e5a065e3457c5c1fcf2bf876"
+ },
+ "kor-live/k4-blanked/serialiser/crush": {
+  "bytes": 19430,
+  "sha256": "329fdecd28244ffef4932a460b798c7eb40f1cc5da72d965ab4a2149f0729095"
+ },
+ "kor-live/k4-blanked/serialiser/droid": {
+  "bytes": 12143,
+  "sha256": "83ad3f41fe41eb03e1c23d57fbfcf385418bc6e7fb96d7048ddeff32eca60c8f"
+ },
+ "kor-live/k4-blanked/serialiser/goose": {
+  "bytes": 12246,
+  "sha256": "2fb1d40eb632ce3b9db5614f6e74155994c7191fb0f42aa58ffee9386f1b1f50"
+ },
+ "kor-live/k4-blanked/serialiser/kilo": {
+  "bytes": 7954,
+  "sha256": "713cc9ba1f07294f1856541baccff867d5cfb3a7ceeca51d638b3e202831be0f"
+ },
+ "kor-live/k4-blanked/serialiser/kimi": {
+  "bytes": 10218,
+  "sha256": "118a7697efff1186a7bdaf47ad6bf51a17f520f8dc20f908b6f4bacbe6526c53"
+ },
+ "kor-live/k4-blanked/serialiser/opencode": {
+  "bytes": 11146,
+  "sha256": "412b8455ca0d146f77f9d2abeef2fc2049dacbe53ef8723326bc62266995b799"
+ },
+ "kor-live/k4-blanked/serialiser/pi": {
+  "bytes": 12520,
+  "sha256": "3a9bdda9c9260e9c151ab53968ddf0f4022422c9fce857b854bf618d3032008f"
+ },
+ "kor-live/k4-blanked/serialiser/qwen": {
+  "bytes": 12621,
+  "sha256": "1e4a326f9742594f78e731a1038c9056f689b84ff463ca115dcdb36ddd686998"
+ },
+ "kor-live/k4-blanked/serialiser/vscode": {
+  "bytes": 8767,
+  "sha256": "fa418330e7552ffaa1b15939ff6f42f1b6d780d9894e44743212a3ad576a7654"
+ },
+ "kor-live/kinds/commandcode/gpt-6-astra": {
+  "approximate": false,
+  "kinds": [
+   "chat"
+  ],
+  "labels": [
+   "Chat"
+  ],
+  "source": "openrouter_live",
+  "source_label": "OpenRouter's live model list",
+  "tier": "OpenRouter live, exact id"
+ },
+ "kor-live/kinds/nous_portal/anthropic/claude-sonnet-5": {
+  "approximate": false,
+  "kinds": [
+   "chat"
+  ],
+  "labels": [
+   "Chat"
+  ],
+  "source": "openrouter_live",
+  "source_label": "OpenRouter's live model list",
+  "tier": "OpenRouter live, exact id"
+ },
+ "kor-live/kinds/novita/ming-image-0.1-design": {
+  "also_stated": {
+   "approximate": false,
+   "kinds": [
+    "image"
+   ],
+   "labels": [
+    "Image"
+   ],
+   "source": "openrouter_live",
+   "source_label": "OpenRouter's live model list",
+   "tier": "OpenRouter live, exact id"
+  },
+  "approximate": false,
+  "kinds": [
+   "chat",
+   "image",
+   "tts",
+   "asr",
+   "video"
+  ],
+  "labels": [
+   "Chat",
+   "Image",
+   "Speech",
+   "Transcription",
+   "Video"
+  ],
+  "source": "provider_listing",
+  "source_label": "the provider's model list",
+  "tier": "provider /models, exact id"
+ },
+ "kor-live/kinds/novita/ming-image-0.1-design-layer": {
+  "also_stated": {
+   "approximate": false,
+   "kinds": [
+    "image"
+   ],
+   "labels": [
+    "Image"
+   ],
+   "source": "openrouter_live",
+   "source_label": "OpenRouter's live model list",
+   "tier": "OpenRouter live, exact id"
+  },
+  "approximate": false,
+  "kinds": [
+   "chat",
+   "image",
+   "tts",
+   "asr",
+   "video"
+  ],
+  "labels": [
+   "Chat",
+   "Image",
+   "Speech",
+   "Transcription",
+   "Video"
+  ],
+  "source": "provider_listing",
+  "source_label": "the provider's model list",
+  "tier": "provider /models, exact id"
+ },
+ "kor-live/page": {
+  "bytes": 227184,
+  "sha256": "99763a85fedbb2ad681c8d3a3dc767169c57fe5d33f6b82a5135b693c6311238"
+ },
+ "kor-live/page-diff": {
+  "cline/cline-pass/deepseek-v4.1-flash": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, bare model + tag (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "deepseek/deepseek-v4.1-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, bare model + tag (deepseek/deepseek-v4.1-flash). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "deepseek/deepseek-v4.1-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": "2026-09-10"
+    }
+   ]
+  },
+  "commandcode/claude-sonnet-5-5": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "commandcode/deepseek/deepseek-v4-flash-fast": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "commandcode/gpt-6-astra": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (openai/gpt-6-astra). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "openai/gpt-6-astra"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "GPT-6 Astra is OpenAI's flagship model for demanding end-to-end work. It is suited for advanced analysis, software engineering, deep research, scientific work, and document creation, with particular strengths in long-horizon..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (openai/gpt-6-astra). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "openai/gpt-6-astra"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-09-04"
+    }
+   ],
+   "capabilities.reasoning.can_reason": [
+    {
+     "approximate": false,
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": true
+    },
+    {
+     "approximate": false,
+     "ladder_value": true,
+     "note": "OpenRouter live, exact id (openai/gpt-6-astra). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "openai/gpt-6-astra"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": true
+    }
+   ],
+   "capabilities.supports_tool_calls": [
+    {
+     "approximate": false,
+     "reference": true,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 5,
+     "tier_label": "OpenRouter catalogue, exact id",
+     "value": true
+    },
+    {
+     "approximate": false,
+     "ladder_value": true,
+     "note": "OpenRouter live, exact id (openai/gpt-6-astra). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "openai/gpt-6-astra"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": true
+    }
+   ],
+   "kind": [
+    {
+     "approximate": false,
+     "kinds": [
+      "chat"
+     ],
+     "labels": [
+      "Chat"
+     ],
+     "source": "models_dev",
+     "source_label": "models.dev modalities",
+     "tier": "OpenRouter catalogue, exact id"
+    },
+    {
+     "approximate": false,
+     "kinds": [
+      "chat"
+     ],
+     "labels": [
+      "Chat"
+     ],
+     "source": "openrouter_live",
+     "source_label": "OpenRouter's live model list",
+     "tier": "OpenRouter live, exact id"
+    }
+   ]
+  },
+  "hypercharm/deepseek-v4.1-flash": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (deepseek/deepseek-v4.1-flash). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "deepseek/deepseek-v4.1-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (deepseek/deepseek-v4.1-flash). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "deepseek/deepseek-v4.1-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-09-10"
+    }
+   ]
+  },
+  "kilo/kilo-auto/efficient": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nous_portal/anthropic/claude-sonnet-5": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (anthropic/claude-sonnet-5). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "anthropic/claude-sonnet-5"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Sonnet 5 is Anthropic's most capable Sonnet-class model, with frontier performance across coding, agents, and professional work. It supports adaptive thinking with selectable reasoning effort levels (low, medium, high, max,..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (anthropic/claude-sonnet-5). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "anthropic/claude-sonnet-5"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-06-30"
+    }
+   ],
+   "kind": [
+    {
+     "approximate": false,
+     "kinds": [
+      "chat"
+     ],
+     "labels": [
+      "Chat"
+     ],
+     "source": "models_dev",
+     "source_label": "models.dev modalities",
+     "tier": "OpenRouter catalogue, exact id"
+    },
+    {
+     "approximate": false,
+     "kinds": [
+      "chat"
+     ],
+     "labels": [
+      "Chat"
+     ],
+     "source": "openrouter_live",
+     "source_label": "OpenRouter's live model list",
+     "tier": "OpenRouter live, exact id"
+    }
+   ]
+  },
+  "nous_portal/tencent/hy3": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (tencent/hy3). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "tencent/hy3"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (tencent/hy3). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "tencent/hy3"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-07-06"
+    }
+   ]
+  },
+  "novita/ming-image-0.1-design": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Ming Image 0.1 Design is a text-to-image model from inclusionAI aimed at graphic-design output, with an emphasis on legible text rendering inside the generated image. It generates from a prompt..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-09-22"
+    }
+   ],
+   "capabilities.reasoning.can_reason": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": false
+    }
+   ],
+   "capabilities.supports_tool_calls": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": false
+    }
+   ],
+   "capabilities.supports_vision": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": false
+    }
+   ],
+   "kind": [
+    {
+     "approximate": false,
+     "kinds": [
+      "chat",
+      "image",
+      "tts",
+      "asr",
+      "video"
+     ],
+     "labels": [
+      "Chat",
+      "Image",
+      "Speech",
+      "Transcription",
+      "Video"
+     ],
+     "source": "provider_listing",
+     "source_label": "the provider's model list",
+     "tier": "provider /models, exact id"
+    },
+    {
+     "also_stated": {
+      "approximate": false,
+      "kinds": [
+       "image"
+      ],
+      "labels": [
+       "Image"
+      ],
+      "source": "openrouter_live",
+      "source_label": "OpenRouter's live model list",
+      "tier": "OpenRouter live, exact id"
+     },
+     "approximate": false,
+     "kinds": [
+      "chat",
+      "image",
+      "tts",
+      "asr",
+      "video"
+     ],
+     "labels": [
+      "Chat",
+      "Image",
+      "Speech",
+      "Transcription",
+      "Video"
+     ],
+     "source": "provider_listing",
+     "source_label": "the provider's model list",
+     "tier": "provider /models, exact id"
+    }
+   ]
+  },
+  "novita/ming-image-0.1-design-layer": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design-layer"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Ming Image 0.1 Design Layer is an image-to-image model from inclusionAI that decomposes a flattened design image into separate RGBA layers, such as a background layer and foreground elements, and..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design-layer"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-09-23"
+    }
+   ],
+   "capabilities.reasoning.can_reason": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design-layer"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": false
+    }
+   ],
+   "capabilities.supports_tool_calls": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design-layer"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": false
+    }
+   ],
+   "capabilities.supports_vision": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, exact id (inclusionai/ming-image-0.1-design-layer). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "inclusionai/ming-image-0.1-design-layer"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": true
+    }
+   ],
+   "kind": [
+    {
+     "approximate": false,
+     "kinds": [
+      "chat",
+      "image",
+      "tts",
+      "asr",
+      "video"
+     ],
+     "labels": [
+      "Chat",
+      "Image",
+      "Speech",
+      "Transcription",
+      "Video"
+     ],
+     "source": "provider_listing",
+     "source_label": "the provider's model list",
+     "tier": "provider /models, exact id"
+    },
+    {
+     "also_stated": {
+      "approximate": false,
+      "kinds": [
+       "image"
+      ],
+      "labels": [
+       "Image"
+      ],
+      "source": "openrouter_live",
+      "source_label": "OpenRouter's live model list",
+      "tier": "OpenRouter live, exact id"
+     },
+     "approximate": false,
+     "kinds": [
+      "chat",
+      "image",
+      "tts",
+      "asr",
+      "video"
+     ],
+     "labels": [
+      "Chat",
+      "Image",
+      "Speech",
+      "Transcription",
+      "Video"
+     ],
+     "source": "provider_listing",
+     "source_label": "the provider's model list",
+     "tier": "provider /models, exact id"
+    }
+   ]
+  },
+  "novita/zai-org/glm-5.3-flash": {
+   "capabilities.cache_read_price": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "z-ai/glm-5.3-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": 0.03
+    }
+   ],
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "z-ai/glm-5.3-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, bare model + tag (z-ai/glm-5.3-flash). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "z-ai/glm-5.3-flash"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, bare model + tag",
+     "value": "2026-08-26"
+    }
+   ]
+  },
+  "nvidia_nim/01-ai/yi-large": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "nvidia_nim/moonshotai/kimi-k3": {
+   "capabilities.cache_read_price": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, exact id (moonshotai/kimi-k3). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "moonshotai/kimi-k3"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": 0.66
+    }
+   ],
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (moonshotai/kimi-k3). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "moonshotai/kimi-k3"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Kimi K3 is a 2.8T parameter open-weight multimodal reasoning model from Moonshot AI. It is suited for complex coding, knowledge work, and long-horizon agentic workflows, and is particularly strong at..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (moonshotai/kimi-k3). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "moonshotai/kimi-k3"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-07-16"
+    }
+   ]
+  },
+  "nvidia_nim/test-model": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "open_router/stepfun/step-5-preview": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (stepfun/step-5-preview). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "stepfun/step-5-preview"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (stepfun/step-5-preview). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "stepfun/step-5-preview"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-10-08"
+    }
+   ]
+  },
+  "opencode_go/minimax-m3": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (minimax/minimax-m3). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "minimax/minimax-m3"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,..."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (minimax/minimax-m3). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "minimax/minimax-m3"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-05-31"
+    }
+   ]
+  },
+  "vercel/alibaba/qwen-3-14b": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/alibaba/qwen3-embedding-0.6b": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/bfl/flux-2-flex": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ]
+  },
+  "vercel/fish-audio/transcribe-1": {
+   "capabilities.description": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (fish-audio/transcribe-1). Shown only; nothing reads it.",
+     "openrouter_ids": [
+      "fish-audio/transcribe-1"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "Transcribe 1 is a speech-to-text model from Fish Audio. It is suited for audio transcription with automatic language detection and can return timestamped word-level segments when alignment details are requested."
+    }
+   ],
+   "capabilities.knowledge_cutoff": [
+    null,
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    }
+   ],
+   "capabilities.listed_on_openrouter": [
+    null,
+    {
+     "approximate": false,
+     "note": "OpenRouter live, exact id (fish-audio/transcribe-1). The day OpenRouter added it to its list -- not the model's release date.",
+     "openrouter_ids": [
+      "fish-audio/transcribe-1"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": "2026-07-29"
+    }
+   ],
+   "capabilities.output_price": [
+    {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    {
+     "approximate": false,
+     "ladder_value": null,
+     "note": "OpenRouter live, exact id (fish-audio/transcribe-1). From OpenRouter's own live model list. Shown here and in agent catalogues only: routing, output caps and reasoning never read it.",
+     "openrouter_ids": [
+      "fish-audio/transcribe-1"
+     ],
+     "reference": false,
+     "source": "openrouter_live",
+     "source_label": "OpenRouter live",
+     "tier": null,
+     "tier_label": "OpenRouter live, exact id",
+     "value": 0.0
+    }
+   ]
+  }
+ },
+ "kor-live/serialiser/aider": {
+  "bytes": 14601,
+  "sha256": "70f22a86095b586b34361d580c4258f4720e8cc51275c5221ba0bfb4425e9f46"
+ },
+ "kor-live/serialiser/codex": {
+  "bytes": 40861,
+  "sha256": "6f53f9ab971a5e43f2270063489939a4545847b4c99e1537926fd0014409dd5a"
+ },
+ "kor-live/serialiser/commandcode": {
+  "bytes": 9788,
+  "sha256": "1ec7643009530a529efb6e793318888f52a0f0d22dfa6ff34b7d9af7661090c9"
+ },
+ "kor-live/serialiser/crush": {
+  "bytes": 16945,
+  "sha256": "29893fbc6ebeee1d61ba523dead73e4d2d3d0ea5c60943f96a515db85067cfc5"
+ },
+ "kor-live/serialiser/droid": {
+  "bytes": 10200,
+  "sha256": "5833d157f05e3d9a2438f4339734289d080ac0b72986ecde74549ce3a75d4724"
+ },
+ "kor-live/serialiser/gemini_cli": {
+  "bytes": 8498,
+  "sha256": "d662b43819d2a0278e9b800af387ba48ee16cc78440261ee1540712151ee6a3c"
+ },
+ "kor-live/serialiser/goose": {
+  "bytes": 9336,
+  "sha256": "da4aa8ae2b44974990ca01ee763b0a4a5a60fb109e3064e9869952712cc20d30"
+ },
+ "kor-live/serialiser/kilo": {
+  "bytes": 11874,
+  "sha256": "62288176f01c4433c555cbf500a6ef71407b1814490e4cb75ab2962b2f26e57e"
+ },
+ "kor-live/serialiser/kimi": {
+  "bytes": 7876,
+  "sha256": "ea1f4258914480d8b007f60730a0af5decc332d25cd93cac23c965593127ae3c"
+ },
+ "kor-live/serialiser/opencode": {
+  "bytes": 13936,
+  "sha256": "b3c0581485412c1c9dd51e6dffe9913350cb39dcd22b7b371edc7eb68ca774d7"
+ },
+ "kor-live/serialiser/pi": {
+  "bytes": 10998,
+  "sha256": "b3a207d858af280faf8e5fd355a14aedeb03562cdd906fe3eac33aa334678b44"
+ },
+ "kor-live/serialiser/qwen": {
+  "bytes": 11342,
+  "sha256": "b93b798bc97c5fbdc6b510aa1339e5e006d9d2609d5471fb792e080a3d60c3c4"
+ },
+ "kor-live/serialiser/vscode": {
+  "bytes": 6925,
+  "sha256": "463ae58e6fe582a1ffa5bb0418ff61d31639bcc335ad9d60102fe3f5e450700a"
+ },
+ "kor-substituted/serialiser/aider": {
+  "bytes": 14610,
+  "sha256": "78e00f3fd5ae3ce51b6c642d2e697563823e061d2778542eeed64b09713bc818"
+ },
+ "kor-substituted/serialiser/cline": {
+  "bytes": 4122,
+  "sha256": "9332753f5d78a08e3703ba2f199de054b70c9f32a3a06dadc0d00000bca7587c"
+ },
+ "kor-substituted/serialiser/codex": {
+  "bytes": 42297,
+  "sha256": "b98cc2412cad71c3eefa2d9b140db6c4b509c5b2536f7ebf3f4e610ed99319f2"
+ },
+ "kor-substituted/serialiser/commandcode": {
+  "bytes": 9930,
+  "sha256": "affef1f413ef8abc9c4e0a5068ea3f5581abd2fbf1240ec9ee73b84927d2d4ab"
+ },
+ "kor-substituted/serialiser/crush": {
+  "bytes": 17238,
+  "sha256": "ef974369d65965e11ad25f1e37fe0c71b6a5329012f287e257b02de1bce47cf4"
+ },
+ "kor-substituted/serialiser/droid": {
+  "bytes": 10286,
+  "sha256": "dc4860d03e6225be943903d06de24fd477c3f30bc5e768d4bd54d96046443420"
+ },
+ "kor-substituted/serialiser/gemini_cli": {
+  "bytes": 8372,
+  "sha256": "7e3f0e461e9519c0384926b2152d4fe519d9e57972b2af8b1268550f16523be2"
+ },
+ "kor-substituted/serialiser/goose": {
+  "bytes": 9660,
+  "sha256": "a0b318c5d313703f9450a5501b473ee4b2f12d0ebf4f221b55206cdcabe4b88b"
+ },
+ "kor-substituted/serialiser/kilo": {
+  "bytes": 11554,
+  "sha256": "5b77218695f040b948d39bd6f1268522681eab0b9e97cf0a0840c773ec62333c"
+ },
+ "kor-substituted/serialiser/kimi": {
+  "bytes": 8059,
+  "sha256": "329acd50d76c3dedfaaa3028bf817265bffb8df8f37ad07c40cf49ebc0fcf52b"
+ },
+ "kor-substituted/serialiser/opencode": {
+  "bytes": 13766,
+  "sha256": "97f8f6c5594abb36a05f86aeb808fb2d90b2a016a2f4cb27c791959153b527f6"
+ },
+ "kor-substituted/serialiser/pi": {
+  "bytes": 11180,
+  "sha256": "7ccfd60d756e5f6e80c3b21f39a13318184c75b3d6d83915779c8fac6009ebb7"
+ },
+ "kor-substituted/serialiser/qwen": {
+  "bytes": 11374,
+  "sha256": "cf988a172ef1629de2e47f884e17f52766477af4c06ffe350debbaaac3567a81"
+ },
+ "kor-substituted/serialiser/vscode": {
+  "bytes": 6956,
+  "sha256": "9ca00cd61aed92417a561ded334d7147f7814525bb3c392b9e153a47c6dbf43f"
+ },
  "page": {
   "v7.82.0": {
    "bytes": 201214,

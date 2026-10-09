@@ -7330,6 +7330,86 @@ if (modelsLink) {
     }),
   };
 
+  /* --- OpenRouter's live list (7.84.0): its badge, its three rows, and a
+     second statement drawn beside an answer it does not override. */
+  const livePanel = window.eval("buildCapabilityPanel")(
+    {
+      supports_vision: {
+        value: true,
+        source: "models_dev",
+        source_label: "models.dev",
+        approximate: false,
+        tier: 3,
+        tier_label: "models.dev bucket, exact id",
+        also_stated: {
+          value: false,
+          source: "openrouter_live",
+          source_label: "OpenRouter live",
+          tier: null,
+          tier_label: "OpenRouter live, exact id",
+        },
+      },
+      cache_read_price: {
+        value: 0.05,
+        source: "openrouter_live",
+        source_label: "OpenRouter live",
+        approximate: false,
+        tier: null,
+        tier_label: "OpenRouter live, exact id",
+        note: "OpenRouter live, exact id (vendor/model). From OpenRouter's own live model list.",
+      },
+      description: {
+        value: "A model.",
+        source: "openrouter_live",
+        source_label: "OpenRouter live",
+        approximate: false,
+        tier: null,
+        tier_label: "OpenRouter live, exact id",
+      },
+      knowledge_cutoff: {
+        value: null,
+        source: "unknown",
+        source_label: "unknown",
+        approximate: false,
+        tier: null,
+        tier_label: null,
+      },
+      listed_on_openrouter: {
+        value: "2026-02-11",
+        source: "openrouter_live",
+        source_label: "OpenRouter live",
+        approximate: false,
+        tier: null,
+        tier_label: "OpenRouter live, exact id",
+        note: "The day OpenRouter added it to its list -- not the model's release date.",
+      },
+    },
+    MODEL_ADMIN_PAGE.source_labels || {},
+    {
+      ...alpha.models[0],
+      kind: {
+        kinds: ["chat", "asr"],
+        labels: ["Chat", "Transcription"],
+        source: "models_dev",
+        source_label: "models.dev modalities",
+        tier: "models.dev bucket, exact id",
+        approximate: false,
+        also_stated: {
+          kinds: ["chat"],
+          labels: ["Chat"],
+          source: "openrouter_live",
+          source_label: "OpenRouter's live model list",
+          tier: "OpenRouter live, exact id",
+          approximate: false,
+        },
+      },
+    },
+  );
+  models.liveRows = Array.from(livePanel.querySelectorAll("tr")).map((row) => ({
+    cells: Array.from(row.children).map(flat),
+    badge: (row.querySelector(".models-source") || { className: "" }).className,
+  }));
+
   models.preferences = {};
   [0, 1, 2, 3, 4, 5, 6].forEach((index) => {
     const model = alpha.models[index];

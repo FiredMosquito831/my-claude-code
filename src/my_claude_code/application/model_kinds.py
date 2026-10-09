@@ -24,6 +24,11 @@ then the catalogues, gap filling down -- in this order (7.80.0):
 2. What models.dev catalogues the model as accepting and producing, read down
    its own rungs (``declared_modalities_tiered``): the provider's own bucket,
    then the OpenRouter reference, then the quorum-guarded cross-provider vote.
+   **OpenRouter's own live model list** (7.84.0) sits here too, for every
+   provider but OpenRouter itself (whose list IS rung 1): for a provider with
+   no models.dev bucket it answers before models.dev's OpenRouter copy and
+   the vote; for a provider with a bucket only where the bucket is silent --
+   it never overrides a bucket (user decisions 2026-10-08 21:00 and 21:33).
 3. The provider's coarser words for it: its model type (Novita
    ``model_type``, Vercel ``type``) and the endpoints it says serve the model
    (Command Code ``supported_endpoints``, new-api ``supported_endpoint_types``,
@@ -62,6 +67,11 @@ from my_claude_code.application.model_metadata import (
     DeclaredModalities,
     ProviderModelDeclaration,
 )
+from my_claude_code.application.openrouter_live import (
+    LiveLookup,
+    LiveModel,
+    live_wins_intrinsic,
+)
 from my_claude_code.config.harness_tiers import HarnessTiers, current_harness_tiers
 from my_claude_code.config.model_refs import (
     configured_chat_model_refs,
@@ -91,12 +101,16 @@ KIND_SOURCE_PROVIDER_LISTING = "provider_listing"
 KIND_SOURCE_MODELS_DEV = "models_dev"
 KIND_SOURCE_PROVIDER_WORDS = "provider_words"
 KIND_SOURCE_MEDIA_RAIL = "media_rail"
+#: 7.84.0: OpenRouter's own live model list, for a provider that is not
+#: OpenRouter.
+KIND_SOURCE_OPENROUTER_LIVE = "openrouter_live"
 
 KIND_SOURCE_LABELS: Mapping[str, str] = {
     KIND_SOURCE_MODELS_DEV: "models.dev modalities",
     KIND_SOURCE_MEDIA_RAIL: "your media rail",
     KIND_SOURCE_PROVIDER_LISTING: "the provider's model list",
     KIND_SOURCE_PROVIDER_WORDS: "the provider's model type or endpoints",
+    KIND_SOURCE_OPENROUTER_LIVE: "OpenRouter's live model list",
 }
 
 #: ``(provider_id, model_id) -> (modalities, rung)``: what the ladder declares
@@ -220,6 +234,9 @@ class ModelKind:
     kinds: frozenset[str] | None
     source: str | None = None
     tier: ResolutionTier | None = None
+    #: How OpenRouter's live list met the id (``"OpenRouter live, exact id"``)
+    #: when that rung stated the kind (7.84.0); it has no ladder tier.
+    match: str | None = None
 
     @property
     def known(self) -> bool:
@@ -414,12 +431,69 @@ def modalities_source(tier: ResolutionTier | None) -> str:
     return KIND_SOURCE_MODELS_DEV
 
 
+#: Every modality word a kind can be read from (7.84.0): models.dev's own
+#: (``text image audio video pdf``), the OpenRouter-dialect synonyms
+#: (:data:`MODALITY_SYNONYMS`), ``file`` (OpenRouter's ``pdf``), and the
+#: outputs that state "none of the five" (``embeddings``, ``rerank``).
+#: OpenRouter's live list also writes words no kind rule reads -- ``decisions``
+#: on 15 rows -- and a pair carrying one states no kind on that rung: an
+#: unread word must not take a model out of a list (unknown is not
+#: unsupported), so such a model keeps whatever the rest of the ladder says.
+LIVE_KIND_MODALITY_WORDS = frozenset(
+    {
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf",
+        "file",
+        "speech",
+        "transcription",
+        "embeddings",
+        "embedding",
+        "rerank",
+    }
+)
+
+
+def _live_pair(live: LiveModel | None) -> DeclaredModalities | None:
+    """The pair OpenRouter's live list states, if it may decide a kind."""
+
+    if live is None or not live.feeds_ladder or live.modalities is None:
+        return None
+    pair = live.modalities
+    words = {word.strip().lower() for word in (*pair.inputs, *pair.outputs)}
+    if not words <= LIVE_KIND_MODALITY_WORDS:
+        return None
+    return pair
+
+
+def live_kind_alternative(kind: ModelKind, live: LiveModel | None) -> ModelKind | None:
+    """OpenRouter's live statement where it differs from the kind shown (7.84.0).
+
+    For the Models page only, which shows both statements wherever the live
+    list says something other than the rung that decided the kind -- the
+    provider's own list or a models.dev bucket, which it never overrides.
+    """
+
+    pair = _live_pair(live)
+    if pair is None or live is None or kind.source == KIND_SOURCE_OPENROUTER_LIVE:
+        return None
+    stated = kinds_from_modalities(pair)
+    if stated == kind.kinds:
+        return None
+    return ModelKind(
+        kinds=stated, source=KIND_SOURCE_OPENROUTER_LIVE, match=live.tier_label
+    )
+
+
 def resolve_model_kind(
     model_ref: str,
     *,
     modalities: ModalitiesLookup,
     placements: Mapping[str, frozenset[str]],
     kind_words: KindWordsLookup | None = None,
+    live: LiveLookup | None = None,
 ) -> ModelKind:
     """The stated kind of one ``provider/model`` ref, or :data:`UNKNOWN_KIND`.
 
@@ -429,12 +503,30 @@ def resolve_model_kind(
     source is silent, so a placement can never contradict a declaration -- a
     chat model someone put on the Image rail is still a chat model, and the
     Image rail's picker marks it rather than the chat lists losing it.
+
+    ``live`` is OpenRouter's live list (7.84.0): below the provider's own
+    pair, above models.dev's tiers 5-10 (which only a provider with no bucket
+    reaches) and below a bucket's 3-4, and above the coarse words. ``None``
+    is the ladder before 7.84.0, exactly.
     """
 
     if "/" in model_ref:
         provider_id = parse_provider_type(model_ref)
         model_id = parse_model_name(model_ref)
         declared, tier = modalities(provider_id, model_id)
+        if declared is None or modalities_source(tier) != KIND_SOURCE_PROVIDER_LISTING:
+            answer = None if live is None else live(provider_id, model_id)
+            pair = _live_pair(answer)
+            if (
+                answer is not None
+                and pair is not None
+                and live_wins_intrinsic(declared, tier, pair)
+            ):
+                return ModelKind(
+                    kinds=kinds_from_modalities(pair),
+                    source=KIND_SOURCE_OPENROUTER_LIVE,
+                    match=answer.tier_label,
+                )
         if declared is not None:
             return ModelKind(
                 kinds=kinds_from_modalities(declared),
@@ -459,6 +551,7 @@ def chat_listing_filter(
     modalities: ModalitiesLookup,
     harness_tiers: HarnessTiers | None = None,
     kind_words: KindWordsLookup | None = None,
+    live: LiveLookup | None = None,
 ) -> Callable[[str], bool]:
     """The one predicate every chat listing applies to a *discovered* ref.
 
@@ -478,6 +571,7 @@ def chat_listing_filter(
             modalities=modalities,
             placements=placements,
             kind_words=kind_words,
+            live=live,
         ).chat_listable
 
     return listable

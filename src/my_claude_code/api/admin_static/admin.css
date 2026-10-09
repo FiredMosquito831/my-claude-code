@@ -7691,6 +7691,14 @@ audio.req-media-preview {
   color: var(--reasoning);
 }
 
+/* OpenRouter's own live model list (7.84.0): one named publisher, read for
+   every provider, shown and never acted on by routing. */
+.models-source-openrouter_live {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
 /* A vote across same-named rows in other providers' buckets. It is regularly
    wrong -- one free model is credited with a 1,048,576-token output limit off
    a single match -- so it never gets to look like a published number. */
