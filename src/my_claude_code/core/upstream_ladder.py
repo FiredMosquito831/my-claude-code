@@ -216,6 +216,11 @@ class ProxyDial:
     answered: bool = False
     #: ``time.monotonic()`` when that last try was recorded.
     verdict_at: float | None = None
+    #: What MCC now remembers about this exit because of this dial (7.81.0,
+    #: "Keep trying exits until one answers"): "remembered spent until ...",
+    #: "remembered blocked for its country ...", "unreachable ...". ``None`` on
+    #: every dial of a chain without the switch, so its row is what it was.
+    memory: str | None = None
 
 
 @dataclass(slots=True)
@@ -231,6 +236,17 @@ class AttemptLadder:
     #: ``time.monotonic()`` when the request moved on to its next attempt.
     #: ``None`` while this is the attempt in flight.
     closed_at: float | None = None
+    #: Exits of a ticked chain ("Keep trying exits until one answers", 7.81.0)
+    #: this attempt did not dial because MCC remembered them spent, blocked or
+    #: unreachable. 0 -- every other attempt -- is not rendered.
+    exits_skipped: int = 0
+    #: The sentence a ticked chain that ran out of exits ended this attempt
+    #: with; the attempt's root-cause line. ``None`` everywhere else.
+    exits_exhausted: str | None = None
+
+    @property
+    def has_exit_summary(self) -> bool:
+        return bool(self.exits_skipped or self.exits_exhausted)
 
 
 @dataclass(slots=True)
@@ -324,6 +340,20 @@ class LadderTrace:
         if dial is None:
             return
         dial.handshake_ms = milliseconds
+
+    def record_dial_memory(self, text: str) -> None:
+        """What MCC now remembers about the exit the open dial went through."""
+        dial = self._open_dial()
+        if dial is None:
+            return
+        dial.memory = text
+
+    def record_exit_summary(self, *, skipped: int, exhausted: str | None) -> None:
+        """How many exits a ticked chain skipped from memory, and how it ended."""
+        ladder = self.slot()
+        ladder.exits_skipped = max(0, int(skipped))
+        if exhausted:
+            ladder.exits_exhausted = exhausted
 
     def record_try(self, entry: LadderTry) -> None:
         ladder = self.slot()
@@ -577,6 +607,26 @@ def amend_proxy_dial(announced: str | None, actual: str | None) -> None:
     slot.amend_dial(announced, actual)
 
 
+def record_dial_memory(text: str) -> None:
+    """Note on the open dial what MCC now remembers about its exit, if tracked.
+
+    Written by a chain with "Keep trying exits until one answers" ticked
+    (7.81.0) right after the exit refused or failed; never by any other chain.
+    """
+    slot = _LADDER.get()
+    if slot is None:
+        return
+    slot.record_dial_memory(text)
+
+
+def record_exit_summary(*, skipped: int, exhausted: str | None = None) -> None:
+    """Note how many exits a ticked chain skipped from memory, if tracked."""
+    slot = _LADDER.get()
+    if slot is None:
+        return
+    slot.record_exit_summary(skipped=skipped, exhausted=exhausted)
+
+
 def record_proxy_connect(seconds: float) -> None:
     """Record the TCP connect to the proxy the open dial is using, if tracked."""
     slot = _LADDER.get()
@@ -727,6 +777,8 @@ def dial_rows(
             row["idle_ms"] = _elapsed_ms(settled, end)
         if dial.verdict is not None:
             row["reason"] = dial.verdict
+        if dial.memory is not None:
+            row["memory"] = dial.memory
         rows.append(row)
     return rows
 
@@ -836,6 +888,12 @@ def ladder_payload(
         payload["dials"] = dial_rows(ladder, now=now)
     if ladder.dials_dropped:
         payload["dials_dropped"] = ladder.dials_dropped
+    # 7.81.0, a chain with "Keep trying exits until one answers" ticked only:
+    # absent on every other attempt, so its payload is what it always was.
+    if ladder.exits_skipped:
+        payload["exits_skipped_by_memory"] = ladder.exits_skipped
+    if ladder.exits_exhausted:
+        payload["exits_exhausted"] = ladder.exits_exhausted
     return payload
 
 
@@ -994,6 +1052,12 @@ def ladder_root_cause(
     inferred from ``error_kind`` alone, and a component that was not measured
     drops its clause rather than defaulting to zero.
     """
+    exhausted = payload.get("exits_exhausted")
+    if exhausted:
+        # A ticked chain that ran out of exits (7.81.0) already said what it
+        # met, exit by exit, in its own sentence -- the line the request
+        # detail shows first.
+        return str(exhausted)
     summary = payload.get("summary") or {}
     tries = int(summary.get("tries") or 0)
     if tries <= 1:

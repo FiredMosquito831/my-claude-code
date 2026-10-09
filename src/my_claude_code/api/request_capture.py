@@ -613,8 +613,12 @@ class RequestCapture:
             return None
         ladder = self._ladder.ladders.get(attempt.attempt)
         # A ladder with dials and no try is the one worth keeping most: a dial
-        # that never completed, which is exactly what a try cannot record.
-        if ladder is None or not (ladder.tries or ladder.dials):
+        # that never completed, which is exactly what a try cannot record. So
+        # is one whose ticked chain dialled nothing because every exit was
+        # remembered spent (7.81.0): its summary is the only account of it.
+        if ladder is None or not (
+            ladder.tries or ladder.dials or ladder.has_exit_summary
+        ):
             return None
         payload = ladder_payload(ladder)
         payload["root_cause"] = ladder_root_cause(

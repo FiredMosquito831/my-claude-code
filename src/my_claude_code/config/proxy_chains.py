@@ -778,6 +778,16 @@ class ProxyChain:
     #: counted from, and stored rather than held in memory so a restart does
     #: not make a chain sortable again at once.
     order_sorted_at: str = ""
+    #: "Keep trying exits until one answers" (7.81.0), for a provider whose
+    #: limit follows the address: a request the exit refused or dropped (a
+    #: free-usage limit, a country refusal, a dead or dropping proxy) moves to
+    #: another exit on the same model -- within "Switches per request" and
+    #: ``PROXY_MAX_LIVE_FAILURES`` -- and the refused exits are remembered
+    #: across rebuilds. FALSE for a chain stored before this key existed, and
+    #: for the dataclass default: a document without it reads back as
+    #: ``False`` and is written back without it, byte for byte. The page sends
+    #: it ticked for a chain it creates.
+    until_served: bool = False
 
     @property
     def is_empty(self) -> bool:
@@ -807,6 +817,10 @@ class ProxyChain:
             document["order_by_speed"] = True
         if self.order_sorted_at:
             document["order_sorted_at"] = self.order_sorted_at
+        # 7.81.0, the same rule: only when it says something, so every chain
+        # stored before it round-trips byte for byte.
+        if self.until_served:
+            document["until_served"] = True
         return document
 
     @classmethod
@@ -861,6 +875,9 @@ class ProxyChain:
             # 2026-09-25). A chain created since carries the key explicitly.
             order_by_speed=raw.get("order_by_speed") is True,
             order_sorted_at=str(raw.get("order_sorted_at") or "").strip(),
+            # Absent reads False: a chain stored before 7.81.0 rotates exactly
+            # as it did until its operator ticks the box.
+            until_served=raw.get("until_served") is True,
         )
 
 

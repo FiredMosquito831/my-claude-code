@@ -72,6 +72,7 @@ from my_claude_code.core.failures import (
 )
 from my_claude_code.core.openai_videos import parse_job
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
+from my_claude_code.core.proxy_exit_memory import EXIT_MEMORY, MEDIA_EXIT_MEMORY
 from my_claude_code.core.proxy_rotation import (
     PROXY_HEALTH,
     PROXY_INTERCEPTION,
@@ -100,6 +101,7 @@ from my_claude_code.providers.media.proxy_pool import (
 )
 from my_claude_code.providers.media.registry import _leaf_limiter
 from my_claude_code.providers.runtime.direct_leg import DirectFallbackLeg
+from my_claude_code.providers.runtime.proxy_leg import ProxiedLegRateLimiter
 from my_claude_code.providers.runtime.proxy_rotating import (
     ProxyRotatingProvider,
     ProxyRotationState,
@@ -197,6 +199,12 @@ class ProviderSpec:
     cooldown: float = 0.05
     #: ``PROXY_MAX_LIVE_FAILURES`` for the chain (0 = unbounded).
     max_live_failures: int = 0
+    #: "Keep trying exits until one answers" (7.81.0).
+    until_served: bool = False
+    #: The leaf's retry backoff. 0 everywhere else; a ticked chain's 429 is
+    #: retried on the same key before it reaches the pool, and the frozen
+    #: retry loop refuses a zero-second reactive block on that path.
+    backoff: float = 0.0
 
 
 def _config(provider: str, spec: ProviderSpec) -> ProviderConfig:
@@ -216,6 +224,7 @@ def _config(provider: str, spec: ProviderSpec) -> ProviderConfig:
             scope="provider",
             max_switches=spec.max_switches,
             direct_fallback=spec.direct_fallback,
+            until_served=spec.until_served,
         )
     return ProviderConfig(
         api_key=keys[0],
@@ -223,8 +232,8 @@ def _config(provider: str, spec: ProviderSpec) -> ProviderConfig:
         api_keys=keys,
         credential_rotation="failover",
         retry_attempts=spec.retry_attempts,
-        retry_backoff_base_seconds=0.0,
-        retry_backoff_max_seconds=0.0,
+        retry_backoff_base_seconds=spec.backoff,
+        retry_backoff_max_seconds=spec.backoff,
         retry_backoff_jitter_seconds=0.0,
         routes_around_model=spec.routes_around_model,
         proxy_chain=plan,
@@ -251,12 +260,22 @@ def _leaf(
     key: int,
     leg: str,
     proxied: bool,
+    plan: ProxyChainPlan | None = None,
 ) -> MediaLeaf:
+    limiter = _leaf_limiter(config, proxied_leg=proxied)
+    if (
+        plan is not None
+        and plan.until_served
+        and isinstance(limiter, ProxiedLegRateLimiter)
+    ):
+        # A ticked chain's leg (7.81.0), armed as the factory and the media
+        # registry arm it.
+        limiter.arm_exit_stops(transport=True, rate_limit="rate_limit" in plan.on)
     return MediaLeaf(
         provider_id=provider,
         config=config,
         surfaces=(image_generation_surface(),),
-        rate_limiter=_leaf_limiter(config, proxied_leg=proxied),
+        rate_limiter=limiter,
         transport=_transport(script, provider, key, leg),
     )
 
@@ -333,7 +352,7 @@ def _chat_node(
         def leaf() -> BaseProvider:
             return _ChatLeaf(
                 leg_config,
-                _leaf(script, provider, leg_config, key, leg, bool(url)),
+                _leaf(script, provider, leg_config, key, leg, bool(url), plan),
                 provider,
             )
 
@@ -351,7 +370,13 @@ def _chat_node(
         return leaf()
 
     state = ProxyRotationState(
-        len(legs), plan.policy, labels=labels, provider_id=provider, scope=plan.scope
+        len(legs),
+        plan.policy,
+        labels=labels,
+        provider_id=provider,
+        scope=plan.scope,
+        until_served=plan.until_served,
+        credential=f"{provider}-key-{key}",
     )
     return ProxyRotatingProvider(
         config,
@@ -428,10 +453,16 @@ def _media_node(
         url = legs[index].url if index < len(legs) else ""
         leg_config = dataclasses.replace(config, proxy=url, proxy_chain=None)
         leg = labels[index] if index < len(legs) else DIRECT_PROXY_LABEL
-        return _leaf(script, provider, leg_config, key, leg, bool(url))
+        return _leaf(script, provider, leg_config, key, leg, bool(url), plan)
 
     state = MediaProxyRotationState(
-        len(legs), plan.policy, labels=labels, provider_id=provider, scope=plan.scope
+        len(legs),
+        plan.policy,
+        labels=labels,
+        provider_id=provider,
+        scope=plan.scope,
+        until_served=plan.until_served,
+        credential=f"{provider}-key-{key}",
     )
     return MediaProxyPool(
         build,
@@ -531,6 +562,8 @@ def _reset_chat_proxy_books() -> None:
     PROXY_REACHABILITY.clear()
     PROXY_HEALTH.clear()
     PROXY_INTERCEPTION.clear()
+    EXIT_MEMORY.clear()
+    MEDIA_EXIT_MEMORY.clear()
 
 
 def _run_chat(scenario: Scenario) -> dict[str, Any]:
@@ -697,6 +730,15 @@ CREDITS = "Insufficient credits: your account balance is too low"
 def _scenarios() -> list[Scenario]:
     one = ProviderSpec()
     two_keys = ProviderSpec(keys=2)
+    #: A ticked chain as the user runs it: the default chips, the 429
+    #: retried on the same key when not routed around (their value), and a
+    #: real backoff so the leaf's limiter ladder has something to stop.
+    ticked: dict[str, Any] = {
+        "triggers": frozenset({"quota", "rate_limit", "timeout"}),
+        "routes_around_model": False,
+        "retry_attempts": 3,
+        "backoff": 0.01,
+    }
     return [
         Scenario(
             "5xx falls back to the next model",
@@ -865,6 +907,52 @@ def _scenarios() -> list[Scenario]:
                 eject_seconds=600,
             ),
         ),
+        # 7.81.0: a chain with "Keep trying exits until one answers" ticked.
+        Scenario(
+            "ticked: a 429 moves the same request to the next exit",
+            {"a": ProviderSpec(legs=3, until_served=True, **ticked), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, "a-p0"): [status(429, "free usage limit")]}),
+        ),
+        Scenario(
+            "ticked: a country refusal moves to the next exit",
+            {"a": ProviderSpec(legs=3, until_served=True, **ticked), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script(
+                {
+                    ("a", None, None, "a-p0"): [
+                        status(403, "This model is not available in your country.")
+                    ]
+                }
+            ),
+        ),
+        Scenario(
+            "ticked: the switch limit ends the exits and the next model answers",
+            {
+                "a": ProviderSpec(legs=3, until_served=True, max_switches=1, **ticked),
+                "b": one,
+            },
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, None): [status(429, "free usage limit")]}),
+        ),
+        Scenario(
+            "ticked: a remembered exit is not dialled by the next request",
+            {"a": ProviderSpec(legs=3, until_served=True, **ticked), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, "a-p0"): [status(429, "free usage limit")]}),
+            requests=2,
+        ),
+        Scenario(
+            "ticked: a dead exit moves on and every exit dead goes direct",
+            {"a": ProviderSpec(legs=2, until_served=True, **ticked), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            Script(
+                {
+                    ("a", None, None, "a-p0"): [CONNECT],
+                    ("a", None, None, "a-p1"): [CONNECT],
+                }
+            ),
+        ),
         Scenario(
             "a reactive 429 block makes the next request step over the provider",
             {"a": ProviderSpec(routes_around_model=False), "b": one},
@@ -927,6 +1015,19 @@ def test_the_scenarios_actually_exercise_the_rules() -> None:
     assert benched["benched"]["a/m1"] is True
     stepped = chat["a reactive 429 block makes the next request step over the provider"]
     assert [call[0] for call in stepped["calls"]] == ["a", "b", "b"]
+    moved = chat["ticked: a 429 moves the same request to the next exit"]
+    # One try on the exit that refused -- not three -- then the next exit.
+    assert [call[3] for call in moved["calls"]] == ["a-p0", "a-p1"]
+    assert moved["outcomes"] == [("served",)]
+    region = chat["ticked: a country refusal moves to the next exit"]
+    assert [call[3] for call in region["calls"]] == ["a-p0", "a-p1"]
+    capped = chat["ticked: the switch limit ends the exits and the next model answers"]
+    assert [call[3] for call in capped["calls"]] == ["a-p0", "a-p1", "-"]
+    assert capped["ledgers"][0][0][4] == FailureKind.UNAVAILABLE.value
+    remembered = chat["ticked: a remembered exit is not dialled by the next request"]
+    assert [call[3] for call in remembered["calls"]] == ["a-p0", "a-p1", "a-p1"]
+    dead = chat["ticked: a dead exit moves on and every exit dead goes direct"]
+    assert [call[3] for call in dead["calls"]] == ["a-p0", "a-p1", DIRECT_PROXY_LABEL]
 
 
 # ------------------------------------------------ video jobs (7.64.0)

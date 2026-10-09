@@ -7947,3 +7947,77 @@ def test_the_models_page_filters_and_marks_by_kind(rendered) -> None:
     assert facets["Video"] == 0
     assert facets["Kind not known"] == 3 * 45 - 3
     assert rendered["models"]["kindChips"] == ["Image model", "Image model"]
+
+
+# --------------------------- 7.81.0 keep trying exits until one answers
+
+
+def test_a_chain_stored_before_the_box_reads_unticked_with_no_forget(
+    rendered,
+) -> None:
+    served = rendered["proxying"]["untilServed"]
+    existing = served["existing"]
+    assert existing["hasKey"] is False  # the fixture is a pre-7.81.0 chain
+    assert existing["present"] is True
+    assert existing["checked"] is False
+    assert existing["label"] == "Keep trying exits until one answers"
+    assert existing["title"].startswith("Off: this chain moves on the failures")
+    assert existing["forget"] is False
+    assert existing["chips"] == [None, None, None, None]
+
+
+def test_a_ticked_chain_shows_what_it_remembers_and_offers_forget(rendered) -> None:
+    ticked = rendered["proxying"]["untilServed"]["ticked"]
+    assert ticked["checked"] is True
+    assert 'It still stops after "Switches per request" refusals' in ticked["title"]
+    assert "PROXY_COOLDOWN_SECONDS" in ticked["title"]
+    assert ticked["forget"] == "Forget exit memory (1)"
+    assert "NVIDIA NIM" in ticked["forgetTitle"]
+    first, *others = ticked["chips"]
+    assert first["text"] == f"remembered spent until {ticked['untilClock']}"
+    assert "chat: spent (rate_limit) for key nvap…6789" in first["title"]
+    assert "stated 300 s" in first["title"]
+    assert others == [None, None, None]
+
+
+def test_forget_posts_the_provider_only_and_clears_the_chip(rendered) -> None:
+    forgot = rendered["proxying"]["untilServed"]["forgot"]
+    assert forgot["writes"] == [
+        {
+            "path": "/admin/api/proxy-chains/forget",
+            "method": "POST",
+            "body": {"provider": "nvidia_nim"},
+        }
+    ]
+    assert forgot["chips"] == [None, None, None, None]
+    assert forgot["forget"] == "Forget exit memory"
+    assert forgot["announcement"].startswith("NVIDIA NIM: forgot 1 remembered exit;")
+
+
+def test_saving_always_names_the_box(rendered) -> None:
+    saved = rendered["proxying"]["untilServed"]["saved"]
+    assert saved is not None
+    assert saved["body"]["until_served"] is False
+    # The first save in this file, of the pre-7.81.0 chain, names it too.
+    assert rendered["proxying"]["saved"]["body"]["until_served"] is False
+
+
+def test_a_dial_says_what_is_remembered_and_the_attempt_what_it_skipped(
+    rendered,
+) -> None:
+    detail = rendered["requestDetail"]["proxyExitMemory"]
+    assert detail["dialTitles"] == [
+        "2 proxy dials · 1 switch · 4 skipped from memory",
+        "No exit dialled · 3 skipped from memory (spent, blocked for their "
+        "country, or unreachable)",
+    ]
+    assert detail["dials"] == [
+        "#1 · 203.0.113.1:1080 · 429 after 1.2s · switched in 4 ms"
+        " · remembered spent until 14:05:12 UTC (stated 412 s)",
+        "#2 · 203.0.113.2:1080 · 403 after 900 ms · not switched"
+        " · remembered blocked for its country until 14:05:12 UTC (300 s)",
+    ]
+    assert detail["ladderRootCauses"] == [
+        "Every exit this request could use in Zen's proxy chain refused or"
+        " failed it: tried 2."
+    ]

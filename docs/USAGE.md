@@ -3178,6 +3178,20 @@ restores 7.33.0 exactly.
 what MCC claims to *be*, not whose allowance it spends. Setting it to `mcc`
 does not move the credential.
 
+**The `public` bucket also follows the address (measured 2026-10-06).** In the
+same minutes a few proxy exits were answered while more than forty others, and
+this machine's own address, got `429 FreeUsageLimitError` on `Bearer public`;
+the direct address stopped at about 500 answers per UTC day. So a proxy chain
+on **OpenCode Zen** does lift the 429 -- one exit at a time. Since 7.81.0 tick
+**Keep trying exits until one answers** on that chain's card (**Proxying**
+page; new chains start ticked): a request an exit refused (a free-usage 429, a
+refusal for the exit's country) or dropped goes to another exit on the same
+model instead of being retried on the same exit, within your *Switches per
+request*, and MCC remembers the refused exits so later requests skip them.
+When the switch limit is reached the request moves to the next model without
+pausing it. See
+[Keep trying exits until one answers](ROUTING-REFERENCE.md#keep-trying-exits-until-one-answers-7810).
+
 ### OpenCode Zen serves different models on different endpoints
 
 **New in 6.74.0.** OpenCode Zen is not one API. It is a front door onto four,

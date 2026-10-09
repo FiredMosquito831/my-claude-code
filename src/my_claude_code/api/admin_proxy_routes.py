@@ -134,6 +134,11 @@ from my_claude_code.config.system_proxy import system_proxy_for
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
 from my_claude_code.core.loop_health import loop_health
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
+from my_claude_code.core.proxy_exit_memory import (
+    EXIT_MEMORY,
+    MEDIA_EXIT_MEMORY,
+    forget_exits,
+)
 from my_claude_code.core.proxy_rotation import PROXY_HEALTH, PROXY_INTERCEPTION
 
 router = APIRouter()
@@ -270,6 +275,13 @@ class ProxyChainPayload(BaseModel):
     #: turn it off by omission nor turn it on for a chain somebody arranged by
     #: hand. The page always sends it.
     order_by_speed: bool | None = None
+    #: "Keep trying exits until one answers" (7.81.0). ``None`` -- a client
+    #: that does not name it -- means TRUE for a chain this write creates (the
+    #: user's decision of 2026-10-06 19:49 wants exit rotation on chains) and
+    #: the stored value for one it updates, so an older client can neither
+    #: switch it off by omission nor switch it on for an existing chain. The
+    #: page always sends it.
+    until_served: bool | None = None
     entries: list[ProxyEntryPayload] = Field(default_factory=list)
 
 
@@ -712,6 +724,13 @@ def _commit_chain(provider_id: str, payload: ProxyChainPayload, inherited: str) 
             # The interval is about writes MCC made, and an operator's save is
             # not one of them: carried across, never reset by a save.
             order_sorted_at="" if previous is None else previous.order_sorted_at,
+            # 7.81.0: as ``order_by_speed`` -- ON for a chain this write
+            # creates, the stored value for one it updates.
+            until_served=(
+                payload.until_served
+                if payload.until_served is not None
+                else (True if previous is None else previous.until_served)
+            ),
         )
         # An address the operator typed may be one a feed had already offered:
         # ``add_endpoint`` files it under the id it already has rather than
@@ -2521,6 +2540,8 @@ def _chain_payload(
         "order_by_speed": chain.order_by_speed,
         "order_sorted_at": chain.order_sorted_at,
         "order_offered": chain.policy in ORDERABLE_POLICIES,
+        # 7.81.0. False for a chain stored before the key existed.
+        "until_served": chain.until_served,
         "entries": [
             _entry_payload(item, store, provider_id, settings) for item in chain.entries
         ],
@@ -2537,7 +2558,13 @@ def _entry_payload(
     url = endpoint.url if endpoint is not None else ""
     label = (endpoint.label if endpoint is not None else "") or mask_proxy_label(url)
     last_check = endpoint.last_check if endpoint is not None else None
-    return {
+    remembered = _memory_payload(
+        provider_id, DIRECT_PROXY_LABEL if entry.is_direct else label
+    )
+    # 7.81.0: what MCC remembers about this exit for this provider, present
+    # only when it remembers something, so every other row is what it was.
+    extra: dict[str, Any] = {"memory": remembered} if remembered else {}
+    return extra | {
         "proxy": entry.proxy,
         "paused": entry.paused,
         "direct": entry.is_direct,
@@ -2565,6 +2592,80 @@ def _entry_payload(
         # and first tokens. Direct has no address to measure.
         "speed": _speed("" if entry.is_direct else label, provider_id, settings),
     }
+
+
+def _memory_payload(provider_id: str, label: str) -> list[dict[str, Any]]:
+    """Every live exit-memory record for one chain entry (7.81.0), chat then media.
+
+    The credential is named by its masked label only; the memory's own
+    identity for it (a fingerprint) never leaves the server.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for rail, memory in (("chat", EXIT_MEMORY), ("media", MEDIA_EXIT_MEMORY)):
+        for record in memory.records(provider_id):
+            if record.exit_label != label:
+                continue
+            rows.append(
+                {
+                    "rail": rail,
+                    "state": record.state,
+                    "reason": record.reason,
+                    "remaining_s": round(memory.remaining(record), 1),
+                    "until": datetime.fromtimestamp(record.until_wall, UTC)
+                    .isoformat(timespec="seconds")
+                    .replace("+00:00", "Z"),
+                    "stated_wait": record.stated_wait,
+                    "credential": record.credential_label,
+                }
+            )
+    return rows
+
+
+def _chain_labels(store: ProxyChains, provider_id: str) -> tuple[str, ...]:
+    """The labels one chain's entries go by -- what the books are keyed on."""
+
+    chain = store.chain(provider_id)
+    if chain is None:
+        return ()
+    labels: list[str] = []
+    for entry in chain.entries:
+        if entry.is_direct:
+            labels.append(DIRECT_PROXY_LABEL)
+            continue
+        endpoint = store.endpoint(entry.proxy)
+        if endpoint is not None:
+            labels.append(endpoint.label or mask_proxy_label(endpoint.url))
+    return tuple(labels)
+
+
+class ProxyForgetPayload(BaseModel):
+    """Forget what MCC remembers about one chain's exits."""
+
+    provider: str
+
+
+@router.post("/admin/api/proxy-chains/forget")
+async def forget_proxy_exit_memory(
+    payload: ProxyForgetPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """ "Forget exit memory" on a chain's card (7.81.0).
+
+    Drops every exit remembered spent or blocked for this provider (every key,
+    chat and media), lifts the cooldown each entry shows, and lets the chain's
+    unreachable exits be dialled again. Rebuilds nothing: a ticked chain reads
+    the memory on every selection, so the next request sees the change.
+    """
+
+    require_loopback_admin(request)
+    provider_id = _require_configured(services, payload.provider)
+    labels = _chain_labels(current_proxy_chains(), provider_id)
+    dropped = await asyncio.to_thread(forget_exits, provider_id, labels)
+    refreshed = await asyncio.to_thread(_payload, services)
+    refreshed["forgotten"] = {"provider": provider_id, "remembered": dropped}
+    return refreshed
 
 
 def _scheme(url: str) -> str:

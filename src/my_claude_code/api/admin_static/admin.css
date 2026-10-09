@@ -9294,6 +9294,40 @@ audio.req-media-preview {
   margin: 0;
 }
 
+/* "Keep trying exits until one answers" (7.81.0): the same kind of answer to
+   "what does this chain do when something goes wrong", so the same place and
+   the same shape as the Direct fallback switch beside it. */
+.proxy-until-served {
+  gap: var(--space-2);
+}
+
+.proxy-until-served-input {
+  margin: 0;
+}
+
+/* Beside Save, like Test all: it acts on what the running chain learned, not
+   on the rows being edited. */
+.proxy-forget-memory {
+  white-space: nowrap;
+}
+
+/* What MCC remembers about one exit (7.81.0): a fact about the provider's
+   answers, not a health measurement, so a muted warning tone rather than the
+   health word's colours, and its own cell so the bounded health word above
+   never cuts it. */
+.proxy-entry-memory {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 32ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 14%, var(--panel));
+  color: var(--warn);
+}
+
 .proxy-empty {
   padding: var(--space-3);
   border: 1px dashed var(--line-strong);

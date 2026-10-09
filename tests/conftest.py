@@ -475,6 +475,22 @@ def _isolate_media_books():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_exit_memory():
+    """What a ticked chain remembers about its exits (7.81.0) is process-wide.
+
+    On purpose -- it has to outlive a provider rebuild -- which makes it process
+    state, and a spent exit one test remembered would be skipped in the next.
+    """
+    from my_claude_code.core.proxy_exit_memory import EXIT_MEMORY, MEDIA_EXIT_MEMORY
+
+    EXIT_MEMORY.clear()
+    MEDIA_EXIT_MEMORY.clear()
+    yield
+    EXIT_MEMORY.clear()
+    MEDIA_EXIT_MEMORY.clear()
+
+
+@pytest.fixture(autouse=True)
 def _reset_config_dir_cache():
     """Forget the cached config-directory decision before each test.
 

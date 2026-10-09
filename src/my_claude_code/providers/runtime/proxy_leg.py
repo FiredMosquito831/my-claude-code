@@ -68,14 +68,40 @@ failure *kind* in the row's ``error_kind`` and its ``status_code`` as the row's
 status. The row a connect failure writes today (``kind="ConnectTimeout"``, no
 status, ``error_kind="ConnectTimeout"``) could not survive that route byte for
 byte.
+
+Two more stops, for a leg of a chain with "Keep trying exits until one
+answers" ticked (7.81.0) and for no other leg
+-------------------------------------------------------------------------
+
+The user's decision of 2026-10-06: a failure caused by the exit moves the
+request to another exit *instead of retrying the same exit*. The factory hands
+such a leg two flags, and with both off -- every other leg -- the limiter is
+exactly the one above:
+
+* ``stop_on_transport`` -- a dropped connection before the response (read,
+  write or protocol error, a read timeout) through this exit is surfaced to the
+  pool on the first try, by the very mechanism above, when the pool will read
+  it as the exit dropping the request (``exit_rotation.proxy_transport_failure``)
+  -- so the two cannot disagree about what moves;
+* ``stop_on_rate_limit`` -- a ``429`` through this exit is surfaced on the
+  first try instead of being retried on the same exit (which is what the leaf
+  does with ``RATE_LIMIT_ROUTES_AROUND_MODEL`` off). Set only when the chain's
+  ``rate_limit`` chip is armed, i.e. when the pool will move on it.
+
+A ``5xx`` keeps its same-exit retries: the origin answered, the exit worked.
 """
 
 import asyncio
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Self
 
+from my_claude_code.providers.failure_policy import (
+    retryable_upstream_status,
+    retryable_upstream_transport_error,
+)
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
+from .exit_rotation import proxy_transport_failure
 from .proxy_rotating import proxy_reachability_failure
 
 
@@ -97,6 +123,65 @@ class _ProxyConnectStop(BaseException):
 class ProxiedLegRateLimiter(ProviderRateLimiter):
     """A leg's limiter that will not dial the same dead address twice."""
 
+    def __init__(
+        self,
+        *args: Any,
+        stop_on_transport: bool = False,
+        stop_on_rate_limit: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._stop_on_transport = bool(stop_on_transport)
+        self._stop_on_rate_limit = bool(stop_on_rate_limit)
+
+    def arm_exit_stops(self, *, transport: bool, rate_limit: bool) -> Self:
+        """Arm the two ticked-chain stops on a limiter built the ordinary way.
+
+        The factory and the media registry build every leg's limiter from one
+        unchanged line and call this only for a leg of a ticked chain, so a leg
+        of any other chain is built exactly as before.
+        """
+
+        self._stop_on_transport = bool(transport)
+        self._stop_on_rate_limit = bool(rate_limit)
+        return self
+
+    @property
+    def stop_on_transport(self) -> bool:
+        return self._stop_on_transport
+
+    @property
+    def stop_on_rate_limit(self) -> bool:
+        return self._stop_on_rate_limit
+
+    def _exit_refused(
+        self, error: BaseException, override: Callable[..., Any] | None
+    ) -> bool:
+        """A ticked chain's leg: did the exit refuse or drop this try (7.81.0)?
+
+        Read the way the base loop reads it -- through the provider's own
+        classifier first -- so this stops exactly the same-exit retries the
+        loop would otherwise run, and nothing else.
+        """
+
+        effective: BaseException = error
+        if override is not None:
+            try:
+                classified = override(error)
+            except Exception:
+                classified = None
+            if isinstance(classified, BaseException):
+                effective = classified
+        status = retryable_upstream_status(effective)
+        if self._stop_on_rate_limit and status == 429:
+            return True
+        return (
+            self._stop_on_transport
+            and status is None
+            and retryable_upstream_transport_error(effective)
+            and proxy_transport_failure(error, proxied=True) is not None
+        )
+
     async def execute_with_retry(
         self, fn: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> Any:
@@ -104,6 +189,8 @@ class ProxiedLegRateLimiter(ProviderRateLimiter):
         stopped: list[BaseException] = []
         # True while a cancellation *this leg* asked for is outstanding.
         requested = False
+        override = kwargs.get("provider_failure_override")
+        exit_stops = self._stop_on_transport or self._stop_on_rate_limit
 
         async def guarded(*call_args: Any, **call_kwargs: Any) -> Any:
             nonlocal requested
@@ -115,7 +202,9 @@ class ProxiedLegRateLimiter(ProviderRateLimiter):
                 # The same question the pool upstairs asks, asked with the
                 # same function, so the two can never drift apart: is this
                 # the *address* failing?
-                if proxy_reachability_failure(error, proxied=True) is not None:
+                if proxy_reachability_failure(error, proxied=True) is not None or (
+                    exit_stops and self._exit_refused(error, override)
+                ):
                     stopped.append(error)
                     if task is not None and not requested:
                         # Delivered at the loop's backoff sleep, the first
