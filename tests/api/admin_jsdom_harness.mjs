@@ -5731,7 +5731,8 @@ if (withChain) {
   };
   const block = () => doc.querySelector(".proxy-tor");
   const card = () => doc.querySelector(".proxy-tor-source");
-  const status = () => text(doc.querySelector("#proxyingStatus"));
+  // The announcement's lead sentence (the panel also holds a Dismiss button).
+  const status = () => text(doc.querySelector("#proxyingStatus p"));
   const out = {};
 
   await reload();
