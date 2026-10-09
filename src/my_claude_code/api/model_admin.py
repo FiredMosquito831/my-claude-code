@@ -29,9 +29,15 @@ from typing import Any
 from my_claude_code.application.model_kinds import (
     KIND_LABELS,
     KIND_SOURCE_LABELS,
+    KIND_SOURCE_MODELS_DEV,
+    KIND_SOURCE_PROVIDER_LISTING,
     MODEL_KINDS,
+    KindWordsLookup,
     ModalitiesLookup,
     ModelKind,
+    modalities_source,
+    provider_first_modalities,
+    provider_kind_words,
     resolve_model_kind,
 )
 from my_claude_code.application.model_metadata import (
@@ -521,20 +527,51 @@ def models_dev_cache_mark() -> str:
     return f"{stat.st_mtime_ns}:{stat.st_size}"
 
 
-def media_output_modalities(provider_id: str, model_id: str) -> dict[str, Any]:
-    """What models.dev catalogues a media model as producing (7.67.0).
+#: Who stated a media row's outputs, in the kind ladder's own words.
+MEDIA_OUTPUT_SOURCE_LABELS: Mapping[str, str] = {
+    KIND_SOURCE_PROVIDER_LISTING: "the provider's model list",
+    KIND_SOURCE_MODELS_DEV: "models.dev",
+}
+
+
+def media_output_modalities(
+    provider_id: str, model_id: str, modalities: ModalitiesLookup | None = None
+) -> dict[str, Any]:
+    """What a media model is declared to produce (7.67.0), provider first (7.80.0).
 
     Advisory, for the Models page's media rows: ``output`` is ``None`` when
-    the cache does not describe the model (unknown, never "text only"), and
-    ``tier`` names the rung the answer came from. Read here because this module
-    owns the page's models.dev edge; disk cache only, never a network call.
+    no source describes the model (unknown, never "text only"), ``tier`` names
+    the rung the answer came from and ``source`` who stated it. ``modalities``
+    is the runtime's kind ladder: where the provider's own list states a pair
+    (tier 1-2), its outputs are the answer, as they are for the kind; otherwise
+    models.dev's output list down its own rungs, exactly as before. Disk cache
+    only, never a network call.
     """
 
+    if modalities is not None:
+        declared, declared_tier = modalities(provider_id, model_id)
+        if (
+            declared is not None
+            and modalities_source(declared_tier) == KIND_SOURCE_PROVIDER_LISTING
+        ):
+            return _media_outputs(
+                declared.outputs, declared_tier, KIND_SOURCE_PROVIDER_LISTING
+            )
     output, tier = model_output_modalities_tiered(provider_id, model_id)
+    return _media_outputs(output, tier, KIND_SOURCE_MODELS_DEV)
+
+
+def _media_outputs(
+    output: Sequence[str] | None, tier: ResolutionTier | None, source: str
+) -> dict[str, Any]:
     return {
         "output": None if output is None else list(output),
         "tier": None if tier is None else TIER_LABELS.get(tier, tier.name),
         "approximate": bool(tier is not None and tier.is_approximate),
+        "source": None if output is None else source,
+        "source_label": (
+            None if output is None else MEDIA_OUTPUT_SOURCE_LABELS[source]
+        ),
     }
 
 
@@ -542,14 +579,18 @@ def declared_model_kind(
     model_ref: str,
     placements: Mapping[str, frozenset[str]],
     modalities: ModalitiesLookup | None = None,
+    kind_words: KindWordsLookup | None = None,
 ) -> ModelKind:
-    """One ref's stated kind, from the same ladder the request runtime reads.
+    """One ref's stated kind, from the ladder the caller hands in.
 
-    ``declared_modalities_lookup`` is what ``ProviderManager`` answers
-    ``model_modalities_lookup`` with, so the Models page and the lists it
-    describes -- ``/v1/models``, the harness catalogues, the pickers -- cannot
-    disagree about a model's kind. A caller rendering many rows passes one
-    lookup for all of them.
+    The routes pass the request runtime's own two lookups
+    (``model_modalities_lookup``, ``model_kind_words_lookup``: the provider's
+    list first, then models.dev, then the provider's words), so the Models
+    page, its media section and the lists they describe -- ``/v1/models``, the
+    harness catalogues, the pickers -- cannot disagree about a model's kind
+    (7.80.0). A caller rendering many rows passes one pair for all of them.
+    With no lookup this reads models.dev alone, which is all a caller holding
+    no provider record can ask.
     """
 
     return resolve_model_kind(
@@ -558,6 +599,7 @@ def declared_model_kind(
         if modalities is not None
         else declared_modalities_lookup(),
         placements=placements,
+        kind_words=kind_words,
     )
 
 
@@ -1702,6 +1744,8 @@ def _model_entry(
     learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     media_placements: Mapping[str, frozenset[str]] | None = None,
     kind_modalities: ModalitiesLookup | None = None,
+    kind_words: KindWordsLookup | None = None,
+    catalogue_modalities: ModalitiesLookup | None = None,
 ) -> dict[str, Any]:
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
@@ -1713,7 +1757,7 @@ def _model_entry(
         dialect=(
             None if dialect_lookup is None else dialect_lookup(provider_id, model_id)
         ),
-        modalities_lookup=kind_modalities,
+        modalities_lookup=catalogue_modalities,
     )
     learned_facts = attach_learned_facts(
         capabilities,
@@ -1728,9 +1772,12 @@ def _model_entry(
         "hidden_by": hiding_pattern(visibility, model_ref),
         "configured": model_ref in configured_refs,
         # What kind of model this is -- chat, or one media rail's -- and who
-        # said so (7.78.2). ``kinds: None`` is the "kind not known" group.
+        # said so (7.78.2), down the ladder provider first (7.80.0). ``kinds:
+        # None`` is the "kind not known" group.
         "kind": model_kind_payload(
-            declared_model_kind(model_ref, media_placements or {}, kind_modalities)
+            declared_model_kind(
+                model_ref, media_placements or {}, kind_modalities, kind_words
+            )
         ),
         "has_metadata": info is not None,
         # Existence provenance, distinct from the per-field capability tiers
@@ -1807,12 +1854,20 @@ def build_models_page_payload(
     catalogue_refresh: Mapping[str, Any] | None = None,
     image_estimates: Mapping[str, Mapping[str, Any]] | None = None,
     media_placements: Mapping[str, frozenset[str]] | None = None,
+    kind_modalities: ModalitiesLookup | None = None,
+    kind_words: KindWordsLookup | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page renders, in one request.
 
     Discovered models are unioned with configured route refs, and *neither* set
     is filtered by visibility: this is the one page where a hidden model has to
     stay listed, or it could never be un-hidden.
+
+    ``kind_modalities``/``kind_words`` are the request runtime's kind ladder,
+    which the route passes so every row's kind is the one the lists act on.
+    Without them the ladder is built from the records handed in here -- each
+    row's own record at tier 1, then models.dev -- the same rungs in the same
+    order, short only of the runtime's tag-stripped lookup.
     """
 
     configured_list = tuple(configured)
@@ -1824,7 +1879,25 @@ def build_models_page_payload(
         by_ref.setdefault(ref, None)
 
     grouped: dict[str, list[dict[str, Any]]] = {}
-    kind_modalities = declared_modalities_lookup()
+    # models.dev's pair, for the "accepts → produces" row (7.79.0), which
+    # shows the row's own record first and walks models.dev only after it.
+    catalogue_modalities = declared_modalities_lookup()
+    if kind_modalities is None or kind_words is None:
+
+        def own_record(
+            provider_id: str, model_id: str
+        ) -> tuple[ProviderModelDeclaration | None, ResolutionTier] | None:
+            info = by_ref.get(f"{provider_id}/{model_id}")
+            if info is None:
+                return None
+            return info.declared, ResolutionTier.PROVIDER_EXACT
+
+        if kind_modalities is None:
+            kind_modalities = provider_first_modalities(
+                own_record, catalogue_modalities
+            )
+        if kind_words is None:
+            kind_words = provider_kind_words(own_record)
     for model_ref in sorted(by_ref, key=str.casefold):
         grouped.setdefault(parse_provider_type(model_ref), []).append(
             _model_entry(
@@ -1838,6 +1911,8 @@ def build_models_page_payload(
                 learned=learned,
                 media_placements=media_placements,
                 kind_modalities=kind_modalities,
+                kind_words=kind_words,
+                catalogue_modalities=catalogue_modalities,
             )
         )
 

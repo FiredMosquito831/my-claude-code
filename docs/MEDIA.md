@@ -50,12 +50,21 @@ media rail (and on no chat rail) is not offered as a chat model.
 ### Which lists offer a model (7.78.2)
 
 Every model has a **kind**: chat, or the media rail it belongs on (Image, Speech,
-Transcription, Video). The kind comes from declared data only, never from a model's name:
+Transcription, Video). The kind comes from declared data only, never from a model's name, and
+walks the same ladder as every other capability -- the provider's own model list first, then
+the catalogues, each rung filling only what the one above left unsaid (7.80.0):
 
-1. what models.dev catalogues it as accepting and producing (its `modalities`) -- a model that
-   reads and writes text is chat, one that writes an image is Image, writes audio is Speech,
-   hears audio and writes text is Transcription, writes video is Video; a model can be several;
-2. otherwise, the media rail you saved it on, when it is on no chat rail.
+1. what the **provider's own model list** says the model accepts and produces (OpenRouter,
+   Nous Portal, Kilo, Novita and Vercel publish this on every row) -- a model that reads and
+   writes text is chat, one that writes an image is Image, writes audio is Speech, hears audio
+   and writes text is Transcription, writes video is Video; a model can be several;
+2. otherwise what **models.dev** catalogues it as accepting and producing (its `modalities`),
+   down its own rungs: the provider's bucket, the OpenRouter reference, the cross-provider vote;
+3. otherwise the **provider's model type or endpoint names** -- Novita's `model_type`, the
+   endpoints Command Code or a new-api gateway says serve the model (`/chat/completions`,
+   `/images/generations`, `openai-video`, ...). These are coarser than a modality list, so they
+   only fill a gap; a word MCC does not know (Anthropic's `model`) says nothing;
+4. otherwise, the media rail you saved it on, when it is on no chat rail.
 
 A model whose kind is stated and is not chat is left out of `/v1/models`, `/v1beta/models`,
 every coding agent's generated catalogue and every chat picker on Model Config. Each media rail's
@@ -66,7 +75,9 @@ there, marked in its picker and on the Models page, and routes exactly as before
 listing change only; no request is routed or sent differently.
 
 The **Models** page shows a chip on every row whose kind is not chat, and one filter chip per
-kind (plus *Kind not known*) with its count.
+kind (plus *Kind not known*) with its count. Each model's capability panel has a **kind** row
+naming the rung that stated it -- *the provider's model list*, *models.dev modalities*, *the
+provider's model type or endpoints* or *your media rail* -- and how the id was matched.
 
 ## Which providers can serve it
 

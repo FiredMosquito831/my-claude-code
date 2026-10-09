@@ -5,7 +5,8 @@ Two read-only views, both kept apart from their chat neighbours on purpose:
 * ``GET /admin/api/media/models`` -- the Models page's "Media models" section:
   every ``provider/model`` configured on a media rail, where it sits on each
   rail, what its provider *declares* it serves (``config/media_surfaces.py``),
-  what models.dev catalogues it as producing, whether the MEDIA books have it
+  what its provider's own model list -- or else models.dev -- states it
+  produces, its stated kind, whether the MEDIA books have it
   benched and whether its provider has a key. Media refs never join the chat
   model list or ``/v1/models``, so they get their own table.
 * ``GET /admin/api/analytics/media`` -- the Analytics page's "Media" block:
@@ -45,7 +46,12 @@ from my_claude_code.application.media.request import (
     RAIL_SETTINGS,
     MediaRail,
 )
-from my_claude_code.application.model_kinds import ModelKind, media_rail_placements
+from my_claude_code.application.model_kinds import (
+    KindWordsLookup,
+    ModalitiesLookup,
+    ModelKind,
+    media_rail_placements,
+)
 from my_claude_code.application.route_health import RouteHealthRegistry
 from my_claude_code.config.admin.status import provider_config_status
 from my_claude_code.config.media_surfaces import (
@@ -72,7 +78,8 @@ from my_claude_code.core.request_log import store_from_settings
 
 from .admin_proxy_routes import _value_state
 from .admin_routes import require_loopback_admin
-from .dependencies import get_settings
+from .dependencies import get_services, get_settings
+from .ports import ApiServices
 
 router = APIRouter()
 
@@ -217,7 +224,11 @@ def _all_descriptors() -> tuple[dict[str, ProviderDescriptor], set[str]]:
 
 
 def media_models_payload(
-    settings: Settings, bench: MediaBenchReadout | None = None
+    settings: Settings,
+    bench: MediaBenchReadout | None = None,
+    *,
+    kind_modalities: ModalitiesLookup | None = None,
+    kind_words: KindWordsLookup | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page's media section renders. Synchronous.
 
@@ -226,6 +237,13 @@ def media_models_payload(
     is the readout :func:`media_bench_readout` took on the event loop; without
     one it is taken here, on the caller's thread, which is right only for a
     caller that is on the event loop itself.
+
+    ``kind_modalities``/``kind_words`` are the request runtime's kind ladder
+    (the provider's own list first, 7.80.0), which the route passes so a row's
+    kind here is the one every model list acts on. The lookups only read the
+    provider records' dicts, which are replaced and never mutated in place, so
+    running them on the worker thread is safe. Without them the kind is read
+    from models.dev alone.
     """
 
     if bench is None:
@@ -248,7 +266,8 @@ def media_models_payload(
     # uses, so a chat model someone saved on the Image rail is marked here
     # rather than looking like any other image model.
     rail_placements = media_rail_placements(settings)
-    kind_modalities = declared_modalities_lookup()
+    if kind_modalities is None:
+        kind_modalities = declared_modalities_lookup()
     kinds: dict[str, ModelKind] = {}
     for rail in MediaRail:
         names = RAIL_SETTINGS[rail]
@@ -279,7 +298,9 @@ def media_models_payload(
             provider_id = parse_provider_type(ref)
             descriptor = descriptors.get(provider_id)
             if ref not in rows:
-                kinds[ref] = declared_model_kind(ref, rail_placements, kind_modalities)
+                kinds[ref] = declared_model_kind(
+                    ref, rail_placements, kind_modalities, kind_words
+                )
                 if descriptor is None:
                     provider_state = "unknown"
                 elif provider_id in disabled:
@@ -299,7 +320,9 @@ def media_models_payload(
                     "provider_state": provider_state,
                     "placements": placements[ref],
                     "declared": _declared(descriptor),
-                    "modalities": media_output_modalities(provider_id, model_id),
+                    "modalities": media_output_modalities(
+                        provider_id, model_id, kind_modalities
+                    ),
                     "kind": model_kind_payload(kinds[ref]),
                     "health": bench.health[ref],
                     "key": _key_state(keys.get(provider_id)),
@@ -346,14 +369,24 @@ def media_models_payload(
 
 
 @router.get("/admin/api/media/models")
-async def media_models(request: Request, settings: Settings = Depends(get_settings)):
+async def media_models(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    services: ApiServices = Depends(get_services),
+):
     """The Models page's media rows and the providers that can serve them."""
 
     require_loopback_admin(request)
     # The bench here, on the loop; the rest on a worker. See
     # ``media_bench_readout`` for why the split is where it is.
     bench = media_bench_readout(settings)
-    return await asyncio.to_thread(media_models_payload, settings, bench)
+    return await asyncio.to_thread(
+        media_models_payload,
+        settings,
+        bench,
+        kind_modalities=services.requests.model_modalities_lookup(),
+        kind_words=services.requests.model_kind_words_lookup(),
+    )
 
 
 def _empty_group(group: str) -> dict[str, Any]:

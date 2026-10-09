@@ -9,9 +9,14 @@ from typing import Protocol
 from loguru import logger
 
 from my_claude_code.application.errors import ApplicationUnavailableError
+from my_claude_code.application.model_kinds import (
+    provider_first_modalities,
+    provider_kind_words,
+)
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
     ModelReasoningCapability,
+    ProviderModelDeclaration,
     ProviderModelInfo,
     ProviderModelRefreshResult,
 )
@@ -404,16 +409,38 @@ class ProviderRuntimeManager:
     def model_modalities_lookup(
         self,
     ) -> Callable[[str, str], tuple[DeclaredModalities | None, ResolutionTier | None]]:
-        """What models.dev catalogues each model as accepting and producing.
+        """What each model accepts and produces, down the ladder, provider first.
 
-        Tiers 3-10 only, like :meth:`model_tool_call_tiered`: no gateway
-        ``/models`` answer MCC reads carries a modality list, so there is no
-        provider rung to prefer. One lookup per listing, bound to the file as
-        it is now (one ``stat``, then memo hits). Read by
-        ``application/model_kinds`` to decide which lists offer a model; never
-        by routing.
+        Tiers 1-2 are the provider's own ``/models`` row -- the pair its list
+        published, kept on the record since 7.79.0 -- and only where the row
+        states none does models.dev answer, tiers 3-10, bound to the file as
+        it is now (one ``stat``, then memo hits). The same order every other
+        field walks: the routed deployment's own record outranks every
+        catalogue. One lookup per listing. Read by ``application/model_kinds``
+        to decide which lists offer a model; never by routing.
         """
-        return declared_modalities_lookup()
+        return provider_first_modalities(
+            self._declaration_at, declared_modalities_lookup()
+        )
+
+    def model_kind_words_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[tuple[str, ...] | None, ResolutionTier | None]]:
+        """The provider's own type and endpoint words for each model (7.80.0).
+
+        Tiers 1-2 only: no catalogue publishes them. ``application/model_kinds``
+        reads them as the coarse kind rung, after both modality rungs.
+        """
+        return provider_kind_words(self._declaration_at)
+
+    def _declaration_at(
+        self, provider_id: str, model_id: str
+    ) -> tuple[ProviderModelDeclaration | None, ResolutionTier] | None:
+        found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
+        if found is None:
+            return None
+        info, tier = found
+        return info.declared, tier
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._model_cache.cached_prefixed_model_infos()

@@ -36,6 +36,7 @@ class FakeRuntime(RequestRuntimePort):
         tool_calls: dict[str, bool] | None = None,
         prices: dict[str, dict[str, float]] | None = None,
         modalities: dict[str, DeclaredModalities] | None = None,
+        kind_words: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self._settings = settings
         self._cached_infos = cached_infos
@@ -47,6 +48,7 @@ class FakeRuntime(RequestRuntimePort):
         self._tool_calls = tool_calls or {}
         self._prices = prices or {}
         self._modalities = modalities or {}
+        self._kind_words = kind_words or {}
 
     async def acquire(self) -> RequestRuntimeLease:
         raise AssertionError("Catalogue building must not acquire a provider lease.")
@@ -114,6 +116,19 @@ class FakeRuntime(RequestRuntimePort):
             if declared is None:
                 return None, None
             return declared, ResolutionTier.MODELS_DEV_BUCKET_EXACT
+
+        return lookup
+
+    def model_kind_words_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[tuple[str, ...] | None, ResolutionTier | None]]:
+        def lookup(
+            provider_id: str, model_id: str
+        ) -> tuple[tuple[str, ...] | None, ResolutionTier | None]:
+            words = self._kind_words.get(f"{provider_id}/{model_id}")
+            if words is None:
+                return None, None
+            return words, ResolutionTier.PROVIDER_EXACT
 
         return lookup
 
@@ -445,6 +460,46 @@ def test_media_models_leave_both_chat_listings_and_saved_refs_stay() -> None:
         "open_router/never-described",
         # Saved on MODEL_HAIKU: listed whatever its kind.
         "open_router/films",
+    }
+
+
+def test_the_providers_own_words_fill_only_where_both_modality_rungs_are_silent() -> (
+    None
+):
+    """7.80.0: the coarse rung -- model type and endpoint words -- in both lists.
+
+    An endpoint list naming only an image endpoint takes a model out of both
+    chat lists; a word the table does not know (Anthropic's ``model``) states
+    nothing, so that model stays; and words never outrank a modality pair.
+    """
+
+    runtime = FakeRuntime(
+        settings=_settings(model="open_router/chat"),
+        cached_infos=(
+            ProviderModelInfo("open_router/chat"),
+            ProviderModelInfo("custom_x/draws-by-endpoint"),
+            ProviderModelInfo("custom_x/typed-model"),
+            ProviderModelInfo("custom_x/pair-wins"),
+        ),
+        modalities={
+            "open_router/chat": DeclaredModalities(("text",), ("text",)),
+            "custom_x/pair-wins": DeclaredModalities(("text",), ("text",)),
+        },
+        kind_words={
+            "custom_x/draws-by-endpoint": ("/v1/images/generations",),
+            "custom_x/typed-model": ("model",),
+            "custom_x/pair-wins": ("image-generation",),
+        },
+    )
+    settings = runtime.current_settings()
+
+    catalogue, listing = _listed_refs(settings, runtime)
+
+    assert catalogue == listing
+    assert catalogue == {
+        "open_router/chat",
+        "custom_x/typed-model",
+        "custom_x/pair-wins",
     }
 
 

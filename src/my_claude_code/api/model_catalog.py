@@ -136,7 +136,11 @@ def build_models_list_response(
     # The predicate every harness catalogue applies too (7.78.2): a discovered
     # model whose stated kind is not chat -- an image, speech or video model --
     # is not an id a chat client may send. Configured refs are never filtered.
-    chat_listable = chat_listing_filter(settings, runtime.model_modalities_lookup())
+    chat_listable = chat_listing_filter(
+        settings,
+        runtime.model_modalities_lookup(),
+        kind_words=runtime.model_kind_words_lookup(),
+    )
 
     for ref in configured_chat_model_refs(settings):
         if not visibility.is_visible(ref.model_ref):

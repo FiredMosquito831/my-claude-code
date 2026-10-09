@@ -158,6 +158,10 @@ class RequestRuntimePort(Protocol):
         [str, str], tuple[DeclaredModalities | None, ResolutionTier | None]
     ]: ...
 
+    def model_kind_words_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[tuple[str, ...] | None, ResolutionTier | None]]: ...
+
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]: ...
 
 

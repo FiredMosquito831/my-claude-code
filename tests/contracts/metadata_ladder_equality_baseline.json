@@ -7,6 +7,10 @@
   "bytes": 364248,
   "sha256": "9af8e614e7720b4779b26ffda4ce8c19217d7cd7e677963f879d7b40faf7f8e9"
  },
+ "admin/models": {
+  "bytes": 1052,
+  "sha256": "f6b72132de7f77c220f92f5f4ec67d57a698fa0e884e808013ca65639639c03f"
+ },
  "canonical/cline": [
   "ProviderModelInfo(model_id=s:cline-pass/deepseek-v4.1-flash,supports_thinking=~,supports_vision=true,context_length=n:1000000,input_price=n:0.15,output_price=n:0.6,max_output_tokens=~,supported_parameters=~,default_parameters=~,reasoning_capability=~,listing=~)"
  ],
@@ -3455,9 +3459,616 @@
    "value": false
   }
  },
+ "kinds/cline/cline-pass/deepseek-v4.1-flash": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  }
+ },
+ "kinds/commandcode/claude-sonnet-5-5": {
+  "v7.79.2": {
+   "approximate": true,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "cross-provider, exact id"
+  },
+  "v7.80.0": {
+   "approximate": true,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "cross-provider, exact id"
+  }
+ },
+ "kinds/commandcode/deepseek/deepseek-v4-flash-fast": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "provider_words",
+   "source_label": "the provider's model type or endpoints",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/commandcode/gpt-6-astra": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "OpenRouter catalogue, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "OpenRouter catalogue, exact id"
+  }
+ },
+ "kinds/hypercharm/deepseek-v4.1-flash": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  }
+ },
+ "kinds/kilo/kilo-auto/efficient": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/nous_portal/anthropic/claude-sonnet-5": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "OpenRouter catalogue, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "OpenRouter catalogue, exact id"
+  }
+ },
+ "kinds/nous_portal/tencent/hy3": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "OpenRouter catalogue, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/novita/ming-image-0.1-design": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat",
+    "image",
+    "tts",
+    "asr",
+    "video"
+   ],
+   "labels": [
+    "Chat",
+    "Image",
+    "Speech",
+    "Transcription",
+    "Video"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/novita/ming-image-0.1-design-layer": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat",
+    "image",
+    "tts",
+    "asr",
+    "video"
+   ],
+   "labels": [
+    "Chat",
+    "Image",
+    "Speech",
+    "Transcription",
+    "Video"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/novita/zai-org/glm-5.3-flash": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/nvidia_nim/01-ai/yi-large": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  }
+ },
+ "kinds/nvidia_nim/moonshotai/kimi-k3": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  }
+ },
+ "kinds/nvidia_nim/test-model": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  }
+ },
+ "kinds/open_router/stepfun/step-5-preview": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": null,
+   "labels": [],
+   "source": null,
+   "source_label": null,
+   "tier": null
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/opencode_go/minimax-m3": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  }
+ },
+ "kinds/vercel/alibaba/qwen-3-14b": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/vercel/alibaba/qwen3-embedding-0.6b": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "chat"
+   ],
+   "labels": [
+    "Chat"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/vercel/bfl/flux-2-flex": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "image"
+   ],
+   "labels": [
+    "Image"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "image"
+   ],
+   "labels": [
+    "Image"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
+ "kinds/vercel/fish-audio/transcribe-1": {
+  "v7.79.2": {
+   "approximate": false,
+   "kinds": [
+    "asr"
+   ],
+   "labels": [
+    "Transcription"
+   ],
+   "source": "models_dev",
+   "source_label": "models.dev modalities",
+   "tier": "models.dev bucket, exact id"
+  },
+  "v7.80.0": {
+   "approximate": false,
+   "kinds": [
+    "asr"
+   ],
+   "labels": [
+    "Transcription"
+   ],
+   "source": "provider_listing",
+   "source_label": "the provider's model list",
+   "tier": "provider /models, exact id"
+  }
+ },
  "page": {
-  "bytes": 205645,
-  "sha256": "173c4088ae8a2eaf4066b01637271a6754540b61cb6c20789d75e93c367400ee"
+  "bytes": 201214,
+  "sha256": "28d0ec26f2386faf71cf1bb23a03b16bd20886e922b853837e12febae872505a"
+ },
+ "picker-kinds": {
+  "v7.79.2": {
+   "cline/cline-pass/deepseek-v4.1-flash": [
+    "chat"
+   ],
+   "commandcode/claude-sonnet-5-5": [
+    "chat"
+   ],
+   "commandcode/gpt-6-astra": [
+    "chat"
+   ],
+   "hypercharm/deepseek-v4.1-flash": [
+    "chat"
+   ],
+   "kilo/kilo-auto/efficient": [
+    "chat"
+   ],
+   "nous_portal/anthropic/claude-sonnet-5": [
+    "chat"
+   ],
+   "nous_portal/tencent/hy3": [
+    "chat"
+   ],
+   "nvidia_nim/moonshotai/kimi-k3": [
+    "chat"
+   ],
+   "opencode_go/minimax-m3": [
+    "chat"
+   ],
+   "vercel/alibaba/qwen-3-14b": [
+    "chat"
+   ],
+   "vercel/alibaba/qwen3-embedding-0.6b": [
+    "chat"
+   ],
+   "vercel/bfl/flux-2-flex": [
+    "image"
+   ],
+   "vercel/fish-audio/transcribe-1": [
+    "asr"
+   ]
+  },
+  "v7.80.0": {
+   "cline/cline-pass/deepseek-v4.1-flash": [
+    "chat"
+   ],
+   "commandcode/claude-sonnet-5-5": [
+    "chat"
+   ],
+   "commandcode/deepseek/deepseek-v4-flash-fast": [
+    "chat"
+   ],
+   "commandcode/gpt-6-astra": [
+    "chat"
+   ],
+   "hypercharm/deepseek-v4.1-flash": [
+    "chat"
+   ],
+   "kilo/kilo-auto/efficient": [
+    "chat"
+   ],
+   "nous_portal/anthropic/claude-sonnet-5": [
+    "chat"
+   ],
+   "nous_portal/tencent/hy3": [
+    "chat"
+   ],
+   "novita/ming-image-0.1-design": [
+    "chat",
+    "image",
+    "tts",
+    "asr",
+    "video"
+   ],
+   "novita/ming-image-0.1-design-layer": [
+    "chat",
+    "image",
+    "tts",
+    "asr",
+    "video"
+   ],
+   "novita/zai-org/glm-5.3-flash": [
+    "chat"
+   ],
+   "nvidia_nim/moonshotai/kimi-k3": [
+    "chat"
+   ],
+   "open_router/stepfun/step-5-preview": [
+    "chat"
+   ],
+   "opencode_go/minimax-m3": [
+    "chat"
+   ],
+   "vercel/alibaba/qwen-3-14b": [
+    "chat"
+   ],
+   "vercel/alibaba/qwen3-embedding-0.6b": [
+    "chat"
+   ],
+   "vercel/bfl/flux-2-flex": [
+    "image"
+   ],
+   "vercel/fish-audio/transcribe-1": [
+    "asr"
+   ]
+  }
  },
  "prices/cline/cline-pass/deepseek-v4.1-flash": [
   "RateCard(source=s:models_dev,input_price=n:1.5e-07,output_price=n:6e-07,cache_read_price=n:3e-09,cache_write_price=~,reasoning_price=~,tier_label=s:models_dev_bucket_exact)",

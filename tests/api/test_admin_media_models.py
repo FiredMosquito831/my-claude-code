@@ -203,11 +203,16 @@ def test_models_dev_output_modalities_are_advisory(monkeypatch, tmp_path):
     assert known["output"] == ["image"]
     assert known["tier"] == "models.dev bucket, exact id"
     assert known["approximate"] is False
+    # 7.80.0: who stated it, now that a provider's own list can answer first.
+    assert known["source"] == "models_dev"
+    assert known["source_label"] == "models.dev"
     # Absent from the cache: unknown, never "text only".
     assert _row(payload, GROQ_TTS)["modalities"] == {
         "output": None,
         "tier": None,
         "approximate": False,
+        "source": None,
+        "source_label": None,
     }
 
 
