@@ -7733,6 +7733,118 @@ audio.req-media-preview {
   margin-top: var(--space-3);
 }
 
+/* "Everything known" (7.86.0): every source's statement of every field,
+   loaded on demand under the capability panel. A wide table, so it scrolls
+   on its own rather than widening the page. */
+.models-knowledge {
+  margin-top: var(--space-3);
+}
+
+.models-knowledge-summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.models-knowledge-body {
+  margin-top: var(--space-2);
+}
+
+.models-knowledge-intro,
+.models-knowledge-sources {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0 0 var(--space-2);
+}
+
+.models-knowledge-error {
+  font-size: 12px;
+  color: var(--error);
+}
+
+.models-knowledge-scroll {
+  overflow-x: auto;
+}
+
+.models-knowledge-table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.models-knowledge-table th,
+.models-knowledge-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
+  border-top: 1px solid var(--line);
+  max-width: 28ch;
+  overflow-wrap: anywhere;
+}
+
+.models-knowledge-table th {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.models-knowledge-cell {
+  display: inline-block;
+}
+
+/* The statement whose value MCC uses. */
+.models-knowledge-used {
+  font-weight: 600;
+  color: var(--ok);
+}
+
+/* A statement that says something other than the value MCC uses: the same
+   highlight a learned fact that contradicts the ladder gets. */
+.models-knowledge-differs {
+  color: var(--warn);
+}
+
+/* A rung the ladder never reads for this provider (one with a models.dev
+   bucket of its own never reads outside it): shown for completeness. */
+.models-knowledge-unread {
+  opacity: 0.6;
+}
+
+.models-knowledge-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.models-knowledge-row {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-1);
+}
+
+.models-knowledge-row-summary {
+  cursor: pointer;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.models-knowledge-row-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  margin: var(--space-1) 0 var(--space-2);
+}
+
+.models-knowledge-row-table th,
+.models-knowledge-row-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 1px var(--space-2) 1px 0;
+  overflow-wrap: anywhere;
+}
+
+.models-knowledge-row-table th {
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* The host half of the capability panel. Separated by a rule rather than
    another table: what a gateway parses is a declaration, not a voted field
    with a resolution tier, and giving it tier-shaped rows would blur exactly

@@ -150,6 +150,8 @@ def reset_openrouter_live_cache() -> None:
 
     with _store_lock:
         _stored.clear()
+    with _raw_lock:
+        _raw_rows.clear()
 
 
 def _file_mark(path: Path) -> str | None:
@@ -401,6 +403,52 @@ def openrouter_live_catalogue(
     )
 
 
+_raw_lock = threading.Lock()
+#: path -> (file mark, rows by OpenRouter id, fetched_at): the stored rows
+#: themselves, for the "Everything known" view (7.86.0). Built only when the
+#: view asks; the rung's own index above never holds a row.
+_raw_rows: dict[Path, tuple[str, dict[str, Mapping[str, Any]], str | None]] = {}
+
+
+def openrouter_live_rows(
+    settings: Settings, slugs: Iterable[str], path: Path | None = None
+) -> tuple[str | None, tuple[tuple[str, Mapping[str, Any]], ...]] | None:
+    """The stored live rows for these OpenRouter ids, verbatim (7.86.0).
+
+    ``slugs`` are the ids a :class:`LiveModel` met (its ``slugs``). ``None``
+    when the rung is off or nothing is stored -- the view then says so --
+    otherwise ``(fetched_at, ((id, row), ...))`` in the order asked. Read off
+    the same file the rung reads, once per file generation.
+    """
+
+    if not openrouter_live_enabled(settings):
+        return None
+    cache_path = path if path is not None else openrouter_live_cache_path()
+    mark = _file_mark(cache_path)
+    if mark is None:
+        return None
+    with _raw_lock:
+        cached = _raw_rows.get(cache_path)
+    if cached is None or cached[0] != mark:
+        read = read_openrouter_live_rows(cache_path)
+        if read is None:
+            return None
+        rows, fetched_at = read
+        by_id: dict[str, Mapping[str, Any]] = {}
+        for row in rows:
+            if isinstance(row, Mapping) and (slug := _row_id(row)) is not None:
+                by_id.setdefault(slug, row)
+        cached = (mark, by_id, fetched_at)
+        with _raw_lock:
+            if cache_path not in _raw_rows and len(_raw_rows) >= _STORE_MAX_PATHS:
+                _raw_rows.pop(next(iter(_raw_rows)))
+            _raw_rows[cache_path] = cached
+    _mark, by_id, fetched_at = cached
+    return fetched_at, tuple(
+        (slug, by_id[slug]) for slug in dict.fromkeys(slugs) if slug in by_id
+    )
+
+
 def openrouter_live_is_due(settings: Settings, path: Path) -> bool:
     """Whether the sweep should fetch: on, and the file absent or past its TTL."""
 
@@ -526,6 +574,7 @@ __all__ = [
     "openrouter_live_catalogue",
     "openrouter_live_enabled",
     "openrouter_live_is_due",
+    "openrouter_live_rows",
     "payload_passes_integrity",
     "read_openrouter_live_rows",
     "refresh_openrouter_live",

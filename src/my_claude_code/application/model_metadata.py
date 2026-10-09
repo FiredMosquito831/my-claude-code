@@ -1,6 +1,6 @@
 """Application-owned model metadata."""
 
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum, StrEnum
 
 from my_claude_code.core.reasoning import ReasoningEffort
@@ -305,6 +305,22 @@ class ProviderModelInfo:
     # Nothing routes on it directly: routing reads the record's own fields
     # above, which the parsers fill from it at the provider rung.
     declared: ProviderModelDeclaration | None = None
+    # The provider's own list row this record was read from, verbatim, as
+    # compact JSON text (7.86.0). Every field the row publishes -- including
+    # the ones no typed field above keeps -- for the Models page's
+    # "Everything known" view and nothing else: nothing routes, lists, prices
+    # or keys a cache on it. Outside equality and hashing, outside
+    # :func:`canonical_model_info` and outside the stored catalogue document,
+    # so two records that differ only here are the same record everywhere it
+    # mattered before; the row is stored beside the catalogue instead
+    # (``provider-rows``). ``None`` when the record did not come from a row.
+    published_row: str | None = field(
+        default=None,
+        compare=False,
+        hash=False,
+        repr=False,
+        metadata={"canonical": False, "document": False},
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,6 +448,11 @@ def canonical_model_info(info: ProviderModelInfo) -> str:
     its value; nested records recursed into. A field whose type this cannot
     encode raises rather than being skipped, because a digest that silently
     ignores a field is a digest that says two different catalogues are the same.
+
+    The one field left out is declared so on the dataclass itself
+    (``metadata={"canonical": False}``): the provider's verbatim list row
+    (7.86.0), which carries volatile keys -- benchmark scores, listing
+    stamps -- that describe no catalogue fact this text is a digest of.
     """
 
     return _canonical(info)
@@ -457,8 +478,9 @@ def _canonical(value: object) -> str:
             type(value).__name__
             + "("
             + ",".join(
-                f"{field.name}={_canonical(getattr(value, field.name))}"
-                for field in fields(value)
+                f"{item.name}={_canonical(getattr(value, item.name))}"
+                for item in fields(value)
+                if item.metadata.get("canonical", True)
             )
             + ")"
         )
@@ -486,6 +508,11 @@ _MODEL_INFO_FIELDS: tuple[str, ...] = (
     "listing",
     "declared",
 )
+#: Fields of :class:`ProviderModelInfo` the stored document deliberately does
+#: NOT carry, each stored somewhere else (7.86.0): the verbatim list row lives
+#: in its own ``provider-rows`` document beside the catalogue, so the catalogue
+#: document -- and every reader of it -- is exactly what 7.85.0 wrote.
+_MODEL_INFO_STORED_ELSEWHERE: tuple[str, ...] = ("published_row",)
 _DECLARATION_FIELDS: tuple[str, ...] = (
     "modalities",
     "model_type",

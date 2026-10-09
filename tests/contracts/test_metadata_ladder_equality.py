@@ -94,6 +94,21 @@ value 7.84.0 showed never changes (the provider's statement of the same value
 may take the badge; a different one is shown beside it); the rest are new rows
 and gap fills. LiteLLM's rungs are off throughout, as they are by default.
 
+**7.86.0 (K-INV) keeps every list row's own words, and turns one rule round, on
+purpose** (user decisions 2026-10-08 20:57-21:00, "provider official first").
+Every record keeps the row its provider's list published (``published_row``),
+outside equality, the canonical encoding and the stored document -- so every
+entry above is byte-identical, and the row each committed fixture row became is
+recorded under ``kinv/raw/<provider>``. ``test_7_86_0_keeps_every_rows_own_words``
+holds it: each recorded row is the committed row verbatim. And where the
+provider's own description or knowledge cutoff differs from OpenRouter's live
+one, the provider's is now shown and OpenRouter's is *also stated* (7.85.0 had
+them the other way round). The ``k3/on/`` entries that moves hold both answers,
+``v7.85.0`` (as 7.85.0 recorded them) and ``v7.86.0``;
+``test_7_86_0_puts_the_providers_words_first_and_moves_nothing_else`` holds
+the rule: only those two rows move, only where the provider stated a different
+value, and the value they showed before is the one now beside it.
+
 A diff in this file means the equality contract is broken and the PR must be
 re-cut. It is not a file to regenerate.
 """
@@ -191,6 +206,12 @@ K3_PREFIX = "k3/"
 K3_NEW_ROWS = ("retires_at", "published_at")
 K3_EXTENDED_ROWS = ("description", "knowledge_cutoff")
 K3_ROWS = K3_EXTENDED_ROWS + K3_NEW_ROWS
+
+#: 7.86.0 (K-INV): each fixture row as its record keeps it, per provider.
+KINV_RAW_PREFIX = "kinv/raw/"
+#: Where a 7.85.0 entry 7.86.0 moves on purpose holds both answers.
+BEFORE_KINV = "v7.85.0"
+AFTER_KINV = "v7.86.0"
 
 #: What 7.79.0 adds to the Models page capability panel, removed before compare.
 NEW_CAPABILITY_KEYS = ("declared_modalities", "declared_type", "declared_endpoints")
@@ -793,9 +814,27 @@ def _is_k3_key(key: str) -> bool:
     return key.startswith(K3_PREFIX)
 
 
+def _is_kinv_key(key: str) -> bool:
+    """What 7.86.0 keeps of each list row, recorded beside the snapshot."""
+
+    return key.startswith("kinv/")
+
+
+def _is_kinv_entry(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {BEFORE_KINV, AFTER_KINV}
+
+
+def _kinv_answer(value: Any, version: str = AFTER_KINV) -> Any:
+    """A recorded k3 entry as ``version`` answers it (one value for both)."""
+
+    return value[version] if _is_kinv_entry(value) else value
+
+
 def _assert_unchanged(current: dict[str, Any], baseline: dict[str, Any]) -> None:
     assert set(current) == {
-        key for key in baseline if not _is_kor_key(key) and not _is_k3_key(key)
+        key
+        for key in baseline
+        if not _is_kor_key(key) and not _is_k3_key(key) and not _is_kinv_key(key)
     }
     differing = [
         key
@@ -827,7 +866,11 @@ def test_with_the_live_list_on_only_the_recorded_entries_move(
         for key in baseline
         if key.startswith(KOR_PREFIX) and key not in (KOR_PAGE_DIFF, KOR_CATALOGUE_DIFF)
     }
-    plain = {key for key in baseline if not _is_kor_key(key) and not _is_k3_key(key)}
+    plain = {
+        key
+        for key in baseline
+        if not _is_kor_key(key) and not _is_k3_key(key) and not _is_kinv_key(key)
+    }
     assert moved <= plain
     assert set(current) == plain | {
         key
@@ -1147,7 +1190,7 @@ def test_7_85_0_display_rows_are_the_recorded_ones(
     differing = [
         key
         for key in sorted(current)
-        if _encoded(current[key]) != _encoded(expected[key])
+        if _encoded(current[key]) != _encoded(_kinv_answer(expected[key]))
     ]
     assert not differing, differing
 
@@ -1182,7 +1225,14 @@ def test_7_85_0_adds_display_rows_and_moves_no_stated_value() -> None:
     """
 
     baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    entries = {key: value for key, value in baseline.items() if _is_k3_key(key)}
+    # 7.85.0's own answers: the rule is 7.85.0's, held over what it recorded
+    # (7.86.0 turns the description and cutoff rule round on purpose; its own
+    # test below holds that move).
+    entries = {
+        key: _kinv_answer(value, BEFORE_KINV)
+        for key, value in baseline.items()
+        if _is_k3_key(key)
+    }
     assert entries, "the fixture would prove nothing without recorded rows"
     violations: list[str] = []
     sources: set[tuple[str, str]] = set()
@@ -1222,3 +1272,154 @@ def test_7_85_0_adds_display_rows_and_moves_no_stated_value() -> None:
         ("knowledge_cutoff", "provider"),
     ):
         assert expected in sources, expected
+
+
+# --------------------------------------------------------------- 7.86.0 K-INV
+
+
+def kinv_raw_rows() -> dict[str, Any]:
+    """Every committed row as its record keeps it, per provider (7.86.0)."""
+
+    rows: dict[str, dict[str, Any]] = json.loads(ROWS_PATH.read_text(encoding="utf-8"))
+    out: dict[str, Any] = {}
+    for provider_id in sorted(rows):
+        parsed = sorted(
+            _parse(provider_id, rows[provider_id]), key=lambda info: info.model_id
+        )
+        out[f"{KINV_RAW_PREFIX}{provider_id}"] = {
+            info.model_id: (
+                None if info.published_row is None else json.loads(info.published_row)
+            )
+            for info in parsed
+        }
+    return out
+
+
+def test_7_86_0_keeps_every_rows_own_words() -> None:
+    """Each record keeps its committed row verbatim, and nothing else moved.
+
+    The record documents and canonical encodings above are byte-identical to
+    their recorded answers (``test_every_output_is_byte_identical_to_v7_78_10``),
+    so the row rides on the record and nowhere else.
+    """
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    current = recorded(kinv_raw_rows())
+    expected = {key: value for key, value in baseline.items() if _is_kinv_key(key)}
+    assert set(current) == set(expected)
+    differing = [
+        key
+        for key in sorted(current)
+        if _encoded(current[key]) != _encoded(expected[key])
+    ]
+    assert not differing, differing
+    rows: dict[str, dict[str, Any]] = json.loads(ROWS_PATH.read_text(encoding="utf-8"))
+    kept = 0
+    for provider_id, spec in rows.items():
+        by_id = {row.get("id"): row for row in spec["rows"] if isinstance(row, dict)}
+        for model_id, row in current[f"{KINV_RAW_PREFIX}{provider_id}"].items():
+            assert row is not None, (provider_id, model_id)
+            # The row the record came from: its own id, or the row it is an
+            # alias of (Nous Portal lists aliases on the row they share).
+            assert row == by_id.get(model_id) or row in by_id.values(), model_id
+            kept += 1
+    assert kept >= 15
+
+
+def _diff_moves(
+    before: dict[str, Any], after: dict[str, Any]
+) -> list[tuple[str, str, Any, Any]]:
+    """Every entry of a recorded K3 diff whose 7.86.0 answer is not 7.85.0's.
+
+    Each diff maps an id to ``{field: [7.84.0 value, value]}``; a field absent
+    from one version's diff is unchanged from 7.84.0 in that version.
+    """
+
+    moves: list[tuple[str, str, Any, Any]] = []
+    for where in sorted(set(before) | set(after)):
+        old_changes, new_changes = before.get(where, {}), after.get(where, {})
+        for field in sorted(set(old_changes) | set(new_changes)):
+            pair_old = old_changes.get(field)
+            pair_new = new_changes.get(field)
+            was = (pair_new or pair_old)[0]
+            if pair_old is not None and pair_new is not None:
+                assert pair_old[0] == pair_new[0], (where, field)
+            old_now = was if pair_old is None else pair_old[1]
+            now = was if pair_new is None else pair_new[1]
+            if old_now != now:
+                moves.append((where, field, old_now, now))
+    return moves
+
+
+def _flip_violation(before: Any, after: Any, where: str) -> str | None:
+    """7.86.0's rule for one description or cutoff field, or ``None``.
+
+    Unchanged, or: 7.85.0 showed OpenRouter's live value with the provider's
+    different one beside it, and 7.86.0 shows the provider's with OpenRouter's
+    beside it -- the same two statements, turned round.
+    """
+
+    if before == after:
+        return None
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return f"{where}: not a field"
+    old_beside = before.get("also_stated") or {}
+    new_beside = after.get("also_stated") or {}
+    if (
+        before.get("source") == LIVE_SOURCE
+        and old_beside.get("source") == "provider"
+        and after.get("source") == "provider"
+        and after.get("value") == old_beside.get("value")
+        and new_beside.get("source") == LIVE_SOURCE
+        and new_beside.get("value") == before.get("value")
+        and after.get("value") != before.get("value")
+    ):
+        return None
+    return f"{where}: {before.get('value')!r} -> {after.get('value')!r}"
+
+
+def test_7_86_0_puts_the_providers_words_first_and_moves_nothing_else() -> None:
+    """The one move 7.86.0 makes, over every k3 entry it changed.
+
+    Only the description and knowledge-cutoff rows; only where the provider's
+    own list states a different value from OpenRouter's live list; the
+    provider's value shown, and the value 7.85.0 showed kept beside it.
+    """
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {key: value for key, value in baseline.items() if _is_kinv_entry(value)}
+    assert moved, "the fixture would prove nothing if no row was turned round"
+    assert all(_is_k3_key(key) for key in moved), sorted(moved)
+    violations: list[str] = []
+    flipped = 0
+    for key, entry in moved.items():
+        before, after = entry[BEFORE_KINV], entry[AFTER_KINV]
+        if "/capabilities/" in key:
+            assert before["before"] == after["before"], key
+            for name in K3_ROWS:
+                if name in K3_EXTENDED_ROWS:
+                    found = _flip_violation(
+                        before["after"][name], after["after"][name], f"{key}.{name}"
+                    )
+                    if found:
+                        violations.append(found)
+                    flipped += before["after"][name] != after["after"][name]
+                else:
+                    assert before["after"][name] == after["after"][name], (key, name)
+        else:
+            assert key.endswith(("/page-diff", "/catalogue-provenance-diff")), key
+            for where, field, old_now, now in _diff_moves(before, after):
+                name = field.removeprefix("capabilities.")
+                if name not in K3_EXTENDED_ROWS:
+                    violations.append(f"{key}:{where}:{field} moved")
+                    continue
+                if key.endswith("/page-diff"):
+                    found = _flip_violation(old_now, now, f"{where}:{field}")
+                    if found:
+                        violations.append(found)
+                else:
+                    # The provenance route carries the badge, not the value.
+                    assert old_now.get("source") == LIVE_SOURCE, (where, field)
+                    assert now.get("source") == "provider", (where, field)
+    assert not violations, violations
+    assert flipped, "no capability record was turned round"

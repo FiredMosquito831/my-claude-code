@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from my_claude_code.api.models_page_cache import capability_half_key
+from my_claude_code.application import model_metadata
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
     ModelListingEvidence,
@@ -135,7 +136,13 @@ def test_a_catalogue_that_really_changed_gets_a_different_key() -> None:
 
 
 def test_every_field_of_the_catalogue_entry_reaches_the_digest() -> None:
-    """A field the encoding skips is a change the key cannot see."""
+    """A field the encoding skips is a change the key cannot see.
+
+    The one field left out is declared so on the dataclass (7.86.0): the
+    provider's verbatim list row, which the page never shows -- it is read
+    only by the on-demand "Everything known" view -- and whose volatile keys
+    would otherwise recompute the page for nothing it draws.
+    """
     encoded = canonical_model_info(_info())
     for record in (
         ProviderModelInfo,
@@ -145,7 +152,17 @@ def test_every_field_of_the_catalogue_entry_reaches_the_digest() -> None:
         DeclaredModalities,
     ):
         for field in fields(record):
+            if field.metadata.get("canonical", True) is False:
+                assert field.name in model_metadata._MODEL_INFO_STORED_ELSEWHERE
+                assert f"{field.name}=" not in encoded
+                continue
             assert f"{field.name}=" in encoded
+
+
+def test_the_list_row_a_record_keeps_never_moves_the_key() -> None:
+    """Two catalogues that differ only in the rows' own words are one page."""
+    info = _info()
+    assert _key((info,)) == _key((replace(info, published_row='{"id":"x"}'),))
 
 
 def test_a_changed_declaration_is_a_different_catalogue() -> None:

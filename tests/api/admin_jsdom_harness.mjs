@@ -7483,6 +7483,144 @@ if (modelsLink) {
     badge: (row.querySelector(".models-source") || { className: "" }).className,
   }));
 
+  /* --- "Everything known" (7.86.0): fetched once, on the first open; the
+     used, differing and unread statements marked; each source's row listed
+     path by path; a failed load retried on the next open. */
+  {
+    const KNOWLEDGE = {
+      model_ref: "novita/acme/model",
+      sources: [
+        { id: "provider_list", label: "provider's own list", as_of: "2026-10-09T10:00:00+00:00" },
+        { id: "openrouter_live", label: "OpenRouter live", as_of: null },
+        { id: "models_dev_bucket", label: "models.dev, own bucket", as_of: null },
+        { id: "models_dev_vote", label: "models.dev, cross-provider vote", as_of: null },
+        { id: "litellm", label: "LiteLLM model map", as_of: null },
+      ],
+      fields: [
+        {
+          key: "description",
+          label: "description",
+          used: { value: "Novita's words.", source: "provider", source_label: "provider /models" },
+          used_value: "Novita's words.",
+          used_source: "provider_list",
+          statements: [
+            { source: "provider_list", rung: null, value: "Novita's words.", consulted: true, note: null, as_of: null, used: true, agrees_with_used: true },
+            { source: "openrouter_live", rung: "OpenRouter live, exact id (acme/model)", value: "OpenRouter's words.", consulted: true, note: null, as_of: null, used: false, agrees_with_used: false },
+          ],
+        },
+        {
+          key: "input_price",
+          label: "input price (USD / 1M)",
+          used: { value: 0.3, source: "provider", source_label: "provider /models" },
+          used_value: 0.3,
+          used_source: "provider_list",
+          statements: [
+            { source: "provider_list", rung: null, value: 0.3, consulted: true, note: null, as_of: null, used: true, agrees_with_used: true },
+            { source: "models_dev_vote", rung: "cross-provider, exact id", value: 0.5, consulted: false, note: "not read for this provider", as_of: null, used: false, agrees_with_used: false },
+          ],
+        },
+      ],
+      rows: [
+        {
+          source: "provider_list",
+          source_label: "provider's own list",
+          key: "acme/model",
+          match: "exact id; as the last sweep read it",
+          as_of: null,
+          consulted: true,
+          row: { id: "acme/model", architecture: { tokenizer: "Other" }, tags: ["chat"] },
+        },
+        {
+          source: "models_dev_vote",
+          source_label: "models.dev, cross-provider vote",
+          key: "one/acme/model",
+          match: "cross-provider, exact id",
+          as_of: null,
+          consulted: false,
+          row: { id: "acme/model", cost: { input: 0.5 } },
+        },
+      ],
+    };
+    const realFetch = window.fetch;
+    const knowledgeUrls = [];
+    let failNext = false;
+    window.fetch = async (url, options) => {
+      if (!String(url).startsWith("/admin/api/models/knowledge")) {
+        return realFetch(url, options);
+      }
+      knowledgeUrls.push(String(url));
+      if (failNext) {
+        failNext = false;
+        return {
+          ok: false,
+          status: 503,
+          statusText: "Service Unavailable",
+          json: async () => ({ detail: "busy" }),
+          text: async () => "",
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => JSON.parse(JSON.stringify(KNOWLEDGE)),
+        text: async () => "",
+      };
+    };
+    // jsdom fires the element's own "toggle" event when ``open`` changes, as
+    // a browser does; nothing is dispatched by hand.
+    const toggle = async (details, open) => {
+      details.open = open;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    };
+    try {
+      const details = window.eval("buildKnowledgeDisclosure")({
+        model_ref: "novita/acme/model",
+      });
+      doc.body.appendChild(details);
+      const fetchedClosed = knowledgeUrls.length;
+      await toggle(details, true);
+      await toggle(details, false);
+      await toggle(details, true);
+      const table = details.querySelector(".models-knowledge-table");
+      models.knowledge = {
+        summary: flat(details.querySelector("summary")),
+        fetchedClosed,
+        urls: knowledgeUrls.slice(),
+        header: Array.from(table.querySelectorAll("tr")[0].children).map(flat),
+        rows: Array.from(table.querySelectorAll("tr"))
+          .slice(1)
+          .map((row) => Array.from(row.children).map(flat)),
+        usedCells: Array.from(table.querySelectorAll(".models-knowledge-used")).map(flat),
+        differsCells: Array.from(table.querySelectorAll(".models-knowledge-differs")).map(flat),
+        unreadCells: Array.from(table.querySelectorAll("td .models-knowledge-unread")).map(flat),
+        titles: Array.from(table.querySelectorAll(".models-knowledge-cell")).map((cell) => cell.title),
+        rowSummaries: Array.from(
+          details.querySelectorAll(".models-knowledge-row-summary"),
+        ).map(flat),
+        unreadRows: details.querySelectorAll("details.models-knowledge-row.models-knowledge-unread").length,
+        firstRowPaths: Array.from(
+          details.querySelectorAll(".models-knowledge-row-table")[0].querySelectorAll("tr"),
+        ).map((row) => Array.from(row.children).map(flat)),
+      };
+      // A failed load says so, and the next open asks again.
+      const failing = window.eval("buildKnowledgeDisclosure")({ model_ref: "a/b" });
+      doc.body.appendChild(failing);
+      failNext = true;
+      await toggle(failing, true);
+      models.knowledge.failedText = flat(failing.querySelector(".models-knowledge-body"));
+      await toggle(failing, false);
+      await toggle(failing, true);
+      models.knowledge.retriedTable = Boolean(
+        failing.querySelector(".models-knowledge-table"),
+      );
+      models.knowledge.totalFetches = knowledgeUrls.length;
+      details.remove();
+      failing.remove();
+    } finally {
+      window.fetch = realFetch;
+    }
+  }
+
   models.preferences = {};
   [0, 1, 2, 3, 4, 5, 6].forEach((index) => {
     const model = alpha.models[index];

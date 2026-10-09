@@ -2376,6 +2376,53 @@ def test_the_models_page_draws_dates_cutoff_retirement_and_litellm(rendered) -> 
     assert "listed on OpenRouter" not in rows
 
 
+def test_everything_known_loads_once_when_opened_and_marks_each_statement(
+    rendered,
+) -> None:
+    """7.86.0: the lazy disclosure, its table, its marks and each source's row."""
+
+    known = rendered["models"]["knowledge"]
+    assert known["summary"] == "Everything known"
+    # Nothing is fetched until it is opened; opened twice, it is fetched once.
+    assert known["fetchedClosed"] == 0
+    assert known["urls"] == ["/admin/api/models/knowledge?ref=novita%2Facme%2Fmodel"]
+    # One column per source that states something, after the value in use.
+    assert known["header"] == [
+        "field",
+        "MCC uses",
+        "provider's own list",
+        "OpenRouter live",
+        "models.dev, cross-provider vote",
+    ]
+    description, price = known["rows"]
+    assert description[0] == "description"
+    assert description[1] == "Novita's words. (provider /models)"
+    assert description[2] == "Novita's words. — used"
+    assert description[3] == "OpenRouter's words."
+    assert price[1] == "$0.30 (provider /models)"
+    assert price[4] == "$0.50"
+    assert known["usedCells"] == ["Novita's words. — used", "$0.30 — used"]
+    assert known["differsCells"] == ["OpenRouter's words.", "$0.50"]
+    assert known["unreadCells"] == ["$0.50"]
+    assert "OpenRouter live, exact id (acme/model)" in known["titles"]
+    assert "cross-provider, exact id · not read for this provider" in known["titles"]
+    assert known["rowSummaries"] == [
+        "provider's own list — acme/model — exact id; as the last sweep read it",
+        "models.dev, cross-provider vote — one/acme/model — cross-provider, exact id "
+        "— not read for this provider",
+    ]
+    assert known["unreadRows"] == 1
+    assert known["firstRowPaths"] == [
+        ["id", '"acme/model"'],
+        ["architecture.tokenizer", '"Other"'],
+        ["tags", '["chat"]'],
+    ]
+    # A failed load says so, and the next open asks again.
+    assert "Could not read it: busy" in known["failedText"]
+    assert known["retriedTable"] is True
+    assert known["totalFetches"] == 3
+
+
 def test_a_single_surface_model_is_offered_no_choice_at_all(rendered) -> None:
     """39 of the 41 providers, and every custom entry that did not opt in."""
 
