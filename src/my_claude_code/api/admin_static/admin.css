@@ -9830,6 +9830,196 @@ audio.req-media-preview {
   overflow-wrap: anywhere;
 }
 
+/* 7.91.0: VPN accounts, commercial gateways and proxy lists -- a card per
+   source like the Tor one, and a form a vendor preset prefills. */
+.proxy-vendor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.proxy-vendor-account,
+.proxy-vendor-gateway,
+.proxy-vendor-list {
+  min-width: 0;
+}
+
+.proxy-vendor-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-strong);
+}
+
+.proxy-vendor-intro,
+.proxy-vendor-doc,
+.proxy-vendor-none,
+.proxy-vendor-sees,
+.proxy-vendor-form-note,
+.proxy-vendor-preset-text {
+  margin: 0;
+}
+
+.proxy-vendor-add {
+  align-self: flex-start;
+  white-space: nowrap;
+}
+
+.proxy-vendor-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  min-width: 0;
+}
+
+.proxy-vendor-head,
+.proxy-vendor-status,
+.proxy-vendor-tunnel {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.proxy-vendor-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-strong);
+}
+
+.proxy-vendor-detail {
+  color: var(--muted);
+}
+
+.proxy-vendor-status {
+  color: var(--text);
+}
+
+.proxy-vendor-status-failed {
+  color: var(--error);
+}
+
+.proxy-vendor-tunnel {
+  color: var(--warn);
+}
+
+.proxy-vendor-actions,
+.proxy-vendor-add-all,
+.proxy-vendor-form-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.proxy-vendor-fetch,
+.proxy-vendor-renew,
+.proxy-vendor-edit,
+.proxy-vendor-remove,
+.proxy-vendor-offer-add,
+.proxy-vendor-add-all-button,
+.proxy-vendor-save,
+.proxy-vendor-cancel {
+  white-space: nowrap;
+}
+
+.proxy-vendor-add-all-label,
+.proxy-vendor-offer-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.proxy-vendor-offers-wrap {
+  min-width: 0;
+}
+
+.proxy-vendor-offers-summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.proxy-vendor-offers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proxy-vendor-offer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.proxy-vendor-offer-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.proxy-vendor-offer-state {
+  flex: 1 1 160px;
+}
+
+.proxy-vendor-provider {
+  max-width: 220px;
+}
+
+.proxy-vendor-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+}
+
+.proxy-vendor-preset {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.proxy-vendor-preset-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.proxy-vendor-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.proxy-vendor-input,
+.proxy-vendor-select {
+  width: 220px;
+  max-width: 100%;
+}
+
+.proxy-vendor-hosts,
+.proxy-vendor-paste {
+  flex-basis: 100%;
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 /* What MCC remembers about one exit (7.81.0): a fact about the provider's
    answers, not a health measurement, so a muted warning tone rather than the
    health word's colours, and its own cell so the bounded health word above

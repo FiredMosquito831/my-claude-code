@@ -3214,6 +3214,19 @@ downloads or starts tor. Raise `PROXY_CONNECT_TIMEOUT_SECONDS` (to 30, say)
 when you use Tor. See
 [Bring your own Tor](ROUTING-REFERENCE.md#bring-your-own-tor-7900).
 
+**A VPN account, a gateway or a proxy list (7.91.0).** On the same page, **Add a
+VPN account** (NordVPN's or PIA's SOCKS5 hosts with their service credentials;
+Mullvad's in-tunnel proxies while its app is connected), **Add a gateway**
+(Oxylabs, IPRoyal, Decodo, Bright Data datacenter or ISP zones: N sessions, N
+addresses) or **Add a proxy list** (Webshare's free list, pasted or by its
+download link). A preset fills each form from the vendor's documentation;
+nothing is contacted until you save, and a vendor's list is fetched only when
+you press **Fetch now** or switch on its schedule. Two or more of these
+addresses in the Zen chain with **Keep trying exits until one answers** ticked
+give a refused request somewhere else to go. Proton VPN Free has no proxy: turn
+its app on and Direct goes out through it. See
+[VPN accounts, gateways and proxy lists](ROUTING-REFERENCE.md#vpn-accounts-gateways-and-proxy-lists-7910).
+
 ### OpenCode Zen serves different models on different endpoints
 
 **New in 6.74.0.** OpenCode Zen is not one API. It is a front door onto four,

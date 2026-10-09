@@ -8685,3 +8685,195 @@ def test_removing_the_tor_source_brings_the_form_back(rendered) -> None:
     assert removed["puts"] == [{"source": "src_tor", "remove": True}]
     assert removed["cards"] == 0
     assert removed["form"] is True
+
+
+# 7.91.0: VPN accounts, commercial gateways, proxy lists -------------------
+
+
+def test_the_vendor_blocks_are_there_and_ask_for_nothing_until_a_form_opens(
+    rendered,
+) -> None:
+    empty = rendered["proxying"]["vendors"]["empty"]
+    assert empty["titles"] == [
+        "VPN accounts",
+        "Commercial proxy gateways",
+        "Proxy lists from your provider",
+    ]
+    assert empty["adds"] == ["Add a VPN account", "Add a gateway", "Add a proxy list"]
+    assert empty["cards"] == 0
+    # Presets are data the page asks for only when a form opens.
+    assert empty["presetGets"] == 0
+    assert any(line.startswith("No VPN vendor found allows") for line in empty["terms"])
+
+
+def test_a_vpn_account_form_is_prefilled_from_the_vendor_preset(rendered) -> None:
+    form = rendered["proxying"]["vendors"]["accountForm"]
+    assert form["presetGets"] == 1
+    assert form["preset"] == "nordvpn"
+    assert form["choices"] == [
+        "NordVPN",
+        "Mullvad (inside its tunnel)",
+        "Another vendor (type it yourself)",
+    ]
+    assert form["hosts"].splitlines() == [
+        "nl.socks.nordhold.net",
+        "se.socks.nordhold.net",
+        "us.socks.nordhold.net",
+    ]
+    assert (form["scheme"], form["port"]) == ("socks5h", "1080")
+    assert form["listUrl"].startswith("https://api.nordvpn.com/v1/servers")
+    assert "port 89" in form["note"] and "untested" in form["note"]
+    assert form["doc"] == "https://support.nordvpn.com/hc/en-us/articles/20195967385745"
+    assert form["passwordType"] == "password"
+
+
+def test_saving_a_vpn_account_sends_it_once_and_keeps_no_secret_on_the_page(
+    rendered,
+) -> None:
+    saved = rendered["proxying"]["vendors"]["accountSaved"]
+    assert len(saved["puts"]) == 1
+    body = saved["puts"][0]
+    assert (body["source"], body["kind"]) == ("", "account")
+    sent = body["account"]
+    assert sent["preset"] == "nordvpn"
+    assert (sent["username"], sent["password"]) == (
+        "service-user-1",
+        "nord-secret-pass-7",
+    )
+    assert sent["countries"] == ["nl", "SE"]
+    assert (sent["fetch_via"], sent["refresh_hours"]) == ("", 0)
+    assert saved["pageHasPassword"] is False
+    assert saved["pageHasUser"] is False
+    assert saved["head"].startswith("NordVPN · SOCKS5 · logs in as serv…ce-1")
+    assert saved["status"].startswith(
+        "Server list at https://api.nordvpn.com (kept: nl, SE) -- fetched only "
+        "when you press Fetch now, from this computer. Not fetched yet."
+    )
+    assert saved["offers"] == [
+        "NordVPN · nl.socks.nordhold.net",
+        "NordVPN · se.socks.nordhold.net",
+        "NordVPN · us.socks.nordhold.net",
+    ]
+    assert saved["buttons"] == ["Fetch now", "Change", "Remove"]
+    assert saved["form"] is False
+    assert saved["announcement"].startswith("Saved: 3 on offer.")
+
+
+def test_fetch_now_reads_the_server_list_and_shows_its_countries(rendered) -> None:
+    fetched = rendered["proxying"]["vendors"]["accountFetched"]
+    assert fetched["posts"] == [
+        {"path": "/admin/api/proxy-sources/fetch", "body": {"source": "src_v_account"}}
+    ]
+    assert fetched["offers"] == [
+        "NordVPN · socks-nl1.nordvpn.com",
+        "NordVPN · socks-nl2.nordvpn.com",
+    ]
+    assert fetched["states"] == ["NL, Amsterdam · on offer"] * 2
+    assert "Fetched: 2 SOCKS5 servers (NL); 2 kept for NL." in fetched["status"]
+    assert fetched["announcement"] == "Fetched: 2 SOCKS5 servers (NL); 2 kept for NL."
+
+
+def test_a_bright_data_residential_zone_is_refused_with_the_reason(rendered) -> None:
+    vendors = rendered["proxying"]["vendors"]
+    form = vendors["gatewayForm"]
+    assert form["presetGets"] == 1  # asked once, then kept
+    assert form["preset"] == "brightdata"
+    assert form["choices"] == ["Bright Data", "Oxylabs"]
+    assert (form["host"], form["port"]) == ("brd.superproxy.io", "22228")
+    assert form["zoneTypes"] == [
+        "Datacenter zone",
+        "ISP zone",
+        "Residential zone (refused)",
+        "Mobile zone (refused)",
+    ]
+    refused = vendors["gatewayRefused"]
+    assert refused["puts"] == 1
+    assert refused["announcement"].startswith(
+        "Bright Data's residential and mobile zones need Bright Data's own "
+        "certificate authority"
+    )
+    assert refused["formStillOpen"] is True
+
+
+def test_a_gateway_is_n_sessions_each_its_own_address(rendered) -> None:
+    vendors = rendered["proxying"]["vendors"]
+    assert vendors["oxylabsForm"] == {
+        "host": "pr.oxylabs.io",
+        "port": "7777",
+        "minutes": "30",
+        "zone": False,
+    }
+    saved = vendors["gatewaySaved"]
+    sent = saved["puts"][0]["gateway"]
+    assert sent["preset"] == "oxylabs"
+    assert (sent["user"], sent["password"], sent["count"], sent["minutes"]) == (
+        "acme-user",
+        "oxy-secret-pass-5",
+        3,
+        30,
+    )
+    assert saved["pageHasPassword"] is False
+    assert saved["head"] == (
+        "Oxylabs · pr.oxylabs.io:7777 · 3 sessions · 30 min sessions · logs in "
+        "as acme…user (stored, never shown)"
+    )
+    assert saved["offers"] == [f"Oxylabs · session first00{n}" for n in (1, 2, 3)]
+    assert saved["buttons"] == ["New sessions", "Change", "Remove"]
+    assert saved["addAll"] == "Add all to chain"
+
+
+def test_every_gateway_session_goes_into_a_chain_through_the_one_bulk_add(
+    rendered,
+) -> None:
+    added = rendered["proxying"]["vendors"]["gatewayAddedAll"]
+    assert len(added) == 1
+    assert (added[0]["action"], added[0]["provider"]) == ("add", "nvidia_nim")
+    assert len(added[0]["proxies"]) == 3
+
+
+def test_new_sessions_sends_no_password_and_asks_for_renewal(rendered) -> None:
+    renewed = rendered["proxying"]["vendors"]["gatewayRenewed"]
+    assert len(renewed["puts"]) == 1
+    sent = renewed["puts"][0]["gateway"]
+    assert sent["renew"] is True
+    assert "password" not in sent and "user" not in sent
+    assert sent["count"] == 3
+    assert renewed["offers"] == [f"Oxylabs · session renew00{n}" for n in (1, 2, 3)]
+
+
+def test_a_proxy_list_link_is_write_only_and_the_schedule_starts_off(rendered) -> None:
+    vendors = rendered["proxying"]["vendors"]
+    form = vendors["listForm"]
+    assert form["preset"] == "webshare"
+    assert form["urlType"] == "password"
+    assert form["refresh"] == [
+        "Only when I press Fetch now",
+        "Every 6 hours",
+        "Every 24 hours",
+        "Every 7 days",
+    ]
+    assert form["refreshValue"] == "0"
+    assert form["via"][0] == "Fetch from this computer"
+    assert all(option.startswith("Fetch through ") for option in form["via"][1:])
+    saved = vendors["listSaved"]
+    sent = saved["puts"][0]["proxy_list"]
+    assert "JSDOM-TOKEN-77" in sent["url"]
+    assert sent["refresh_hours"] == 0
+    assert saved["pageHasToken"] is False
+    assert "download link at https://proxy.webshare.io" in saved["head"]
+    assert saved["none"] == "Nothing on offer yet: press Fetch now to read the list."
+    fetched = vendors["listFetched"]
+    assert fetched["posts"] == [
+        {"path": "/admin/api/proxy-sources/fetch", "body": {"source": "src_v_list"}}
+    ]
+    assert fetched["offers"] == [
+        "Webshare · 198.51.100.10:6540",
+        "Webshare · 198.51.100.11:6541",
+    ]
+
+
+def test_removing_a_vendor_source_sends_one_put(rendered) -> None:
+    removed = rendered["proxying"]["vendors"]["removed"]
+    assert removed["puts"] == [{"source": "src_v_gateway", "remove": True}]
+    assert removed["gatewayCards"] == 0
+    assert removed["presetGets"] == 1

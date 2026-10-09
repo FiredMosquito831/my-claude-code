@@ -188,8 +188,9 @@ def test_a_login_change_on_a_chained_offer_rebuilds_that_provider(
 
 
 def test_a_kind_a_later_release_builds_is_refused() -> None:
+    # ``runner`` since 7.91.0, which builds ``account``, ``gateway`` and ``list``.
     response = _client().put(
-        "/admin/api/proxy-sources", json={"source": "src_nord", "kind": "account"}
+        "/admin/api/proxy-sources", json={"source": "src_proton", "kind": "runner"}
     )
 
     assert response.status_code == 422

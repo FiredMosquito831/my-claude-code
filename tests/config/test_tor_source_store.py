@@ -95,15 +95,18 @@ def test_a_document_with_tor_sources_round_trips_byte_for_byte(
 
 def test_tor_is_not_one_of_the_kinds_the_sources_payload_lists() -> None:
     """The 7.89.0 ``kinds`` list is the base spec's five, unchanged, so an
-    install with no tor source answers the Sources routes byte for byte."""
+    install with no tor source answers the Sources routes byte for byte.
+
+    7.91.0 builds ``account``, ``gateway`` and ``list``, so those three now
+    say so; ``tor`` is still not in the list and ``runner`` still unbuilt."""
 
     assert SOURCE_KINDS == ("local", "account", "gateway", "list", "runner")
     document = sources_document(ProxyChains(), ProxySources.from_document(DOCUMENT))
     assert document["kinds"] == [
         {"id": "local", "available": True},
-        {"id": "account", "available": False},
-        {"id": "gateway", "available": False},
-        {"id": "list", "available": False},
+        {"id": "account", "available": True},
+        {"id": "gateway", "available": True},
+        {"id": "list", "available": True},
         {"id": "runner", "available": False},
     ]
 

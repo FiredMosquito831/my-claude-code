@@ -146,7 +146,11 @@ from my_claude_code.core.proxy_exit_memory import (
     forget_exits,
 )
 from my_claude_code.core.proxy_rotation import PROXY_HEALTH, PROXY_INTERCEPTION
-from my_claude_code.providers.runtime.config import direct_exit_refusal
+from my_claude_code.providers.runtime.config import (
+    MaskedExit,
+    direct_exit_refusal,
+    masked_exit_for,
+)
 
 router = APIRouter()
 
@@ -2921,6 +2925,48 @@ async def check_direct_exit(
         refusal=refusal,
     )
     return await asyncio.to_thread(_payload, services)
+
+
+def vendor_fetch_exit(settings: Settings, provider_id: str) -> MaskedExit:
+    """Where a vendor list fetch leaves from when its source names a chain (7.91.0).
+
+    The operator may send a source's *Fetch now* -- and its schedule --
+    through a provider's proxy chain. The fetch is not a request to that
+    provider, so nothing rotates, retries or falls back around it: it takes
+    the one exit that provider's own probes would take
+    (:func:`~my_claude_code.providers.runtime.config.masked_exit_for`, the
+    same single read real requests are built from). That is the chain's
+    first usable proxy; this computer's address only where the chain itself
+    would use it (no chain, or every proxy unhealthy with Direct fallback
+    on); and a refusal -- nothing sent -- wherever the chain says no. A
+    provider no longer configured is refused too, never dialled direct.
+    """
+
+    providers = {
+        entry["provider_id"]: entry for entry in _configured_providers(settings)
+    }
+    entry = providers.get(provider_id)
+    if entry is None:
+        return MaskedExit(
+            proxy=None,
+            refused=(
+                f"Not sent: {provider_id!r} is not a configured provider any "
+                "more, so there is no chain to send this through. Choose "
+                "another chain for the fetch, or this computer."
+            ),
+        )
+    return masked_exit_for(
+        provider_id,
+        str(entry.get("inherited_proxy") or ""),
+        settings,
+        name=str(entry["display_name"]),
+    )
+
+
+def configured_provider_ids(settings: Settings) -> frozenset[str]:
+    """Every provider a source's fetch may be sent through."""
+
+    return frozenset(entry["provider_id"] for entry in _configured_providers(settings))
 
 
 class ProxyKeepOnePerExitPayload(BaseModel):

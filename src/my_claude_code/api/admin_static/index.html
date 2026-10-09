@@ -413,12 +413,22 @@
                     <a href="#guide-proxy-sources">Guide</a>.
                     A tor you run yourself, on ports of your choosing, goes in
                     <em>Tor you run yourself</em> below (see
-                    <a href="#guide-proxy-tor">Bring your own Tor</a>).
+                    <a href="#guide-proxy-tor">Bring your own Tor</a>). After it:
+                    VPN accounts, commercial gateways and proxy lists from your own
+                    provider, each prefilled from the vendor's documentation and
+                    contacted only when you press <em>Fetch now</em> (see
+                    <a href="#guide-proxy-vendors">VPN accounts, gateways and proxy
+                    lists</a>).
                   </p>
                   <p class="proxy-sources-terms">
                     Spreading requests over many exits can conflict with a
                     provider&rsquo;s terms &mdash; a free quota counted per
                     address, for example. That is your choice.
+                  </p>
+                  <p class="proxy-sources-terms">
+                    No VPN vendor found allows automated API traffic in its terms, and
+                    commercial proxies bind you to the use you declared to them: using
+                    them for a coding assistant is your call.
                   </p>
                 </div>
               </div>
@@ -2052,6 +2062,7 @@
                 <a href="#guide-proxy-keep-trying">Keep trying exits until one answers</a>
                 <a href="#guide-proxy-sources">Proxies on this computer, and where each exit comes out</a>
                 <a href="#guide-proxy-tor">Bring your own Tor</a>
+                <a href="#guide-proxy-vendors">VPN accounts, gateways and proxy lists</a>
                 <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
@@ -4019,6 +4030,107 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   providers sit behind Cloudflare, which can challenge or refuse them.
                   The Tor Project asks people not to push heavy or automated traffic
                   through its volunteer exits.
+                </p>
+
+                <h3 id="guide-proxy-vendors">VPN accounts, commercial gateways and proxy lists</h3>
+                <p>
+                  Since 7.91.0 the Proxying page's <em>Proxies on this computer</em>
+                  section has three more kinds of source. Each one turns what you give it
+                  into ordinary chain addresses, offered on its card: <em>Add to
+                  chain</em> (or <em>Add all to chain</em>) tests each against that
+                  provider's own host first, like any address. A <strong>preset</strong>
+                  fills the form from the vendor's own documentation &mdash; its host, port,
+                  session syntax, a link to the page and the day MCC read it &mdash; and
+                  you keep, change or replace every field. Nothing is stored or contacted
+                  until you press Save. A vendor's list is fetched only when you press
+                  <em>Fetch now</em> or switch on that source's own schedule (every 6
+                  hours, 24 hours or 7 days; off until you choose), from the URL you
+                  confirmed, and &mdash; if you choose a provider's chain for it &mdash;
+                  through that chain's exit, never from this computer where that chain
+                  says no. Passwords, service logins and download links are kept in
+                  <code>proxy_sources.json</code> and in each address's URL in
+                  <code>proxy_chains.json</code>, both readable by you only, and are never
+                  shown again; a download link is shown by its host alone.
+                </p>
+                <p>
+                  <strong>VPN accounts with a proxy.</strong> <em>NordVPN</em>: SOCKS5 on
+                  port 1080 with your <em>service credentials</em> (Nord Account &rarr;
+                  Set up NordVPN manually), not your login. Its SOCKS5 servers are in the
+                  Netherlands, Sweden and the United States only; the preset fills
+                  <code>nl</code>, <code>se</code> and <code>us.socks.nordhold.net</code>
+                  and, optionally, Nord's server list URL &mdash; press <em>Fetch now</em>
+                  and its SOCKS5 servers in the countries you keep become addresses. Nord
+                  allows 10 connections at once per account. Nord also documents an HTTPS
+                  proxy on port 89; it is untested with MCC (an httpx user reported a TLS
+                  error through it), so it is not offered. <em>Private Internet
+                  Access</em>: <code>proxy-nl.privateinternetaccess.com:1080</code> with
+                  the SOCKS credentials you generate in its Client Control Panel (one exit,
+                  in the Netherlands). <em>IPVanish</em> and <em>TorGuard</em>: their
+                  SOCKS5 hosts with their proxy credentials (TorGuard also answers on 1085
+                  and 1090 &mdash; type <code>host:port</code> for each). One host is one
+                  address; a SOCKS5 login crosses the network unencrypted, which exposes a
+                  proxy-only login, never your API key.
+                </p>
+                <p>
+                  <strong>VPNs whose proxy is inside their tunnel.</strong>
+                  <em>Mullvad</em>: while the Mullvad app is connected,
+                  <code>10.64.0.1:1080</code> is the server you are on, and every other
+                  server's proxy
+                  (<code>nl-ams-wg-socks5-001.relays.mullvad.net</code> and so on) is
+                  reachable through the same tunnel &mdash; add the ones you want, one per
+                  line. No login. These addresses answer only while the app's tunnel is
+                  up, and the card says so. <em>IVPN</em> works the same way with
+                  <code>10.1.0.1</code> and <code>socks5.&lt;server&gt;.gw.ivpn.net</code>.
+                </p>
+                <p>
+                  <strong>VPNs with no proxy at all: Proton VPN, Surfshark, ExpressVPN,
+                  Windscribe.</strong> They give a whole-computer tunnel and nothing a
+                  chain could choose per request. <em>Proton VPN Free</em> has no proxy,
+                  no split tunnelling, one device and a randomly chosen free server: turn
+                  the Proton app on and MCC's <em>Direct</em> goes out through Proton for
+                  the whole computer &mdash; nothing to set in MCC. Press <em>Where does
+                  Direct come out?</em> on a card to see which country Direct now exits
+                  from. On Proton VPN Plus and ExpressVPN, split tunnelling in
+                  <em>include</em> mode can send only MCC's program through the VPN.
+                  Surfshark and Windscribe: the same, Direct through the app. Cloudflare
+                  WARP in proxy mode is a proxy on this computer: <em>Scan this
+                  computer</em> finds it on 40000, or type
+                  <code>socks5h://127.0.0.1:&lt;your port&gt;</code> as an address;
+                  Cloudflare documents a 10-second limit per request for that mode in its
+                  Zero Trust client.
+                </p>
+                <p>
+                  <strong>Commercial gateways.</strong> One gateway host gives a new
+                  address per <em>session</em>, so MCC spells N sessions in the vendor's
+                  own syntax &mdash; each its own address with its own name
+                  (<code>Oxylabs &middot; session 3f9a0c1e0001</code>) and its own health,
+                  cooldown and history. <em>New sessions</em> mints fresh session ids
+                  (never one used before) for fresh addresses. <em>Bright Data</em>:
+                  <code>brd.superproxy.io</code>, SOCKS5 on 22228 (or HTTP on 44445),
+                  datacenter and ISP zones only &mdash; residential and mobile zones need
+                  Bright Data's own certificate installed so it can decrypt your traffic,
+                  and MCC refuses them. <em>Oxylabs</em>:
+                  <code>pr.oxylabs.io:7777</code>; a session keeps its address for its
+                  session time or until it is idle 60 seconds, so 30 minutes or more keeps
+                  a quiet thinking pause from changing it mid-answer.
+                  <em>IPRoyal</em>: <code>geo.iproyal.com:12321</code>; the session goes
+                  in the password, and without one IPRoyal changes address on every
+                  request. <em>Decodo</em>: <code>gate.decodo.com:7000</code>.
+                </p>
+                <p>
+                  <strong>Proxy lists.</strong> A list of
+                  <code>ip:port:username:password</code> rows your provider gave you
+                  &mdash; Webshare's free plan (10 datacenter proxies, 1 GB a month,
+                  shared with other users, and some sites block them) first. Paste it, or
+                  give the list's download link from your Webshare dashboard: the link
+                  carries your token, so MCC keeps it like a password and fetches it only
+                  on <em>Fetch now</em> or your schedule. Each row is one address; its
+                  login lives only in that address's URL.
+                </p>
+                <p>
+                  <strong>Terms.</strong> No VPN vendor found allows automated API traffic
+                  in its terms, and commercial proxies bind you to the use you declared to
+                  them: using them for a coding assistant is your call.
                 </p>
 
                 <h3 id="guide-advanced">Where the advanced settings went</h3>

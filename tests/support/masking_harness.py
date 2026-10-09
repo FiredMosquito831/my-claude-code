@@ -285,11 +285,34 @@ class _RecordingProxy(_Listener):
 
 
 class RecordingSocks5Proxy(_RecordingProxy):
-    """A SOCKS5 proxy that resolves the provider's hostname itself."""
+    """A SOCKS5 proxy that resolves the provider's hostname itself.
+
+    7.91.0: a client that offers ONLY a username and password (RFC 1929) --
+    what httpx does for a ``socks5h://user:pass@`` address, such as a
+    gateway's session or a VPN account's host -- is asked for them, and the
+    user name is recorded in :attr:`logins`. Any login is accepted. A client
+    offering "no authentication" gets exactly the bytes it always got.
+    """
+
+    def __init__(self, names: dict[str, str] | None = None) -> None:
+        super().__init__(names)
+        self._logins: list[str] = []
 
     @property
     def url(self) -> str:
         return f"socks5://127.0.0.1:{self.port}"
+
+    @property
+    def logins(self) -> list[str]:
+        """The user name of every RFC 1929 login, in arrival order."""
+
+        with self._lock:
+            return list(self._logins)
+
+    def clear(self) -> None:
+        super().clear()
+        with self._lock:
+            self._logins.clear()
 
     async def _serve(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -297,9 +320,21 @@ class RecordingSocks5Proxy(_RecordingProxy):
         with self._lock:
             self.accepted += 1
         greeting = await reader.readexactly(2)
-        await reader.readexactly(greeting[1])
-        writer.write(_GREETING_OK)
-        await writer.drain()
+        methods = await reader.readexactly(greeting[1])
+        if 0x00 not in methods and 0x02 in methods:
+            writer.write(b"\x05\x02")
+            await writer.drain()
+            _version, size = await reader.readexactly(2)
+            username = (await reader.readexactly(size)).decode("utf-8", "replace")
+            size = (await reader.readexactly(1))[0]
+            await reader.readexactly(size)
+            with self._lock:
+                self._logins.append(username)
+            writer.write(b"\x01\x00")
+            await writer.drain()
+        else:
+            writer.write(_GREETING_OK)
+            await writer.drain()
         request = await reader.readexactly(4)
         kind = request[3]
         if kind == 1:

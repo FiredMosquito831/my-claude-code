@@ -77,6 +77,15 @@ own when that happens (decision 5(a): New Tor identity is a button, never a
 trigger). The two buttons, *Check Tor* and *New Tor identity*, dial
 ``127.0.0.1:<control port>`` and nothing else: not through the chain, not
 around it, not the provider.
+
+Filled by 7.91.0 (vendor presets, PR-S4 + PR-S5): a VPN account's hosts and a
+gateway's sessions are chain entries like any address, logging in to the proxy
+with their own credential (the rig's SOCKS5 proxies record RFC 1929 logins). A
+ticked chain of two account hosts moves a refused request to the other host;
+a ticked chain of two gateway sessions on one gateway moves it to the other
+session, each under its own name, never direct. A vendor list fetch is traffic
+too: with a chain named for the source it leaves through that chain's exit, by
+name, and sends nothing at all where the chain refuses.
 """
 
 import asyncio
@@ -98,12 +107,21 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from google.auth.credentials import Credentials as GoogleCredentials
 
+from my_claude_code.application import proxy_vendor_sources
 from my_claude_code.application.model_metadata import ResponseSurface
 from my_claude_code.application.ports import PooledCredentialPort
 from my_claude_code.application.proxy_check import (
     CHECK_DEPTH_REQUEST,
     check_proxy,
     reset_direct_exits,
+)
+from my_claude_code.application.proxy_vendor_sources import (
+    AccountEdit,
+    GatewayEdit,
+    ListEdit,
+    save_account_source,
+    save_gateway_source,
+    save_list_source,
 )
 from my_claude_code.application.tor_source import TorEdit, save_tor_source
 from my_claude_code.config.constants import CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE
@@ -160,6 +178,7 @@ from tests.api.support import create_test_app, provider_manager_for_app
 from tests.support.fake_tor_control import FakeTorControl, run_fake_tor
 from tests.support.masking_harness import (
     MaskingRig,
+    RecordingSocks5Proxy,
     SeenRequest,
     closed_port,
     start_masking_rig,
@@ -2357,5 +2376,208 @@ def test_the_tor_buttons_dial_only_the_control_port(
     assert dialled == [("127.0.0.1", tor_control.port)] * 2
     assert {peer[0] for peer in tor_control.peers} == {"127.0.0.1"}
     # ...and not one byte through or around the chain, nor to the provider.
+    traffic.rig.assert_nothing_sent()
+    assert [proxy.accepted for proxy in traffic.rig.proxies] == [0, 0, 0]
+
+
+# ================================ 7.91.0: VPN accounts, gateways, vendor lists
+#
+# The rig's SOCKS5 proxies stand in for a VPN's proxy hosts and for a
+# commercial gateway: they accept any RFC 1929 login and record its user name,
+# so a row can see which credential each dial carried. The rig's host stands
+# in for a vendor's list API. No vendor is contacted.
+
+VENDOR_USER = "rig-service-user"
+VENDOR_PASS = "rig-service-pass"
+VENDOR_LIST_PATH = "/vendor/proxy/list/download/RIG-TOKEN/"
+VENDOR_LIST = b"198.51.100.10:6540:rig-list-user:rig-list-pass\n"
+
+
+def _logins(world: TrafficWorld, index: int) -> list[str]:
+    """The RFC 1929 user names the rig's SOCKS5 proxy ``index`` was given."""
+
+    proxy = world.rig.proxies[index]
+    assert isinstance(proxy, RecordingSocks5Proxy)
+    return proxy.logins
+
+
+def _chain_offers(
+    world: TrafficWorld, chains: ProxyChains, source_id: str
+) -> list[str]:
+    """Chain a source's offers on every masked provider, ticked, fallback off."""
+
+    offers = list(chains.source_offers[source_id])
+    chain = ProxyChain(
+        enabled=True,
+        policy="failover",
+        entries=tuple(ProxyChainEntry(proxy=proxy_id) for proxy_id in offers),
+        direct_fallback=False,
+        until_served=True,
+        max_switches=2,
+    )
+    save_proxy_chains(
+        ProxyChains(
+            proxies=chains.proxies,
+            chains=dict.fromkeys(world.masked_ids, chain),
+            source_offers=chains.source_offers,
+        ),
+        world.chains_path,
+    )
+    reset_proxy_chains_cache()
+    return offers
+
+
+def _send_chat(world: TrafficWorld) -> Outcome:
+    with world.client(**BACKOFF) as client:
+        return _answered(
+            client.post(
+                "/v1/messages",
+                json=_messages_body(f"{world.ids[CHAT_NAME]}/{MODEL}", stream=False),
+            )
+        )
+
+
+@pytest.mark.local_serial
+def test_account_hosts_in_a_ticked_chain_move_a_refused_request_to_the_next_host(
+    traffic: TrafficWorld,
+) -> None:
+    first, second = (traffic.rig.proxies[0].port, traffic.rig.proxies[2].port)
+    chains, sources, source_id = save_account_source(
+        ProxyChains(),
+        ProxySources(),
+        "",
+        AccountEdit(
+            name="Rig VPN",
+            hosts=f"127.0.0.1:{first}\n127.0.0.1:{second}",
+            username=VENDOR_USER,
+            password=VENDOR_PASS,
+        ),
+    )
+    save_proxy_sources(sources)
+    _chain_offers(traffic, chains, source_id)
+    traffic.exit_answers = {0: FREE_USAGE_429}
+
+    outcome = _send_chat(traffic)
+
+    assert outcome.ok, outcome.text
+    traffic.rig.assert_masked()
+    # The refusing host once, then the other host: never this computer.
+    assert _exits_used(traffic, CHAT_NAME) == [0, 2]
+    assert len({seen.body for seen in traffic.requests_for(CHAT_NAME)}) == 1
+    # Each dial logged in with the account's service credential.
+    assert _logins(traffic, 0) == [VENDOR_USER]
+    assert _logins(traffic, 2) == [VENDOR_USER]
+    assert _dial_proxies(_last_attempts(traffic)[0]) == [
+        f"Rig VPN · 127.0.0.1:{first}",
+        f"Rig VPN · 127.0.0.1:{second}",
+    ]
+
+
+@pytest.mark.local_serial
+def test_gateway_sessions_are_separate_entries_that_never_go_direct(
+    traffic: TrafficWorld,
+) -> None:
+    gateway = traffic.rig.proxies[0].port
+    chains, sources, source_id = save_gateway_source(
+        ProxyChains(),
+        ProxySources(),
+        "",
+        GatewayEdit(
+            preset="oxylabs",
+            host="127.0.0.1",
+            port=gateway,
+            scheme="socks5h",
+            user="rigcust",
+            password=VENDOR_PASS,
+            minutes=30,
+            count=2,
+        ),
+    )
+    save_proxy_sources(sources)
+    _chain_offers(traffic, chains, source_id)
+    source = sources.source(source_id)
+    assert source is not None and source.gateway is not None
+    sessions = source.gateway.sessions
+    # The rig meters by exit, and both sessions leave through the one gateway:
+    # a refusal of the first is a refusal of the second too.
+    traffic.exit_answers = {0: FREE_USAGE_429}
+
+    outcome = _send_chat(traffic)
+
+    assert not outcome.ok
+    # Session one, then session two -- each its own login, its own name --
+    # and never this computer's own address.
+    assert traffic.rig.direct_peers() == []
+    assert _exits_used(traffic, CHAT_NAME) == [0, 0]
+    assert _logins(traffic, 0) == [
+        f"customer-rigcust-sessid-{session}-sesstime-30" for session in sessions
+    ]
+    assert _dial_proxies(_last_attempts(traffic)[0]) == [
+        f"Oxylabs · session {session}" for session in sessions
+    ]
+
+
+def _vendor_list_world(traffic: TrafficWorld, monkeypatch, *, via: str) -> str:
+    """A list source whose download link is the rig host (plain http, so the
+    https-only rule is relaxed for this row alone), fetched through ``via``."""
+
+    monkeypatch.setattr(proxy_vendor_sources, "is_valid_feed_url", lambda url: True)
+    answer = traffic.answer
+
+    def vendor_or_provider(request: SeenRequest):
+        if request.path == VENDOR_LIST_PATH:
+            return 200, VENDOR_LIST, "text/plain"
+        return answer(request)
+
+    traffic.rig.host.responder = vendor_or_provider
+    url = traffic.rig.host.base_url(path=VENDOR_LIST_PATH)
+    _, sources, source_id = save_list_source(
+        ProxyChains(),
+        ProxySources(),
+        "",
+        ListEdit(name="Rig list", url=url, fetch_via=via),
+    )
+    save_proxy_sources(sources)
+    reset_proxy_sources_cache()
+    return source_id
+
+
+@pytest.mark.local_serial
+def test_a_vendor_list_fetch_leaves_through_the_chain_named_for_it(
+    traffic: TrafficWorld, monkeypatch
+) -> None:
+    traffic.write()
+    source_id = _vendor_list_world(traffic, monkeypatch, via=traffic.ids[CHAT_NAME])
+
+    with traffic.client() as client:
+        traffic.rig.clear()
+        response = client.post(
+            "/admin/api/proxy-sources/fetch", json={"source": source_id}
+        )
+
+    assert response.json()["fetch_result"]["ok"] is True, response.text
+    traffic.rig.assert_masked()
+    assert [seen.path for seen in traffic.rig.host.requests] == [VENDOR_LIST_PATH]
+    # Through the chain's first exit, which resolved the vendor's name.
+    assert traffic.exit_of(traffic.rig.host.requests[0]) == 0
+    assert "RIG-TOKEN" not in response.text
+
+
+@pytest.mark.local_serial
+def test_a_vendor_list_fetch_sends_nothing_where_the_chain_says_no(
+    traffic: TrafficWorld, monkeypatch
+) -> None:
+    traffic.write(paused=True)
+    source_id = _vendor_list_world(traffic, monkeypatch, via=traffic.ids[CHAT_NAME])
+
+    with traffic.client() as client:
+        traffic.rig.clear()
+        response = client.post(
+            "/admin/api/proxy-sources/fetch", json={"source": source_id}
+        )
+
+    result = response.json()["fetch_result"]
+    assert result["ok"] is False
+    assert "Direct fallback" in result["sentence"]
     traffic.rig.assert_nothing_sent()
     assert [proxy.accepted for proxy in traffic.rig.proxies] == [0, 0, 0]
