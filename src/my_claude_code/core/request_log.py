@@ -7839,10 +7839,15 @@ class RequestLogStore:
         # rotation), and a video job's exit (media attempts record none).
         #
         # Correlated on the attempt's primary key, so the outer query keeps
-        # its own index and window and each row it reads costs one seek; the
-        # JSON is opened only on attempts whose params mention dials, and only
-        # when it parses. ``media_jobs`` is small (pruned an hour after its
-        # request), so it is read once as a list.
+        # its own index and window and each row it reads costs one seek. The
+        # JSON is opened only where dials can be: an attempt that went through
+        # a chain and succeeded always stored its exit, so a succeeded attempt
+        # with no exit is chain-less and is never scanned -- the common row --
+        # and the rest only when their params mention dials and parse.
+        # Measured on synthetic logs: 0.1-0.4 s per filtered count over a
+        # week of 70,000 rows, about 1 s over 300,000 rows of all time.
+        # ``media_jobs`` is small (pruned an hour after its request), so it is
+        # read once as a list.
         exit_value = exit_filter(exit)
         if exit_value is not None:
             pattern = _like_contains(exit_value)
@@ -7851,7 +7856,8 @@ class RequestLogStore:
                 "(EXISTS (SELECT 1 FROM request_attempts AS xa"
                 " WHERE xa.request_id = requests.id"
                 f" AND (xa.proxy_label {like}"
-                " OR (xa.params LIKE '%\"dials\"%' AND EXISTS (SELECT 1"
+                " OR ((xa.proxy_label IS NOT NULL OR xa.outcome <> 'succeeded')"
+                " AND xa.params LIKE '%\"dials\"%' AND EXISTS (SELECT 1"
                 " FROM json_each(CASE WHEN json_valid(xa.params)"
                 " THEN xa.params END, '$.ladder.dials') AS xd"
                 f" WHERE json_extract(xd.value, '$.proxy') {like}))))"

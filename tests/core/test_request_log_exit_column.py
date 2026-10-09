@@ -135,6 +135,18 @@ EXPECTED: dict[str, tuple[str | None, list[str]]] = {
     "media": ("Tokyo exit", ["Tokyo exit"]),
     "media-none": (None, []),
     "skipped-first": ("203.0.113.7:1080", ["203.0.113.7:1080"]),
+    # A dial that never completed: no try, so no stored label, on a failed
+    # attempt; the next model answered with no chain.
+    "hung": (None, ["exit-h.example:1080"]),
+}
+
+HUNG_DIAL = {
+    "ladder": {
+        "tries": [],
+        "summary": {"tries": 0},
+        "credentials": [],
+        "dials": [{"at_try": 0, "proxy": "exit-h.example:1080", "outcome": "dialing"}],
+    }
 }
 
 
@@ -219,6 +231,14 @@ def store(tmp_path):
             (
                 _attempt(0, None, outcome=RouteAttemptOutcome.SKIPPED),
                 _attempt(1, "203.0.113.7:1080"),
+            ),
+        ),
+        _record(
+            "hung",
+            13,
+            (
+                _attempt(0, None, outcome=RouteAttemptOutcome.FAILED, params=HUNG_DIAL),
+                _attempt(1, None),
             ),
         ),
     ]
@@ -313,12 +333,16 @@ class TestTheFilter:
         assert _ids(store, exit="exit-a") == {"rotated", "fallback"}
         assert _ids(store, exit="direct") == {"direct", "system"}
         assert _ids(store, exit="system proxy") == {"system"}
+        # A dial that never completed is found too: a failed attempt's JSON is
+        # read even though it stored no exit.
+        assert _ids(store, exit="exit-h") == {"hung"}
         assert _ids(store, exit="1080") == {
             "rotated",
             "fallback",
             "one-entry",
             "masked",
             "skipped-first",
+            "hung",
         }
 
     def test_it_ignores_case_and_treats_wildcards_literally(self, store) -> None:
@@ -338,12 +362,13 @@ class TestTheFilter:
         assert _ids(store, exit="1080", since=BASE_TS + 9) == {
             "masked",
             "skipped-first",
+            "hung",
         }
         assert _ids(store, exit="198.51.100.4", status="error") == {"static"}
         assert _ids(store, exit="198.51.100.4", status="success") == set()
 
     def test_every_view_counts_the_same_rows(self, store) -> None:
-        for value, expected in (("Tokyo", 2), ("1080", 5), ("direct", 2)):
+        for value, expected in (("Tokyo", 2), ("1080", 6), ("direct", 2)):
             stats = store.stats(exit=value)
             assert stats["served_from"] == "rows"
             assert stats["total"] == expected
