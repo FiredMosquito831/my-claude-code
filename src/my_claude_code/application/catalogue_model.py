@@ -489,6 +489,10 @@ def _resolve(
     # tool_calls`` still speaks first and ``None`` still means "nobody said":
     # only a published statement, on any rung, can produce ``False``.
     tool_calls = derive_supports_tool_calls(supported)
+    if tool_calls is None and info is not None and info.declared is not None:
+        # No parameter list, but the row's own capability words or flag said
+        # (7.83.0) -- the provider rung, before models.dev, as on the page.
+        tool_calls = info.declared.tool_calls
     if tool_calls is None:
         tool_calls = runtime.model_tool_call_tiered(provider_id, model_id)[0]
     prices = runtime.model_prices_tiered(provider_id, model_id)

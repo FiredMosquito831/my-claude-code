@@ -75,6 +75,12 @@ def _rich(model_id: str) -> ProviderModelInfo:
             modalities=DeclaredModalities(inputs=("image", "text"), outputs=("text",)),
             model_type="chat",
             endpoints=("anthropic", "chat/completions", "responses"),
+            context_length=200_000,
+            max_output_tokens=64_000,
+            input_price=0.15,
+            output_price=0.5,
+            reasoning=True,
+            tool_calls=False,
         ),
     )
 
@@ -195,6 +201,48 @@ def test_damaged_inner_values_read_as_unstated() -> None:
         "modalities": {"inputs": "text", "outputs": ["text"]},
         "model_type": 7,
         "endpoints": "chat/completions",
+    }
+    restored = model_info_from_document(document)
+    assert restored is not None
+    assert restored.declared == ProviderModelDeclaration()
+
+
+def test_a_7_82_declaration_loads_with_the_new_fields_unstated() -> None:
+    """What 7.79-7.82 wrote: the three kind statements and nothing else."""
+    document = model_info_document(_rich("x/y"))
+    stored = document["declared"]
+    assert isinstance(stored, dict)
+    declared = {str(key): value for key, value in stored.items()}
+    document["declared"] = {
+        key: declared[key] for key in ("modalities", "model_type", "endpoints")
+    }
+    restored = model_info_from_document(document)
+    assert restored is not None and restored.declared is not None
+    rich = _rich("x/y").declared
+    assert rich is not None
+    assert restored.declared == ProviderModelDeclaration(
+        modalities=rich.modalities, model_type=rich.model_type, endpoints=rich.endpoints
+    )
+    # The record's own fields are exactly what was stored.
+    assert restored.context_length == 200_000
+
+
+def test_the_new_declared_keys_come_after_the_three_older_ones() -> None:
+    """A 7.79-7.82 reader reads the first three by name and passes over the rest."""
+    declared = model_info_document(_rich("x/y"))["declared"]
+    assert isinstance(declared, dict)
+    assert list(declared)[:3] == ["modalities", "model_type", "endpoints"]
+
+
+def test_damaged_new_declared_values_read_as_unstated() -> None:
+    document = model_info_document(_bare("x/y"))
+    document["declared"] = {
+        "context_length": "1M",
+        "max_output_tokens": True,
+        "input_price": "0.15",
+        "output_price": [],
+        "reasoning": "yes",
+        "tool_calls": 1,
     }
     restored = model_info_from_document(document)
     assert restored is not None

@@ -9,6 +9,7 @@ import pytest
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import (
     ModelReasoningCapability,
+    ProviderModelDeclaration,
     ProviderModelInfo,
 )
 from my_claude_code.config.nim import NimSettings
@@ -248,6 +249,10 @@ async def test_openrouter_lists_tool_metadata_with_thinking_support() -> None:
                     supports_toggle_control=True,
                     supports_budget_control=True,
                 ),
+                # 7.83.0: the generic reader keeps what the row states; its
+                # parameter list names ``reasoning``. The record's own flag
+                # above is the dialect's, as it always was.
+                declared=ProviderModelDeclaration(reasoning=True),
             ),
             ProviderModelInfo(
                 "plain-tool-model",

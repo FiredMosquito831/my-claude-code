@@ -420,6 +420,54 @@ def _laddered(
     return _sourced(value, source, tier, **extra)
 
 
+def _provider_first(
+    cached_value: Any,
+    declared_value: Any,
+    provider_tier: ResolutionTier | None,
+    resolved: tuple[Any, ResolutionTier | None],
+    **extra: Any,
+) -> dict[str, Any]:
+    """A record field whose provider rung can now name itself (7.83.0).
+
+    ``context_length`` and the two uncached prices on a cached record may hold
+    the provider's own number or models.dev's discovery-time fill, which
+    records no rung -- so the page has always said "provider /models or
+    models.dev". Where the provider's own row stated the very value the record
+    holds, it is the provider's answer, at the tier the record was found at.
+    Anything else reads exactly as it did before.
+    """
+
+    if declared_value is not None and cached_value == declared_value:
+        return _sourced(cached_value, SOURCE_PROVIDER, provider_tier, **extra)
+    return _laddered(
+        cached_value, SOURCE_PROVIDER_OR_MODELS_DEV, None, resolved, **extra
+    )
+
+
+def _provider_reasoning(
+    info: ProviderModelInfo | None,
+) -> ModelReasoningCapability | None:
+    """The provider rung's reasoning record, as routing reads it.
+
+    The same fold ``ProviderModelCache.cached_model_reasoning_capability``
+    applies before the models.dev merge: a record whose list stated only a
+    thinking flag -- a capability word, or (7.83.0) the generic reader's
+    statement -- answers ``can_reason`` with it. Without the fold the page
+    would credit models.dev with a value routing takes from the provider.
+    """
+
+    if info is None:
+        return None
+    capability = info.reasoning_capability
+    if capability is None:
+        if info.supports_thinking is None:
+            return None
+        return ModelReasoningCapability(can_reason=info.supports_thinking)
+    if capability.can_reason is None and info.supports_thinking is not None:
+        return replace(capability, can_reason=info.supports_thinking)
+    return capability
+
+
 def _reasoning_field_value(capability: ModelReasoningCapability, name: str) -> Any:
     value = getattr(capability, name)
     if name == "supported_efforts" and value is not None:
@@ -840,7 +888,8 @@ def capability_payload(
     """
 
     described = models_dev_describes_provider(provider_id)
-    provider_capability = info.reasoning_capability if info is not None else None
+    provider_capability = _provider_reasoning(info)
+    declared = None if info is None else info.declared
     if provider_tier is None and info is not None:
         provider_tier = ResolutionTier.PROVIDER_EXACT
     models_dev_capability, models_dev_tiers = model_reasoning_capability_tiered(
@@ -895,10 +944,10 @@ def capability_payload(
 
     supported = info.supported_parameters if info is not None else None
     defaults = info.default_parameters if info is not None else None
-    context = _laddered(
+    context = _provider_first(
         info.context_length if info is not None else None,
-        SOURCE_PROVIDER_OR_MODELS_DEV,
-        None,
+        None if declared is None else declared.context_length,
+        provider_tier,
         model_context_length_tiered(provider_id, model_id),
         note=CONTEXT_LENGTH_SOURCE_NOTE,
     )
@@ -917,6 +966,10 @@ def capability_payload(
         if supported is None
         else bool(supported & frozenset({"tools", "tool_choice"}))
     )
+    if derived_tools is None and declared is not None:
+        # No parameter list, but the row's own capability words or flag said
+        # (7.83.0): Novita ``features: ["function-calling"]``.
+        derived_tools = declared.tool_calls
     tool_calls = _laddered(
         derived_tools,
         SOURCE_PROVIDER,
@@ -931,16 +984,16 @@ def capability_payload(
         # Three fields the page never carried at all, which is why a catalogue
         # could publish one and the page could not corroborate it.
         "supports_tool_calls": tool_calls,
-        "input_price": _laddered(
+        "input_price": _provider_first(
             info.input_price if info is not None else None,
-            SOURCE_PROVIDER_OR_MODELS_DEV,
-            None,
+            None if declared is None else declared.input_price,
+            provider_tier,
             prices["input_price"],
         ),
-        "output_price": _laddered(
+        "output_price": _provider_first(
             info.output_price if info is not None else None,
-            SOURCE_PROVIDER_OR_MODELS_DEV,
-            None,
+            None if declared is None else declared.output_price,
+            provider_tier,
             prices["output_price"],
         ),
         # No provider ``/models`` payload publishes a cache rate and

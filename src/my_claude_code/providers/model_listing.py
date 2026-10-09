@@ -1,7 +1,10 @@
 """Provider model-list response parsing helpers."""
 
+import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any
+from dataclasses import replace
+from decimal import Decimal, InvalidOperation
+from typing import Any, Literal
 
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
@@ -151,12 +154,16 @@ def extract_openai_model_infos(
             continue
 
         declared = declared_from_row(item)
+        supported_parameters = published_parameters_from_row(item)
         model_infos.setdefault(
             model_id,
-            _ProviderModelInfo(
-                model_id=model_id,
-                supports_thinking=supports_thinking,
-                declared=declared,
+            record_with_declared(
+                _ProviderModelInfo(
+                    model_id=model_id,
+                    supports_thinking=supports_thinking,
+                    supported_parameters=supported_parameters,
+                    declared=declared,
+                )
             ),
         )
         if aliases_field is not None:
@@ -177,10 +184,13 @@ def extract_openai_model_infos(
                 # what its row states.
                 model_infos.setdefault(
                     alias,
-                    _ProviderModelInfo(
-                        model_id=alias,
-                        supports_thinking=supports_thinking,
-                        declared=declared,
+                    record_with_declared(
+                        _ProviderModelInfo(
+                            model_id=alias,
+                            supports_thinking=supports_thinking,
+                            supported_parameters=supported_parameters,
+                            declared=declared,
+                        )
                     ),
                 )
 
@@ -392,9 +402,14 @@ def _openrouter_dialect_model_info(
     Every field a gateway does not publish stays ``None``. A thin payload that
     carries only ``context_length`` therefore yields ``None`` -- unknown -- for
     the rest, never ``False``.
+
+    The dialect's own readings below are byte-identical to every release before
+    7.83.0. What they leave unset -- today the two listed prices, which this
+    dialect publishes as ``pricing.prompt``/``pricing.completion`` -- is filled
+    from the generic reader's statement of the same row.
     """
     top_provider = _field(item, "top_provider")
-    return _ProviderModelInfo(
+    record = _ProviderModelInfo(
         model_id=model_id,
         supports_thinking="reasoning" in supported_parameter_names,
         supports_vision=_openrouter_accepts_images(item) if read_vision else None,
@@ -417,6 +432,7 @@ def _openrouter_dialect_model_info(
         ),
         declared=declared_from_row(item),
     )
+    return record_with_declared(record)
 
 
 def _positive_int_or_none(value: Any) -> int | None:
@@ -596,6 +612,120 @@ _ENDPOINT_PATHS: tuple[tuple[str, ...], ...] = (
     ("endpoints",),
 )
 
+# -- 7.83.0: the row's own numbers and flags, for fields the record carries --
+#
+# Each table is read in order and the first path that states a usable value
+# wins, exactly as the three tables above. A value in a shape this cannot read
+# -- a string where a number belongs, zero, a negative -- states nothing and
+# the next path is tried, as a ``None`` rung defers on the ladder.
+
+#: The routed deployment's own context window. ``top_provider.context_length``
+#: first because the OpenRouter dialect's parser already prefers it to the
+#: nominal top-level value, so the two can never disagree about one row.
+#:
+#: - ``top_provider.context_length``, ``context_length``: the OpenRouter
+#:   dialect (OpenRouter, Nous Portal, Kilo); Command Code;
+#: - ``context_window``: HyperCharm, Vercel's AI Gateway, Groq;
+#: - ``context_size``: Novita;
+#: - ``max_context_length``: Mistral (its documented field; no keyless copy).
+_CONTEXT_LENGTH_PATHS: tuple[tuple[str, ...], ...] = (
+    ("top_provider", "context_length"),
+    ("context_length",),
+    ("context_window",),
+    ("context_size",),
+    ("max_context_length",),
+)
+#: The deployment's own ceiling on generated tokens.
+#:
+#: - ``top_provider.max_completion_tokens``: the OpenRouter dialect;
+#: - ``max_output_tokens``: Novita, HyperCharm;
+#: - ``max_completion_tokens``: Groq;
+#: - ``max_tokens``: Vercel's AI Gateway, which publishes it beside
+#:   ``context_window`` as the generation limit.
+_OUTPUT_LIMIT_PATHS: tuple[tuple[str, ...], ...] = (
+    ("top_provider", "max_completion_tokens"),
+    ("max_output_tokens",),
+    ("max_completion_tokens",),
+    ("max_tokens",),
+)
+
+#: How a price path's value is denominated.
+#:
+#: ``"by_type"`` follows the two conventions the lists actually use under the
+#: same names: a decimal written as a STRING is USD per token (OpenRouter's
+#: published convention, which Nous Portal, Kilo and Vercel's AI Gateway copy:
+#: ``"0.0000027"``), and one written as a JSON NUMBER is USD per million tokens
+#: (HyperCharm: ``1.31``). ``"per_million"`` is a path whose own name says so,
+#: whatever the type (Novita's ``price_per_m_decimal``: ``"0.15"``).
+type PriceUnit = Literal["by_type", "per_million"]
+
+#: Where a row lists its price per uncached input token, and per output token:
+#: (input path, output path, unit). Each half is read on its own, first path
+#: that states wins, because the record holds two separate prices and the
+#: ladder fills each one separately.
+#:
+#: - ``pricing.prompt``/``completion``: the OpenRouter dialect (strings);
+#: - ``pricing.prompt.price_per_m_decimal``: Novita, whose ``pricing.prompt``
+#:   is an object rather than a value (the integer ``input_token_price_per_m``
+#:   beside it is in ten-thousandths of a dollar and reads ``0`` on the rows that
+#:   carry no ``pricing`` object at all -- two of them billed by tier -- so it is
+#:   deliberately not read: that ``0`` is not a free price);
+#: - ``pricing.input``/``output``: HyperCharm (numbers), Vercel (strings).
+_PRICE_PATHS: tuple[tuple[tuple[str, ...], tuple[str, ...], PriceUnit], ...] = (
+    (("pricing", "prompt"), ("pricing", "completion"), "by_type"),
+    (
+        ("pricing", "prompt", "price_per_m_decimal"),
+        ("pricing", "completion", "price_per_m_decimal"),
+        "per_million",
+    ),
+    (("pricing", "input"), ("pricing", "output"), "by_type"),
+)
+_PER_MILLION = Decimal(1_000_000)
+
+#: Lists of capability words a row may publish: Novita ``features``
+#: (``function-calling``, ``reasoning``, ``structured-outputs``), chutes
+#: ``supported_features`` (``tools``, ``reasoning``), Vercel and deepinfra
+#: ``tags`` (``tool-use``, ``reasoning``; deepinfra also ``non-reasoning``).
+_CAPABILITY_WORD_PATHS: tuple[tuple[str, ...], ...] = (
+    ("features",),
+    ("supported_features",),
+    ("tags",),
+)
+#: Words that state the model reasons, and the one word that states it does
+#: not. A word list states nothing by leaving a word out: tag lists are not
+#: exhaustive, and reading an absence as "no" would suppress reasoning on a
+#: model whose provider simply did not tag it.
+_REASONING_WORDS = frozenset({"reasoning"})
+_NON_REASONING_WORDS = frozenset({"non-reasoning"})
+#: Words that state the model takes tool calls.
+_TOOL_CALL_WORDS = frozenset(
+    {
+        "function-calling",
+        "function_calling",
+        "tool-use",
+        "tool_use",
+        "tool-calling",
+        "tool_calling",
+        "tools",
+    }
+)
+#: Explicit booleans, which state either answer: featherless
+#: ``capabilities.reasoning`` (the path its profile already reads), Mistral
+#: ``capabilities.function_calling`` (its documented field; no keyless copy).
+_REASONING_BOOLEAN_PATHS: tuple[tuple[str, ...], ...] = (("capabilities", "reasoning"),)
+_TOOL_CALL_BOOLEAN_PATHS: tuple[tuple[str, ...], ...] = (
+    ("capabilities", "function_calling"),
+)
+#: A ``reasoning`` object states the model reasons only when it lists an
+#: effort level or makes thinking mandatory: OpenRouter publishes
+#: ``{"mandatory": false}`` alone for models that do not reason at all.
+#: ``effort_levels``: HyperCharm; ``supported_efforts``: the OpenRouter dialect.
+_REASONING_EFFORT_LIST_FIELDS: tuple[str, ...] = ("effort_levels", "supported_efforts")
+#: Request parameters whose presence in a row's ``supported_parameters`` means
+#: the gateway parses a reasoning control -- the same two names
+#: ``_reasoning_from_supported_parameters`` reads for the OpenRouter dialect.
+_REASONING_PARAMETERS = frozenset({"reasoning", "reasoning_effort"})
+
 
 def declared_from_row(item: Any) -> ProviderModelDeclaration | None:
     """What one ``/models`` row says the model is, or ``None`` if it says nothing.
@@ -609,21 +739,210 @@ def declared_from_row(item: Any) -> ProviderModelDeclaration | None:
     The words are kept as published: lower-cased, de-duplicated, sorted, and
     otherwise untouched. Mapping them onto kinds is the job of whoever reads
     them, never of the parser that recorded them.
+
+    Since 7.83.0 the same row's own numbers and flags are read too -- context
+    window, output limit, the two listed prices (converted to the record's
+    USD per million), reasoning and tool-call support -- under the same
+    never-raise rule. :func:`record_with_declared` is what puts them on the
+    record at the provider rung.
     """
 
     try:
         modalities = _declared_modalities(item)
         model_type = _first_stated(item, _MODEL_TYPE_PATHS, _word)
         endpoints = _first_stated(item, _ENDPOINT_PATHS, _words)
+        context_length = _first_stated(
+            item, _CONTEXT_LENGTH_PATHS, _positive_int_or_none
+        )
+        max_output_tokens = _first_stated(
+            item, _OUTPUT_LIMIT_PATHS, _positive_int_or_none
+        )
+        input_price = _listed_price(item, input_half=True)
+        output_price = _listed_price(item, input_half=False)
+        reasoning = _declared_reasoning(item)
+        tool_calls = _declared_tool_calls(item)
     except Exception:
         # Belt and braces for a payload object whose attribute access itself
         # misbehaves: an optional field is never worth a failed sweep.
         return None
-    if modalities is None and model_type is None and endpoints is None:
-        return None
-    return ProviderModelDeclaration(
-        modalities=modalities, model_type=model_type, endpoints=endpoints
+    declaration = ProviderModelDeclaration(
+        modalities=modalities,
+        model_type=model_type,
+        endpoints=endpoints,
+        context_length=context_length,
+        max_output_tokens=max_output_tokens,
+        input_price=input_price,
+        output_price=output_price,
+        reasoning=reasoning,
+        tool_calls=tool_calls,
     )
+    if declaration == _NOTHING_DECLARED:
+        return None
+    return declaration
+
+
+#: A row that stated nothing the reader keeps; such a row records ``None``.
+_NOTHING_DECLARED = ProviderModelDeclaration()
+
+
+def record_with_declared(info: _ProviderModelInfo) -> _ProviderModelInfo:
+    """The provider rung, completed from what the record's own row stated (7.83.0).
+
+    Each listing parser reads its dialect's own fields first and leaves this to
+    fill only what that left unset (``None``): the row's context window,
+    output limit and two listed prices into the fields of the same name, and
+    its reasoning statement into ``supports_thinking``. Nothing a parser set is
+    replaced -- an OpenRouter-dialect row's thinking flag stays the one its
+    ``supported_parameters`` list states -- and a row that states nothing
+    returns the record unchanged, the very same object.
+
+    This is what makes a provider's own number rung 1 of the ladder: every
+    lookup reads these record fields before it consults models.dev, and the
+    discovery-time models.dev fill only ever writes a field still ``None``.
+    """
+
+    declared = info.declared
+    if declared is None:
+        return info
+    filled = replace(
+        info,
+        supports_thinking=_first_known(info.supports_thinking, declared.reasoning),
+        context_length=_first_known(info.context_length, declared.context_length),
+        input_price=_first_known(info.input_price, declared.input_price),
+        output_price=_first_known(info.output_price, declared.output_price),
+        max_output_tokens=_first_known(
+            info.max_output_tokens, declared.max_output_tokens
+        ),
+    )
+    return info if filled == info else filled
+
+
+def _first_known[T](own: T | None, declared: T | None) -> T | None:
+    return declared if own is None else own
+
+
+def published_parameters_from_row(item: Any) -> frozenset[str] | None:
+    """A row's own ``supported_parameters`` list, or ``None`` (7.83.0).
+
+    The OpenRouter dialect has always kept this list; a generic row that
+    publishes the same field (Vercel's AI Gateway does, on 276 of 412 rows)
+    now keeps it too, read exactly as the dialect reads it: every string entry,
+    others skipped. ``None`` when the row has no list -- never an empty set,
+    which would claim the gateway parses nothing. Never raises.
+    """
+
+    try:
+        values = _field(item, "supported_parameters")
+        if not _is_sequence(values):
+            return None
+        return frozenset(value for value in values if isinstance(value, str))
+    except Exception:
+        return None
+
+
+def _listed_price(item: Any, *, input_half: bool) -> float | None:
+    for input_path, output_path, unit in _PRICE_PATHS:
+        price = _price(
+            _stated_path(item, input_path if input_half else output_path), unit
+        )
+        if price is not None:
+            return price
+    return None
+
+
+def _price(value: Any, unit: PriceUnit) -> float | None:
+    """One listed price in USD per million tokens, or ``None``.
+
+    Negative values state nothing (Kilo lists ``"-1"`` for a router whose
+    price depends on the model it picks); zero is a stated free price. A
+    string is converted through :class:`~decimal.Decimal` so ``"0.0000027"``
+    becomes exactly ``2.7``, not ``2.6999999999999997``.
+    """
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            amount = Decimal(value.strip())
+        except InvalidOperation:
+            return None
+        if not amount.is_finite() or amount < 0:
+            return None
+        if unit == "by_type":
+            amount *= _PER_MILLION
+        return _finite(float(amount))
+    if isinstance(value, int | float):
+        amount = Decimal(value)
+        if not amount.is_finite() or amount < 0:
+            return None
+        return _finite(float(value))
+    return None
+
+
+def _finite(price: float) -> float | None:
+    """A price too large to be a float (``"1e999"``) states nothing."""
+
+    return price if math.isfinite(price) else None
+
+
+def _declared_reasoning(item: Any) -> bool | None:
+    stated = _first_stated(item, _REASONING_BOOLEAN_PATHS, _boolean)
+    if stated is not None:
+        return stated
+    words = _capability_words(item)
+    if words is not None:
+        if words & _NON_REASONING_WORDS:
+            return False
+        if words & _REASONING_WORDS:
+            return True
+    if _reasoning_object_reasons(_field(item, "reasoning")):
+        return True
+    options = _field(item, "reasoning_options")
+    if _is_sequence(options) and len(options) > 0:
+        # Vercel's ``reasoning_options``: one entry per control the model takes.
+        return True
+    parameters = published_parameters_from_row(item)
+    if parameters is not None and parameters & _REASONING_PARAMETERS:
+        return True
+    return None
+
+
+def _declared_tool_calls(item: Any) -> bool | None:
+    stated = _first_stated(item, _TOOL_CALL_BOOLEAN_PATHS, _boolean)
+    if stated is not None:
+        return stated
+    words = _capability_words(item)
+    if words is not None and words & _TOOL_CALL_WORDS:
+        return True
+    return None
+
+
+def _capability_words(item: Any) -> frozenset[str] | None:
+    """Every capability word the row publishes, across all its word lists."""
+
+    found: set[str] = set()
+    stated = False
+    for path in _CAPABILITY_WORD_PATHS:
+        words = _words(_stated_path(item, path))
+        if words is not None:
+            stated = True
+            found.update(words)
+    return frozenset(found) if stated else None
+
+
+def _reasoning_object_reasons(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if value.get("mandatory") is True:
+        return True
+    return any(
+        _is_sequence(value.get(name)) and len(value.get(name)) > 0
+        for name in _REASONING_EFFORT_LIST_FIELDS
+    )
+
+
+def _boolean(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
 
 
 def _declared_modalities(item: Any) -> DeclaredModalities | None:

@@ -2696,6 +2696,20 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   once.
                 </p>
                 <p>
+                  <strong>The provider's own numbers come first.</strong> Where a
+                  provider's model list publishes a model's context window, output
+                  limit, listed input and output price, or says it reasons or takes
+                  tool calls, that is the answer MCC uses &mdash; models.dev only
+                  fills what the list left out. The capability panel says which:
+                  <em>provider /models</em> with the rung it matched at, or
+                  <em>provider /models or models.dev</em> where the value came from the
+                  catalogue. A provider's own output limit is also the one MCC clamps
+                  a request's <code>max_tokens</code> to. What a request is
+                  <em>charged</em> is unchanged: Analytics still prices it from the
+                  provider's own reported cost, then models.dev, then LiteLLM (if you
+                  turned it on), then the cross-provider vote.
+                </p>
+                <p>
                   <strong>Catalogues re-read themselves.</strong> Every usable
                   provider's model list is fetched again in the background once an hour,
                   so a gateway that added a model this morning is listed this afternoon
