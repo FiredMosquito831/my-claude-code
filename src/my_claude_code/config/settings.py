@@ -78,6 +78,7 @@ from .constants import (
     MAX_OUTPUT_TOKENS_FLOOR,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
     MODEL_DISCOVERY_REFRESH_SECONDS_DEFAULT,
+    MODEL_METADATA_OPENROUTER_LIVE_DEFAULT,
     MODEL_PROBE_NEW_MODELS_DEFAULT,
     MODEL_VISIBILITY_ALLOW_DEFAULT,
     MODEL_VISIBILITY_DENY_DEFAULT,
@@ -1720,6 +1721,14 @@ class Settings(BaseSettings):
         validation_alias="LITELLM_FETCH_TIMEOUT_SECONDS",
         ge=LITELLM_FETCH_TIMEOUT_SECONDS_MIN,
         le=LITELLM_FETCH_TIMEOUT_SECONDS_MAX,
+    )
+    # OpenRouter's own live model list as a rung for every provider (7.84.0):
+    # fetched at the models.dev cadence through the OpenRouter proxy chain,
+    # read by the Models page, the kind lists and the agent catalogues. Off:
+    # no fetch, and every output is what it was before the rung existed.
+    model_metadata_openrouter_live: bool = Field(
+        default=MODEL_METADATA_OPENROUTER_LIVE_DEFAULT,
+        validation_alias="MODEL_METADATA_OPENROUTER_LIVE",
     )
     # How long each evidence class of a learned fact stays applicable. Read per
     # fact, so a change here applies without a restart.

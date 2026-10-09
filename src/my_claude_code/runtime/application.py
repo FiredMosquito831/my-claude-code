@@ -682,6 +682,11 @@ class ApplicationRuntime:
             await self._rearm_stall_watchdog(current)
         if changed("model_discovery_refresh_seconds"):
             self._discovery_timer.rearm()
+        if changed("model_metadata_openrouter_live"):
+            # Switched on: fetch OpenRouter's live list now if none is stored,
+            # rather than waiting out the next sweep (7.84.0). Off needs
+            # nothing: the rung reads the setting on every listing.
+            self.provider_manager.schedule_openrouter_live_refresh(current)
         if changed("proxy_check_enabled", "proxy_check_interval_minutes"):
             self._proxy_check_timer.rearm()
         if changed("proxy_feed_refresh_enabled", "proxy_feed_refresh_minutes"):

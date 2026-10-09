@@ -59,7 +59,12 @@ the catalogues, each rung filling only what the one above left unsaid (7.80.0):
    writes text is chat, one that writes an image is Image, writes audio is Speech, hears audio
    and writes text is Transcription, writes video is Video; a model can be several;
 2. otherwise what **models.dev** catalogues it as accepting and producing (its `modalities`),
-   down its own rungs: the provider's bucket, the OpenRouter reference, the cross-provider vote;
+   down its own rungs: the provider's bucket, the OpenRouter reference, the cross-provider vote.
+   **OpenRouter's own live model list** (7.84.0, `MODEL_METADATA_OPENROUTER_LIVE`) is a rung
+   here too, matched by name: for a provider models.dev has no bucket for it answers before
+   models.dev's OpenRouter reference and the vote; for one it describes, only where the bucket
+   is silent -- it never overrides a bucket, and the Models page shows both where they differ.
+   A pair with a word no kind rule reads (OpenRouter's `decisions`) states nothing;
 3. otherwise the **provider's model type or endpoint names** -- Novita's `model_type`, the
    endpoints Command Code or a new-api gateway says serve the model (`/chat/completions`,
    `/images/generations`, `openai-video`, ...). These are coarser than a modality list, so they

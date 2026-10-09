@@ -57,6 +57,24 @@ stay one value: equal bytes there prove the digest moved for no other reason.
 those fields move, a replaced number is the provider's own, and no request is
 priced differently -- ``prices/`` entries never move.
 
+**7.84.0 (K-OR) adds OpenRouter's own live model list as a rung for every
+provider, on purpose** (user decisions 2026-10-08 21:00 and 21:33). With no list
+stored -- every test above -- and with one stored but the rung switched off,
+every output is the 7.83.0 one, byte for byte. With the list on
+(``metadata_ladder_openrouter_live.json``: the real rows of the 2026-10-08
+keyless copy that the committed listing rows reach), every entry that differs
+is recorded beside its 7.83.0 answer under ``kor-live/<key>``, and only those:
+generated on this branch with this same snapshot, and nothing else in the
+file moved. The large digested outputs are recorded as structured
+differences instead (``kor-live/page-diff``, ``kor-live/catalogue-diff``), and
+each digested catalogue with every value the rung filled put back from the
+7.83.0 build must hash to its 7.83.0 digest (``kor-substituted/``).
+``test_7_84_0_fills_gaps_and_moves_no_stated_value`` holds the rule: a value
+nobody stated may become stated; a stated value never changes (a provider's
+own and a bucket's never; models.dev's OpenRouter copy and the vote only to
+the same value, a provenance change); the rest is new rows and second
+statements shown beside an answer.
+
 A diff in this file means the equality contract is broken and the PR must be
 re-cut. It is not a file to regenerate.
 """
@@ -90,6 +108,7 @@ from my_claude_code.application.catalogues import (
     serialise_sidecar,
 )
 from my_claude_code.application.model_metadata import (
+    ModelReasoningCapability,
     ProviderModelInfo,
     canonical_model_info,
     model_info_document,
@@ -111,12 +130,41 @@ from my_claude_code.providers.runtime.models_dev import (
     read_models_dev_cache,
     write_models_dev_cache,
 )
+from my_claude_code.providers.runtime.openrouter_catalogue import (
+    openrouter_live_cache_path,
+    openrouter_live_catalogue,
+    write_openrouter_live_cache,
+)
 from tests.api.support import create_test_app, provider_manager_for_app
 
 HERE = Path(__file__).parent
 BASELINE_PATH = HERE / "metadata_ladder_equality_baseline.json"
 ROWS_PATH = HERE / "metadata_ladder_listing_rows.json"
 MODELS_DEV_PATH = HERE / "metadata_ladder_models_dev.json"
+LIVE_PATH = HERE / "metadata_ladder_openrouter_live.json"
+
+#: 7.84.0 (K-OR): where an entry the live list changes records its new answer.
+KOR_PREFIX = "kor-live/"
+#: The live list's structured differences for the digested outputs.
+KOR_PAGE_DIFF = "kor-live/page-diff"
+KOR_CATALOGUE_DIFF = "kor-live/catalogue-diff"
+#: Digests of each catalogue with every value the live list filled put back.
+KOR_SUBSTITUTED = "kor-substituted/"
+#: The capability rows the live list adds while it is on.
+KOR_DISPLAY_ROWS = ("description", "knowledge_cutoff", "listed_on_openrouter")
+#: The catalogue record's fields it may fill.
+KOR_CATALOGUE_FIELDS = (
+    "context_length",
+    "max_output_tokens",
+    "input_price",
+    "output_price",
+    "cache_read_price",
+    "cache_write_price",
+    "supports_vision",
+    "supports_tool_calls",
+    "reasoning",
+)
+LIVE_SOURCE = "openrouter_live"
 
 #: What 7.79.0 adds to the Models page capability panel, removed before compare.
 NEW_CAPABILITY_KEYS = ("declared_modalities", "declared_type", "declared_endpoints")
@@ -330,13 +378,115 @@ def _canon(value: Any) -> str:
     return model_metadata._canonical(value)
 
 
-def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
-    """Every output the ladder produced before 7.79.0, from the committed rows."""
+def _page_rows(page: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {m["model_ref"]: m for p in page["providers"] for m in p["models"]}
+
+
+def _page_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """Every Models-page value the live list changed, ``{ref: {path: [old, new]}}``."""
+
+    diff: dict[str, Any] = {}
+    old_rows, new_rows = _page_rows(before), _page_rows(after)
+    assert list(old_rows) == list(new_rows)
+    for ref, old in old_rows.items():
+        new = new_rows[ref]
+        changed: dict[str, Any] = {}
+        for key in sorted(set(old) | set(new)):
+            if key == "capabilities":
+                caps_old, caps_new = old["capabilities"], new["capabilities"]
+                for name in sorted(set(caps_old) | set(caps_new)):
+                    if name == "reasoning":
+                        for sub in sorted(set(caps_old[name]) | set(caps_new[name])):
+                            a = caps_old[name].get(sub)
+                            b = caps_new[name].get(sub)
+                            if a != b:
+                                changed[f"capabilities.reasoning.{sub}"] = [a, b]
+                    elif caps_old.get(name) != caps_new.get(name):
+                        changed[f"capabilities.{name}"] = [
+                            caps_old.get(name),
+                            caps_new.get(name),
+                        ]
+            elif old.get(key) != new.get(key):
+                changed[key] = [old.get(key), new.get(key)]
+        if changed:
+            diff[ref] = changed
+    stripped_old = {k: v for k, v in before.items() if k != "providers"}
+    stripped_new = {k: v for k, v in after.items() if k != "providers"}
+    assert stripped_old == stripped_new, "the page's frame moved"
+    return diff
+
+
+def _put_back(model: CatalogueModel, base: CatalogueModel) -> CatalogueModel:
+    return replace(
+        model, **{name: getattr(base, name) for name in KOR_CATALOGUE_FIELDS}
+    )
+
+
+def _record_catalogue_live(
+    out: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    manager: Any,
+    models: tuple[CatalogueModel, ...],
+) -> None:
+    """The live list's catalogue changes, and each catalogue with them put back."""
+
+    with monkeypatch.context() as patched:
+        patched.setattr(manager, "openrouter_live_catalogue", lambda: None)
+        base = build_catalogue_models(settings, manager)
+    by_id = {model.gateway_id: model for model in base}
+    assert [m.gateway_id for m in models] == [m.gateway_id for m in base]
+    diff: dict[str, Any] = {}
+    for model in models:
+        old = by_id[model.gateway_id]
+        for name in KOR_CATALOGUE_FIELDS:
+            a, b = getattr(old, name), getattr(model, name)
+            if a == b:
+                continue
+            if name == "reasoning":
+                # Only whether it reasons may come from the live list.
+                assert b is not None, model.gateway_id
+                rest = ModelReasoningCapability() if a is None else a
+                assert replace(b, can_reason=rest.can_reason) == rest, model.gateway_id
+                a = rest.can_reason
+                b = b.can_reason
+            diff.setdefault(model.gateway_id, {})[name] = [a, b]
+        # Every other field of the record is the 7.83.0 one.
+        assert _put_back(model, old) == old, model.gateway_id
+    out[KOR_CATALOGUE_DIFF] = diff
+    restored = tuple(_put_back(m, by_id[m.gateway_id]) for m in models)
+    for format_id in sorted(SERIALISERS):
+        document, defaulted = serialise(format_id, restored)
+        out[f"{KOR_SUBSTITUTED}serialiser/{format_id}"] = {
+            "document": document,
+            "defaulted": defaulted.as_document(),
+            "sidecar": serialise_sidecar(format_id, restored),
+        }
+
+
+def snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, live_mode: str | None = None
+) -> dict[str, Any]:
+    """Every output the ladder produced before 7.79.0, from the committed rows.
+
+    ``live_mode`` (7.84.0): ``None`` stores no OpenRouter live list; ``"on"``
+    stores the committed one with the rung on; ``"off"`` stores it with the
+    rung switched off.
+    """
 
     monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path))
     write_models_dev_cache(json.loads(MODELS_DEV_PATH.read_text(encoding="utf-8")))
     cached = read_models_dev_cache()
     assert cached is not None
+    switch: dict[str, str] = {}
+    if live_mode is not None:
+        write_openrouter_live_cache(
+            json.loads(LIVE_PATH.read_text(encoding="utf-8"))["data"],
+            openrouter_live_cache_path(),
+        )
+        if live_mode == "off":
+            switch["MODEL_METADATA_OPENROUTER_LIVE"] = "false"
+    live = openrouter_live_catalogue(Settings.model_validate(switch))
     rows: dict[str, dict[str, Any]] = json.loads(ROWS_PATH.read_text(encoding="utf-8"))
 
     out: dict[str, Any] = {}
@@ -357,12 +507,12 @@ def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
         }
         for info in enriched:
             out[f"capabilities/{provider_id}/{info.model_id}"] = _without_new_rows(
-                capability_payload(provider_id, info.model_id, info)
+                capability_payload(provider_id, info.model_id, info, live=live)
             )
 
     first = next(iter(catalogues["open_router"]))
     settings = Settings.model_validate(
-        {**FAKE_KEYS, "MODEL": f"open_router/{first.model_id}"}
+        {**FAKE_KEYS, **switch, "MODEL": f"open_router/{first.model_id}"}
     )
     app = create_test_app(settings)
     manager = provider_manager_for_app(app)
@@ -392,22 +542,28 @@ def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
                 for card in rate_cards(provider_id, model_id, litellm_enabled=False)
             ]
 
-    page = _page_without_new_rows(
-        build_models_page_payload(
-            manager.cached_prefixed_model_infos(),
-            configured_chat_model_refs(settings),
-            settings_model_visibility(settings),
-            ModelParameterOverrides(),
-            dialect_lookup=manager.model_reasoning_dialect,
-            measured=None,
-            measured_days=REASONING_MEASUREMENT_DAYS,
-            learned=None,
-            catalogue_refresh=None,
-            image_estimates=None,
-            media_placements={},
-            **_page_kind_lookups(manager),
+    def page_payload(with_live: Any) -> dict[str, Any]:
+        return _page_without_new_rows(
+            build_models_page_payload(
+                manager.cached_prefixed_model_infos(),
+                configured_chat_model_refs(settings),
+                settings_model_visibility(settings),
+                ModelParameterOverrides(),
+                dialect_lookup=manager.model_reasoning_dialect,
+                measured=None,
+                measured_days=REASONING_MEASUREMENT_DAYS,
+                learned=None,
+                catalogue_refresh=None,
+                image_estimates=None,
+                media_placements={},
+                **_page_kind_lookups(manager),
+                live=with_live,
+            )
         )
-    )
+
+    page = page_payload(manager.openrouter_live_catalogue())
+    if live is not None:
+        out[KOR_PAGE_DIFF] = _page_diff(page_payload(None), page)
     for ref, kind in _take_page_kinds(page).items():
         out[f"{KIND_PREFIX}{ref}"] = kind
     out["page"] = page
@@ -441,6 +597,8 @@ def snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     finally:
         monkeypatch.setattr(admin_harness_routes, "build_catalogue_models", real_build)
     models = build_catalogue_models(settings, manager)
+    if live is not None:
+        _record_catalogue_live(out, monkeypatch, settings, manager, models)
     blanked = tuple(_blank_k4_model(model) for model in models)
     for model in models:
         out[f"catalogue-k4/{model.gateway_id}"] = _catalogue_k4(model)
@@ -471,6 +629,7 @@ DIGESTED_PREFIXES = (
     "k4-blanked/page",
     "k4-blanked/admin/",
     "k4-blanked/serialiser/",
+    "kor-substituted/serialiser/",
 )
 #: The digested outputs 7.83.0 may move, each through K4 fields only.
 K4_DIGESTED = ("page", "admin/catalogue-models", "serialiser/")
@@ -512,17 +671,187 @@ def _expected(key: str, value: Any) -> Any:
     return value
 
 
-def test_every_output_is_byte_identical_to_v7_78_10(monkeypatch, tmp_path) -> None:
-    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    current = recorded(snapshot(monkeypatch, tmp_path))
+def _is_kor_key(key: str) -> bool:
+    """An entry that exists only while OpenRouter's live list is on (7.84.0)."""
 
-    assert set(current) == set(baseline)
+    return key.startswith((KOR_PREFIX, KOR_SUBSTITUTED))
+
+
+def _assert_unchanged(current: dict[str, Any], baseline: dict[str, Any]) -> None:
+    assert set(current) == {key for key in baseline if not _is_kor_key(key)}
     differing = [
         key
-        for key in sorted(baseline)
+        for key in sorted(current)
         if _encoded(current[key]) != _encoded(_expected(key, baseline[key]))
     ]
     assert not differing, differing
+
+
+def test_every_output_is_byte_identical_to_v7_78_10(monkeypatch, tmp_path) -> None:
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    _assert_unchanged(recorded(snapshot(monkeypatch, tmp_path)), baseline)
+
+
+def test_with_the_live_list_switched_off_nothing_changes(monkeypatch, tmp_path) -> None:
+    """A stored OpenRouter list and ``MODEL_METADATA_OPENROUTER_LIVE=false``."""
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    _assert_unchanged(recorded(snapshot(monkeypatch, tmp_path, "off")), baseline)
+
+
+def test_with_the_live_list_on_only_the_recorded_entries_move(
+    monkeypatch, tmp_path
+) -> None:
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    current = recorded(snapshot(monkeypatch, tmp_path, "on"))
+    moved = {
+        key.removeprefix(KOR_PREFIX)
+        for key in baseline
+        if key.startswith(KOR_PREFIX) and key not in (KOR_PAGE_DIFF, KOR_CATALOGUE_DIFF)
+    }
+    plain = {key for key in baseline if not _is_kor_key(key)}
+    assert moved <= plain
+    assert set(current) == plain | {
+        key
+        for key in baseline
+        if key.startswith(KOR_SUBSTITUTED) or key in (KOR_PAGE_DIFF, KOR_CATALOGUE_DIFF)
+    }
+    differing = []
+    for key in sorted(current):
+        if key in moved:
+            expected = baseline[KOR_PREFIX + key]
+        elif key in plain:
+            expected = _expected(key, baseline[key])
+        else:
+            expected = baseline[key]
+        if _encoded(current[key]) != _encoded(expected):
+            differing.append(key)
+    assert not differing, differing
+
+
+#: A capability field's keys the live list may add beside a stated answer.
+_LIVE_FIELD_KEYS = {"also_stated", "ladder_value", "openrouter_ids"}
+#: The digested outputs, each held by a structured record instead.
+_KOR_DIGESTED_HELD_BY = {
+    "page": KOR_PAGE_DIFF,
+    "k4-blanked/page": KOR_PAGE_DIFF,
+    "admin/catalogue-models": KOR_CATALOGUE_DIFF,
+    "admin/catalogue-models?provenance=1": KOR_CATALOGUE_DIFF,
+    "k4-blanked/admin/catalogue-models": KOR_CATALOGUE_DIFF,
+    "k4-blanked/admin/catalogue-models?provenance=1": KOR_CATALOGUE_DIFF,
+}
+
+
+def _field_violations(before: Any, after: Any, where: str) -> list[str]:
+    """How ``after`` breaks the rule against ``before``; empty when it does not.
+
+    Allowed: a value nobody stated becomes stated (``before`` None/unknown);
+    the same value now badged OpenRouter live where models.dev's copy or the
+    vote (tier 5+) stated it; a second statement added beside an unchanged
+    answer; a kind nobody stated becomes stated, or the same kinds re-badged.
+    """
+
+    if _encoded(before) == _encoded(after):
+        return []
+    if before is None or before == _canon(None):
+        # Nobody stated it (a canonical encoding writes None as its own mark).
+        return []
+    if isinstance(before, dict) and isinstance(after, dict):
+        if "kinds" in before:
+            if before["kinds"] is None or before["kinds"] == after.get("kinds"):
+                rest = {k: v for k, v in after.items() if k != "also_stated"}
+                if before["kinds"] is None or rest == before:
+                    return []
+                if after.get("source") == LIVE_SOURCE:
+                    return []
+            return [f"{where}: kind {before.get('kinds')} -> {after.get('kinds')}"]
+        if "value" in before and "source" in before:
+            if (
+                after.get("source") == LIVE_SOURCE
+                and before.get("source") != LIVE_SOURCE
+            ):
+                if before.get("value") is None:
+                    return []
+                if (
+                    before.get("value") == after.get("value")
+                    and (before.get("tier") or 0) >= 5
+                ):
+                    return []
+                return [f"{where}: {before.get('value')!r} -> {after.get('value')!r}"]
+            rest = {k: v for k, v in after.items() if k not in _LIVE_FIELD_KEYS}
+            if rest == before:
+                return []
+            return [f"{where}: field changed"]
+        found: list[str] = []
+        for key in sorted(set(before) | set(after)):
+            if key not in before:
+                if key not in KOR_DISPLAY_ROWS:
+                    found.append(f"{where}.{key}: new")
+                continue
+            if key not in after:
+                found.append(f"{where}.{key}: gone")
+                continue
+            found.extend(_field_violations(before[key], after[key], f"{where}.{key}"))
+        return found
+    return [f"{where}: {before!r} -> {after!r}"]
+
+
+def test_7_84_0_fills_gaps_and_moves_no_stated_value() -> None:
+    """The user's rule for OpenRouter's live list, over every recorded entry.
+
+    A value nobody stated may become stated; a value a provider's own list or
+    a models.dev bucket stated never changes and never loses its badge; one
+    models.dev's OpenRouter copy or the vote stated keeps its value (the live
+    list goes above them for a provider with no bucket); new rows and second
+    statements are additions. Numbers only ever fill gaps, and the generated
+    catalogues are their 7.83.0 bytes once the filled values are put back.
+    """
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {
+        key.removeprefix(KOR_PREFIX): value
+        for key, value in baseline.items()
+        if key.startswith(KOR_PREFIX) and key not in (KOR_PAGE_DIFF, KOR_CATALOGUE_DIFF)
+    }
+    assert moved, "the fixture would prove nothing if nothing moved"
+    violations: list[str] = []
+    for key, after in moved.items():
+        before = _expected(key, baseline[key])
+        if key.startswith(DIGESTED_PREFIXES):
+            if key.startswith(("serialiser/", "k4-blanked/serialiser/")):
+                continue  # held by the substituted digests below
+            assert key in _KOR_DIGESTED_HELD_BY, key
+            continue
+        assert not key.startswith(("prices/", "routing/", "records/", "canonical/")), (
+            key
+        )
+        violations.extend(_field_violations(before, after, key))
+    assert not violations, violations
+
+    page_diff = baseline[KOR_PAGE_DIFF]
+    assert page_diff
+    filled = 0
+    for ref, changes in page_diff.items():
+        for path, (before, after) in changes.items():
+            name = path.removeprefix("capabilities.")
+            if name in KOR_DISPLAY_ROWS:
+                assert before is None, (ref, path)
+                continue
+            found = _field_violations(before, after, f"{ref}:{path}")
+            assert not found, found
+            filled += 1
+    assert filled, "the fixture would prove nothing if no page field changed"
+
+    catalogue_diff = baseline[KOR_CATALOGUE_DIFF]
+    assert catalogue_diff
+    for gateway_id, fields in catalogue_diff.items():
+        for name, (before, after) in fields.items():
+            assert name in KOR_CATALOGUE_FIELDS, name
+            assert before is None and after is not None, (gateway_id, name)
+    for format_id in SERIALISERS:
+        assert baseline[f"{KOR_SUBSTITUTED}serialiser/{format_id}"] == _expected(
+            f"serialiser/{format_id}", baseline[f"serialiser/{format_id}"]
+        ), format_id
 
 
 def _changed_keys(before: Any, after: Any) -> set[str]:

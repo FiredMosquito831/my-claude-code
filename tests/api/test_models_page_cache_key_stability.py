@@ -169,3 +169,27 @@ def test_an_unencodable_value_is_refused_rather_than_dropped() -> None:
         assert "canonical encoding" in str(exc)
     else:
         raise AssertionError("an unencodable value was encoded anyway")
+
+
+def test_openrouter_s_live_list_is_part_of_the_key() -> None:
+    """7.84.0: the rung on with a list, a newer list, and the rung off are three pages."""
+
+    infos = (_info(),)
+    base = capability_half_key(
+        infos, (), ModelVisibility(allow=(), deny=()), ModelParameterOverrides()
+    )
+    assert base == _key(infos)
+
+    def with_mark(mark: str | None) -> str:
+        return capability_half_key(
+            infos,
+            (),
+            ModelVisibility(allow=(), deny=()),
+            ModelParameterOverrides(),
+            live_mark=mark,
+        )
+
+    assert with_mark(None) == base
+    assert with_mark("1:100") != base
+    assert with_mark("1:100") == with_mark("1:100")
+    assert with_mark("2:100") != with_mark("1:100")

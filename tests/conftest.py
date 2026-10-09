@@ -645,6 +645,32 @@ def _isolate_proxy_speed(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_openrouter_live(monkeypatch, tmp_path):
+    """No test may download OpenRouter's live list or read the developer's copy.
+
+    7.84.0 fetches ``openrouter.ai/api/v1/models`` in the background after a
+    catalogue sweep when no copy is stored -- which, in a hermetic home, is
+    every test that runs a sweep. The store is redirected under ``tmp_path``
+    (the same directory models.dev's cache is) and the one network call
+    refuses, so a sweep's fetch fails silently exactly as it does offline. A
+    test of the fetch itself puts the real function back, by the reference it
+    imported.
+    """
+    from my_claude_code.providers.runtime import openrouter_catalogue
+
+    config_dir = tmp_path / "fcc-config"
+    monkeypatch.setattr(openrouter_catalogue, "config_dir_path", lambda: config_dir)
+
+    async def _never(*_args, **_kwargs):
+        raise OSError("tests never download OpenRouter's live model list")
+
+    monkeypatch.setattr(openrouter_catalogue, "fetch_openrouter_live", _never)
+    openrouter_catalogue.reset_openrouter_live_cache()
+    yield
+    openrouter_catalogue.reset_openrouter_live_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_provider_registry(monkeypatch, tmp_path):
     """Keep custom provider registry state out of the real ~/.fcc directory."""
     from my_claude_code.config import provider_registry

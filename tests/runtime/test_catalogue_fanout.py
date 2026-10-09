@@ -14,6 +14,7 @@ from my_claude_code.application.model_metadata import (
     ModelReasoningCapability,
     ProviderModelInfo,
 )
+from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
 from my_claude_code.config.harnesses import MCC_HARNESS_ID_SENTINEL, harness_specs
 from my_claude_code.config.proxy_auth import PROXY_NO_AUTH_SENTINEL
@@ -110,6 +111,14 @@ class FakeRuntime(RequestRuntimePort):
         self,
     ) -> Callable[[str, str], tuple[tuple[str, ...] | None, ResolutionTier | None]]:
         return lambda _provider_id, _model_id: (None, None)
+
+    def openrouter_live_catalogue(self) -> LiveCatalogue | None:
+        return None
+
+    def model_can_reason_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        return None, None
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos

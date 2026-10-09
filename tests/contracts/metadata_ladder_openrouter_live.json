@@ -1,0 +1,530 @@
+{
+ "data": [
+  {
+   "id": "anthropic/claude-sonnet-5",
+   "created": 1782843083,
+   "description": "Sonnet 5 is Anthropic's most capable Sonnet-class model, with frontier performance across coding, agents, and professional work. It supports adaptive thinking with selectable reasoning effort levels (low, medium, high, max,...",
+   "context_length": 1000000,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "output_modalities": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.00001",
+    "input_cache_read": "0.0000002",
+    "input_cache_write": "0.0000025"
+   },
+   "top_provider": {
+    "context_length": 1000000,
+    "max_completion_tokens": 128000
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "max_completion_tokens",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "tool_choice",
+    "tools",
+    "verbosity"
+   ],
+   "knowledge_cutoff": null,
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "deepseek/deepseek-v4.1-flash",
+   "created": 1789021285,
+   "description": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on...",
+   "context_length": 1048576,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.0000003",
+    "completion": "0.0000012",
+    "input_cache_read": "0.000000006"
+   },
+   "top_provider": {
+    "context_length": 1048576,
+    "max_completion_tokens": 943718
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "knowledge_cutoff": null,
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "high",
+     "low"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "fish-audio/transcribe-1",
+   "created": 1785353735,
+   "description": "Transcribe 1 is a speech-to-text model from Fish Audio. It is suited for audio transcription with automatic language detection and can return timestamped word-level segments when alignment details are requested.",
+   "context_length": 0,
+   "architecture": {
+    "input_modalities": [
+     "audio"
+    ],
+    "output_modalities": [
+     "transcription"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.0001",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 0,
+    "max_completion_tokens": 0
+   },
+   "supported_parameters": [],
+   "knowledge_cutoff": null
+  },
+  {
+   "id": "inclusionai/ming-image-0.1-design",
+   "created": 1790095711,
+   "description": "Ming Image 0.1 Design is a text-to-image model from inclusionAI aimed at graphic-design output, with an emphasis on legible text rendering inside the generated image. It generates from a prompt...",
+   "context_length": 0,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "image"
+    ]
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 0,
+    "max_completion_tokens": 0
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "max_tokens",
+    "presence_penalty",
+    "repetition_penalty",
+    "seed",
+    "stop",
+    "temperature",
+    "top_k",
+    "top_p"
+   ],
+   "knowledge_cutoff": null
+  },
+  {
+   "id": "inclusionai/ming-image-0.1-design-layer",
+   "created": 1790201839,
+   "description": "Ming Image 0.1 Design Layer is an image-to-image model from inclusionAI that decomposes a flattened design image into separate RGBA layers, such as a background layer and foreground elements, and...",
+   "context_length": 0,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "image"
+    ]
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 0,
+    "max_completion_tokens": 0
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "max_tokens",
+    "presence_penalty",
+    "repetition_penalty",
+    "seed",
+    "stop",
+    "temperature",
+    "top_k",
+    "top_p"
+   ],
+   "knowledge_cutoff": null
+  },
+  {
+   "id": "minimax/minimax-m3",
+   "created": 1780245374,
+   "description": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,...",
+   "context_length": 1048576,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.0000003",
+    "completion": "0.0000012",
+    "input_cache_read": "0.00000006"
+   },
+   "top_provider": {
+    "context_length": 524288,
+    "max_completion_tokens": 512000
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "knowledge_cutoff": null,
+   "reasoning": {
+    "mandatory": false
+   }
+  },
+  {
+   "id": "moonshotai/kimi-k3",
+   "created": 1784215858,
+   "description": "Kimi K3 is a 2.8T parameter open-weight multimodal reasoning model from Moonshot AI. It is suited for complex coding, knowledge work, and long-horizon agentic workflows, and is particularly strong at...",
+   "context_length": 1048576,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000099",
+    "completion": "0.000014",
+    "input_cache_read": "0.00000066"
+   },
+   "top_provider": {
+    "context_length": 1048576,
+    "max_completion_tokens": 943718
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "knowledge_cutoff": null,
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "high",
+     "low"
+    ],
+    "default_effort": "max"
+   }
+  },
+  {
+   "id": "openai/gpt-6-astra",
+   "created": 1788552838,
+   "description": "GPT-6 Astra is OpenAI's flagship model for demanding end-to-end work. It is suited for advanced analysis, software engineering, deep research, scientific work, and document creation, with particular strengths in long-horizon...",
+   "context_length": 1050000,
+   "architecture": {
+    "input_modalities": [
+     "file",
+     "image",
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00001",
+    "completion": "0.00005",
+    "input_cache_read": "0.000001",
+    "input_cache_write": "0.0000125"
+   },
+   "top_provider": {
+    "context_length": 1050000,
+    "max_completion_tokens": 128000
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "max_completion_tokens",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "structured_outputs",
+    "tool_choice",
+    "tools",
+    "verbosity"
+   ],
+   "knowledge_cutoff": null,
+   "reasoning": {
+    "mandatory": true,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   }
+  },
+  {
+   "id": "stepfun/step-5-preview",
+   "created": 1791462849,
+   "description": "Step 5 Preview is StepFun's flagship model for agentic work, built on a sparse Mixture-of-Experts architecture (27B active / 600B total parameters). It performs strongly in software engineering and professional...",
+   "context_length": 1000000,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000001",
+    "completion": "0.0000027",
+    "input_cache_read": "0.00000005"
+   },
+   "top_provider": {
+    "context_length": 1000000,
+    "max_completion_tokens": 64000
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tools",
+    "top_logprobs",
+    "top_p"
+   ],
+   "knowledge_cutoff": null,
+   "reasoning": {
+    "mandatory": true,
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   }
+  },
+  {
+   "id": "tencent/hy3",
+   "created": 1783344048,
+   "description": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:...",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.0000000825",
+    "completion": "0.00000033",
+    "input_cache_read": "0.000000020625"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 128000
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ],
+   "knowledge_cutoff": null,
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supported_efforts": [
+     "high",
+     "low",
+     "none"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "z-ai/glm-5.3-flash",
+   "created": 1787752741,
+   "description": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while...",
+   "context_length": 1048576,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000015",
+    "completion": "0.0000005",
+    "input_cache_read": "0.00000003"
+   },
+   "top_provider": {
+    "context_length": 1048575,
+    "max_completion_tokens": 943717
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_tokens",
+    "min_p",
+    "parallel_tool_calls",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "knowledge_cutoff": null,
+   "reasoning": {
+    "mandatory": true,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "high",
+     "low"
+    ],
+    "default_effort": "max"
+   }
+  }
+ ]
+}

@@ -30,11 +30,13 @@ from my_claude_code.application.model_kinds import (
     KIND_LABELS,
     KIND_SOURCE_LABELS,
     KIND_SOURCE_MODELS_DEV,
+    KIND_SOURCE_OPENROUTER_LIVE,
     KIND_SOURCE_PROVIDER_LISTING,
     MODEL_KINDS,
     KindWordsLookup,
     ModalitiesLookup,
     ModelKind,
+    live_kind_alternative,
     modalities_source,
     provider_first_modalities,
     provider_kind_words,
@@ -49,6 +51,15 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
     ResponseSurface,
     ResponseSurfaceSource,
+)
+from my_claude_code.application.openrouter_live import (
+    LIVE_NOTE,
+    LIVE_SOURCE,
+    LIVE_SOURCE_LABEL,
+    LiveCatalogue,
+    LiveModel,
+    live_fills_gap,
+    live_wins_intrinsic,
 )
 from my_claude_code.config.model_overrides import (
     ALLOWED_OVERRIDE_PARAMETERS,
@@ -579,11 +590,15 @@ def models_dev_cache_mark() -> str:
 MEDIA_OUTPUT_SOURCE_LABELS: Mapping[str, str] = {
     KIND_SOURCE_PROVIDER_LISTING: "the provider's model list",
     KIND_SOURCE_MODELS_DEV: "models.dev",
+    KIND_SOURCE_OPENROUTER_LIVE: "OpenRouter's live model list",
 }
 
 
 def media_output_modalities(
-    provider_id: str, model_id: str, modalities: ModalitiesLookup | None = None
+    provider_id: str,
+    model_id: str,
+    modalities: ModalitiesLookup | None = None,
+    live: LiveCatalogue | None = None,
 ) -> dict[str, Any]:
     """What a media model is declared to produce (7.67.0), provider first (7.80.0).
 
@@ -594,6 +609,9 @@ def media_output_modalities(
     (tier 1-2), its outputs are the answer, as they are for the kind; otherwise
     models.dev's output list down its own rungs, exactly as before. Disk cache
     only, never a network call.
+
+    ``live`` is OpenRouter's live list (7.84.0), placed as the kind places
+    it: above models.dev's tiers 5-10 and in a gap, never above a bucket.
     """
 
     if modalities is not None:
@@ -606,6 +624,16 @@ def media_output_modalities(
                 declared.outputs, declared_tier, KIND_SOURCE_PROVIDER_LISTING
             )
     output, tier = model_output_modalities_tiered(provider_id, model_id)
+    answer = None if live is None else live(provider_id, model_id)
+    pair = answer.modalities if answer is not None and answer.feeds_ladder else None
+    if (
+        answer is not None
+        and pair is not None
+        and live_wins_intrinsic(output, tier, pair.outputs)
+    ):
+        shown = _media_outputs(pair.outputs, None, KIND_SOURCE_OPENROUTER_LIVE)
+        shown["tier"] = answer.tier_label
+        return shown
     return _media_outputs(output, tier, KIND_SOURCE_MODELS_DEV)
 
 
@@ -628,6 +656,7 @@ def declared_model_kind(
     placements: Mapping[str, frozenset[str]],
     modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
+    live: LiveCatalogue | None = None,
 ) -> ModelKind:
     """One ref's stated kind, from the ladder the caller hands in.
 
@@ -638,7 +667,8 @@ def declared_model_kind(
     harness catalogues, the pickers -- cannot disagree about a model's kind
     (7.80.0). A caller rendering many rows passes one pair for all of them.
     With no lookup this reads models.dev alone, which is all a caller holding
-    no provider record can ask.
+    no provider record can ask. ``live`` is OpenRouter's live list (7.84.0),
+    the same rung every list reads.
     """
 
     return resolve_model_kind(
@@ -648,16 +678,28 @@ def declared_model_kind(
         else declared_modalities_lookup(),
         placements=placements,
         kind_words=kind_words,
+        live=live,
     )
 
 
-def model_kind_payload(kind: ModelKind) -> dict[str, Any]:
+def model_kind_payload(
+    kind: ModelKind, also_stated: ModelKind | None = None
+) -> dict[str, Any]:
     """How the dashboard renders a :class:`ModelKind`.
 
     ``kinds`` is ``None`` when nothing stated one -- the "kind not known"
     group, never an empty list, which would mean "stated: none of these".
+    ``also_stated`` (7.84.0) is OpenRouter's live statement where it differs
+    from the rung that decided -- shown, never acted on; absent otherwise.
     """
 
+    payload = _kind_fields(kind)
+    if also_stated is not None:
+        payload["also_stated"] = _kind_fields(also_stated)
+    return payload
+
+
+def _kind_fields(kind: ModelKind) -> dict[str, Any]:
     tier = kind.tier
     return {
         "kinds": (
@@ -674,7 +716,13 @@ def model_kind_payload(kind: ModelKind) -> dict[str, Any]:
         "source_label": (
             None if kind.source is None else KIND_SOURCE_LABELS.get(kind.source)
         ),
-        "tier": None if tier is None else TIER_LABELS.get(tier, tier.name),
+        "tier": (
+            kind.match
+            if kind.match is not None
+            else None
+            if tier is None
+            else TIER_LABELS.get(tier, tier.name)
+        ),
         "approximate": bool(tier is not None and tier.is_approximate),
     }
 
@@ -794,12 +842,25 @@ def attach_learned_facts(
         field = capabilities.get(field_name) if field_name else None
         if isinstance(field, dict):
             entry["field"] = field_name
-            entry["agrees"] = _learned_disagreement(fact, field.get("value"))
+            entry["agrees"] = _learned_disagreement(fact, _claimed(field))
             # Applied facts narrow the field they hang on; a stale one is
             # shown beside it and explicitly does not.
             field["learned"] = dict(entry)
         rendered.append(entry)
     return rendered
+
+
+def _claimed(field: Mapping[str, Any]) -> Any:
+    """The ladder's claim a learned fact is compared with.
+
+    A value only OpenRouter's live list states (7.84.0) is no claim anything
+    acts on, so the comparison is with what the ladder below it answered --
+    ``None`` for a gap it filled, which is "nothing to compare".
+    """
+
+    if field.get("source") == LIVE_SOURCE:
+        return field.get("ladder_value")
+    return field.get("value")
 
 
 def _modalities_text(modalities: DeclaredModalities) -> str:
@@ -874,6 +935,7 @@ def capability_payload(
     provider_tier: ResolutionTier | None = None,
     dialect: ReasoningDialect | None = None,
     modalities_lookup: ModalitiesLookup | None = None,
+    live: LiveCatalogue | None = None,
 ) -> dict[str, Any]:
     """Read-only capability record for one model, tier-tagged per field.
 
@@ -885,8 +947,27 @@ def capability_payload(
     ``modalities_lookup`` is models.dev's declared-modalities lookup, bound
     once by a caller rendering many rows (the Models page binds it for the
     kind column already); ``None`` binds one for this row alone.
+
+    ``live`` is OpenRouter's live list (7.84.0), applied by
+    :func:`with_openrouter_live`; ``None`` is the record before 7.84.0.
     """
 
+    payload = _capability_payload(
+        provider_id, model_id, info, provider_tier, dialect, modalities_lookup
+    )
+    if live is None:
+        return payload
+    return with_openrouter_live(payload, live(provider_id, model_id))
+
+
+def _capability_payload(
+    provider_id: str,
+    model_id: str,
+    info: ProviderModelInfo | None,
+    provider_tier: ResolutionTier | None,
+    dialect: ReasoningDialect | None,
+    modalities_lookup: ModalitiesLookup | None,
+) -> dict[str, Any]:
     described = models_dev_describes_provider(provider_id)
     provider_capability = _provider_reasoning(info)
     declared = None if info is None else info.declared
@@ -1038,6 +1119,183 @@ def capability_payload(
             modalities_lookup,
         ),
     }
+
+
+#: Numbers OpenRouter's live list fills only where every rung above it said
+#: nothing (7.84.0): provider, then models.dev, then OpenRouter last.
+LIVE_GAP_FIELDS: tuple[str, ...] = (
+    "max_output_tokens",
+    "context_length",
+    "input_price",
+    "output_price",
+    "cache_read_price",
+    "cache_write_price",
+    "reasoning_price",
+)
+#: Intrinsic flags it answers above models.dev's tiers 5-10 and in a gap, and
+#: never above the provider's own statement or a models.dev bucket.
+LIVE_INTRINSIC_FIELDS: tuple[str, ...] = ("supports_vision", "supports_tool_calls")
+#: Its three display facts, each a row of its own while the rung is on. The
+#: listing date is the day OpenRouter listed the model, never its release.
+LIVE_DISPLAY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("description", "description"),
+    ("knowledge_cutoff", "knowledge_cutoff"),
+    ("listed_on_openrouter", "listed_at"),
+)
+LISTED_ON_OPENROUTER_NOTE = (
+    "The day OpenRouter added it to its list -- not the model's release date."
+)
+
+
+def _statement(field: Mapping[str, Any]) -> dict[str, Any]:
+    """One field's answer and who gave it, for a second statement beside it."""
+
+    return {
+        "value": field.get("value"),
+        "source": field.get("source"),
+        "source_label": field.get("source_label"),
+        "tier": field.get("tier"),
+        "tier_label": field.get("tier_label"),
+    }
+
+
+def _live_statement(value: Any, answer: LiveModel) -> dict[str, Any]:
+    return {
+        "value": value,
+        "source": LIVE_SOURCE,
+        "source_label": LIVE_SOURCE_LABEL,
+        "tier": None,
+        "tier_label": answer.tier_label,
+        "openrouter_ids": list(answer.slugs),
+    }
+
+
+def _live_note(answer: LiveModel, note: str = LIVE_NOTE) -> str:
+    return f"{answer.tier_label} ({', '.join(answer.slugs)}). {note}"
+
+
+def _live_field(
+    value: Any, answer: LiveModel, base: Mapping[str, Any], **extra: Any
+) -> dict[str, Any]:
+    """A field OpenRouter's live list answers, with what it stands in for.
+
+    ``ladder_value`` is what the ladder below it answered -- ``None`` for a
+    gap -- and is what a learned fact is compared with (:func:`_claimed`).
+    Where that was a different value, both are shown (``also_stated``).
+    """
+
+    field: dict[str, Any] = {
+        "value": value,
+        "source": LIVE_SOURCE,
+        "source_label": LIVE_SOURCE_LABEL,
+        "approximate": False,
+        "reference": False,
+        "tier": None,
+        "tier_label": answer.tier_label,
+        "note": _live_note(answer),
+        "openrouter_ids": list(answer.slugs),
+        "ladder_value": base.get("value"),
+    }
+    field.update(extra)
+    if base.get("value") is not None and base.get("value") != value:
+        field["also_stated"] = _statement(base)
+    if "learned" in base:
+        field["learned"] = base["learned"]
+    return field
+
+
+def _live_intrinsic(
+    field: Mapping[str, Any], value: Any, answer: LiveModel, **extra: Any
+) -> Mapping[str, Any]:
+    """An intrinsic field with the live answer placed: replaced, beside, or neither."""
+
+    existing = field.get("value")
+    if live_wins_intrinsic(existing, field.get("tier"), value):
+        return _live_field(value, answer, field, **extra)
+    if value is not None and existing is not None and value != existing:
+        beside = dict(field)
+        beside["also_stated"] = _live_statement(value, answer)
+        return beside
+    return field
+
+
+def with_openrouter_live(
+    payload: Mapping[str, Any], answer: LiveModel | None
+) -> dict[str, Any]:
+    """A capability record with OpenRouter's live answer placed per field (7.84.0).
+
+    Called only while the rung is on and a list is stored; ``answer`` is
+    ``None`` when the live list has no match for this model. Numbers fill
+    gaps only; intrinsic flags go above models.dev's OpenRouter copy and the
+    vote and never above a provider or a bucket, with both statements shown
+    where they differ; the three display facts become rows of their own. For
+    OpenRouter's own models (``own_list``) only those three are read.
+    Everything else in ``payload`` is returned as it was.
+    """
+
+    out = dict(payload)
+    if answer is not None and answer.feeds_ladder:
+        for name in LIVE_GAP_FIELDS:
+            field = out.get(name)
+            value = getattr(answer, name)
+            if isinstance(field, Mapping) and live_fills_gap(field.get("value"), value):
+                out[name] = _live_field(value, answer, field)
+        for name in LIVE_INTRINSIC_FIELDS:
+            field = out.get(name)
+            if isinstance(field, Mapping):
+                out[name] = _live_intrinsic(field, getattr(answer, name), answer)
+        reasoning = out.get("reasoning")
+        if isinstance(reasoning, Mapping) and isinstance(
+            reasoning.get("can_reason"), Mapping
+        ):
+            placed = dict(reasoning)
+            placed["can_reason"] = _live_intrinsic(
+                reasoning["can_reason"], answer.can_reason, answer
+            )
+            out["reasoning"] = placed
+        modalities = out.get("declared_modalities")
+        if isinstance(modalities, Mapping) and answer.modalities is not None:
+            # The "accepts -> produces" row keeps the words it showed: a gap is
+            # filled and a different pair is shown beside it, but a stated pair
+            # is never re-worded (OpenRouter writes ``file`` where models.dev
+            # writes ``pdf``). The KIND follows the rung's placement; this row
+            # is the words, and words that were shown stay shown.
+            pair = answer.modalities
+            text = _modalities_text(pair)
+            if modalities.get("value") is None:
+                out["declared_modalities"] = _live_field(
+                    text,
+                    answer,
+                    modalities,
+                    inputs=list(pair.inputs),
+                    outputs=list(pair.outputs),
+                )
+            elif modalities.get("value") != text:
+                beside = dict(modalities)
+                beside["also_stated"] = _live_statement(text, answer)
+                out["declared_modalities"] = beside
+    for key, attr in LIVE_DISPLAY_FIELDS:
+        value = None if answer is None else getattr(answer, attr)
+        if answer is None or value is None:
+            out[key] = _sourced(None, SOURCE_UNKNOWN)
+            continue
+        out[key] = {
+            "value": value,
+            "source": LIVE_SOURCE,
+            "source_label": LIVE_SOURCE_LABEL,
+            "approximate": False,
+            "reference": False,
+            "tier": None,
+            "tier_label": answer.tier_label,
+            "note": _live_note(
+                answer,
+                LISTED_ON_OPENROUTER_NOTE
+                if key == "listed_on_openrouter"
+                else "Shown only; nothing reads it.",
+            ),
+            "openrouter_ids": list(answer.slugs),
+        }
+    return out
 
 
 def response_surface_payload(provider_id: str, model_id: str) -> dict[str, Any] | None:
@@ -1799,6 +2057,7 @@ def _model_entry(
     kind_modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
     catalogue_modalities: ModalitiesLookup | None = None,
+    live: LiveCatalogue | None = None,
 ) -> dict[str, Any]:
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
@@ -1816,6 +2075,17 @@ def _model_entry(
         capabilities,
         () if learned is None else facts_for_row(learned, provider_id, model_id),
     )
+    # What MCC may be told to decide is built from the ladder routing reads,
+    # before OpenRouter's live list is placed (7.84.0): an output limit or a
+    # "does not reason" only that list states must not bound a preference.
+    preferences = model_preferences_payload(provider_id, capabilities, model_row)
+    answer = None
+    if live is not None:
+        answer = live(provider_id, model_id) if "/" in model_ref else None
+        capabilities = with_openrouter_live(capabilities, answer)
+    kind = declared_model_kind(
+        model_ref, media_placements or {}, kind_modalities, kind_words, live
+    )
     return {
         "model_ref": model_ref,
         "model_id": model_id,
@@ -1827,11 +2097,7 @@ def _model_entry(
         # What kind of model this is -- chat, or one media rail's -- and who
         # said so (7.78.2), down the ladder provider first (7.80.0). ``kinds:
         # None`` is the "kind not known" group.
-        "kind": model_kind_payload(
-            declared_model_kind(
-                model_ref, media_placements or {}, kind_modalities, kind_words
-            )
-        ),
+        "kind": model_kind_payload(kind, live_kind_alternative(kind, answer)),
         "has_metadata": info is not None,
         # Existence provenance, distinct from the per-field capability tiers
         # below it: this answers "why is this model in my picker", they answer
@@ -1843,7 +2109,7 @@ def _model_entry(
         # told to SEND. Built from the capability record already computed
         # above, so every option on offer came off the same ladder the rest of
         # the row did and none of it is a hand-written table.
-        "preferences": model_preferences_payload(provider_id, capabilities, model_row),
+        "preferences": preferences,
         # What the log measured for this model over the window, or None
         # when it served no succeeded attempt in it. None rather than a
         # zeroed row: never measured is not the same fact as measured
@@ -1909,6 +2175,7 @@ def build_models_page_payload(
     media_placements: Mapping[str, frozenset[str]] | None = None,
     kind_modalities: ModalitiesLookup | None = None,
     kind_words: KindWordsLookup | None = None,
+    live: LiveCatalogue | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page renders, in one request.
 
@@ -1921,6 +2188,9 @@ def build_models_page_payload(
     Without them the ladder is built from the records handed in here -- each
     row's own record at tier 1, then models.dev -- the same rungs in the same
     order, short only of the runtime's tag-stripped lookup.
+
+    ``live`` is OpenRouter's live list (7.84.0), bound once for every row;
+    ``None`` -- the rung off, or nothing stored -- is the page before it.
     """
 
     configured_list = tuple(configured)
@@ -1966,6 +2236,7 @@ def build_models_page_payload(
                 kind_modalities=kind_modalities,
                 kind_words=kind_words,
                 catalogue_modalities=catalogue_modalities,
+                live=live,
             )
         )
 

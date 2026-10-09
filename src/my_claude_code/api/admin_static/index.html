@@ -2709,6 +2709,30 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   provider's own reported cost, then models.dev, then LiteLLM (if you
                   turned it on), then the cross-provider vote.
                 </p>
+                <p id="guide-openrouter-live">
+                  <strong>OpenRouter's own live list is a rung for every
+                  provider.</strong> MCC reads OpenRouter's public model list
+                  &mdash; every model it serves, matched to your providers' models by
+                  name (exact id, tag stripped, bare model) &mdash; and uses it like
+                  this: what a model accepts and produces (so its kind), whether it
+                  reads images, reasons or takes tool calls come from it right after
+                  the provider's own list for a provider models.dev does not
+                  describe; for one models.dev does describe, only where that
+                  catalogue said nothing &mdash; where the two disagree, the panel
+                  shows both. Window, output limit and prices come from it last,
+                  only where nothing else said. Each such row is badged
+                  <em>OpenRouter live</em> with how the name matched. It also adds
+                  three rows: a description, a knowledge cutoff, and
+                  <em>listed on OpenRouter</em> &mdash; the day OpenRouter added the
+                  model, not its release date. None of it reaches a request: output
+                  caps, context room and reasoning are decided exactly as before,
+                  and the generated agent catalogues are the only other place it
+                  shows. The list is fetched in the background at the models.dev
+                  catalogue's freshness, through the OpenRouter proxy chain if you
+                  set one (Proxying page). <code>MODEL_METADATA_OPENROUTER_LIVE</code>
+                  (Model Config, catalogue card) turns it off, and then nothing
+                  differs from before it existed.
+                </p>
                 <p>
                   <strong>Catalogues re-read themselves.</strong> Every usable
                   provider's model list is fetched again in the background once an hour,
@@ -3791,9 +3815,12 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 <p>
                   Each picker offers only its own kind of model: a chat route chat models, the
                   Image rail image models, and so on. The kind comes from the provider's own
-                  model list first, then what models.dev says a model accepts and produces,
-                  then the provider's model type or endpoint names, then the media rail you
-                  saved it on; never from its name. The <em>kind</em> row in a model's panel
+                  model list first, then what models.dev says a model accepts and produces
+                  &mdash; with <a href="#guide-openrouter-live">OpenRouter's own live list</a>
+                  ahead of models.dev for a provider models.dev does not describe, and only
+                  where models.dev is silent for one it does &mdash; then the provider's model
+                  type or endpoint names, then the media rail you saved it on; never from its
+                  name. The <em>kind</em> row in a model's panel
                   on the <strong>Models</strong> page names the one that decided it. A model
                   whose kind is not chat is left out of
                   <code>/v1/models</code> and every coding agent's catalogue. A model nobody has

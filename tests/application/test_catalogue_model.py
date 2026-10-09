@@ -13,6 +13,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelDeclaration,
     ProviderModelInfo,
 )
+from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.gateway_model_ids import gateway_model_id
@@ -38,6 +39,8 @@ class FakeRuntime(RequestRuntimePort):
         prices: dict[str, dict[str, float]] | None = None,
         modalities: dict[str, DeclaredModalities] | None = None,
         kind_words: dict[str, tuple[str, ...]] | None = None,
+        live: LiveCatalogue | None = None,
+        tiers: dict[str, ResolutionTier] | None = None,
     ) -> None:
         self._settings = settings
         self._cached_infos = cached_infos
@@ -50,6 +53,11 @@ class FakeRuntime(RequestRuntimePort):
         self._prices = prices or {}
         self._modalities = modalities or {}
         self._kind_words = kind_words or {}
+        self._live = live
+        # The rung each ``(field, ref)`` answer came from, where a test needs
+        # one (7.84.0: OpenRouter's live list is placed by rung). Keyed
+        # ``"<field>:<provider>/<model>"``; absent means no rung (``None``).
+        self._tiers = tiers or {}
 
     async def acquire(self) -> RequestRuntimeLease:
         raise AssertionError("Catalogue building must not acquire a provider lease.")
@@ -86,12 +94,26 @@ class FakeRuntime(RequestRuntimePort):
     def model_vision_tiered(
         self, provider_id: str, model_id: str
     ) -> tuple[bool | None, ResolutionTier | None]:
-        return self._vision.get(f"{provider_id}/{model_id}"), None
+        ref = f"{provider_id}/{model_id}"
+        return self._vision.get(ref), self._tiers.get(f"vision:{ref}")
 
     def model_tool_call_tiered(
         self, provider_id: str, model_id: str
     ) -> tuple[bool | None, ResolutionTier | None]:
-        return self._tool_calls.get(f"{provider_id}/{model_id}"), None
+        ref = f"{provider_id}/{model_id}"
+        return self._tool_calls.get(ref), self._tiers.get(f"tools:{ref}")
+
+    def model_can_reason_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        ref = f"{provider_id}/{model_id}"
+        capability = self._reasoning.get(ref)
+        if capability is None or capability.can_reason is None:
+            return None, None
+        return capability.can_reason, self._tiers.get(f"reason:{ref}")
+
+    def openrouter_live_catalogue(self) -> LiveCatalogue | None:
+        return self._live
 
     def model_prices_tiered(
         self, provider_id: str, model_id: str
