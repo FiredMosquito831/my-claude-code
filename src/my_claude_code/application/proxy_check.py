@@ -40,6 +40,7 @@ import asyncio
 import base64
 import contextlib
 import errno
+import json
 import ssl
 import threading
 import time
@@ -95,6 +96,148 @@ PROXY_CHECK_TIMEOUT_SECONDS = PROXY_CHECK_TIMEOUT_SECONDS_DEFAULT
 #: their own choice and may return anything at all; the store holds a short
 #: string, not a page.
 EXIT_IP_MAX_CHARS = 64
+
+#: The one value of ``PROXY_CHECK_EXIT_IP_URL`` that is not a URL (7.89.0,
+#: PR-S2): ask the provider's OWN host which address it saw, at
+#: ``https://<provider base host>/cdn-cgi/trace``, through the tunnel being
+#: checked. A Cloudflare-fronted provider answers there with the exit's
+#: address, its country (``loc``) and whether it is WARP; a provider that is
+#: not on Cloudflare answers nothing usable, and the record says the trace is
+#: not available rather than inventing one. It is the destination the check
+#: already talks to, so it contacts nobody new -- the user's 2026-09-25
+#: decision 3: the setting stays empty by default and this is the one-click
+#: option. Never at ``tls`` depth (a fetch sweep), which promises the provider
+#: no request at all.
+EXIT_IP_PROVIDER_TRACE = "provider"
+#: Where a Cloudflare-fronted host publishes the trace.
+TRACE_PATH = "/cdn-cgi/trace"
+
+
+@dataclass(frozen=True, slots=True)
+class ExitIdentity:
+    """What an exit check learned about the address a request leaves from.
+
+    ``ip`` is what :attr:`ProxyCheckRecord.exit_ip` always held; the other
+    three come only from a JSON or a trace answer; ``via`` is ``provider``
+    for the provider's own trace and ``""`` for an operator URL.
+    """
+
+    ip: str = ""
+    country: str = ""
+    asn: str = ""
+    warp: str = ""
+    via: str = ""
+
+    def as_document(self) -> dict[str, str]:
+        return {
+            "ip": self.ip,
+            "country": self.country,
+            "asn": self.asn,
+            "warp": self.warp,
+            "via": self.via,
+        }
+
+
+def is_provider_trace(setting: str) -> bool:
+    """Whether ``PROXY_CHECK_EXIT_IP_URL`` names the provider's own trace."""
+
+    return (setting or "").strip().lower() == EXIT_IP_PROVIDER_TRACE
+
+
+def exit_check_url(setting: str, destination: str) -> str:
+    """The URL an exit check fetches for one destination, or ``""`` for none.
+
+    The operator's URL as typed, or -- for :data:`EXIT_IP_PROVIDER_TRACE` --
+    the trace on the destination's own host and port, credentials stripped.
+    Built from the destination and nothing else, so it can never name another
+    host.
+    """
+
+    value = (setting or "").strip()
+    if not value:
+        return ""
+    if not is_provider_trace(value):
+        return value
+    parsed = urlsplit((destination or "").strip())
+    if parsed.scheme not in {"https", "http"} or not parsed.hostname:
+        return ""
+    host = parsed.netloc.rpartition("@")[2]
+    return f"{parsed.scheme}://{host}{TRACE_PATH}"
+
+
+def _field(value: object) -> str:
+    """One answer field as a short single-line string; ``""`` for anything else."""
+
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return ""
+    return " ".join(str(value).split())[:EXIT_IP_MAX_CHARS]
+
+
+def _trace_fields(body: str) -> dict[str, str] | None:
+    """A Cloudflare trace's ``key=value`` lines, or ``None`` when it is not one."""
+
+    fields: dict[str, str] = {}
+    for line in body.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        key, separator, value = text.partition("=")
+        if not separator or not key or " " in key:
+            return None
+        fields[key.strip().lower()] = value.strip()
+    return fields if fields.get("ip") else None
+
+
+def parse_exit_answer(body: str, *, trace_only: bool = False) -> ExitIdentity:
+    """Read an exit check's answer: a trace, JSON, or plain text.
+
+    Three shapes, in this order:
+
+    * a Cloudflare trace -- ``ip``, ``loc`` (the country) and ``warp``;
+    * a JSON object with ``ip``, a country under ``country_code``,
+      ``countryCode`` or ``country``, and a network under ``asn`` or ``org``;
+    * anything else is plain text, kept exactly as every release before
+      7.89.0 kept it: the first :data:`EXIT_IP_MAX_CHARS` characters.
+
+    ``trace_only`` is the provider's own trace: anything but a trace there is
+    "not available", never a page stored as an address.
+    """
+
+    text = (body or "").strip()
+    trace = _trace_fields(text)
+    if trace is not None:
+        return ExitIdentity(
+            ip=_field(trace.get("ip")),
+            country=_field(trace.get("loc")),
+            warp=_field(trace.get("warp")).lower(),
+        )
+    if trace_only:
+        return ExitIdentity()
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        if isinstance(data, Mapping) and _field(data.get("ip")):
+            country = next(
+                (
+                    _field(data.get(key))
+                    for key in ("country_code", "countryCode", "country")
+                    if _field(data.get(key))
+                ),
+                "",
+            )
+            network = next(
+                (
+                    _field(data.get(key))
+                    for key in ("asn", "org")
+                    if _field(data.get(key))
+                ),
+                "",
+            )
+            return ExitIdentity(ip=_field(data.get("ip")), country=country, asn=network)
+    return ExitIdentity(ip=text[:EXIT_IP_MAX_CHARS])
+
 
 #: How many addresses one *operator-initiated* sweep may have in flight. The
 #: background checker keeps the serial default of 1 -- it has all day and it
@@ -933,21 +1076,31 @@ async def check_proxy(
     # completed against the destination's own certificate, which is the whole
     # of what a pass ever meant.
     latency_ms = int((time.monotonic() - started) * 1000)
-    exit_ip = ""
-    if exit_ip_url:
-        exit_ip = await _exit_ip(url, exit_ip_url, timeout)
+    identity = ExitIdentity()
+    trace = is_provider_trace(exit_ip_url)
+    if exit_ip_url and not (tls_only and trace):
+        # The trace is a GET to the provider's own host, so it is skipped at
+        # ``tls`` depth -- the one depth that promises the provider nothing
+        # is sent. An operator URL is fetched at both, as it always was.
+        identity = await exit_identity(
+            url, exit_check_url(exit_ip_url, destination), timeout, trace=trace
+        )
     return ProxyCheckRecord(
         at=_now(),
         ok=True,
         latency_ms=latency_ms,
         tls=TLS_STRICT,
         detail="",
-        exit_ip=exit_ip,
+        exit_ip=identity.ip,
         depth=proven,
         connect_ms=phases.connect_ms,
         tunnel_ms=phases.tunnel_ms,
         tls_ms=phases.tls_ms,
         first_byte_ms=phases.first_byte_ms,
+        exit_country=identity.country,
+        exit_asn=identity.asn,
+        exit_warp=identity.warp,
+        exit_via=identity.via,
     )
 
 
@@ -977,27 +1130,121 @@ def _transport_reason(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-async def _exit_ip(proxy_url: str, exit_ip_url: str, timeout: float) -> str:
-    """The operator's own URL, fetched through the proxy. Never a default.
+async def exit_identity(
+    proxy_url: str | None, exit_url: str, timeout: float, *, trace: bool = False
+) -> ExitIdentity:
+    """Fetch the exit check through ``proxy_url`` and read what it says.
+
+    The operator's own URL -- never a default -- or, with ``trace``, the
+    provider's own ``/cdn-cgi/trace`` (:func:`exit_check_url`). ``proxy_url``
+    ``None`` is this computer's own address: the Direct readout, which the
+    caller only asks for where the chain itself would go direct.
 
     Best effort in every direction: a URL that is down, slow or answers with a
     page says nothing about whether the tunnel verifies, so a failure here is
-    recorded as an absence rather than as a verdict.
+    recorded as an absence rather than as a verdict. The trace never follows a
+    redirect -- a redirect is another host, and the whole point of the trace
+    is that it contacts nobody but the provider.
     """
 
+    via = EXIT_IP_PROVIDER_TRACE if trace else ""
+    if not exit_url:
+        return ExitIdentity(via=via)
     try:
-        client = bound_socks_handshake(
-            httpx.AsyncClient(proxy=proxy_url, timeout=timeout, follow_redirects=True)
-        )
+        if proxy_url:
+            client = bound_socks_handshake(
+                httpx.AsyncClient(
+                    proxy=proxy_url, timeout=timeout, follow_redirects=not trace
+                )
+            )
+        else:
+            client = httpx.AsyncClient(timeout=timeout, follow_redirects=not trace)
         try:
-            response = await client.get(exit_ip_url)
+            response = await client.get(exit_url)
             response.raise_for_status()
-            return response.text.strip()[:EXIT_IP_MAX_CHARS]
+            return replace(parse_exit_answer(response.text, trace_only=trace), via=via)
         finally:
             await _release_client(client)
     except Exception as exc:
-        logger.debug("PROXY CHECK: exit-IP URL did not answer: {}", exc)
-        return ""
+        logger.debug(
+            "PROXY CHECK: the exit check did not answer: {}", type(exc).__name__
+        )
+        return ExitIdentity(via=via)
+
+
+@dataclass(frozen=True, slots=True)
+class DirectExit:
+    """Where one provider's Direct rung comes out, as last measured (7.89.0).
+
+    Process-lifetime and per provider: the Proxying card's "Where does Direct
+    come out?" asks it on a click, under the same rule every probe of that
+    provider follows (``providers/runtime/config.direct_exit_refusal``).
+    ``refused`` is the sentence when that rule said no and nothing was sent;
+    ``identity`` is what the exit check answered otherwise.
+    """
+
+    at: str
+    identity: ExitIdentity | None = None
+    refused: str = ""
+    host: str = ""
+
+    def as_document(self) -> dict[str, Any]:
+        document: dict[str, Any] = {"at": self.at, "host": self.host}
+        if self.refused:
+            document["refused"] = self.refused
+        if self.identity is not None:
+            document |= self.identity.as_document()
+        return document
+
+
+_DIRECT_EXITS: dict[str, DirectExit] = {}
+_DIRECT_EXITS_LOCK = threading.Lock()
+
+
+def record_direct_exit(provider_id: str, record: DirectExit) -> None:
+    with _DIRECT_EXITS_LOCK:
+        _DIRECT_EXITS[provider_id] = record
+
+
+def direct_exit_for(provider_id: str) -> DirectExit | None:
+    with _DIRECT_EXITS_LOCK:
+        return _DIRECT_EXITS.get(provider_id)
+
+
+def reset_direct_exits() -> None:
+    """Forget every Direct readout. For tests."""
+
+    with _DIRECT_EXITS_LOCK:
+        _DIRECT_EXITS.clear()
+
+
+async def measure_direct_exit(
+    provider_id: str,
+    *,
+    setting: str,
+    destination: str,
+    timeout: float,
+    refusal: str,
+) -> DirectExit:
+    """Measure, or decline to measure, where Direct comes out for a provider.
+
+    ``refusal`` is the masking rule's answer for this provider: non-empty and
+    NOTHING is dialled -- the sentence is recorded instead. Empty, and the exit
+    check is fetched with no proxy at all, from this computer's own address,
+    which is what the provider's Direct rung would dial.
+    """
+
+    url = exit_check_url(setting, destination)
+    host = (urlsplit(url).hostname or "") if url else ""
+    if refusal:
+        record = DirectExit(at=_now(), refused=refusal, host=host)
+    else:
+        identity = await exit_identity(
+            None, url, timeout, trace=is_provider_trace(setting)
+        )
+        record = DirectExit(at=_now(), identity=identity, host=host)
+    record_direct_exit(provider_id, record)
+    return record
 
 
 #: How many passing checks *in a row* retire an interception refusal (7.52.4).
@@ -1162,10 +1409,10 @@ def arm_refusals_from_store(store: ProxyChains | None = None) -> int:
 
     table = load_proxy_chains() if store is None else store
     armed = 0
-    for endpoint in table.proxies.values():
+    for proxy_id, endpoint in table.proxies.items():
         if endpoint.refused:
             PROXY_INTERCEPTION.mark(
-                endpoint.label or mask_proxy_label(endpoint.url),
+                table.ledger_label(proxy_id),
                 endpoint.last_check.detail if endpoint.last_check else "",
             )
             armed += 1
@@ -1416,7 +1663,7 @@ async def check_endpoints(
         endpoint = table.endpoint(proxy_id)
         if endpoint is None:  # pragma: no cover - filtered above
             return
-        label = endpoint.label or mask_proxy_label(endpoint.url)
+        label = table.ledger_label(proxy_id)
         tried = 0
         while True:
             tried += 1
@@ -1478,11 +1725,15 @@ __all__ = [
     "CHECK_DEPTH_TLS",
     "DEFAULT_FETCH_CHECK_DEPTH",
     "EXIT_IP_MAX_CHARS",
+    "EXIT_IP_PROVIDER_TRACE",
     "HTTPS_DEFAULT_PORT",
     "PROXY_CHECK_MAX_CONCURRENCY",
     "PROXY_CHECK_TIMEOUT_SECONDS",
     "PROXY_CLOSE_TIMEOUT_SECONDS",
     "REFUSAL_LIFT_PASSES",
+    "TRACE_PATH",
+    "DirectExit",
+    "ExitIdentity",
     "ProxyCheckOutcome",
     "apply_fetch_outcome",
     "apply_outcome",
@@ -1494,6 +1745,14 @@ __all__ = [
     "check_targets",
     "default_ssl_context",
     "destination_for_provider",
+    "direct_exit_for",
+    "exit_check_url",
+    "exit_identity",
     "hold_refusal",
+    "is_provider_trace",
+    "measure_direct_exit",
+    "parse_exit_answer",
+    "record_direct_exit",
+    "reset_direct_exits",
     "reset_refusal_lifts",
 ]

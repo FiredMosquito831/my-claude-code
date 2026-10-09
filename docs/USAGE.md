@@ -3193,6 +3193,16 @@ When the switch limit is reached the request moves to the next model without
 pausing it. See
 [Keep trying exits until one answers](ROUTING-REFERENCE.md#keep-trying-exits-until-one-answers-7810).
 
+**A VPN, WARP or Tor you already run (7.89.0).** **Scan this computer** on the
+**Proxying** page finds a proxy listening on this machine (WARP in proxy mode,
+`ssh -D`, Tor, gluetun, wireproxy) and offers it as a chain address -- two
+Tor ports, or WARP plus a VPN's proxy, give a Zen chain two exits. With
+`PROXY_CHECK_EXIT_IP_URL=provider` every Test also asks OpenCode's own host
+(`/cdn-cgi/trace`) which address and country it saw, so entries that come out
+of the same address show up as one exit; **Where does Direct come out?** shows
+the address a connected VPN app gives this computer. See
+[Proxies on this computer](ROUTING-REFERENCE.md#proxies-on-this-computer-7890).
+
 ### OpenCode Zen serves different models on different endpoints
 
 **New in 6.74.0.** OpenCode Zen is not one API. It is a front door onto four,
@@ -5617,7 +5627,7 @@ Loopback-only (`HOST=127.0.0.1`) is the shipped default.
 
 ### What never leaves the machine
 
-Provider API keys are never sent to your agent, never written to the analytics stores, and never included in configuration snapshots — only masked `first4…last4` labels. Proxy credentials are stripped from any recorded URL.
+Provider API keys are never sent to your agent, never written to the analytics stores, and never included in configuration snapshots — only masked `first4…last4` labels. Proxy credentials are stripped from any recorded URL. Since 7.89.0 the two files that can hold a proxy login, `proxy_chains.json` and `proxy_sources.json`, are written readable by you only (POSIX `0600`; on Windows you, `SYSTEM` and Administrators, nothing inherited).
 
 ---
 

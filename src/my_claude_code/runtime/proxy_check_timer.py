@@ -49,7 +49,6 @@ from my_claude_code.config.constants import (
     PROXY_CHECK_CONFIRM_ATTEMPTS_DEFAULT,
     PROXY_CHECK_CONFIRM_SPACING_SECONDS_DEFAULT,
 )
-from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import load_proxy_chains
 from my_claude_code.core.proxy_rotation import PROXY_REACHABILITY
 from my_claude_code.runtime.timer_rearm import RearmableTimer
@@ -351,7 +350,7 @@ class ProxyHealthTimer:
             endpoint = store.proxies.get(proxy_id)
             if endpoint is None:  # pragma: no cover - targets come from the store
                 continue
-            label = endpoint.label or mask_proxy_label(endpoint.url)
+            label = store.ledger_label(proxy_id)
             if PROXY_REACHABILITY.due_for_reprobe(label):
                 if label not in self._in_round:
                     due.append(proxy_id)
@@ -422,9 +421,9 @@ class ProxyHealthTimer:
 
         store = await asyncio.to_thread(load_proxy_chains)
         self._in_round = {
-            endpoint.label or mask_proxy_label(endpoint.url)
+            store.ledger_label(proxy_id)
             for proxy_id in due
-            if (endpoint := store.proxies.get(proxy_id)) is not None
+            if store.proxies.get(proxy_id) is not None
         }
         # Both of the operator's check settings reach the re-probe (7.52.2).
         # Before, the timeout was the module constant -- ten seconds whatever

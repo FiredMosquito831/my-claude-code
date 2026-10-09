@@ -41,7 +41,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.proxy_chains import ProxyChain, ProxyChains
 from my_claude_code.core.proxy_rotation import (
     PROXY_HEALTH,
@@ -179,7 +178,7 @@ def entry_facts(
                 )
             )
             continue
-        label = endpoint.label or mask_proxy_label(endpoint.url)
+        label = store.ledger_label(entry.proxy)
         score = PROXY_SPEED.score(
             label,
             provider_id,

@@ -55,10 +55,12 @@ persists; it does not construct a provider, and nothing on the request path
 imports it.
 """
 
+import hashlib
 import json
 import secrets
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -70,7 +72,6 @@ from urllib.parse import urlsplit
 from loguru import logger
 
 from my_claude_code.config.atomic_json import (
-    write_json_document_atomically,
     write_json_document_atomically_if_changed,
 )
 from my_claude_code.config.constants import (
@@ -80,6 +81,8 @@ from my_claude_code.config.constants import (
     ROTATION_POLICY_ALIASES,
     ROTATION_POLICY_ORDER,
 )
+from my_claude_code.config.credentials import mask_proxy_label
+from my_claude_code.config.owner_only import write_owner_only_json
 from my_claude_code.config.paths import PROXY_CHAINS_FILENAME, proxy_chains_path
 from my_claude_code.config.proxy_feed_legacy import convert_legacy_feed_ids
 from my_claude_code.config.proxy_feeds import CustomFeed, mint_feed_id
@@ -189,6 +192,16 @@ SOURCE_MANUAL = "manual"
 #: more: it sits in :attr:`ProxyChains.candidates` until an operator moves it
 #: into a chain, and it cannot carry a credential before then.
 SOURCE_FEED = "feed"
+#: An address a proxy *source* yielded (7.89.0, PR-S3): a listener the scan of
+#: this computer found, and -- in later releases -- an account's hosts, a
+#: gateway's sessions or a list's rows. ``ProxyEndpoint.source_id`` names the
+#: source in ``proxy_sources.json``; the address itself is an ordinary entry.
+SOURCE_SOURCE = "source"
+
+#: Each source's offered-but-unchosen addresses, by source id (7.89.0). Absent
+#: from every document written before sources existed and from every install
+#: that has none, which reads back as "no offers" and needs no migration.
+SOURCE_OFFERS_KEY = "source_offers"
 
 #: The most refused addresses the store keeps beyond the candidate list.
 #:
@@ -393,6 +406,21 @@ class ProxyCheckRecord:
     #: ``flaky`` are labels, never verdicts -- a slow or flaky address is kept
     #: and can be added to a chain.
     state: str = ""
+    #: The exit's identity beyond its address (7.89.0, PR-S2), from a JSON or
+    #: a Cloudflare ``/cdn-cgi/trace`` answer: the country (``loc`` / a
+    #: ``country`` key), the network (``asn`` / ``org``; a trace has none),
+    #: and Cloudflare's ``warp`` word (``on``/``plus`` -- the exit is WARP,
+    #: and a Cloudflare-fronted provider can tell). All four are written only
+    #: when they say something, so every record before 7.89.0, and every one
+    #: an exit check did not fill, round-trips byte for byte.
+    exit_country: str = ""
+    exit_asn: str = ""
+    exit_warp: str = ""
+    #: How the exit was asked: ``provider`` for the provider's own trace
+    #: (``PROXY_CHECK_EXIT_IP_URL=provider``), ``""`` for an operator URL or no
+    #: exit check. ``provider`` with no ``exit_ip`` is "that host publishes no
+    #: trace" -- the page says so rather than showing nothing.
+    exit_via: str = ""
 
     @property
     def intercepted(self) -> bool:
@@ -447,6 +475,18 @@ class ProxyCheckRecord:
             document["failure"] = self.failure
         if self.state:
             document["state"] = self.state
+        document.update(
+            {
+                key: value
+                for key, value in (
+                    ("exit_country", self.exit_country),
+                    ("exit_asn", self.exit_asn),
+                    ("exit_warp", self.exit_warp),
+                    ("exit_via", self.exit_via),
+                )
+                if value
+            }
+        )
         return document
 
     @classmethod
@@ -478,6 +518,10 @@ class ProxyCheckRecord:
             failure=_known(raw.get("failure"), CHECK_FAILURES),
             tries=_optional_int(raw.get("tries")),
             state=_known(raw.get("state"), CHECK_STATES),
+            exit_country=_short(raw.get("exit_country")),
+            exit_asn=_short(raw.get("exit_asn")),
+            exit_warp=_short(raw.get("exit_warp")).lower(),
+            exit_via=_short(raw.get("exit_via")).lower(),
         )
 
 
@@ -538,6 +582,19 @@ def _optional_int(value: object) -> int | None:
         return int(float(value))
     except ValueError:
         return None
+
+
+#: The most characters any exit-identity field keeps: the store holds a
+#: short string, never a page, whatever a URL answered.
+EXIT_FIELD_MAX_CHARS = 64
+
+
+def _short(value: object) -> str:
+    """A stored exit field as a short, single-line string."""
+
+    if not isinstance(value, str | int | float) or isinstance(value, bool):
+        return ""
+    return " ".join(str(value).split())[:EXIT_FIELD_MAX_CHARS]
 
 
 def _known(value: object, names: tuple[str, ...]) -> str:
@@ -649,6 +706,10 @@ class ProxyEndpoint:
     #: The reachability bench this address was carrying when it was last
     #: written. ``None`` for an address that has never failed.
     health: ProxyHealthState | None = None
+    #: The ``proxy_sources.json`` source that yielded this address
+    #: (:data:`SOURCE_SOURCE`), or ``""``. Written only when set, so every
+    #: other address round-trips byte for byte.
+    source_id: str = ""
 
     @property
     def refused(self) -> bool:
@@ -674,6 +735,8 @@ class ProxyEndpoint:
             document["checked_for"] = self.checked_for
         if self.health is not None:
             document["health"] = self.health.as_document()
+        if self.source_id:
+            document["source_id"] = self.source_id
         return document
 
     @classmethod
@@ -711,6 +774,7 @@ class ProxyEndpoint:
             last_check=ProxyCheckRecord.from_document(raw.get("last_check")),
             checked_for=str(raw.get("checked_for") or "").strip().lower(),
             health=ProxyHealthState.from_document(raw.get("health")),
+            source_id=str(raw.get("source_id") or "").strip(),
         )
 
 
@@ -891,6 +955,165 @@ class ProxyChain:
 EMPTY_CHAIN = ProxyChain()
 
 
+# ------------------------------------------------------------ ledger labels
+#
+# What every book about an address is keyed on (7.89.0, PR-S1). The
+# reachability ladder, the interception refusals, the trigger benches, the
+# speed ledger, the exit memory and the request log all name an address by one
+# string: its operator label, or else its masked ``host:port``. Two addresses
+# that differ only in their credentials -- sessions of one commercial gateway,
+# one VPN proxy host used with two accounts, Tor's ``IsolateSOCKSAuth`` on one
+# port -- used to come out as the same ``host:port`` and share every one of
+# those books: a refusal on one benched the other.
+#
+# Such addresses are now told apart by a short digest of their credentials,
+# ``host:port#1a2b`` -- never the credentials themselves -- and only when they
+# would otherwise collide. A catalogue with no collision names every address
+# exactly as before, byte for byte.
+#
+# Two tiers, so a feed pass can never rename an address a chain is using: the
+# addresses chains name are disambiguated among themselves only, and every
+# other address (a candidate, a refusal, a source's offer) steps around them.
+# An address entering or leaving a chain can rename a colliding one in another
+# chain; the chain writer rebuilds every provider whose built labels went stale
+# (:func:`providers_with_stale_labels`).
+
+#: Hex digits of the credential digest a colliding address is told apart by.
+LEDGER_SUFFIX_HEX = 4
+
+
+def _userinfo(url: str) -> str:
+    """The raw ``user:pass`` part of a proxy URL, or ``""``."""
+
+    netloc = urlsplit((url or "").strip()).netloc
+    userinfo, separator, _ = netloc.rpartition("@")
+    return userinfo if separator else ""
+
+
+def _digest(text: str, length: int = LEDGER_SUFFIX_HEX) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
+
+
+def is_address_named(endpoint: ProxyEndpoint) -> bool:
+    """Whether an address goes by its masked ``host:port`` rather than a name.
+
+    An empty label, or a label that *is* its ``host:port`` -- which is what a
+    feed writes (``proxy_ingest._as_endpoint``) -- names nothing the operator
+    chose, so it is disambiguated like an unlabelled address.
+    """
+
+    return not endpoint.label or endpoint.label == mask_proxy_label(endpoint.url)
+
+
+def _suffixed(
+    members: Sequence[str],
+    address: str,
+    proxies: Mapping[str, ProxyEndpoint],
+    reserved: set[str],
+) -> dict[str, str]:
+    """Distinct ``address#xxxx`` labels for addresses that share ``address``.
+
+    Deterministic: the first try is the digest of each address's credentials,
+    which is what the page shows and what two sessions of one gateway differ
+    in. Members still tied after it -- the same credentials under another
+    scheme, or a digest clash -- take the digest of their whole URL, then a
+    longer one, and finally their catalogue id, which is unique by
+    construction. A label the operator gave another address is never reused.
+    """
+
+    def tries(proxy_id: str) -> tuple[str, ...]:
+        url = proxies[proxy_id].url
+        return (
+            f"{address}#{_digest(_userinfo(url))}",
+            f"{address}#{_digest(url)}",
+            f"{address}#{_digest(url, 12)}",
+            f"{address}#{proxy_id}",
+        )
+
+    labels: dict[str, str] = {}
+    pending = sorted(members)
+    taken = set(reserved)
+    for level in range(4):
+        if not pending:
+            break
+        wanted = {proxy_id: tries(proxy_id)[level] for proxy_id in pending}
+        counts: dict[str, int] = defaultdict(int)
+        for label in wanted.values():
+            counts[label] += 1
+        still: list[str] = []
+        for proxy_id in pending:
+            label = wanted[proxy_id]
+            if (counts[label] == 1 or level == 3) and label not in taken:
+                labels[proxy_id] = label
+                taken.add(label)
+            else:
+                still.append(proxy_id)
+        pending = still
+    for proxy_id in pending:  # pragma: no cover - the id is unique
+        labels[proxy_id] = f"{address}#{proxy_id}"
+    return labels
+
+
+def _tier_labels(
+    ids: Sequence[str],
+    addresses: Mapping[str, str],
+    proxies: Mapping[str, ProxyEndpoint],
+    reserved: set[str],
+) -> dict[str, str]:
+    """Labels for address-named ids: the plain address unless it collides."""
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    for proxy_id in ids:
+        groups[addresses[proxy_id]].append(proxy_id)
+    labels: dict[str, str] = {}
+    for address, members in groups.items():
+        if not address:
+            # An address ``mask_proxy_label`` cannot name: keep today's "".
+            labels.update(dict.fromkeys(members, ""))
+            continue
+        if len(members) == 1 and address not in reserved:
+            labels[members[0]] = address
+            continue
+        labels.update(_suffixed(members, address, proxies, reserved))
+    return labels
+
+
+def ledger_label_map(
+    proxies: Mapping[str, ProxyEndpoint], chained: Iterable[str]
+) -> dict[str, str]:
+    """Every address's ledger label, unique wherever ``host:port`` collided."""
+
+    chained_ids = set(chained)
+    named: dict[str, str] = {}
+    addresses: dict[str, str] = {}
+    for proxy_id, endpoint in proxies.items():
+        if is_address_named(endpoint):
+            addresses[proxy_id] = mask_proxy_label(endpoint.url)
+        else:
+            named[proxy_id] = endpoint.label
+    labels: dict[str, str] = dict(named)
+    in_chains = [proxy_id for proxy_id in addresses if proxy_id in chained_ids]
+    on_offer = [proxy_id for proxy_id in addresses if proxy_id not in chained_ids]
+    labels.update(
+        _tier_labels(
+            in_chains,
+            addresses,
+            proxies,
+            {label for proxy_id, label in named.items() if proxy_id in chained_ids},
+        )
+    )
+    # Everything not in a chain steps around everything that is: the chained
+    # addresses' labels and their bare ``host:port`` (so an offer sharing an
+    # address with a chained one is suffixed from the start and keeps its label
+    # when promoted), and every name the operator gave.
+    reserved = set(named.values())
+    for proxy_id in in_chains:
+        reserved.add(labels[proxy_id])
+        reserved.add(addresses[proxy_id])
+    labels.update(_tier_labels(on_offer, addresses, proxies, reserved))
+    return labels
+
+
 @dataclass(frozen=True, slots=True)
 class ProxyChains:
     """Every endpoint this install knows and every chain it has been given."""
@@ -912,6 +1135,14 @@ class ProxyChains:
     #: made, and it is what decides whether this product ever contacts a third
     #: party.
     feeds: tuple[CustomFeed, ...] = ()
+    #: What each proxy source offers and nobody has chosen yet, by source id
+    #: (7.89.0, PR-S3). Like a candidate, an offer is in the catalogue so it
+    #: can be shown and tested and is in no chain. Unlike a candidate it is
+    #: not replaced by a feed pass and not pruned while its source offers it:
+    #: the source -- a scan of this computer, say -- is the only thing that
+    #: withdraws it. An offer stays listed once a chain takes it, so the same
+    #: listener can go into several providers' chains.
+    source_offers: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     #: Built-in feed ids that were converted into :attr:`feeds` while reading
     #: this document. **Never persisted** -- it is how
     #: :func:`~my_claude_code.config.proxy_feed_legacy.migrate_proxy_feeds`
@@ -932,6 +1163,13 @@ class ProxyChains:
     #: :func:`save_proxy_chains` still carrying it, and is refused there: MCC
     #: never overwrites a chain file it could not read.
     unreadable: str = ""
+    #: What :meth:`ledger_labels` computed for THIS table, filled on first use.
+    #: **Never persisted** and never compared; not an ``__init__`` argument,
+    #: so every ``replace`` copy starts with an empty one rather than
+    #: inheriting labels computed for a different catalogue.
+    _ledger: dict[str, Any] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     @property
     def is_empty(self) -> bool:
@@ -1014,6 +1252,166 @@ class ProxyChains:
     def endpoint(self, proxy_id: str) -> ProxyEndpoint | None:
         return self.proxies.get(proxy_id)
 
+    def chained_ids(self) -> frozenset[str]:
+        """Every catalogue id some chain names, paused or not."""
+
+        return frozenset(
+            proxy_id for chain in self.chains.values() for proxy_id in chain.proxy_ids()
+        )
+
+    def ledger_labels(self) -> Mapping[str, str]:
+        """Every address's ledger label (7.89.0): see :func:`ledger_label_map`.
+
+        Computed once per table and kept on it -- the page, the checker and
+        the health flush ask for every address in a loop.
+        """
+
+        cached = self._ledger.get("labels")
+        if cached is None:
+            cached = ledger_label_map(self.proxies, self.chained_ids())
+            self._ledger["labels"] = cached
+        return cached
+
+    def ledger_label(self, proxy_id: str) -> str:
+        """The name every book about one address is keyed on, or ``""``.
+
+        The operator's label, else the masked ``host:port`` -- what it always
+        was -- unless another address would come out the same, in which case
+        ``host:port#xxxx`` (a digest of its credentials, never them).
+        """
+
+        return self.ledger_labels().get(proxy_id, "")
+
+    def offer_ledger_label(self, proxy_id: str, url: str) -> str:
+        """The label an address a fetch is about to offer will go by.
+
+        For an id already in the catalogue, its label here. For a new one,
+        the label it gets once stored as an offer -- in no chain, so it steps
+        around every chained address, exactly as :func:`ledger_label_map`
+        will place it. What a fetch charges the interception and speed books
+        under, so a candidate sharing ``host:port`` with a chained address
+        never refuses or ranks the chained one.
+        """
+
+        if proxy_id in self.proxies:
+            return self.ledger_label(proxy_id)
+        address = mask_proxy_label(url)
+        if not address:
+            return ""
+        index = self._ledger.get("offers")
+        if index is None:
+            labels = self.ledger_labels()
+            chained = self.chained_ids()
+            reserved: set[str] = set()
+            by_address: dict[str, list[str]] = defaultdict(list)
+            for known, endpoint in self.proxies.items():
+                named = not is_address_named(endpoint)
+                if named or known in chained:
+                    reserved.add(labels.get(known, ""))
+                if not named:
+                    masked = mask_proxy_label(endpoint.url)
+                    if known in chained:
+                        reserved.add(masked)
+                    else:
+                        by_address[masked].append(known)
+            reserved.discard("")
+            index = (reserved, by_address)
+            self._ledger["offers"] = index
+        reserved, by_address = index
+        group = [*by_address.get(address, ()), proxy_id]
+        if len(group) == 1 and address not in reserved:
+            return address
+        proxies = dict(self.proxies)
+        proxies[proxy_id] = ProxyEndpoint(url=url)
+        return _suffixed(group, address, proxies, reserved)[proxy_id]
+
+    def chain_ledger_labels(self, provider_id: str) -> tuple[str, ...]:
+        """The ledger labels of one chain's addresses, in entry order.
+
+        Paused entries included and Direct left out: the signature a built
+        provider is compared against (:func:`providers_with_stale_labels`).
+        """
+
+        chain = self.chain(provider_id)
+        if chain is None:
+            return ()
+        return tuple(
+            self.ledger_label(entry.proxy)
+            for entry in chain.entries
+            if entry.proxy and entry.proxy in self.proxies
+        )
+
+    def duplicate_labels(
+        self, provider_id: str
+    ) -> tuple[tuple[str, tuple[int, ...]], ...]:
+        """Labels two or more of one chain's addresses share, with their entries.
+
+        ``(label, (1-based entry numbers))`` per shared label, in entry order.
+        Empty for a chain whose every address has a name of its own -- which,
+        since addresses that collide on ``host:port`` are told apart by
+        :meth:`ledger_label`, is every chain except one naming the same
+        address twice or two addresses the operator gave the same name.
+        Direct entries are not addresses and never count.
+        """
+
+        chain = self.chain(provider_id)
+        if chain is None:
+            return ()
+        seen: dict[str, list[int]] = defaultdict(list)
+        for index, entry in enumerate(chain.entries, start=1):
+            if entry.proxy and entry.proxy in self.proxies:
+                seen[self.ledger_label(entry.proxy)].append(index)
+        return tuple(
+            (label, tuple(indexes))
+            for label, indexes in seen.items()
+            if len(indexes) > 1
+        )
+
+    def offered_ids(self) -> frozenset[str]:
+        """Every catalogue id some source offers (7.89.0)."""
+
+        return frozenset(
+            proxy_id for offers in self.source_offers.values() for proxy_id in offers
+        )
+
+    def is_on_offer(self, proxy_id: str) -> bool:
+        """Whether an address may be added to a chain through the bulk add.
+
+        A feed's candidate, or a source's offer -- the two kinds of address
+        that are in the catalogue without anybody having chosen them.
+        """
+
+        return proxy_id in self.candidates or proxy_id in self.offered_ids()
+
+    def with_source_offers(
+        self, source_id: str, offers: Sequence[tuple[str, ProxyEndpoint]]
+    ) -> ProxyChains:
+        """Return a copy whose offers from ``source_id`` are exactly ``offers``.
+
+        The one write path for a source's addresses. An id already in the
+        catalogue keeps its row -- its checks, its health, a chain's use of it
+        -- and only takes the offered URL (a credential set or changed on the
+        source); a new id is added as given. Offers the source no longer makes
+        leave its list and, unless a chain uses them, the catalogue. An empty
+        ``offers`` withdraws the source entirely.
+        """
+
+        proxies = dict(self.proxies)
+        kept: list[str] = []
+        for proxy_id, endpoint in offers:
+            previous = proxies.get(proxy_id)
+            proxies[proxy_id] = (
+                endpoint if previous is None else replace(previous, url=endpoint.url)
+            )
+            if proxy_id not in kept:
+                kept.append(proxy_id)
+        source_offers = {
+            key: value for key, value in self.source_offers.items() if key != source_id
+        }
+        if kept:
+            source_offers[source_id] = tuple(kept)
+        return replace(self, proxies=proxies, source_offers=source_offers).pruned()
+
     def add_endpoint(self, url: str) -> tuple[ProxyChains, str]:
         """Return a copy carrying ``url``, and the id it was filed under.
 
@@ -1084,6 +1482,9 @@ class ProxyChains:
         chained = {
             proxy_id for chain in self.chains.values() for proxy_id in chain.proxy_ids()
         }
+        # A source's offer is not the feed's to replace (7.89.0): it stays
+        # whatever this pass offers, exactly as a chained address does.
+        chained |= self.offered_ids()
         proxies = {
             proxy_id: endpoint
             for proxy_id, endpoint in self.proxies.items()
@@ -1211,6 +1612,8 @@ class ProxyChains:
         referenced.update(self.refused_ids()[:MAX_REFUSED_ENDPOINTS])
         for chain in self.chains.values():
             referenced.update(chain.proxy_ids())
+        # A source's offer is referenced by its source (7.89.0).
+        referenced.update(self.offered_ids())
         if referenced == set(self.proxies):
             return self
         return replace(
@@ -1238,7 +1641,18 @@ class ProxyChains:
             # document is what completes the migration: the next read finds
             # entries rather than ids and converts nothing.
             FEEDS_KEY: [feed.as_document() for feed in self.feeds],
-        }
+        } | (
+            # Only once a source offers something (7.89.0): every document of
+            # an install without sources is what it was, byte for byte.
+            {
+                SOURCE_OFFERS_KEY: {
+                    source_id: list(ids)
+                    for source_id, ids in self.source_offers.items()
+                }
+            }
+            if self.source_offers
+            else {}
+        )
 
     @classmethod
     def from_document(cls, document: object) -> Self:
@@ -1300,6 +1714,8 @@ class ProxyChains:
             else ()
         )
 
+        source_offers = _read_source_offers(document.get(SOURCE_OFFERS_KEY), proxies)
+
         # Prune here rather than through ``pruned()``: the classmethod has to
         # return ``Self``, and a copy made by ``dataclasses.replace`` is only
         # ever the base class. The rule is the same one ``pruned()`` applies,
@@ -1321,6 +1737,9 @@ class ProxyChains:
         referenced.update(
             proxy_id for chain in chains.values() for proxy_id in chain.proxy_ids()
         )
+        referenced.update(
+            proxy_id for offers in source_offers.values() for proxy_id in offers
+        )
         feeds, migrated = _read_feeds(document.get(FEEDS_KEY))
         return cls(
             proxies={
@@ -1331,11 +1750,43 @@ class ProxyChains:
             chains=chains,
             candidates=candidates,
             feeds=feeds,
+            source_offers=source_offers,
             migrated_feed_ids=migrated,
         )
 
 
 EMPTY_PROXY_CHAINS = ProxyChains()
+
+
+def _read_source_offers(
+    raw: object, proxies: Mapping[str, ProxyEndpoint]
+) -> dict[str, tuple[str, ...]]:
+    """The ``source_offers`` key: source id -> offered ids still in the catalogue."""
+
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        logger.warning("PROXY CHAINS: '{}' is not an object", SOURCE_OFFERS_KEY)
+        return {}
+    offers: dict[str, tuple[str, ...]] = {}
+    for raw_id, raw_ids in raw.items():
+        source_id = str(raw_id).strip()
+        if (
+            not source_id
+            or isinstance(raw_ids, str)
+            or not isinstance(raw_ids, Sequence)
+        ):
+            continue
+        kept = tuple(
+            dict.fromkeys(
+                proxy_id
+                for proxy_id in (str(value).strip() for value in raw_ids)
+                if proxy_id in proxies
+            )
+        )
+        if kept:
+            offers[source_id] = kept
+    return offers
 
 
 def _read_feeds(raw: object) -> tuple[tuple[CustomFeed, ...], tuple[str, ...]]:
@@ -1550,7 +2001,10 @@ def save_proxy_chains(chains: ProxyChains, path: Path | None = None) -> None:
     if chains.unreadable:
         raise ProxyChainsUnreadableError(resolved_path, chains.unreadable)
     with PROXY_CHAINS_WRITE_LOCK:
-        write_json_document_atomically(resolved_path, chains.as_document())
+        # Owner-only since 7.89.0 (the user's decision 6 of 2026-09-25: a
+        # proxy's ``user:pass`` stays in its URL here, and this file is
+        # restricted to its owner). The same bytes, the same atomic rename.
+        write_owner_only_json(resolved_path, chains.as_document())
         _invalidate_proxy_chains_cache()
         _sync_masking_record(resolved_path, chains)
 
@@ -1911,6 +2365,43 @@ def proxy_chains_problem(path: Path | None = None) -> str:
     )
 
 
+#: The ledger labels each provider's chain was BUILT with (7.89.0): what the
+#: running provider dials and charges its books under. Written by provider
+#: construction (``providers/runtime/config.resolve_proxy_route``), read by the
+#: chain writer's republish, which rebuilds every provider whose labels the
+#: catalogue has since renamed -- an address joining another chain can rename
+#: a colliding one here (:func:`ledger_label_map`), and a provider still
+#: dialling under the old name would charge books nobody reads.
+_BUILT_LABELS: dict[str, tuple[str, ...]] = {}
+_BUILT_LABELS_LOCK = threading.Lock()
+
+
+def note_built_chain_labels(provider_id: str, labels: tuple[str, ...]) -> None:
+    """Record the ledger labels one provider was just built with."""
+
+    with _BUILT_LABELS_LOCK:
+        _BUILT_LABELS[(provider_id or "").strip().lower()] = tuple(labels)
+
+
+def providers_with_stale_labels(store: ProxyChains) -> frozenset[str]:
+    """Providers built with chain labels ``store`` no longer gives them."""
+
+    with _BUILT_LABELS_LOCK:
+        built = dict(_BUILT_LABELS)
+    return frozenset(
+        provider_id
+        for provider_id, labels in built.items()
+        if labels and store.chain_ledger_labels(provider_id) != labels
+    )
+
+
+def reset_built_chain_labels() -> None:
+    """Forget every built provider's labels. For tests."""
+
+    with _BUILT_LABELS_LOCK:
+        _BUILT_LABELS.clear()
+
+
 def unusable_chain_cause(store: ProxyChains, provider_id: str) -> str:
     """Why ``provider_id``'s chain has no entry a request could use, or ``""``.
 
@@ -2024,12 +2515,14 @@ __all__ = [
     "DOCUMENT_VERSION",
     "EMPTY_CHAIN",
     "EMPTY_PROXY_CHAINS",
+    "EXIT_FIELD_MAX_CHARS",
     "FAILURE_CONNECT_TIMEOUT",
     "FAILURE_OTHER",
     "FAILURE_REFUSED",
     "FAILURE_TLS_TIMEOUT",
     "FAILURE_TUNNEL",
     "FEEDS_KEY",
+    "LEDGER_SUFFIX_HEX",
     "MASKING_RECORD_FILENAME",
     "MASKING_RECORD_VERSION",
     "MAX_REFUSED_ENDPOINTS",
@@ -2065,7 +2558,9 @@ __all__ = [
     "ProxyHealthState",
     "clamp_max_switches",
     "current_proxy_chains",
+    "is_address_named",
     "is_valid_proxy_url",
+    "ledger_label_map",
     "load_proxy_chains",
     "masked_refusal_sentence",
     "masking_record_path",
@@ -2073,7 +2568,10 @@ __all__ = [
     "normalise_policy",
     "normalise_scope",
     "normalise_trigger_kinds",
+    "note_built_chain_labels",
+    "providers_with_stale_labels",
     "proxy_chains_problem",
+    "reset_built_chain_labels",
     "reset_proxy_chains_cache",
     "save_proxy_chains",
     "settle_proxy_chains",

@@ -262,6 +262,19 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "cannot afford two answers to. Read-only; it sends nothing itself."
     ),
     (
+        "my_claude_code.api.admin_proxy_routes",
+        "my_claude_code.providers.runtime.config",
+    ): (
+        "Owner: the Proxying card's 'Where does Direct come out?' (7.89.0, "
+        "PR-S2). Reason: that readout dials the provider's own host from this "
+        "computer's address, so it may only run where the provider's traffic "
+        "may leave from it right now -- and direct_exit_refusal answers that "
+        "with the very resolve_proxy_chain / masked_exit_for read the probes "
+        "and real requests use. A mirror in the api package would be a second "
+        "answer to the one question masking cannot afford two answers to. "
+        "Read-only; it sends nothing itself."
+    ),
+    (
         "my_claude_code.api.admin_routes",
         "my_claude_code.providers.chatgpt_oauth.codex_catalogue",
     ): (

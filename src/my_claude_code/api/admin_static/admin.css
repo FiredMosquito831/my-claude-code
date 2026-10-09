@@ -9492,6 +9492,168 @@ audio.req-media-preview {
   white-space: nowrap;
 }
 
+/* 7.89.0 (PR-S2): where exits come out. The page-level note under the
+   checker, the card's exit groups and the Direct readout. */
+.proxy-exit-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.proxy-exit-identity:empty {
+  display: none;
+}
+
+.proxy-exit-identity-line {
+  flex: 1 1 320px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.proxy-exit-identity-on,
+.proxy-keep-one-per-exit,
+.proxy-direct-exit-check {
+  white-space: nowrap;
+}
+
+.proxy-exit-groups {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-md);
+  background: var(--warn-bg);
+}
+
+.proxy-exit-group {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.proxy-direct-exit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.proxy-direct-exit-line {
+  flex: 1 1 280px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.proxy-direct-exit-refused {
+  color: var(--muted);
+}
+
+/* 7.89.0 (PR-S3): proxies found on this computer. */
+.proxy-sources-terms {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.proxy-sources-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.proxy-sources-status {
+  flex: 1 1 240px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.proxy-sources-scan,
+.proxy-sources-remove,
+.proxy-source-add,
+.proxy-source-login-save,
+.proxy-source-login-clear {
+  white-space: nowrap;
+}
+
+.proxy-sources-problem {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-md);
+  background: var(--error-bg);
+  font-size: 12px;
+}
+
+.proxy-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proxy-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.proxy-source-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-strong);
+}
+
+.proxy-source-usually,
+.proxy-source-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.proxy-source-state {
+  flex: 1 1 200px;
+}
+
+.proxy-source-provider {
+  max-width: 220px;
+}
+
+.proxy-source-login {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex-basis: 100%;
+}
+
+.proxy-source-username,
+.proxy-source-password {
+  width: 180px;
+  max-width: 100%;
+}
+
+.proxy-source-sees,
+.proxy-sources-sees {
+  flex-basis: 100%;
+}
+
 /* What MCC remembers about one exit (7.81.0): a fact about the provider's
    answers, not a health measurement, so a muted warning tone rather than the
    health word's colours, and its own cell so the bounded health word above

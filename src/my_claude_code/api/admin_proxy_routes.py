@@ -53,6 +53,9 @@ from my_claude_code.application.proxy_check import (
     check_budget,
     check_endpoints,
     destination_for_provider,
+    direct_exit_for,
+    is_provider_trace,
+    measure_direct_exit,
 )
 from my_claude_code.application.proxy_fetch import (
     FetchAlreadyRunning,
@@ -79,6 +82,7 @@ from my_claude_code.application.proxy_order import (
     plan_speed_order,
     ranked,
 )
+from my_claude_code.application.proxy_sources import sources_document
 from my_claude_code.application.proxy_speed_store import speed_payload
 from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.admin.status import provider_config_status
@@ -117,6 +121,7 @@ from my_claude_code.config.proxy_chains import (
     load_proxy_chains,
     masked_refusal_sentence,
     normalise_policy,
+    providers_with_stale_labels,
     proxy_chains_problem,
     save_proxy_chains,
 )
@@ -129,6 +134,7 @@ from my_claude_code.config.proxy_feeds import (
     is_valid_feed_url,
     normalise_parser,
 )
+from my_claude_code.config.proxy_sources import current_proxy_sources
 from my_claude_code.config.settings import Settings
 from my_claude_code.config.system_proxy import system_proxy_for
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
@@ -140,6 +146,7 @@ from my_claude_code.core.proxy_exit_memory import (
     forget_exits,
 )
 from my_claude_code.core.proxy_rotation import PROXY_HEALTH, PROXY_INTERCEPTION
+from my_claude_code.providers.runtime.config import direct_exit_refusal
 
 router = APIRouter()
 
@@ -550,7 +557,15 @@ async def republish_chains(
     """
 
     rebuild = (
-        None if provider_ids is None else frozenset(provider_ids) | frozenset(_UNROUTED)
+        None
+        if provider_ids is None
+        else frozenset(provider_ids)
+        | frozenset(_UNROUTED)
+        # 7.89.0: providers built with a ledger label this write renamed --
+        # an address joining or leaving a chain can tell a colliding address
+        # in ANOTHER chain apart, and that provider must dial under its new
+        # name too. Empty on every install without such a collision.
+        | providers_with_stale_labels(current_proxy_chains())
     )
     # Never fail the write for it. The chain is already on disk, and a
     # republish that could not run leaves the operator with a saved chain that
@@ -611,8 +626,12 @@ def _chain_inputs(store: ProxyChains, key: str) -> object:
     legs: list[tuple[str, str, str] | None] = []
     for proxy_id in chain.proxy_ids():
         endpoint = store.endpoint(proxy_id)
+        # The ledger label, not the stored one (7.89.0): it is what the legs
+        # are built with, and a write elsewhere in the catalogue can change it.
         legs.append(
-            None if endpoint is None else (proxy_id, endpoint.url, endpoint.label)
+            None
+            if endpoint is None
+            else (proxy_id, endpoint.url, store.ledger_label(proxy_id))
         )
     return chain.as_document(), tuple(legs)
 
@@ -740,7 +759,52 @@ def _commit_chain(provider_id: str, payload: ProxyChainPayload, inherited: str) 
         for entry in chain.entries:
             if entry.proxy:
                 store = store.without_candidate(entry.proxy)
-        save_proxy_chains(store.with_chain(provider_id, chain))
+        written = store.with_chain(provider_id, chain)
+        _refuse_shared_labels(written, provider_id)
+        save_proxy_chains(written)
+
+
+def _refuse_shared_labels(store: ProxyChains, provider_id: str) -> None:
+    """Refuse a chain whose entries would share a ledger label (7.89.0, PR-S1).
+
+    Every book MCC keeps about an address -- reachability, the refusal for
+    intercepting TLS, the cooldown after a refusal, its speed, what the exit
+    memory remembers, the request log's Exit -- is keyed on that one name, so
+    two entries with one name would share all of them: a refusal on one would
+    bench the other. Addresses that merely collide on ``host:port`` are told
+    apart automatically; what is left is the same address twice, or two
+    addresses given the same name by hand. Direct entries never count.
+    """
+
+    shared = store.duplicate_labels(provider_id)
+    if not shared:
+        return
+    label, indexes = shared[0]
+    numbers = ", ".join(str(index) for index in indexes[:-1])
+    entries = f"Entries {numbers} and {indexes[-1]}"
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Not saved: {entries} would both go by {label!r}. MCC keeps one "
+            "health record, cooldown, speed history and exit memory per name, "
+            "so two entries with one name would share them -- a refusal on "
+            "one would bench the other. "
+            + (
+                "They are the same address: remove all but one."
+                if len(
+                    {
+                        entry.proxy
+                        for position, entry in enumerate(
+                            store.chains[provider_id].entries, start=1
+                        )
+                        if position in indexes
+                    }
+                )
+                == 1
+                else "Give one of them another name in proxy_chains.json, or remove it."
+            )
+        ),
+    )
 
 
 def _resolve_entries(
@@ -802,9 +866,7 @@ def _refuse_if_intercepted(store: ProxyChains, proxy_id: str, index: int) -> Non
     """
 
     endpoint = store.endpoint(proxy_id)
-    label = (
-        "" if endpoint is None else (endpoint.label or mask_proxy_label(endpoint.url))
-    )
+    label = "" if endpoint is None else store.ledger_label(proxy_id)
     if (endpoint is not None and endpoint.refused) or PROXY_INTERCEPTION.is_refused(
         label
     ):
@@ -1735,14 +1797,11 @@ async def bulk_proxy_candidates(
     testable: list[str] = []
     for proxy_id in proxies:
         endpoint = store.endpoint(proxy_id)
-        label = (
-            ""
-            if endpoint is None
-            else (endpoint.label or mask_proxy_label(endpoint.url))
-        )
+        label = "" if endpoint is None else store.ledger_label(proxy_id)
         if proxy_id in in_chain:
             results[proxy_id] = _result(proxy_id, label, "already")
-        elif proxy_id not in store.candidates:
+        elif not store.is_on_offer(proxy_id):
+            # A feed's candidate or, since 7.89.0, a source's offer.
             results[proxy_id] = _result(proxy_id, label, "gone")
         elif len(testable) >= free:
             results[proxy_id] = _result(proxy_id, label, "full")
@@ -1798,6 +1857,7 @@ async def bulk_proxy_candidates(
             else {}
         )
     keep: list[str] = []
+    exits_held = _exits_held(chain, store)
     for proxy_id in testable:
         outcome = outcomes.get(proxy_id)
         label = "" if outcome is None else outcome.label
@@ -1831,6 +1891,15 @@ async def bulk_proxy_candidates(
             detail=outcome.record.detail,
             latency_ms=outcome.record.latency_ms,
         )
+        # 7.89.0 (PR-S2): an address whose exit the chain already holds is
+        # added -- it is still another tunnel -- and the result says so.
+        exit_ip = outcome.record.exit_ip if outcome.record.ok else ""
+        sharing = exits_held.get(exit_ip, []) if exit_ip else []
+        if sharing:
+            results[proxy_id]["shares_exit_with"] = list(sharing)
+            results[proxy_id]["exit_ip"] = exit_ip
+        if exit_ip:
+            exits_held.setdefault(exit_ip, []).append(label)
 
     before = await asyncio.to_thread(_snapshot)
     if keep:
@@ -1927,6 +1996,18 @@ async def undo_proxy_candidates(
     return await asyncio.to_thread(_payload, services)
 
 
+def _exits_held(chain: ProxyChain, store: ProxyChains) -> dict[str, list[str]]:
+    """Exit address -> the labels of the chain's entries that came out of it."""
+
+    held: dict[str, list[str]] = {}
+    for entry in chain.entries:
+        endpoint = store.endpoint(entry.proxy) if entry.proxy else None
+        check = None if endpoint is None else endpoint.last_check
+        if check is not None and check.ok and check.exit_ip:
+            held.setdefault(check.exit_ip, []).append(store.ledger_label(entry.proxy))
+    return held
+
+
 def _result(
     proxy_id: str,
     label: str,
@@ -2001,7 +2082,7 @@ def _commit_promotions(
             if proxy_id in present:
                 store = store.without_candidate(proxy_id)
                 continue
-            if proxy_id not in store.candidates:
+            if not store.is_on_offer(proxy_id):
                 missed.append(proxy_id)
                 continue
             if cap and len(entries) >= cap:
@@ -2033,11 +2114,7 @@ def _commit_discard(proxy_ids: list[str]) -> list[dict[str, Any]]:
         store = load_proxy_chains()
         for proxy_id in proxy_ids:
             endpoint = store.endpoint(proxy_id)
-            label = (
-                ""
-                if endpoint is None
-                else (endpoint.label or mask_proxy_label(endpoint.url))
-            )
+            label = "" if endpoint is None else store.ledger_label(proxy_id)
             if proxy_id not in store.candidates:
                 results.append(_result(proxy_id, label, "gone"))
                 continue
@@ -2107,117 +2184,140 @@ def _commit_undo(token: str) -> tuple[str, frozenset[str]]:
 def _payload(services: ApiServices) -> dict[str, Any]:
     settings = services.requests.current_settings()
     store = current_proxy_chains()
-    return {
-        "vocabulary": {
-            "policies": [
-                {"id": policy, "help": POLICY_HELP[policy]}
-                for policy in ROTATION_POLICY_ORDER
+    return (
+        {
+            "vocabulary": {
+                "policies": [
+                    {"id": policy, "help": POLICY_HELP[policy]}
+                    for policy in ROTATION_POLICY_ORDER
+                ],
+                "default_policy": "failover",
+                "kinds": [_kind_payload(kind) for kind in TRIGGER_KIND_ORDER],
+                "default_kinds": list(DEFAULT_TRIGGER_KINDS),
+                "scopes": list(SCOPES),
+                "max_entries": _entry_cap(settings),
+                "switch_bound": {
+                    "min": MAX_SWITCHES_MIN,
+                    "max": MAX_SWITCHES_MAX,
+                    "default": 2,
+                },
+                "tls_intercepted": TLS_INTERCEPTED,
+                # "Keep the fastest healthy proxy first" (7.56.0), in the
+                # operator's own numbers, so the card's explanation is never a
+                # copy of a rule the server has since changed.
+                "order": {
+                    "policies": list(ORDERABLE_POLICIES),
+                    "resort_minutes": int(
+                        getattr(
+                            settings,
+                            "proxy_order_resort_minutes",
+                            PROXY_ORDER_RESORT_MINUTES_DEFAULT,
+                        )
+                    ),
+                    "margin_ratio": RESORT_MARGIN_RATIO,
+                    "margin_ms": RESORT_MARGIN_MS,
+                    "min_samples": RESORT_MIN_SAMPLES,
+                    "tick_seconds": PROXY_ORDER_TICK_SECONDS,
+                },
+                # What the page says about the checker, so it can tell the operator
+                # whether anything is measuring these addresses without them
+                # pressing a button. Off is the shipped answer and the page says so
+                # rather than leaving a stale "not checked yet" unexplained.
+                "checker": {
+                    "enabled": bool(settings.proxy_check_enabled),
+                    "interval_minutes": int(settings.proxy_check_interval_minutes),
+                    "exit_ip_configured": bool(
+                        settings.proxy_check_exit_ip_url.strip()
+                    ),
+                }
+                | _exit_mode(settings),
+                # What, if anything, re-reads the public lists without being asked.
+                # Off is the shipped answer to both halves and the page says so,
+                # because "no feeds are selected" and "the timer is off" are
+                # different reasons for an empty candidate list.
+                "refresh": {
+                    "enabled": bool(settings.proxy_feed_refresh_enabled),
+                    "interval_minutes": int(settings.proxy_feed_refresh_minutes),
+                    "minimum_minutes": PROXY_FEED_MINIMUM_MINUTES,
+                },
+                # What a press of Fetch is about to do, in the operator's own
+                # numbers. The page prints these rather than a constant of its own:
+                # 7.19.0 shipped "a chain holds at most 12" on a card with two
+                # hundred rows because the browser kept its own copy of a limit the
+                # server had stopped applying.
+                "fetch": {
+                    "concurrency": int(settings.proxy_fetch_test_concurrency),
+                    # How that number is read, and how far each test goes. Both
+                    # travel because both change what a press of Fetch does to
+                    # somebody else's machines, and the page must not keep its own
+                    # opinion about either.
+                    "concurrency_mode": str(settings.proxy_fetch_concurrency_mode),
+                    "check_depth": str(settings.proxy_fetch_check_depth),
+                    "connect_timeout_seconds": float(
+                        settings.proxy_fetch_connect_timeout_seconds
+                    ),
+                    "check_timeout_seconds": float(
+                        settings.proxy_check_timeout_seconds
+                    ),
+                    # 0 is UNLIMITED and is what ships. It travels as 0, and the
+                    # page must read it with a test for "is it a positive number",
+                    # never with `Number(x) || <something>` -- which cannot tell 0
+                    # from absent and is exactly how 7.19.0 put the old cap back.
+                    "candidates_max": int(settings.proxy_candidates_max),
+                },
+                # The readers this install ships, for the Add form's picker. MCC
+                # ships no feed of its own, so this is the whole of what the page
+                # can offer: formats, never sources.
+                "parsers": [
+                    {"id": parser.id, "label": parser.label, "shape": parser.shape}
+                    for parser in PARSERS
+                ],
+                "feed_name_max_length": FEED_NAME_MAX_LENGTH,
+                "max_feeds": int(settings.proxy_feed_max),
+            },
+            "feeds": feed_payload(store),
+            "candidates": [
+                _candidate_payload(proxy_id, store, settings)
+                for proxy_id in store.candidates
             ],
-            "default_policy": "failover",
-            "kinds": [_kind_payload(kind) for kind in TRIGGER_KIND_ORDER],
-            "default_kinds": list(DEFAULT_TRIGGER_KINDS),
-            "scopes": list(SCOPES),
-            "max_entries": _entry_cap(settings),
-            "switch_bound": {
-                "min": MAX_SWITCHES_MIN,
-                "max": MAX_SWITCHES_MAX,
-                "default": 2,
-            },
-            "tls_intercepted": TLS_INTERCEPTED,
-            # "Keep the fastest healthy proxy first" (7.56.0), in the
-            # operator's own numbers, so the card's explanation is never a
-            # copy of a rule the server has since changed.
-            "order": {
-                "policies": list(ORDERABLE_POLICIES),
-                "resort_minutes": int(
-                    getattr(
-                        settings,
-                        "proxy_order_resort_minutes",
-                        PROXY_ORDER_RESORT_MINUTES_DEFAULT,
-                    )
-                ),
-                "margin_ratio": RESORT_MARGIN_RATIO,
-                "margin_ms": RESORT_MARGIN_MS,
-                "min_samples": RESORT_MIN_SAMPLES,
-                "tick_seconds": PROXY_ORDER_TICK_SECONDS,
-            },
-            # What the page says about the checker, so it can tell the operator
-            # whether anything is measuring these addresses without them
-            # pressing a button. Off is the shipped answer and the page says so
-            # rather than leaving a stale "not checked yet" unexplained.
-            "checker": {
-                "enabled": bool(settings.proxy_check_enabled),
-                "interval_minutes": int(settings.proxy_check_interval_minutes),
-                "exit_ip_configured": bool(settings.proxy_check_exit_ip_url.strip()),
-            },
-            # What, if anything, re-reads the public lists without being asked.
-            # Off is the shipped answer to both halves and the page says so,
-            # because "no feeds are selected" and "the timer is off" are
-            # different reasons for an empty candidate list.
-            "refresh": {
-                "enabled": bool(settings.proxy_feed_refresh_enabled),
-                "interval_minutes": int(settings.proxy_feed_refresh_minutes),
-                "minimum_minutes": PROXY_FEED_MINIMUM_MINUTES,
-            },
-            # What a press of Fetch is about to do, in the operator's own
-            # numbers. The page prints these rather than a constant of its own:
-            # 7.19.0 shipped "a chain holds at most 12" on a card with two
-            # hundred rows because the browser kept its own copy of a limit the
-            # server had stopped applying.
-            "fetch": {
-                "concurrency": int(settings.proxy_fetch_test_concurrency),
-                # How that number is read, and how far each test goes. Both
-                # travel because both change what a press of Fetch does to
-                # somebody else's machines, and the page must not keep its own
-                # opinion about either.
-                "concurrency_mode": str(settings.proxy_fetch_concurrency_mode),
-                "check_depth": str(settings.proxy_fetch_check_depth),
-                "connect_timeout_seconds": float(
-                    settings.proxy_fetch_connect_timeout_seconds
-                ),
-                "check_timeout_seconds": float(settings.proxy_check_timeout_seconds),
-                # 0 is UNLIMITED and is what ships. It travels as 0, and the
-                # page must read it with a test for "is it a positive number",
-                # never with `Number(x) || <something>` -- which cannot tell 0
-                # from absent and is exactly how 7.19.0 put the old cap back.
-                "candidates_max": int(settings.proxy_candidates_max),
-            },
-            # The readers this install ships, for the Add form's picker. MCC
-            # ships no feed of its own, so this is the whole of what the page
-            # can offer: formats, never sources.
-            "parsers": [
-                {"id": parser.id, "label": parser.label, "shape": parser.shape}
-                for parser in PARSERS
+            # The addresses a sweep refused, which until 7.35.1 the page could only
+            # count. A refusal is a durable fact about a stranger's machine -- it
+            # terminated TLS -- and the panel said "12 refused" with nothing to
+            # look at, so an operator could not tell which address it was talking
+            # about or when. These rows are read-only by construction: the payload
+            # carries no handle the Add gestures accept, which is the page's half
+            # of the server's refusal (see ``_refuse_if_intercepted``).
+            "refused_addresses": [
+                _refused_payload(proxy_id, store) for proxy_id in store.refused_ids()
             ],
-            "feed_name_max_length": FEED_NAME_MAX_LENGTH,
-            "max_feeds": int(settings.proxy_feed_max),
-        },
-        "feeds": feed_payload(store),
-        "candidates": [
-            _candidate_payload(proxy_id, store, settings)
-            for proxy_id in store.candidates
-        ],
-        # The addresses a sweep refused, which until 7.35.1 the page could only
-        # count. A refusal is a durable fact about a stranger's machine -- it
-        # terminated TLS -- and the panel said "12 refused" with nothing to
-        # look at, so an operator could not tell which address it was talking
-        # about or when. These rows are read-only by construction: the payload
-        # carries no handle the Add gestures accept, which is the page's half
-        # of the server's refusal (see ``_refuse_if_intercepted``).
-        "refused_addresses": [
-            _refused_payload(proxy_id, store) for proxy_id in store.refused_ids()
-        ],
-        # How many addresses currently in a chain got there having passed a
-        # check. It is the fact that tells "everything that passed is already
-        # in a chain" apart from "you discarded them", which are the two ways
-        # a sweep can end with nothing left on offer and which the page used to
-        # report with the same sentence as "nothing passed".
-        "chained_passing": _chained_passing(store),
-        "providers": [
-            _provider_payload(entry, store, settings)
-            for entry in _configured_providers(settings)
-        ],
-    } | _store_problem_payload()
+            # How many addresses currently in a chain got there having passed a
+            # check. It is the fact that tells "everything that passed is already
+            # in a chain" apart from "you discarded them", which are the two ways
+            # a sweep can end with nothing left on offer and which the page used to
+            # report with the same sentence as "nothing passed".
+            "chained_passing": _chained_passing(store),
+            "providers": [
+                _provider_payload(entry, store, settings)
+                for entry in _configured_providers(settings)
+            ],
+        }
+        | _store_problem_payload()
+        | _sources_payload(store)
+    )
+
+
+def _sources_payload(store: ProxyChains) -> dict[str, Any]:
+    """``{"sources": ...}`` once this install has a source (7.89.0, PR-S3).
+
+    The Sources section's data, masked exactly as ``GET
+    /admin/api/proxy-sources`` masks it. Absent until a scan has run, so the
+    page of every install without a source is what it was.
+    """
+
+    sources = current_proxy_sources()
+    if sources.is_empty and not sources.unreadable:
+        return {}
+    return {"sources": sources_document(store, sources)}
 
 
 def _store_problem_payload() -> dict[str, Any]:
@@ -2266,9 +2366,9 @@ def _refused_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
     if endpoint is None:  # pragma: no cover - refusals are pruned with proxies
         return {"proxy": proxy_id, "label": "", "reason": "", "at": ""}
     last_check = endpoint.last_check
-    return {
+    return _told_apart(store, proxy_id) | {
         "proxy": proxy_id,
-        "label": endpoint.label or mask_proxy_label(endpoint.url),
+        "label": store.ledger_label(proxy_id),
         "scheme": _scheme(endpoint.url),
         "reason": "" if last_check is None else last_check.detail,
         "at": "" if last_check is None else last_check.at,
@@ -2298,9 +2398,10 @@ def _candidate_payload(
         return {"proxy": proxy_id, "label": "", "sources": []}
     facts = endpoint.feed
     last_check = endpoint.last_check
-    return {
+    label = store.ledger_label(proxy_id)
+    return _told_apart(store, proxy_id) | {
         "proxy": proxy_id,
-        "label": endpoint.label or mask_proxy_label(endpoint.url),
+        "label": label,
         "scheme": _scheme(endpoint.url),
         "source_count": endpoint.source_count,
         "sources": [
@@ -2347,11 +2448,7 @@ def _candidate_payload(
         # checked against (7.54.0): median setup, success rate, the live
         # first-token factor and the rank key of spec §7.3. Sortable and
         # filterable on the page; it never decides anything by itself.
-        "speed": _speed(
-            endpoint.label or mask_proxy_label(endpoint.url),
-            endpoint.checked_for,
-            settings,
-        ),
+        "speed": _speed(label, endpoint.checked_for, settings),
     }
 
 
@@ -2521,6 +2618,11 @@ def _provider_payload(
     system_proxy = system_proxy_for(str(entry.get("base_url") or ""))
     if system_proxy:
         payload["system_proxy"] = system_proxy
+    # Where this provider's Direct rung came out the last time somebody asked
+    # (7.89.0, PR-S2) -- or why it was not asked. Present only once asked.
+    direct = direct_exit_for(provider_id)
+    if direct is not None:
+        payload["direct_exit"] = direct.as_document()
     return payload
 
 
@@ -2546,7 +2648,81 @@ def _chain_payload(
         "entries": [
             _entry_payload(item, store, provider_id, settings) for item in chain.entries
         ],
-    }
+    } | _exit_groups_payload(chain, store, provider_id)
+
+
+def _exit_groups(
+    chain: ProxyChain, store: ProxyChains, provider_id: str = ""
+) -> list[dict[str, Any]]:
+    """Entries whose latest check came out of one address (7.89.0, PR-S2).
+
+    Grouped by the exit address the stored check recorded -- the proxy's own
+    verdict, whichever provider it was measured against, because an exit is
+    a property of the tunnel. Direct joins a group when this provider's last
+    Direct readout came out of the same address: such a proxy does not change
+    the address the provider sees at all. Only groups of two or more.
+    """
+
+    groups: dict[str, dict[str, Any]] = {}
+    for index, entry in enumerate(chain.entries, start=1):
+        if not entry.proxy:
+            continue
+        endpoint = store.endpoint(entry.proxy)
+        check = None if endpoint is None else endpoint.last_check
+        if check is None or not check.ok or not check.exit_ip:
+            continue
+        group = groups.setdefault(
+            check.exit_ip,
+            {
+                "exit_ip": check.exit_ip,
+                "country": "",
+                "warp": "",
+                "entries": [],
+                "direct": False,
+            },
+        )
+        group["country"] = group["country"] or check.exit_country
+        group["warp"] = group["warp"] or check.exit_warp
+        group["entries"].append(
+            {
+                "index": index,
+                "proxy": entry.proxy,
+                "label": store.ledger_label(entry.proxy),
+                "paused": entry.paused,
+            }
+        )
+    direct = direct_exit_for(provider_id) if provider_id else None
+    seen = None if direct is None or direct.identity is None else direct.identity.ip
+    if seen and seen in groups:
+        groups[seen]["direct"] = True
+    return [
+        group
+        for group in groups.values()
+        if len(group["entries"]) + int(group["direct"]) >= 2
+    ]
+
+
+def _exit_groups_payload(
+    chain: ProxyChain, store: ProxyChains, provider_id: str
+) -> dict[str, Any]:
+    """``{"exit_groups": [...]}`` when entries share an exit, else nothing."""
+
+    groups = _exit_groups(chain, store, provider_id)
+    return {"exit_groups": groups} if groups else {}
+
+
+def _exit_mode(settings: Any) -> dict[str, Any]:
+    """How exit identity is configured, for the card -- only once it is.
+
+    ``provider`` for each provider's own trace, ``url`` for an address the
+    operator typed. Absent while the setting is empty (the shipped value), so
+    the page of an install that never turned it on is what it was.
+    """
+
+    value = str(getattr(settings, "proxy_check_exit_ip_url", "") or "").strip()
+    if not value:
+        return {}
+    return {"exit_ip_mode": "provider" if is_provider_trace(value) else "url"}
 
 
 def _entry_payload(
@@ -2557,7 +2733,7 @@ def _entry_payload(
 ) -> dict[str, Any]:
     endpoint = store.endpoint(entry.proxy) if entry.proxy else None
     url = endpoint.url if endpoint is not None else ""
-    label = (endpoint.label if endpoint is not None else "") or mask_proxy_label(url)
+    label = store.ledger_label(entry.proxy) if endpoint is not None else ""
     last_check = endpoint.last_check if endpoint is not None else None
     remembered = _memory_payload(
         provider_id, DIRECT_PROXY_LABEL if entry.is_direct else label
@@ -2565,6 +2741,8 @@ def _entry_payload(
     # 7.81.0: what MCC remembers about this exit for this provider, present
     # only when it remembers something, so every other row is what it was.
     extra: dict[str, Any] = {"memory": remembered} if remembered else {}
+    if endpoint is not None:
+        extra |= _told_apart(store, entry.proxy)
     return extra | {
         "proxy": entry.proxy,
         "paused": entry.paused,
@@ -2593,6 +2771,23 @@ def _entry_payload(
         # and first tokens. Direct has no address to measure.
         "speed": _speed("" if entry.is_direct else label, provider_id, settings),
     }
+
+
+def _told_apart(store: ProxyChains, proxy_id: str) -> dict[str, Any]:
+    """``{"label_disambiguated": True}`` for an address renamed by PR-S1.
+
+    Present only when the address's ledger label is not what it was before
+    7.89.0 -- its ``host:port`` collided with another address, so a digest of
+    its credentials tells the two apart -- so every other row is what it was.
+    """
+
+    endpoint = store.endpoint(proxy_id)
+    if endpoint is None:
+        return {}
+    before = endpoint.label or mask_proxy_label(endpoint.url)
+    return (
+        {} if store.ledger_label(proxy_id) == before else {"label_disambiguated": True}
+    )
 
 
 def _memory_payload(provider_id: str, label: str) -> list[dict[str, Any]]:
@@ -2634,9 +2829,8 @@ def _chain_labels(store: ProxyChains, provider_id: str) -> tuple[str, ...]:
         if entry.is_direct:
             labels.append(DIRECT_PROXY_LABEL)
             continue
-        endpoint = store.endpoint(entry.proxy)
-        if endpoint is not None:
-            labels.append(endpoint.label or mask_proxy_label(endpoint.url))
+        if store.endpoint(entry.proxy) is not None:
+            labels.append(store.ledger_label(entry.proxy))
     return tuple(labels)
 
 
@@ -2667,6 +2861,133 @@ async def forget_proxy_exit_memory(
     refreshed = await asyncio.to_thread(_payload, services)
     refreshed["forgotten"] = {"provider": provider_id, "remembered": dropped}
     return refreshed
+
+
+class ProxyDirectExitPayload(BaseModel):
+    """Ask where one provider's Direct rung comes out."""
+
+    provider: str
+
+
+@router.post("/admin/api/proxy-chains/direct-exit")
+async def check_direct_exit(
+    payload: ProxyDirectExitPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """ "Where does Direct come out?" on a card (7.89.0, PR-S2).
+
+    The exit check -- the operator's URL, or the provider's own trace -- with
+    no proxy at all, so a VPN app's exit (or this computer's own address)
+    shows on the card. Asked only where this provider's traffic may leave
+    from this address right now, by the rule its probes follow
+    (``direct_exit_refusal``); everywhere else nothing is sent and the card
+    says why. The answer is kept for the page until the server restarts.
+    """
+
+    require_loopback_admin(request)
+    settings = services.requests.current_settings()
+    providers = {
+        entry["provider_id"]: entry for entry in _configured_providers(settings)
+    }
+    provider_id = payload.provider.strip().lower()
+    if provider_id not in providers:
+        raise HTTPException(
+            status_code=404, detail=f"Not a configured provider: {payload.provider}"
+        )
+    setting = str(settings.proxy_check_exit_ip_url or "").strip()
+    if not setting:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Exit identity is off: PROXY_CHECK_EXIT_IP_URL is empty, so "
+                "MCC asks nobody where an address comes out. Use the "
+                "provider's own trace on this page, or set your own URL on "
+                "Limits & Resilience."
+            ),
+        )
+    provider = providers[provider_id]
+    refusal = direct_exit_refusal(
+        provider_id,
+        str(provider.get("inherited_proxy") or ""),
+        settings,
+        name=str(provider["display_name"]),
+    )
+    await measure_direct_exit(
+        provider_id,
+        setting=setting,
+        destination=str(provider.get("base_url") or ""),
+        timeout=float(settings.proxy_check_timeout_seconds),
+        refusal=refusal,
+    )
+    return await asyncio.to_thread(_payload, services)
+
+
+class ProxyKeepOnePerExitPayload(BaseModel):
+    """Pause every entry of one chain that shares its exit with an earlier one."""
+
+    provider: str
+
+
+@router.post("/admin/api/proxy-chains/keep-one-per-exit")
+async def keep_one_per_exit_route(
+    payload: ProxyKeepOnePerExitPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """ "Keep one per exit" (7.89.0, PR-S2): explicit, reversible.
+
+    Of every group of entries whose latest check came out of the same
+    address, the first unpaused one in chain order is kept and the others are
+    paused. Nothing is removed and nothing is un-paused; each row's Resume
+    brings an address back. The same kind of write as "Pause all but the
+    fastest", and never run by anything but this button.
+    """
+
+    require_loopback_admin(request)
+    provider_id = _require_configured(services, payload.provider)
+    outcome = await asyncio.to_thread(commit_keep_one_per_exit, provider_id)
+    if outcome["paused"]:
+        await _republish(services, {provider_id})
+    refreshed = await asyncio.to_thread(_payload, services)
+    refreshed["kept_one_per_exit"] = outcome
+    return refreshed
+
+
+def commit_keep_one_per_exit(provider_id: str) -> dict[str, Any]:
+    """Pause the duplicates of every shared exit in one chain. One write."""
+
+    with _CHAIN_WRITE_LOCK:
+        store = load_proxy_chains()
+        chain = _stored_chain(store, provider_id)
+        pause: set[int] = set()
+        kept: list[str] = []
+        for group in _exit_groups(chain, store):
+            live = [item for item in group["entries"] if not item["paused"]]
+            if len(live) < 2:
+                continue
+            kept.append(live[0]["label"])
+            pause.update(item["index"] - 1 for item in live[1:])
+        paused = [
+            store.ledger_label(chain.entries[index].proxy) for index in sorted(pause)
+        ]
+        if pause:
+            entries = tuple(
+                replace(entry, paused=True) if index in pause else entry
+                for index, entry in enumerate(chain.entries)
+            )
+            save_proxy_chains(
+                store.with_chain(provider_id, replace(chain, entries=entries))
+            )
+    if paused:
+        logger.info(
+            "PROXY CHAINS: {} paused {} address(es) sharing an exit with an "
+            "earlier entry, keeping {}",
+            provider_id,
+            len(paused),
+            ", ".join(kept),
+        )
+    return {"provider": provider_id, "kept": kept, "paused": paused}
 
 
 def _scheme(url: str) -> str:

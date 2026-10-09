@@ -645,6 +645,31 @@ def _isolate_proxy_speed(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_proxy_sources(monkeypatch, tmp_path):
+    """No test may read or write the real ``proxy_sources.json`` (7.89.0).
+
+    It holds a source's login, so a test that scans or edits a source would
+    otherwise write the developer's file. The two process-wide registries the
+    same release added are reset with it: the Direct readouts a card shows and
+    the ledger labels each built provider dials under -- one test's builds
+    must never put another test's provider in a republish.
+    """
+    from my_claude_code.application.proxy_check import reset_direct_exits
+    from my_claude_code.config import proxy_sources
+    from my_claude_code.config.proxy_chains import reset_built_chain_labels
+
+    path = tmp_path / "fcc-config" / "proxy_sources.json"
+    monkeypatch.setattr(proxy_sources, "proxy_sources_path", lambda: path)
+    proxy_sources.reset_proxy_sources_cache()
+    reset_direct_exits()
+    reset_built_chain_labels()
+    yield path
+    proxy_sources.reset_proxy_sources_cache()
+    reset_direct_exits()
+    reset_built_chain_labels()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_openrouter_live(monkeypatch, tmp_path):
     """No test may download OpenRouter's live list or read the developer's copy.
 

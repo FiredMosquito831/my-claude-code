@@ -1231,7 +1231,10 @@ function renderProxyCheckerNote() {
       "relayed: that address is marked TLS intercepted and refused outright.",
   );
   sentences.push(
-    checker.exit_ip_configured
+    checker.exit_ip_mode === "provider"
+      ? "Each provider's own host is also asked, through the tunnel, which " +
+          "address it saw, and that address is shown on the row."
+      : checker.exit_ip_configured
       ? "Your exit-IP URL is also fetched through each proxy, so the address " +
           "it reports is shown on the row."
       : "No exit-IP URL is set, so MCC contacts nobody but the provider. Set " +
@@ -3667,6 +3670,18 @@ function announceProxyBulk(action, providerId, token, stopped) {
     if (counts.already) {
       lines.push(`${counts.already} were already entries of that chain.`);
     }
+    // 7.89.0 (PR-S2): an address whose exit the chain already holds is added
+    // -- it is still another tunnel -- and said so, once per address.
+    rows
+      .filter((row) => (row.shares_exit_with || []).length)
+      .forEach((row) => {
+        lines.push(
+          `${row.label} comes out of ${row.exit_ip}, like ` +
+            `${row.shares_exit_with.join(", ")} already in that chain: the ` +
+            "provider sees one address for both. Keep one per exit on the " +
+            "card pauses the duplicate.",
+        );
+      });
     if (counts.full) {
       lines.push(
         `${counts.full} did not fit: you have set PROXY_CHAIN_MAX_ENTRIES to ` +
@@ -3718,11 +3733,465 @@ async function undoProxyCandidateBulk(token) {
   }
 }
 
+/* ------------------------------------------------ exit identity (7.89.0)
+   PR-S2: where each address comes out. PROXY_CHECK_EXIT_IP_URL stays empty
+   by default (the user's 2026-09-25 decision 3); "provider" asks each
+   provider's own host -- its /cdn-cgi/trace -- through the tunnel being
+   tested, so nobody new is contacted. One click turns it on. */
+
+const PROXY_LABEL_TOLD_APART =
+  "Another address in the catalogue has the same host:port. The #xxxx is a " +
+  "short digest of this one's login -- never the login itself -- so each " +
+  "keeps its own health, cooldown, speed history and exit memory.";
+
+function renderProxyExitIdentity() {
+  const box = byId("proxyingExitIdentity");
+  if (!box) return;
+  box.textContent = "";
+  const checker = proxyVocabulary().checker || {};
+  const line = document.createElement("p");
+  line.className = "proxy-exit-identity-line";
+  if (checker.exit_ip_mode === "provider") {
+    line.textContent =
+      "Exit identity is on: each Test also asks the provider's own host " +
+      "(its /cdn-cgi/trace) which address the request came from, through " +
+      "the tunnel being tested -- nobody else is contacted. Providers behind " +
+      "Cloudflare answer with the address, its country and whether it is " +
+      "WARP; others say nothing, and the row says so. Entries that come out " +
+      "of one address are grouped on their card. Switch it off with " +
+      "Exit-IP check URL on Limits & Resilience.";
+    box.appendChild(line);
+    return;
+  }
+  if (checker.exit_ip_configured) return;
+  line.textContent =
+    "Want to see where each address comes out -- and whether two of them " +
+    "are the same exit? Use each provider's own trace: a Test then also asks " +
+    "that provider's own host (its /cdn-cgi/trace), through the tunnel, " +
+    "which address it saw. It contacts nobody new.";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary-button proxy-exit-identity-on";
+  button.textContent = "Use each provider's own trace";
+  button.addEventListener("click", () => useProviderTrace(button));
+  box.append(line, button);
+}
+
+async function useProviderTrace(button) {
+  button.disabled = true;
+  try {
+    const result = await api("/admin/api/config/apply", {
+      method: "POST",
+      body: JSON.stringify({ values: { PROXY_CHECK_EXIT_IP_URL: "provider" } }),
+    });
+    if (!result.applied) {
+      throw new Error((result.errors || []).join("; ") || "Not applied.");
+    }
+    await loadProxying();
+    announceProxy(
+      "Exit identity is on: PROXY_CHECK_EXIT_IP_URL=provider. The next Test " +
+        "of an address also asks the provider's own host where it came out.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+/* "3 entries share exit 104.28.1.2 (NL, WARP)": one line per group the server
+   found, and "Keep one per exit" when a group has two live entries. */
+function proxyExitGroupsNote(provider) {
+  const groups = (provider.chain && provider.chain.exit_groups) || [];
+  if (!groups.length) return null;
+  const box = document.createElement("div");
+  box.className = "proxy-exit-groups";
+  let pausable = false;
+  groups.forEach((group) => {
+    const where = [group.country, group.warp === "on" || group.warp === "plus" ? "WARP" : ""]
+      .filter(Boolean)
+      .join(", ");
+    const names = group.entries.map((item) => `${item.index}. ${item.label}`);
+    const line = document.createElement("p");
+    line.className = "proxy-exit-group";
+    const count = group.entries.length;
+    line.textContent =
+      `${count} ${count === 1 ? "entry comes" : "entries share"} exit ` +
+      `${group.exit_ip}${where ? ` (${where})` : ""}: ${names.join(", ")}.` +
+      (group.direct
+        ? " That is also where Direct comes out: the provider sees this " +
+          "computer's own exit through " +
+          (count === 1 ? "it." : "them.")
+        : " The provider sees one address for all of them.");
+    box.appendChild(line);
+    if (group.entries.filter((item) => !item.paused).length > 1) pausable = true;
+  });
+  if (pausable) {
+    const keep = document.createElement("button");
+    keep.type = "button";
+    keep.className = "secondary-button proxy-keep-one-per-exit";
+    keep.textContent = "Keep one per exit";
+    keep.title =
+      "Pause every entry that comes out of the same address as an earlier, " +
+      "live one. Nothing is removed; Resume on a row brings it back.";
+    keep.addEventListener("click", () => keepOnePerExit(provider, keep));
+    box.appendChild(keep);
+  }
+  return box;
+}
+
+async function keepOnePerExit(provider, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/keep-one-per-exit", {
+      method: "POST",
+      body: JSON.stringify({ provider: provider.provider_id }),
+    });
+    proxyState.drafts.delete(provider.provider_id);
+    renderProxying();
+    const result = proxyState.data.kept_one_per_exit || {};
+    const paused = result.paused || [];
+    announceProxy(
+      paused.length
+        ? `Paused ${paused.length} entr${paused.length === 1 ? "y" : "ies"} on ` +
+            `${provider.display_name} that came out of the same address as an ` +
+            `earlier one (${paused.join(", ")}), keeping ` +
+            `${(result.kept || []).join(", ")}. Resume on a row brings it back.`
+        : `Nothing to pause on ${provider.display_name}: no two live entries ` +
+            "share an exit.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+/* Where this provider's Direct rung comes out (7.89.0): this computer's own
+   address -- or a VPN app's exit, if one is on. Asked only on a click, and
+   the server sends nothing where the chain itself would never go direct. */
+function proxyDirectExitRow(provider) {
+  const checker = proxyVocabulary().checker || {};
+  const readout = provider.direct_exit;
+  if (!checker.exit_ip_configured && !readout) return null;
+  const row = document.createElement("div");
+  row.className = "proxy-direct-exit";
+  const text = document.createElement("p");
+  text.className = "proxy-direct-exit-line";
+  if (!readout) {
+    text.textContent =
+      "Direct (this computer's own address): not checked yet. A VPN app " +
+      "that is on changes where it comes out.";
+  } else if (readout.refused) {
+    text.classList.add("proxy-direct-exit-refused");
+    text.textContent = readout.refused;
+  } else if (readout.ip) {
+    const where = [readout.country, readout.warp === "on" || readout.warp === "plus" ? "WARP" : ""]
+      .filter(Boolean)
+      .join(", ");
+    const ago = proxyCheckedAgo(readout.at);
+    text.textContent =
+      `Direct comes out of ${readout.ip}${where ? ` (${where})` : ""}, as ` +
+      `${readout.host || "the exit check"} saw it${ago ? ` ${ago}` : ""}.`;
+  } else {
+    text.textContent =
+      `Direct: ${readout.host || "the exit check"} did not say where it came ` +
+      "out (no trace there, or no answer).";
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost-button proxy-direct-exit-check";
+  button.textContent = "Where does Direct come out?";
+  button.disabled = !checker.exit_ip_configured;
+  button.addEventListener("click", () => checkDirectExit(provider, button));
+  row.append(text, button);
+  return row;
+}
+
+async function checkDirectExit(provider, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/direct-exit", {
+      method: "POST",
+      body: JSON.stringify({ provider: provider.provider_id }),
+    });
+    renderProxying();
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+/* ------------------------------------------------------ sources (7.89.0)
+   PR-S3: a proxy somebody already runs on this computer -- WARP in proxy
+   mode, ssh -D, Tor, gluetun, wireproxy -- found by one press of Scan and
+   offered here. Adding one goes through the same bulk add a feed's address
+   does, so it is tested against the provider's own host first. A login is
+   write-only: the page never holds one it did not just type. */
+
+function proxySourcesData() {
+  return (proxyState.data && proxyState.data.sources) || null;
+}
+
+function renderProxySources() {
+  const panel = byId("proxyingSources");
+  if (!panel) return;
+  panel.textContent = "";
+  const data = proxySourcesData();
+  const local = data ? (data.sources || []).find((source) => source.kind === "local") : null;
+  const head = document.createElement("div");
+  head.className = "proxy-sources-head";
+  const status = document.createElement("p");
+  status.className = "proxy-sources-status";
+  if (!local) {
+    status.textContent = "Not scanned yet.";
+  } else {
+    const found = (local.listeners || []).filter((row) => row.answering);
+    const when = proxyCheckedAgo(local.scanned_at);
+    status.textContent =
+      `Scanned ${when || "earlier"}: ${found.length} ` +
+      `${found.length === 1 ? "port answers" : "ports answer"} on 127.0.0.1.`;
+  }
+  const scan = document.createElement("button");
+  scan.type = "button";
+  scan.className = "secondary-button proxy-sources-scan";
+  scan.textContent = local ? "Scan again" : "Scan this computer";
+  scan.addEventListener("click", () => scanProxySources(scan));
+  head.append(status, scan);
+  if (local) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost-button proxy-sources-remove";
+    remove.textContent = "Forget the scan";
+    remove.title =
+      "Withdraw these offers and forget any login set here. A chain that " +
+      "took one keeps it.";
+    remove.addEventListener("click", () => removeProxySource(local, remove));
+    head.appendChild(remove);
+  }
+  panel.appendChild(head);
+  if (data && data.unreadable) {
+    const problem = document.createElement("p");
+    problem.className = "proxy-sources-problem";
+    problem.textContent =
+      `proxy_sources.json ${data.unreadable}. MCC does not overwrite it: fix ` +
+      "or remove it.";
+    panel.appendChild(problem);
+  }
+  if (!local) return;
+  const rows = local.listeners || [];
+  if (!rows.length) {
+    const none = document.createElement("p");
+    none.className = "proxy-note";
+    none.textContent = "Nothing is listening on those ports right now.";
+    panel.appendChild(none);
+    return;
+  }
+  const list = document.createElement("ul");
+  list.className = "proxy-sources-list";
+  rows.forEach((row) => list.appendChild(proxySourceRow(row, data)));
+  panel.appendChild(list);
+  if (data && data.sees) {
+    const sees = document.createElement("p");
+    sees.className = "proxy-note proxy-sources-sees";
+    sees.textContent = data.sees;
+    panel.appendChild(sees);
+  }
+}
+
+function proxySourceRow(row, data) {
+  const item = document.createElement("li");
+  item.className = "proxy-source-row";
+  item.dataset.port = String(row.port);
+  const name = document.createElement("span");
+  name.className = "proxy-source-name";
+  name.textContent = row.label || `127.0.0.1:${row.port}`;
+  const usually = document.createElement("span");
+  usually.className = "proxy-source-usually";
+  usually.textContent = row.usually ? `usually ${row.usually}` : "";
+  const state = document.createElement("span");
+  state.className = "proxy-source-state";
+  state.textContent = proxySourceState(row);
+  item.append(name, usually, state);
+
+  if (row.offered && row.proxy) {
+    const providers = proxyCandidateProviders();
+    const pick = document.createElement("select");
+    pick.className = "proxy-source-provider";
+    pick.setAttribute("aria-label", `Add ${name.textContent} to which chain`);
+    providers.forEach((provider) => {
+      const option = document.createElement("option");
+      option.value = provider.provider_id;
+      option.textContent = provider.display_name;
+      pick.appendChild(option);
+    });
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "secondary-button proxy-source-add";
+    add.textContent = "Add to chain";
+    add.disabled = !providers.length || Boolean(proxyState.run);
+    add.addEventListener("click", () =>
+      runProxyCandidateBulk({
+        action: "add",
+        providerId: pick.value,
+        proxies: [row.proxy],
+      }),
+    );
+    item.append(pick, add);
+  }
+  if (row.auth === "userpass" && row.answering) {
+    item.appendChild(proxySourceLogin(row));
+  }
+  if (row.sees) {
+    const sees = document.createElement("p");
+    sees.className = "proxy-note proxy-source-sees";
+    sees.textContent = row.sees + (row.tor && data && data.tor_line ? ` ${data.tor_line}` : "");
+    item.appendChild(sees);
+  }
+  return item;
+}
+
+function proxySourceState(row) {
+  if (!row.answering) return "not answering now";
+  if (!row.protocol) return row.note || "answered, but not as a proxy";
+  if (row.auth === "unsupported") return row.note || "a login MCC cannot speak";
+  const kind = row.protocol === "socks5" ? "SOCKS5" : "HTTP proxy";
+  const login =
+    row.auth === "userpass"
+      ? row.secret_set
+        ? ` · login set (${row.secret_label || "…"})`
+        : " · needs a username and password"
+      : "";
+  const chained = (row.chained || []).map((id) => {
+    const provider = ((proxyState.data && proxyState.data.providers) || []).find(
+      (entry) => entry.provider_id === id,
+    );
+    return provider ? provider.display_name : id;
+  });
+  return `${kind}${login}${chained.length ? ` · in ${chained.join(", ")}` : " · on offer"}`;
+}
+
+function proxySourceLogin(row) {
+  const form = document.createElement("div");
+  form.className = "proxy-source-login";
+  const user = document.createElement("input");
+  user.type = "text";
+  user.className = "proxy-source-username";
+  user.autocomplete = "off";
+  user.placeholder = "username";
+  user.setAttribute("aria-label", `Username for 127.0.0.1:${row.port}`);
+  const pass = document.createElement("input");
+  pass.type = "password";
+  pass.className = "proxy-source-password";
+  pass.autocomplete = "new-password";
+  pass.placeholder = "password";
+  pass.setAttribute("aria-label", `Password for 127.0.0.1:${row.port}`);
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary-button proxy-source-login-save";
+  save.textContent = row.secret_set ? "Replace login" : "Save login";
+  save.addEventListener("click", () =>
+    saveProxySourceLogin(row, { username: user.value, password: pass.value }, save),
+  );
+  form.append(user, pass, save);
+  if (row.secret_set) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "ghost-button proxy-source-login-clear";
+    clear.textContent = "Forget login";
+    clear.addEventListener("click", () => saveProxySourceLogin(row, { clear: true }, clear));
+    form.appendChild(clear);
+  }
+  return form;
+}
+
+async function saveProxySourceLogin(row, login, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources", {
+      method: "PUT",
+      body: JSON.stringify({
+        source: "src_local",
+        credentials: [
+          {
+            port: row.port,
+            username: login.username || "",
+            password: login.password || "",
+            clear: Boolean(login.clear),
+          },
+        ],
+      }),
+    });
+    proxyState.drafts.clear();
+    renderProxying();
+    announceProxy(
+      login.clear
+        ? `Forgot the login for 127.0.0.1:${row.port}.`
+        : `Saved the login for 127.0.0.1:${row.port}. It is kept in ` +
+            "proxy_sources.json and in that address's URL, both readable by " +
+            "you only, and is never shown again.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function scanProxySources(button) {
+  button.disabled = true;
+  button.textContent = "Scanning...";
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources/scan", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    renderProxying();
+    const scan = proxyState.data.scan || {};
+    const offered = scan.offered || [];
+    announceProxy(
+      offered.length
+        ? `Found ${offered.length} proxy listener${offered.length === 1 ? "" : "s"} ` +
+            `on this computer (port${offered.length === 1 ? "" : "s"} ` +
+            `${offered.join(", ")}). Each is on offer below: choose a chain ` +
+            "and press Add to chain -- it is tested against that provider first."
+        : "No proxy is listening on this computer's usual ports right now.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Scan this computer";
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function removeProxySource(source, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources", {
+      method: "PUT",
+      body: JSON.stringify({ source: source.id, remove: true }),
+    });
+    renderProxying();
+    announceProxy(
+      "Forgot the scan of this computer. Its offers are withdrawn; a chain " +
+        "that took one keeps it.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
 function renderProxying() {
   const list = byId("proxyingList");
   const empty = byId("proxyingEmpty");
   if (proxyState.data) setProxyStoreProblem(proxyState.data.store_problem);
   renderProxyCheckerNote();
+  renderProxyExitIdentity();
+  renderProxySources();
   renderProxyFeeds();
   renderProxyCandidates();
   if (!list) return;
@@ -3747,6 +4216,12 @@ function proxyCard(provider) {
   card.appendChild(proxyVisibilityBox(provider, draft));
   card.appendChild(proxyTriggers(provider, draft));
   card.appendChild(proxyEntryList(provider, draft));
+  // 7.89.0 (PR-S2): which entries come out of one address, and where Direct
+  // comes out -- each shown only when there is something to say.
+  const exits = proxyExitGroupsNote(provider);
+  if (exits) card.appendChild(exits);
+  const direct = proxyDirectExitRow(provider);
+  if (direct) card.appendChild(direct);
   card.appendChild(proxyOrderRow(provider, draft));
   card.appendChild(proxyAddRow(provider, draft));
   card.appendChild(proxyCardFoot(provider, draft));
@@ -4351,12 +4826,45 @@ function proxyCheckReadout(entry) {
     check.latency_ms === null || check.latency_ms === undefined
       ? ""
       : `${check.latency_ms} ms · `;
-  const exit = check.exit_ip ? ` · exit ${check.exit_ip}` : "";
+  const identity = proxyExitIdentityText(check);
+  const exit = identity.text ? ` · ${identity.text}` : "";
   return {
     text: `${latency}TLS strict${exit}${ago ? ` · ${ago}` : ""}`,
+    title: "The destination's certificate verified through this tunnel." + identity.title,
+  };
+}
+
+/* What the exit check said about one address (7.89.0, PR-S2), as a short
+   readout and a sentence. A record from before 7.89.0, or one an exit check
+   did not fill, reads exactly as it always did: "exit <ip>" or nothing. */
+function proxyExitIdentityText(check) {
+  if (!check) return { text: "", title: "" };
+  const viaTrace = check.exit_via === "provider";
+  if (!check.exit_ip) {
+    return viaTrace
+      ? {
+          text: "exit not available",
+          title:
+            " The provider's own host publishes no /cdn-cgi/trace (it is not " +
+            "behind Cloudflare), so where this address comes out is unknown.",
+        }
+      : { text: "", title: "" };
+  }
+  const extra = [check.exit_country, check.exit_warp === "on" || check.exit_warp === "plus" ? "WARP" : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const who = viaTrace ? "The provider's own host" : "Your exit-IP URL";
+  return {
+    text: `exit ${check.exit_ip}${extra ? ` · ${extra}` : ""}`,
     title:
-      "The destination's certificate verified through this tunnel." +
-      (check.exit_ip ? ` Your exit-IP URL saw ${check.exit_ip}.` : ""),
+      ` ${who} saw ${check.exit_ip}` +
+      (check.exit_country ? `, in ${check.exit_country}` : "") +
+      (check.exit_asn ? `, on ${check.exit_asn}` : "") +
+      "." +
+      (extra.includes("WARP")
+        ? " It is a Cloudflare WARP exit: a Cloudflare-fronted provider can " +
+          "tell the request came through WARP."
+        : ""),
   };
 }
 
@@ -4402,6 +4910,7 @@ function proxyEntryRow(provider, draft, entry, index) {
   const label = document.createElement("span");
   label.className = "proxy-entry-label";
   label.textContent = entry.direct ? "Direct (no proxy)" : entry.label || entry.proxy;
+  if (entry.label_disambiguated) label.title = PROXY_LABEL_TOLD_APART;
 
   const scheme = document.createElement("span");
   scheme.className = "proxy-entry-scheme";

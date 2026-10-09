@@ -482,9 +482,8 @@ def in_use_labels(store: ProxyChains) -> set[str]:
     used: set[str] = set()
     for chain in store.chains.values():
         for proxy_id in chain.proxy_ids():
-            endpoint = store.endpoint(proxy_id)
-            if endpoint is not None:
-                used.add(endpoint.label or mask_proxy_label(endpoint.url))
+            if store.endpoint(proxy_id) is not None:
+                used.add(store.ledger_label(proxy_id))
     return used
 
 
@@ -959,7 +958,10 @@ async def run_fetch_pass(
 
         item = ranked[index]
         url = item.endpoint.url
-        label = mask_proxy_label(url)
+        # The label this address will be stored under (7.89.0): its plain
+        # ``ip:port`` unless a chained address already goes by that, so a
+        # stranger on a list can never refuse, bench or rank a chain's own.
+        label = store.offer_ledger_label(candidate_id(item.endpoint.address), url)
         epoch = guard.epoch if guard is not None else 0
         dial, bound = (
             (connect_timeout, budget) if attempt == 1 else (confirm_dial, confirm_bound)
