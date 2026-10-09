@@ -17,9 +17,15 @@ from fastapi.testclient import TestClient
 from my_claude_code.api.dependencies import get_settings
 from my_claude_code.api.request_capture import build_capture
 from my_claude_code.config.settings import Settings
-from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.anthropic.models import (
+    ContentBlockText,
+    Message,
+    MessagesRequest,
+    SystemContent,
+)
 from my_claude_code.core.request_headers import capture_headers
 from my_claude_code.core.request_log import get_request_log_store
+from my_claude_code.core.request_tasks import inflight_report
 from tests.api.support import create_test_app
 
 SESSION = "0f3c2a1b-6d5e-4f70-9a8b-1c2d3e4f5a6b"
@@ -52,6 +58,42 @@ def _request(system: str | None = SYSTEM) -> MessagesRequest:
         stream=True,
         system=system,
         messages=[Message(role="user", content="hi")],
+    )
+
+
+# Where Claude Code really sends the block (7.87.1): not in the system blocks
+# but in a ``<system-reminder>`` that opens the first user message.
+CC_FOLDER = "C:\\x\\y"
+CC_REMINDER = (
+    "<system-reminder>\n# Environment\n"
+    "You have been invoked in the following environment:\n"
+    f" - Primary working directory: {CC_FOLDER}\n - Platform: win32\n"
+    "</system-reminder>"
+)
+
+
+def _claude_code_request() -> MessagesRequest:
+    return MessagesRequest(
+        model="claude-sonnet-4-5",
+        max_tokens=100,
+        stream=True,
+        system=[
+            SystemContent(
+                type="text",
+                text="You are Claude Code.\n<total_tokens>15000000 tokens left</total_tokens>",
+            )
+        ],
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    ContentBlockText(type="text", text=CC_REMINDER),
+                    ContentBlockText(type="text", text="hi"),
+                ],
+            ),
+            Message(role="assistant", content="hello"),
+            Message(role="user", content="and again"),
+        ],
     )
 
 
@@ -111,6 +153,48 @@ class TestTheCapture:
         asyncio.run(drive())
 
         assert _stored("req_stream")["project_dir"] == FOLDER
+
+    def test_claude_code_states_its_folder_in_the_first_user_message(self) -> None:
+        capture = _capture(_claude_code_request(), "req_cc", CLAUDE_HEADERS)
+
+        # At capture: the session at once, the folder promised, not yet read.
+        assert capture._record.session_id == SESSION
+        assert capture._record.project_dir is None
+        inflight = inflight_report()
+        assert inflight["total"] == 1
+        assert inflight["rows"][0]["project_dir_pending"] is True
+        capture.finish_success("done")
+
+        row = _stored("req_cc")
+        assert row["project_dir"] == CC_FOLDER
+        assert row["origin_source"] == (
+            "session_id=header.x-claude-code-session-id;"
+            "agent_id=header.x-claude-code-agent-id;"
+            "parent_session_id=header.x-claude-code-agent-id;"
+            "project_dir=prompt.env-block"
+        )
+
+    def test_claude_code_streaming_reads_the_first_user_message_too(self) -> None:
+        async def body() -> AsyncIterator[str]:
+            yield 'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+
+        async def drive() -> None:
+            capture = _capture(_claude_code_request(), "req_cc_stream", CLAUDE_HEADERS)
+            async for _chunk in capture.wrap(body()):
+                pass
+
+        asyncio.run(drive())
+
+        assert _stored("req_cc_stream")["project_dir"] == CC_FOLDER
+
+    def test_the_agent_sdk_never_reads_the_first_user_message(self) -> None:
+        capture = _capture(_claude_code_request(), "req_sdk_cc", SDK_HEADERS)
+        capture.finish_success("done")
+
+        row = _stored("req_sdk_cc")
+        assert row["harness"] == "claude_agent_sdk"
+        assert row["project_dir"] is None
+        assert row["origin_source"] == "session_id=header.x-claude-code-session-id"
 
     def test_the_agent_sdk_gets_a_session_and_no_folder(self) -> None:
         capture = _capture(_request(), "req_sdk", SDK_HEADERS)

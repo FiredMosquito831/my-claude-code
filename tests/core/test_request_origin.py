@@ -2,9 +2,10 @@
 
 Table-driven over the declared extractors, one case per row, plus the rules the
 table exists to hold: first source wins in the declared order, the prompt is
-read from the system blocks only and never past 64 KiB, a harness with no
-prompt extractor pays nothing, NULL means "not stated", and nothing here widens
-what MCC sends upstream or stores in the ``headers`` column.
+read from the system blocks and then the first user message (where Claude Code
+sends it, 7.87.1) and never past 64 KiB of either, a harness with no prompt
+extractor pays nothing, NULL means "not stated", and nothing here widens what
+MCC sends upstream or stores in the ``headers`` column.
 
 Every path in this file is fake. None is the operator's own.
 """
@@ -16,7 +17,12 @@ from typing import Any
 import pytest
 
 from my_claude_code.core import client_fingerprint
-from my_claude_code.core.anthropic.models import SystemContent
+from my_claude_code.core.anthropic.models import (
+    ContentBlockText,
+    ContentBlockToolResult,
+    Message,
+    SystemContent,
+)
 from my_claude_code.core.request_headers import ALLOWED_HEADERS
 from my_claude_code.core.request_origin import (
     BACKFILL_SIGNAL,
@@ -28,6 +34,7 @@ from my_claude_code.core.request_origin import (
     PROMPT_HARNESSES,
     PROMPT_SCAN_MAX_CHARS,
     SOURCE_ORDER,
+    first_user_message_text,
     format_origin_source,
     merge_origin_source,
     origin_inputs,
@@ -58,6 +65,7 @@ def _resolve(
     harness: str | None,
     metadata: Any = None,
     system: Any = None,
+    messages: Any = None,
     capture_session: bool = True,
     capture_folder: bool = True,
 ):
@@ -66,6 +74,7 @@ def _resolve(
         capture_session=capture_session,
         capture_folder=capture_folder,
         system=system,
+        messages=messages,
     )
 
 
@@ -332,7 +341,7 @@ def test_both_off_is_the_empty_origin() -> None:
     )
 
 
-class TestThePromptIsReadFromSystemBlocksOnlyAndCapped:
+class TestTheSystemBlocksAreReadFirstAndCapped:
     def test_a_700k_system_prompt_is_read_only_to_64_kib(self) -> None:
         """The block is found where real traffic puts it (max offset 15,722)
         and not found past the cap -- the closed failure the spec asks for."""
@@ -390,6 +399,214 @@ class TestThePromptIsReadFromSystemBlocksOnlyAndCapped:
         system = "Note: the Primary working directory: C:\\fake is prose here\n"
 
         assert _resolve({}, harness="claude", system=system).project_dir is None
+
+
+# A Claude Code request as it reaches MCC today (2.1.271-2.1.281, measured
+# 2026-10-08): the system blocks end without the environment block, and the
+# first user message opens with a ``<system-reminder>`` that carries it.
+CC_FOLDER = "C:\\x\\y"
+CC_SYSTEM = [
+    SystemContent(type="text", text="x-anthropic-billing-header: cc_version=2.1.280;"),
+    SystemContent(
+        type="text",
+        text="You are Claude Code.\n...\n<total_tokens>15000000 tokens left</total_tokens>",
+    ),
+]
+CC_REMINDER = (
+    "<system-reminder>\n"
+    "# Environment\n"
+    "You have been invoked in the following environment:\n"
+    f" - Primary working directory: {CC_FOLDER}\n"
+    " - Is a git repository: false\n"
+    " - Platform: win32\n"
+    "</system-reminder>"
+)
+
+
+def _cc_messages(*blocks: str) -> list[Message]:
+    texts = blocks or (CC_REMINDER, "fix the failing test")
+    return [
+        Message(
+            role="user",
+            content=[ContentBlockText(type="text", text=text) for text in texts],
+        )
+    ]
+
+
+class _ExplodingBlock:
+    """A message block whose text must never be read."""
+
+    @property
+    def text(self) -> str:
+        raise AssertionError("the first user message was read")
+
+
+_EXPLODING_MESSAGES = [{"role": "user", "content": [_ExplodingBlock()]}]
+
+
+class TestTheFirstUserMessageIsReadWhereClaudeCodeSendsIt:
+    def test_a_claude_code_shaped_request_names_its_folder(self) -> None:
+        origin = _resolve(
+            {"x-claude-code-session-id": SESSION},
+            harness="claude",
+            system=CC_SYSTEM,
+            messages=_cc_messages(),
+        )
+
+        assert origin.project_dir == CC_FOLDER
+        assert origin.origin_source == (
+            "session_id=header.x-claude-code-session-id;project_dir=prompt.env-block"
+        )
+        # The system blocks alone -- all 7.87.0 read -- state nothing.
+        assert _resolve({}, harness="claude", system=CC_SYSTEM).project_dir is None
+
+    def test_string_content_and_dict_shaped_messages_are_read_too(self) -> None:
+        as_string = [Message(role="user", content=CC_REMINDER + "\nhello")]
+        as_dicts = [
+            {"role": "user", "content": [{"type": "text", "text": CC_REMINDER}]}
+        ]
+
+        assert _resolve({}, harness="claude", messages=as_string).project_dir == (
+            CC_FOLDER
+        )
+        assert _resolve({}, harness="claude", messages=as_dicts).project_dir == (
+            CC_FOLDER
+        )
+
+    def test_the_system_blocks_still_win(self) -> None:
+        origin = _resolve(
+            {}, harness="claude", system=ENV_BLOCK, messages=_cc_messages()
+        )
+
+        assert origin.project_dir == FOLDER
+        assert origin.origin_source == "project_dir=prompt.env-block"
+
+    def test_the_message_is_not_read_when_the_system_blocks_answered(self) -> None:
+        origin = _resolve(
+            {}, harness="claude", system=ENV_BLOCK, messages=_EXPLODING_MESSAGES
+        )
+
+        assert origin.project_dir == FOLDER
+
+    @pytest.mark.parametrize(
+        "harness", ["claude_agent_sdk", "opencode", "codex", "unknown", None]
+    )
+    def test_a_harness_other_than_claude_never_reads_the_message(
+        self, harness: str | None
+    ) -> None:
+        origin = _resolve(
+            {"x-claude-code-session-id": SESSION},
+            harness=harness,
+            system=CC_SYSTEM,
+            messages=_EXPLODING_MESSAGES,
+        )
+
+        assert origin.project_dir is None
+
+    def test_folder_capture_off_never_reads_the_message(self) -> None:
+        origin = _resolve(
+            {"x-claude-code-session-id": SESSION},
+            harness="claude",
+            messages=_EXPLODING_MESSAGES,
+            capture_folder=False,
+        )
+
+        assert origin.session_id == SESSION
+        assert origin.project_dir is None
+
+    def test_a_line_beyond_64_kib_of_the_message_is_ignored(self) -> None:
+        past_in_one_string = [
+            Message(
+                role="user",
+                content="p" * (PROMPT_SCAN_MAX_CHARS + 10) + "\n" + CC_REMINDER,
+            )
+        ]
+        past_across_blocks = _cc_messages("a" * 40_000, "b" * 40_000, CC_REMINDER)
+        # Where a current subagent's block sits (anchor at 41,971 of the
+        # stored prompt): inside the cap, so found.
+        inside = _cc_messages("c" * 41_971, CC_REMINDER)
+
+        assert (
+            _resolve({}, harness="claude", messages=past_in_one_string).project_dir
+            is None
+        )
+        assert (
+            _resolve({}, harness="claude", messages=past_across_blocks).project_dir
+            is None
+        )
+        assert _resolve({}, harness="claude", messages=inside).project_dir == CC_FOLDER
+        # Only the capped head is ever joined.
+        assert len(first_user_message_text(past_across_blocks)) == PROMPT_SCAN_MAX_CHARS
+
+    def test_a_request_without_the_line_stays_null(self) -> None:
+        messages = _cc_messages(
+            "<system-reminder>\nAs you answer, use this context.\n</system-reminder>",
+            "fix the failing test",
+        )
+
+        origin = _resolve(
+            {"x-claude-code-session-id": SESSION},
+            harness="claude",
+            system=CC_SYSTEM,
+            messages=messages,
+        )
+
+        assert origin.project_dir is None
+        assert origin.origin_source == "session_id=header.x-claude-code-session-id"
+        assert _resolve({}, harness="claude", messages=[]) is EMPTY_ORIGIN
+        assert _resolve({}, harness="claude", messages=None) is EMPTY_ORIGIN
+
+    def test_a_message_of_another_role_is_not_read(self) -> None:
+        cases = {
+            "an assistant turn before it": [
+                Message(role="assistant", content=CC_REMINDER),
+                Message(role="user", content="hello"),
+            ],
+            "a system-role turn before it": [
+                Message(role="system", content=CC_REMINDER),
+                Message(role="user", content="hello"),
+            ],
+            "an assistant turn after it": [
+                Message(role="user", content="hello"),
+                Message(role="assistant", content=CC_REMINDER),
+            ],
+            "a later user turn": [
+                Message(role="user", content="hello"),
+                Message(role="assistant", content="ok"),
+                Message(role="user", content=CC_REMINDER),
+            ],
+            "a tool result in the first user turn": [
+                Message(
+                    role="user",
+                    content=[
+                        ContentBlockToolResult(
+                            type="tool_result",
+                            tool_use_id="toolu_1",
+                            content=CC_REMINDER,
+                        )
+                    ],
+                )
+            ],
+        }
+
+        for name, messages in cases.items():
+            origin = _resolve({}, harness="claude", system=CC_SYSTEM, messages=messages)
+            assert origin.project_dir is None, name
+
+    def test_the_first_user_message_after_an_assistant_turn_is_read(self) -> None:
+        messages = [
+            Message(role="assistant", content="ready"),
+            Message(role="user", content=CC_REMINDER),
+        ]
+
+        assert _resolve({}, harness="claude", messages=messages).project_dir == (
+            CC_FOLDER
+        )
+
+    def test_the_anchor_must_start_a_line_in_the_message_too(self) -> None:
+        messages = _cc_messages("Set the Primary working directory: C:\\fake please")
+
+        assert _resolve({}, harness="claude", messages=messages).project_dir is None
 
 
 class TestNormalisation:
