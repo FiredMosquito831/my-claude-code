@@ -859,6 +859,8 @@ const MEDIA_MODELS = {
       provider_state: "known",
       placements: [
         { rail: "tts", label: "Speech", position: "primary", index: 0, paused: true, served: true },
+        // 7.82.0: the same model listed again on its own rail.
+        { rail: "tts", label: "Speech", position: "fallback 1", index: 1, paused: true, served: true },
       ],
       declared: MEDIA_DECLARED_GROQ,
       modalities: { output: ["audio"], tier: "cross-provider, exact id", approximate: true },
@@ -8017,6 +8019,19 @@ if (routingLink) {
     doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true, ...init }));
     await settle();
   };
+  // 7.82.0: the "×N" chip a row of a model listed more than once carries,
+  // as [ref, text] for every visible chip on one rail (primary first).
+  const repeatChips = (chainKey, modelKey) =>
+    nodes()
+      .filter(
+        (node) =>
+          node.dataset.chainKey === chainKey ||
+          (modelKey && node.dataset.routeId === `route:${modelKey}`),
+      )
+      .map((node) => [node.querySelector("input").value.trim(), node.querySelector(".route-repeat-chip")])
+      .filter(([, chip]) => chip && !chip.hidden)
+      .map(([ref, chip]) => [ref, chip.textContent]);
+  routing.repeatChipsAtLoad = doc.querySelectorAll(".route-repeat-chip").length;
 
   // --- every rail heading, with whatever alias it carries. The ids other
   // coding agents put on the wire are invisible on this page otherwise.
@@ -8165,12 +8180,14 @@ if (routingLink) {
   routing.sonnetAfterMoveUndo = chainValue(SONNET);
   routing.opusAfterMoveUndo = chainValue(OPUS);
 
-  // --- a copy onto a chain that already holds the ref moves the row it has
+  // --- 7.82.0: a copy onto a chain that already holds the ref adds a second
+  //     listing (a model listed twice is tried twice), and both rows say so
   routing.opusBeforeDuplicate = chainValue(OPUS);
   await clickNode(rowIds(SONNET)[0]);
   await drag(rowIds(SONNET)[0], rowIds(OPUS)[0]);
   const opusWithSonnet = chainValue(OPUS);
   routing.opusWithSonnetRef = opusWithSonnet;
+  routing.repeatChipsBeforeDuplicate = repeatChips(OPUS, "MODEL_OPUS");
   await clickNode(rowIds(SONNET)[0]);
   await drag(rowIds(SONNET)[0], rowIds(OPUS)[4]);
   routing.opusAfterDuplicateCopy = chainValue(OPUS);
@@ -8178,6 +8195,17 @@ if (routingLink) {
     .split(",")
     .filter((ref) => ref === "p1/s1").length;
   routing.duplicateSentence = statusText();
+  routing.repeatChipsAfterDuplicate = repeatChips(OPUS, "MODEL_OPUS");
+  routing.repeatChipTitle =
+    nodeFor(rowIds(OPUS)[0]).querySelector(".route-repeat-chip")?.title || "";
+  // The rest of this drive was written when that copy landed as a move, so
+  // take the first listing out again: the rail is then exactly what it was.
+  nodeFor(rowIds(OPUS)[0])
+    .querySelector(".model-chain-remove")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  routing.opusAfterFirstListingRemoved = chainValue(OPUS);
+  routing.repeatChipsAfterRemoval = repeatChips(OPUS, "MODEL_OPUS");
 
   // --- a copy onto a chain whose primary is that ref is refused
   routing.sonnetPrimary = primaryValue("MODEL_SONNET");
@@ -8206,9 +8234,20 @@ if (routingLink) {
     routing.promoteSentence = statusText();
     await clickNode(opusRowForSonnetPrimary);
     const sonnetBeforeRefusal = chainValue(SONNET);
+    routing.sonnetBeforePrimaryRefCopy = sonnetBeforeRefusal;
     await drag(opusRowForSonnetPrimary, rowIds(SONNET)[0]);
+    // 7.82.0: no longer refused -- the route's own model listed again is one
+    // more try further down.
     routing.sonnetUnchangedByRefusal = chainValue(SONNET) === sonnetBeforeRefusal;
+    routing.sonnetAfterPrimaryRefCopy = chainValue(SONNET);
     routing.refusalSentence = statusText();
+    routing.primaryRefCopyChips = repeatChips(SONNET, "MODEL_SONNET");
+    // Put it back, so the drive below sees the rail it was written against.
+    doc.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+    );
+    await settle();
+    routing.sonnetAfterPrimaryRefCopyUndo = chainValue(SONNET);
   }
 
   // --- dropping on a primary slot swaps and demotes the old primary
@@ -8377,6 +8416,53 @@ if (routingLink) {
     .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   await settle();
   routing.arrowsStillReorder = chainValue(OPUS) !== beforeArrow;
+
+  // --- 7.82.0: within one card a plain drop still moves, Ctrl copies
+  const sonnetBeforeSameRail = chainValue(SONNET);
+  routing.sonnetBeforeSameRail = sonnetBeforeSameRail;
+  await clickNode(rowIds(SONNET)[1]);
+  await drag(rowIds(SONNET)[1], rowIds(SONNET)[0]);
+  routing.sonnetAfterSameRailPlainDrop = chainValue(SONNET);
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+  );
+  await settle();
+  await clickNode(rowIds(SONNET)[1]);
+  await drag(rowIds(SONNET)[1], rowIds(SONNET)[0], { ctrlKey: true });
+  routing.sonnetAfterSameRailCopy = chainValue(SONNET);
+  routing.sameRailCopySentence = statusText();
+  routing.sameRailCopyChips = repeatChips(SONNET, "MODEL_SONNET");
+  // A second copy, then Ctrl+Z: the undo rebuilds the rail from a saved value
+  // that holds a repeat, the same path a page load takes.
+  await clickNode(rowIds(SONNET)[0]);
+  await drag(rowIds(SONNET)[0], rowIds(SONNET)[1], { ctrlKey: true });
+  routing.sonnetAfterSecondCopy = chainValue(SONNET);
+  routing.secondCopyChips = repeatChips(SONNET, "MODEL_SONNET");
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+  );
+  await settle();
+  routing.sonnetRebuiltWithRepeat = chainValue(SONNET);
+  routing.rebuiltRepeatChips = repeatChips(SONNET, "MODEL_SONNET");
+  // Editing a repeated row into another model takes its chip away.
+  const repeatedRow = rowIds(SONNET)[0];
+  const repeatedInput = nodeFor(repeatedRow).querySelector("input");
+  repeatedInput.value = "p1/s9";
+  repeatedInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await settle();
+  routing.chipsAfterEditingARepeat = repeatChips(SONNET, "MODEL_SONNET");
+  routing.sonnetAfterEditingARepeat = chainValue(SONNET);
+
+  // --- the primary dragged into its own chain with Ctrl lands as a row
+  const sonnetBeforePrimaryCopy = chainValue(SONNET);
+  routing.sonnetBeforePrimaryCopy = sonnetBeforePrimaryCopy;
+  routing.sonnetPrimaryBeforePrimaryCopy = primaryValue("MODEL_SONNET");
+  await clickNode("route:MODEL_SONNET");
+  await drag("route:MODEL_SONNET", rowIds(SONNET)[1], { ctrlKey: true });
+  routing.sonnetAfterPrimaryCopy = chainValue(SONNET);
+  routing.sonnetPrimaryAfterPrimaryCopy = primaryValue("MODEL_SONNET");
+  routing.primaryCopySentence = statusText();
+  routing.primaryCopyChips = repeatChips(SONNET, "MODEL_SONNET");
 
   // --- a drag leaks no nodes
   routing.nodeCountAtEnd = doc.querySelectorAll("*").length;

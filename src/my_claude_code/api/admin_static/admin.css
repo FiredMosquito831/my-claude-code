@@ -1451,6 +1451,21 @@ textarea:focus-visible,
   gap: 4px;
 }
 
+/* 7.82.0: a model listed more than once on one rail. Each listing is one more
+   try, so the chip reads as a fact about the route, in the accent colour --
+   not as a warning. Lives in the pause cell so the rail's grid is unchanged. */
+.route-repeat-chip {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .route-pause-toggle {
   flex: 0 0 auto;
   padding: 4px 8px;

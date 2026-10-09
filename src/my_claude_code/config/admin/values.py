@@ -7,6 +7,7 @@ from typing import Any
 from my_claude_code.config.limits import LIMIT_RANGES
 from my_claude_code.config.model_refs import (
     format_model_ref_list,
+    parse_model_ref_chain,
     parse_model_ref_list,
 )
 from my_claude_code.config.paths import managed_env_path
@@ -50,12 +51,13 @@ def normalize_field_value(field: ConfigFieldSpec, value: Any) -> str:
     ``Settings`` canonicalises a fallback chain when it loads it, so persisting
     the raw submission would leave the dashboard showing a value that differs
     from the one actually in effect. Normalizing on the way in keeps the stored
-    value and the running value the same string.
+    value and the running value the same string. A repeated entry is part of
+    the chain (7.82.0) and is written as typed: Apply never collapses it.
     """
 
     normalized = normalize_for_env(value)
     if field.field_type == "model_chain":
-        return format_model_ref_list(parse_model_ref_list(normalized))
+        return format_model_ref_list(parse_model_ref_chain(normalized))
     return normalized
 
 

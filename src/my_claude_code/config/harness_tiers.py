@@ -233,7 +233,11 @@ def _parse_entry(raw: object, where: str) -> HarnessTierOverride | None:
     model = _clean_ref(raw.get(MODEL_KEY), f"{where}.{MODEL_KEY}")
     return HarnessTierOverride(
         model=model,
-        fallbacks=_clean_refs(raw.get(FALLBACKS_KEY), f"{where}.{FALLBACKS_KEY}"),
+        # A chain keeps a repeated entry: a model listed twice is tried twice
+        # (7.82.0). A pause names a ref, so the pause list stays a set.
+        fallbacks=_clean_refs(
+            raw.get(FALLBACKS_KEY), f"{where}.{FALLBACKS_KEY}", keep_repeats=True
+        ),
         paused=_clean_refs(raw.get(PAUSED_KEY), f"{where}.{PAUSED_KEY}"),
     )
 
@@ -258,7 +262,9 @@ def _clean_ref(value: object, where: str) -> str | None:
     return ref
 
 
-def _clean_refs(value: object, where: str) -> tuple[str, ...]:
+def _clean_refs(
+    value: object, where: str, *, keep_repeats: bool = False
+) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, str):
@@ -273,7 +279,7 @@ def _clean_refs(value: object, where: str) -> tuple[str, ...]:
     refs: list[str] = []
     for candidate in candidates:
         ref = _clean_ref(candidate, where)
-        if ref is not None and ref not in refs:
+        if ref is not None and (keep_repeats or ref not in refs):
             refs.append(ref)
     return tuple(refs)
 

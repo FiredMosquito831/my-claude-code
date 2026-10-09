@@ -120,10 +120,12 @@ def test_a_chain_entry_naming_an_unknown_provider_is_skipped(settings):
     )
 
 
-def test_a_duplicate_of_the_primary_is_dropped_from_the_chain(settings):
+def test_a_repeat_of_the_primary_is_tried_again_in_its_place(settings):
+    """7.82.0: a model listed twice is tried twice (it was dropped before)."""
     settings.model_fallbacks = "nvidia_nim/fallback-model,cerebras/real"
 
     assert _refs(ModelRouter(settings), _request()) == (
+        "nvidia_nim/fallback-model",
         "nvidia_nim/fallback-model",
         "cerebras/real",
     )

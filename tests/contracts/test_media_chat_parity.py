@@ -739,6 +739,13 @@ def _scenarios() -> list[Scenario]:
         "retry_attempts": 3,
         "backoff": 0.01,
     }
+    #: The user's own values (FAILURE-HANDLING-GRAPH.md §1): no same-provider
+    #: jump on a 429, three same-key tries; the backoff is shortened only.
+    users: dict[str, Any] = {
+        "routes_around_model": False,
+        "retry_attempts": 3,
+        "backoff": 0.01,
+    }
     return [
         Scenario(
             "5xx falls back to the next model",
@@ -966,6 +973,63 @@ def _scenarios() -> list[Scenario]:
             ),
             requests=2,
         ),
+        # 7.82.0: a model listed more than once is tried at each listing, and
+        # each listing meets the same rules as any other entry. The user's own
+        # values: no route-around, three same-key tries.
+        Scenario(
+            "repeat: each listing is tried again with its own same-key retries",
+            {"a": ProviderSpec(**users), "b": ProviderSpec(**users)},
+            (("a", "m1"), ("b", "m2"), ("a", "m1")),
+            Script(
+                {
+                    ("a", "m1", None, None): [status(500)] * 3 + [OK],
+                    ("b", None, None, None): [status(500)],
+                }
+            ),
+        ),
+        Scenario(
+            "repeat: a listing still cooling down is stepped over while a model "
+            "remains",
+            {"a": ProviderSpec(keys=2, cooldown=2.0, **users), "b": one},
+            (("a", "m1"), ("a", "m1"), ("b", "m2")),
+            Script({("a", None, None, None): [status(429, "slow down")]}),
+            policy=RouteExecutionPolicy(cooldown_step_over_floor=1.0),
+        ),
+        Scenario(
+            # Never stepped over (nothing is behind it), so it is tried -- and
+            # the key pool's own (key, model) bench answers it, as it answers
+            # any entry reached inside that bench.
+            "repeat: the last listing is tried even while it cools down",
+            {"a": ProviderSpec(keys=2, cooldown=2.0, **users)},
+            (("a", "m1"), ("a", "m1")),
+            Script({("a", "m1", None, None): [status(429, "slow down")]}),
+            policy=RouteExecutionPolicy(cooldown_step_over_floor=1.0),
+        ),
+        Scenario(
+            "repeat: a paused model is skipped at every listing",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2"), ("a", "m1")),
+            Script(),
+            paused=frozenset({"a/m1"}),
+        ),
+        Scenario(
+            "repeat: a benched model is skipped at every listing",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2"), ("a", "m1")),
+            Script(
+                {
+                    ("a", None, None, None): [status(500)],
+                    ("b", None, None, None): [status(500)],
+                }
+            ),
+            requests=2,
+            health=lambda: RouteHealthRegistry(
+                bench_enabled=True,
+                mode="consecutive",
+                eject_after_failures=2,
+                eject_seconds=600,
+            ),
+        ),
     ]
 
 
@@ -1028,6 +1092,43 @@ def test_the_scenarios_actually_exercise_the_rules() -> None:
     assert [call[3] for call in remembered["calls"]] == ["a-p0", "a-p1", "a-p1"]
     dead = chat["ticked: a dead exit moves on and every exit dead goes direct"]
     assert [call[3] for call in dead["calls"]] == ["a-p0", "a-p1", DIRECT_PROXY_LABEL]
+    # 7.82.0: a repeated model, at each of its listings.
+    again = chat["repeat: each listing is tried again with its own same-key retries"]
+    assert [call[0] for call in again["calls"]] == ["a"] * 3 + ["b"] * 3 + ["a"]
+    assert [(row[0], row[2], row[3]) for row in again["ledgers"][0]] == [
+        (0, "a/m1", "failed"),
+        (1, "b/m2", "failed"),
+        (2, "a/m1", "succeeded"),
+    ]
+    over = chat[
+        "repeat: a listing still cooling down is stepped over while a model remains"
+    ]
+    # Three same-key tries on each key, then the key pool is spent; the second
+    # listing is stepped over, uncalled, and the model behind it answers.
+    assert [call[:3] for call in over["calls"]] == (
+        [("a", "m1", 0)] * 3 + [("a", "m1", 1)] * 3 + [("b", "m2", 0)]
+    )
+    assert [(row[3], row[4]) for row in over["ledgers"][0]] == [
+        ("failed", FailureKind.RATE_LIMIT.value),
+        ("skipped", "cooldown"),
+        ("succeeded", None),
+    ]
+    last = chat["repeat: the last listing is tried even while it cools down"]
+    assert len(last["calls"]) == 6
+    assert [(row[3], row[4]) for row in last["ledgers"][0]] == [
+        ("failed", FailureKind.RATE_LIMIT.value),
+        ("failed", FailureKind.UNAVAILABLE.value),
+    ]
+    assert "rate-limited for m1" in last["ledgers"][0][1][5]
+    paused = chat["repeat: a paused model is skipped at every listing"]
+    assert [call[0] for call in paused["calls"]] == ["b"]
+    assert [row[4] for row in paused["ledgers"][0]] == ["paused", None, "paused"]
+    rested = chat["repeat: a benched model is skipped at every listing"]
+    assert [row[4] for row in rested["ledgers"][1]] == [
+        "ejected",
+        FailureKind.UPSTREAM.value,
+        "ejected",
+    ]
 
 
 # ------------------------------------------------ video jobs (7.64.0)

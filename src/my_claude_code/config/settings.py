@@ -225,7 +225,11 @@ from .env_files import (
     env_file_override,
 )
 from .limits import LIMIT_RANGES
-from .model_refs import format_model_ref_list, parse_model_ref_list
+from .model_refs import (
+    format_model_ref_list,
+    parse_model_ref_chain,
+    parse_model_ref_list,
+)
 from .nim import NimSettings
 from .paths import anthropic_oauth_managed_store_path, chatgpt_oauth_auth_path
 from .provider_registry import get_provider_registry
@@ -331,6 +335,16 @@ def _require_provider_prefixed_model_ref(model_ref: str) -> None:
     if provider not in supported_ids:
         supported = ", ".join(f"'{p}'" for p in supported_ids)
         raise ValueError(f"Invalid provider: '{provider}'. Supported: {supported}")
+
+
+def _canonical_model_ref_text(model_refs: tuple[str, ...]) -> str | None:
+    """Validate parsed refs and render them back; ``None`` when there are none."""
+
+    if not model_refs:
+        return None
+    for model_ref in model_refs:
+        _require_provider_prefixed_model_ref(model_ref)
+    return format_model_ref_list(model_refs)
 
 
 def _no_ceiling_when_zero(value: int | None) -> int | None:
@@ -2669,6 +2683,18 @@ class Settings(BaseSettings):
         "model_tts_fallbacks",
         "model_asr_fallbacks",
         "model_video_fallbacks",
+    )
+    @classmethod
+    def validate_model_fallback_chain(cls, v: str | None) -> str | None:
+        """Validate every chain entry and store the chain in canonical form.
+
+        A repeated entry is kept (7.82.0): a model listed twice is tried twice.
+        """
+        if v is None:
+            return None
+        return _canonical_model_ref_text(parse_model_ref_chain(v))
+
+    @field_validator(
         "model_paused",
         "model_mythos_paused",
         "model_fable_paused",
@@ -2682,16 +2708,14 @@ class Settings(BaseSettings):
         "model_video_paused",
     )
     @classmethod
-    def validate_model_fallback_chain(cls, v: str | None) -> str | None:
-        """Validate every chain entry and store the chain in canonical form."""
+    def validate_model_pause_list(cls, v: str | None) -> str | None:
+        """Validate every paused ref and store the list in canonical form.
+
+        A pause names a ref, so a ref named twice is stored once.
+        """
         if v is None:
             return None
-        model_refs = parse_model_ref_list(v)
-        if not model_refs:
-            return None
-        for model_ref in model_refs:
-            _require_provider_prefixed_model_ref(model_ref)
-        return format_model_ref_list(model_refs)
+        return _canonical_model_ref_text(parse_model_ref_list(v))
 
     @field_validator(*LIMIT_RANGES, mode="before")
     @classmethod

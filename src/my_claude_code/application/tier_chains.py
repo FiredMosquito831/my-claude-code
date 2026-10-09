@@ -28,7 +28,10 @@ choosing a model for the operator.
 from dataclasses import dataclass
 
 from my_claude_code.config.harness_tiers import HarnessTiers
-from my_claude_code.config.model_refs import parse_model_ref_list
+from my_claude_code.config.model_refs import (
+    parse_model_ref_chain,
+    parse_model_ref_list,
+)
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.tier_refs import GLOBAL_TIER_SETTINGS, ModelTier
 
@@ -56,6 +59,7 @@ class TierChain:
     harness: str | None
     source: str
     #: The chain's refs, primary first, before any vision or pause policy.
+    #: A ref may appear more than once (7.82.0): each listing is one try.
     refs: tuple[str, ...]
     #: Refs switched off on this tier, for this harness.
     paused: tuple[str, ...]
@@ -105,7 +109,7 @@ def global_tier_chain(settings: Settings, tier: ModelTier) -> TierChain:
     configured = getattr(settings, spec.model_attr, None)
     if isinstance(configured, str) and configured.strip():
         primary = configured.strip()
-        fallbacks = parse_model_ref_list(getattr(settings, spec.fallbacks_attr))
+        fallbacks = parse_model_ref_chain(getattr(settings, spec.fallbacks_attr))
         paused = parse_model_ref_list(getattr(settings, spec.paused_attr))
         paused_label = spec.paused_env_var
     else:
@@ -114,7 +118,7 @@ def global_tier_chain(settings: Settings, tier: ModelTier) -> TierChain:
         # the pause list has to follow the route it collapsed onto or a ref
         # paused on MODEL would keep being tried under another name.
         primary = settings.model.strip()
-        fallbacks = parse_model_ref_list(settings.model_fallbacks)
+        fallbacks = parse_model_ref_chain(settings.model_fallbacks)
         paused = parse_model_ref_list(settings.model_paused)
         paused_label = DEFAULT_ROUTE_PAUSED_ENV_VAR
     return TierChain(

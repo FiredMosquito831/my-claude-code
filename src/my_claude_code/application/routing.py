@@ -18,6 +18,7 @@ from my_claude_code.config.model_overrides import (
 )
 from my_claude_code.config.model_refs import (
     parse_model_name,
+    parse_model_ref_chain,
     parse_model_ref_list,
     parse_provider_type,
 )
@@ -609,6 +610,10 @@ class ModelRouter:
         A client that names a provider and model directly gets exactly what it
         asked for: overriding an explicit choice with a configured fallback
         would silently answer a different question than the one asked.
+
+        A ref listed more than once -- the primary again as a fallback, or a
+        fallback twice -- is one entry per listing, in the listed positions
+        (7.82.0): each is judged when it is reached, exactly like any other.
         """
 
         tier = parse_tier_ref(claude_model_name)
@@ -624,11 +629,7 @@ class ModelRouter:
 
         reasoning_preference = self._resolve_reasoning_preference(claude_model_name)
         resolved = [primary]
-        seen = {primary.provider_model_ref}
         for model_ref in self._fallback_model_refs(claude_model_name):
-            if model_ref in seen:
-                continue
-            seen.add(model_ref)
             provider_id = parse_provider_type(model_ref)
             try:
                 self._validate_provider_id(provider_id)
@@ -678,11 +679,10 @@ class ModelRouter:
         route = self._tier_chain(tier, harness)
         preference = self._tier_reasoning_preference(tier)
         resolved: list[ResolvedModel] = []
-        seen: set[str] = set()
+        # A repeated ref is one entry per listing (7.82.0).
         for model_ref in route.refs:
-            if not model_ref or model_ref in seen:
+            if not model_ref:
                 continue
-            seen.add(model_ref)
             provider_id = parse_provider_type(model_ref)
             try:
                 self._validate_provider_id(provider_id)
@@ -752,8 +752,8 @@ class ModelRouter:
 
         route = self._matched_route(claude_model_name)
         if route is not None and isinstance(getattr(self._settings, route[1]), str):
-            return parse_model_ref_list(getattr(self._settings, route[3]))
-        return parse_model_ref_list(self._settings.model_fallbacks)
+            return parse_model_ref_chain(getattr(self._settings, route[3]))
+        return parse_model_ref_chain(self._settings.model_fallbacks)
 
     def _resolve_model_ref(self, claude_model_name: str) -> str:
         """Resolve a Claude model name to the configured provider/model ref."""
@@ -1073,20 +1073,17 @@ class ModelRouter:
         The adapter is a route like any other and gets the same safety net: a
         single unreachable vision model would otherwise lose every image on the
         machine. An entry known to reject images is dropped -- putting a blind
-        model in a *vision* chain is always a mistake, not a preference.
+        model in a *vision* chain is always a mistake, not a preference. A ref
+        listed more than once is one entry per listing (7.82.0).
         """
         if not self._settings.model_vision:
             return ()
         resolved: list[ResolvedModel] = []
-        seen: set[str] = set()
         candidates = (
             self._settings.model_vision,
-            *parse_model_ref_list(self._settings.model_vision_fallbacks),
+            *parse_model_ref_chain(self._settings.model_vision_fallbacks),
         )
         for model_ref in candidates:
-            if model_ref in seen:
-                continue
-            seen.add(model_ref)
             provider_id = parse_provider_type(model_ref)
             try:
                 self._validate_provider_id(provider_id)
