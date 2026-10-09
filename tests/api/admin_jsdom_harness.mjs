@@ -7637,6 +7637,90 @@ if (modelsLink) {
     alpha.override,
     alpha.preferences,
   );
+
+  /* --- the context-window row (7.87.0): model rows only, three states, no
+     upper bound, and the extracted window with its rung beside the box. */
+  const LADDER_WINDOW = {
+    value: 524288,
+    source: "provider_or_models_dev",
+    source_label: "provider /models or models.dev",
+    tier: null,
+    tier_label: null,
+  };
+  const OPERATOR_WINDOW = (value) => ({
+    value,
+    source: "operator",
+    source_label: "operator override",
+    approximate: false,
+    reference: false,
+    tier: null,
+    tier_label: null,
+    note: "Your number from this model's override row.",
+    also_stated: LADDER_WINDOW,
+  });
+  const describeContextRow = (scope, row, capabilities) => {
+    const form = window.eval("buildOverrideEditor")(
+      scope,
+      "custom_agnes/agnes-3.0-flash",
+      row,
+      [],
+      alpha.models[0].preferences,
+      capabilities,
+    );
+    const box = form.querySelector('input[aria-label="context window"]');
+    const line = box ? box.closest(".models-override-row") : null;
+    const save = form.querySelector(".models-actions button");
+    const status = form.querySelector(".models-actions .models-status");
+    const described = {
+      present: Boolean(box),
+      label: line ? flat(line.querySelector(".models-override-name")) : "",
+      mode: line ? line.querySelector("select.models-override-mode").value : "",
+      value: box ? box.value : "",
+      max: box ? box.getAttribute("max") : null,
+      note: line ? flat(line.querySelector(".models-preference-note")) : "",
+      refused: "",
+    };
+    if (box && save && status) {
+      line.querySelector("select.models-override-mode").value = "value";
+      box.disabled = false;
+      box.value = "1.5";
+      save.click();
+      described.refused = flat(status);
+    }
+    return described;
+  };
+  models.contextWindow = {
+    ladder: describeContextRow("model", {}, { context_length: LADDER_WINDOW }),
+    forced: describeContextRow(
+      "model",
+      { context_length: { state: "value", value: 1000000 } },
+      { context_length: OPERATOR_WINDOW(1000000) },
+    ),
+    unknown: describeContextRow(
+      "model",
+      { context_length: { state: "unset", value: null } },
+      { context_length: OPERATOR_WINDOW(null) },
+    ),
+    nothing: describeContextRow("model", {}, {
+      context_length: { value: null, source: "unknown", source_label: "unknown" },
+    }),
+    provider: describeContextRow("provider", {}, undefined),
+  };
+  const contextPanel = window.eval("buildCapabilityPanel")(
+    { context_length: OPERATOR_WINDOW(1000000) },
+    MODEL_ADMIN_PAGE.source_labels || {},
+    alpha.models[0],
+  );
+  const contextRow = Array.from(contextPanel.querySelectorAll("tr")).find(
+    (row) => flat(row.querySelector("th") || row) === "context length",
+  );
+  models.contextWindowPanel = contextRow
+    ? {
+        cells: Array.from(contextRow.children).map(flat),
+        badge: (contextRow.querySelector(".models-source") || { className: "" })
+          .className,
+      }
+    : null;
 }
 
 // ----------------------------------------------------- analytics filters

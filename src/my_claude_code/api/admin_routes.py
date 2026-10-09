@@ -45,6 +45,7 @@ from my_claude_code.api.model_admin import (
     migrate_exact_patterns_to_globs,
     model_knowledge_payload,
     model_refs_by_provider,
+    override_update_problem,
     render_patterns,
     speakable_surfaces,
     visibility_payload,
@@ -2338,6 +2339,9 @@ async def save_model_override_row(
         )
     if not payload.key.strip():
         raise HTTPException(status_code=400, detail="key must not be empty")
+    problem = override_update_problem(payload.scope, payload.updates)
+    if problem is not None:
+        raise HTTPException(status_code=422, detail=problem)
     updated = with_override_row(
         current_model_overrides(),
         scope=payload.scope,

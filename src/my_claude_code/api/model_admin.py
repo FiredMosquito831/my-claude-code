@@ -84,12 +84,15 @@ from my_claude_code.application.openrouter_live import (
 )
 from my_claude_code.config.model_overrides import (
     ALLOWED_OVERRIDE_PARAMETERS,
+    CONTEXT_LENGTH_OVERRIDE,
     MAX_OUTPUT_TOKENS_OVERRIDE,
     OWNED_ELSEWHERE_PARAMETERS,
     PREFERENCE_OVERRIDE_PARAMETERS,
     REASONING_PREFERENCE_OVERRIDE,
     RESPONSE_SURFACE_OVERRIDE,
     ModelParameterOverrides,
+    StatedContextLength,
+    context_length_problem,
     current_model_overrides,
     model_ref_for,
     normalize_override_key,
@@ -397,6 +400,20 @@ CONTEXT_LENGTH_SOURCE_NOTE = (
     "The routed deployment's own /models payload wins outright. Where it "
     "published nothing, the value comes off the same ten-rung ladder the "
     "output limit walks, and the tier beside it names the rung."
+)
+# The operator's own window (7.87.0): a source above every rung, kept out of
+# ``SOURCE_LABELS`` so the page's label table is unchanged when nobody set one.
+SOURCE_OPERATOR = "operator"
+SOURCE_OPERATOR_LABEL = "operator override"
+OPERATOR_CONTEXT_LENGTH_NOTE = (
+    "Your number from this model's override row. It is the window routing "
+    "keeps the output budget within and the one every generated agent "
+    "catalogue publishes."
+)
+OPERATOR_CONTEXT_UNKNOWN_NOTE = (
+    "Forced unknown on this model's override row: no window bounds the output "
+    "budget, and the agent catalogues publish none (a CLI that requires one "
+    "falls back to its own documented default)."
 )
 
 
@@ -1207,6 +1224,42 @@ def _statement(field: Mapping[str, Any]) -> dict[str, Any]:
         "tier": field.get("tier"),
         "tier_label": field.get("tier_label"),
     }
+
+
+def with_operator_context_length(
+    payload: Mapping[str, Any], stated: StatedContextLength | None
+) -> dict[str, Any]:
+    """A capability record with the operator's context window placed (7.87.0).
+
+    Applied last, after OpenRouter's live list and the display rows, so it
+    sits above every rung. What the ladder answered is kept beside it as
+    ``also_stated`` -- the extracted number and the rung that gave it -- so
+    the page always shows both. ``stated is None`` (nothing on the row)
+    returns the record unchanged.
+    """
+
+    out = dict(payload)
+    if stated is None:
+        return out
+    base = out.get("context_length") or {}
+    field: dict[str, Any] = {
+        "value": stated.value,
+        "source": SOURCE_OPERATOR,
+        "source_label": SOURCE_OPERATOR_LABEL,
+        "approximate": False,
+        "reference": False,
+        "tier": None,
+        "tier_label": None,
+        "note": (
+            OPERATOR_CONTEXT_LENGTH_NOTE
+            if stated.value is not None
+            else OPERATOR_CONTEXT_UNKNOWN_NOTE
+        ),
+    }
+    if base.get("value") is not None:
+        field["also_stated"] = _statement(base)
+    out["context_length"] = field
+    return out
 
 
 def _live_statement(value: Any, answer: LiveModel) -> dict[str, Any]:
@@ -2401,6 +2454,11 @@ def _model_entry(
             else litellm(provider_id, model_id)
         ),
     )
+    # The operator's own context window (7.87.0), above every rung and so
+    # placed last; the ladder's answer stays beside it as ``also_stated``.
+    capabilities = with_operator_context_length(
+        capabilities, overrides.context_length(model_ref)
+    )
     kind = declared_model_kind(
         model_ref, media_placements or {}, kind_modalities, kind_words, live, litellm
     )
@@ -2638,6 +2696,38 @@ def _image_estimate_row(
     }
 
 
+#: Every key the parameter grid may write: the nine body parameters, the two
+#: preferences, and the operator's context window (7.87.0, model rows only --
+#: :func:`override_update_problem` refuses it on a provider row).
+EDITOR_OVERRIDE_PARAMETERS: frozenset[str] = (
+    ALLOWED_OVERRIDE_PARAMETERS
+    | PREFERENCE_OVERRIDE_PARAMETERS
+    | frozenset({CONTEXT_LENGTH_OVERRIDE})
+)
+
+
+def override_update_problem(scope: str, updates: Mapping[str, Any]) -> str | None:
+    """Why one editor submission cannot be saved, or ``None`` if it can.
+
+    Only the context window is checked here: it is the one key whose value
+    is a number every reader trusts as a model fact, so a 0, a negative or a
+    fraction is refused at the door rather than stored and ignored later.
+    ``null`` (force unknown) and the inherit sentinel are always accepted.
+    """
+
+    if CONTEXT_LENGTH_OVERRIDE not in updates:
+        return None
+    value = updates[CONTEXT_LENGTH_OVERRIDE]
+    if value == INHERIT_SENTINEL:
+        return None
+    if scope != MODEL_SCOPE:
+        return f"{CONTEXT_LENGTH_OVERRIDE} is set per model, not per provider"
+    if value is None:
+        return None
+    problem = context_length_problem(value)
+    return None if problem is None else f"{CONTEXT_LENGTH_OVERRIDE} {problem}"
+
+
 def merged_override_row(
     existing: Mapping[str, Any], updates: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -2660,7 +2750,7 @@ def merged_override_row(
 
     row = dict(existing)
     for name, value in updates.items():
-        if name not in ALLOWED_OVERRIDE_PARAMETERS | PREFERENCE_OVERRIDE_PARAMETERS:
+        if name not in EDITOR_OVERRIDE_PARAMETERS:
             continue
         if value == INHERIT_SENTINEL:
             row.pop(name, None)

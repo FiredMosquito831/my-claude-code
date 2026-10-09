@@ -7708,6 +7708,14 @@ audio.req-media-preview {
   color: var(--warn);
 }
 
+/* Your own number from the model's override row (7.87.0): above every rung,
+   so it must never look like something a catalogue published. */
+.models-source-operator {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
 /* A vote across same-named rows in other providers' buckets. It is regularly
    wrong -- one free model is credited with a 1,048,576-token output limit off
    a single match -- so it never gets to look like a published number. */

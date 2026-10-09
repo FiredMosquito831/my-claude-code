@@ -32,6 +32,11 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.ports import RequestRuntimePort
+from my_claude_code.config.model_overrides import (
+    ModelParameterOverrides,
+    current_model_overrides,
+    model_ref_for,
+)
 from my_claude_code.config.provider_catalog import configured_credential_values
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
@@ -164,10 +169,16 @@ class ProviderRuntimeManager:
         runtime_factory: ProviderRuntimeFactory = ProviderRuntime,
         connected_provider_ids: ConnectedProviderIds = tuple,
         model_catalog_publisher: ModelCatalogPublisher | None = None,
+        model_overrides: Callable[[], ModelParameterOverrides] = (
+            current_model_overrides
+        ),
     ) -> None:
         self._runtime_factory = runtime_factory
         self._connected_provider_ids = connected_provider_ids
         self._model_catalog_publisher = model_catalog_publisher
+        # A callable, never a table, for the reason routing's own preferences
+        # are one: the Models page rewrites the file between any two requests.
+        self._model_overrides = model_overrides
         self._replace_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._model_cache = ProviderModelCache(
@@ -384,7 +395,16 @@ class ProviderRuntimeManager:
         that matters -- a gateway serving a 262k model on a 32k deployment
         would have its real window overstated, and the output budget derived
         from it would not fit.
+
+        The operator's own ``context_length`` on the model's row in
+        ``model_overrides.json`` (7.87.0) answers before it: a number is the
+        window, ``null`` makes it unknown (so no headroom bound applies).
         """
+        stated = self._model_overrides().context_length(
+            model_ref_for(provider_id, model_id)
+        )
+        if stated is not None:
+            return stated.value
         return self._model_cache.cached_model_context_length(provider_id, model_id)
 
     def model_context_length_tiered(

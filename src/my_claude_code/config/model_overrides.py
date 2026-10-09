@@ -103,13 +103,21 @@ ALLOWED_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
 #: ``application`` for the same reason ``response_surface`` is checked in the
 #: provider layer: this module is a leaf and importing the enums would make it
 #: one no longer.
+#:
+#: ``context_length`` (7.87.0) is the operator's statement of a model's context
+#: window, a rung above every source the metadata ladder reads. Model rows
+#: only: one provider serves models with different windows, so a provider-wide
+#: number would be a statement about models nobody looked at. A positive whole
+#: number forces that window; ``null`` forces it unknown, so no ladder value is
+#: used and every reader sees "unknown"; absent inherits the ladder.
 NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
-    {"response_surface", "reasoning_preference", "max_output_tokens"}
+    {"response_surface", "reasoning_preference", "max_output_tokens", "context_length"}
 )
 
 RESPONSE_SURFACE_OVERRIDE = "response_surface"
 REASONING_PREFERENCE_OVERRIDE = "reasoning_preference"
 MAX_OUTPUT_TOKENS_OVERRIDE = "max_output_tokens"
+CONTEXT_LENGTH_OVERRIDE = "context_length"
 
 #: The two non-body keys the Models page editor may write. A strict subset of
 #: :data:`NON_BODY_OVERRIDE_PARAMETERS`: ``response_surface`` is written by the
@@ -135,6 +143,33 @@ OWNED_ELSEWHERE_PARAMETERS: dict[str, str] = {
 # or, for ``stop``, a list of strings, and an object here would mean the user is
 # describing something this file does not model.
 _ALLOWED_VALUE_TYPES = (bool, int, float, str, list)
+
+
+@dataclass(frozen=True, slots=True)
+class StatedContextLength:
+    """The operator's context window for one model: a number, or ``None``.
+
+    ``None`` is the force-unset state -- the window is unknown on every
+    surface, whatever the ladder below would have said. "Nothing stated" is
+    not this object at all; :meth:`ModelParameterOverrides.context_length`
+    returns ``None`` for it.
+    """
+
+    value: int | None
+
+
+def context_length_problem(value: object) -> str | None:
+    """Why ``value`` cannot be a forced context window, or ``None`` if it can.
+
+    ``bool`` is refused explicitly because it is an ``int`` in Python and
+    ``True`` would otherwise read as a one-token window.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "must be a whole number of tokens"
+    if value <= 0:
+        return "must be greater than zero"
+    return None
 
 
 def normalize_override_key(raw: str) -> str:
@@ -278,6 +313,21 @@ class ModelParameterOverrides:
             return None
         return value
 
+    def context_length(self, model_ref: str) -> StatedContextLength | None:
+        """Return the operator's context window for one model, or ``None``.
+
+        ``None`` means the model row says nothing, so the ladder answers.
+        A :class:`StatedContextLength` whose ``value`` is ``None`` means the
+        row says ``null``: the window is unknown, and no source below is
+        consulted. Model rows only, and an unusable value never got past the
+        parser (:func:`_parse_parameters`).
+        """
+
+        row = self.models.get(normalize_override_key(model_ref), {})
+        if CONTEXT_LENGTH_OVERRIDE not in row:
+            return None
+        return StatedContextLength(row[CONTEXT_LENGTH_OVERRIDE])
+
     def as_document(self) -> dict[str, dict[str, dict[str, Any]]]:
         """Render back to the on-disk shape."""
 
@@ -310,13 +360,17 @@ def _parse_section(section: object, section_name: str) -> dict[str, dict[str, An
                 key,
             )
             continue
-        parameters = _parse_parameters(raw_value, f"{section_name}.{key}")
+        parameters = _parse_parameters(
+            raw_value, f"{section_name}.{key}", model_row=section_name == MODELS_KEY
+        )
         if parameters:
             parsed[key] = parameters
     return parsed
 
 
-def _parse_parameters(raw: Mapping[Any, Any], where: str) -> dict[str, Any]:
+def _parse_parameters(
+    raw: Mapping[Any, Any], where: str, *, model_row: bool = True
+) -> dict[str, Any]:
     parameters: dict[str, Any] = {}
     for raw_name, value in raw.items():
         name = str(raw_name).strip()
@@ -343,6 +397,18 @@ def _parse_parameters(raw: Mapping[Any, Any], where: str) -> dict[str, Any]:
                 type(value).__name__,
             )
             continue
+        if name == CONTEXT_LENGTH_OVERRIDE:
+            problem: str | None = None
+            if not model_row:
+                problem = "is set per model, not per provider"
+            elif value is not None:
+                # ``null`` is the force-unknown state and always well-formed.
+                problem = context_length_problem(value)
+            if problem is not None:
+                logger.warning(
+                    "MODEL OVERRIDES: '{}.{}' {}; ignoring it", where, name, problem
+                )
+                continue
         parameters[name] = value
     return parameters
 

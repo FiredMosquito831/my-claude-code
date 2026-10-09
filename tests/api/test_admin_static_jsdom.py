@@ -5279,8 +5279,13 @@ def test_jsdom_the_preference_controls_are_drawn_above_the_parameter_grid(
 
     assert editor["heads"][0] == "PreferenceWhat to decideValue"
     assert editor["heads"][1] == "ParameterWhat to sendValue"
-    # Three-state, the same idiom as every other row on the form.
-    assert editor["modes"] == ["inherit", "inherit"]
+    # Three-state, the same idiom as every other row on the form -- the third
+    # is the context window (7.87.0), on model rows only.
+    assert editor["modes"] == ["inherit", "inherit", "inherit"]
+    assert rendered["models"]["providerPreferences"]["modes"] == [
+        "inherit",
+        "inherit",
+    ]
 
 
 def test_jsdom_the_reasoning_select_offers_exactly_what_the_row_published(
@@ -5402,6 +5407,57 @@ def test_jsdom_the_value_control_is_disabled_until_force_value_is_chosen(
     mode says Inherit would make "inherit" and "force" look the same."""
 
     assert rendered["models"]["preferences"]["0"]["valueDisabledWhileInherit"] is True
+
+
+# The context window (7.87.0): one more three-state row on a model's editor,
+# beside max_output_tokens, with the extracted window and its rung shown.
+
+
+def test_jsdom_the_context_row_shows_the_extracted_window_and_its_rung(
+    rendered,
+) -> None:
+    ladder = rendered["models"]["contextWindow"]["ladder"]
+
+    assert ladder["present"] is True
+    assert ladder["label"] == "context_length"
+    assert ladder["mode"] == "inherit"
+    assert ladder["max"] is None  # no upper bound, unlike the output cap
+    assert "Also stated: 524,288 (provider /models or models.dev)." in ladder["note"]
+
+
+def test_jsdom_a_forced_window_keeps_the_extracted_one_beside_it(rendered) -> None:
+    forced = rendered["models"]["contextWindow"]["forced"]
+    unknown = rendered["models"]["contextWindow"]["unknown"]
+    nothing = rendered["models"]["contextWindow"]["nothing"]
+
+    assert forced["mode"] == "value"
+    assert forced["value"] == "1000000"
+    assert "Also stated: 524,288" in forced["note"]
+    assert unknown["mode"] == "unset"
+    assert "Also stated: 524,288" in unknown["note"]
+    assert "Nothing else states a window" in nothing["note"]
+
+
+def test_jsdom_the_context_row_is_on_model_rows_only(rendered) -> None:
+    assert rendered["models"]["contextWindow"]["provider"]["present"] is False
+
+
+def test_jsdom_a_fractional_window_is_refused_before_saving(rendered) -> None:
+    refused = rendered["models"]["contextWindow"]["ladder"]["refused"]
+
+    assert "context_length must be a whole number of tokens" in refused
+
+
+def test_jsdom_the_panel_badges_the_operator_and_shows_the_extracted_window(
+    rendered,
+) -> None:
+    panel = rendered["models"]["contextWindowPanel"]
+
+    assert panel is not None
+    assert panel["cells"][1] == "1,000,000"
+    assert "models-source-operator" in panel["badge"]
+    assert "operator override" in panel["cells"][2]
+    assert "also stated: 524,288 (provider /models or models.dev)" in panel["cells"][2]
 
 
 # ------------------------------------------------------------- key pool rail

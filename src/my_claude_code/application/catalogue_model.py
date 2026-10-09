@@ -47,6 +47,12 @@ from my_claude_code.application.openrouter_live import (
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.application.tier_chains import resolve_tier_chain
 from my_claude_code.config.harness_tiers import EMPTY_HARNESS_TIERS, HarnessTiers
+from my_claude_code.config.model_overrides import (
+    CONTEXT_LENGTH_OVERRIDE,
+    ModelParameterOverrides,
+    current_model_overrides,
+    model_ref_for,
+)
 from my_claude_code.config.model_refs import (
     configured_chat_model_refs,
     parse_model_name,
@@ -87,6 +93,14 @@ class CatalogueFieldProvenance:
     tier: int | None = None
     tier_label: str | None = None
     approximate: bool = False
+
+
+#: The provenance of a field the operator stated in ``model_overrides.json``
+#: (7.87.0), above every rung of the ladder. Spelled as the Models page
+#: spells it, so the page and a generated catalogue name the same source.
+OPERATOR_PROVENANCE = CatalogueFieldProvenance(
+    source="operator", source_label="operator override"
+)
 
 
 #: ``(provider_id, model_id, info) -> {field: provenance}``. Injected rather
@@ -172,6 +186,7 @@ def build_catalogue_models(
     *,
     harness_id: str | None = None,
     harness_tiers: HarnessTiers | None = None,
+    model_overrides: ModelParameterOverrides | None = None,
 ) -> tuple[CatalogueModel, ...]:
     """Resolve every visible routable model into the neutral catalogue record.
 
@@ -186,8 +201,15 @@ def build_catalogue_models(
     overrides. It is optional because ``/admin/api/catalogue-models`` and the
     tests build one neutral list for nobody in particular, which is exactly the
     global chain.
+
+    ``model_overrides`` is the operator's override table, read once for the
+    whole document; ``None`` reads ``~/.mcc/model_overrides.json``. Only its
+    per-model ``context_length`` (7.87.0) reaches a catalogue record.
     """
 
+    overrides = (
+        current_model_overrides() if model_overrides is None else model_overrides
+    )
     visibility = ModelVisibility.from_raw(
         settings.model_visibility_allow, settings.model_visibility_deny
     )
@@ -228,6 +250,7 @@ def build_catalogue_models(
             info=infos_by_ref.get(ref.model_ref),
             provenance=provenance,
             live=live,
+            overrides=overrides,
         )
 
     for info in runtime.cached_prefixed_model_infos():
@@ -244,6 +267,7 @@ def build_catalogue_models(
             info=info,
             provenance=provenance,
             live=live,
+            overrides=overrides,
         )
 
     aliases = _tier_alias_models(
@@ -253,6 +277,7 @@ def build_catalogue_models(
         models,
         runtime=runtime,
         live=live,
+        overrides=overrides,
     )
     if not aliases:
         return tuple(models)
@@ -278,6 +303,7 @@ def _tier_alias_models(
     *,
     runtime: RequestRuntimePort,
     live: LiveCatalogue | None = None,
+    overrides: ModelParameterOverrides,
 ) -> tuple[CatalogueModel, ...]:
     """Build the five tier records, each a copy of the model it points at.
 
@@ -364,6 +390,7 @@ def _tier_alias_models(
                     info=None,
                     provenance=None,
                     live=live,
+                    overrides=overrides,
                 ),
                 gateway_id=gateway_model_id(primary_ref),
                 display_name=primary_ref,
@@ -398,6 +425,7 @@ def _append_variants(
     info: ProviderModelInfo | None,
     provenance: CapabilityProvenanceLookup | None,
     live: LiveCatalogue | None = None,
+    overrides: ModelParameterOverrides,
 ) -> None:
     provider_id = parse_provider_type(provider_model_ref)
     model_id = parse_model_name(provider_model_ref)
@@ -411,6 +439,7 @@ def _append_variants(
         info=info,
         provenance=provenance,
         live=live,
+        overrides=overrides,
     )
 
     if supports_thinking is not False:
@@ -553,6 +582,7 @@ def _resolve(
     info: ProviderModelInfo | None,
     provenance: CapabilityProvenanceLookup | None,
     live: LiveCatalogue | None = None,
+    overrides: ModelParameterOverrides,
 ) -> CatalogueModel:
     reasoning: ModelReasoningCapability | None = runtime.model_reasoning_capability(
         provider_id, model_id
@@ -608,14 +638,36 @@ def _resolve(
         ),
     )
     answer = None if live is None else live(provider_id, model_id)
-    if answer is None or not answer.feeds_ladder:
-        return resolved
-    return _with_live(
-        resolved,
-        provider_id=provider_id,
-        model_id=model_id,
-        runtime=runtime,
-        info=info,
-        tool_calls_tier=tool_calls_tier,
-        answer=answer,
+    if answer is not None and answer.feeds_ladder:
+        resolved = _with_live(
+            resolved,
+            provider_id=provider_id,
+            model_id=model_id,
+            runtime=runtime,
+            info=info,
+            tool_calls_tier=tool_calls_tier,
+            answer=answer,
+        )
+    return _with_operator_context_length(
+        resolved, overrides, model_ref_for(provider_id, model_id)
     )
+
+
+def _with_operator_context_length(
+    model: CatalogueModel, overrides: ModelParameterOverrides, model_ref: str
+) -> CatalogueModel:
+    """The operator's context window, placed above every rung (7.87.0).
+
+    Last, after OpenRouter's live list, so a forced unknown (``null``) is
+    never refilled by a rung below it. The record the ladder built is not
+    otherwise touched, and with nothing stated it is returned as it came.
+    Its provenance is replaced only where provenance was asked for.
+    """
+
+    stated = overrides.context_length(model_ref)
+    if stated is None:
+        return model
+    provenance = model.field_provenance
+    if CONTEXT_LENGTH_OVERRIDE in provenance:
+        provenance = {**provenance, CONTEXT_LENGTH_OVERRIDE: OPERATOR_PROVENANCE}
+    return replace(model, context_length=stated.value, field_provenance=provenance)
