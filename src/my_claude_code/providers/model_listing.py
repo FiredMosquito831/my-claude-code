@@ -1,5 +1,6 @@
 """Provider model-list response parsing helpers."""
 
+import json
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
@@ -160,6 +161,8 @@ def extract_openai_model_infos(
 
         declared = declared_from_row(item, listing_date=date_field)
         supported_parameters = published_parameters_from_row(item)
+        # 7.86.0: the row itself, verbatim, for the "Everything known" view.
+        published_row = published_row_text(item)
         model_infos.setdefault(
             model_id,
             record_with_declared(
@@ -168,6 +171,7 @@ def extract_openai_model_infos(
                     supports_thinking=supports_thinking,
                     supported_parameters=supported_parameters,
                     declared=declared,
+                    published_row=published_row,
                 )
             ),
         )
@@ -195,6 +199,7 @@ def extract_openai_model_infos(
                             supports_thinking=supports_thinking,
                             supported_parameters=supported_parameters,
                             declared=declared,
+                            published_row=published_row,
                         )
                     ),
                 )
@@ -230,6 +235,7 @@ def extract_tool_capable_model_infos(
                 model_id=model_id,
                 supported_parameter_names=supported_parameter_names,
                 read_vision=False,
+                published_row=published_row_text(item),
             )
         )
 
@@ -380,10 +386,39 @@ def extract_openrouter_tool_model_infos(
                 model_id=model_id,
                 supported_parameter_names=supported_parameter_names,
                 read_vision=True,
+                published_row=published_row_text(item),
             )
         )
 
     return frozenset(model_infos)
+
+
+def published_row_text(item: Any) -> str | None:
+    """One provider list row, verbatim, as compact JSON text (7.86.0).
+
+    What the "Everything known" view shows as the provider's own statement --
+    every field the row publishes, the ones no typed field keeps included.
+    Kept as text rather than as the parsed object: immutable, about a fifth of
+    the memory, and already what the sidecar store writes. A row the list
+    client handed over as an SDK object (the ``openai`` client's ``Model``)
+    is dumped with the keys it was given, extra ones included. Never raises:
+    a row that cannot be written as JSON is ``None`` -- the record keeps
+    everything else it read from it -- because a display copy is not worth
+    one failed discovery.
+    """
+
+    try:
+        row = item
+        if not isinstance(row, Mapping):
+            dump = getattr(row, "model_dump", None)
+            if not callable(dump):
+                return None
+            row = dump(mode="json", by_alias=True, exclude_unset=True)
+        if not isinstance(row, Mapping):
+            return None
+        return json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str)
+    except Exception:
+        return None
 
 
 def openrouter_row_model_info(item: Any) -> _ProviderModelInfo | None:
@@ -451,6 +486,7 @@ def _openrouter_dialect_model_info(
     model_id: str,
     supported_parameter_names: set[str],
     read_vision: bool,
+    published_row: str | None = None,
 ) -> _ProviderModelInfo:
     """Build one model record from an OpenRouter-dialect ``/models`` entry.
 
@@ -462,6 +498,10 @@ def _openrouter_dialect_model_info(
     7.83.0. What they leave unset -- today the two listed prices, which this
     dialect publishes as ``pricing.prompt``/``pricing.completion`` -- is filled
     from the generic reader's statement of the same row.
+
+    ``published_row`` is the row's own verbatim text (7.86.0), passed by the
+    two provider parsers; OpenRouter's live list as a rung keeps its rows in
+    its own stored file and passes none.
     """
     top_provider = _field(item, "top_provider")
     record = _ProviderModelInfo(
@@ -489,6 +529,7 @@ def _openrouter_dialect_model_info(
         # listed the model -- Nous Portal and Kilo copy OpenRouter's value --
         # never the day it was published (7.85.0).
         declared=declared_from_row(item),
+        published_row=published_row,
     )
     return record_with_declared(record)
 

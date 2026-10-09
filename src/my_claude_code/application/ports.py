@@ -1,6 +1,6 @@
 """Typed capabilities consumed by application use cases."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -10,6 +10,7 @@ from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningDialect, ReasoningPolicy
 
 from .litellm_model_map import LiteLLMCatalogue
+from .model_knowledge import PublishedRow
 from .model_metadata import (
     DeclaredModalities,
     ModelReasoningCapability,
@@ -173,6 +174,18 @@ class RequestRuntimePort(Protocol):
     ) -> tuple[bool | None, ResolutionTier | None]: ...
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]: ...
+
+    def model_published_rows(
+        self, provider_id: str, model_id: str, openrouter_ids: Sequence[str]
+    ) -> tuple[PublishedRow, ...]:
+        """The rows the "Everything known" view shows beside the record (7.86.0).
+
+        The provider's own row as stored beside the catalogue, the OpenRouter
+        live rows for ``openrouter_ids``, and LiteLLM's entries while LiteLLM
+        pricing is on -- verbatim, scrubbed of anything credential-shaped.
+        Read on a worker thread, on demand; nothing else reads them.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)

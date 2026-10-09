@@ -2664,3 +2664,442 @@ def resolve_model_reasoning_capability(
         provider_capability,
         model_reasoning_capability_from_models_dev(provider_id, model_id, path),
     )
+
+
+# -- 7.86.0: every rung's own statement, for "Everything known" ---------------
+#
+# The ladder above stops at the first rung that answers a field and keeps only
+# the winner. The Models page's "Everything known" view shows what EVERY rung
+# says about each field -- the provider's own models.dev bucket, models.dev's
+# OpenRouter copy and the cross-provider vote, each with its rung and, for the
+# vote, its sample -- beside the value the ladder used. Read-only and additive:
+# every function above is untouched, each statement below is read off the very
+# indexes and helpers the ladder itself reads, and nothing here is consulted by
+# routing, listing or pricing. The vote is assembled from the cross-provider
+# index directly rather than through :func:`cross_provider_match`, so asking
+# about a provider that HAS a bucket never writes that function's
+# "approximate match" log line about a provider it was never run for.
+
+#: The three models.dev rungs, in the order the ladder reads them.
+MODELS_DEV_RUNG_BUCKET = "bucket"
+MODELS_DEV_RUNG_REFERENCE = "openrouter_copy"
+MODELS_DEV_RUNG_VOTE = "vote"
+
+
+@dataclass(frozen=True, slots=True)
+class ModelsDevStatement:
+    """What one models.dev rung states about one field of one model (7.86.0).
+
+    ``consulted`` is whether the ladder reads this rung for this provider at
+    all: a provider with a models.dev bucket never reads outside it, so its
+    OpenRouter-copy and vote statements are shown for completeness and are
+    never an answer. ``reporters``/``agreement`` are the vote's sample (rows
+    that stated the field at the rung that answered, and the share that
+    agreed); ``None`` for a single-row rung.
+    """
+
+    rung: str
+    tier: ResolutionTier
+    value: Any
+    consulted: bool = True
+    reporters: int | None = None
+    agreement: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelsDevRow:
+    """One models.dev row a rung matched, verbatim (7.86.0)."""
+
+    rung: str
+    tier: ResolutionTier
+    #: The models.dev provider id (bucket) the row is filed under.
+    bucket: str
+    #: The row's own id in that bucket.
+    model_key: str
+    row: Mapping[str, Any]
+    consulted: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class ModelsDevKnowledge:
+    """Every models.dev statement and row about one model (7.86.0)."""
+
+    #: Whether models.dev has a bucket of this provider's own.
+    has_bucket: bool
+    #: When the bytes on disk were fetched, ISO-8601; ``None`` with no file.
+    fetched_at: str | None
+    statements: Mapping[str, tuple[ModelsDevStatement, ...]]
+    rows: tuple[ModelsDevRow, ...]
+    #: What :func:`enrich_model_infos` fills into the record at discovery --
+    #: the provider-blind name match, own bucket first, field by field -- for
+    #: the four fields it fills (``context_length``, ``input_price``,
+    #: ``output_price``, ``supports_vision``). It records no rung, which is why
+    #: the page says "provider /models or models.dev" for those fields.
+    discovery_fill: Mapping[str, Any]
+
+
+def _discovery_fill(
+    index: Mapping[str, Any], provider_id: str, model_id: str
+) -> dict[str, Any]:
+    """What :func:`enrich_model_infos` would fill for one model, field by field."""
+
+    metadata = _prefer_own_provider(
+        _match_metadata(_provider_bucket_metadata(index, provider_id), model_id),
+        _match_metadata(_flatten_index(index), model_id),
+    )
+    if metadata is None:
+        return {}
+    values = {
+        "context_length": metadata.context_length,
+        "input_price": metadata.input_price,
+        "output_price": metadata.output_price,
+        "supports_vision": metadata.supports_vision,
+    }
+    return {name: value for name, value in values.items() if value is not None}
+
+
+#: The generic fields, under the names the Models page uses for them.
+_KNOWLEDGE_LADDER_FIELDS: tuple[tuple[str, _LadderField[Any]], ...] = (
+    ("context_length", CONTEXT_LENGTH_FIELD),
+    ("supports_vision", VISION_FIELD),
+    ("supports_tool_calls", TOOL_CALL_FIELD),
+    *((field.name, field) for field in PRICE_FIELDS),
+    ("published_at", RELEASE_DATE_FIELD),
+    ("knowledge_cutoff", KNOWLEDGE_CUTOFF_FIELD),
+    ("description", DESCRIPTION_FIELD),
+    ("deprecated", DEPRECATED_FIELD),
+)
+
+#: The reasoning record's fields, each stated per rung.
+_KNOWLEDGE_REASONING_FIELDS: tuple[str, ...] = (
+    *_BOOLEAN_CAPABILITY_FIELDS,
+    "supported_efforts",
+)
+
+
+def _own_bucket[T](
+    index: Mapping[str, Mapping[str, T]], provider_id: str
+) -> tuple[str, Mapping[str, T]] | None:
+    """This provider's own bucket in one index, found exactly as the ladder does.
+
+    Its own id first, then its alias -- the order of
+    :func:`_resolve_model_field_tiered` and every sibling of it.
+    """
+
+    bucket = index.get(provider_id)
+    if bucket is not None:
+        return provider_id, bucket
+    alias = PROVIDER_ID_ALIASES.get(provider_id)
+    if alias is not None:
+        bucket = index.get(alias)
+        if bucket is not None:
+            return alias, bucket
+    return None
+
+
+def _rung_statements[T](
+    index: Mapping[str, Mapping[str, T]],
+    has_bucket: bool,
+    provider_id: str,
+    model_id: str,
+) -> list[ModelsDevStatement]:
+    """The bucket and OpenRouter-copy statements off one per-bucket index."""
+
+    found: list[ModelsDevStatement] = []
+    own = _own_bucket(index, provider_id) if has_bucket else None
+    hit = None if own is None else _lookup_in_bucket_tiered(own[1], model_id)
+    if hit is not None:
+        found.append(ModelsDevStatement(MODELS_DEV_RUNG_BUCKET, hit[1], hit[0]))
+    reference = _reference_bucket(index, provider_id)
+    hit = (
+        None if reference is None else _lookup_in_reference_bucket(reference, model_id)
+    )
+    if hit is not None:
+        found.append(
+            ModelsDevStatement(
+                MODELS_DEV_RUNG_REFERENCE, hit[1], hit[0], consulted=not has_bucket
+            )
+        )
+    return found
+
+
+def _vote_statement[T: Hashable](
+    field: _LadderField[T], model_id: str, path: Path | None, consulted: bool
+) -> ModelsDevStatement | None:
+    """:func:`_field_cross_vote`, with the sample it was taken over."""
+
+    index = _cached_field_cross_index(field, path)
+    for tier, candidate in candidate_ladder(model_id):
+        reported = index.get(candidate)
+        if not reported:
+            continue
+        vote = _modal(reported, field.tie_break, field.minimum)
+        if vote is not None:
+            return ModelsDevStatement(
+                MODELS_DEV_RUNG_VOTE,
+                tier,
+                vote.value,
+                consulted=consulted,
+                reporters=vote.reporters,
+                agreement=vote.agreement,
+            )
+    return None
+
+
+def _pair_statements(
+    provider_id: str,
+    model_id: str,
+    has_bucket: bool,
+    path: Path | None,
+) -> list[ModelsDevStatement]:
+    """What each rung states a model accepts and produces: both halves or none."""
+
+    inputs = {
+        statement.rung: statement
+        for statement in _rung_statements(
+            _cached_field_index(INPUT_MODALITIES_FIELD, path),
+            has_bucket,
+            provider_id,
+            model_id,
+        )
+    }
+    found: list[ModelsDevStatement] = []
+    for output in _rung_statements(
+        _cached_field_index(OUTPUT_MODALITIES_FIELD, path),
+        has_bucket,
+        provider_id,
+        model_id,
+    ):
+        accepted = inputs.get(output.rung)
+        if accepted is None:
+            continue
+        found.append(
+            replace(
+                output,
+                tier=max(output.tier, accepted.tier),
+                value=DeclaredModalities(inputs=accepted.value, outputs=output.value),
+            )
+        )
+    consulted = not has_bucket
+    voted_in = _vote_statement(INPUT_MODALITIES_FIELD, model_id, path, consulted)
+    voted_out = _vote_statement(OUTPUT_MODALITIES_FIELD, model_id, path, consulted)
+    if voted_in is not None and voted_out is not None:
+        found.append(
+            ModelsDevStatement(
+                MODELS_DEV_RUNG_VOTE,
+                max(voted_in.tier, voted_out.tier),
+                DeclaredModalities(inputs=voted_in.value, outputs=voted_out.value),
+                consulted=consulted,
+                reporters=min(voted_in.reporters or 0, voted_out.reporters or 0),
+            )
+        )
+    return found
+
+
+def _cross_rungs(
+    model_id: str, path: Path | None
+) -> tuple[tuple[ResolutionTier, tuple[_CrossProviderRow, ...]], ...]:
+    index = _cached_cross_provider_index(
+        path if path is not None else models_dev_cache_path()
+    )
+    return tuple(
+        (tier, rows)
+        for tier, candidate in candidate_ladder(model_id)
+        if (rows := index.get(candidate))
+    )
+
+
+_rows_index_lock = threading.Lock()
+_rows_index_cache: dict[
+    Path,
+    tuple[
+        tuple[int, int],
+        dict[str, dict[str, tuple[str, Mapping[str, Any]]]],
+        dict[str, tuple[tuple[str, str, Mapping[str, Any]], ...]],
+    ],
+] = {}
+
+
+def _cached_rows_index(
+    path: Path | None,
+) -> tuple[
+    dict[str, dict[str, tuple[str, Mapping[str, Any]]]],
+    dict[str, tuple[tuple[str, str, Mapping[str, Any]], ...]],
+]:
+    """Every row by bucket and by normalized id, once per file generation.
+
+    Shaped like the ladder's own indexes -- a per-bucket ``setdefault`` table
+    and a cross-bucket list per candidate -- but holding the rows themselves,
+    by reference into the shared parse, so the view can show them verbatim.
+    Built only when someone opens the view.
+    """
+
+    cache_path = path if path is not None else models_dev_cache_path()
+    generation = _cache_generation(cache_path)
+    if generation is None:
+        return {}, {}
+    with _rows_index_lock:
+        cached = _rows_index_cache.get(cache_path)
+        if cached is not None and cached[0] == generation:
+            return cached[1], cached[2]
+    cache = read_models_dev_cache(cache_path)
+    by_bucket: dict[str, dict[str, tuple[str, Mapping[str, Any]]]] = {}
+    across: dict[str, list[tuple[str, str, Mapping[str, Any]]]] = {}
+    for bucket_id, bucket in (cache.index if cache is not None else {}).items():
+        if not isinstance(bucket_id, str) or not isinstance(bucket, Mapping):
+            continue
+        models = bucket.get("models")
+        if not isinstance(models, Mapping):
+            continue
+        table: dict[str, tuple[str, Mapping[str, Any]]] = {}
+        for model_key, metadata in models.items():
+            if not isinstance(model_key, str) or not isinstance(metadata, Mapping):
+                continue
+            for candidate in normalize_candidates(model_key):
+                table.setdefault(candidate, (model_key, metadata))
+                across.setdefault(candidate, []).append(
+                    (bucket_id, model_key, metadata)
+                )
+        if table:
+            by_bucket[bucket_id] = table
+    built = (by_bucket, {key: tuple(rows) for key, rows in across.items()})
+    with _rows_index_lock:
+        _rows_index_cache[cache_path] = (generation, *built)
+        while len(_rows_index_cache) > _PAYLOAD_CACHE_MAX_PATHS:
+            _rows_index_cache.pop(next(iter(_rows_index_cache)))
+    return built
+
+
+def _knowledge_rows(
+    provider_id: str, model_id: str, has_bucket: bool, path: Path | None
+) -> tuple[ModelsDevRow, ...]:
+    by_bucket, across = _cached_rows_index(path)
+    rows: list[ModelsDevRow] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(
+        rung: str, tier: ResolutionTier, bucket: str, found: Any, consulted: bool
+    ) -> None:
+        model_key, metadata = found
+        if (bucket, model_key) in seen:
+            return
+        seen.add((bucket, model_key))
+        rows.append(ModelsDevRow(rung, tier, bucket, model_key, metadata, consulted))
+
+    own = _own_bucket(by_bucket, provider_id) if has_bucket else None
+    if own is not None:
+        hit = _lookup_in_bucket_tiered(own[1], model_id)
+        if hit is not None:
+            add(MODELS_DEV_RUNG_BUCKET, hit[1], own[0], hit[0], True)
+    reference = _reference_bucket(by_bucket, provider_id)
+    hit = (
+        None if reference is None else _lookup_in_reference_bucket(reference, model_id)
+    )
+    if hit is not None:
+        add(
+            MODELS_DEV_RUNG_REFERENCE,
+            hit[1],
+            REFERENCE_BUCKET_ID,
+            hit[0],
+            not has_bucket,
+        )
+    for tier, candidate in candidate_ladder(model_id):
+        for bucket, model_key, metadata in across.get(candidate, ()):
+            add(
+                MODELS_DEV_RUNG_VOTE,
+                tier,
+                bucket,
+                (model_key, metadata),
+                not has_bucket,
+            )
+    return tuple(rows)
+
+
+def models_dev_knowledge(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> ModelsDevKnowledge:
+    """Every models.dev rung's statement about one model, and its rows (7.86.0).
+
+    Per field, in ladder order: the provider's own bucket (tiers 3-4), the
+    OpenRouter copy (5-6) and the cross-provider vote (7-10), each only where
+    that rung states the field -- the same indexes, the same matching, the
+    same quorum as the ladder. Rows: the bucket's and the copy's matched row,
+    then every same-named row the vote counts, each with the rung it met.
+    Never raises on a missing or unreadable file: everything is empty.
+    """
+
+    cache = read_models_dev_cache(path)
+    has_bucket = _has_models_dev_bucket(_cached_raw_index(path), provider_id)
+    consulted = not has_bucket
+    statements: dict[str, tuple[ModelsDevStatement, ...]] = {}
+    for name, field in _KNOWLEDGE_LADDER_FIELDS:
+        found = _rung_statements(
+            _cached_field_index(field, path), has_bucket, provider_id, model_id
+        )
+        voted = _vote_statement(field, model_id, path, consulted)
+        if voted is not None:
+            found.append(voted)
+        if found:
+            statements[name] = tuple(found)
+    output = _rung_statements(
+        _cached_output_limit_index(path), has_bucket, provider_id, model_id
+    )
+    rungs = _cross_rungs(model_id, path)
+    voted_limit = _vote_across_rungs(
+        rungs,
+        lambda row: row.output_limit,
+        lambda value: value,
+        MIN_APPROXIMATE_NUMERIC_REPORTERS,
+    )
+    if voted_limit is not None:
+        vote, tier = voted_limit
+        output.append(
+            ModelsDevStatement(
+                MODELS_DEV_RUNG_VOTE,
+                tier,
+                vote.value,
+                consulted=consulted,
+                reporters=vote.reporters,
+                agreement=vote.agreement,
+            )
+        )
+    if output:
+        statements["max_output_tokens"] = tuple(output)
+    capabilities = _rung_statements(
+        _cached_reasoning_index(path), has_bucket, provider_id, model_id
+    )
+    if rungs:
+        voted, voted_tiers, _efforts = _cross_provider_capability(rungs)
+    else:
+        voted, voted_tiers = None, {}
+    for name in _KNOWLEDGE_REASONING_FIELDS:
+        found = [
+            replace(statement, value=getattr(statement.value, name))
+            for statement in capabilities
+            if getattr(statement.value, name) is not None
+        ]
+        if voted is not None and getattr(voted, name) is not None:
+            tier = voted_tiers.get(name)
+            if tier is not None:
+                found.append(
+                    ModelsDevStatement(
+                        MODELS_DEV_RUNG_VOTE,
+                        tier,
+                        getattr(voted, name),
+                        consulted=consulted,
+                    )
+                )
+        if found:
+            statements[f"reasoning.{name}"] = tuple(found)
+    pairs = _pair_statements(provider_id, model_id, has_bucket, path)
+    if pairs:
+        statements["declared_modalities"] = tuple(pairs)
+    return ModelsDevKnowledge(
+        has_bucket=has_bucket,
+        fetched_at=None if cache is None else cache.fetched_at.isoformat(),
+        statements=statements,
+        rows=_knowledge_rows(provider_id, model_id, has_bucket, path),
+        discovery_fill=(
+            {} if cache is None else _discovery_fill(cache.index, provider_id, model_id)
+        ),
+    )

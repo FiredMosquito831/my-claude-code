@@ -1,11 +1,13 @@
 """Single-owner provider generations and application model catalog."""
 
 import asyncio
+import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from loguru import logger
 
@@ -14,6 +16,12 @@ from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_kinds import (
     provider_first_modalities,
     provider_kind_words,
+)
+from my_claude_code.application.model_knowledge import (
+    ROW_SOURCE_LITELLM,
+    ROW_SOURCE_OPENROUTER_LIVE,
+    ROW_SOURCE_PROVIDER,
+    PublishedRow,
 )
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
@@ -32,14 +40,20 @@ from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningDialect
 from my_claude_code.core.stop_deadline import stop_deadline
 from my_claude_code.core.trace import trace_event
-from my_claude_code.core.wire_capture import install_credential_digests
+from my_claude_code.core.wire_capture import (
+    install_credential_digests,
+    redact_wire_value,
+)
 from my_claude_code.providers.base import BaseProvider
 from my_claude_code.providers.runtime import ProviderRuntime
 from my_claude_code.providers.runtime.discovery import (
     ProviderModelDiscovery,
     model_cache_provider_ids_for_settings,
 )
-from my_claude_code.providers.runtime.litellm_prices import litellm_model_catalogue
+from my_claude_code.providers.runtime.litellm_prices import (
+    litellm_model_catalogue,
+    litellm_model_entries,
+)
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.models_dev import (
     declared_modalities_lookup,
@@ -55,13 +69,17 @@ from my_claude_code.providers.runtime.openrouter_catalogue import (
     openrouter_live_cache_path,
     openrouter_live_catalogue,
     openrouter_live_is_due,
+    openrouter_live_rows,
     refresh_openrouter_live,
 )
 from my_claude_code.providers.runtime.validation import ConfiguredModelValidator
 from my_claude_code.runtime.catalogue_store import (
     catalogue_scope_key,
+    provider_rows_mark,
     read_stored_catalogue,
+    read_stored_provider_rows,
     store_catalogue,
+    store_provider_rows,
 )
 
 ProviderRuntimeFactory = Callable[[Settings], ProviderRuntime]
@@ -167,6 +185,16 @@ class ProviderRuntimeManager:
         # that "last refreshed 40 min ago" is not mistaken for a sweep this
         # process ran.
         self._catalogue_from_store = False
+        # The stored provider rows (7.86.0), parsed once per file write for
+        # the "Everything known" view: ((scope key, file mark), what was read).
+        self._provider_rows_lock = threading.Lock()
+        self._provider_rows_memo: (
+            tuple[
+                tuple[str, str | None],
+                tuple[dict[str, dict[str, Any]], float] | None,
+            ]
+            | None
+        ) = None
         self._next_generation_id = 2
         self._retired: dict[int, _ProviderGeneration] = {}
         # How many live generations hold each carried provider object, keyed
@@ -547,6 +575,84 @@ class ProviderRuntimeManager:
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._model_cache.cached_prefixed_model_infos()
 
+    def model_published_rows(
+        self, provider_id: str, model_id: str, openrouter_ids: Sequence[str]
+    ) -> tuple[PublishedRow, ...]:
+        """The stored rows "Everything known" shows for one model (7.86.0).
+
+        Three of them, each from its own stored file and each scrubbed of
+        anything credential-shaped: the provider's own list row as stored
+        beside the catalogue (the view prefers the live record's own copy and
+        reads this one after a restart, until the next sweep), OpenRouter's
+        live rows for the ids its rung met, and LiteLLM's entries while
+        LiteLLM pricing is on. Called on a worker thread, on demand; nothing a
+        request, a list or a price reads goes through here.
+        """
+
+        settings = self._current.settings
+        found: list[PublishedRow] = []
+        stored = self._stored_provider_rows()
+        if stored is not None:
+            rows, written_at = stored
+            row = rows.get(provider_id, {}).get(model_id)
+            if row is not None:
+                found.append(
+                    PublishedRow(
+                        source=ROW_SOURCE_PROVIDER,
+                        key=model_id,
+                        row=row,
+                        match="stored beside the catalogue",
+                        as_of=_iso_instant(written_at),
+                    )
+                )
+        if openrouter_ids:
+            live = openrouter_live_rows(settings, openrouter_ids)
+            if live is not None:
+                fetched_at, live_rows = live
+                found.extend(
+                    PublishedRow(
+                        source=ROW_SOURCE_OPENROUTER_LIVE,
+                        key=slug,
+                        row=redact_wire_value(row),
+                        as_of=fetched_at,
+                    )
+                    for slug, row in live_rows
+                )
+        entries = litellm_model_entries(settings, provider_id, model_id)
+        if entries is not None:
+            fetched_at, matched = entries
+            found.extend(
+                PublishedRow(
+                    source=ROW_SOURCE_LITELLM,
+                    key=key,
+                    row=redact_wire_value(entry),
+                    match=match,
+                    as_of=fetched_at,
+                )
+                for key, entry, match in matched
+            )
+        return tuple(found)
+
+    def _stored_provider_rows(
+        self,
+    ) -> tuple[dict[str, dict[str, Any]], float] | None:
+        """The stored provider rows for this scope, read once per file write."""
+
+        key = catalogue_scope_key(self._model_cache.cached_scope())
+        try:
+            stamp = provider_rows_mark()
+            with self._provider_rows_lock:
+                cached = self._provider_rows_memo
+                if cached is not None and cached[0] == (key, stamp):
+                    return cached[1]
+            read = read_stored_provider_rows(key)
+        except Exception as exc:
+            logger.debug("Stored provider rows could not be read: {}", exc)
+            return None
+        with self._provider_rows_lock:
+            self._provider_rows_memo = ((key, stamp), read)
+        return read
+
     def cache_model_infos(
         self,
         provider_id: str,
@@ -764,14 +870,18 @@ class ProviderRuntimeManager:
     def _store_catalogue(self, computed_at: float) -> None:
         """Write what the sweep just learned, unless it is already on disk."""
 
+        catalogues = self._model_cache.cached_model_infos_by_provider()
+        key = catalogue_scope_key(self._model_cache.cached_scope())
         try:
-            store_catalogue(
-                self._model_cache.cached_model_infos_by_provider(),
-                catalogue_scope_key(self._model_cache.cached_scope()),
-                computed_at=computed_at,
-            )
+            store_catalogue(catalogues, key, computed_at=computed_at)
         except Exception as exc:
             logger.debug("Model catalogue could not be stored: {}", exc)
+        # 7.86.0: each record's own list row, beside the catalogue and never
+        # inside it, for the Models page's "Everything known" view.
+        try:
+            store_provider_rows(catalogues, key, computed_at=computed_at)
+        except Exception as exc:
+            logger.debug("Provider list rows could not be stored: {}", exc)
 
     @property
     def last_catalogue_refresh_at(self) -> float | None:
@@ -1258,3 +1368,12 @@ def _install_credential_digests(settings: Settings) -> None:
         install_credential_digests(values)
     except Exception as exc:
         logger.debug("Credential digest install skipped: {}", type(exc).__name__)
+
+
+def _iso_instant(epoch_seconds: float) -> str | None:
+    """Epoch seconds as an ISO-8601 UTC instant, or ``None`` if unreadable."""
+
+    try:
+        return datetime.fromtimestamp(epoch_seconds, UTC).isoformat()
+    except OverflowError, OSError, ValueError:
+        return None

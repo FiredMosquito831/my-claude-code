@@ -598,6 +598,8 @@ _map_lock = threading.Lock()
 #: page asking about every model reads the 2.3 MB file once, not per row.
 _map_generations: dict[Path, tuple[str, Mapping[str, Any]]] = {}
 _MAP_MAX_PATHS = 4
+#: path -> (file mark, ``fetched_at``) for the "Everything known" view (7.86.0).
+_map_fetched_at: dict[Path, tuple[str, str | None]] = {}
 
 
 def reset_litellm_model_map_cache() -> None:
@@ -605,6 +607,7 @@ def reset_litellm_model_map_cache() -> None:
 
     with _map_lock:
         _map_generations.clear()
+        _map_fetched_at.clear()
 
 
 def _litellm_file_mark(path: Path) -> str | None:
@@ -662,6 +665,39 @@ def litellm_model_catalogue(
     return LiteLLMCatalogue(mark=mark, lookup=lookup)
 
 
+def litellm_model_entries(
+    settings: Settings, provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[str | None, tuple[tuple[str, Mapping[str, Any], str], ...]] | None:
+    """Every LiteLLM entry that may describe this route, verbatim (7.86.0).
+
+    For the Models page's "Everything known" view: the entries pricing's own
+    walk (:func:`_candidate_entries`) meets, in its order, as
+    ``(key, entry, match)``, with when the file was fetched. ``None`` exactly
+    where :func:`litellm_model_catalogue` is -- LiteLLM pricing off, or no
+    readable file -- so the view never shows a map nothing else reads.
+    """
+
+    if not bool(getattr(settings, "cost_source_litellm_enabled", False)):
+        return None
+    cache_path = path if path is not None else litellm_cache_path()
+    stored = _stored_map(cache_path)
+    if stored is None:
+        return None
+    with _map_lock:
+        known = _map_fetched_at.get(cache_path)
+    if known is None or known[0] != stored[0]:
+        cache = read_litellm_cache(cache_path)
+        known = (stored[0], None if cache is None else cache.fetched_at.isoformat())
+        with _map_lock:
+            _map_fetched_at[cache_path] = known
+    fetched_at = known[1]
+    try:
+        entries = tuple(_candidate_entries(stored[1], provider_id, model_id))
+    except Exception:
+        return fetched_at, ()
+    return fetched_at, entries
+
+
 __all__ = [
     "LITELLM_MAX_SHRINK_RATIO",
     "LITELLM_MIN_ENTRIES",
@@ -672,6 +708,7 @@ __all__ = [
     "litellm_cache_path",
     "litellm_media_card",
     "litellm_model_catalogue",
+    "litellm_model_entries",
     "litellm_model_facts",
     "litellm_rate_card",
     "payload_passes_integrity",

@@ -129,10 +129,20 @@ def test_the_order_a_provider_listed_its_models_in_survives() -> None:
 
 
 def test_every_field_is_carried_by_the_codec() -> None:
-    """A field the codec forgets is a field every restart silently drops."""
+    """A field the codec forgets is a field every restart silently drops.
+
+    The one exception is declared, not forgotten: the verbatim list row
+    (7.86.0) is stored beside the catalogue (``provider-rows``), never in it.
+    """
     assert {field.name for field in fields(ProviderModelInfo)} == set(
         model_metadata._MODEL_INFO_FIELDS
+    ) | set(model_metadata._MODEL_INFO_STORED_ELSEWHERE)
+    assert not set(model_metadata._MODEL_INFO_FIELDS) & set(
+        model_metadata._MODEL_INFO_STORED_ELSEWHERE
     )
+    for field in fields(ProviderModelInfo):
+        stored_elsewhere = field.name in model_metadata._MODEL_INFO_STORED_ELSEWHERE
+        assert field.metadata.get("document", True) is not stored_elsewhere
     assert {field.name for field in fields(ModelReasoningCapability)} == set(
         model_metadata._REASONING_FIELDS
     )

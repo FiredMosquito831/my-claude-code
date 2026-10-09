@@ -8,6 +8,7 @@ import sys
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,9 @@ from my_claude_code.api.model_admin import (
     apply_visibility_toggle,
     bulk_result_rows,
     hiding_pattern,
+    knowledge_entry,
     migrate_exact_patterns_to_globs,
+    model_knowledge_payload,
     model_refs_by_provider,
     render_patterns,
     speakable_surfaces,
@@ -73,7 +76,11 @@ from my_claude_code.application.model_kinds import (
     media_rail_placements,
     resolve_model_kind,
 )
-from my_claude_code.application.model_metadata import ProviderModelRefreshResult
+from my_claude_code.application.model_metadata import (
+    ModelListingProvenance,
+    ProviderModelInfo,
+    ProviderModelRefreshResult,
+)
 from my_claude_code.application.release_updates import (
     get_release_status,
     perform_upgrade,
@@ -134,12 +141,15 @@ from my_claude_code.config.harnesses import (
 )
 from my_claude_code.config.model_overrides import (
     current_model_overrides,
+    normalize_override_key,
     save_model_overrides,
 )
 from my_claude_code.config.model_refs import (
     configured_chat_model_refs,
     format_model_ref_list,
+    parse_model_name,
     parse_model_ref_list,
+    parse_provider_type,
 )
 from my_claude_code.config.onboarding import (
     OnboardingState,
@@ -1732,6 +1742,145 @@ async def model_admin_page(
 
     require_loopback_admin(request)
     return await asyncio.to_thread(_models_page_payload, services)
+
+
+#: The longest model reference the knowledge route reads (7.86.0). Longer than
+#: any id a provider list publishes; a longer string is not a model reference.
+KNOWLEDGE_REF_MAX_CHARS = 512
+
+
+def _knowledge_ref(ref: str) -> str:
+    """A ``provider/model`` reference, or a 400 saying what one looks like."""
+
+    text = ref.strip()
+    provider_id, _, model_id = text.partition("/")
+    if (
+        not provider_id
+        or not model_id.strip()
+        or len(text) > KNOWLEDGE_REF_MAX_CHARS
+        or any(ord(character) < 32 or ord(character) == 127 for character in text)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="ref must be one model reference, written provider/model",
+        )
+    return text
+
+
+def _vendor_client_row(
+    info: ProviderModelInfo | None, model_id: str
+) -> tuple[str, Mapping[str, Any]] | None:
+    """The vendor's own client catalogue row for a model it lists, if any.
+
+    Only a record whose listing names the vendor client as its source has
+    one: the Codex CLI's bundled catalogue, which ``codex_catalogue`` reads
+    (memoized per installed file) and which nothing else produces.
+    """
+
+    listing = None if info is None else info.listing
+    if listing is None or listing.provenance != ModelListingProvenance.VENDOR_CLIENT:
+        return None
+    catalogue = load_codex_catalogue()
+    if catalogue is None:
+        return None
+    for entry in catalogue.entries:
+        if entry.slug == model_id and entry.raw is not None:
+            return catalogue.label, entry.raw
+    return None
+
+
+def _iso_or_none(epoch: Any) -> str | None:
+    if isinstance(epoch, bool) or not isinstance(epoch, int | float):
+        return None
+    try:
+        return datetime.fromtimestamp(float(epoch), UTC).isoformat()
+    except OverflowError, OSError, ValueError:
+        return None
+
+
+def _model_knowledge(services: ApiServices, model_ref: str) -> dict[str, Any] | None:
+    """Everything known about one model, or ``None`` for a ref nothing lists.
+
+    On a worker thread (the route below), like the Models page it mirrors:
+    the row is built by the page's own function from the page's own inputs,
+    so each ``used`` cell is the cell the page draws.
+    """
+
+    settings = services.requests.current_settings()
+    info = next(
+        (
+            item
+            for item in services.requests.cached_prefixed_model_infos()
+            if item.model_id == model_ref
+        ),
+        None,
+    )
+    configured_refs = frozenset(
+        ref.model_ref for ref in configured_chat_model_refs(settings)
+    )
+    if info is None and model_ref not in configured_refs:
+        return None
+    overrides = current_model_overrides()
+    placements = media_rail_placements(settings)
+    live = services.requests.openrouter_live_catalogue()
+    litellm = services.requests.litellm_model_catalogue()
+    entry = knowledge_entry(
+        model_ref,
+        info,
+        visibility=settings_model_visibility(settings),
+        overrides=overrides,
+        configured_refs=configured_refs,
+        dialect_lookup=services.requests.model_reasoning_dialect,
+        media_placements=placements,
+        kind_modalities=services.requests.model_modalities_lookup(),
+        kind_words=services.requests.model_kind_words_lookup(),
+        live=live,
+        litellm=litellm,
+        learned=services.admin.learned_facts_by_model(),
+    )
+    provider_id = parse_provider_type(model_ref)
+    model_id = parse_model_name(model_ref)
+    answer = None if live is None else live(provider_id, model_id)
+    refresh = services.admin.catalogue_refresh_status()
+    return model_knowledge_payload(
+        entry,
+        info,
+        live=live,
+        litellm=litellm,
+        published_rows=services.requests.model_published_rows(
+            provider_id, model_id, () if answer is None else answer.slugs
+        ),
+        vendor_row=_vendor_client_row(info, model_id),
+        model_row=overrides.models.get(normalize_override_key(model_ref), {}),
+        provider_row=overrides.providers.get(normalize_override_key(provider_id), {}),
+        media_placements=placements,
+        catalogue_as_of=_iso_or_none(refresh.get("last_refreshed_at")),
+    )
+
+
+@router.get("/admin/api/models/knowledge")
+async def model_knowledge(
+    request: Request,
+    ref: str = "",
+    services: ApiServices = Depends(get_services),
+):
+    """Everything known about one model, for its "Everything known" view (7.86.0).
+
+    Every source's statement of every field beside the value the ladder used,
+    and every source's own row, verbatim and scrubbed. Loaded on demand for one
+    model, computed off the event loop, and never part of the Models page
+    payload or its cache.
+    """
+
+    require_loopback_admin(request)
+    model_ref = _knowledge_ref(ref)
+    payload = await asyncio.to_thread(_model_knowledge, services, model_ref)
+    if payload is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No model {model_ref} in the catalogue or the configured routes",
+        )
+    return payload
 
 
 class LearnedFactForgetPayload(BaseModel):

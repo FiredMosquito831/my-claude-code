@@ -10,9 +10,9 @@ Each walks its own ladder, provider official first (user decisions 2026-10-08
   live list states no publication day; its ``created`` is its listing day and
   stays in its own row;
 - knowledge cutoff, description: the provider's list -> OpenRouter's live list
-  (7.84.0's rows) -> models.dev. A value 7.84.0 already showed never moves: the
-  provider's statement of the same value takes the badge, a different one is
-  shown beside it.
+  (7.84.0's rows) -> models.dev. The provider's statement of the same value
+  takes the badge; since 7.86.0 a different one is shown, with OpenRouter's
+  beside it (7.85.0 had them the other way round).
 
 Display only, and LiteLLM's endpoint words fill the endpoints row only where
 the provider's list names none.
@@ -207,7 +207,14 @@ def test_without_the_live_list_the_provider_then_models_dev() -> None:
     assert copy["knowledge_cutoff"]["value"] == "2025-03-31"
 
 
-def test_a_value_the_live_list_showed_never_moves() -> None:
+def test_the_providers_own_words_answer_and_openrouters_stay_beside() -> None:
+    """Provider first (7.86.0): the user's rule, turned round from 7.85.0.
+
+    7.85.0 kept OpenRouter's live words shown where the provider's own list
+    said something else, with the provider's beside them; the provider's own
+    statement now answers, and OpenRouter's is the one beside it.
+    """
+
     live = _live(description="OpenRouter's words.", knowledge_cutoff="2025-03-31")
     same = capability_payload(
         "nous_portal",
@@ -215,22 +222,40 @@ def test_a_value_the_live_list_showed_never_moves() -> None:
         _record("acme/copied", description="OpenRouter's words."),
         live=live,
     )
-    # Same words from the provider's own list: the badge becomes the provider's.
+    # Same words from the provider's own list: the badge is the provider's.
     assert same["description"]["value"] == "OpenRouter's words."
     assert same["description"]["source"] == "provider"
+    assert "also_stated" not in same["description"]
     differs = capability_payload(
         "nous_portal",
         "acme/copied",
-        _record("acme/copied", description="Nous's own words."),
+        _record(
+            "acme/copied",
+            description="Nous's own words.",
+            knowledge_cutoff="2024-11",
+        ),
         live=live,
     )
     row = differs["description"]
-    assert (row["value"], row["source"]) == ("OpenRouter's words.", "openrouter_live")
-    assert row["also_stated"]["value"] == "Nous's own words."
-    assert row["also_stated"]["source"] == "provider"
-    # models.dev never replaces a stated live value either.
-    assert differs["knowledge_cutoff"]["value"] == "2025-03-31"
-    assert differs["knowledge_cutoff"]["source"] == "openrouter_live"
+    assert (row["value"], row["source"], row["tier"]) == (
+        "Nous's own words.",
+        "provider",
+        1,
+    )
+    assert row["also_stated"]["value"] == "OpenRouter's words."
+    assert row["also_stated"]["source"] == "openrouter_live"
+    assert row["also_stated"]["tier_label"] == "OpenRouter live, exact id"
+    cutoff = differs["knowledge_cutoff"]
+    assert (cutoff["value"], cutoff["source"]) == ("2024-11", "provider")
+    assert cutoff["also_stated"]["value"] == "2025-03-31"
+    # Where the provider says nothing, OpenRouter's live value stands and
+    # models.dev never replaces it.
+    silent = capability_payload(
+        "nous_portal", "acme/copied", _record("acme/copied"), live=live
+    )
+    assert silent["knowledge_cutoff"]["value"] == "2025-03-31"
+    assert silent["knowledge_cutoff"]["source"] == "openrouter_live"
+    assert silent["description"]["source"] == "openrouter_live"
 
 
 def test_where_the_live_list_is_silent_the_provider_then_models_dev_fill() -> None:

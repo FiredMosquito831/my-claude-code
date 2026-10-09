@@ -27034,10 +27034,224 @@ function fillModelReadouts(readouts, model) {
       model,
     ),
   );
+  /* Everything every source says about this model (7.86.0), loaded only when
+     opened: it is never part of the page payload or its cache. */
+  readouts.appendChild(buildKnowledgeDisclosure(model));
   const listing = buildListingPanel(model.listing);
   if (listing) readouts.appendChild(listing);
   const learned = buildLearnedPanel(model);
   if (learned) readouts.appendChild(learned);
+}
+
+/* "Everything known" (7.86.0). The panel above shows the value the ladder
+   used for each field and the rung that stated it; this shows, beside that
+   value, what EVERY source states about the same field -- the provider's own
+   list, what discovery filled from models.dev, OpenRouter's live list,
+   models.dev's own bucket, its OpenRouter copy and its cross-provider vote,
+   LiteLLM's map (while LiteLLM pricing is on), what this host taught MCC,
+   your own overrides and the vendor's own client -- and every source's own
+   row, verbatim. Fetched once, on the first open, from
+   /admin/api/models/knowledge; computed off the server's event loop for one
+   model, never for the whole page. Read-only: nothing routes on any of it. */
+function buildKnowledgeDisclosure(model) {
+  const details = document.createElement("details");
+  details.className = "models-knowledge";
+  const summary = document.createElement("summary");
+  summary.className = "models-knowledge-summary";
+  summary.textContent = "Everything known";
+  details.appendChild(summary);
+  const body = document.createElement("div");
+  body.className = "models-knowledge-body";
+  details.appendChild(body);
+  let state = "idle";
+  details.addEventListener("toggle", () => {
+    if (!details.open || state !== "idle") return;
+    state = "loading";
+    loadModelKnowledge(model.model_ref, body).then((loaded) => {
+      // A failed load may be retried by closing and opening again.
+      state = loaded ? "loaded" : "idle";
+    });
+  });
+  return details;
+}
+
+async function loadModelKnowledge(modelRef, body) {
+  body.textContent = "";
+  const waiting = document.createElement("p");
+  waiting.className = "models-empty-note";
+  waiting.textContent = "Reading what every source says about this model…";
+  body.appendChild(waiting);
+  try {
+    const payload = await api(
+      `/admin/api/models/knowledge?ref=${encodeURIComponent(modelRef)}`,
+    );
+    renderModelKnowledge(body, payload);
+    return true;
+  } catch (error) {
+    body.textContent = "";
+    const failed = document.createElement("p");
+    failed.className = "models-knowledge-error";
+    failed.textContent = `Could not read it: ${error.message}. Close and open again to retry.`;
+    body.appendChild(failed);
+    return false;
+  }
+}
+
+function knowledgeValueText(key, value) {
+  if (key.endsWith("_price")) return formatPriceValue(value);
+  return formatCapabilityValue(value);
+}
+
+function renderModelKnowledge(body, payload) {
+  body.textContent = "";
+  const intro = document.createElement("p");
+  intro.className = "models-knowledge-intro";
+  intro.textContent =
+    "What every source states about each field, beside the value MCC uses " +
+    "(marked “used”). A highlighted statement says something different; a " +
+    "dimmed one is a rung MCC does not read for this provider. Shown only — " +
+    "nothing routes on this view.";
+  body.appendChild(intro);
+
+  const fields = Array.isArray(payload.fields) ? payload.fields : [];
+  const sources = Array.isArray(payload.sources) ? payload.sources : [];
+  // Only the sources that state something about this model get a column.
+  const stating = new Set();
+  fields.forEach((field) => {
+    (field.statements || []).forEach((statement) =>
+      stating.add(statement.source),
+    );
+  });
+  const columns = sources.filter((source) => stating.has(source.id));
+
+  const scroll = document.createElement("div");
+  scroll.className = "models-knowledge-scroll";
+  const table = document.createElement("table");
+  table.className = "models-knowledge-table";
+  const head = document.createElement("tr");
+  ["field", "MCC uses", ...columns.map((source) => source.label)].forEach(
+    (label) => {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = label;
+      head.appendChild(th);
+    },
+  );
+  table.appendChild(head);
+  fields.forEach((field) => {
+    const tr = document.createElement("tr");
+    const name = document.createElement("th");
+    name.scope = "row";
+    name.textContent = field.label;
+    tr.appendChild(name);
+    const used = document.createElement("td");
+    const usedLabel = field.used && (field.used.source_label || field.used.source);
+    used.textContent =
+      knowledgeValueText(field.key, field.used_value) +
+      (field.used_value !== null && field.used_value !== undefined && usedLabel
+        ? ` (${usedLabel})`
+        : "");
+    tr.appendChild(used);
+    columns.forEach((column) => {
+      const td = document.createElement("td");
+      const said = (field.statements || []).filter(
+        (statement) => statement.source === column.id,
+      );
+      said.forEach((statement, index) => {
+        const cell = document.createElement("span");
+        cell.className = "models-knowledge-cell";
+        if (statement.used) cell.classList.add("models-knowledge-used");
+        else if (statement.agrees_with_used === false)
+          cell.classList.add("models-knowledge-differs");
+        if (!statement.consulted) cell.classList.add("models-knowledge-unread");
+        cell.textContent =
+          knowledgeValueText(field.key, statement.value) +
+          (statement.used ? " — used" : "");
+        cell.title = [statement.rung, statement.note, statement.as_of]
+          .filter(Boolean)
+          .join(" · ");
+        if (index) td.appendChild(document.createElement("br"));
+        td.appendChild(cell);
+      });
+      tr.appendChild(td);
+    });
+    table.appendChild(tr);
+  });
+  scroll.appendChild(table);
+  body.appendChild(scroll);
+
+  const asOf = document.createElement("p");
+  asOf.className = "models-knowledge-sources";
+  asOf.textContent = columns
+    .map(
+      (source) => `${source.label}: ${source.as_of ? source.as_of : "age unknown"}`,
+    )
+    .join(" · ");
+  if (columns.length) body.appendChild(asOf);
+
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const rowsHead = document.createElement("p");
+  rowsHead.className = "models-subhead";
+  rowsHead.textContent = rows.length
+    ? `Each source's own row (${rows.length})`
+    : "No source's own row is stored for this model";
+  body.appendChild(rowsHead);
+  const list = document.createElement("div");
+  list.className = "models-knowledge-rows";
+  rows.forEach((entry) => list.appendChild(buildKnowledgeRow(entry)));
+  body.appendChild(list);
+}
+
+/* One source's row, collapsed: every field it publishes as a dotted path and
+   its value, in the order the source wrote them. */
+function buildKnowledgeRow(entry) {
+  const details = document.createElement("details");
+  details.className = "models-knowledge-row";
+  if (!entry.consulted) details.classList.add("models-knowledge-unread");
+  const summary = document.createElement("summary");
+  summary.className = "models-knowledge-row-summary";
+  summary.textContent = [
+    entry.source_label,
+    entry.key,
+    entry.match,
+    entry.consulted ? null : "not read for this provider",
+  ]
+    .filter(Boolean)
+    .join(" — ");
+  details.appendChild(summary);
+  const table = document.createElement("table");
+  table.className = "models-knowledge-row-table";
+  knowledgeRowPaths(entry.row, "").forEach(([path, value]) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.scope = "row";
+    th.textContent = path;
+    const td = document.createElement("td");
+    td.textContent = value;
+    tr.append(th, td);
+    table.appendChild(tr);
+  });
+  details.appendChild(table);
+  return details;
+}
+
+function knowledgeRowPaths(node, prefix) {
+  if (node === null || typeof node !== "object" || Array.isArray(node)) {
+    return [[prefix || "(value)", JSON.stringify(node)]];
+  }
+  const out = [];
+  Object.keys(node).forEach((key) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    const value = node[key];
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const inner = knowledgeRowPaths(value, path);
+      if (inner.length) out.push(...inner);
+      else out.push([path, "{}"]);
+    } else {
+      out.push([path, JSON.stringify(value)]);
+    }
+  });
+  return out;
 }
 
 /* Every fact MCC holds about this model, with its source, both timestamps,

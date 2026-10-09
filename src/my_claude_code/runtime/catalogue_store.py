@@ -40,6 +40,7 @@ from my_claude_code.application.model_metadata import (
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.core.derived_cache import DerivedCache, DerivedEntry
 from my_claude_code.core.version import package_version
+from my_claude_code.core.wire_capture import redact_wire_value
 
 #: The entry name under ``<config dir>/cache/derived/``.
 CATALOGUE_ENTRY = "provider-catalogue"
@@ -192,12 +193,160 @@ def _same_document(entry: DerivedEntry, document: dict[str, Any]) -> bool:
         return False
 
 
+# -- 7.86.0: the provider's own list rows, beside the catalogue ---------------
+#
+# Each record keeps the row its provider's list published (``published_row``)
+# for the Models page's "Everything known" view. The catalogue document above
+# never carries it -- it is byte for byte what 7.85.0 wrote -- so the rows are
+# stored here, under the same scope key: a version or provider-scope change
+# ignores this document exactly as it ignores the catalogue. Rows are public
+# listings, but every string is scrubbed by value shape before it is written
+# (a custom provider's list is whatever that host chose to put in it).
+
+#: The entry name under ``<config dir>/cache/derived/``.
+PROVIDER_ROWS_ENTRY = "provider-rows"
+
+
+def _parsed_row(text: str | None) -> dict[str, Any] | None:
+    if text is None:
+        return None
+    try:
+        row = json.loads(text)
+    except ValueError:
+        return None
+    return (
+        {str(key): value for key, value in row.items()}
+        if isinstance(row, dict)
+        else None
+    )
+
+
+def provider_rows_document(
+    catalogues: Mapping[str, tuple[ProviderModelInfo, ...]],
+    previous: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Every record's published row, scrubbed, deterministically.
+
+    ``previous`` is the stored document's rows (same scope), used for a record
+    that holds none -- one restored from the stored catalogue whose provider
+    the last sweep could not reach -- so a failed sweep never drops the row
+    the one before it stored. Providers sorted, models in listed order, like
+    the catalogue document.
+    """
+
+    providers: list[dict[str, Any]] = []
+    for provider_id in sorted(catalogues):
+        kept = (previous or {}).get(provider_id) or {}
+        rows: dict[str, Any] = {}
+        for info in catalogues[provider_id]:
+            row = _parsed_row(info.published_row)
+            if row is not None:
+                rows[info.model_id] = redact_wire_value(row)
+            elif info.model_id in kept:
+                rows[info.model_id] = kept[info.model_id]
+        if rows:
+            providers.append({"provider_id": provider_id, "rows": rows})
+    return {"providers": providers}
+
+
+def provider_rows_from_document(document: Any) -> dict[str, dict[str, Any]]:
+    """``{provider: {model id: row}}`` from a stored document; never raises."""
+
+    if not isinstance(document, dict):
+        return {}
+    providers = document.get("providers")
+    if not isinstance(providers, list):
+        return {}
+    restored: dict[str, dict[str, Any]] = {}
+    for entry in providers:
+        if not isinstance(entry, dict):
+            continue
+        provider_id = entry.get("provider_id")
+        rows = entry.get("rows")
+        if not isinstance(provider_id, str) or not isinstance(rows, dict):
+            continue
+        restored[provider_id] = {
+            str(model_id): row
+            for model_id, row in rows.items()
+            if isinstance(row, dict)
+        }
+    return restored
+
+
+def provider_rows_mark(*, cache: DerivedCache | None = None) -> str | None:
+    """The stored rows file's identity (``mtime_ns:size``), or ``None``.
+
+    For a reader that keeps the parsed document between questions: one stat
+    tells it whether the sweep has written a new one since.
+    """
+
+    store = catalogue_cache() if cache is None else cache
+    try:
+        stat = store.path_for(PROVIDER_ROWS_ENTRY).stat()
+    except OSError:
+        return None
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def read_stored_provider_rows(
+    key: str, *, cache: DerivedCache | None = None
+) -> tuple[dict[str, dict[str, Any]], float] | None:
+    """The stored rows and the moment they were written, or ``None``."""
+
+    store = catalogue_cache() if cache is None else cache
+    entry = store.read(PROVIDER_ROWS_ENTRY)
+    if entry is None or not entry.matches(key):
+        return None
+    return provider_rows_from_document(entry.payload), entry.computed_at
+
+
+def store_provider_rows(
+    catalogues: Mapping[str, tuple[ProviderModelInfo, ...]],
+    key: str,
+    *,
+    computed_at: float,
+    cache: DerivedCache | None = None,
+) -> bool:
+    """Write the rows beside the catalogue, unless they are already stored.
+
+    Returns whether anything was written. Compared on the document, as the
+    catalogue is, so an hourly sweep that learned nothing rewrites nothing.
+    """
+
+    store = catalogue_cache() if cache is None else cache
+    existing = store.read(PROVIDER_ROWS_ENTRY)
+    previous = (
+        provider_rows_from_document(existing.payload)
+        if existing is not None and existing.matches(key)
+        else None
+    )
+    document = provider_rows_document(catalogues, previous)
+    if (
+        existing is not None
+        and existing.matches(key)
+        and _same_document(existing, document)
+    ):
+        return False
+    return store.write(
+        PROVIDER_ROWS_ENTRY,
+        key=key,
+        payload=document,
+        computed_at=computed_at,
+        compact=True,
+    )
+
+
 __all__ = [
     "CATALOGUE_ENTRY",
+    "PROVIDER_ROWS_ENTRY",
     "catalogue_cache",
     "catalogue_document",
     "catalogue_scope_key",
     "catalogues_from_document",
+    "provider_rows_document",
+    "provider_rows_from_document",
     "read_stored_catalogue",
+    "read_stored_provider_rows",
     "store_catalogue",
+    "store_provider_rows",
 ]

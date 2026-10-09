@@ -2740,9 +2740,9 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <em>published</em> day and a <em>retires</em> row, each badged
                   with the source that said it, the provider's own model list first.
                   Description and cutoff: the provider's list, then OpenRouter's
-                  live list, then models.dev &mdash; a value the panel already showed
-                  from OpenRouter stays, and where the provider's own words differ
-                  they are shown beside it. Published: the day the provider's list
+                  live list, then models.dev &mdash; where the provider's own words
+                  and OpenRouter's differ, the provider's are shown and OpenRouter's
+                  are listed beside them as <em>also stated</em>. Published: the day the provider's list
                   says it published the model (a list that stamps one value on every
                   row says nothing, and OpenRouter's own <em>created</em> is its
                   listing day, shown in its own row), else the vendor's release day
@@ -2754,6 +2754,28 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <em>endpoints</em> row where the provider names none, and is one
                   more source for a model's kind &mdash; see below. All of it is
                   shown only: nothing here changes a route, a list or a price.
+                </p>
+                <p id="guide-everything-known">
+                  <strong>Everything known about one model.</strong> Under each
+                  model's panel on the <strong>Models</strong> page, open
+                  <em>Everything known</em> to see what <em>every</em> source says
+                  about each field, beside the value MCC uses (marked
+                  <em>used</em>): the provider's own model list, what discovery
+                  filled from models.dev, OpenRouter's live list, models.dev's own
+                  bucket for the provider, models.dev's copy of OpenRouter, the
+                  cross-provider vote (with how many same-named rows stated it),
+                  LiteLLM's map when <em>Use LiteLLM's price map too</em> is on,
+                  what this host taught MCC, your own overrides and media rails, and
+                  the vendor's own client (the Codex CLI's catalogue for ChatGPT).
+                  A highlighted statement says something different from the value
+                  in use; a dimmed one comes from a rung MCC never reads for that
+                  provider &mdash; a provider with a models.dev bucket of its own
+                  is never answered from outside it. Below the table, each source's
+                  own row is listed verbatim, field by field, so a field no row of
+                  the panel shows (a tokenizer, a moderation flag, a benchmark
+                  score) is still there to read. It is read when you open it, for
+                  that one model, and it is shown only: nothing routes, lists or
+                  prices on it.
                 </p>
                 <p>
                   <strong>Catalogues re-read themselves.</strong> Every usable

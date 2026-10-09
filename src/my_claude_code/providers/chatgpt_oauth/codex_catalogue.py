@@ -38,7 +38,7 @@ import mmap
 import os
 import shutil
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -89,6 +89,14 @@ class CodexCatalogueEntry:
     #: ``available_in_plans``; ``None`` when the entry published no list at
     #: all, so an unknown plan can never be read as an excluded plan.
     available_in_plans: frozenset[str] | None = None
+    #: The entry exactly as Codex's catalogue publishes it (7.86.0) -- its
+    #: ``context_window``, ``max_context_window`` and effort vocabulary
+    #: included -- for the Models page's "Everything known" view only. Never
+    #: read by this rung or the ladder (see the module docstring); outside
+    #: equality, so an entry is the same entry it always was.
+    raw: Mapping[str, Any] | None = field(
+        default=None, compare=False, hash=False, repr=False
+    )
 
     @property
     def listed(self) -> bool:
@@ -303,6 +311,7 @@ def _entry_from_payload(payload: Mapping[str, Any]) -> CodexCatalogueEntry | Non
             if isinstance(plans, list)
             else None
         ),
+        raw=payload,
     )
 
 

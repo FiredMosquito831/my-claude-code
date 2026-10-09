@@ -9,6 +9,7 @@ from my_claude_code.providers.model_listing import (
     declared_from_row,
     listing_date_field,
     published_parameters_from_row,
+    published_row_text,
     record_with_declared,
 )
 
@@ -50,6 +51,8 @@ def extract_anthropic_model_infos(
                     model_id=model_id.strip(),
                     supported_parameters=published_parameters_from_row(item),
                     declared=declared_from_row(item, listing_date=date_field),
+                    # 7.86.0: the row itself, for the "Everything known" view.
+                    published_row=published_row_text(item),
                 )
             )
         )

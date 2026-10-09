@@ -21,8 +21,10 @@ Read-only for capabilities; the visibility and override sections write through
 the existing owners (``apply_admin_config`` and ``save_model_overrides``).
 """
 
+import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 from fnmatch import fnmatchcase
 from typing import Any
 
@@ -36,18 +38,30 @@ from my_claude_code.application.litellm_model_map import (
 from my_claude_code.application.model_kinds import (
     KIND_LABELS,
     KIND_SOURCE_LABELS,
+    KIND_SOURCE_LITELLM_WORDS,
+    KIND_SOURCE_MEDIA_RAIL,
     KIND_SOURCE_MODELS_DEV,
     KIND_SOURCE_OPENROUTER_LIVE,
     KIND_SOURCE_PROVIDER_LISTING,
+    KIND_SOURCE_PROVIDER_WORDS,
     MODEL_KINDS,
     KindWordsLookup,
     ModalitiesLookup,
     ModelKind,
+    declaration_words,
+    kinds_from_modalities,
+    kinds_from_words,
     live_kind_alternative,
     modalities_source,
     provider_first_modalities,
     provider_kind_words,
     resolve_model_kind,
+)
+from my_claude_code.application.model_knowledge import (
+    ROW_SOURCE_LITELLM,
+    ROW_SOURCE_OPENROUTER_LIVE,
+    ROW_SOURCE_PROVIDER,
+    PublishedRow,
 )
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
@@ -98,6 +112,7 @@ from my_claude_code.core.reasoning import (
     ReasoningDialectOrigin,
     ReasoningEffort,
 )
+from my_claude_code.core.wire_capture import redact_wire_value
 from my_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
     catalogue_surface,
@@ -105,7 +120,12 @@ from my_claude_code.providers.openai_chat import (
     learned_effort_values,
 )
 from my_claude_code.providers.runtime.models_dev import (
+    MODELS_DEV_RUNG_BUCKET,
+    MODELS_DEV_RUNG_REFERENCE,
+    MODELS_DEV_RUNG_VOTE,
     ModelDisplayFactsLookup,
+    ModelsDevKnowledge,
+    ModelsDevStatement,
     cross_provider_match,
     declared_modalities_lookup,
     declared_modalities_tiered,
@@ -119,6 +139,7 @@ from my_claude_code.providers.runtime.models_dev import (
     model_vision_tiered,
     models_dev_cache_path,
     models_dev_describes_provider,
+    models_dev_knowledge,
 )
 
 #: The ``model_id`` a fact about the whole provider is stored under.
@@ -1341,10 +1362,11 @@ def with_openrouter_live(
 #   dialect's ``created`` is OpenRouter's listing day and is never read as one)
 #   -> models.dev's release date down its ladder, a split vote to the earliest;
 # - knowledge cutoff, description: the provider's list -> OpenRouter's live
-#   list (7.84.0's rows) -> models.dev. A value 7.84.0's row already shows is
-#   kept: where the provider's own list says the same, the badge becomes the
-#   provider's; where it says something else, its words are shown beside
-#   ("also stated") and the shown value does not move.
+#   list (7.84.0's rows) -> models.dev. Where the provider's own list says the
+#   same as OpenRouter's, the badge is the provider's; where it says something
+#   else, the provider's words are shown and OpenRouter's stay beside them
+#   ("also stated") -- provider first since 7.86.0 (7.85.0 kept OpenRouter's
+#   words shown there and the provider's beside them).
 
 #: The four rows, in the order they are added to the record.
 DISPLAY_FACT_FIELDS: tuple[str, ...] = (
@@ -1431,10 +1453,13 @@ def _display_text_row(
     """Knowledge cutoff or description: provider -> OpenRouter live -> models.dev.
 
     ``existing`` is the row 7.84.0's OpenRouter live rung built (absent while
-    that rung is off). A value it shows is never replaced: the provider's
-    own statement of the same value takes the badge, a different one is
-    shown beside it. Where it shows nothing, the provider's list answers,
-    then models.dev down its ladder.
+    that rung is off). The provider's own statement answers first, always
+    (the user's provider-first rule): where OpenRouter's live list says the
+    same, the badge is the provider's; where it says something else, the
+    provider's words are shown and OpenRouter's stay beside them ("also
+    stated") -- 7.85.0 kept OpenRouter's shown there and put the provider's
+    beside it, which 7.86.0 turns round. Where the provider says nothing,
+    OpenRouter's live row stands, then models.dev down its ladder.
     """
 
     provider = (
@@ -1447,11 +1472,12 @@ def _display_text_row(
     if isinstance(existing, Mapping) and existing.get("value") is not None:
         if provider is None:
             return dict(existing)
-        if provider_value == existing.get("value"):
-            return provider
-        beside = dict(existing)
-        beside["also_stated"] = _statement(provider)
-        return beside
+        if provider_value != existing.get("value"):
+            beside = _statement(existing)
+            if "openrouter_ids" in existing:
+                beside["openrouter_ids"] = existing["openrouter_ids"]
+            provider["also_stated"] = beside
+        return provider
     if provider is not None:
         return provider
     value, tier = models_dev
@@ -2695,3 +2721,885 @@ def with_override_row(
     if scope == PROVIDER_SCOPE:
         return replace(overrides, providers=table)
     return replace(overrides, models=table)
+
+
+# -- 7.86.0: everything known about one model --------------------------------
+#
+# The Models page shows, per field, the value the ladder used and the rung that
+# stated it. "Everything known" -- a disclosure under each model row, loaded on
+# demand from ``GET /admin/api/models/knowledge`` -- shows beside it what EVERY
+# source says about the same field, and every source's own row verbatim: the
+# provider's list, OpenRouter's live list, models.dev's own bucket, its
+# OpenRouter copy and the cross-provider vote, LiteLLM's map (while LiteLLM
+# pricing is on), what this host taught MCC, the operator's own settings and
+# the vendor's own client. Read-only and computed off the event loop for one
+# model at a time; never part of the page payload and never read by routing,
+# listing or pricing. The ``used`` cell of each field is the very cell the page
+# draws, built by the page's own function on the page's own inputs.
+
+#: The columns of the view, in ladder order.
+KNOWLEDGE_SOURCE_PROVIDER = "provider_list"
+KNOWLEDGE_SOURCE_FILL = "models_dev_fill"
+KNOWLEDGE_SOURCE_LIVE = "openrouter_live"
+KNOWLEDGE_SOURCE_BUCKET = "models_dev_bucket"
+KNOWLEDGE_SOURCE_COPY = "models_dev_openrouter"
+KNOWLEDGE_SOURCE_VOTE = "models_dev_vote"
+KNOWLEDGE_SOURCE_LITELLM = "litellm"
+KNOWLEDGE_SOURCE_LEARNED = "learned"
+KNOWLEDGE_SOURCE_OPERATOR = "operator"
+KNOWLEDGE_SOURCE_VENDOR = "vendor_client"
+
+KNOWLEDGE_SOURCE_LABELS: dict[str, str] = {
+    KNOWLEDGE_SOURCE_PROVIDER: "provider's own list",
+    # What discovery fills into the record from models.dev where the row said
+    # nothing -- a provider-blind name match that records no rung, which is
+    # why the page says "provider /models or models.dev" for these fields.
+    KNOWLEDGE_SOURCE_FILL: "models.dev, filled at discovery",
+    KNOWLEDGE_SOURCE_LIVE: "OpenRouter live",
+    KNOWLEDGE_SOURCE_BUCKET: "models.dev, own bucket",
+    KNOWLEDGE_SOURCE_COPY: "models.dev, OpenRouter copy",
+    KNOWLEDGE_SOURCE_VOTE: "models.dev, cross-provider vote",
+    KNOWLEDGE_SOURCE_LITELLM: "LiteLLM model map",
+    KNOWLEDGE_SOURCE_LEARNED: "learned from this host",
+    KNOWLEDGE_SOURCE_OPERATOR: "your overrides and media rails",
+    KNOWLEDGE_SOURCE_VENDOR: "vendor's own client",
+}
+KNOWLEDGE_SOURCES: tuple[str, ...] = tuple(KNOWLEDGE_SOURCE_LABELS)
+
+_MODELS_DEV_RUNG_SOURCES: dict[str, str] = {
+    MODELS_DEV_RUNG_BUCKET: KNOWLEDGE_SOURCE_BUCKET,
+    MODELS_DEV_RUNG_REFERENCE: KNOWLEDGE_SOURCE_COPY,
+    MODELS_DEV_RUNG_VOTE: KNOWLEDGE_SOURCE_VOTE,
+}
+
+#: Every field the view lists, ``(key, label)``, in the page's own order. A
+#: ``reasoning.`` key names one field of the page's reasoning record.
+KNOWLEDGE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("kind", "kind"),
+    ("response_surface", "wire surface"),
+    ("max_output_tokens", "output limit"),
+    ("context_length", "context length"),
+    ("supports_vision", "reads images"),
+    ("supports_tool_calls", "takes tool calls"),
+    ("declared_modalities", "accepts → produces"),
+    ("declared_type", "model type (provider's word)"),
+    ("declared_endpoints", "endpoints"),
+    ("description", "description"),
+    ("knowledge_cutoff", "knowledge cutoff"),
+    ("published_at", "published"),
+    ("listed_on_openrouter", "listed on OpenRouter"),
+    ("retires_at", "retires"),
+    ("input_price", "input price (USD / 1M)"),
+    ("output_price", "output price (USD / 1M)"),
+    ("cache_read_price", "cache read price (USD / 1M)"),
+    ("cache_write_price", "cache write price (USD / 1M)"),
+    ("reasoning_price", "reasoning price (USD / 1M)"),
+    ("default_parameters", "gateway default parameters"),
+    ("supported_parameters", "supported parameters"),
+    *((f"reasoning.{name}", name.replace("_", " ")) for name in REASONING_FIELDS),
+)
+
+#: Which columns can have answered a page cell, by the cell's ``source``.
+_USED_SOURCE_COLUMNS: dict[str, tuple[str, ...]] = {
+    SOURCE_PROVIDER: (KNOWLEDGE_SOURCE_PROVIDER, KNOWLEDGE_SOURCE_VENDOR),
+    # The record's own value: its row's, or what discovery filled from
+    # models.dev where the row said nothing (the ladder's tiers answer only a
+    # field the record left unset, and are badged with their tier then).
+    SOURCE_PROVIDER_OR_MODELS_DEV: (KNOWLEDGE_SOURCE_PROVIDER, KNOWLEDGE_SOURCE_FILL),
+    SOURCE_MODELS_DEV: (
+        KNOWLEDGE_SOURCE_BUCKET,
+        KNOWLEDGE_SOURCE_COPY,
+        KNOWLEDGE_SOURCE_VOTE,
+    ),
+    SOURCE_APPROXIMATE: (KNOWLEDGE_SOURCE_VOTE,),
+    LIVE_SOURCE: (KNOWLEDGE_SOURCE_LIVE,),
+    LITELLM_SOURCE: (KNOWLEDGE_SOURCE_LITELLM,),
+    SOURCE_LEARNED: (KNOWLEDGE_SOURCE_LEARNED,),
+    # A wire surface's override (``ResponseSurfaceSource.OVERRIDE``); its
+    # ``learned`` source is the learned column above.
+    ResponseSurfaceSource.OVERRIDE.value: (KNOWLEDGE_SOURCE_OPERATOR,),
+    # A kind's own sources (``ModelKind.source``) where they are not spelled
+    # like a field source above (``models_dev``, ``openrouter_live`` and
+    # ``litellm`` are).
+    KIND_SOURCE_PROVIDER_LISTING: (KNOWLEDGE_SOURCE_PROVIDER,),
+    KIND_SOURCE_PROVIDER_WORDS: (KNOWLEDGE_SOURCE_PROVIDER,),
+    KIND_SOURCE_LITELLM_WORDS: (KNOWLEDGE_SOURCE_LITELLM,),
+    KIND_SOURCE_MEDIA_RAIL: (KNOWLEDGE_SOURCE_OPERATOR,),
+}
+
+#: A vendor's own client catalogue row, as the route hands it in: the label
+#: naming the client and its version, and the row itself.
+type VendorClientRow = tuple[str, Mapping[str, Any]]
+
+_DEPRECATED_IS_CURRENT = "listed as current"
+_PER_MILLION = Decimal(1_000_000)
+
+
+@dataclass(frozen=True, slots=True)
+class _Said:
+    """One source's statement about one field, before it is rendered."""
+
+    key: str
+    source: str
+    value: Any
+    rung: str | None = None
+    consulted: bool = True
+    note: str | None = None
+
+
+def knowledge_entry(
+    model_ref: str,
+    info: ProviderModelInfo | None,
+    *,
+    visibility: ModelVisibility,
+    overrides: ModelParameterOverrides,
+    configured_refs: frozenset[str],
+    dialect_lookup: ReasoningDialectLookup | None,
+    media_placements: Mapping[str, frozenset[str]] | None,
+    kind_modalities: ModalitiesLookup | None,
+    kind_words: KindWordsLookup | None,
+    live: LiveCatalogue | None,
+    litellm: LiteLLMCatalogue | None,
+    learned: Mapping[str, Sequence[Mapping[str, Any]]] | None,
+) -> dict[str, Any]:
+    """One model's page row, exactly as the Models page route builds it.
+
+    The route computes the capability half with nothing learned attached and
+    merges the learned facts in afterwards (``models_page_cache``); this does
+    the same two steps for one row, with the same bound lookups, so every cell
+    is the cell the page shows.
+    """
+
+    entry = _model_entry(
+        model_ref,
+        info,
+        visibility=visibility,
+        overrides=overrides,
+        configured_refs=configured_refs,
+        dialect_lookup=dialect_lookup,
+        measured=None,
+        learned=None,
+        media_placements=media_placements,
+        kind_modalities=kind_modalities,
+        kind_words=kind_words,
+        catalogue_modalities=declared_modalities_lookup(),
+        live=live,
+        litellm=litellm,
+        display_facts=bound_display_facts(),
+    )
+    provider_id = parse_provider_type(model_ref)
+    model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
+    entry["learned"] = attach_learned_facts(
+        entry["capabilities"],
+        () if learned is None else facts_for_row(learned, provider_id, model_id),
+    )
+    return entry
+
+
+def page_cell(entry: Mapping[str, Any], key: str) -> Any:
+    """The cell the page draws for one knowledge field, or ``None``."""
+
+    if key == "kind":
+        return entry.get("kind")
+    capabilities = entry.get("capabilities") or {}
+    if key.startswith("reasoning."):
+        reasoning = capabilities.get("reasoning") or {}
+        return reasoning.get(key.removeprefix("reasoning."))
+    return capabilities.get(key)
+
+
+def _kind_labels(kinds: Iterable[str] | None) -> list[str] | None:
+    if kinds is None:
+        return None
+    named = set(kinds)
+    return [KIND_LABELS[name] for name in MODEL_KINDS if name in named]
+
+
+def _pair_kind(pair: DeclaredModalities | None) -> list[str] | None:
+    return None if pair is None else _kind_labels(kinds_from_modalities(pair))
+
+
+def _efforts(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    return sorted(
+        effort.value if isinstance(effort, ReasoningEffort) else str(effort)
+        for effort in value
+    )
+
+
+def _provider_said(info: ProviderModelInfo | None) -> list[_Said]:
+    """What the provider's own list row states, field by field.
+
+    Read off the record exactly as the page reads it -- the declaration the
+    row stated, the parameter list it published, the reasoning record its
+    dialect built -- never off the record's fields models.dev may have filled.
+    """
+
+    if info is None:
+        return []
+    declared = info.declared
+    values: dict[str, Any] = {"max_output_tokens": info.max_output_tokens}
+    supported = info.supported_parameters
+    tools = (
+        None
+        if supported is None
+        else bool(supported & frozenset({"tools", "tool_choice"}))
+    )
+    if declared is not None:
+        pair = declared.modalities
+        if tools is None:
+            tools = declared.tool_calls
+        values.update(
+            {
+                "context_length": declared.context_length,
+                "supports_vision": None if pair is None else "image" in pair.inputs,
+                "declared_modalities": None if pair is None else _modalities_text(pair),
+                "kind": _kind_labels(
+                    kinds_from_modalities(pair)
+                    if pair is not None
+                    else kinds_from_words(declaration_words(declared))
+                ),
+                "declared_type": declared.model_type,
+                "declared_endpoints": (
+                    None if declared.endpoints is None else list(declared.endpoints)
+                ),
+                "description": declared.description,
+                "knowledge_cutoff": declared.knowledge_cutoff,
+                "published_at": declared.published_at,
+                "retires_at": declared.retires_at,
+                "input_price": declared.input_price,
+                "output_price": declared.output_price,
+            }
+        )
+    values["supports_tool_calls"] = tools
+    values["supported_parameters"] = None if supported is None else sorted(supported)
+    defaults = info.default_parameters
+    values["default_parameters"] = (
+        None if defaults is None else [list(pair) for pair in defaults]
+    )
+    capability = _provider_reasoning(info)
+    if capability is not None:
+        for name in REASONING_FIELDS:
+            values[f"reasoning.{name}"] = _reasoning_field_value(capability, name)
+    return [
+        _Said(key, KNOWLEDGE_SOURCE_PROVIDER, value)
+        for key, value in values.items()
+        if value is not None
+    ]
+
+
+def _live_said(answer: LiveModel | None) -> list[_Said]:
+    """What OpenRouter's live list states, under the rung line the page uses."""
+
+    if answer is None:
+        return []
+    rung = f"{answer.tier_label} ({', '.join(answer.slugs)})"
+    note = (
+        "OpenRouter's own list: this provider's rows already are it"
+        if (answer.own_list)
+        else None
+    )
+    values: dict[str, Any] = {
+        "max_output_tokens": answer.max_output_tokens,
+        "context_length": answer.context_length,
+        "supports_vision": answer.supports_vision,
+        "supports_tool_calls": answer.supports_tool_calls,
+        "declared_modalities": (
+            None if answer.modalities is None else _modalities_text(answer.modalities)
+        ),
+        "kind": _pair_kind(answer.modalities),
+        "description": answer.description,
+        "knowledge_cutoff": answer.knowledge_cutoff,
+        "listed_on_openrouter": answer.listed_at,
+        "input_price": answer.input_price,
+        "output_price": answer.output_price,
+        "cache_read_price": answer.cache_read_price,
+        "cache_write_price": answer.cache_write_price,
+        "reasoning_price": answer.reasoning_price,
+        "reasoning.can_reason": answer.can_reason,
+    }
+    return [
+        _Said(key, KNOWLEDGE_SOURCE_LIVE, value, rung, note=note)
+        for key, value in values.items()
+        if value is not None
+    ]
+
+
+def _models_dev_value(name: str, value: Any) -> Any:
+    if name == "declared_modalities":
+        return _modalities_text(value)
+    if name == "deprecated":
+        return DEPRECATED_BY_MODELS_DEV if value else _DEPRECATED_IS_CURRENT
+    if name == "reasoning.supported_efforts":
+        return _efforts(value)
+    return value
+
+
+def _models_dev_note(statement: ModelsDevStatement) -> str | None:
+    note = None
+    if statement.reporters is not None:
+        note = f"{statement.reporters} same-named rows stated it"
+        if statement.agreement is not None:
+            note += f", {statement.agreement:.0%} agree"
+    if not statement.consulted:
+        note = "not read for this provider: it has a models.dev bucket of its own" + (
+            "" if note is None else f"; {note}"
+        )
+    return note
+
+
+def _models_dev_said(knowledge: ModelsDevKnowledge) -> list[_Said]:
+    """Every models.dev rung's statement, under the view's field names."""
+
+    said: list[_Said] = [
+        _Said(
+            key,
+            KNOWLEDGE_SOURCE_FILL,
+            value,
+            "name match, the provider's own bucket first",
+        )
+        for key, value in knowledge.discovery_fill.items()
+    ]
+    for name, statements in knowledge.statements.items():
+        key = "retires_at" if name == "deprecated" else name
+        for statement in statements:
+            source = _MODELS_DEV_RUNG_SOURCES[statement.rung]
+            rung = TIER_LABELS.get(statement.tier, statement.tier.name)
+            note = _models_dev_note(statement)
+            said.append(
+                _Said(
+                    key,
+                    source,
+                    _models_dev_value(name, statement.value),
+                    rung,
+                    statement.consulted,
+                    note,
+                )
+            )
+            if name == "declared_modalities":
+                said.append(
+                    _Said(
+                        "kind",
+                        source,
+                        _pair_kind(statement.value),
+                        rung,
+                        statement.consulted,
+                        note,
+                    )
+                )
+    return said
+
+
+def _litellm_rate(entry: Mapping[str, Any], name: str) -> float | None:
+    """A LiteLLM per-token rate as USD per million, exactly (no float noise)."""
+
+    value = entry.get(name)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        return float(Decimal(str(value)) * _PER_MILLION)
+    except InvalidOperation:
+        return None
+
+
+def _litellm_int(entry: Mapping[str, Any], *names: str) -> int | None:
+    for name in names:
+        value = entry.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def _litellm_flag(entry: Mapping[str, Any], name: str) -> bool | None:
+    value = entry.get(name)
+    return value if isinstance(value, bool) else None
+
+
+#: What LiteLLM's entries state beyond the kind rung's facts, shown only (spec
+#: §11.1: "never a ladder value in this arc"). Rates are per token in the map.
+_LITELLM_READINGS: tuple[tuple[str, Callable[[Mapping[str, Any]], Any]], ...] = (
+    ("max_output_tokens", lambda e: _litellm_int(e, "max_output_tokens", "max_tokens")),
+    ("context_length", lambda e: _litellm_int(e, "max_input_tokens")),
+    ("supports_vision", lambda e: _litellm_flag(e, "supports_vision")),
+    ("supports_tool_calls", lambda e: _litellm_flag(e, "supports_function_calling")),
+    ("reasoning.can_reason", lambda e: _litellm_flag(e, "supports_reasoning")),
+    ("input_price", lambda e: _litellm_rate(e, "input_cost_per_token")),
+    ("output_price", lambda e: _litellm_rate(e, "output_cost_per_token")),
+    ("cache_read_price", lambda e: _litellm_rate(e, "cache_read_input_token_cost")),
+    (
+        "cache_write_price",
+        lambda e: _litellm_rate(e, "cache_creation_input_token_cost"),
+    ),
+    (
+        "reasoning_price",
+        lambda e: _litellm_rate(e, "output_cost_per_reasoning_token"),
+    ),
+)
+
+
+def _litellm_said(
+    model: LiteLLMModel | None, rows: Sequence[PublishedRow]
+) -> list[_Said]:
+    """LiteLLM's statements: the kind rung's own facts, then the entry's numbers.
+
+    Each from the first entry in pricing's own walk that states it, as the
+    kind rung reads its facts.
+    """
+
+    said: list[_Said] = []
+    if model is not None:
+        if model.modalities is not None:
+            pair = model.modalities
+            said.append(
+                _Said(
+                    "declared_modalities",
+                    KNOWLEDGE_SOURCE_LITELLM,
+                    _modalities_text(pair.value),
+                    pair.tier_label,
+                )
+            )
+            said.append(
+                _Said(
+                    "kind",
+                    KNOWLEDGE_SOURCE_LITELLM,
+                    _pair_kind(pair.value),
+                    pair.tier_label,
+                )
+            )
+        elif model.words is not None:
+            said.append(
+                _Said(
+                    "kind",
+                    KNOWLEDGE_SOURCE_LITELLM,
+                    _kind_labels(kinds_from_words(model.words.value)),
+                    model.words.tier_label,
+                )
+            )
+        if model.endpoints is not None:
+            said.append(
+                _Said(
+                    "declared_endpoints",
+                    KNOWLEDGE_SOURCE_LITELLM,
+                    list(model.endpoints.value),
+                    model.endpoints.tier_label,
+                )
+            )
+        if model.deprecation_date is not None:
+            said.append(
+                _Said(
+                    "retires_at",
+                    KNOWLEDGE_SOURCE_LITELLM,
+                    model.deprecation_date.value,
+                    model.deprecation_date.tier_label,
+                )
+            )
+    for key, read in _LITELLM_READINGS:
+        for row in rows:
+            value = read(row.row)
+            if value is not None:
+                said.append(
+                    _Said(
+                        key,
+                        KNOWLEDGE_SOURCE_LITELLM,
+                        value,
+                        f"LiteLLM, {row.match} ({row.key})",
+                    )
+                )
+                break
+    return said
+
+
+def _learned_said(facts: Sequence[Mapping[str, Any]]) -> list[_Said]:
+    """What this host taught MCC, on the fields those facts narrow."""
+
+    said: list[_Said] = []
+    for fact in facts:
+        kind = str(fact.get("fact_kind") or "")
+        field_name = FACT_CAPABILITY_FIELDS.get(kind)
+        if field_name is None:
+            continue
+        stale = bool(fact.get("stale"))
+        said.append(
+            _Said(
+                field_name,
+                KNOWLEDGE_SOURCE_LEARNED,
+                fact.get("value") if kind == "output_cap" else False,
+                str(fact.get("source_label") or fact.get("source") or ""),
+                consulted=not stale,
+                note="stale: no longer applied" if stale else None,
+            )
+        )
+    return said
+
+
+def _operator_said(
+    model_ref: str,
+    model_row: Mapping[str, Any],
+    placements: Mapping[str, frozenset[str]] | None,
+) -> list[_Said]:
+    """What you set for this model: a wire surface, the media rails it is on."""
+
+    said: list[_Said] = []
+    surface = model_row.get(RESPONSE_SURFACE_OVERRIDE)
+    if isinstance(surface, str) and surface:
+        said.append(
+            _Said(
+                "response_surface", KNOWLEDGE_SOURCE_OPERATOR, surface, "your override"
+            )
+        )
+    rails = (placements or {}).get(model_ref)
+    if rails:
+        said.append(
+            _Said(
+                "kind",
+                KNOWLEDGE_SOURCE_OPERATOR,
+                _kind_labels(rails),
+                "the media rails you saved it on",
+            )
+        )
+    return said
+
+
+def _vendor_said(
+    info: ProviderModelInfo | None, vendor: VendorClientRow | None
+) -> list[_Said]:
+    """The vendor's own client catalogue: its retirement, and what it states.
+
+    Codex's ``context_window`` and effort vocabulary are shown and never read
+    by the ladder (``codex_catalogue``'s own rule).
+    """
+
+    said: list[_Said] = []
+    listing = None if info is None else info.listing
+    if listing is not None and listing.retirement_at:
+        said.append(
+            _Said(
+                "retires_at",
+                KNOWLEDGE_SOURCE_VENDOR,
+                listing.retirement_at,
+                PROVENANCE_LABELS.get(listing.provenance, str(listing.provenance)),
+            )
+        )
+    if vendor is None:
+        return said
+    label, row = vendor
+    window = row.get("context_window")
+    if isinstance(window, int) and not isinstance(window, bool) and window > 0:
+        said.append(_Said("context_length", KNOWLEDGE_SOURCE_VENDOR, window, label))
+    description = row.get("description")
+    if isinstance(description, str) and description.strip():
+        said.append(
+            _Said("description", KNOWLEDGE_SOURCE_VENDOR, description.strip(), label)
+        )
+    levels = row.get("supported_reasoning_levels")
+    if isinstance(levels, list):
+        efforts = sorted(
+            {
+                level["effort"]
+                for level in levels
+                if isinstance(level, Mapping) and isinstance(level.get("effort"), str)
+            }
+        )
+        said.append(
+            _Said(
+                "reasoning.supported_efforts", KNOWLEDGE_SOURCE_VENDOR, efforts, label
+            )
+        )
+    return said
+
+
+def _comparable(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def knowledge_used_value(key: str, cell: Any) -> Any:
+    """The value a page cell shows, in the form statements are written in."""
+
+    if not isinstance(cell, Mapping):
+        return None
+    if key == "kind":
+        return None if cell.get("kinds") is None else list(cell.get("labels") or [])
+    return cell.get("value")
+
+
+def _used_column(
+    key: str, cell: Any, statements: Sequence[Mapping[str, Any]]
+) -> str | None:
+    """Which column's statement the page's cell is, or ``None``.
+
+    The first column, in ladder order, of the kind the cell's own badge names
+    whose statement is the very value shown. ``None`` for an unknown cell, and
+    for a value no single column states (a record field models.dev filled at
+    discovery, say, which records no rung).
+    """
+
+    value = knowledge_used_value(key, cell)
+    if value is None or not isinstance(cell, Mapping):
+        return None
+    source = str(cell.get("source") or "")
+    columns = _USED_SOURCE_COLUMNS.get(source, ())
+    wanted = _comparable(value)
+    for statement in statements:
+        if statement["source"] in columns and _comparable(statement["value"]) == wanted:
+            return str(statement["source"])
+    return None
+
+
+def _provider_column_label(info: ProviderModelInfo | None) -> str:
+    listing = None if info is None else info.listing
+    if listing is not None and listing.provenance != ModelListingProvenance.GATEWAY:
+        return PROVENANCE_LABELS.get(listing.provenance, str(listing.provenance))
+    return KNOWLEDGE_SOURCE_LABELS[KNOWLEDGE_SOURCE_PROVIDER]
+
+
+def model_knowledge_payload(
+    entry: Mapping[str, Any],
+    info: ProviderModelInfo | None,
+    *,
+    live: LiveCatalogue | None,
+    litellm: LiteLLMCatalogue | None,
+    published_rows: Sequence[PublishedRow],
+    vendor_row: VendorClientRow | None,
+    model_row: Mapping[str, Any],
+    provider_row: Mapping[str, Any],
+    media_placements: Mapping[str, frozenset[str]] | None,
+    catalogue_as_of: str | None,
+) -> dict[str, Any]:
+    """Everything known about one model, beside what the ladder used.
+
+    ``entry`` is :func:`knowledge_entry`'s row -- the page's own row -- so each
+    field's ``used`` cell is the page's cell, verbatim, and ``used_source``
+    names the column whose statement it is. Every other column says what that
+    source states about the same field, whether the ladder reads it for this
+    provider (``consulted``), and whether it agrees with the used value.
+    ``rows`` is every source's own row, verbatim and scrubbed of anything
+    credential-shaped.
+    """
+
+    model_ref = str(entry.get("model_ref") or "")
+    provider_id = parse_provider_type(model_ref)
+    model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
+    prefixed = "/" in model_ref
+    answer = live(provider_id, model_id) if live is not None and prefixed else None
+    lite = litellm(provider_id, model_id) if litellm is not None and prefixed else None
+    lite_rows = [row for row in published_rows if row.source == ROW_SOURCE_LITELLM]
+    models_dev = models_dev_knowledge(provider_id, model_id)
+    learned_facts = [
+        dict(fact) for fact in entry.get("learned") or () if isinstance(fact, Mapping)
+    ]
+    said = [
+        *_provider_said(info),
+        *_live_said(answer),
+        *_models_dev_said(models_dev),
+        *_litellm_said(lite, lite_rows),
+        *_learned_said(learned_facts),
+        *_operator_said(model_ref, model_row, media_placements),
+        *_vendor_said(info, vendor_row),
+    ]
+    provider_label = _provider_column_label(info)
+    as_of: dict[str, str | None] = {
+        KNOWLEDGE_SOURCE_PROVIDER: catalogue_as_of,
+        KNOWLEDGE_SOURCE_FILL: models_dev.fetched_at,
+        KNOWLEDGE_SOURCE_LIVE: None if live is None else live.fetched_at,
+        KNOWLEDGE_SOURCE_BUCKET: models_dev.fetched_at,
+        KNOWLEDGE_SOURCE_COPY: models_dev.fetched_at,
+        KNOWLEDGE_SOURCE_VOTE: models_dev.fetched_at,
+        KNOWLEDGE_SOURCE_LITELLM: next((row.as_of for row in lite_rows), None),
+    }
+    labels = {**KNOWLEDGE_SOURCE_LABELS, KNOWLEDGE_SOURCE_PROVIDER: provider_label}
+    order = {source: index for index, source in enumerate(KNOWLEDGE_SOURCES)}
+    fields_out: list[dict[str, Any]] = []
+    for key, label in KNOWLEDGE_FIELDS:
+        cell = page_cell(entry, key)
+        if cell is None:
+            continue
+        statements: list[dict[str, Any]] = [
+            {
+                "source": item.source,
+                "source_label": labels[item.source],
+                "rung": item.rung,
+                "value": item.value,
+                "consulted": item.consulted,
+                "note": item.note,
+                "as_of": as_of.get(item.source),
+            }
+            for item in sorted(
+                (item for item in said if item.key == key and item.value is not None),
+                key=lambda item: order[item.source],
+            )
+        ]
+        used_value = knowledge_used_value(key, cell)
+        used_source = _used_column(key, cell, statements)
+        wanted = None if used_value is None else _comparable(used_value)
+        marked = False
+        for statement in statements:
+            agrees = (
+                None if wanted is None else _comparable(statement["value"]) == wanted
+            )
+            statement["agrees_with_used"] = agrees
+            statement["used"] = bool(
+                not marked and agrees and statement["source"] == used_source
+            )
+            marked = marked or statement["used"]
+        fields_out.append(
+            {
+                "key": key,
+                "label": label,
+                "used": cell,
+                "used_value": used_value,
+                "used_source": used_source,
+                "statements": statements,
+            }
+        )
+    return {
+        "model_ref": model_ref,
+        "provider_id": provider_id,
+        "model_id": model_id,
+        "has_record": info is not None,
+        "models_dev_has_bucket": models_dev.has_bucket,
+        "sources": [
+            {"id": source, "label": labels[source], "as_of": as_of.get(source)}
+            for source in KNOWLEDGE_SOURCES
+        ],
+        "fields": fields_out,
+        "rows": _knowledge_rows(
+            model_id,
+            info,
+            answer,
+            models_dev,
+            published_rows,
+            vendor_row,
+            provider_label,
+            catalogue_as_of,
+        ),
+        "learned": learned_facts,
+        "operator": {
+            "model_override": dict(model_row),
+            "provider_override": dict(provider_row),
+            "media_rails": sorted((media_placements or {}).get(model_ref, ())),
+        },
+    }
+
+
+def _record_row(
+    model_id: str, info: ProviderModelInfo | None, published: Sequence[PublishedRow]
+) -> tuple[Mapping[str, Any], str] | None:
+    """The provider's row: the live record's own copy, else the stored one."""
+
+    text = None if info is None else info.published_row
+    if text is not None:
+        try:
+            row = json.loads(text)
+        except ValueError:
+            row = None
+        if isinstance(row, Mapping):
+            return row, "as the last sweep read it"
+    for stored in published:
+        if stored.source == ROW_SOURCE_PROVIDER and stored.key == model_id:
+            return stored.row, stored.match or "stored beside the catalogue"
+    return None
+
+
+def _row_entry(
+    source: str,
+    label: str,
+    key: str,
+    match: str | None,
+    as_of: str | None,
+    row: Mapping[str, Any],
+    consulted: bool = True,
+) -> dict[str, Any]:
+    return {
+        "source": source,
+        "source_label": label,
+        "key": key,
+        "match": match,
+        "as_of": as_of,
+        "consulted": consulted,
+        "row": redact_wire_value(row),
+    }
+
+
+def _knowledge_rows(
+    model_id: str,
+    info: ProviderModelInfo | None,
+    answer: LiveModel | None,
+    models_dev: ModelsDevKnowledge,
+    published: Sequence[PublishedRow],
+    vendor_row: VendorClientRow | None,
+    provider_label: str,
+    catalogue_as_of: str | None,
+) -> list[dict[str, Any]]:
+    """Every source's own row about this model, verbatim, scrubbed."""
+
+    rows: list[dict[str, Any]] = []
+    found = _record_row(model_id, info, published)
+    if found is not None:
+        row, where = found
+        row_id = row.get("id")
+        match = (
+            "exact id"
+            if not isinstance(row_id, str) or row_id == model_id
+            else f"listed as an alias of {row_id}"
+        )
+        rows.append(
+            _row_entry(
+                KNOWLEDGE_SOURCE_PROVIDER,
+                provider_label,
+                model_id,
+                f"{match}; {where}",
+                catalogue_as_of,
+                row,
+            )
+        )
+    rows.extend(
+        _row_entry(
+            KNOWLEDGE_SOURCE_LIVE,
+            KNOWLEDGE_SOURCE_LABELS[KNOWLEDGE_SOURCE_LIVE],
+            stored.key,
+            None if answer is None else answer.tier_label,
+            stored.as_of,
+            stored.row,
+        )
+        for stored in published
+        if stored.source == ROW_SOURCE_OPENROUTER_LIVE
+    )
+    for found_row in models_dev.rows:
+        source = _MODELS_DEV_RUNG_SOURCES[found_row.rung]
+        rows.append(
+            _row_entry(
+                source,
+                KNOWLEDGE_SOURCE_LABELS[source],
+                f"{found_row.bucket}/{found_row.model_key}",
+                TIER_LABELS.get(found_row.tier, found_row.tier.name),
+                models_dev.fetched_at,
+                found_row.row,
+                found_row.consulted,
+            )
+        )
+    rows.extend(
+        _row_entry(
+            KNOWLEDGE_SOURCE_LITELLM,
+            KNOWLEDGE_SOURCE_LABELS[KNOWLEDGE_SOURCE_LITELLM],
+            stored.key,
+            stored.match,
+            stored.as_of,
+            stored.row,
+        )
+        for stored in published
+        if stored.source == ROW_SOURCE_LITELLM
+    )
+    if vendor_row is not None:
+        label, row = vendor_row
+        rows.append(
+            _row_entry(
+                KNOWLEDGE_SOURCE_VENDOR,
+                KNOWLEDGE_SOURCE_LABELS[KNOWLEDGE_SOURCE_VENDOR],
+                model_id,
+                label,
+                None,
+                row,
+            )
+        )
+    return rows
