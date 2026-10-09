@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from my_claude_code.application.proxy_sources import sources_document
+from my_claude_code.config.proxy_chains import ProxyChains
 from my_claude_code.config.proxy_sources import (
     SOURCE_KINDS,
     ProxySources,
@@ -92,9 +94,18 @@ def test_a_document_with_tor_sources_round_trips_byte_for_byte(
 
 
 def test_tor_is_not_one_of_the_kinds_the_sources_payload_lists() -> None:
-    """The 7.89.0 ``kinds`` list is the base spec's five, unchanged."""
+    """The 7.89.0 ``kinds`` list is the base spec's five, unchanged, so an
+    install with no tor source answers the Sources routes byte for byte."""
 
     assert SOURCE_KINDS == ("local", "account", "gateway", "list", "runner")
+    document = sources_document(ProxyChains(), ProxySources.from_document(DOCUMENT))
+    assert document["kinds"] == [
+        {"id": "local", "available": True},
+        {"id": "account", "available": False},
+        {"id": "gateway", "available": False},
+        {"id": "list", "available": False},
+        {"id": "runner", "available": False},
+    ]
 
 
 def test_a_tor_source_naming_no_usable_port_is_ignored(tmp_path: Path) -> None:
