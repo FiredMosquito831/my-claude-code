@@ -23,6 +23,7 @@ Every address is a documentation address (RFC 5737) or a made-up name, and
 every "credential" here is fake.
 """
 
+import json
 import sqlite3
 from typing import Any
 
@@ -392,6 +393,49 @@ class TestTheFilter:
         where, args = store._where(**common, exit="tokyo")
         assert where.startswith(baseline[0])
         assert args[: len(baseline[1])] == baseline[1]
+
+    @pytest.mark.parametrize("value", ["Tokyo", "1080", "exit-b", "direct", "nowhere"])
+    def test_reading_the_matches_once_changes_no_number(
+        self, store, monkeypatch, value: str
+    ) -> None:
+        """Stats, cost and origin read an exit's matching rows once and hand
+        every pass the set; with that switched off, every number is the same."""
+
+        def answers() -> str:
+            store._stats_cache.clear()
+            return json.dumps(
+                {
+                    "stats": store.stats(exit=value),
+                    "stats_window": store.stats(exit=value, since=BASE_TS + 5),
+                    "cost": store.cost_breakdown(exit=value),
+                    "origin": store.origin_breakdown(exit=value),
+                },
+                sort_keys=True,
+                default=str,
+            )
+
+        once = answers()
+        monkeypatch.setattr(
+            RequestLogStore,
+            "_exit_rows_once",
+            staticmethod(lambda conn, where, args, exit: (where, args)),
+        )
+        assert answers() == once
+
+    def test_without_an_exit_the_predicate_is_untouched(self, store) -> None:
+        where, args = store._where(provider="opencode", since=1.0)
+        connection = sqlite3.connect(store.db_path)
+        try:
+            assert RequestLogStore._exit_rows_once(connection, where, args, None) == (
+                where,
+                args,
+            )
+            assert RequestLogStore._exit_rows_once(connection, where, args, "  ") == (
+                where,
+                args,
+            )
+        finally:
+            connection.close()
 
 
 class TestTheExport:

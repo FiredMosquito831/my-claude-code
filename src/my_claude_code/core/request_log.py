@@ -6937,6 +6937,30 @@ class RequestLogStore:
         ]
 
     @staticmethod
+    def _exit_rows_once(
+        conn: sqlite3.Connection, where: str, args: list[Any], exit: str | None
+    ) -> tuple[str, list[Any]]:
+        """An Exit-filtered predicate, read once for an answer of many passes.
+
+        The Exit filter (7.88.0) is a lookup of each row's attempts, and the
+        stats, cost and origin answers read their predicate eight to fourteen
+        times. With an exit asked for, the matching rows are read once, inside
+        the caller's connection, and every pass gets that set instead -- the
+        same rows, so the same numbers. Measured on a synthetic 300,000-row
+        log, all time: stats with an exit matching nothing 8.9 s -> 1.0 s,
+        matching 60,000 rows 4.5 s -> 2.2 s; seven days 1.2 s -> 0.7 s.
+        Without an exit nothing changes: the predicate comes back exactly as
+        it went in.
+        """
+
+        if exit_filter(exit) is None:
+            return where, args
+        rowids = [
+            row[0] for row in conn.execute(f"SELECT rowid FROM requests{where}", args)
+        ]
+        return " WHERE rowid IN (SELECT value FROM json_each(?))", [json.dumps(rowids)]
+
+    @staticmethod
     def _fetch_exits(
         conn: sqlite3.Connection, answering: Mapping[str, Any]
     ) -> dict[str, dict[str, Any]]:
@@ -8179,6 +8203,8 @@ class RequestLogStore:
         )
         result: dict[str, Any] = {}
         with self._connection() as conn:
+            # 7.88.0: an Exit filter is read once here, not once per pass.
+            where, args = self._exit_rows_once(conn, where, args, exit)
             totals = conn.execute(
                 f"SELECT {measures} FROM requests{where}", args
             ).fetchone()
@@ -9073,6 +9099,8 @@ class RequestLogStore:
             exit=exit,
         )
         with self._connection() as conn:
+            # 7.88.0: an Exit filter is read once here, not once per pass.
+            where, args = self._exit_rows_once(conn, where, args, exit)
             totals = conn.execute(
                 f"""
                 SELECT COUNT(*) AS total,
@@ -10710,6 +10738,9 @@ class RequestLogStore:
             )
 
         with self._connection() as conn:
+            # 7.88.0: an Exit filter is read once here, not once per pass.
+            # ``carrying`` reads ``where`` when it is called, so it sees this.
+            where, args = self._exit_rows_once(conn, where, args, exit)
             folder_where, folder_args = carrying("project_dir")
             by_folder, by_folder_truncated = self._breakdown(
                 conn,
