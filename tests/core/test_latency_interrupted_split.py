@@ -246,8 +246,12 @@ def test_every_breakdown_filter_is_part_of_its_cache_key() -> None:
     """
 
     signature = inspect.signature(RequestLogStore.cancelled_breakdown)
+    # ``matched`` (7.91.1) is not a filter: a search's rows standing in for its
+    # predicate give the same answer, so it is deliberately in no cache key.
     filters = [
-        name for name in signature.parameters if name not in {"self", "kwargs", "args"}
+        name
+        for name in signature.parameters
+        if name not in {"self", "kwargs", "args", "matched"}
     ]
     assert filters, "the reflection found nothing, which would pass vacuously"
     source = inspect.getsource(RequestLogStore.cancelled_breakdown)
