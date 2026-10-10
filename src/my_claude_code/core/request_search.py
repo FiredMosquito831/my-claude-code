@@ -1055,15 +1055,18 @@ class SearchIndex:
     ) -> dict[str, int]:
         """What ``prepare`` would read for ``plans``, from the index's own counts.
 
-        ``chunks`` is every chunk a word must have tested or looked up (an
-        upper bound: the rarest trigram's document count for a word the index
-        narrows, every chunk for a word it cannot).
+        ``tested`` is every chunk a word must have tested (an upper bound: the
+        rarest trigram's document count for a word the index narrows, every
+        chunk for a word it cannot) and ``looked_up`` every chunk a
+        three-letter word's postings name; ``postings`` is how many postings
+        the trigram queries read, which no window narrows.
         """
 
         schema = SEARCH_SCHEMA
         total = int(conn.execute(f"SELECT COUNT(*) FROM {schema}.chunks").fetchone()[0])
         tested = 0
         looked_up = 0
+        postings = 0
         for plan in plans:
             if not plan.grams:
                 tested += total
@@ -1073,14 +1076,21 @@ class SearchIndex:
                 row = conn.execute(
                     f"SELECT doc FROM {schema}.grams_vocab WHERE term = ?", (gram,)
                 ).fetchone()
-                smallest = min(smallest, int(row[0]) if row is not None else 0)
+                count = int(row[0]) if row is not None else 0
+                postings += count
+                smallest = min(smallest, count)
                 if smallest == 0:
                     break
             if plan.exact:
                 looked_up += smallest
             else:
                 tested += smallest
-        return {"chunks": total, "tested": tested, "looked_up": looked_up}
+        return {
+            "chunks": total,
+            "tested": tested,
+            "looked_up": looked_up,
+            "postings": postings,
+        }
 
 
 def _chunk_flags(chunk: bytes) -> tuple[int, str | None]:

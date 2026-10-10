@@ -500,6 +500,40 @@ def test_a_build_under_way_leaves_a_mostly_uncovered_window_to_the_scan(
     assert prepared == []
 
 
+def test_a_words_postings_are_priced_whole_for_a_small_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A common trigram's postings are read whole, however few rows the window has."""
+
+    monkeypatch.setattr(rl, "_SEARCH_SCAN_FIRST_ROWS", 0)
+    monkeypatch.setattr(rl, "_SEARCH_SCAN_SECONDS_MIN", 0.0)
+    prepared = _count_prepare(monkeypatch)
+    store, times = build_search_log(
+        tmp_path / "requests.db", rows=320, seed=6, inline_share=0.0
+    )
+    since = sorted(times)[288]  # 32 of 320 rows: a tenth of the log, scoped
+    postings = {"count": 0}
+    original = rs.SearchIndex.estimate
+
+    def estimate(self: rs.SearchIndex, conn: sqlite3.Connection, plans: Any) -> Any:
+        return {**original(self, conn, plans), "postings": postings["count"]}
+
+    monkeypatch.setattr(rs.SearchIndex, "estimate", estimate)
+    q = "zqx"
+    assert index_rows(store, q, local="all", since=since) == scan_rows(
+        store, q, local="all", since=since
+    )
+    assert prepared, "no postings to read: the index answers"
+    prepared.clear()
+    # 100,000 postings: 80 ms to read, against a 17 ms budget for 32 rows
+    # (scaled by the window's tenth they would look like 8 ms).
+    postings["count"] = 100_000
+    assert index_rows(store, q, local="all", since=since) == scan_rows(
+        store, q, local="all", since=since
+    )
+    assert prepared == []
+
+
 def test_a_build_says_how_long_it_has_left_only_after_running_a_while(
     tmp_path: Path,
 ) -> None:

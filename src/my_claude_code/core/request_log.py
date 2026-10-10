@@ -238,12 +238,13 @@ _SEARCH_COST_SCAN_ROW = 0.7e-3
 # pricing the index at all: looking the words up costs about as much.
 _SEARCH_SCAN_SECONDS_MIN = 0.25
 # The planner's prices, in seconds (measured on a full-size copy of a real
-# log; see the 7.92.0 PR): testing one chunk's text, one posting of a
-# three-letter word, one chunk -> unit link, one row of the indexed pass
-# (23-39 us measured: each row's two blob addresses looked up in the log and
-# in the index).
+# log; see the 7.92.0 PR): testing one chunk's text, reading one posting of a
+# trigram (every posting of every trigram a word has is read, whatever the
+# window: 0.8 us measured, a common trigram has ~2 M), one chunk -> unit link,
+# one row of the indexed pass (23-39 us measured: each row's two blob
+# addresses looked up in the log and in the index).
 _SEARCH_COST_TEST = 25e-6
-_SEARCH_COST_POSTING = 0.5e-6
+_SEARCH_COST_POSTING = 0.8e-6
 _SEARCH_COST_LINK = 1.2e-6
 _SEARCH_LINKS_PER_CHUNK = 13
 _SEARCH_COST_PASS_ROW = 40e-6
@@ -11902,12 +11903,12 @@ class RequestLogStore:
             estimate = search.estimate(conn, plans)
             total = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
             # A window reading under half the log looks up only the blobs its
-            # rows name (``scope``): their share of the work.
+            # rows name (``scope``): their share of the chunks tested and the
+            # links followed. The words' postings are read whole either way.
             scoped = rest < total * _SEARCH_SCOPE_SHARE
             share = rest / total if scoped and total else 1.0
-            lookups = share * (
+            lookups = estimate["postings"] * _SEARCH_COST_POSTING + share * (
                 estimate["tested"] * _SEARCH_COST_TEST
-                + estimate["looked_up"] * _SEARCH_COST_POSTING
                 + (estimate["tested"] + estimate["looked_up"])
                 * _SEARCH_LINKS_PER_CHUNK
                 * _SEARCH_COST_LINK
