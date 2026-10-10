@@ -61,6 +61,7 @@ from my_claude_code.api.models_page_cache import (
 )
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
 from my_claude_code.api.route_status import config_changed_at, credential_problems
+from my_claude_code.api.search_pool import run_on_search_pool
 from my_claude_code.application.derived_payloads import (
     ANALYTICS_MAX_AGE_SECONDS,
     LATENCY_ALL_TIME_ENTRY,
@@ -85,6 +86,12 @@ from my_claude_code.application.model_metadata import (
 from my_claude_code.application.release_updates import (
     get_release_status,
     perform_upgrade,
+)
+from my_claude_code.application.search_jobs import (
+    SearchAbandoned,
+    SearchStopped,
+    is_search,
+    search_jobs,
 )
 from my_claude_code.config.admin.manifest import FIELD_BY_KEY
 from my_claude_code.config.admin.persistence import validate_updates
@@ -217,6 +224,7 @@ from my_claude_code.core.optimization_discovery import (
 )
 from my_claude_code.core.request_log import (
     LOCAL_FILTER_VALUES,
+    MatchedRows,
     RequestLogStore,
     store_from_settings,
 )
@@ -224,6 +232,11 @@ from my_claude_code.core.request_tasks import (
     DEFAULT_INFLIGHT_LIMIT,
     inflight_count,
     inflight_report,
+)
+from my_claude_code.core.stop_deadline import (
+    SHUTDOWN_MARKER_HEADER,
+    SHUTDOWN_MARKER_VALUE,
+    SHUTDOWN_RETRY_AFTER_SECONDS,
 )
 from my_claude_code.core.stuck_requests import (
     DEFAULT_REQUEST_LIMIT,
@@ -4047,6 +4060,50 @@ def _validate_request_log_local(local: str | None) -> None:
         raise HTTPException(status_code=422, detail="Invalid local filter")
 
 
+async def answer_from_search[T](
+    request: Request,
+    store: RequestLogStore,
+    filters: dict[str, Any],
+    compute: Callable[[MatchedRows], T],
+    *,
+    settled: Callable[[T, float], bool] | None = None,
+) -> T:
+    """One answer for a free-text search, from the search's one pass (7.91.1).
+
+    Every request-log read carrying a search comes here instead of to a worker
+    of its own: the search is read once on the search pool
+    (``application.search_jobs``), and ``compute`` -- the same store method
+    the route always called -- runs over the rows that pass matched. Nothing
+    of it touches the default executor, and the request waits on a future,
+    not on a thread.
+    """
+
+    try:
+        return await search_jobs().answer(
+            store,
+            filters,
+            compute,
+            run=run_on_search_pool,
+            disconnected=request.is_disconnected,
+            settled=settled,
+        )
+    except SearchStopped:
+        raise HTTPException(
+            status_code=503,
+            detail="The server is stopping; this search was not finished.",
+            headers={
+                "retry-after": str(SHUTDOWN_RETRY_AFTER_SECONDS),
+                SHUTDOWN_MARKER_HEADER: SHUTDOWN_MARKER_VALUE,
+            },
+        ) from None
+    except SearchAbandoned:
+        # The client is gone; this only reaches the access log.
+        raise HTTPException(
+            status_code=503,
+            detail="The search was stopped: the client disconnected.",
+        ) from None
+
+
 def _harness_labels(harness_ids: Iterable[str]) -> dict[str, str]:
     """Display names for exactly the harness ids in one payload.
 
@@ -4114,31 +4171,77 @@ async def list_request_log(
     _validate_request_log_status(status)
     _validate_request_log_local(local)
     include_total = not (q or "").strip()
-    # SQLite work is synchronous; run it off the event loop so analytics
-    # queries cannot stall proxy traffic.
-    rows, total, has_more = await asyncio.to_thread(
-        store.list_requests_page,
-        limit=limit,
-        offset=offset,
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since,
-        until=until,
-        q=q,
-        local=local,
-        harness=harness,
-        session=session,
-        folder=folder,
-        exit=exit,
-        include_total=include_total,
-        # 7.88.0: each row gains ``exit`` -- the exit its answering attempt
-        # went out through and every exit it tried -- for the table's Exit
-        # column. Added beside every existing key, never instead of one.
-        include_exits=True,
-    )
+    if is_search(q):
+        filters: dict[str, Any] = {
+            "provider": provider,
+            "model": model,
+            "status": status,
+            "endpoint": endpoint,
+            "key": key,
+            "since": since,
+            "until": until,
+            "q": q,
+            "local": local,
+            "harness": harness,
+            "session": session,
+            "folder": folder,
+            "exit": exit,
+        }
+        page_size = max(1, min(limit, 500))
+
+        def page(matched: MatchedRows) -> tuple[list[dict[str, Any]], int | None, bool]:
+            return store.list_requests_page(
+                limit=limit,
+                offset=offset,
+                **filters,
+                include_total=include_total,
+                include_exits=True,
+                matched=matched,
+            )
+
+        def page_is_final(
+            answer: tuple[list[dict[str, Any]], int | None, bool], read_to: float
+        ) -> bool:
+            # A full page with a row after it, every row of it newer than the
+            # point the search has read back to: no row still to be found can
+            # come before any of them, so this is the page the finished search
+            # gives. Answered while the pass is still reading older rows.
+            rows, _total, has_more = answer
+            return (
+                len(rows) == page_size
+                and has_more
+                and float(rows[-1]["ts_epoch"]) > read_to
+            )
+
+        rows, total, has_more = await answer_from_search(
+            request, store, filters, page, settled=page_is_final
+        )
+    else:
+        # SQLite work is synchronous; run it off the event loop so analytics
+        # queries cannot stall proxy traffic.
+        rows, total, has_more = await asyncio.to_thread(
+            store.list_requests_page,
+            limit=limit,
+            offset=offset,
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+            session=session,
+            folder=folder,
+            exit=exit,
+            include_total=include_total,
+            # 7.88.0: each row gains ``exit`` -- the exit its answering attempt
+            # went out through and every exit it tried -- for the table's Exit
+            # column. Added beside every existing key, never instead of one.
+            include_exits=True,
+        )
     return {
         "enabled": True,
         "capture_bodies": bool(settings.request_log_capture_bodies),
@@ -4185,6 +4288,29 @@ async def count_request_log(
         return {"enabled": False, "total": 0}
     _validate_request_log_status(status)
     _validate_request_log_local(local)
+    if is_search(q):
+        filters: dict[str, Any] = {
+            "provider": provider,
+            "model": model,
+            "status": status,
+            "endpoint": endpoint,
+            "key": key,
+            "since": since,
+            "until": until,
+            "q": q,
+            "local": local,
+            "harness": harness,
+            "session": session,
+            "folder": folder,
+            "exit": exit,
+        }
+        total = await answer_from_search(
+            request,
+            store,
+            filters,
+            lambda matched: store.count_requests(**filters, matched=matched),
+        )
+        return {"enabled": True, "total": total}
     total = await asyncio.to_thread(
         store.count_requests,
         provider=provider,
@@ -4257,7 +4383,11 @@ async def request_log_ttft(
         "exit": exit,
     }
     result = await _recent_analytics_answer(
-        store, "ttft", filters, lambda: store.ttft_percentiles(**filters)
+        request,
+        store,
+        "ttft",
+        filters,
+        lambda matched: store.ttft_percentiles(**filters, matched=matched),
     )
     return {"enabled": True, **result}
 
@@ -4311,7 +4441,11 @@ async def request_log_no_answer(
         "exit": exit,
     }
     result = await _recent_analytics_answer(
-        store, "no-answer", filters, lambda: store.no_answer_breakdown(**filters)
+        request,
+        store,
+        "no-answer",
+        filters,
+        lambda matched: store.no_answer_breakdown(**filters, matched=matched),
     )
     return {"enabled": True, **result}
 
@@ -4367,7 +4501,11 @@ async def request_log_origin(
         "exit": exit,
     }
     result = await _recent_analytics_answer(
-        store, "origin", filters, lambda: store.origin_breakdown(**filters)
+        request,
+        store,
+        "origin",
+        filters,
+        lambda matched: store.origin_breakdown(**filters, matched=matched),
     )
     return {"enabled": True, **result}
 
@@ -4421,8 +4559,8 @@ async def request_log_stats(
         "exit": exit,
     }
 
-    def compute() -> dict[str, Any]:
-        answer = store.stats(**filters)
+    def compute(matched: MatchedRows | None) -> dict[str, Any]:
+        answer = store.stats(**filters, matched=matched)
         # Uptime over the same window, so a flat stretch in the series can be
         # read as "no traffic" or "no server" instead of being ambiguous.
         answer["coverage"] = store.coverage(since=since, until=until)
@@ -4431,10 +4569,12 @@ async def request_log_stats(
         # sub-label is deliberately not a rollup dimension. Decorating the
         # result here keeps every existing key of the stats answer exactly as
         # it was and adds one.
-        answer["cancelled_breakdown"] = store.cancelled_breakdown(**filters)
+        answer["cancelled_breakdown"] = store.cancelled_breakdown(
+            **filters, matched=matched
+        )
         return answer
 
-    result = await _recent_analytics_answer(store, "stats", filters, compute)
+    result = await _recent_analytics_answer(request, store, "stats", filters, compute)
     result["enabled"] = True
     result["capture_bodies"] = bool(settings.request_log_capture_bodies)
     # Resolved here and shipped with the numbers, because the store cannot do
@@ -4455,10 +4595,11 @@ async def request_log_stats(
 
 
 async def _recent_analytics_answer(
+    request: Request,
     store: RequestLogStore,
     name: str,
     filters: dict[str, Any],
-    compute: Callable[[], dict[str, Any]],
+    compute: Callable[[MatchedRows | None], dict[str, Any]],
 ) -> dict[str, Any]:
     """One Analytics answer, at most ``ANALYTICS_MAX_AGE_SECONDS`` old.
 
@@ -4467,10 +4608,23 @@ async def _recent_analytics_answer(
     memory for up to a minute (the user's limit, 2026-10-01) with the
     ``computed_at`` they were computed at, which the page shows as "as of". On
     a worker thread, like every query here.
+
+    A free-text search (7.91.1) is kept the same way, but a second ask for one
+    still being computed never parks a worker beside the first: it waits on
+    the search's own pass (``answer_from_search``) and is computed from the
+    rows that pass read.
     """
 
     key = (name, *(filters[field] for field in sorted(filters)))
-    return await asyncio.to_thread(recent_analytics().answer, store, key, compute)
+    if not is_search(filters.get("q")):
+        return await asyncio.to_thread(
+            recent_analytics().answer, store, key, lambda: compute(None)
+        )
+    kept = recent_analytics().recent(store, key)
+    if kept is not None:
+        return kept
+    payload = await answer_from_search(request, store, filters, compute)
+    return recent_analytics().keep(store, key, payload)
 
 
 @router.get("/admin/api/requests/cost")
@@ -4529,7 +4683,17 @@ async def request_log_cost(
         return store.cost_breakdown(**filters)
 
     entry_name = cost_breakdown_entry_name(**filters)
-    if entry_name is None:
+    if is_search(q):
+        # 7.91.1: from the search's one pass, on the search pool, never on
+        # the default executor. A search is a filter, so never stored.
+        result = await answer_from_search(
+            request,
+            store,
+            filters,
+            lambda matched: store.cost_breakdown(**filters, matched=matched),
+        )
+        result["stale"] = False
+    elif entry_name is None:
         # A filtered question is asked once and moved on from; it is answered
         # the way it always was.
         result = await asyncio.to_thread(compute)
@@ -4756,22 +4920,47 @@ async def request_log_pulse(
         return {"enabled": False}
     _validate_request_log_status(status)
     _validate_request_log_local(local)
-    result = await asyncio.to_thread(
-        store.pulse,
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since,
-        until=until,
-        q=q,
-        local=local,
-        harness=harness,
-        session=session,
-        folder=folder,
-        exit=exit,
-    )
+    if is_search(q):
+        filters: dict[str, Any] = {
+            "provider": provider,
+            "model": model,
+            "status": status,
+            "endpoint": endpoint,
+            "key": key,
+            "since": since,
+            "until": until,
+            "q": q,
+            "local": local,
+            "harness": harness,
+            "session": session,
+            "folder": folder,
+            "exit": exit,
+        }
+        # 7.91.1: the search's one pass, and after it only the rows written
+        # since -- not a full pass on every auto-refresh tick.
+        result = await answer_from_search(
+            request,
+            store,
+            filters,
+            lambda matched: store.pulse(**filters, matched=matched),
+        )
+    else:
+        result = await asyncio.to_thread(
+            store.pulse,
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+            session=session,
+            folder=folder,
+            exit=exit,
+        )
     result["enabled"] = True
     # How many requests are being served right now: one ``len`` under the
     # registry's lock, no query. ``None`` when the in-flight view is off. The
@@ -5051,6 +5240,9 @@ async def clear_request_log(
     cleared = await asyncio.to_thread(store.clear) if store is not None else 0
     # The minute-old Analytics answers describe rows that no longer exist.
     recent_analytics().clear()
+    # So do the rows a search matched; one still waited for reads again.
+    if store is not None:
+        search_jobs().forget(store)
     return {"cleared": cleared}
 
 

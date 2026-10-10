@@ -62,6 +62,14 @@ ANALYTICS_MAX_AGE_SECONDS = 60.0
 #: filters must not grow a dictionary for the life of the process.
 RECENT_ANSWERS_MAX_ENTRIES = 64
 
+#: Longest a second caller waits, in seconds, for an Analytics answer someone
+#: else is already computing (7.91.1). Past it, it computes its own beside
+#: theirs: the same answer, so nothing changes but the cost. These answers
+#: take 0.1-5 s; the bound is what keeps one worker from ever waiting on
+#: another without end. A free-text search never waits here at all -- it waits
+#: on its own pass (``application.search_jobs``).
+RECENT_ANSWER_WAIT_SECONDS = 30.0
+
 _refresh_lock = threading.Lock()
 _refreshing: set[str] = set()
 
@@ -281,17 +289,20 @@ class RecentAnswers:
     replaced under it (the store is part of the key).
 
     One computation per key at a time: a second caller for the same key waits
-    for the first answer instead of running the same scans beside it. Called
-    on a worker thread (``asyncio.to_thread``), never on the event loop.
+    for the first answer instead of running the same scans beside it -- for at
+    most ``wait_seconds`` (7.91.1), never without a bound. Called on a worker
+    thread (``asyncio.to_thread``), never on the event loop.
     """
 
     def __init__(
         self,
         max_age_seconds: float = ANALYTICS_MAX_AGE_SECONDS,
         max_entries: int = RECENT_ANSWERS_MAX_ENTRIES,
+        wait_seconds: float = RECENT_ANSWER_WAIT_SECONDS,
     ) -> None:
         self._max_age = max_age_seconds
         self._max_entries = max_entries
+        self._wait_seconds = wait_seconds
         self._lock = threading.Lock()
         self._entries: OrderedDict[tuple[Any, ...], _RecentAnswer] = OrderedDict()
         self._computing: dict[tuple[Any, ...], threading.Event] = {}
@@ -319,26 +330,51 @@ class RecentAnswers:
                     running = threading.Event()
                     self._computing[full_key] = running
                     break
-            # Someone else is computing this very answer: wait for theirs.
-            running.wait()
+            # Someone else is computing this very answer: wait for theirs, up
+            # to the bound. Past it, compute it beside them -- the same answer,
+            # and a worker that waited on another without end held the server
+            # on 2026-10-09.
+            if not running.wait(self._wait_seconds):
+                return self.keep(owner, key, compute())
         try:
-            payload = compute()
-            computed_at = time.time()
-            with self._lock:
-                self._entries[full_key] = _RecentAnswer(
-                    payload=dict(payload),
-                    computed_at=computed_at,
-                    monotonic_at=time.monotonic(),
-                    owner=owner,
-                )
-                self._entries.move_to_end(full_key)
-                while len(self._entries) > self._max_entries:
-                    self._entries.popitem(last=False)
-            return {**payload, "computed_at": computed_at}
+            return self.keep(owner, key, compute())
         finally:
             with self._lock:
                 self._computing.pop(full_key, None)
             running.set()
+
+    def recent(self, owner: object, key: tuple[Any, ...]) -> dict[str, Any] | None:
+        """The answer for ``key`` if one younger than the limit is kept, else None.
+
+        Never waits and never computes, so the event loop may ask (7.91.1).
+        """
+
+        full_key = (id(owner), *key)
+        with self._lock:
+            entry = self._entries.get(full_key)
+            if entry is None or time.monotonic() - entry.monotonic_at >= self._max_age:
+                return None
+            self._entries.move_to_end(full_key)
+            return {**entry.payload, "computed_at": entry.computed_at}
+
+    def keep(
+        self, owner: object, key: tuple[Any, ...], payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Keep ``payload`` as the answer for ``key`` from now; return it as served."""
+
+        full_key = (id(owner), *key)
+        computed_at = time.time()
+        with self._lock:
+            self._entries[full_key] = _RecentAnswer(
+                payload=dict(payload),
+                computed_at=computed_at,
+                monotonic_at=time.monotonic(),
+                owner=owner,
+            )
+            self._entries.move_to_end(full_key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
+        return {**payload, "computed_at": computed_at}
 
     def clear(self) -> None:
         """Forget every answer: the log they were computed from was cleared."""

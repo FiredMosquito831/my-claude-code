@@ -1421,6 +1421,83 @@ _VALUE_CACHE_MAX = 4_096
 # quietly blind to most of the transcript.
 _SEARCHED_COLUMNS = ("input_text", "output_text", "thinking_text", "tool_calls")
 
+# A free-text search's matched rows (7.91.1), standing in for the body
+# predicate in every answer of that search; see ``MatchedRows``. ``+rowid``
+# rather than ``rowid``: the unary plus keeps the term from driving the plan, so
+# an answer walks exactly the index the body predicate's query walked, and rows
+# that share a timestamp come back in the same order they always did.
+_MATCHED_ROWS_SQL = "+rowid IN (SELECT value FROM json_each(?))"
+# The same set copied once into a table of the answering connection, for an
+# answer that reads its predicate many times (``_rows_once``). An IN over a
+# table's own rowid is a direct lookup; ``json_each`` builds its lookup again
+# for every statement (measured: 0.2-0.4 s a statement for 558,000 rows).
+_MATCHED_TABLE = "mcc_search_rows"
+_MATCHED_TABLE_SQL = f"+rowid IN (SELECT rowid FROM temp.{_MATCHED_TABLE})"
+
+
+def normalized_search(q: str | None) -> str:
+    """The free-text search ``q`` asks for, as the predicate reads it.
+
+    ``_where`` and ``fcc_bodies_match`` both read only ``q.split()``, so two
+    spellings that split alike are the same search. Empty means no search: a
+    blank or whitespace-only ``q`` adds no clause, as it never did.
+    """
+
+    return " ".join(q.split()) if q else ""
+
+
+@dataclass(frozen=True, slots=True)
+class MatchedRows:
+    """The rows one free-text search matched, as its one pass found them.
+
+    Until 7.91.1 every answer for a search ran the body predicate itself --
+    the page, the count, the stats cards (fourteen statements), the cost
+    (seven), TTFT, no-answer, origin and the auto-refresh pulse: 27 passes
+    over every stored body in the window for one page load, each of them
+    decompressing and parsing every row. The search is now read once, and
+    each answer is handed the rows it found in place of the predicate; every
+    other clause of the answer -- the window, the status, the Exit filter, a
+    method's own filter -- stays the SQL it was. The rows are the predicate's
+    own answer, so every count, every row and every order is the one the
+    predicate gave.
+
+    ``q`` is :func:`normalized_search` of the search; ``rowids`` is a JSON
+    array of the matching rows' rowids. It may hold rows outside a caller's
+    window, or rows deleted since (a prune): the answer's own clauses and its
+    own read of ``requests`` decide those exactly as before.
+    """
+
+    q: str
+    rowids: str
+
+
+#: Called with every connection a store opens while set (7.91.1). The search
+#: pool registers each one so a superseded or abandoned search can be stopped
+#: mid-statement (``sqlite3.Connection.interrupt``); ``None`` everywhere else,
+#: where ``_connect`` is exactly what it was.
+_CONNECTION_WATCHER: ContextVar[Callable[[sqlite3.Connection], None] | None] = (
+    ContextVar("request_log_connection_watcher", default=None)
+)
+
+
+@contextlib.contextmanager
+def watch_connections(
+    watcher: Callable[[sqlite3.Connection], None],
+) -> Iterator[None]:
+    """Hand every connection a store opens in this context to ``watcher``.
+
+    A watcher that raises refuses the connection: it is closed and the error
+    reaches the caller, which is how a search stopped between two statements
+    cannot start a third.
+    """
+
+    token = _CONNECTION_WATCHER.set(watcher)
+    try:
+        yield
+    finally:
+        _CONNECTION_WATCHER.reset(token)
+
+
 # Aggregate columns of ``request_totals``, in the order the upsert binds them.
 _TOTALS_COUNTERS = (
     "requests",
@@ -2971,6 +3048,9 @@ class RequestLogStore:
         # start-up decision about training, so a caller can tell "nothing was
         # due" from "not decided yet".
         self._dictionaries_checked = threading.Event()
+        # Bumped by every ``clear`` (7.91.1). A search's matched rows are kept
+        # under it, because a cleared log hands out its rowids again from 1.
+        self._clear_generation = 0
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=self._queue_max_size)
         self._inserts_since_prune = 0
         # Session-level "stop asking": set when the historical cost backfill
@@ -3114,6 +3194,13 @@ class RequestLogStore:
         conn.create_function(
             "fcc_bodies_match", 5, self._bodies_match, deterministic=True
         )
+        watcher = _CONNECTION_WATCHER.get()
+        if watcher is not None:
+            try:
+                watcher(conn)
+            except BaseException:
+                conn.close()
+                raise
         return conn
 
     # --------------------------------------------------------- body storage ---
@@ -6961,6 +7048,54 @@ class RequestLogStore:
         return " WHERE rowid IN (SELECT value FROM json_each(?))", [json.dumps(rowids)]
 
     @staticmethod
+    def _rows_once(
+        conn: sqlite3.Connection,
+        where: str,
+        args: list[Any],
+        matched: MatchedRows | None,
+    ) -> tuple[str, list[Any]]:
+        """A search's matched rows, copied once into this connection (7.91.1).
+
+        ``_where`` hands a search's rows to SQL as a JSON array, and SQLite
+        builds a lookup from it again for every statement: 0.2-0.4 s each for
+        558,000 rows. An answer that reads its predicate many times -- the
+        stats cards fourteen times, the cost seven, an export once per thousand
+        rows -- copies them here once, into a table only this connection sees,
+        and every statement looks a row up by its rowid instead. The same rows,
+        so the same answer. Without ``matched`` the predicate comes back
+        exactly as it went in.
+        """
+
+        if matched is None or _MATCHED_ROWS_SQL not in where:
+            return where, args
+        position = where[: where.index(_MATCHED_ROWS_SQL)].count("?")
+        if position >= len(args) or args[position] is not matched.rowids:
+            # Not the clause ``_where`` wrote for this set: leave it as the
+            # JSON lookup, which is the same answer, only slower.
+            return where, args
+        # In memory rather than a temporary file. The pragma has to come before
+        # the table, and failing to set it costs only speed.
+        with contextlib.suppress(sqlite3.Error):
+            conn.execute("PRAGMA temp_store = MEMORY")
+        conn.execute(
+            f"CREATE TEMP TABLE IF NOT EXISTS {_MATCHED_TABLE}"
+            " (rowid INTEGER PRIMARY KEY)"
+        )
+        conn.execute(f"DELETE FROM temp.{_MATCHED_TABLE}")
+        conn.execute(
+            f"INSERT OR IGNORE INTO temp.{_MATCHED_TABLE} (rowid)"
+            " SELECT value FROM json_each(?)",
+            (matched.rowids,),
+        )
+        # Only the connection's own temporary table was written; committing
+        # here keeps every read after it in autocommit, as it always was.
+        conn.commit()
+        return (
+            where.replace(_MATCHED_ROWS_SQL, _MATCHED_TABLE_SQL, 1),
+            [*args[:position], *args[position + 1 :]],
+        )
+
+    @staticmethod
     def _fetch_exits(
         conn: sqlite3.Connection, answering: Mapping[str, Any]
     ) -> dict[str, dict[str, Any]]:
@@ -7682,6 +7817,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         args: list[Any] = []
@@ -7783,7 +7919,13 @@ class RequestLogStore:
             clauses.append("ts_epoch <= ?")
             args.append(until)
         terms = q.split() if q else []
-        if terms:
+        if terms and matched is not None and matched.q == " ".join(terms):
+            # 7.91.1: this search's one pass already read the predicate below,
+            # and these are the rows it matched. In the predicate's place and
+            # position, so every other clause and argument is what it was.
+            clauses.append(_MATCHED_ROWS_SQL)
+            args.append(matched.rowids)
+        elif terms:
             # Legacy inline text and compressed bodies coexist, so search has to
             # cover both. The correlated subquery keeps this self-contained --
             # no caller of ``_where`` needs to know about the second table --
@@ -7958,6 +8100,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
         include_total: bool = True,
         include_exits: bool = False,
@@ -8000,6 +8143,7 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
@@ -8075,6 +8219,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> int:
         """How many rows match, and nothing else.
 
@@ -8098,6 +8243,7 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         with self._connection() as conn:
             return int(
@@ -8123,6 +8269,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> dict[str, Any]:
         """What the filtered traffic cost, split by provenance, per dimension.
 
@@ -8192,6 +8339,7 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         measures = (
             "SUM(CASE WHEN cost_source = 'provider' THEN cost_usd END)"
@@ -8203,6 +8351,9 @@ class RequestLogStore:
         )
         result: dict[str, Any] = {}
         with self._connection() as conn:
+            # 7.91.1: a search's matched rows, copied into this connection once
+            # for the many reads below rather than looked up again by each.
+            where, args = self._rows_once(conn, where, args, matched)
             # 7.88.0: an Exit filter is read once here, not once per pass.
             where, args = self._exit_rows_once(conn, where, args, exit)
             totals = conn.execute(
@@ -8440,6 +8591,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
         page_size: int = 1_000,
     ) -> Generator[dict[str, Any]]:
         """Yield every matching row for an export, bypassing the 500-row page cap.
@@ -8497,9 +8649,13 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         conn = self._connect()
         try:
+            # 7.91.1: a search's matched rows, copied into this connection once
+            # for the many reads below rather than looked up again by each.
+            where, args = self._rows_once(conn, where, args, matched)
             cursor: Any = None
             while True:
                 page_where = where
@@ -8571,6 +8727,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
         page_size: int = 1_000,
     ) -> Generator[dict[str, Any]]:
         """Yield one row per *attempt*, carrying its request's dimensions.
@@ -8609,10 +8766,14 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         boundaries = self.restart_boundaries()
         conn = self._connect()
         try:
+            # 7.91.1: a search's matched rows, copied into this connection once
+            # for the many reads below rather than looked up again by each.
+            where, args = self._rows_once(conn, where, args, matched)
             cursor: Any = None
             while True:
                 page_where = where
@@ -8761,6 +8922,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield the aggregated (grouped) records for an export.
 
@@ -8782,6 +8944,7 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         group_sql = ", ".join(group_by)
         order_sql = ", ".join(group_by)
@@ -8959,6 +9122,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> dict[str, Any]:
         """Aggregate analytics, served from the rollup where it can be.
 
@@ -9050,6 +9214,7 @@ class RequestLogStore:
                 session=session,
                 folder=folder,
                 exit=exit,
+                matched=matched,
             )
         with self._stats_lock:
             self._stats_cache[cache_key] = (now, payload)
@@ -9074,6 +9239,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> dict[str, Any]:
         """Compute the whole payload by scanning ``requests``.
 
@@ -9097,8 +9263,12 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         with self._connection() as conn:
+            # 7.91.1: a search's matched rows, copied into this connection once
+            # for the many reads below rather than looked up again by each.
+            where, args = self._rows_once(conn, where, args, matched)
             # 7.88.0: an Exit filter is read once here, not once per pass.
             where, args = self._exit_rows_once(conn, where, args, exit)
             totals = conn.execute(
@@ -9949,6 +10119,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> dict[str, Any]:
         """Overall p50/p95 time-to-first-token, over the same filters as stats.
 
@@ -10021,8 +10192,12 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         with self._connection() as conn:
+            # 7.91.1: a search's matched rows, copied into this connection once
+            # for the many reads below rather than looked up again by each.
+            where, args = self._rows_once(conn, where, args, matched)
             percentiles = self._percentiles(
                 conn, where, args, (0.50, 0.95), column="ttft_ms"
             )
@@ -10104,6 +10279,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> dict[str, Any]:
         """The Cancelled card, split into the four things "cancelled" means.
 
@@ -10173,6 +10349,7 @@ class RequestLogStore:
                 session=session,
                 folder=folder,
                 exit=exit,
+                matched=matched,
             )
             try:
                 with self._connection() as conn:
@@ -10218,6 +10395,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> dict[str, Any]:
         """The successes that carried no answer, split into the two shapes.
 
@@ -10294,6 +10472,7 @@ class RequestLogStore:
                 session=session,
                 folder=folder,
                 exit=exit,
+                matched=matched,
             )
             try:
                 with self._connection() as conn:
@@ -10594,6 +10773,129 @@ class RequestLogStore:
             ],
         }
 
+    @property
+    def clear_generation(self) -> int:
+        """How many times this store has been cleared (see ``clear``)."""
+
+        return self._clear_generation
+
+    def match_rows(
+        self,
+        *,
+        q: str,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+        session: str | None = None,
+        folder: str | None = None,
+        exit: str | None = None,
+        below: float | None = None,
+        below_inclusive: bool = False,
+        rowid_after: int | None = None,
+        rowid_through: int | None = None,
+    ) -> Generator[tuple[int, float]]:
+        """``(rowid, ts_epoch)`` of every row a free-text search matches (7.91.1).
+
+        The one pass a search's answers share (see ``MatchedRows``). The
+        predicate is ``_where``'s own for these filters, body predicate and
+        all, so the rows are exactly the rows every answer used to find for
+        itself. Newest first, walking the timestamp index, so the rows a page
+        shows are found first and arrive while the pass goes on.
+
+        ``below`` continues a pass below the point it had reached (``ts_epoch
+        < below``, or ``<=`` with ``below_inclusive``). ``rowid_after`` and
+        ``rowid_through`` test only the rows written after a pass, by rowid.
+        One connection, closed when the generator is closed.
+        """
+
+        where, args = self._where(
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+            session=session,
+            folder=folder,
+            exit=exit,
+        )
+        extra: list[str] = []
+        if below is not None:
+            extra.append("ts_epoch <= ?" if below_inclusive else "ts_epoch < ?")
+            args.append(below)
+        if rowid_after is not None:
+            extra.append("rowid > ?")
+            args.append(rowid_after)
+        if rowid_through is not None:
+            extra.append("rowid <= ?")
+            args.append(rowid_through)
+        if extra:
+            where = f"{where}{' AND' if where else ' WHERE'} {' AND '.join(extra)}"
+        if rowid_after is None and rowid_through is None:
+            # The timestamp index, named: what streams the rows newest first
+            # rather than sorting them all at the end. Which rows the body
+            # predicate reads is the same on any plan -- SQLite tests a
+            # correlated subquery after every plain clause of the row.
+            sql = (
+                "SELECT rowid, ts_epoch FROM requests INDEXED BY idx_requests_ts"
+                f"{where} ORDER BY ts_epoch DESC"
+            )
+        else:
+            sql = f"SELECT rowid, ts_epoch FROM requests{where}"
+        conn = self._connect()
+        try:
+            for row in conn.execute(sql, args):
+                yield int(row[0]), float(row[1])
+        finally:
+            conn.close()
+
+    def max_rowid(self) -> int:
+        """The newest row's rowid, 0 for an empty log (7.91.1)."""
+
+        with self._connection() as conn:
+            return int(
+                conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM requests").fetchone()[
+                    0
+                ]
+            )
+
+    def search_mark(self, filters: Mapping[str, Any]) -> str:
+        """What a search's matched rows rest on besides the rows (7.91.1).
+
+        A search pass reads the page's filters with it, and three of those
+        filters read columns a backfill rewrites in place without adding a
+        row: ``is_local``, ``harness`` and ``project_dir``. Their markers, for
+        the filters ``filters`` sets, so rows matched before such a rewrite
+        are read again rather than kept. Empty when none of the three is set.
+        """
+
+        keys: list[str] = []
+        if filters.get("local") in ("hide", "only"):
+            keys.append(_IS_LOCAL_BACKFILL_KEY)
+        if filters.get("harness"):
+            keys.append(_HARNESS_BACKFILL_KEY)
+        if folder_filter(filters.get("folder")) is not None:
+            keys.extend((_ORIGIN_BACKFILL_KEY, _ORIGIN_BACKFILL_THROUGH_KEY))
+        if not keys:
+            return ""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT key, value FROM request_log_meta"
+                f" WHERE key IN ({', '.join('?' * len(keys))}) ORDER BY key",
+                keys,
+            ).fetchall()
+        return json.dumps([[str(row[0]), str(row[1])] for row in rows])
+
     def pulse(
         self,
         *,
@@ -10610,6 +10912,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> dict[str, Any]:
         """Return a cheap heartbeat: row count and latest timestamp for these filters.
 
@@ -10631,6 +10934,7 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         with self._connection() as conn:
             total, last_ts = conn.execute(
@@ -10654,6 +10958,7 @@ class RequestLogStore:
         session: str | None = None,
         folder: str | None = None,
         exit: str | None = None,
+        matched: MatchedRows | None = None,
     ) -> dict[str, Any]:
         """Requests by folder and by session, over the same filters as ``stats``.
 
@@ -10717,6 +11022,7 @@ class RequestLogStore:
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
         window_sql = ""
         window_args: list[Any] = []
@@ -10738,6 +11044,9 @@ class RequestLogStore:
             )
 
         with self._connection() as conn:
+            # 7.91.1: a search's matched rows, copied into this connection once
+            # for the many reads below rather than looked up again by each.
+            where, args = self._rows_once(conn, where, args, matched)
             # 7.88.0: an Exit filter is read once here, not once per pass.
             # ``carrying`` reads ``where`` when it is called, so it sees this.
             where, args = self._exit_rows_once(conn, where, args, exit)
@@ -11316,6 +11625,9 @@ class RequestLogStore:
             conn.execute("DELETE FROM tool_schemas")
             conn.execute("DELETE FROM request_values")
             removed = cursor.rowcount
+        # After the erase has committed: rowids start again from 1, so rows a
+        # search matched before it must never stand for rows written after.
+        self._clear_generation += 1
         if stored_media:
             delete_media_files(media_root(self._db_path), stored_media)
         return removed

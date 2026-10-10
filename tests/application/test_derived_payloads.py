@@ -390,6 +390,54 @@ def test_one_computation_per_question_at_a_time() -> None:
     assert len({result["computed_at"] for result in results}) == 1
 
 
+def test_a_second_caller_waits_for_the_first_only_up_to_the_bound() -> None:
+    """7.91.1: no worker waits on another without end.
+
+    The first caller is stuck; the second gives up waiting at the bound and
+    computes the same answer itself, and the first still finishes its own.
+    """
+
+    answers = derived_payloads.RecentAnswers(max_age_seconds=60.0, wait_seconds=0.2)
+    owner = object()
+    release = threading.Event()
+
+    def stuck() -> dict[str, Any]:
+        release.wait(10.0)
+        return {"total": 7}
+
+    first: list[dict[str, Any]] = []
+    holder = threading.Thread(
+        target=lambda: first.append(answers.answer(owner, ("stats",), stuck))
+    )
+    holder.start()
+    time.sleep(0.1)
+    started = time.perf_counter()
+    second = answers.answer(owner, ("stats",), lambda: {"total": 7})
+    waited = time.perf_counter() - started
+    release.set()
+    holder.join(10.0)
+
+    assert second["total"] == 7
+    assert 0.2 <= waited < 1.0
+    assert first and first[0]["total"] == 7
+
+
+def test_recent_and_keep_never_wait_or_compute() -> None:
+    """The event loop's side of the minute-long answers (7.91.1, a search)."""
+
+    answers = derived_payloads.RecentAnswers(max_age_seconds=60.0)
+    owner = object()
+    assert answers.recent(owner, ("stats", "q")) is None
+    kept = answers.keep(owner, ("stats", "q"), {"total": 3})
+    again = answers.recent(owner, ("stats", "q"))
+
+    assert again == kept
+    assert kept["total"] == 3
+    assert isinstance(kept["computed_at"], float)
+    # The same entry ``answer`` serves: no computation inside the minute.
+    assert answers.answer(owner, ("stats", "q"), lambda: {"total": 99}) == kept
+
+
 def test_a_failed_computation_is_not_kept() -> None:
     answers = derived_payloads.RecentAnswers(max_age_seconds=60.0)
     owner = object()

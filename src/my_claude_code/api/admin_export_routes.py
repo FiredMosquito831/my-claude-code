@@ -15,14 +15,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from my_claude_code.api.admin_websearch_routes import get_websearch_log_store
+from my_claude_code.application.search_jobs import is_search
 from my_claude_code.config.settings import Settings
 from my_claude_code.core import export as export_engine
 from my_claude_code.core import request_log
-from my_claude_code.core.request_log import RequestLogStore, store_from_settings
+from my_claude_code.core.request_log import (
+    MatchedRows,
+    RequestLogStore,
+    store_from_settings,
+)
 from my_claude_code.core.success_reasons import REQUEST_STATUS_FILTER_VALUES
 from my_claude_code.websearch.analytics import WebSearchLogStore
 
-from .admin_routes import require_loopback_admin
+from .admin_routes import answer_from_search, require_loopback_admin
 from .credential_display import credential_name_index
 from .dependencies import get_settings
 
@@ -152,7 +157,8 @@ async def export_analytics(
     group_by_list = _split_csv(group_by)
 
     if scp == export_engine.ATTEMPT_SCOPE:
-        return _attempt_export(
+        return await _attempt_export(
+            request,
             fmt,
             fields,
             group_by_list,
@@ -172,7 +178,8 @@ async def export_analytics(
             settings=settings,
         )
     if scp == export_engine.REQUEST_SCOPE:
-        return _request_export(
+        return await _request_export(
+            request,
             fmt,
             fields,
             group_by_list,
@@ -204,7 +211,24 @@ async def export_analytics(
     )
 
 
-def _request_export(
+async def _search_rows(
+    request: Request, store: RequestLogStore, filters: dict[str, Any]
+) -> MatchedRows | None:
+    """The rows an export's search matched, from that search's one pass (7.91.1).
+
+    ``None`` without a search, and the export reads exactly as it did. With
+    one, the pass runs on the search pool -- the same pass the page that asked
+    for the export already ran, so an export of the current search reads no
+    body again -- and the export's own streaming reads only those rows.
+    """
+
+    if not is_search(filters.get("q")):
+        return None
+    return await answer_from_search(request, store, filters, lambda matched: matched)
+
+
+async def _request_export(
+    request: Request,
     fmt: export_engine.Format,
     fields: str | None,
     group_by_list: list[str],
@@ -255,6 +279,25 @@ def _request_export(
     filename = export_engine.export_filename(
         export_engine.REQUEST_SCOPE, fmt, exported_at
     )
+    matched = await _search_rows(
+        request,
+        store,
+        {
+            "provider": provider,
+            "model": model,
+            "status": status,
+            "endpoint": endpoint,
+            "key": key,
+            "since": since_epoch,
+            "until": until_epoch,
+            "q": q,
+            "local": local,
+            "harness": harness,
+            "session": session,
+            "folder": folder,
+            "exit": exit,
+        },
+    )
 
     if dims:
         select, names = export_engine.request_aggregate_sql(selected, dims)
@@ -277,6 +320,7 @@ def _request_export(
             session=session,
             folder=folder,
             exit=exit,
+            matched=matched,
         )
 
         def agg_rows() -> Iterator[dict[str, Any]]:
@@ -313,6 +357,7 @@ def _request_export(
         session=session,
         folder=folder,
         exit=exit,
+        matched=matched,
     )
 
     key_names = credential_name_index()
@@ -325,7 +370,8 @@ def _request_export(
     return _stream(fmt, detail_rows(), output_columns, headers, filename, exported_at)
 
 
-def _attempt_export(
+async def _attempt_export(
+    request: Request,
     fmt: export_engine.Format,
     fields: str | None,
     group_by_list: list[str],
@@ -380,21 +426,23 @@ def _attempt_export(
     )
     output_columns = export_engine.attempt_output_columns(selected)
     headers = export_engine.attempt_detail_headers(output_columns)
-    iterator = store.iter_export_attempt_rows(
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since_epoch,
-        until=until_epoch,
-        q=q,
-        local=local,
-        harness=harness,
-        session=session,
-        folder=folder,
-        exit=exit,
-    )
+    filters: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "endpoint": endpoint,
+        "key": key,
+        "since": since_epoch,
+        "until": until_epoch,
+        "q": q,
+        "local": local,
+        "harness": harness,
+        "session": session,
+        "folder": folder,
+        "exit": exit,
+    }
+    matched = await _search_rows(request, store, filters)
+    iterator = store.iter_export_attempt_rows(**filters, matched=matched)
 
     key_names = credential_name_index()
 
