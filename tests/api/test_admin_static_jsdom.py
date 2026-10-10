@@ -6641,7 +6641,7 @@ def test_search_index_line_says_when_this_server_cannot_keep_one(rendered) -> No
         "Search index off: This Python's SQLite (3.31.1)"
     )
     assert index["off"]["text"].endswith(
-        "Searches read every stored request, as before."
+        "(no such tokenizer: trigram), so searches read every stored request, as before."
     )
     assert index["off"]["build"] is False
     assert index["off"]["pause"] is False

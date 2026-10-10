@@ -12077,7 +12077,7 @@ const searchIndex = {};
     enabled: true,
     available: false,
     reason:
-      "This Python's SQLite (3.31.1) cannot keep the search index (no such tokenizer: trigram), so searches read every stored request.",
+      "This Python's SQLite (3.31.1) cannot keep the search index (no such tokenizer: trigram), so searches read every stored request, as before.",
   });
   searchIndex.logOff = paint({ enabled: false, available: false, reason: "The request log is off." });
 

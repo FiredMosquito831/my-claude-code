@@ -193,12 +193,12 @@ def search_index_support() -> tuple[bool, str | None]:
     except sqlite3.Error as exc:
         return False, (
             f"This Python's SQLite ({sqlite3.sqlite_version}) cannot keep the"
-            f" search index ({exc}), so searches read every stored request."
+            f" search index ({exc}), so searches read every stored request, as before."
         )
     if found != [1] or terms != 2 or unhexed != b"\x00\xff":
         return False, (
             f"This Python's SQLite ({sqlite3.sqlite_version}) answered the search"
-            " index's self-test wrongly, so searches read every stored request."
+            " index's self-test wrongly, so searches read every stored request, as before."
         )
     return True, None
 
@@ -412,7 +412,7 @@ class SearchIndex:
                 if version not in (None, SEARCH_INDEX_SCHEMA_VERSION):
                     self.unusable = (
                         f"The search index file was written by another version"
-                        f" (schema {version}); it is left as it is."
+                        f" (schema {version}): it is left as it is, so searches read every stored request, as before."
                     )
                     conn.close()
                     return None
@@ -428,7 +428,7 @@ class SearchIndex:
                 conn.close()
                 raise
         except Exception as exc:  # an unreadable file only turns the index off
-            self.unusable = f"The search index file could not be opened: {exc}"
+            self.unusable = f"The search index file could not be opened ({exc}), so searches read every stored request, as before."
             logger.warning("Request log search index unavailable: {}", exc)
             return None
         self.unusable = None

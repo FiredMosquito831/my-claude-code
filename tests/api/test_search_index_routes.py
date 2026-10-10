@@ -86,7 +86,7 @@ def test_the_routes_say_so_when_the_log_is_off() -> None:
 def test_a_python_without_the_index_says_why_and_refuses_the_build(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, client: TestClient
 ) -> None:
-    reason = "This Python's SQLite (3.31.1) cannot keep the search index (no such tokenizer: trigram), so searches read every stored request."
+    reason = "This Python's SQLite (3.31.1) cannot keep the search index (no such tokenizer: trigram), so searches read every stored request, as before."
     monkeypatch.setattr(rl, "search_index_support", lambda: (False, reason))
     built, _times = build_search_log(tmp_path / "requests.db", rows=20, seed=5)
     monkeypatch.setattr(

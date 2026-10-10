@@ -11500,7 +11500,7 @@ class RequestLogStore:
             return {
                 "available": False,
                 "reason": self._search_off
-                or "The search index is off for this log; searches read every stored request.",
+                or "The search index is off for this log, so searches read every stored request, as before.",
             }
         if search.unusable is not None:
             return {"available": False, "reason": search.unusable}

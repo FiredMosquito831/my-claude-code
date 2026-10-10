@@ -20419,9 +20419,10 @@ function paintSearchIndex(status) {
   }
   line.hidden = false;
   if (!status.available) {
-    text.textContent =
-      `Search index off: ${status.reason || "this server cannot keep one."} ` +
-      "Searches read every stored request, as before.";
+    // The server's reason says what happens instead (the old way, as before).
+    text.textContent = `Search index off: ${
+      status.reason || "this server cannot keep one, so searches read every stored request, as before."
+    }`;
     return;
   }
   const coverage = searchIndexCoverageText(status.coverage);
