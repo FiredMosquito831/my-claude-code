@@ -392,6 +392,111 @@ def test_a_window_mixing_covered_and_uncovered_rows_answers_like_the_scan(
     assert force_index
 
 
+def _count_prepare(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    prepared: list[int] = []
+    original = rs.SearchIndex.prepare
+
+    def counting(
+        self: rs.SearchIndex, conn: sqlite3.Connection, plans: Any, **kw: Any
+    ) -> Any:
+        prepared.append(len(plans))
+        return original(self, conn, plans, **kw)
+
+    monkeypatch.setattr(rs.SearchIndex, "prepare", counting)
+    return prepared
+
+
+def test_a_window_within_its_first_rows_is_the_scans_own_statement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No index file is opened, nor any query added, for a window of few rows."""
+
+    store, _times = build_search_log(tmp_path / "requests.db", rows=120, seed=11)
+    attached: list[int] = []
+    original = rs.SearchIndex.attach
+
+    def counting(self: rs.SearchIndex, conn: sqlite3.Connection) -> bool:
+        attached.append(1)
+        return original(self, conn)
+
+    monkeypatch.setattr(rs.SearchIndex, "attach", counting)
+    assert rl._SEARCH_SCAN_FIRST_ROWS >= 120
+    _assert_identical(store, CORPUS[:10])
+    assert attached == []
+
+
+def test_the_rest_of_a_pass_starts_below_the_last_timestamp_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, force_index: list[int]
+) -> None:
+    """A read limit inside a run of equal timestamps reads the whole run first.
+
+    Every row once, none twice, in the scan's order: the first statement
+    finishes the timestamp it stopped in, and the rest is strictly older.
+    """
+
+    path = tmp_path / "requests.db"
+    _write(
+        path,
+        [
+            _record(
+                index,
+                1000.0 + index // 7,
+                input_text=f"row {index} " + ("needle" if index % 3 else "hay"),
+                output_text="reply",
+            )
+            for index in range(60)
+        ],
+    )
+    store = RequestLogStore(path, max_rows=0)
+    store.close()
+    for first in (1, 10, 13, 14, 59, 60):
+        monkeypatch.setattr(rl, "_SEARCH_SCAN_FIRST_ROWS", first)
+        for q in ("needle", "hay", "row", "zqxjvkw"):
+            for chosen in ({"local": "all"}, {"local": "all", "since": 1004.0}):
+                expected = scan_rows(store, q, **chosen)
+                assert index_rows(store, q, **chosen) == expected, (first, q, chosen)
+                reads: list[float] = []
+                got = list(
+                    store.match_rows(q=q, **_filters(**chosen), on_read=reads.append)
+                )
+                assert got == expected, (first, q, chosen, "on_read")
+                # Every row of the window is read exactly once.
+                assert len(reads) == (60 if "since" not in chosen else 60 - 28)
+    assert force_index
+
+
+def test_a_build_under_way_leaves_a_mostly_uncovered_window_to_the_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rows the index lacks cost the scan either way: too many, and the scan answers."""
+
+    monkeypatch.setattr(rl, "_SEARCH_SCAN_FIRST_ROWS", 0)
+    monkeypatch.setattr(rl, "_SEARCH_SCAN_SECONDS_MIN", 0.0)
+    prepared = _count_prepare(monkeypatch)
+    store, _times = build_search_log(
+        tmp_path / "requests.db", rows=320, seed=5, inline_share=0.0
+    )
+    for q in ("zqxjvkw", CORPUS[0]):
+        assert index_rows(store, q, local="all") == scan_rows(store, q, local="all")
+    assert prepared, "a fully covered log is answered from the index"
+    prepared.clear()
+    conn = _index_conn(store)
+    keys = [int(row[0]) for row in conn.execute("SELECT key FROM blobs ORDER BY key")]
+    with conn:
+        conn.executemany(
+            "DELETE FROM blobs WHERE key = ?",
+            [(key,) for number, key in enumerate(keys) if number % 10],
+        )
+    conn.close()
+    coverage = store.search_index_coverage()
+    assert coverage is not None
+    assert coverage["covered"] < coverage["rows"] * 0.2
+    for q in ("zqxjvkw", CORPUS[0]):
+        for chosen in ({"local": "all"}, {"local": "all", "since": sorted(_times)[192]}):
+            assert index_rows(store, q, **chosen) == scan_rows(store, q, **chosen)
+    assert prepared == []
+
+
 def test_an_entry_under_another_address_is_never_answered_from_the_index(
     tmp_path: Path, force_index: list[int]
 ) -> None:

@@ -222,9 +222,11 @@ _SEARCH_DECODE_BATCH = 16
 _SEARCH_SWEEP_ROWS = 1_000
 # A failed index step waits this long before the next try.
 _SEARCH_RETRY_SECONDS = 60.0
-# The newest rows of a search's window are read the old way before the index
-# is used for the rest: the first page of a common word arrives as fast as it
-# always did, and how long those rows took prices the scan for the planner.
+# The newest rows of a search's window are read by the scan's own statement
+# before the index is considered for the rest: a window with no more rows than
+# this costs exactly what it always did (nothing else is opened or asked), the
+# first page of a common word arrives as fast as it always did, and how long
+# those rows took prices the scan for the planner.
 _SEARCH_SCAN_FIRST_ROWS = 256
 # What the scan costs a row when no row of the window was timed (the
 # investigation's all-time pass, 0.72 ms a row on a quiet machine).
@@ -232,21 +234,33 @@ _SEARCH_COST_SCAN_ROW = 0.7e-3
 # A rest of the window the scan reads in less than this is scanned without
 # pricing the index at all: looking the words up costs about as much.
 _SEARCH_SCAN_SECONDS_MIN = 0.25
-# The planner's prices, in seconds (measured on the full-size synthetic log;
-# see the 7.92.0 PR): testing one chunk's text, one posting of a three-letter
-# word, one chunk -> unit link, one row of the indexed pass.
-_SEARCH_COST_TEST = 12e-6
+# The planner's prices, in seconds (measured on a full-size copy of a real
+# log; see the 7.92.0 PR): testing one chunk's text, one posting of a
+# three-letter word, one chunk -> unit link, one row of the indexed pass
+# (23-39 us measured: each row's two blob addresses looked up in the log and
+# in the index).
+_SEARCH_COST_TEST = 25e-6
 _SEARCH_COST_POSTING = 0.5e-6
 _SEARCH_COST_LINK = 1.2e-6
 _SEARCH_LINKS_PER_CHUNK = 13
-_SEARCH_COST_PASS_ROW = 8e-6
+_SEARCH_COST_PASS_ROW = 40e-6
 # A window reading less than this share of the log looks up only the blobs its
-# own rows name; what collecting them costs a row.
+# own rows name; what collecting them and reading their chunk lists costs a
+# row (``_SEARCH_COST_SCOPE_ROW``, 34-48 us measured).
 _SEARCH_SCOPE_SHARE = 0.5
 # The page cache of a connection that runs an indexed pass (see
 # ``_search_cache``), in KiB.
 _SEARCH_PASS_CACHE_KIB = 128 * 1024
-_SEARCH_COST_SCOPE_ROW = 10e-6
+_SEARCH_COST_SCOPE_ROW = 50e-6
+# The index is used only when it is expected to cost at most this share of the
+# scan of the same rows. Below that the estimate is too close to call -- most
+# of all while a build is under way, when the rows the index does not hold yet
+# cost the scan either way and their number is estimated -- and the scan, which
+# costs exactly what it always did, answers.
+_SEARCH_INDEX_MARGIN = 0.75
+# Until a build is done, one row in this many (by rowid) is checked for
+# coverage to estimate how many of a window's rows the scan must still read.
+_SEARCH_SAMPLE_EVERY = 16
 _QUEUE_MAX_SIZE = 10_000
 _STOP = object()
 # "Write the session row now" -- for a fact the next heartbeat is too late for,
@@ -11671,21 +11685,26 @@ class RequestLogStore:
         rowid_after: int | None = None,
         rowid_through: int | None = None,
         on_read: Callable[[float], None] | None = None,
-        at_least: float | None = None,
+        read_limit: int | None = None,
+        stopped_at: list[float] | None = None,
         indexed: IndexedSearch | None = None,
     ) -> Generator[tuple[int, float]]:
         """One statement of a search's pass: ``match_rows``' rows over one stretch.
 
-        ``at_least`` keeps the rows at or after a time (``ts_epoch >= ?``);
-        ``below`` the rows before one. ``indexed`` answers the bodies' half of
-        the predicate from the search index (``_where``); without it the
-        predicate is the scan's, exactly as before 7.92.0.
+        ``read_limit`` ends a newest-first statement once it has read that many
+        rows, matched or not, and every other row of the last one's timestamp
+        (never splitting a timestamp, whatever order SQLite gives its rows),
+        and appends that timestamp to ``stopped_at``: the rest of the window
+        is then the rows ``below`` it. A statement that runs out of rows first
+        appends nothing. ``indexed`` answers the bodies' half of the predicate
+        from the search index (``_where``); without it the predicate is the
+        scan's, exactly as before 7.92.0.
         """
 
         newest_first = rowid_after is None and rowid_through is None
         flagged = ""
         flag_args: list[Any] = []
-        if on_read is not None and newest_first:
+        if (on_read is not None or read_limit is not None) and newest_first:
             # The body predicate on its own; every other filter stays a clause
             # of the ``WHERE`` below.
             test, flag_args = self._where(
@@ -11711,9 +11730,6 @@ class RequestLogStore:
             indexed=None if flagged else indexed,
         )
         extra: list[str] = []
-        if at_least is not None:
-            extra.append("ts_epoch >= ?")
-            args.append(at_least)
         if below is not None:
             extra.append("ts_epoch <= ?" if below_inclusive else "ts_epoch < ?")
             args.append(below)
@@ -11747,12 +11763,26 @@ class RequestLogStore:
             sql = f"SELECT rowid, ts_epoch FROM requests{where}"
         cursor = conn.execute(sql, args)
         try:
-            if flagged and on_read is not None:
-                for row in cursor:
+            if flagged:
+                stop_at: float | None = None
+                for read, row in enumerate(cursor, start=1):
                     ts = float(row[1])
-                    on_read(ts)
+                    if stop_at is not None and ts != stop_at:
+                        # The first row older than the limit's timestamp: the
+                        # rest of the window starts here (``below=stop_at``).
+                        if stopped_at is not None:
+                            stopped_at.append(stop_at)
+                        break
+                    if on_read is not None:
+                        on_read(ts)
                     if row[2]:
                         yield int(row[0]), ts
+                    if (
+                        read_limit is not None
+                        and stop_at is None
+                        and read >= read_limit
+                    ):
+                        stop_at = ts
             else:
                 for row in cursor:
                     yield int(row[0]), float(row[1])
@@ -11770,52 +11800,25 @@ class RequestLogStore:
     ) -> Generator[tuple[int, float]]:
         """A newest-first pass that uses the search index where it is cheaper (7.92.0).
 
-        The rows are exactly the scan's, in the same order: the newest
-        ``_SEARCH_SCAN_FIRST_ROWS`` rows of the window are read the old way
-        (the first page of a common word arrives as fast as it always did),
-        then everything older is read by one statement whose bodies' half is
+        The rows are exactly the scan's, in the same order. The pass starts as
+        the scan's own statement, and a window whose rows end within its first
+        ``_SEARCH_SCAN_FIRST_ROWS`` ends there, at exactly the scan's cost:
+        nothing else is opened or asked. Past that many rows -- the first page
+        of a common word has arrived as fast as it always did, and their time
+        prices the scan -- the rest of the window, every row older than the
+        last timestamp read, is read by one statement whose bodies' half is
         answered from the index for the requests it covers and by the scan for
-        the rest -- or by the plain scan, when the index would cost more (a
-        short word over a small window). One read transaction holds every
-        statement, so all of them see the same log and the same index.
+        the others, or by the plain scan when the index would not cost clearly
+        less (``_search_plan``). One read transaction holds every statement,
+        so all of them see the same log and the same index.
         """
 
-        search = self._search
-        attached = search is not None and search.attach(conn)
-        if attached:
-            self._search_cache(conn)
         conn.execute("BEGIN")
         try:
-            where, args = self._where(**filters)
-            extra: list[str] = []
-            if below is not None:
-                extra.append("ts_epoch <= ?" if below_inclusive else "ts_epoch < ?")
-                args.append(below)
-            if extra:
-                where = f"{where}{' AND' if where else ' WHERE'} {' AND '.join(extra)}"
             first = _SEARCH_SCAN_FIRST_ROWS
-            boundary_row = (
-                conn.execute(
-                    "SELECT ts_epoch FROM requests INDEXED BY idx_requests_ts"
-                    f"{where} ORDER BY ts_epoch DESC LIMIT 1 OFFSET ?",
-                    [*args, first - 1],
-                ).fetchone()
-                if first > 0
-                else (math.inf,)
-            )
-            if not attached or search is None or boundary_row is None:
-                yield from self._match_rows_pass(
-                    conn,
-                    q,
-                    filters,
-                    below=below,
-                    below_inclusive=below_inclusive,
-                    on_read=on_read,
-                )
-                return
-            boundary = float(boundary_row[0])
             per_row = _SEARCH_COST_SCAN_ROW
             if first > 0:
+                stopped: list[float] = []
                 started = time.perf_counter()
                 yield from self._match_rows_pass(
                     conn,
@@ -11824,97 +11827,159 @@ class RequestLogStore:
                     below=below,
                     below_inclusive=below_inclusive,
                     on_read=on_read,
-                    at_least=boundary,
+                    read_limit=first,
+                    stopped_at=stopped,
                 )
+                if not stopped:
+                    return
                 per_row = (time.perf_counter() - started) / first
-                rest_where = f"{where}{' AND' if where else ' WHERE'} ts_epoch < ?"
-                rest_args = [*args, boundary]
-            else:
-                rest_where, rest_args = where, args
-            rest = int(
-                conn.execute(
-                    f"SELECT COUNT(*) FROM requests{rest_where}", rest_args
-                ).fetchone()[0]
+                # Every row at or after this timestamp has been read.
+                below, below_inclusive = stopped[0], False
+            indexed = self._search_plan(
+                conn, q, filters, below, below_inclusive, per_row
             )
-            tables = None
-            if rest * per_row > _SEARCH_SCAN_SECONDS_MIN:
-                try:
-                    plans = plan_terms(q)
-                    estimate = search.estimate(conn, plans)
-                    total = int(
-                        conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
-                    )
-                    # A window reading under half the log looks up only the
-                    # blobs its rows name (``scope``): their share of the work.
-                    scoped = rest < total * _SEARCH_SCOPE_SHARE
-                    share = rest / total if scoped and total else 1.0
-                    # Rows naming a blob the index does not hold (history
-                    # before a build) cost the scan either way. A scoped
-                    # window counts them while it collects its blobs; a wider
-                    # one, before a build has finished, takes the share of
-                    # blobs the index holds.
-                    with self._search_lock:
-                        built = self._search_build.get("state") == "done"
-                    keys: set[int] = set()
-                    if scoped:
-                        keys, uncovered = self._search_window(
-                            conn, rest_where, rest_args
-                        )
-                    elif built:
-                        uncovered = 0
-                    else:
-                        uncovered = int(rest * (1.0 - search.held_share(conn)))
-                    index_cost = (
-                        uncovered * per_row
-                        + share
-                        * (
-                            estimate["tested"] * _SEARCH_COST_TEST
-                            + estimate["looked_up"] * _SEARCH_COST_POSTING
-                            + (estimate["tested"] + estimate["looked_up"])
-                            * _SEARCH_LINKS_PER_CHUNK
-                            * _SEARCH_COST_LINK
-                        )
-                        + rest
-                        * (
-                            _SEARCH_COST_PASS_ROW
-                            + (_SEARCH_COST_SCOPE_ROW if scoped else 0.0)
-                        )
-                    )
-                    if index_cost < rest * per_row:
-                        scope = None
-                        if scoped:
-                            scope = "mcc_search_keys"
-                            conn.execute(f"DROP TABLE IF EXISTS temp.{scope}")
-                            conn.execute(
-                                f"CREATE TEMP TABLE {scope} (key INTEGER PRIMARY KEY)"
-                            )
-                            conn.executemany(
-                                f"INSERT INTO temp.{scope} (key) VALUES (?)",
-                                ((key,) for key in sorted(keys)),
-                            )
-                        tables = search.prepare(conn, plans, scope=scope)
-                except (sqlite3.Error, ValueError) as exc:
-                    # A stopped search stops; an unreadable index is not
-                    # used, and the rest of the window is the plain scan.
-                    if isinstance(exc, sqlite3.Error):
-                        raise_if_interrupted(exc)
-                    logger.warning("Request log search index not used: {}", exc)
-                    tables = None
             yield from self._match_rows_pass(
                 conn,
                 q,
                 filters,
-                below=boundary if first > 0 else below,
-                below_inclusive=False if first > 0 else below_inclusive,
+                below=below,
+                below_inclusive=below_inclusive,
                 on_read=on_read,
-                indexed=(
-                    None
-                    if tables is None
-                    else IndexedSearch(q=normalized_search(q), tables=tables)
-                ),
+                indexed=indexed,
             )
         finally:
             conn.rollback()
+
+    def _search_plan(
+        self,
+        conn: sqlite3.Connection,
+        q: str,
+        filters: Mapping[str, Any],
+        below: float | None,
+        below_inclusive: bool,
+        per_row: float,
+    ) -> IndexedSearch | None:
+        """The words of ``q`` looked up in the index for the rest of a pass, or None for the scan (7.92.0).
+
+        ``per_row`` is what the scan has cost a row of this window so far. The
+        index is used only when it is expected to cost at most
+        ``_SEARCH_INDEX_MARGIN`` of the scan of the same rows: never when the
+        scan reads a row for less than the index's own work on it (rows with
+        small or no bodies), nor for a rest the scan reads in under
+        ``_SEARCH_SCAN_SECONDS_MIN``. Rows the index does not cover cost the
+        scan's price either way. Runs inside the pass's read transaction.
+        """
+
+        search = self._search
+        if search is None:
+            return None
+        if per_row <= _SEARCH_COST_PASS_ROW + _SEARCH_COST_SCOPE_ROW:
+            return None
+        where, args = self._where(**filters)
+        extra: list[str] = []
+        if below is not None:
+            extra.append("ts_epoch <= ?" if below_inclusive else "ts_epoch < ?")
+            args.append(below)
+        if extra:
+            where = f"{where}{' AND' if where else ' WHERE'} {' AND '.join(extra)}"
+        try:
+            rest = int(
+                conn.execute(f"SELECT COUNT(*) FROM requests{where}", args).fetchone()[
+                    0
+                ]
+            )
+            scan_cost = rest * per_row
+            if scan_cost <= _SEARCH_SCAN_SECONDS_MIN or not search.attach(conn):
+                return None
+            self._search_cache(conn)
+            plans = plan_terms(q)
+            estimate = search.estimate(conn, plans)
+            total = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
+            # A window reading under half the log looks up only the blobs its
+            # rows name (``scope``): their share of the work.
+            scoped = rest < total * _SEARCH_SCOPE_SHARE
+            share = rest / total if scoped and total else 1.0
+            lookups = share * (
+                estimate["tested"] * _SEARCH_COST_TEST
+                + estimate["looked_up"] * _SEARCH_COST_POSTING
+                + (estimate["tested"] + estimate["looked_up"])
+                * _SEARCH_LINKS_PER_CHUNK
+                * _SEARCH_COST_LINK
+            )
+            per_row_index = _SEARCH_COST_PASS_ROW + (
+                _SEARCH_COST_SCOPE_ROW if scoped else 0.0
+            )
+            budget = _SEARCH_INDEX_MARGIN * scan_cost
+            if lookups + rest * per_row_index >= budget:
+                return None
+            # Rows naming a blob the index does not hold (history before a
+            # build is done, rows an older version wrote) cost the scan either
+            # way. Until a build is done their number is measured on every
+            # ``_SEARCH_SAMPLE_EVERY``-th row of the rest before anything else
+            # is read; a scoped window then counts them exactly while it
+            # collects its blobs.
+            with self._search_lock:
+                built = self._search_build.get("state") == "done"
+            uncovered = 0
+            if not built:
+                uncovered = self._search_uncovered_sample(conn, where, args, rest)
+                if uncovered * per_row + lookups + rest * per_row_index >= budget:
+                    return None
+            keys: set[int] = set()
+            if scoped:
+                keys, uncovered = self._search_window(conn, where, args)
+                if uncovered * per_row + lookups + rest * per_row_index >= budget:
+                    return None
+            scope = None
+            if scoped:
+                scope = "mcc_search_keys"
+                conn.execute(f"DROP TABLE IF EXISTS temp.{scope}")
+                conn.execute(f"CREATE TEMP TABLE {scope} (key INTEGER PRIMARY KEY)")
+                conn.executemany(
+                    f"INSERT INTO temp.{scope} (key) VALUES (?)",
+                    ((key,) for key in sorted(keys)),
+                )
+            tables = search.prepare(conn, plans, scope=scope)
+        except (sqlite3.Error, ValueError) as exc:
+            # A stopped search stops; an unreadable index is not used, and the
+            # rest of the window is the plain scan.
+            if isinstance(exc, sqlite3.Error):
+                raise_if_interrupted(exc)
+            logger.warning("Request log search index not used: {}", exc)
+            return None
+        return IndexedSearch(q=normalized_search(q), tables=tables)
+
+    @staticmethod
+    def _search_uncovered_sample(
+        conn: sqlite3.Connection, where: str, args: Sequence[Any], rest: int
+    ) -> int:
+        """How many rows of ``where`` the index does not cover, measured on a sample of them.
+
+        Every ``_SEARCH_SAMPLE_EVERY``-th row by rowid (which says nothing
+        about coverage) is checked exactly as the indexed statement checks it;
+        the rest of the rows are only counted. A small fraction of the cost of
+        collecting the window's blobs, which is what it decides whether to pay.
+        """
+
+        clause = f"{where}{' AND' if where else ' WHERE'} rowid % ? = 0"
+        sampled, uncovered = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(CASE"
+            " WHEN r.request_id IS NULL THEN 0"
+            " WHEN (br.rowid IS NULL OR xr.key IS NOT NULL)"
+            " AND (bi.rowid IS NULL OR xi.key IS NOT NULL) THEN 0"
+            " ELSE 1 END), 0)"
+            f" FROM (SELECT id FROM requests{clause}) AS w"
+            " LEFT JOIN request_bodies r ON r.request_id = w.id"
+            " LEFT JOIN body_blobs br ON br.sha = r.sha"
+            " LEFT JOIN body_blobs bi ON bi.sha = r.input_sha"
+            f" LEFT JOIN {SEARCH_SCHEMA}.blobs xr ON xr.sha = unhex(br.sha)"
+            f" LEFT JOIN {SEARCH_SCHEMA}.blobs xi ON xi.sha = unhex(bi.sha)",
+            [*args, _SEARCH_SAMPLE_EVERY],
+        ).fetchone()
+        if not sampled:
+            # Too few rows to sample: count as if none were covered.
+            return rest
+        return round(rest * int(uncovered) / int(sampled))
 
     @staticmethod
     def _search_cache(conn: sqlite3.Connection) -> None:

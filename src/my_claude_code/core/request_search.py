@@ -1050,15 +1050,6 @@ class SearchIndex:
                 cursor.close()
         return seen, hits
 
-    def held_share(self, conn: sqlite3.Connection) -> float:
-        """The share of the log's stored bodies the index holds (0 to 1)."""
-
-        held = int(
-            conn.execute(f"SELECT COUNT(*) FROM {SEARCH_SCHEMA}.blobs").fetchone()[0]
-        )
-        stored = int(conn.execute("SELECT COUNT(*) FROM main.body_blobs").fetchone()[0])
-        return min(1.0, held / stored) if stored else 1.0
-
     def estimate(
         self, conn: sqlite3.Connection, plans: Sequence[TermPlan]
     ) -> dict[str, int]:
