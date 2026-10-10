@@ -19742,13 +19742,42 @@ const reqState = {
   // answer never counts for a newer one.
   statsPaintedFor: 0,
   countPaintedFor: 0,
+  // 7.91.2 (the user's decision, 2026-10-10): a search typed earlier and put
+  // back at start-up is shown, not run. The box keeps its text, a notice
+  // offers Run and Clear, and no request carries it until Enter or Run --
+  // a saved all-time search used to re-run itself on every page load.
+  searchHeld: false,
+  // The AbortControllers of the last full load's search requests and of the
+  // last table-only refresh. A new load aborts the previous one's, so the
+  // server sees those requests leave and stops a search nobody waits for:
+  // with search-as-you-type only the last prefix is read to the end.
+  loadAbort: null,
+  tableAbort: null,
+  // The full load whose search count and cards are still out, what it
+  // searched for and in which window, and the last progress answer for it.
+  searchPendingFor: 0,
+  searchPendingText: "",
+  searchPendingWindow: "",
+  searchProgress: null,
+  // The full load whose rows are in the table.
+  listPaintedFor: 0,
 };
 
 function reqWindowSeconds() {
   return Number(byId("reqFilterWindow").value) || 0;
 }
 
-function reqFilters() {
+/** The window select's own words: "all time", "last 7d", ... */
+function reqWindowLabel() {
+  const select = byId("reqFilterWindow");
+  const option = select ? select.options[select.selectedIndex] : null;
+  return option ? option.textContent.trim() : "all time";
+}
+
+/* `withHeldSearch` is for the one caller that acts on the box as it reads --
+   the export, an explicit gesture of its own. Every load, the pulse and the
+   captions leave a held search out until it is run. */
+function reqFilters({ withHeldSearch = false } = {}) {
   const params = new URLSearchParams();
   const provider = byId("reqFilterProvider").value.trim();
   const model = byId("reqFilterModel").value.trim();
@@ -19773,7 +19802,7 @@ function reqFilters() {
   // 7.88.0, the same rule: absent unless set.
   if (exit) params.set("exit", exit);
   if (status) params.set("status", status);
-  if (search) params.set("q", search);
+  if (search && (withHeldSearch || !reqState.searchHeld)) params.set("q", search);
   if (endpoint) params.set("endpoint", endpoint);
   // Always sent, including "all": the store's default is "all", so an omitted
   // param and a chosen Show would look the same to the pulse signature.
@@ -19911,10 +19940,26 @@ function requestTotalsDue() {
  *  re-reads while the heavy totals are less than a minute old. */
 async function loadRequestsTable(params) {
   const listId = ++reqState.listLoadId;
-  const [list, lifetime] = await Promise.all([
-    api(`/admin/api/requests?limit=${reqState.limit}&offset=${reqState.offset}&${params}`),
-    api("/admin/api/requests/lifetime"),
-  ]);
+  // 7.91.2: the previous refresh's search request, if still out, is older
+  // news; aborting it lets the server drop it. A full load's are left alone.
+  abortRequests(reqState.tableAbort);
+  const controller = params.get("q") ? newAbortController() : null;
+  reqState.tableAbort = controller;
+  let list;
+  let lifetime;
+  try {
+    [list, lifetime] = await Promise.all([
+      api(
+        `/admin/api/requests?limit=${reqState.limit}&offset=${reqState.offset}&${params}`,
+        abortOptions(controller),
+      ),
+      api("/admin/api/requests/lifetime"),
+    ]);
+  } catch (error) {
+    // Aborted by a newer load or refresh, which is on its way.
+    if (listId !== reqState.listLoadId) return;
+    throw error;
+  }
   if (listId !== reqState.listLoadId || reqState.fullLoadsPending > 0) return;
   if (list.enabled === false) return;
   if (list.key_names) adoptKeyNames(list.key_names);
@@ -19946,6 +19991,22 @@ async function loadRequestsView({ auto = false } = {}) {
   }
   const loadId = ++reqState.loadId;
   ++reqState.listLoadId;
+  // 7.91.2: a new load makes the previous one's search requests news nobody
+  // will read. Aborting them is how the server learns it: it drops their
+  // waiters, and a search no request waits for any more stops (7.91.1). Only
+  // requests that carry the search get a signal; the rest are cheap.
+  abortRequests(reqState.loadAbort);
+  abortRequests(reqState.tableAbort);
+  reqState.tableAbort = null;
+  const searchText = params.get("q") || "";
+  const controller = searchText ? newAbortController() : null;
+  reqState.loadAbort = controller;
+  const searchOptions = abortOptions(controller);
+  reqState.searchPendingFor = searchText ? loadId : 0;
+  reqState.searchPendingText = searchText;
+  reqState.searchPendingWindow = reqWindowLabel();
+  reqState.searchProgress = null;
+  renderReqSearchNotice();
   const requestedAt = Date.now();
   reqState.totalsAt = requestedAt;
   reqState.totalsSignature = requestTotalsSignature();
@@ -19964,7 +20025,22 @@ async function loadRequestsView({ auto = false } = {}) {
   // Analytics cost nine seconds to show numbers that were ready in a tenth of
   // one. The request still starts here, at the same moment as the other three;
   // only the *wait* has moved, to after the page has painted.
-  loadRequestCostPanel(loadId, params);
+  //
+  // 7.91.2: with a search, the four panels that read it (cost, TTFT, no
+  // answer, origin) ask once its pass has ended. A browser keeps six
+  // connections to one server and each request waiting on a pass holds one:
+  // measured in Chrome on 100,022 rows, the four panels with the count and
+  // the cards held all six, so the list, the progress line and every other
+  // read of the page queued behind them for the whole 24 s pass. Once the
+  // pass ends each of the four is answered from it in a tenth of a second.
+  // They say they are working from the start, as before.
+  let landSearch = () => {};
+  const searchLanded = searchText
+    ? new Promise((resolve) => {
+        landSearch = resolve;
+      })
+    : null;
+  loadRequestCostPanel(loadId, params, searchOptions, searchLanded);
   // Off the paint path for the same reason the cost panel is: it is the one
   // Analytics query that scans `request_attempts`, measured at 3.3 s cold on
   // a 4.5 GB log against 0.11 s for the stats it sits beside.
@@ -19972,15 +20048,15 @@ async function loadRequestsView({ auto = false } = {}) {
   // Off the paint path for the same reason as the two above: an exact scan of
   // `requests.ttft_ms`, measured at 0.69-0.99 s over 331,086 rows on a 4.5 GB
   // log against the tenth of a second the rollup-served stats cost.
-  loadRequestTtftPanel(loadId, params);
+  loadRequestTtftPanel(loadId, params, searchOptions, searchLanded);
   // Off the paint path for the same reason again: the no-answer label reads
   // columns no index carries, over every success in the window -- 0.3 s for a
   // day and 5.2 s all time on an 8.4 GB log.
-  loadRequestNoAnswerPanel(loadId, params);
+  loadRequestNoAnswerPanel(loadId, params, searchOptions, searchLanded);
   // Off the paint path for the same reason again: neither session nor folder
   // is a rollup dimension, so these two tables are a row query, and the
   // rollup-served stats the cards are drawn from stay exactly as they were.
-  loadRequestOriginPanel(loadId, params);
+  loadRequestOriginPanel(loadId, params, searchOptions, searchLanded);
   // 7.67.0: the Media card, off the paint path like the panels above. It
   // reads only rows a media endpoint wrote, and only the window applies.
   loadRequestMediaPanel(loadId, params);
@@ -19996,8 +20072,27 @@ async function loadRequestsView({ auto = false } = {}) {
   reqState.countDeferred = deferring;
   reqState.hasMore = false;
   if (deferring) {
-    loadRequestSearchCount(loadId, params);
-    loadRequestDeferredStats(loadId, params);
+    // 7.91.2: the cards say "counting…" and the pager how far the search has
+    // read from the start, not from the list's arrival: for a word few rows
+    // contain, the list waits for the whole pass, and until then they went on
+    // showing the last view's numbers.
+    reqState.total = null;
+    renderRequestStatsCards(reqPlaceholderStats());
+    renderReqPager();
+    // Since 7.91.1 the count and the cards both wait for the search's one
+    // pass, so they are painted together when it ends; until then the
+    // progress line says how far it has read. Then the four panels ask.
+    loadRequestSearchTotals(loadId, params, searchOptions).then(landSearch, landSearch);
+    pollRequestSearchProgress(loadId, params, searchOptions);
+    // The last view's rows under a pager that says "searched back to…" read
+    // as results. A common word fills its first page in a fraction of a
+    // second; a word few rows contain only when the pass ends. So if this
+    // search's page is not in after a second, the table says it is searching.
+    window.setTimeout(() => {
+      if (loadId === reqState.loadId && reqState.listPaintedFor !== loadId) {
+        renderRequestsSearching();
+      }
+    }, SEARCH_ROWS_WAIT_MS);
   }
   reqState.fullLoadsPending += 1;
   try {
@@ -20007,6 +20102,7 @@ async function loadRequestsView({ auto = false } = {}) {
         : api(`/admin/api/requests/stats?${params}`),
       api(
         `/admin/api/requests?limit=${reqState.limit}&offset=${reqState.offset}&${params}`,
+        searchOptions,
       ),
       api("/admin/api/requests/lifetime"),
     ]);
@@ -20087,6 +20183,7 @@ async function loadRequestsView({ auto = false } = {}) {
   reqState.hasMore = Boolean(list.has_more);
   reqState.pageRows = (list.rows || []).length;
   reqState.lastCaptureBodies = list.capture_bodies;
+  reqState.listPaintedFor = loadId;
   renderRequestsTable(list.rows || []);
   renderReqPager();
   reqState.listUpdatedAt = Date.now();
@@ -20118,29 +20215,195 @@ function reqPlaceholderStats() {
   };
 }
 
-/** Fetch the deferred count and, if the page has not moved on, show it. */
-async function loadRequestSearchCount(loadId, params) {
-  try {
-    const result = await api(`/admin/api/requests/count?${params}`);
-    if (loadId !== reqState.loadId) return;
-    reqState.countPaintedFor = loadId;
-    reqState.total = Number(result.total || 0);
-    reqState.countDeferred = false;
-    renderReqPager();
-  } catch (_error) {
-    if (loadId !== reqState.loadId) return;
-    reqState.countPaintedFor = loadId;
-    reqState.countDeferred = false;
-    reqState.total = null;
+/* -------------------------------------------- a search's own requests (7.91.2)
+   A free-text search reads the log once, newest first (7.91.1), and its count
+   and cards wait for that pass to end: minutes, over all time on a large log.
+   Three things follow from that here. Every request a load makes with the
+   search carries the load's AbortController, and the next load aborts them,
+   so a search typed over is dropped by the server rather than read to the
+   end. The count and the cards are painted together when the pass ends.
+   And until then a progress line says how far the pass has read, where the
+   pager said "counting…". */
+
+/** A fresh AbortController, or null in a browser without one. */
+function newAbortController() {
+  return typeof AbortController === "function" ? new AbortController() : null;
+}
+
+function abortRequests(controller) {
+  if (controller && !controller.signal.aborted) controller.abort();
+}
+
+/** The fetch options that tie a request to `controller` (none without one). */
+function abortOptions(controller) {
+  return controller ? { signal: controller.signal } : {};
+}
+
+/** Fetch a search's count and the stats it forces off the rollup, and paint
+ *  both together once both have answered -- if the page has not moved on. */
+async function loadRequestSearchTotals(loadId, params, options = {}) {
+  const [count, stats] = await Promise.allSettled([
+    api(`/admin/api/requests/count?${params}`, options),
+    api(`/admin/api/requests/stats?${params}`, options),
+  ]);
+  if (loadId !== reqState.loadId) return;
+  reqState.searchPendingFor = 0;
+  reqState.searchProgress = null;
+  renderReqSearchNotice();
+  paintRequestSearchStats(loadId, stats);
+  paintRequestSearchCount(loadId, count);
+}
+
+/** The deferred count, from its settled request. */
+function paintRequestSearchCount(loadId, settled) {
+  reqState.countPaintedFor = loadId;
+  reqState.countDeferred = false;
+  reqState.total =
+    settled.status === "fulfilled" ? Number(settled.value.total || 0) : null;
+  renderReqPager();
+}
+
+/** How often the progress line asks how far the search has read. */
+const SEARCH_PROGRESS_POLL_MS = 1000;
+/** How long the last view's rows may stand while a search finds its first page. */
+const SEARCH_ROWS_WAIT_MS = 1000;
+
+/** The table while a search has not found its first page yet. */
+function renderRequestsSearching() {
+  const body = byId("reqTableBody");
+  body.innerHTML = "";
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = requestTableColumnCount();
+  td.className = "analytics-empty";
+  td.textContent =
+    "Searching… the matching requests appear here as soon as a page of " +
+    "them is found, or when the search ends.";
+  tr.appendChild(td);
+  body.appendChild(tr);
+  reqState.pageRows = 0;
+  reqState.hasMore = false;
+  renderReqPager();
+}
+
+/** Ask how far this load's search has read, every second, until its count
+ *  and cards land or a newer load replaces it. The route reads the search's
+ *  state and starts nothing, so asking keeps nothing running. */
+async function pollRequestSearchProgress(loadId, params, options = {}) {
+  const pending = () =>
+    loadId === reqState.loadId && reqState.searchPendingFor === loadId;
+  while (pending()) {
+    await new Promise((resolve) => window.setTimeout(resolve, SEARCH_PROGRESS_POLL_MS));
+    if (!pending()) return;
+    if (document.visibilityState === "hidden" || state.activeView !== "requests") {
+      continue;
+    }
+    let progress;
+    try {
+      progress = await api(`/admin/api/requests/search-progress?${params}`, options);
+    } catch (_error) {
+      // Aborted by a newer load, or no answer this time: the line keeps what
+      // it last said, and the next tick asks again while the search is out.
+      continue;
+    }
+    if (!pending()) return;
+    reqState.searchProgress = progress && progress.searching ? progress : null;
+    renderReqSearchNotice();
     renderReqPager();
   }
 }
 
-/** The same for the filtered stats a free-text search forces off the rollup. */
-async function loadRequestDeferredStats(loadId, params) {
+/** "12 Aug" (the user's own wording; the year when it is not this one), or
+ *  the time of day for today. */
+function searchedBackToText(epochSeconds) {
+  const when = new Date(Number(epochSeconds) * 1000);
+  const now = new Date();
+  if (when.toDateString() === now.toDateString()) {
+    return when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  const month = when.toLocaleDateString([], { month: "short" });
+  const year = when.getFullYear() !== now.getFullYear() ? ` ${when.getFullYear()}` : "";
+  return `${when.getDate()} ${month}${year}`;
+}
+
+/** "searched back to 12 Aug · 412,000 of 598,683 rows", or "" before the
+ *  search has said anything. */
+function requestSearchProgressText(progress) {
+  if (!progress || !progress.searching) return "";
+  const parts = [];
+  if (progress.searched_back_to != null) {
+    parts.push(`searched back to ${searchedBackToText(progress.searched_back_to)}`);
+  }
+  const read = Number(progress.read) || 0;
+  if (progress.total != null) {
+    const total = Number(progress.total) || 0;
+    parts.push(
+      `${formatAnalyticsNumber(Math.min(read, total))} of ` +
+        `${formatAnalyticsNumber(total)} rows`,
+    );
+  } else if (read > 0) {
+    parts.push(`${formatAnalyticsNumber(read)} rows read`);
+  }
+  return parts.join(" · ");
+}
+
+/** The line under the filters: a saved search waiting for Run, or how far a
+ *  running one has read. Hidden otherwise. */
+function renderReqSearchNotice() {
+  const notice = byId("reqSearchNotice");
+  if (!notice) return;
+  const text = byId("reqSearchNoticeText");
+  const actions = byId("reqSearchNoticeActions");
+  const box = byId("reqFilterSearch");
+  const held = reqState.searchHeld && box ? box.value.trim() : "";
+  if (held) {
+    text.textContent = `Saved search '${held}' (${reqWindowLabel()}) — `;
+    actions.hidden = false;
+    notice.hidden = false;
+    return;
+  }
+  actions.hidden = true;
+  if (reqState.searchPendingFor && reqState.searchPendingFor === reqState.loadId) {
+    const progress = requestSearchProgressText(reqState.searchProgress);
+    text.textContent =
+      `Searching '${reqState.searchPendingText}' (${reqState.searchPendingWindow})` +
+      (progress ? ` — ${progress}` : "…");
+    notice.hidden = false;
+    return;
+  }
+  text.textContent = "";
+  notice.hidden = true;
+}
+
+/** Run the saved search the page put back at start-up (Enter does the same). */
+function runHeldSearch() {
+  reqState.searchHeld = false;
+  if (reqFilterTypingTimer) {
+    window.clearTimeout(reqFilterTypingTimer);
+    reqFilterTypingTimer = null;
+  }
+  applyReqFilters();
+}
+
+/** Forget the saved search: an empty box, and nothing saved. The view on
+ *  screen never carried it, so there is nothing to reload. */
+function clearHeldSearch() {
+  reqState.searchHeld = false;
+  byId("reqFilterSearch").value = "";
+  if (reqFilterTypingTimer) {
+    window.clearTimeout(reqFilterTypingTimer);
+    reqFilterTypingTimer = null;
+  }
+  persistDashboardState();
+  renderReqSearchNotice();
+}
+
+/** The filtered stats a free-text search forces off the rollup, from its
+ *  settled request. A failed one leaves the page as it is. */
+function paintRequestSearchStats(loadId, settled) {
+  if (settled.status !== "fulfilled") return;
+  const stats = settled.value;
   try {
-    const stats = await api(`/admin/api/requests/stats?${params}`);
-    if (loadId !== reqState.loadId) return;
     if (stats.enabled === false) return;
     reqState.statsPaintedFor = loadId;
     reqState.harnessLabels =
@@ -20164,7 +20427,7 @@ async function loadRequestDeferredStats(loadId, params) {
     renderRequestDivertedRoutes(stats.diverted_routes || []);
     renderReqBreakdownTruncatedNote(stats);
   } catch (_error) {
-    /* The page already rendered its rows; a failed count is not a failed page. */
+    /* The page already rendered its rows; a failed paint is not a failed page. */
   }
 }
 
@@ -20668,11 +20931,16 @@ function ttftPercentileText(field) {
  * for it. The store caches the answer per filter for 5 s, so a repaint inside
  * that window costs nothing.
  */
-async function loadRequestTtftPanel(loadId, params) {
+async function loadRequestTtftPanel(loadId, params, options = {}, ready = null) {
   reqState.ttft = null;
+  // 7.91.2: with a search, asked once its pass has ended (see loadRequestsView).
+  if (ready) {
+    await ready;
+    if (loadId !== reqState.loadId) return;
+  }
   const requestedAt = Date.now();
   try {
-    const panel = await api(`/admin/api/requests/ttft?${params}`);
+    const panel = await api(`/admin/api/requests/ttft?${params}`, options);
     if (loadId !== reqState.loadId) return;
     reqState.ttft = panel;
     noteAnalyticsAsOf("totals", panel, requestedAt);
@@ -20692,12 +20960,17 @@ async function loadRequestTtftPanel(loadId, params) {
  * and the label reads columns no index carries. Awaited by nobody, like the
  * TTFT panel beside it, and cached per filter for 5 s by the store.
  */
-async function loadRequestNoAnswerPanel(loadId, params) {
+async function loadRequestNoAnswerPanel(loadId, params, options = {}, ready = null) {
   reqState.noAnswer = null;
+  // 7.91.2: with a search, asked once its pass has ended (see loadRequestsView).
+  if (ready) {
+    await ready;
+    if (loadId !== reqState.loadId) return;
+  }
   const requestedAt = Date.now();
   let panel;
   try {
-    panel = await api(`/admin/api/requests/no-answer?${params}`);
+    panel = await api(`/admin/api/requests/no-answer?${params}`, options);
   } catch (error) {
     if (loadId !== reqState.loadId) return;
     // Not rethrown, for the TTFT panel's reason: a readout that failed says
@@ -21017,16 +21290,21 @@ function renderRequestMedia(media) {
    nobody can tell which half was which -- which is exactly the failure the
    whole provenance column exists to prevent. Every sum carries its own
    "N of M priced" denominator for the same reason. */
-async function loadRequestCostPanel(loadId, params) {
+async function loadRequestCostPanel(loadId, params, options = {}, ready = null) {
   // Says what it is doing while it does it, then fills the card it owns. A
   // stale load (the user changed a filter while this was in flight) drops its
   // answer on the floor, the same rule the rest of this view follows.
   const note = byId("reqCostNote");
   note.textContent = "Working out what this traffic cost...";
+  // 7.91.2: with a search, asked once its pass has ended (see loadRequestsView).
+  if (ready) {
+    await ready;
+    if (loadId !== reqState.loadId) return;
+  }
   const requestedAt = Date.now();
   let cost;
   try {
-    cost = await api(`/admin/api/requests/cost?${params}`);
+    cost = await api(`/admin/api/requests/cost?${params}`, options);
   } catch (error) {
     // Deliberately not rethrown: this promise is not awaited on the paint
     // path, and an unhandled rejection would be a console error for a card
@@ -21594,13 +21872,18 @@ function renderRequestHarnessBreakdown(rows) {
    dimension, so this is a row query and must not hold up the cards. A stale
    answer -- the reader changed a filter while it was in flight -- is dropped,
    the same rule the rest of this view follows. */
-async function loadRequestOriginPanel(loadId, params) {
+async function loadRequestOriginPanel(loadId, params, options = {}, ready = null) {
   byId("reqFolderBreakdownNote").textContent = "Counting folders...";
   byId("reqSessionBreakdownNote").textContent = "Counting sessions...";
+  // 7.91.2: with a search, asked once its pass has ended (see loadRequestsView).
+  if (ready) {
+    await ready;
+    if (loadId !== reqState.loadId) return;
+  }
   const requestedAt = Date.now();
   let origin;
   try {
-    origin = await api(`/admin/api/requests/origin?${params}`);
+    origin = await api(`/admin/api/requests/origin?${params}`, options);
   } catch (error) {
     if (loadId !== reqState.loadId) return;
     // Not rethrown: off the paint path, and a failed breakdown is not a
@@ -22405,10 +22688,19 @@ function renderReqPager() {
   const start = !counting && reqState.total === 0 ? 0 : reqState.offset + 1;
   if (counting) {
     const end = reqState.offset + reqState.pageRows;
+    // 7.91.2: while a search is reading, how far it has got, where this said
+    // "counting…" for the whole pass.
+    const progress =
+      reqState.searchPendingFor && reqState.searchPendingFor === reqState.loadId
+        ? requestSearchProgressText(reqState.searchProgress)
+        : "";
+    const counted = progress || "counting…";
     byId("reqPageInfo").textContent =
       reqState.pageRows === 0
-        ? "counting…"
-        : `${start}–${end} of counting…`;
+        ? counted
+        : progress
+          ? `${start}–${end} · ${progress}`
+          : `${start}–${end} of counting…`;
     byId("reqPrevPage").disabled = reqState.offset === 0;
     byId("reqNextPage").disabled = !reqState.hasMore;
     return;
@@ -22510,6 +22802,11 @@ function restoreReqFilters(f) {
     byId("reqPageSize").value = f.pageSize;
     reqState.limit = Number(f.pageSize) || reqState.limit;
   }
+  // 7.91.2: a saved search comes back into the box but is not run. It waits
+  // for Enter or Run, under a notice that says so; the rest of the saved
+  // view loads as it always did.
+  reqState.searchHeld = Boolean(String(f.search || "").trim());
+  renderReqSearchNotice();
 }
 
 function restoreDashboardState() {
@@ -25222,7 +25519,9 @@ async function runExport() {
     });
     params.set("include_content", "true");
   } else {
-    reqFilters().forEach((value, key) => {
+    // The search in the box travels even while it waits for Run (7.91.2):
+    // the export is its own gesture, and the box is what it exports.
+    reqFilters({ withHeldSearch: true }).forEach((value, key) => {
       if (!params.has(key)) params.set(key, value);
     });
   }
@@ -25287,6 +25586,13 @@ async function pollRequestPulse({ timeoutMs = 0 } = {}) {
   if (state.activeView !== "requests") return { clean: true };
   // A hidden tab must not poll at all, not just skip the expensive call.
   if (document.visibilityState === "hidden") return { clean: true };
+  // 7.91.2: while this view's search is still reading, a pulse with it would
+  // wait for that same pass and give up; the progress line is the news then.
+  // Once the count has landed the pulse comes back, and with a search it
+  // reads only the rows written since the pass (7.91.1).
+  if (reqState.searchPendingFor && reqState.searchPendingFor === reqState.loadId) {
+    return { clean: true };
+  }
   const params = reqFilters();
   let answer;
   try {
@@ -25422,17 +25728,30 @@ byId("reqClearFilters").addEventListener("click", () => {
     window.clearTimeout(reqFilterTypingTimer);
     reqFilterTypingTimer = null;
   }
+  // The box is empty, so a saved search waiting for Run is gone with it.
+  reqState.searchHeld = false;
   applyReqFilters();
 });
 byId("reqFilterSearch").addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
-  // Enter is an explicit commit: don't make it wait out the debounce.
+  // Enter is an explicit commit: don't make it wait out the debounce. It is
+  // also how a saved search waiting at start-up is run (7.91.2).
   if (reqFilterTypingTimer) {
     window.clearTimeout(reqFilterTypingTimer);
     reqFilterTypingTimer = null;
   }
+  reqState.searchHeld = false;
   applyReqFilters();
 });
+// Typing makes it the reader's search again, run as they type (7.91.2): the
+// saved one is only held until the box is touched.
+byId("reqFilterSearch").addEventListener("input", () => {
+  if (!reqState.searchHeld) return;
+  reqState.searchHeld = false;
+  renderReqSearchNotice();
+});
+byId("reqSearchRun").addEventListener("click", runHeldSearch);
+byId("reqSearchClear").addEventListener("click", clearHeldSearch);
 byId("reqPrevPage").addEventListener("click", () => {
   reqState.offset = Math.max(0, reqState.offset - reqState.limit);
   loadRequestsView().catch((error) => showMessage(error.message, "error"));

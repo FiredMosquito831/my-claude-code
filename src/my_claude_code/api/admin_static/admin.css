@@ -2610,6 +2610,31 @@ textarea:focus-visible,
   color: var(--muted, #888);
 }
 
+/* 7.91.2: what the search box is doing -- a saved search waiting for Run,
+   or how far a running one has read. One line under the filters, in the
+   text colour: it is the answer to "why is nothing filtered yet?". */
+.requests-search-notice {
+  margin: -6px 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.requests-search-action {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.requests-search-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .requests-lifetime {
   margin-bottom: 20px;
   padding-top: 14px;

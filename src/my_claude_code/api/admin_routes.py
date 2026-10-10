@@ -4330,6 +4330,68 @@ async def count_request_log(
     return {"enabled": True, "total": total}
 
 
+@router.get("/admin/api/requests/search-progress")
+async def request_search_progress(
+    request: Request,
+    provider: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+    endpoint: str | None = None,
+    key: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    q: str | None = None,
+    local: str | None = None,
+    harness: str | None = None,
+    session: str | None = None,
+    folder: str | None = None,
+    exit: str | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """How far a free-text search has read, for the page's progress line (7.91.2).
+
+    The count and the cards of a search wait for its one pass to end -- up to
+    minutes over all time -- and until 7.91.2 the page said "counting…" for
+    all of it. This reads the pass the page's own requests are waiting for,
+    asked with the same filters: ``read`` rows of ``total`` (the rows in the
+    window, newest first) and ``searched_back_to``, the time of the oldest row
+    read. It never starts a search, never waits for one and is not one of its
+    waiters, so asking keeps nothing running. ``searching`` is false while no
+    such search exists -- before the page's requests have started it, or for
+    a box with no search in it.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False, "searching": False}
+    _validate_request_log_status(status)
+    _validate_request_log_local(local)
+    if not is_search(q):
+        return {"enabled": True, "searching": False}
+    filters: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "endpoint": endpoint,
+        "key": key,
+        "since": since,
+        "until": until,
+        "q": q,
+        "local": local,
+        "harness": harness,
+        "session": session,
+        "folder": folder,
+        "exit": exit,
+    }
+    # The window's row count is a plain read with no search in it, so it runs
+    # where every other plain read runs.
+    progress = await search_jobs().progress(store, filters, run=asyncio.to_thread)
+    if progress is None:
+        return {"enabled": True, "searching": False}
+    return {"enabled": True, "searching": True, **progress}
+
+
 @router.get("/admin/api/requests/ttft")
 async def request_log_ttft(
     request: Request,
