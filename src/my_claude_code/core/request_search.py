@@ -1016,6 +1016,9 @@ class SearchIndex:
         seen = 0
         hits = 0
         digested: dict[int, Any] = {}
+        # Folding only changes A-Z: a word with no ASCII letter is in the
+        # folded text exactly where it is in the text, so no copy is folded.
+        fold = any(65 <= byte <= 90 or 97 <= byte <= 122 for byte in probe)
         for source, args in sources:
             cursor = conn.execute(source, args)
             try:
@@ -1035,7 +1038,7 @@ class SearchIndex:
                         text = zstd.decompress(
                             bytes(data), zstd_dict=digested[dict_key]
                         )
-                        if probe in text.lower():
+                        if probe in (text.lower() if fold else text):
                             found.append((int(chunk_id),))
                     if found:
                         conn.executemany(

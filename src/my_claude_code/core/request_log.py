@@ -243,6 +243,9 @@ _SEARCH_COST_PASS_ROW = 8e-6
 # A window reading less than this share of the log looks up only the blobs its
 # own rows name; what collecting them costs a row.
 _SEARCH_SCOPE_SHARE = 0.5
+# The page cache of a connection that runs an indexed pass (see
+# ``_search_cache``), in KiB.
+_SEARCH_PASS_CACHE_KIB = 128 * 1024
 _SEARCH_COST_SCOPE_ROW = 10e-6
 _QUEUE_MAX_SIZE = 10_000
 _STOP = object()
@@ -11557,6 +11560,7 @@ class RequestLogStore:
             if not search.attach(conn):
                 total = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
                 return {"rows": total, "covered": 0}
+            self._search_cache(conn)
             schema = SEARCH_SCHEMA
             row = conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(CASE"
@@ -11778,6 +11782,8 @@ class RequestLogStore:
 
         search = self._search
         attached = search is not None and search.attach(conn)
+        if attached:
+            self._search_cache(conn)
         conn.execute("BEGIN")
         try:
             where, args = self._where(**filters)
@@ -11909,6 +11915,20 @@ class RequestLogStore:
             )
         finally:
             conn.rollback()
+
+    @staticmethod
+    def _search_cache(conn: sqlite3.Connection) -> None:
+        """Give a connection that reads every row's blob links a cache that holds them.
+
+        An indexed pass looks up each row's two blob addresses in the log and
+        in the index: about 130 MB of b-tree pages over all time. Through the
+        default 2 MB cache an absent word took 101 s over 598,683 rows; with
+        128 MB, 31 s (measured under load). Only this connection, only while
+        it is open.
+        """
+
+        with contextlib.suppress(sqlite3.Error):
+            conn.execute(f"PRAGMA main.cache_size=-{_SEARCH_PASS_CACHE_KIB}")
 
     @staticmethod
     def _search_window(
