@@ -312,6 +312,21 @@ def _reset_derived_refresh_state():
 
 
 @pytest.fixture(autouse=True)
+def _reset_search_jobs():
+    """Stop and forget every free-text search between tests (7.91.1).
+
+    ``application.search_jobs`` keeps one process-wide registry of searches and
+    the rows each matched; a test never inherits another test's searches, and
+    a pass a test left running is interrupted rather than left on the pool.
+    """
+    from my_claude_code.application.search_jobs import search_jobs
+
+    search_jobs().stop_all()
+    yield
+    search_jobs().stop_all()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_websearch_analytics(monkeypatch, tmp_path):
     """Keep the web-search analytics database out of the real config directory.
 

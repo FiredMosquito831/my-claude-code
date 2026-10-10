@@ -47,10 +47,13 @@ ODD = "C:\\Users\\devuser\\Projects\\100%_done!"
 BASE_TS = 1_789_000_000.0
 
 #: The filter set, read off the one predicate builder every view shares.
+#: ``matched`` (7.91.1) is not a filter: it is a search's rows standing in for
+#: its predicate -- the same answer with or without it -- so it belongs in no
+#: cache key and no route's filter dict.
 FILTERS: tuple[str, ...] = tuple(
     name
     for name in inspect.signature(RequestLogStore._where).parameters
-    if name != "self"
+    if name not in {"self", "matched"}
 )
 #: A value per filter that no other filter's value equals, so a key slot can
 #: be told apart from every other slot.

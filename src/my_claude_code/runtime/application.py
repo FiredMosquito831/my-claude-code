@@ -6,6 +6,7 @@ import logging
 import os
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +19,7 @@ import my_claude_code.messaging.workflow as messaging_workflow_module
 from my_claude_code.api.admin_proxy_routes import republish_chains
 from my_claude_code.api.finalize_pool import close_finalize_pool
 from my_claude_code.api.request_pricing import backfill_pricer
+from my_claude_code.api.search_pool import close_search_pool
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.ports import StopResult
@@ -152,6 +154,24 @@ def prewarm_heavy_imports() -> None:
             __import__(name)
         except Exception:
             logger.debug("Prewarming {name} failed; it imports lazily.", name=name)
+
+
+async def _flush_request_log() -> None:
+    """Flush and close the request log on a thread of its own (7.91.1).
+
+    Not the default executor: until 7.91.1 the dashboard's searches filled it
+    with scans minutes long, and a stop's flush queued behind them. Nothing
+    else ever runs on this thread, so the flush starts the moment it is asked
+    for, bounded by the store's own close timeout.
+    """
+
+    flusher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mcc-log-flush")
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            flusher, reset_request_log_stores
+        )
+    finally:
+        flusher.shutdown(wait=False)
 
 
 async def best_effort(
@@ -1497,9 +1517,16 @@ class ApplicationRuntime:
             close_finalize_pool(),
             log_verbose_errors=self.settings.log_api_error_tracebacks,
         )
+        # Every free-text search stopped where it is (an interrupt, a
+        # millisecond), before the log it reads is closed.
+        await best_effort(
+            "search_pool.close",
+            close_search_pool(),
+            log_verbose_errors=self.settings.log_api_error_tracebacks,
+        )
         await best_effort(
             "request_log.flush",
-            asyncio.to_thread(reset_request_log_stores),
+            _flush_request_log(),
             log_verbose_errors=self.settings.log_api_error_tracebacks,
         )
         if not await self._cleanup_messaging():
