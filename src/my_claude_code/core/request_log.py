@@ -222,6 +222,9 @@ _SEARCH_DECODE_BATCH = 16
 _SEARCH_SWEEP_ROWS = 1_000
 # A failed index step waits this long before the next try.
 _SEARCH_RETRY_SECONDS = 60.0
+# A build waits while the index file's WAL is over this size and a reader in
+# another process keeps it from being reset (``_search_wal_pinned``).
+_SEARCH_WAL_PAUSE_BYTES = 256 * 1024 * 1024
 # A build says how long it has left only once it has run this long since it
 # was started or continued.
 _SEARCH_ETA_AFTER_SECONDS = 20.0
@@ -11369,6 +11372,33 @@ class RequestLogStore:
             self._search_sweep_from = entries[-1][0]
         return False
 
+    def _search_wal_pinned(self, sconn: sqlite3.Connection) -> bool:
+        """Whether the build must wait: the index's WAL is large and a reader holds it.
+
+        A search in this process holds the build back by itself. A reader in
+        another process (a second server on the same log) holds a snapshot
+        that keeps the WAL from being reset, so everything the build writes
+        meanwhile piles up in it (measured: 626 MB in two minutes). Past
+        ``_SEARCH_WAL_PAUSE_BYTES`` the build checkpoints what it can,
+        passively, and goes on only once every frame is in the file -- the
+        next write then starts the WAL over, cut back to its 64 MB limit.
+        """
+
+        search = self._search
+        if search is None:
+            return False
+        try:
+            size = search.path.with_name(search.path.name + "-wal").stat().st_size
+        except OSError:
+            return False
+        if size <= _SEARCH_WAL_PAUSE_BYTES:
+            return False
+        try:
+            row = sconn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        except sqlite3.Error:
+            return False
+        return row is not None and int(row[2]) < int(row[1])
+
     def _search_build_run(
         self, conn: sqlite3.Connection, sconn: sqlite3.Connection, deadline: float
     ) -> None:
@@ -11392,6 +11422,9 @@ class RequestLogStore:
             ).fetchone()
             state.update(cursor=int(newest) + 1, total=int(total), done=0, indexed=0)
         while self._search_may_go(deadline):
+            if self._search_wal_pinned(sconn):
+                # Waits for the reader; the next idle tick looks again.
+                return
             cursor = int(state["cursor"])
             rows = [
                 (int(row[0]), str(row[1]))

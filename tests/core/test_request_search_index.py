@@ -1020,6 +1020,41 @@ def test_a_search_running_holds_the_build_back(tmp_path: Path) -> None:
     store.close()
 
 
+def test_a_reader_in_another_process_holds_the_build_back_once_the_wal_is_large(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The WAL cannot be reset under a foreign snapshot: the build waits, then goes on."""
+
+    monkeypatch.setattr(rl, "_SEARCH_WAL_PAUSE_BYTES", 0)
+    monkeypatch.setattr(rl, "_SEARCH_WALK_ROWS", 4)
+    path = tmp_path / "requests.db"
+    _write(
+        path,
+        [_record(n, 1000.0 + n, input_text=f"p {n}") for n in range(60)],
+        search_index=False,
+    )
+    store = RequestLogStore(path, max_rows=0)
+    # The writer thread has opened the file and made its tables.
+    _wait(lambda: store._search_conn is not None)
+    assert store._search is not None
+    reader = sqlite3.connect(store._search.path, timeout=10)
+    try:
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM blobs").fetchone()
+        store.request_search_index_build()
+        time.sleep(1.5)
+        held = store.search_index_status()["done"]
+        time.sleep(1.0)
+        assert store.search_index_status()["done"] == held
+        assert store.search_index_status()["state"] == "running"
+        assert held < 60
+    finally:
+        reader.rollback()
+        reader.close()
+    _wait(lambda: store.search_index_status()["state"] == "done")
+    store.close()
+
+
 def test_bodies_an_older_version_wrote_are_caught_up_on_the_next_start(
     tmp_path: Path, force_index: list[int]
 ) -> None:
