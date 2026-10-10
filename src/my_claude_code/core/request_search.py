@@ -842,7 +842,7 @@ class SearchIndex:
             wanted: set[int] = set()
             for key, field, manifest in conn.execute(
                 f"SELECT u.key, u.field, u.manifest FROM temp.{scope} AS s"
-                f" JOIN {schema}.units AS u ON u.key = s.key"
+                f" CROSS JOIN {schema}.units AS u ON u.key = s.key"
             ):
                 chunk_ids = manifest_ids(bytes(manifest))
                 scope_units.append((int(key), int(field), chunk_ids))
@@ -856,6 +856,9 @@ class SearchIndex:
             if scope_chunks
             else ""
         )
+        # Every join below is a CROSS JOIN: SQLite keeps its left-to-right order,
+        # so the few rows on the left drive (it has no statistics for temp
+        # tables, and once walked all 16.9 M links for an empty chunk list).
         # With a scope, the window's own chunks drive and the word's postings
         # are one lookup set (never ``rowid IN (...)`` inside the trigram
         # query, which SQLite would answer one rowid at a time).
@@ -897,7 +900,7 @@ class SearchIndex:
                 sources = [
                     (
                         f"SELECT c.id, c.dict_id, c.data FROM temp.{scope_chunks} AS s"
-                        f" JOIN {schema}.chunks AS c ON c.id = s.chunk"
+                        f" CROSS JOIN {schema}.chunks AS c ON c.id = s.chunk"
                         f" WHERE s.chunk IN ({matching})",
                         (_fts_query(plan.grams),),
                     ),
@@ -907,7 +910,7 @@ class SearchIndex:
                 sources = [
                     (
                         f"SELECT c.id, c.dict_id, c.data FROM {schema}.grams AS g"
-                        f" JOIN {schema}.chunks AS c ON c.id = g.rowid"
+                        f" CROSS JOIN {schema}.chunks AS c ON c.id = g.rowid"
                         " WHERE g.grams MATCH ?",
                         (_fts_query(plan.grams),),
                     ),
@@ -917,7 +920,7 @@ class SearchIndex:
                 sources = [
                     (
                         f"SELECT c.id, c.dict_id, c.data FROM temp.{scope_chunks} AS s"
-                        f" JOIN {schema}.chunks AS c ON c.id = s.chunk",
+                        f" CROSS JOIN {schema}.chunks AS c ON c.id = s.chunk",
                         (),
                     )
                 ]
@@ -952,7 +955,7 @@ class SearchIndex:
                     conn.execute(
                         f"INSERT INTO temp.{prefix}_m{number} (key, mask)"
                         f" SELECT l.key, 1 << l.field"
-                        f" FROM temp.{prefix}_c{number} AS t JOIN {schema}.links AS l"
+                        f" FROM temp.{prefix}_c{number} AS t CROSS JOIN {schema}.links AS l"
                         " ON l.chunk = t.chunk WHERE 1"
                         " ON CONFLICT(key) DO UPDATE SET mask = mask | excluded.mask"
                     )
