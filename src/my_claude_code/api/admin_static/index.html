@@ -1306,6 +1306,14 @@
                 <button id="reqSearchClear" class="requests-search-action" type="button">Clear</button>
               </span>
             </p>
+            <!-- 7.92.0: the search index -- how much of the log a search answers
+                 without reading stored bodies, and the build that indexes what
+                 was logged before it (never automatic). -->
+            <p id="reqSearchIndex" class="requests-search-index" role="status" aria-live="polite" hidden>
+              <span id="reqSearchIndexText"></span>
+              <button id="reqSearchIndexBuild" class="requests-search-action" type="button" hidden>Build search index</button>
+              <button id="reqSearchIndexPause" class="requests-search-action" type="button" hidden>Pause</button>
+            </p>
             <div id="reqStatsCards" class="requests-cards"></div>
             <p id="reqRetentionNote" class="requests-retention" hidden></p>
             <div class="requests-lifetime">
@@ -4475,6 +4483,25 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   12 Aug &middot; 412,000 of 598,683 rows</em>. The matching rows appear
                   first; the count and the cards arrive together when the whole window
                   has been read.
+                </p>
+                <p id="guide-search-index">
+                  <strong>The search index</strong> (7.92.0) answers a search without
+                  unpacking stored requests. It lives in its own file beside the log,
+                  <code>requests-search.db</code>, and holds each distinct piece of text
+                  once: a conversation repeats itself on every turn, so the index is a
+                  small fraction of the log. Every request logged from 7.92.0 on is
+                  indexed as it is written. Requests logged before are indexed only when
+                  you press <strong>Build search index</strong> under the filters; it
+                  works between requests and searches, newest first, says how far it
+                  has got (<em>Build search index: 41 % &middot; 3 min left</em>), can be
+                  paused, and continues after a restart. The line also says how much of
+                  the log the index covers (<em>Search index covers 412,000 of 598,683
+                  rows</em>). Rows it does not cover are searched the old way in the same
+                  search, so the results are always exactly what they were before; only
+                  the time changes. Deleting the file only resets the index, and
+                  <strong>Clear log</strong> clears it with the log. If this Python's
+                  SQLite cannot keep the index, the line says so and searches read every
+                  stored request, as before.
                 </p>
                 <h4>What the request body pane says</h4>
                 <p>

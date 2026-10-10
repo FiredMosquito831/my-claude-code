@@ -6574,6 +6574,80 @@ def test_requests_table_keeps_all_existing_columns(rendered) -> None:
     assert len(headers) == len(EXISTING_REQUEST_COLUMNS) + 4
 
 
+def test_search_index_line_says_what_the_index_covers(rendered) -> None:
+    """7.92.0: the line under the Requests filters, in each state the route reports."""
+
+    index = rendered["searchIndex"]
+    assert index["present"] is True
+    assert index["inRequestsView"] is True
+    # The harness's route: a complete index, no button.
+    assert index["atOpen"]["hidden"] is False
+    assert index["atOpen"]["text"] == "Search index covers 480 of 480 rows."
+    assert index["atOpen"]["build"] is False
+    assert index["partial"]["text"] == (
+        "Search index covers 412,000 of 598,683 rows. Rows logged before 7.92.0"
+        " are searched the slow way until the index is built."
+    )
+    assert index["partial"]["build"] is True
+    assert index["partial"]["buildText"] == "Build search index"
+    assert index["partial"]["pause"] is False
+    assert index["uncounted"]["text"].startswith("Rows logged before 7.92.0")
+    assert index["complete"]["text"] == "Search index covers 598,683 of 598,683 rows."
+    assert index["complete"]["build"] is False
+    # Built, and still short: the rest is said plainly, and Build stays offered.
+    assert index["doneIncomplete"]["text"] == (
+        "Search index covers 598,641 of 598,683 rows; the rest are searched the slow way."
+    )
+    assert index["doneIncomplete"]["build"] is True
+
+
+def test_search_index_build_shows_progress_eta_and_pause(rendered) -> None:
+    index = rendered["searchIndex"]
+    assert index["running"]["text"] == (
+        "Build search index: 41 % · 3 min left — Search index covers 412,000 of"
+        " 598,683 rows."
+    )
+    assert index["running"]["pause"] is True
+    assert index["running"]["build"] is False
+    assert index["runningLong"]["text"].startswith(
+        "Build search index: 3 % · 1 h 12 min left"
+    )
+    assert index["runningSoon"]["text"].startswith(
+        "Build search index: 99 % · 12 s left"
+    )
+    assert index["paused"]["text"] == (
+        "Build search index paused at 41 % — Search index covers 412,000 of"
+        " 598,683 rows."
+    )
+    assert index["paused"]["build"] is True
+    assert index["paused"]["buildText"] == "Continue"
+    assert index["paused"]["pause"] is False
+
+
+def test_search_index_buttons_post_to_their_routes(rendered) -> None:
+    index = rendered["searchIndex"]
+    assert index["buildPosts"] == ["POST /admin/api/requests/search-index/build"]
+    assert index["afterBuild"]["pause"] is True
+    assert index["pausePosts"] == ["POST /admin/api/requests/search-index/pause"]
+    assert index["afterPause"]["buildText"] == "Continue"
+    # The page follows a running build until it ends.
+    assert index["afterPoll"]["text"] == "Search index covers 598,683 of 598,683 rows."
+
+
+def test_search_index_line_says_when_this_server_cannot_keep_one(rendered) -> None:
+    index = rendered["searchIndex"]
+    assert index["off"]["hidden"] is False
+    assert index["off"]["text"].startswith(
+        "Search index off: This Python's SQLite (3.31.1)"
+    )
+    assert index["off"]["text"].endswith(
+        "Searches read every stored request, as before."
+    )
+    assert index["off"]["build"] is False
+    assert index["off"]["pause"] is False
+    assert index["logOff"]["hidden"] is True
+
+
 def test_requests_table_adds_three_columns(rendered) -> None:
     """Session, Exit (Folder until 7.88.0), Requested model -- plus the Origin
     chip that stands in for Session and Folder below 1200 px (CSS decides

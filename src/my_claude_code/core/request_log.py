@@ -61,6 +61,14 @@ from my_claude_code.core.request_origin import (
     session_filter,
     session_short,
 )
+from my_claude_code.core.request_search import (
+    SEARCH_SCHEMA,
+    BlobUnits,
+    SearchIndex,
+    TermTables,
+    plan_terms,
+    search_index_support,
+)
 from my_claude_code.core.success_reasons import (
     SUCCESS_REASON_SOURCE_COLUMNS,
     SUCCESS_STATUS,
@@ -198,6 +206,44 @@ _TOOL_SWEEP_INTERVAL_SECONDS = 3600.0
 _SHA_LOOKUP_CHUNK = 500
 _WRITER_BATCH_SIZE = 50
 _WRITER_POLL_SECONDS = 0.25
+# The search index (7.92.0; ``core/request_search.py``). Its work between
+# requests -- the build the operator asks for, catching up new bodies the
+# writer did not index itself, dropping entries for bodies the log no longer
+# holds -- runs on the writer thread in steps of at most this long, each its
+# own commit of the index file, and stops for any request queued behind it and
+# for any search running. A slice is the longest it keeps the idle branch.
+_SEARCH_STEP_SECONDS = 0.25
+_SEARCH_IDLE_SLICE_SECONDS = 1.0
+# Blob rows read per query by the build and the catch-up walk, and blobs
+# decoded per batch inside a step.
+_SEARCH_WALK_ROWS = 256
+_SEARCH_DECODE_BATCH = 16
+# Index entries compared per query by the sweep.
+_SEARCH_SWEEP_ROWS = 1_000
+# A failed index step waits this long before the next try.
+_SEARCH_RETRY_SECONDS = 60.0
+# The newest rows of a search's window are read the old way before the index
+# is used for the rest: the first page of a common word arrives as fast as it
+# always did, and how long those rows took prices the scan for the planner.
+_SEARCH_SCAN_FIRST_ROWS = 256
+# What the scan costs a row when no row of the window was timed (the
+# investigation's all-time pass, 0.72 ms a row on a quiet machine).
+_SEARCH_COST_SCAN_ROW = 0.7e-3
+# A rest of the window the scan reads in less than this is scanned without
+# pricing the index at all: looking the words up costs about as much.
+_SEARCH_SCAN_SECONDS_MIN = 0.25
+# The planner's prices, in seconds (measured on the full-size synthetic log;
+# see the 7.92.0 PR): testing one chunk's text, one posting of a three-letter
+# word, one chunk -> unit link, one row of the indexed pass.
+_SEARCH_COST_TEST = 12e-6
+_SEARCH_COST_POSTING = 0.5e-6
+_SEARCH_COST_LINK = 1.2e-6
+_SEARCH_LINKS_PER_CHUNK = 13
+_SEARCH_COST_PASS_ROW = 8e-6
+# A window reading less than this share of the log looks up only the blobs its
+# own rows name; what collecting them costs a row.
+_SEARCH_SCOPE_SHARE = 0.5
+_SEARCH_COST_SCOPE_ROW = 10e-6
 _QUEUE_MAX_SIZE = 10_000
 _STOP = object()
 # "Write the session row now" -- for a fact the next heartbeat is too late for,
@@ -1471,6 +1517,69 @@ class MatchedRows:
     rowids: str
 
 
+@dataclass(frozen=True, slots=True)
+class IndexedSearch:
+    """A free-text search whose words the search index has looked up (7.92.0).
+
+    ``tables`` are the temp tables ``SearchIndex.prepare`` filled on the
+    reading connection, one per distinct word, each mapping a blob's key to
+    the fields of that blob holding the word. ``q`` is the search as
+    ``normalized_search`` spells it.
+    """
+
+    q: str
+    tables: TermTables
+
+
+def _indexed_bodies_sql(indexed: IndexedSearch) -> str:
+    """The bodies' half of the search predicate, answered from the index where it can be.
+
+    A request is covered when each blob it names that the log holds is in the
+    index under its content address; the index then
+    decides, field by field the way ``_bodies_match`` merges them: a word is
+    in the request when the prompt blob holds it in any field, or the reply
+    blob holds it in a field the prompt blob does not have. Every other
+    request is tested by ``fcc_bodies_match`` exactly as the scan does, with
+    the search bound as its last argument.
+    """
+
+    schema = SEARCH_SCHEMA
+    words = " AND ".join(
+        f"(EXISTS (SELECT 1 FROM temp.{table} WHERE key = xi.key)"
+        f" OR EXISTS (SELECT 1 FROM temp.{table} WHERE key = xr.key"
+        " AND (mask & ~ifnull(xi.fields, 0)) != 0))"
+        for table in indexed.tables.masks
+    )
+    return (
+        "SELECT 1 FROM request_bodies r"
+        " LEFT JOIN body_blobs br ON br.sha = r.sha"
+        " LEFT JOIN body_blobs bi ON bi.sha = r.input_sha"
+        f" LEFT JOIN {schema}.blobs xr ON xr.sha = unhex(br.sha)"
+        f" LEFT JOIN {schema}.blobs xi ON xi.sha = unhex(bi.sha)"
+        " WHERE r.request_id = requests.id AND CASE"
+        " WHEN (br.rowid IS NULL OR xr.key IS NOT NULL)"
+        " AND (bi.rowid IS NULL OR xi.key IS NOT NULL)"
+        f" THEN ({words})"
+        " ELSE fcc_bodies_match(br.payload, br.dict_id, bi.payload, bi.dict_id, ?)"
+        " END"
+    )
+
+
+def _sha_bytes(sha: str) -> bytes | None:
+    """A blob's content address as the index stores it, or None if it is not one.
+
+    Exactly 64 hex digits, as ``hashlib.sha256().hexdigest()`` writes them:
+    anything else is never covered (``unhex`` in the predicate agrees).
+    """
+
+    if len(sha) != 64:
+        return None
+    try:
+        return bytes.fromhex(sha)
+    except ValueError:
+        return None
+
+
 #: Called with every connection a store opens while set (7.91.1). The search
 #: pool registers each one so a superseded or abandoned search can be stopped
 #: mid-statement (``sqlite3.Connection.interrupt``); ``None`` everywhere else,
@@ -2368,6 +2477,52 @@ def searchable_text(bodies: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def search_units(raw: bytes, canonical: bool) -> tuple[int, dict[int, str]] | None:
+    """A stored blob's searchable text, field by field, for the search index (7.92.0).
+
+    The index answers a search exactly as ``_bodies_match`` would only if it
+    holds exactly the text that function reads, so a blob is read here the way
+    it is read there: the keys ``unpack_bodies`` keeps, and the values
+    ``searchable_text`` takes from them (a string prompt, reply or reasoning;
+    every string value of the tool calls, joined with newlines). ``fields``
+    has bit ``1 << n`` for each of ``_BODY_FIELDS`` the blob holds, whatever
+    its value, because the prompt blob's field hides the reply blob's field of
+    the same name (``merged.update``). Empty texts are left out.
+
+    None when the blob cannot be indexed exactly, so the scan goes on deciding
+    for every request that names it: not UTF-8 JSON of an object, or -- with
+    ``canonical``, for history whoever wrote it -- not byte for byte what
+    ``pack_fields`` writes for that content. The scan's byte pre-filter
+    (``_stored_probes``) relies on that form; in another form it could reject
+    a blob whose text holds the word, and the index must never find what the
+    scan would not.
+    """
+    try:
+        packed = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError, json.JSONDecodeError:
+        return None
+    if not isinstance(packed, dict):
+        return None
+    if canonical and json.dumps(packed, separators=(",", ":")).encode("utf-8") != raw:
+        return None
+    fields = 0
+    units: dict[int, str] = {}
+    for position, (short, name) in enumerate(_BODY_FIELDS):
+        if short not in packed:
+            continue
+        fields |= 1 << position
+        value = packed[short]
+        if name == "tool_calls":
+            text = "\n".join(_strings_in(value))
+        elif isinstance(value, str):
+            text = value
+        else:
+            continue
+        if text:
+            units[position] = text
+    return fields, units
+
+
 def _packed_or_none(packed: bytes) -> bytes | None:
     return None if packed == b"{}" else packed
 
@@ -3013,6 +3168,7 @@ class RequestLogStore:
         compression_level: int = _BODY_COMPRESSION_LEVEL,
         queue_max_size: int = _QUEUE_MAX_SIZE,
         compress_bodies: bool = True,
+        search_index: bool = True,
     ) -> None:
         self._db_path = Path(db_path)
         self._max_rows = max(0, max_rows)
@@ -3068,6 +3224,35 @@ class RequestLogStore:
         # Bumped by every ``clear`` (7.91.1). A search's matched rows are kept
         # under it, because a cleared log hands out its rowids again from 1.
         self._clear_generation = 0
+        # The search index in its own file beside the log (7.92.0; see
+        # ``core/request_search.py``). None when this Python's SQLite cannot
+        # keep one (``_search_off`` says why) or the store was opened without
+        # it; every search then reads the stored bodies, as before.
+        supported, reason = search_index_support()
+        self._search_off: str | None = None if supported else reason
+        self._search: SearchIndex | None = (
+            SearchIndex(self._db_path) if search_index and supported else None
+        )
+        # Writer thread only: its connection to the index file, the clear it
+        # last saw, and the index work due between requests.
+        self._search_conn: sqlite3.Connection | None = None
+        self._search_seen_generation = 0
+        self._search_retry_at = 0.0
+        self._search_catchup_due = True
+        self._search_sweep_due = True
+        self._search_sweep_from = 0
+        # The build the operator asks for ("Build search index"), resumable
+        # across restarts through the index file's ``build`` document. Written
+        # by any thread under the lock, run and saved by the writer thread.
+        self._search_lock = threading.Lock()
+        self._search_build: dict[str, Any] = (
+            self._search.saved_build_state() if self._search is not None else {}
+        ) or {"state": "idle"}
+        self._search_build_dirty = False
+        # Searches reading the log right now: the build waits for them.
+        self._search_active = 0
+        # New bodies indexed as they were written: blobs, seconds.
+        self._search_written = [0, 0.0]
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=self._queue_max_size)
         self._inserts_since_prune = 0
         # Session-level "stop asking": set when the historical cost backfill
@@ -6212,6 +6397,7 @@ class RequestLogStore:
             self._maybe_refresh_dictionaries()
             self._dictionaries_checked.set()
             session_id = self._open_session(conn)
+            self._search_start(conn)
             last_heartbeat = time.monotonic()
             while not stopping:
                 # Between batches, never inside one: see ``retune``. A
@@ -6245,6 +6431,9 @@ class RequestLogStore:
                     # ``request_origin_backfill``.
                     if self._origin_backfill_requested.is_set():
                         self._run_origin_backfill(conn)
+                    # The search index's own work (7.92.0), in bounded steps
+                    # that hand the thread back for a request or a search.
+                    self._run_search_index(conn)
                     # Last, and with the same yield: one bounded step at a
                     # time, back to the queue the moment a request arrives.
                     self._run_history_conversion(conn)
@@ -6272,8 +6461,12 @@ class RequestLogStore:
             # Stamp the clean shutdown so the recorded session ends where the
             # server actually stopped rather than up to one heartbeat earlier.
             self._touch_session(conn, session_id, time.time())
+            self._save_search_build()
         finally:
             conn.close()
+            search_conn, self._search_conn = self._search_conn, None
+            if search_conn is not None:
+                search_conn.close()
 
     @staticmethod
     def _existing_ids(conn: sqlite3.Connection, ids: list[str]) -> set[str]:
@@ -7307,15 +7500,18 @@ class RequestLogStore:
         packed: dict[str, tuple[bytes | None, bytes | None]],
         *,
         level: int | None = None,
-    ) -> None:
+    ) -> dict[str, tuple[bytes, str]]:
         """Point each request at its blobs, compressing only unseen content.
 
         ``level`` defaults to ``REQUEST_LOG_COMPRESSION_LEVEL`` as the store
         holds it now, read once so one batch is written at one level. Until
         7.72.2 this default was a fixed 9, so the setting changed nothing.
+
+        Returns every blob the batch names, new or already stored, by sha:
+        its packed bytes and its kind (the search index reads them, 7.92.0).
         """
         if not packed:
-            return
+            return {}
         if level is None:
             level = self._compression_level
         mapping: list[tuple[str, str | None, str | None]] = []
@@ -7362,6 +7558,7 @@ class RequestLogStore:
             " VALUES (?, ?, ?)",
             mapping,
         )
+        return blobs
 
     @staticmethod
     def _existing_shas(
@@ -7504,6 +7701,7 @@ class RequestLogStore:
                 if blobs != (None, None):
                     packed[record.id] = blobs
         already_stored: set[str] = set()
+        stored_blobs: dict[str, tuple[bytes, str]] = {}
         try:
             with conn:
                 already_stored = self._existing_ids(
@@ -7514,7 +7712,7 @@ class RequestLogStore:
                     # can delete a value between its lookup and the row naming it.
                     rows = self._store_request_values(conn, rows)
                 conn.executemany(_REQUEST_INSERT_SQL, rows)
-                self._store_bodies(conn, packed)
+                stored_blobs = self._store_bodies(conn, packed)
                 self._store_images(conn, batch)
                 self._store_media(conn, batch)
                 written = Counter(record.id for record in batch)
@@ -7538,6 +7736,11 @@ class RequestLogStore:
         except sqlite3.Error as exc:
             logger.warning("Request log write failed: {}", exc)
             return
+        # After the commit, never inside it: indexing the batch's bodies for
+        # search (7.92.0) holds no lock of the log, and a failure there costs
+        # only the index (the rows stay searched the old way).
+        if stored_blobs:
+            self._search_index_written(conn, stored_blobs)
         if already_stored or len({record.id for record in batch}) < len(batch):
             # A request written again replaces its links, so a body, picture
             # or file its earlier write named may now be named by nothing.
@@ -7835,6 +8038,7 @@ class RequestLogStore:
         folder: str | None = None,
         exit: str | None = None,
         matched: MatchedRows | None = None,
+        indexed: IndexedSearch | None = None,
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         args: list[Any] = []
@@ -7942,6 +8146,22 @@ class RequestLogStore:
             # position, so every other clause and argument is what it was.
             clauses.append(_MATCHED_ROWS_SQL)
             args.append(matched.rowids)
+        elif terms and indexed is not None and indexed.q == " ".join(terms):
+            # 7.92.0: the same predicate, with the bodies' half answered from
+            # the search index for every request whose two blobs it holds
+            # under their current address, and by ``fcc_bodies_match`` --
+            # exactly the clause below -- for every other request. The inline
+            # half is unchanged.
+            inline = " AND ".join(
+                "("
+                + " OR ".join(f"{column} LIKE ?" for column in _SEARCHED_COLUMNS)
+                + ")"
+                for _ in terms
+            )
+            for term in terms:
+                args.extend([f"%{term}%"] * len(_SEARCHED_COLUMNS))
+            clauses.append(f"(({inline}) OR EXISTS ({_indexed_bodies_sql(indexed)}))")
+            args.append(q)
         elif terms:
             # Legacy inline text and compressed bodies coexist, so search has to
             # cover both. The correlated subquery keeps this self-contained --
@@ -10801,6 +11021,556 @@ class RequestLogStore:
 
         return self._clear_generation
 
+    # ----------------------------------------------------------- search index
+    # 7.92.0; the index itself is ``core/request_search.py``. Everything here
+    # that writes the index runs on the writer thread, after the log's own
+    # commit and never inside it; everything here that reads it is a search.
+
+    def _search_enter(self) -> None:
+        with self._search_lock:
+            self._search_active += 1
+
+    def _search_leave(self) -> None:
+        with self._search_lock:
+            self._search_active -= 1
+
+    def _search_may_go(self, deadline: float) -> bool:
+        """Whether index work may take another step: no request waits, no search runs."""
+
+        if not self._queue.empty() or time.monotonic() >= deadline:
+            return False
+        with self._search_lock:
+            return self._search_active == 0
+
+    def _search_start(self, conn: sqlite3.Connection) -> None:
+        """Writer thread: open the index file, creating it on a first start."""
+
+        search = self._search
+        if search is None:
+            return
+        sconn = search.open_writer()
+        self._search_conn = sconn
+        if sconn is None:
+            return
+        self._search_seen_generation = search.generation
+        try:
+            self._search_adopt(conn, sconn)
+        except Exception as exc:  # the index never stops the writer starting
+            logger.warning("Request log search index not read: {}", exc)
+            self._search_retry_at = time.monotonic() + _SEARCH_RETRY_SECONDS
+
+    def _search_adopt(
+        self, conn: sqlite3.Connection, sconn: sqlite3.Connection
+    ) -> None:
+        """Note where new bodies begin, on a new (or cleared) index file.
+
+        On a new (or cleared) file every body the log holds now is history,
+        which only "Build search index" reads; every body written after it is
+        new and is indexed without being asked.
+        """
+
+        search = self._search
+        if search is None:
+            return
+        if search.first_key(sconn) is None:
+            newest = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(rowid), 0) FROM body_blobs"
+                ).fetchone()[0]
+            )
+            with sconn:
+                search.set_first_key(sconn, newest)
+                search.set_catchup_through(sconn, newest)
+
+    def _search_check_cleared(self, conn: sqlite3.Connection) -> None:
+        """Writer thread: after a ``clear`` from another thread, start the index over."""
+
+        search, sconn = self._search, self._search_conn
+        if search is None or sconn is None:
+            return
+        if search.generation == self._search_seen_generation:
+            return
+        self._search_seen_generation = search.generation
+        self._search_sweep_from = 0
+        self._search_catchup_due = True
+        self._search_adopt(conn, sconn)
+
+    def _clear_search_index(self) -> None:
+        """Erase the index's text with the log's (``clear``); any thread."""
+
+        if self._search is None:
+            return
+        try:
+            self._search.clear()
+        except sqlite3.Error as exc:
+            logger.warning("Request log search index not cleared: {}", exc)
+        with self._search_lock:
+            self._search_build = {"state": "idle"}
+            self._search_build_dirty = False
+
+    def _search_blob_units(
+        self,
+        sconn: sqlite3.Connection,
+        items: Sequence[tuple[str, bytes | None]],
+        *,
+        canonical: bool,
+    ) -> list[BlobUnits]:
+        """The blobs of ``items`` (sha, packed bytes) the index lacks, read for it.
+
+        A blob that cannot be read exactly (``search_units``) is left out and
+        stays searched the old way.
+        """
+
+        search = self._search
+        if search is None:
+            return []
+        valid: list[tuple[bytes, bytes | None]] = []
+        for sha, raw in items:
+            address = _sha_bytes(sha)
+            if address is not None:
+                valid.append((address, raw))
+        known = search.known(sconn, [address for address, _raw in valid])
+        blobs: list[BlobUnits] = []
+        for address, raw in valid:
+            if address in known or raw is None:
+                continue
+            read = search_units(raw, canonical)
+            if read is None:
+                continue
+            fields, texts = read
+            blobs.append(BlobUnits(sha=address, fields=fields, units=texts))
+        return blobs
+
+    def _search_index_written(
+        self, conn: sqlite3.Connection, stored: Mapping[str, tuple[bytes, str]]
+    ) -> None:
+        """Index the bodies a batch named, right after the batch committed (writer thread).
+
+        From the packed bytes the writer already holds: nothing is read back
+        or decompressed. A failure costs only the index -- those requests stay
+        searched the old way until the next start catches them up.
+        """
+
+        search, sconn = self._search, self._search_conn
+        if search is None or sconn is None:
+            return
+        started = time.perf_counter()
+        indexed = 0
+        try:
+            self._search_check_cleared(conn)
+            blobs = self._search_blob_units(
+                sconn,
+                [(sha, packed) for sha, (packed, _kind) in sorted(stored.items())],
+                canonical=False,
+            )
+            if blobs:
+                with sconn:
+                    indexed, _chunks = search.add(sconn, blobs)
+        except Exception as exc:  # the index never costs the writer a row
+            with contextlib.suppress(sqlite3.Error):
+                sconn.rollback()
+            logger.warning("Request log search index: new bodies not indexed: {}", exc)
+            return
+        # The next idle tick checks the new keys (cheap when all are held).
+        self._search_catchup_due = True
+        self._search_written[0] += indexed
+        self._search_written[1] += time.perf_counter() - started
+
+    def _run_search_index(self, conn: sqlite3.Connection) -> None:
+        """Writer thread, idle only: the index's work between requests (7.92.0).
+
+        In order: save a build state another thread changed; index new bodies
+        the writer did not index itself (an older version wrote them, or a
+        write failed); drop entries for bodies the log no longer holds (a
+        prune); train the chunk dictionary once; then, only when asked, one
+        slice of the build. Each step commits the index file on its own and
+        none starts while a request is queued or a search is running.
+        """
+
+        search, sconn = self._search, self._search_conn
+        if search is None or sconn is None:
+            return
+        now = time.monotonic()
+        if now < self._search_retry_at:
+            return
+        deadline = now + _SEARCH_IDLE_SLICE_SECONDS
+        try:
+            self._search_check_cleared(conn)
+            self._save_search_build()
+            if self._search_catchup_due and not self._search_catchup(
+                conn, sconn, deadline
+            ):
+                return
+            if self._search_sweep_due and not self._search_sweep(conn, sconn, deadline):
+                return
+            if not self._search_may_go(deadline):
+                return
+            if search.train_dictionary_if_due(sconn):
+                return
+            self._search_build_run(conn, sconn, deadline)
+        except Exception as exc:  # nor the writer thread its life
+            with contextlib.suppress(sqlite3.Error):
+                sconn.rollback()
+            logger.warning("Request log search index paused: {}", exc)
+            self._search_retry_at = time.monotonic() + _SEARCH_RETRY_SECONDS
+
+    def _search_index_rows(
+        self,
+        conn: sqlite3.Connection,
+        sconn: sqlite3.Connection,
+        rows: Sequence[tuple[int, str]],
+        step_end: float,
+    ) -> tuple[int, int, int]:
+        """Index the blobs ``rows`` (log rowid, sha) name, in their order, until ``step_end``.
+
+        Inside the caller's transaction on the index file. Returns how many
+        rows were dealt with (held, indexed or unreadable), the rowid of the
+        last of them, and how many blobs were indexed.
+        """
+
+        search = self._search
+        if search is None:
+            return 0, 0, 0
+        valid = {key: _sha_bytes(sha) for key, sha in rows}
+        known = search.known(
+            sconn, [address for address in valid.values() if address is not None]
+        )
+        dealt = 0
+        last = 0
+        indexed = 0
+        pending: list[int] = []
+
+        def flush() -> int:
+            if not pending:
+                return 0
+            marks = ", ".join("?" * len(pending))
+            fetched = [
+                (str(sha), self._raw_payload(payload, dict_id))
+                for sha, dict_id, payload in conn.execute(
+                    "SELECT sha, dict_id, payload FROM body_blobs"
+                    f" WHERE rowid IN ({marks})",
+                    pending,
+                )
+            ]
+            pending.clear()
+            blobs = self._search_blob_units(sconn, fetched, canonical=True)
+            return search.add(sconn, blobs)[0] if blobs else 0
+
+        for key, _sha in rows:
+            address = valid[key]
+            if address is not None and address not in known:
+                pending.append(key)
+            dealt += 1
+            last = key
+            if len(pending) >= _SEARCH_DECODE_BATCH:
+                indexed += flush()
+                # Between two batches: hand the interpreter to any other
+                # thread (the event loop above all), and end the step early
+                # for a request queued or a search started meanwhile.
+                time.sleep(0)
+                if time.monotonic() >= step_end or not self._search_may_go(step_end):
+                    break
+        indexed += flush()
+        return dealt, last, indexed
+
+    def _search_catchup(
+        self, conn: sqlite3.Connection, sconn: sqlite3.Connection, deadline: float
+    ) -> bool:
+        """Index bodies written since the index began that it does not hold. True when done."""
+
+        search = self._search
+        if search is None:
+            return True
+        through = search.catchup_through(sconn) or 0
+        while self._search_may_go(deadline):
+            rows = [
+                (int(row[0]), str(row[1]))
+                for row in conn.execute(
+                    "SELECT rowid, sha FROM body_blobs WHERE rowid > ?"
+                    " ORDER BY rowid LIMIT ?",
+                    (through, _SEARCH_WALK_ROWS),
+                )
+            ]
+            if not rows:
+                self._search_catchup_due = False
+                return True
+            step_end = min(deadline, time.monotonic() + _SEARCH_STEP_SECONDS)
+            with sconn:
+                dealt, last, _indexed = self._search_index_rows(
+                    conn, sconn, rows, step_end
+                )
+                if dealt:
+                    through = last
+                    search.set_catchup_through(sconn, through)
+        return False
+
+    def _search_sweep(
+        self, conn: sqlite3.Connection, sconn: sqlite3.Connection, deadline: float
+    ) -> bool:
+        """Drop index entries for bodies the log no longer holds. True when done.
+
+        A body pruned with its requests, or erased by another process: its text
+        leaves the index with it, so retention applies to the index as it does
+        to the log.
+        """
+
+        search = self._search
+        if search is None:
+            return True
+        while self._search_may_go(deadline):
+            entries = [
+                (int(row[0]), bytes(row[1]))
+                for row in sconn.execute(
+                    "SELECT key, sha FROM blobs WHERE key > ? ORDER BY key LIMIT ?",
+                    (self._search_sweep_from, _SEARCH_SWEEP_ROWS),
+                )
+            ]
+            if not entries:
+                self._search_sweep_due = False
+                self._search_sweep_from = 0
+                return True
+            addresses = [sha.hex() for _key, sha in entries]
+            held: set[str] = set()
+            for start in range(0, len(addresses), _SHA_LOOKUP_CHUNK):
+                part = addresses[start : start + _SHA_LOOKUP_CHUNK]
+                held.update(
+                    str(row[0])
+                    for row in conn.execute(
+                        "SELECT sha FROM body_blobs"
+                        f" WHERE sha IN ({', '.join('?' * len(part))})",
+                        part,
+                    )
+                )
+            stale = [key for key, sha in entries if sha.hex() not in held]
+            if stale:
+                with sconn:
+                    search.remove(sconn, stale)
+            self._search_sweep_from = entries[-1][0]
+        return False
+
+    def _search_build_run(
+        self, conn: sqlite3.Connection, sconn: sqlite3.Connection, deadline: float
+    ) -> None:
+        """One slice of "Build search index": every stored body, newest first.
+
+        Resumable: the cursor (the lowest blob rowid reached) is saved with
+        every step, in the index file, so a restart continues where the last
+        committed step ended. A body the index already holds costs one lookup.
+        """
+
+        search = self._search
+        if search is None:
+            return
+        with self._search_lock:
+            state = dict(self._search_build)
+        if state.get("state") != "running":
+            return
+        if state.get("cursor") is None:
+            newest, total = conn.execute(
+                "SELECT COALESCE(MAX(rowid), 0), COUNT(*) FROM body_blobs"
+            ).fetchone()
+            state.update(cursor=int(newest) + 1, total=int(total), done=0, indexed=0)
+        while self._search_may_go(deadline):
+            cursor = int(state["cursor"])
+            rows = [
+                (int(row[0]), str(row[1]))
+                for row in conn.execute(
+                    "SELECT rowid, sha FROM body_blobs WHERE rowid < ?"
+                    " ORDER BY rowid DESC LIMIT ?",
+                    (cursor, _SEARCH_WALK_ROWS),
+                )
+            ]
+            step_end = min(deadline, time.monotonic() + _SEARCH_STEP_SECONDS)
+            with sconn:
+                if rows:
+                    dealt, last, indexed = self._search_index_rows(
+                        conn, sconn, rows, step_end
+                    )
+                    progress = {
+                        "cursor": last if dealt else cursor,
+                        "done": int(state.get("done") or 0) + dealt,
+                        "indexed": int(state.get("indexed") or 0) + indexed,
+                        "session_done": int(state.get("session_done") or 0) + dealt,
+                    }
+                else:
+                    progress = {
+                        "cursor": 0,
+                        "state": "done",
+                        "finished_at": time.time(),
+                    }
+                state = self._merge_search_build(state, progress)
+                search.set_build_state(sconn, state)
+            if state.get("state") != "running":
+                return
+
+    def _merge_search_build(
+        self, state: dict[str, Any], progress: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Apply the writer's progress to the build state the operator may have changed.
+
+        A pause pressed meanwhile is kept (with the progress); a build that
+        was cleared or restarted meanwhile is not overwritten.
+        """
+
+        with self._search_lock:
+            current = dict(self._search_build)
+            if current.get("started_at") != state.get("started_at"):
+                return current
+            merged = {**state, **progress}
+            if current.get("state") == "paused" and merged.get("state") == "running":
+                merged["state"] = "paused"
+            for name in ("total",):
+                merged.setdefault(name, state.get(name))
+            self._search_build = merged
+            self._search_build_dirty = False
+            return dict(merged)
+
+    def _save_search_build(self) -> None:
+        """Writer thread: write a build state another thread changed to the index file."""
+
+        search, sconn = self._search, self._search_conn
+        if search is None or sconn is None:
+            return
+        with self._search_lock:
+            if not self._search_build_dirty:
+                return
+            state = dict(self._search_build)
+            self._search_build_dirty = False
+        try:
+            with sconn:
+                search.set_build_state(sconn, state)
+        except sqlite3.Error as exc:
+            logger.debug("Search index build state not saved: {}", exc)
+            with self._search_lock:
+                self._search_build_dirty = True
+
+    def request_search_index_build(self) -> dict[str, Any]:
+        """Start or resume "Build search index" (never automatic; any thread).
+
+        The writer thread indexes every body the log holds, newest first, in
+        steps between requests and searches; pressing it again after a pause
+        or a restart continues from where it stopped.
+        """
+
+        if self._search is not None:
+            with self._search_lock:
+                state = dict(self._search_build)
+                now = time.time()
+                if state.get("state") == "paused":
+                    state.update(state="running", session_started=now, session_done=0)
+                elif state.get("state") != "running":
+                    state = {
+                        "state": "running",
+                        "started_at": now,
+                        "finished_at": None,
+                        "cursor": None,
+                        "total": None,
+                        "done": 0,
+                        "indexed": 0,
+                        "session_started": now,
+                        "session_done": 0,
+                    }
+                self._search_build = state
+                self._search_build_dirty = True
+        return self.search_index_status()
+
+    def pause_search_index_build(self) -> dict[str, Any]:
+        """Pause a running build; it continues only when asked again (any thread)."""
+
+        if self._search is not None:
+            with self._search_lock:
+                if self._search_build.get("state") == "running":
+                    self._search_build = {**self._search_build, "state": "paused"}
+                    self._search_build_dirty = True
+        return self.search_index_status()
+
+    def search_index_status(self) -> dict[str, Any]:
+        """The index's state for the Requests page. No database walk.
+
+        ``percent`` and ``eta_seconds`` describe a build; ``written`` what
+        indexing new requests has cost so far in this process.
+        """
+
+        search = self._search
+        if search is None:
+            return {
+                "available": False,
+                "reason": self._search_off
+                or "The search index is off for this log; searches read every stored request.",
+            }
+        if search.unusable is not None:
+            return {"available": False, "reason": search.unusable}
+        with self._search_lock:
+            state = dict(self._search_build)
+        total = state.get("total")
+        done = int(state.get("done") or 0)
+        percent: float | None = None
+        eta: float | None = None
+        if state.get("state") == "done":
+            percent = 100.0
+        elif total:
+            percent = min(100.0, 100.0 * done / int(total))
+            started = state.get("session_started")
+            session_done = int(state.get("session_done") or 0)
+            if state.get("state") == "running" and started and session_done:
+                elapsed = max(0.0, time.time() - float(started))
+                rate = session_done / elapsed if elapsed > 0 else 0.0
+                if rate > 0:
+                    eta = max(0.0, (int(total) - done) / rate)
+        size = 0
+        for path in (search.path, search.path.with_name(search.path.name + "-wal")):
+            with contextlib.suppress(OSError):
+                size += path.stat().st_size
+        written, seconds = self._search_written
+        return {
+            "available": True,
+            "state": state.get("state", "idle"),
+            "percent": percent,
+            "eta_seconds": eta,
+            "done": done,
+            "total": total,
+            "indexed": int(state.get("indexed") or 0),
+            "started_at": state.get("started_at"),
+            "finished_at": state.get("finished_at"),
+            "bytes": size,
+            "written": {"blobs": written, "seconds": round(seconds, 6)},
+        }
+
+    def search_index_coverage(self) -> dict[str, int] | None:
+        """How many requests a search answers from the index, of all of them.
+
+        One read of every request's two blob links: seconds on a large log, so
+        a caller runs it off the event loop and keeps the answer a while. A
+        request with no stored body needs no index and counts as covered.
+        None when there is no index.
+        """
+
+        search = self._search
+        if search is None or search.unusable is not None:
+            return None
+        conn = self._connect()
+        try:
+            if not search.attach(conn):
+                total = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
+                return {"rows": total, "covered": 0}
+            schema = SEARCH_SCHEMA
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE"
+                " WHEN r.request_id IS NULL THEN 1"
+                " WHEN (br.rowid IS NULL OR xr.key IS NOT NULL)"
+                " AND (bi.rowid IS NULL OR xi.key IS NOT NULL) THEN 1"
+                " ELSE 0 END), 0)"
+                " FROM requests q"
+                " LEFT JOIN request_bodies r ON r.request_id = q.id"
+                " LEFT JOIN body_blobs br ON br.sha = r.sha"
+                " LEFT JOIN body_blobs bi ON bi.sha = r.input_sha"
+                f" LEFT JOIN {schema}.blobs xr ON xr.sha = unhex(br.sha)"
+                f" LEFT JOIN {schema}.blobs xi ON xi.sha = unhex(bi.sha)"
+            ).fetchone()
+            return {"rows": int(row[0]), "covered": int(row[1])}
+        finally:
+            conn.close()
+
     def match_rows(
         self,
         *,
@@ -10846,6 +11616,65 @@ class RequestLogStore:
         """
 
         newest_first = rowid_after is None and rowid_through is None
+        filters: dict[str, Any] = {
+            "provider": provider,
+            "model": model,
+            "status": status,
+            "endpoint": endpoint,
+            "key": key,
+            "since": since,
+            "until": until,
+            "local": local,
+            "harness": harness,
+            "session": session,
+            "folder": folder,
+            "exit": exit,
+        }
+        conn = self._connect()
+        self._search_enter()
+        try:
+            if newest_first and self._search is not None:
+                yield from self._match_rows_planned(
+                    conn, q, filters, below, below_inclusive, on_read
+                )
+            else:
+                yield from self._match_rows_pass(
+                    conn,
+                    q,
+                    filters,
+                    below=below,
+                    below_inclusive=below_inclusive,
+                    rowid_after=rowid_after,
+                    rowid_through=rowid_through,
+                    on_read=on_read if newest_first else None,
+                )
+        finally:
+            self._search_leave()
+            conn.close()
+
+    def _match_rows_pass(
+        self,
+        conn: sqlite3.Connection,
+        q: str,
+        filters: Mapping[str, Any],
+        *,
+        below: float | None = None,
+        below_inclusive: bool = False,
+        rowid_after: int | None = None,
+        rowid_through: int | None = None,
+        on_read: Callable[[float], None] | None = None,
+        at_least: float | None = None,
+        indexed: IndexedSearch | None = None,
+    ) -> Generator[tuple[int, float]]:
+        """One statement of a search's pass: ``match_rows``' rows over one stretch.
+
+        ``at_least`` keeps the rows at or after a time (``ts_epoch >= ?``);
+        ``below`` the rows before one. ``indexed`` answers the bodies' half of
+        the predicate from the search index (``_where``); without it the
+        predicate is the scan's, exactly as before 7.92.0.
+        """
+
+        newest_first = rowid_after is None and rowid_through is None
         flagged = ""
         flag_args: list[Any] = []
         if on_read is not None and newest_first:
@@ -10865,24 +11694,18 @@ class RequestLogStore:
                 session=None,
                 folder=None,
                 exit=None,
+                indexed=indexed,
             )
             flagged = test.removeprefix(" WHERE ")
         where, args = self._where(
-            provider=provider,
-            model=model,
-            status=status,
-            endpoint=endpoint,
-            key=key,
-            since=since,
-            until=until,
+            **filters,
             q=None if flagged else q,
-            local=local,
-            harness=harness,
-            session=session,
-            folder=folder,
-            exit=exit,
+            indexed=None if flagged else indexed,
         )
         extra: list[str] = []
+        if at_least is not None:
+            extra.append("ts_epoch >= ?")
+            args.append(at_least)
         if below is not None:
             extra.append("ts_epoch <= ?" if below_inclusive else "ts_epoch < ?")
             args.append(below)
@@ -10914,19 +11737,168 @@ class RequestLogStore:
             )
         else:
             sql = f"SELECT rowid, ts_epoch FROM requests{where}"
-        conn = self._connect()
+        cursor = conn.execute(sql, args)
         try:
             if flagged and on_read is not None:
-                for row in conn.execute(sql, args):
+                for row in cursor:
                     ts = float(row[1])
                     on_read(ts)
                     if row[2]:
                         yield int(row[0]), ts
             else:
-                for row in conn.execute(sql, args):
+                for row in cursor:
                     yield int(row[0]), float(row[1])
         finally:
-            conn.close()
+            cursor.close()
+
+    def _match_rows_planned(
+        self,
+        conn: sqlite3.Connection,
+        q: str,
+        filters: Mapping[str, Any],
+        below: float | None,
+        below_inclusive: bool,
+        on_read: Callable[[float], None] | None,
+    ) -> Generator[tuple[int, float]]:
+        """A newest-first pass that uses the search index where it is cheaper (7.92.0).
+
+        The rows are exactly the scan's, in the same order: the newest
+        ``_SEARCH_SCAN_FIRST_ROWS`` rows of the window are read the old way
+        (the first page of a common word arrives as fast as it always did),
+        then everything older is read by one statement whose bodies' half is
+        answered from the index for the requests it covers and by the scan for
+        the rest -- or by the plain scan, when the index would cost more (a
+        short word over a small window). One read transaction holds every
+        statement, so all of them see the same log and the same index.
+        """
+
+        search = self._search
+        attached = search is not None and search.attach(conn)
+        conn.execute("BEGIN")
+        try:
+            where, args = self._where(**filters)
+            extra: list[str] = []
+            if below is not None:
+                extra.append("ts_epoch <= ?" if below_inclusive else "ts_epoch < ?")
+                args.append(below)
+            if extra:
+                where = f"{where}{' AND' if where else ' WHERE'} {' AND '.join(extra)}"
+            first = _SEARCH_SCAN_FIRST_ROWS
+            boundary_row = (
+                conn.execute(
+                    "SELECT ts_epoch FROM requests INDEXED BY idx_requests_ts"
+                    f"{where} ORDER BY ts_epoch DESC LIMIT 1 OFFSET ?",
+                    [*args, first - 1],
+                ).fetchone()
+                if first > 0
+                else (math.inf,)
+            )
+            if not attached or search is None or boundary_row is None:
+                yield from self._match_rows_pass(
+                    conn,
+                    q,
+                    filters,
+                    below=below,
+                    below_inclusive=below_inclusive,
+                    on_read=on_read,
+                )
+                return
+            boundary = float(boundary_row[0])
+            per_row = _SEARCH_COST_SCAN_ROW
+            if first > 0:
+                started = time.perf_counter()
+                yield from self._match_rows_pass(
+                    conn,
+                    q,
+                    filters,
+                    below=below,
+                    below_inclusive=below_inclusive,
+                    on_read=on_read,
+                    at_least=boundary,
+                )
+                per_row = (time.perf_counter() - started) / first
+                rest_where = f"{where}{' AND' if where else ' WHERE'} ts_epoch < ?"
+                rest_args = [*args, boundary]
+            else:
+                rest_where, rest_args = where, args
+            rest = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM requests{rest_where}", rest_args
+                ).fetchone()[0]
+            )
+            tables = None
+            if rest * per_row > _SEARCH_SCAN_SECONDS_MIN:
+                try:
+                    plans = plan_terms(q)
+                    estimate = search.estimate(conn, plans)
+                    total = int(
+                        conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
+                    )
+                    # A window reading under half the log looks up only the
+                    # blobs its rows name (``scope``): their share of the work.
+                    scoped = rest < total * _SEARCH_SCOPE_SHARE
+                    share = rest / total if scoped and total else 1.0
+                    index_cost = share * (
+                        estimate["tested"] * _SEARCH_COST_TEST
+                        + estimate["looked_up"] * _SEARCH_COST_POSTING
+                        + (estimate["tested"] + estimate["looked_up"])
+                        * _SEARCH_LINKS_PER_CHUNK
+                        * _SEARCH_COST_LINK
+                    ) + rest * (
+                        _SEARCH_COST_PASS_ROW
+                        + (_SEARCH_COST_SCOPE_ROW if scoped else 0.0)
+                    )
+                    if index_cost < rest * per_row:
+                        scope = None
+                        if scoped:
+                            scope = "mcc_search_keys"
+                            self._search_scope(conn, scope, rest_where, rest_args)
+                        tables = search.prepare(conn, plans, scope=scope)
+                except (sqlite3.Error, ValueError) as exc:
+                    # A stopped search stops; an unreadable index is not
+                    # used, and the rest of the window is the plain scan.
+                    if isinstance(exc, sqlite3.Error):
+                        raise_if_interrupted(exc)
+                    logger.warning("Request log search index not used: {}", exc)
+                    tables = None
+            yield from self._match_rows_pass(
+                conn,
+                q,
+                filters,
+                below=boundary if first > 0 else below,
+                below_inclusive=False if first > 0 else below_inclusive,
+                on_read=on_read,
+                indexed=(
+                    None
+                    if tables is None
+                    else IndexedSearch(q=normalized_search(q), tables=tables)
+                ),
+            )
+        finally:
+            conn.rollback()
+
+    @staticmethod
+    def _search_scope(
+        conn: sqlite3.Connection, table: str, where: str, args: Sequence[Any]
+    ) -> None:
+        """Fill ``temp.<table>`` with the index keys of every blob the rows of ``where`` name.
+
+        Exactly the rows the indexed statement will read (the same clauses,
+        in the same read transaction), so every key a covered row can ask
+        for is in it.
+        """
+
+        conn.execute(f"DROP TABLE IF EXISTS temp.{table}")
+        conn.execute(f"CREATE TEMP TABLE {table} (key INTEGER PRIMARY KEY)")
+        for column in ("sha", "input_sha"):
+            conn.execute(
+                f"INSERT OR IGNORE INTO temp.{table} (key)"
+                f" SELECT x.key FROM request_bodies AS r"
+                f" JOIN body_blobs AS b ON b.sha = r.{column}"
+                f" JOIN {SEARCH_SCHEMA}.blobs AS x ON x.sha = unhex(b.sha)"
+                f" WHERE r.request_id IN (SELECT id FROM requests{where})",
+                list(args),
+            )
 
     def max_rowid(self) -> int:
         """The newest row's rowid, 0 for an empty log (7.91.1)."""
@@ -11384,6 +12356,9 @@ class RequestLogStore:
                     self._sweep_skip_sets(conn)
             committed = True
             if removed:
+                # The search index drops what the removed bodies left in it
+                # between requests (7.92.0): retention applies to it too.
+                self._search_sweep_due = True
                 # Return the freed pages to the filesystem instead of leaving
                 # them on the freelist, where they would grow the file forever.
                 with contextlib.suppress(sqlite3.Error):
@@ -11666,6 +12641,11 @@ class RequestLogStore:
         """
         with self._stats_lock:
             self._stats_cache.clear()
+        # The search index holds the requests' text, so it goes too (7.92.0):
+        # before the log's erase, so a search never treats a body as indexed
+        # once the log has none, and after it, for anything the writer indexed
+        # in between.
+        self._clear_search_index()
         with self._connection() as conn:
             cursor = conn.execute("DELETE FROM requests")
             conn.execute("DELETE FROM request_totals")
@@ -11697,6 +12677,7 @@ class RequestLogStore:
         # After the erase has committed: rowids start again from 1, so rows a
         # search matched before it must never stand for rows written after.
         self._clear_generation += 1
+        self._clear_search_index()
         if stored_media:
             delete_media_files(media_root(self._db_path), stored_media)
         return removed

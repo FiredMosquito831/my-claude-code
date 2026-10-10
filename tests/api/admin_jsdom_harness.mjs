@@ -1069,6 +1069,15 @@ const MEDIA_ANALYTICS = {
 
 const ROUTES = {
   "/admin/api/media/models": MEDIA_MODELS,
+  // 7.92.0: the search index line under the Requests filters.
+  "/admin/api/requests/search-index": {
+    enabled: true,
+    available: true,
+    state: "idle",
+    percent: null,
+    eta_seconds: null,
+    coverage: { rows: 480, covered: 480 },
+  },
   "/admin/api/analytics/media": MEDIA_ANALYTICS,
   /* Two credential pools for the key manager: one whose keys hold live
      (key, model) 429 benches, and one plain healthy pool that must render
@@ -12014,6 +12023,116 @@ const requestOrigin = {};
   };
 }
 
+// ------------------------------------------------- search index line (7.92.0)
+/* The line under the Requests filters: what the index covers, the build's
+   progress and ETA, Pause and Continue, the feature check's reason -- and the
+   two buttons posting to their routes. */
+const searchIndex = {};
+{
+  const line = doc.getElementById("reqSearchIndex");
+  const read = () => ({
+    hidden: line ? line.hidden : null,
+    text: line ? doc.getElementById("reqSearchIndexText").textContent : null,
+    build: line ? !doc.getElementById("reqSearchIndexBuild").hidden : null,
+    buildText: line ? doc.getElementById("reqSearchIndexBuild").textContent : null,
+    pause: line ? !doc.getElementById("reqSearchIndexPause").hidden : null,
+  });
+  const paint = (status) => {
+    window.eval(`paintSearchIndex(${JSON.stringify(status)})`);
+    return read();
+  };
+  searchIndex.present = Boolean(line);
+  searchIndex.inRequestsView = Boolean(line && line.closest("#view-requests"));
+  // What opening the Requests view asks for, read from the harness's route.
+  await window.eval("loadSearchIndexStatus()");
+  await settle();
+  searchIndex.atOpen = read();
+  const partial = {
+    enabled: true,
+    available: true,
+    state: "idle",
+    percent: null,
+    eta_seconds: null,
+    coverage: { rows: 598683, covered: 412000 },
+  };
+  searchIndex.partial = paint(partial);
+  searchIndex.uncounted = paint({ ...partial, coverage: null });
+  searchIndex.running = paint({ ...partial, state: "running", percent: 41.7, eta_seconds: 175 });
+  searchIndex.runningLong = paint({ ...partial, state: "running", percent: 3.2, eta_seconds: 4330 });
+  searchIndex.runningSoon = paint({ ...partial, state: "running", percent: 99.4, eta_seconds: 12 });
+  searchIndex.paused = paint({ ...partial, state: "paused", percent: 41.2 });
+  searchIndex.complete = paint({
+    ...partial,
+    state: "done",
+    percent: 100,
+    coverage: { rows: 598683, covered: 598683 },
+  });
+  searchIndex.doneIncomplete = paint({
+    ...partial,
+    state: "done",
+    percent: 100,
+    coverage: { rows: 598683, covered: 598641 },
+  });
+  searchIndex.off = paint({
+    enabled: true,
+    available: false,
+    reason:
+      "This Python's SQLite (3.31.1) cannot keep the search index (no such tokenizer: trigram), so searches read every stored request.",
+  });
+  searchIndex.logOff = paint({ enabled: false, available: false, reason: "The request log is off." });
+
+  // The two buttons, against the routes.
+  paint(partial);
+  ROUTES["/admin/api/requests/search-index/build"] = {
+    enabled: true,
+    available: true,
+    state: "running",
+    percent: 0,
+    eta_seconds: null,
+    coverage: null,
+  };
+  ROUTES["/admin/api/requests/search-index"] = {
+    ...partial,
+    state: "running",
+    percent: 12.5,
+    eta_seconds: 600,
+  };
+  let before = fetchBodies.length;
+  if (line) {
+    doc.getElementById("reqSearchIndexBuild").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
+    await settle();
+  }
+  searchIndex.buildPosts = fetchBodies
+    .slice(before)
+    .filter((entry) => entry.path.startsWith("/admin/api/requests/search-index"))
+    .map((entry) => `${entry.method} ${entry.path}`);
+  searchIndex.afterBuild = read();
+  ROUTES["/admin/api/requests/search-index/pause"] = { ...partial, state: "paused", percent: 12.5 };
+  before = fetchBodies.length;
+  if (line) {
+    doc.getElementById("reqSearchIndexPause").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
+    await settle();
+  }
+  searchIndex.pausePosts = fetchBodies
+    .slice(before)
+    .filter((entry) => entry.path.startsWith("/admin/api/requests/search-index"))
+    .map((entry) => `${entry.method} ${entry.path}`);
+  searchIndex.afterPause = read();
+  // Let the page's own poll find the build finished, so no timer outlives the run.
+  ROUTES["/admin/api/requests/search-index"] = {
+    ...partial,
+    state: "done",
+    percent: 100,
+    coverage: { rows: 598683, covered: 598683 },
+  };
+  await new Promise((resolve) => setTimeout(resolve, 2300));
+  searchIndex.afterPoll = read();
+}
+
 // ------------------------------------------------- origin filters (7.43.0)
 /* Session and Folder: the two boxes through every wiring site (debounce,
    offset 0, persistence, restore, Clear), the breakdown route riding along
@@ -13263,6 +13382,7 @@ console.log(
       latencyViews,
       toolCatalogue,
       requestOrigin,
+      searchIndex,
       originFilters,
       requestExitCell,
       exitFilter,

@@ -5268,6 +5268,106 @@ async def start_origin_backfill(
     return {"enabled": True, **status}
 
 
+#: How long a search-index coverage count is reused (7.92.0). It reads every
+#: request's two blob links -- seconds on a large log -- and the page asks for
+#: it every couple of seconds while an index is being built.
+SEARCH_COVERAGE_MAX_AGE_SECONDS = 30.0
+_search_coverage: dict[int, tuple[float, asyncio.Future[Any]]] = {}
+
+
+async def _search_index_coverage(store: RequestLogStore) -> dict[str, int] | None:
+    """The index's coverage, counted at most once per ``SEARCH_COVERAGE_MAX_AGE_SECONDS``.
+
+    On the search pool, never the default executor: it is a read of every
+    row, like a search's. Callers that arrive while a count runs share it.
+    """
+
+    now = time.monotonic()
+    entry = _search_coverage.get(id(store))
+    if entry is not None:
+        started, future = entry
+        if not future.done() or now - started < SEARCH_COVERAGE_MAX_AGE_SECONDS:
+            try:
+                return await asyncio.shield(future)
+            except Exception:
+                _search_coverage.pop(id(store), None)
+                return None
+    future = run_on_search_pool(store.search_index_coverage)
+    _search_coverage[id(store)] = (now, future)
+    try:
+        return await asyncio.shield(future)
+    except Exception:
+        # A count that failed (the log busy, the index unreadable) says
+        # nothing; the page shows the build state without it.
+        _search_coverage.pop(id(store), None)
+        return None
+
+
+@router.get("/admin/api/requests/search-index")
+async def search_index_status(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """What the request log's search index covers, and the build if one runs (7.92.0).
+
+    Declared before ``/admin/api/requests/{request_id}``, which would otherwise
+    read ``search-index`` as a request id. ``coverage`` is how many requests a
+    search answers without reading their stored bodies, of all of them.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {
+            "enabled": False,
+            "available": False,
+            "reason": _ORIGIN_BACKFILL_LOG_OFF,
+        }
+    status = await asyncio.to_thread(store.search_index_status)
+    coverage = await _search_index_coverage(store) if status.get("available") else None
+    return {"enabled": True, **status, "coverage": coverage}
+
+
+@router.post("/admin/api/requests/search-index/build")
+async def start_search_index_build(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Index every request already logged, so searches stop reading their bodies.
+
+    Never automatic (new requests are indexed as they are written). It runs on
+    the request log's writer thread between requests and between searches, in
+    small steps, and continues after a pause or a restart from where it
+    stopped. It changes nothing in the log itself: the index is a file of its
+    own beside it.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_LOG_OFF)
+    status = await asyncio.to_thread(store.request_search_index_build)
+    if not status.get("available"):
+        raise HTTPException(status_code=409, detail=status.get("reason"))
+    _search_coverage.pop(id(store), None)
+    return {"enabled": True, **status}
+
+
+@router.post("/admin/api/requests/search-index/pause")
+async def pause_search_index_build(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Pause a running build; "Build search index" continues it."""
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_LOG_OFF)
+    status = await asyncio.to_thread(store.pause_search_index_build)
+    return {"enabled": True, **status}
+
+
 @router.get("/admin/api/requests/{request_id}")
 async def get_request_log_entry(
     request_id: str,
