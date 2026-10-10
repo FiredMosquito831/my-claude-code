@@ -11838,21 +11838,50 @@ class RequestLogStore:
                     # blobs its rows name (``scope``): their share of the work.
                     scoped = rest < total * _SEARCH_SCOPE_SHARE
                     share = rest / total if scoped and total else 1.0
-                    index_cost = share * (
-                        estimate["tested"] * _SEARCH_COST_TEST
-                        + estimate["looked_up"] * _SEARCH_COST_POSTING
-                        + (estimate["tested"] + estimate["looked_up"])
-                        * _SEARCH_LINKS_PER_CHUNK
-                        * _SEARCH_COST_LINK
-                    ) + rest * (
-                        _SEARCH_COST_PASS_ROW
-                        + (_SEARCH_COST_SCOPE_ROW if scoped else 0.0)
+                    # Rows naming a blob the index does not hold (history
+                    # before a build) cost the scan either way. A scoped
+                    # window counts them while it collects its blobs; a wider
+                    # one, before a build has finished, takes the share of
+                    # blobs the index holds.
+                    with self._search_lock:
+                        built = self._search_build.get("state") == "done"
+                    keys: set[int] = set()
+                    if scoped:
+                        keys, uncovered = self._search_window(
+                            conn, rest_where, rest_args
+                        )
+                    elif built:
+                        uncovered = 0
+                    else:
+                        uncovered = int(rest * (1.0 - search.held_share(conn)))
+                    index_cost = (
+                        uncovered * per_row
+                        + share
+                        * (
+                            estimate["tested"] * _SEARCH_COST_TEST
+                            + estimate["looked_up"] * _SEARCH_COST_POSTING
+                            + (estimate["tested"] + estimate["looked_up"])
+                            * _SEARCH_LINKS_PER_CHUNK
+                            * _SEARCH_COST_LINK
+                        )
+                        + rest
+                        * (
+                            _SEARCH_COST_PASS_ROW
+                            + (_SEARCH_COST_SCOPE_ROW if scoped else 0.0)
+                        )
                     )
                     if index_cost < rest * per_row:
                         scope = None
                         if scoped:
                             scope = "mcc_search_keys"
-                            self._search_scope(conn, scope, rest_where, rest_args)
+                            conn.execute(f"DROP TABLE IF EXISTS temp.{scope}")
+                            conn.execute(
+                                f"CREATE TEMP TABLE {scope} (key INTEGER PRIMARY KEY)"
+                            )
+                            conn.executemany(
+                                f"INSERT INTO temp.{scope} (key) VALUES (?)",
+                                ((key,) for key in sorted(keys)),
+                            )
                         tables = search.prepare(conn, plans, scope=scope)
                 except (sqlite3.Error, ValueError) as exc:
                     # A stopped search stops; an unreadable index is not
@@ -11878,27 +11907,37 @@ class RequestLogStore:
             conn.rollback()
 
     @staticmethod
-    def _search_scope(
-        conn: sqlite3.Connection, table: str, where: str, args: Sequence[Any]
-    ) -> None:
-        """Fill ``temp.<table>`` with the index keys of every blob the rows of ``where`` name.
+    def _search_window(
+        conn: sqlite3.Connection, where: str, args: Sequence[Any]
+    ) -> tuple[set[int], int]:
+        """The index keys of every blob the rows of ``where`` name, and how many rows name one it lacks.
 
-        Exactly the rows the indexed statement will read (the same clauses,
-        in the same read transaction), so every key a covered row can ask
-        for is in it.
+        Exactly the rows the indexed statement will read (the same clauses, in
+        the same read transaction), so the keys hold every key a covered row
+        can ask for -- and possibly more (a blob the log lost), which costs
+        nothing. One lookup of each row's two addresses, the rows driving.
         """
 
-        conn.execute(f"DROP TABLE IF EXISTS temp.{table}")
-        conn.execute(f"CREATE TEMP TABLE {table} (key INTEGER PRIMARY KEY)")
-        for column in ("sha", "input_sha"):
-            conn.execute(
-                f"INSERT OR IGNORE INTO temp.{table} (key)"
-                f" SELECT x.key FROM request_bodies AS r"
-                f" JOIN body_blobs AS b ON b.sha = r.{column}"
-                f" JOIN {SEARCH_SCHEMA}.blobs AS x ON x.sha = unhex(b.sha)"
-                f" WHERE r.request_id IN (SELECT id FROM requests{where})",
-                list(args),
-            )
+        keys: set[int] = set()
+        uncovered = 0
+        for rest_key, prompt_key, rest_sha, prompt_sha in conn.execute(
+            f"SELECT xr.key, xi.key, r.sha, r.input_sha"
+            f" FROM (SELECT id FROM requests{where}) AS w"
+            " CROSS JOIN request_bodies AS r ON r.request_id = w.id"
+            f" LEFT JOIN {SEARCH_SCHEMA}.blobs AS xr ON xr.sha = unhex(r.sha)"
+            f" LEFT JOIN {SEARCH_SCHEMA}.blobs AS xi ON xi.sha = unhex(r.input_sha)",
+            list(args),
+        ):
+            if rest_key is not None:
+                keys.add(int(rest_key))
+            elif rest_sha is not None:
+                uncovered += 1
+                continue
+            if prompt_key is not None:
+                keys.add(int(prompt_key))
+            elif prompt_sha is not None:
+                uncovered += 1
+        return keys, uncovered
 
     def max_rowid(self) -> int:
         """The newest row's rowid, 0 for an empty log (7.91.1)."""

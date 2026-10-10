@@ -807,6 +807,10 @@ class SearchIndex:
         started = time.perf_counter()
         schema = SEARCH_SCHEMA
         scope_chunks = ""
+        # The scope's units with their chunks, read once: a scoped mask is
+        # found forward (does this unit hold a matched chunk?), never through
+        # the links of a chunk that half the log shares.
+        scope_units: list[tuple[int, int, array]] = []
         if scope is not None:
             scope_chunks = f"{prefix}_scope"
             conn.execute(f"DROP TABLE IF EXISTS temp.{scope_chunks}")
@@ -814,11 +818,13 @@ class SearchIndex:
                 f"CREATE TEMP TABLE {scope_chunks} (chunk INTEGER PRIMARY KEY)"
             )
             wanted: set[int] = set()
-            for (manifest,) in conn.execute(
-                f"SELECT u.manifest FROM temp.{scope} AS s"
+            for key, field, manifest in conn.execute(
+                f"SELECT u.key, u.field, u.manifest FROM temp.{scope} AS s"
                 f" JOIN {schema}.units AS u ON u.key = s.key"
             ):
-                wanted.update(manifest_ids(bytes(manifest)))
+                chunk_ids = manifest_ids(bytes(manifest))
+                scope_units.append((int(key), int(field), chunk_ids))
+                wanted.update(chunk_ids)
             conn.executemany(
                 f"INSERT INTO temp.{scope_chunks} (chunk) VALUES (?)",
                 ((chunk_id,) for chunk_id in sorted(wanted)),
@@ -828,6 +834,10 @@ class SearchIndex:
             if scope_chunks
             else ""
         )
+        # With a scope, the window's own chunks drive and the word's postings
+        # are one lookup set (never ``rowid IN (...)`` inside the trigram
+        # query, which SQLite would answer one rowid at a time).
+        matching = f"SELECT rowid FROM {schema}.grams WHERE grams MATCH ?"
         masks: list[str] = []
         tested = 0
         hits = 0
@@ -848,23 +858,35 @@ class SearchIndex:
             )
             sources: list[tuple[str, tuple[Any, ...]]]
             if plan.grams and plan.exact:
-                postings_scope = (
-                    f" AND rowid IN (SELECT chunk FROM temp.{scope_chunks})"
-                    if scope_chunks
-                    else ""
-                )
-                conn.execute(
-                    f"INSERT INTO temp.{chunk_table} (chunk)"
-                    f" SELECT rowid FROM {schema}.grams WHERE grams MATCH ?{postings_scope}",
-                    (_fts_query(plan.grams),),
-                )
+                if scope_chunks:
+                    conn.execute(
+                        f"INSERT INTO temp.{chunk_table} (chunk)"
+                        f" SELECT s.chunk FROM temp.{scope_chunks} AS s"
+                        f" WHERE s.chunk IN ({matching})",
+                        (_fts_query(plan.grams),),
+                    )
+                else:
+                    conn.execute(
+                        f"INSERT INTO temp.{chunk_table} (chunk) {matching}",
+                        (_fts_query(plan.grams),),
+                    )
                 sources = [flagged]
+            elif plan.grams and scope_chunks:
+                sources = [
+                    (
+                        f"SELECT c.id, c.dict_id, c.data FROM temp.{scope_chunks} AS s"
+                        f" JOIN {schema}.chunks AS c ON c.id = s.chunk"
+                        f" WHERE s.chunk IN ({matching})",
+                        (_fts_query(plan.grams),),
+                    ),
+                    flagged,
+                ]
             elif plan.grams:
                 sources = [
                     (
                         f"SELECT c.id, c.dict_id, c.data FROM {schema}.grams AS g"
                         f" JOIN {schema}.chunks AS c ON c.id = g.rowid"
-                        f" WHERE g.grams MATCH ?{in_scope}",
+                        " WHERE g.grams MATCH ?",
                         (_fts_query(plan.grams),),
                     ),
                     flagged,
@@ -884,16 +906,27 @@ class SearchIndex:
             hits += held
             # An upsert per link rather than a GROUP BY: measured 11 s against
             # 15-19 s for 5.9 M links, and its memory is the keys, not the links.
-            keys_scope = (
-                f"l.key IN (SELECT key FROM temp.{scope})" if scope is not None else "1"
-            )
-            conn.execute(
-                f"INSERT INTO temp.{mask_table} (key, mask)"
-                f" SELECT l.key, 1 << l.field"
-                f" FROM temp.{chunk_table} AS t JOIN {schema}.links AS l"
-                f" ON l.chunk = t.chunk WHERE {keys_scope}"
-                " ON CONFLICT(key) DO UPDATE SET mask = mask | excluded.mask"
-            )
+            if scope is not None:
+                matched = {
+                    int(row[0])
+                    for row in conn.execute(f"SELECT chunk FROM temp.{chunk_table}")
+                }
+                found: dict[int, int] = {}
+                for key, field, chunk_ids in scope_units:
+                    if not matched.isdisjoint(chunk_ids):
+                        found[key] = found.get(key, 0) | (1 << field)
+                conn.executemany(
+                    f"INSERT INTO temp.{mask_table} (key, mask) VALUES (?, ?)",
+                    sorted(found.items()),
+                )
+            else:
+                conn.execute(
+                    f"INSERT INTO temp.{mask_table} (key, mask)"
+                    f" SELECT l.key, 1 << l.field"
+                    f" FROM temp.{chunk_table} AS t JOIN {schema}.links AS l"
+                    " ON l.chunk = t.chunk WHERE 1"
+                    " ON CONFLICT(key) DO UPDATE SET mask = mask | excluded.mask"
+                )
             masks.append(mask_table)
         return TermTables(
             masks=masks,
@@ -944,6 +977,15 @@ class SearchIndex:
             finally:
                 cursor.close()
         return seen, hits
+
+    def held_share(self, conn: sqlite3.Connection) -> float:
+        """The share of the log's stored bodies the index holds (0 to 1)."""
+
+        held = int(
+            conn.execute(f"SELECT COUNT(*) FROM {SEARCH_SCHEMA}.blobs").fetchone()[0]
+        )
+        stored = int(conn.execute("SELECT COUNT(*) FROM main.body_blobs").fetchone()[0])
+        return min(1.0, held / stored) if stored else 1.0
 
     def estimate(
         self, conn: sqlite3.Connection, plans: Sequence[TermPlan]

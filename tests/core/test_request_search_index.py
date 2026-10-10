@@ -334,14 +334,17 @@ def test_a_window_looked_up_through_its_own_blobs_answers_like_the_scan(
     """Every window reads only the blobs its own rows name (``scope``)."""
 
     monkeypatch.setattr(rl, "_SEARCH_SCOPE_SHARE", 2.0)
-    scopes: list[str] = []
-    real_scope = RequestLogStore._search_scope
+    scopes: list[int] = []
+    real_window = RequestLogStore._search_window
 
-    def recording(conn: sqlite3.Connection, table: str, where: str, args: Any) -> None:
-        scopes.append(table)
-        real_scope(conn, table, where, args)
+    def recording(
+        conn: sqlite3.Connection, where: str, args: Any
+    ) -> tuple[set[int], int]:
+        keys, uncovered = real_window(conn, where, args)
+        scopes.append(len(keys))
+        return keys, uncovered
 
-    monkeypatch.setattr(RequestLogStore, "_search_scope", staticmethod(recording))
+    monkeypatch.setattr(RequestLogStore, "_search_window", staticmethod(recording))
     store, times = build_search_log(tmp_path / "requests.db", rows=500, seed=33)
     newest = max(times)
     for since in (None, newest - 3 * 86400, newest - 20 * 86400):
