@@ -55,7 +55,7 @@ import threading
 import time
 import zlib
 from array import array
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from compression import zstd
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,8 +94,14 @@ _CHUNK_DICT_SIZE = 110 * 1024
 # then chunks are stored with none (id 0).
 _CHUNK_DICT_MIN_SAMPLES = 4_096
 _DIGEST_BYTES = 16
+# The size the index file's WAL is cut back to after a checkpoint.
+_WAL_LIMIT_BYTES = 64 * 1024 * 1024
 # Rows per statement when a list of keys or digests is looked up.
 _LOOKUP_CHUNK = 500
+# Links a chunk has on average (measured: 16.2 M links for 1.29 M chunks), and
+# how many links per unit make reading every unit cheaper than following them.
+_LINKS_PER_CHUNK = 13
+_FORWARD_FACTOR = 3
 # Chunks tested per batch while a search reads candidate chunks.
 _TEST_BATCH = 2_000
 
@@ -397,6 +403,11 @@ class SearchIndex:
                     conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
+                # A search holds its read snapshot for the whole pass, and a
+                # build writes meanwhile, so the WAL can grow by what a build
+                # writes in that time; once a checkpoint resets it, it goes
+                # back to this size instead of keeping its largest.
+                conn.execute(f"PRAGMA journal_size_limit={_WAL_LIMIT_BYTES}")
                 version = self._schema_version(conn)
                 if version not in (None, SEARCH_INDEX_SCHEMA_VERSION):
                     self.unusable = (
@@ -904,36 +915,80 @@ class SearchIndex:
             seen, held = self._test_chunks(conn, sources, plan.probe, chunk_table)
             tested += seen
             hits += held
-            # An upsert per link rather than a GROUP BY: measured 11 s against
-            # 15-19 s for 5.9 M links, and its memory is the keys, not the links.
-            if scope is not None:
-                matched = {
-                    int(row[0])
-                    for row in conn.execute(f"SELECT chunk FROM temp.{chunk_table}")
-                }
-                found: dict[int, int] = {}
-                for key, field, chunk_ids in scope_units:
-                    if not matched.isdisjoint(chunk_ids):
-                        found[key] = found.get(key, 0) | (1 << field)
-                conn.executemany(
-                    f"INSERT INTO temp.{mask_table} (key, mask) VALUES (?, ?)",
-                    sorted(found.items()),
-                )
-            else:
-                conn.execute(
-                    f"INSERT INTO temp.{mask_table} (key, mask)"
-                    f" SELECT l.key, 1 << l.field"
-                    f" FROM temp.{chunk_table} AS t JOIN {schema}.links AS l"
-                    " ON l.chunk = t.chunk WHERE 1"
-                    " ON CONFLICT(key) DO UPDATE SET mask = mask | excluded.mask"
-                )
             masks.append(mask_table)
+        # Chunks -> the blobs holding them. Through the links when the matched
+        # chunks are few; forward -- does a unit hold one of them? -- over the
+        # scope's units, or over every unit once the links to follow would
+        # outnumber them (a common word: half the log shares its chunks).
+        forward: list[int] = []
+        if scope is not None:
+            forward = list(range(len(plans)))
+        else:
+            units_estimate = 2 * int(
+                conn.execute(f"SELECT COUNT(*) FROM {schema}.blobs").fetchone()[0]
+            )
+            for number in range(len(plans)):
+                matched_count = int(
+                    conn.execute(
+                        f"SELECT COUNT(*) FROM temp.{prefix}_c{number}"
+                    ).fetchone()[0]
+                )
+                if matched_count * _LINKS_PER_CHUNK > _FORWARD_FACTOR * units_estimate:
+                    forward.append(number)
+                else:
+                    # An upsert per link rather than a GROUP BY: measured 11 s
+                    # against 15-19 s for 5.9 M links; memory is the keys.
+                    conn.execute(
+                        f"INSERT INTO temp.{prefix}_m{number} (key, mask)"
+                        f" SELECT l.key, 1 << l.field"
+                        f" FROM temp.{prefix}_c{number} AS t JOIN {schema}.links AS l"
+                        " ON l.chunk = t.chunk WHERE 1"
+                        " ON CONFLICT(key) DO UPDATE SET mask = mask | excluded.mask"
+                    )
+        if forward:
+            matched_sets = {
+                number: {
+                    int(row[0])
+                    for row in conn.execute(
+                        f"SELECT chunk FROM temp.{prefix}_c{number}"
+                    )
+                }
+                for number in forward
+            }
+            found: dict[int, dict[int, int]] = {number: {} for number in forward}
+            for key, field, chunk_ids in (
+                scope_units if scope is not None else self._every_unit(conn)
+            ):
+                for number in forward:
+                    if not matched_sets[number].isdisjoint(chunk_ids):
+                        masks_of = found[number]
+                        masks_of[key] = masks_of.get(key, 0) | (1 << field)
+            for number in forward:
+                conn.executemany(
+                    f"INSERT INTO temp.{prefix}_m{number} (key, mask) VALUES (?, ?)",
+                    sorted(found[number].items()),
+                )
         return TermTables(
             masks=masks,
             chunks_tested=tested,
             hits=hits,
             seconds=time.perf_counter() - started,
         )
+
+    @staticmethod
+    def _every_unit(conn: sqlite3.Connection) -> Iterator[tuple[int, int, array]]:
+        """Every unit the index holds, with its chunk ids, read a batch at a time."""
+
+        cursor = conn.execute(f"SELECT key, field, manifest FROM {SEARCH_SCHEMA}.units")
+        try:
+            while True:
+                rows = cursor.fetchmany(_TEST_BATCH)
+                if not rows:
+                    return
+                for key, field, manifest in rows:
+                    yield int(key), int(field), manifest_ids(bytes(manifest))
+        finally:
+            cursor.close()
 
     def _test_chunks(
         self,

@@ -11400,6 +11400,10 @@ class RequestLogStore:
                     }
                 state = self._merge_search_build(state, progress)
                 search.set_build_state(sconn, state)
+            if state.get("state") == "done":
+                # The build is the index's one long write: hand its WAL back.
+                with contextlib.suppress(sqlite3.Error):
+                    sconn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             if state.get("state") != "running":
                 return
 

@@ -328,6 +328,19 @@ def test_the_index_answers_every_search_exactly_like_the_scan(
     assert len(force_index) >= checked // 2
 
 
+@pytest.mark.parametrize("factor", [0, 10**9], ids=["forward", "links"])
+def test_both_ways_from_chunks_to_blobs_answer_like_the_scan(
+    tmp_path: Path, force_index: list[int], monkeypatch: pytest.MonkeyPatch, factor: int
+) -> None:
+    """All time, every word, through the links of its chunks and forward."""
+
+    monkeypatch.setattr(rs, "_FORWARD_FACTOR", factor)
+    store, _times = build_search_log(tmp_path / "requests.db", rows=400, seed=27)
+    for q in (*CORPUS, *EXTRA_TERMS):
+        assert index_rows(store, q, local="all") == scan_rows(store, q, local="all"), q
+    assert force_index
+
+
 def test_a_window_looked_up_through_its_own_blobs_answers_like_the_scan(
     tmp_path: Path, force_index: list[int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
