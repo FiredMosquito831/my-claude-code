@@ -856,6 +856,9 @@ function setActiveView(viewId, { scroll = false } = {}) {
     loadOriginBackfillStatus().catch(() => {
       // An older server has no backfill route; the card keeps its button.
     });
+    loadSearchIndexStatus().catch(() => {
+      // An older server has no search index; the line stays hidden.
+    });
   }
 
   if (activeView.id === "optimizer") {
@@ -20375,6 +20378,122 @@ function renderReqSearchNotice() {
   notice.hidden = true;
 }
 
+/* 7.92.0: the search index line under the filters. It says how many rows a
+   search answers from the index, runs the build only when its button is
+   pressed, and follows a running build every two seconds. */
+let searchIndexTimer = null;
+
+/** "3 min left", "45 s left", "1 h 12 min left"; "" when not known. */
+function searchIndexEtaText(seconds) {
+  const value = Number(seconds);
+  if (seconds == null || !Number.isFinite(value)) return "";
+  const total = Math.max(0, Math.round(value));
+  if (total < 60) return `${total} s left`;
+  const minutes = Math.round(total / 60);
+  if (minutes < 60) return `${minutes} min left`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} h ${rest} min left` : `${hours} h left`;
+}
+
+/** "Search index covers 412,000 of 598,683 rows", or "" before it is counted. */
+function searchIndexCoverageText(coverage) {
+  if (!coverage || coverage.rows == null) return "";
+  return (
+    `Search index covers ${formatAnalyticsNumber(Number(coverage.covered) || 0)} ` +
+    `of ${formatAnalyticsNumber(Number(coverage.rows) || 0)} rows`
+  );
+}
+
+function paintSearchIndex(status) {
+  const line = byId("reqSearchIndex");
+  if (!line) return;
+  const text = byId("reqSearchIndexText");
+  const build = byId("reqSearchIndexBuild");
+  const pause = byId("reqSearchIndexPause");
+  build.hidden = true;
+  pause.hidden = true;
+  if (!status || status.enabled === false) {
+    line.hidden = true;
+    return;
+  }
+  line.hidden = false;
+  if (!status.available) {
+    // The server's reason says what happens instead (the old way, as before).
+    text.textContent = `Search index off: ${
+      status.reason || "this server cannot keep one, so searches read every stored request, as before."
+    }`;
+    return;
+  }
+  const coverage = searchIndexCoverageText(status.coverage);
+  const percent = status.percent == null ? 0 : Math.floor(Number(status.percent) || 0);
+  if (status.state === "running") {
+    const eta = searchIndexEtaText(status.eta_seconds);
+    text.textContent =
+      `Build search index: ${percent} %${eta ? ` · ${eta}` : ""}` +
+      (coverage ? ` — ${coverage}.` : "");
+    pause.hidden = false;
+    return;
+  }
+  if (status.state === "paused") {
+    text.textContent =
+      `Build search index paused at ${percent} %` + (coverage ? ` — ${coverage}.` : ".");
+    build.textContent = "Continue";
+    build.hidden = false;
+    return;
+  }
+  const cov = status.coverage;
+  const complete = cov && Number(cov.rows) === Number(cov.covered);
+  if (complete) {
+    text.textContent = `${coverage}.`;
+    return;
+  }
+  // Built once already: what is left is rows it could not read or rows an
+  // older version wrote since; pressing Build again indexes what it can.
+  text.textContent =
+    status.state === "done"
+      ? `${coverage || "Search index built"}; the rest are searched the slow way.`
+      : (coverage ? `${coverage}. ` : "") +
+        "Rows logged before 7.92.0 are searched the slow way until the index is built.";
+  build.textContent = "Build search index";
+  build.hidden = false;
+}
+
+async function loadSearchIndexStatus() {
+  if (!byId("reqSearchIndex")) return null;
+  const status = await api("/admin/api/requests/search-index");
+  paintSearchIndex(status);
+  if (status && status.state === "running") scheduleSearchIndexPoll();
+  return status;
+}
+
+function scheduleSearchIndexPoll() {
+  if (searchIndexTimer) return;
+  searchIndexTimer = setTimeout(() => {
+    searchIndexTimer = null;
+    loadSearchIndexStatus().catch(() => {});
+  }, 2000);
+}
+
+async function startSearchIndexBuild() {
+  const status = await api("/admin/api/requests/search-index/build", {
+    method: "POST",
+    body: "{}",
+  });
+  paintSearchIndex(status);
+  scheduleSearchIndexPoll();
+  return status;
+}
+
+async function pauseSearchIndexBuild() {
+  const status = await api("/admin/api/requests/search-index/pause", {
+    method: "POST",
+    body: "{}",
+  });
+  paintSearchIndex(status);
+  return status;
+}
+
 /** Run the saved search the page put back at start-up (Enter does the same). */
 function runHeldSearch() {
   reqState.searchHeld = false;
@@ -25752,6 +25871,12 @@ byId("reqFilterSearch").addEventListener("input", () => {
 });
 byId("reqSearchRun").addEventListener("click", runHeldSearch);
 byId("reqSearchClear").addEventListener("click", clearHeldSearch);
+byId("reqSearchIndexBuild").addEventListener("click", () => {
+  startSearchIndexBuild().catch((error) => showMessage(error.message, "error"));
+});
+byId("reqSearchIndexPause").addEventListener("click", () => {
+  pauseSearchIndexBuild().catch((error) => showMessage(error.message, "error"));
+});
 byId("reqPrevPage").addEventListener("click", () => {
   reqState.offset = Math.max(0, reqState.offset - reqState.limit);
   loadRequestsView().catch((error) => showMessage(error.message, "error"));

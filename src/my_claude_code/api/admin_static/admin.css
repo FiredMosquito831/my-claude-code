@@ -2635,6 +2635,20 @@ textarea:focus-visible,
   outline-offset: 2px;
 }
 
+/* 7.92.0: the search index line -- coverage, the build's progress, its
+   buttons. Quieter than the notice above it: it describes the log, not the
+   search on screen. */
+.requests-search-index {
+  margin: -10px 0 16px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted, #888);
+}
+
+.requests-search-index .requests-search-action {
+  margin-left: 6px;
+}
+
 .requests-lifetime {
   margin-bottom: 20px;
   padding-top: 14px;

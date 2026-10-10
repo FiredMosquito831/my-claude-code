@@ -186,6 +186,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | Capability | What it gives you | Where it lives | More |
 | --- | --- | --- | --- |
 | Request log | Every completed request stored locally, searchable across prompt, reply, reasoning and tool calls | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
+| Search index | Search the request log without unpacking stored requests: an index of each distinct piece of text, in its own file beside the log; new requests indexed as they are written, older ones when you press **Build search index**; the same results as before, always | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Wire capture | The message and tool structure actually sent, bounded and inspectable | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Analytics | Range-aware rollups, p50/p95 latency, provider and model breakdowns, top errors, auto-refresh | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Cost with provenance | Each request priced once as it is logged, with the rung of the pricing ladder that answered stored beside it | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |

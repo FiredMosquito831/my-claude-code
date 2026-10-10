@@ -327,6 +327,20 @@ def _reset_search_jobs():
 
 
 @pytest.fixture(autouse=True)
+def _reset_search_index_coverage():
+    """Forget the search index's cached coverage counts between tests (7.92.0).
+
+    ``api.admin_routes`` keeps one count per log store for half a minute; a
+    test must never read a count another test's store left behind.
+    """
+    from my_claude_code.api import admin_routes
+
+    admin_routes._search_coverage.clear()
+    yield
+    admin_routes._search_coverage.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_websearch_analytics(monkeypatch, tmp_path):
     """Keep the web-search analytics database out of the real config directory.
 

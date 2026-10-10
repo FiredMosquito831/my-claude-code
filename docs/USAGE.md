@@ -4321,6 +4321,14 @@ Reasoning and tool calls are the majority of a real log: on a typical machine 55
 
 **Words with letters or symbols outside ASCII are found too (7.77.1).** Before 7.77.1 a search for `ș`, `ă`, `—`, `→` or `é` found nothing inside a stored prompt, reply, reasoning or tool call, even where thousands of requests contained it: bodies are stored with such characters escaped, and the search looked only for them unescaped. On a copy of a real log, one day of 9,569 requests, `—` now finds 9,555 requests, `→` 9,536, `…` 7,764, `✓` 2,020, `ș` 220 and `ă` 194 (0 each before); every search made of ASCII words returns exactly the rows it returned before. Case folding still covers ASCII letters only, as before: `Ș` does not find `ș`, while `PE șosea` finds "Pe șosea".
 
+**Searches are answered from an index (7.92.0).** Until 7.92.0 every search unpacked and read every stored request in the window, and because each prompt repeats the whole conversation before it, an all-time search read tens of gigabytes of text: minutes per search on a large log. The **search index** keeps each distinct piece of text once, cut into small pieces at line ends, with a trigram index over them (SQLite FTS5), in its own file beside the log: `requests-search.db`. A search reads the newest few hundred requests of its window the old way (so the first page arrives as fast as it always did, and a small window costs exactly what it did), then looks its words up in the index for the rest and does not unpack those requests. When the index would not be clearly faster for a search (a short window, rows it does not cover yet), the rest is read the old way too.
+
+- **New requests** are indexed as they are written, after their row is saved, on the request log's own writer thread.
+- **Requests logged before** are indexed only when you press **Build search index** under the Requests filters. It works between requests and between searches, newest first, says how far it has got (*Build search index: 41 % · 3 min left*), can be paused, and continues after a restart from where it stopped.
+- **Results never change.** A row the index does not cover — history before the build, a row an older version wrote, a body it could not read — is searched the old way in the same search. The line under the filters says how much the index covers (*Search index covers 412,000 of 598,683 rows*).
+- **The log itself is unchanged**, so older versions still open it and ignore the index file. Deleting `requests-search.db` (with the server stopped) only resets the index; **Clear log** clears it with the log, and retention removes pruned requests from it too.
+- If this Python's SQLite has no FTS5 trigram tokenizer, the index is off, the line says so, and every search reads the stored requests as before.
+
 #### Which model actually answered
 
 A request does not always go where the tier points. **View** on any row draws the whole path it took:

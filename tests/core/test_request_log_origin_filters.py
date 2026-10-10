@@ -49,11 +49,12 @@ BASE_TS = 1_789_000_000.0
 #: The filter set, read off the one predicate builder every view shares.
 #: ``matched`` (7.91.1) is not a filter: it is a search's rows standing in for
 #: its predicate -- the same answer with or without it -- so it belongs in no
-#: cache key and no route's filter dict.
+#: cache key and no route's filter dict. ``indexed`` (7.92.0) neither: it is
+#: the same predicate answered from the search index, the same rows.
 FILTERS: tuple[str, ...] = tuple(
     name
     for name in inspect.signature(RequestLogStore._where).parameters
-    if name not in {"self", "matched"}
+    if name not in {"self", "matched", "indexed"}
 )
 #: A value per filter that no other filter's value equals, so a key slot can
 #: be told apart from every other slot.

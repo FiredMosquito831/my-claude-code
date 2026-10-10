@@ -5268,6 +5268,155 @@ async def start_origin_backfill(
     return {"enabled": True, **status}
 
 
+#: How long a search-index coverage count is reused (7.92.0). It reads every
+#: request's two blob links -- seconds on a large log -- and the page asks for
+#: it every couple of seconds while an index is being built. A count is also
+#: reused for ``SEARCH_COVERAGE_AGE_FACTOR`` times as long as it took: on a
+#: 550,000-row log one takes about 28 s, and counting again every 30 s would
+#: keep a core busy for the whole build.
+SEARCH_COVERAGE_MAX_AGE_SECONDS = 30.0
+SEARCH_COVERAGE_AGE_FACTOR = 10.0
+_search_coverage: dict[int, tuple[float, float, asyncio.Future[Any]]] = {}
+
+
+def _last_search_coverage(store: RequestLogStore) -> dict[str, int] | None:
+    """The last finished coverage count, however old; None if there is none.
+
+    For the Build and Pause answers: the page paints the line from them and,
+    once paused, asks nothing more, so the line keeps what the index covers
+    without a button press waiting for a count.
+    """
+
+    entry = _search_coverage.get(id(store))
+    if entry is None:
+        return None
+    future = entry[2]
+    if not future.done() or future.cancelled() or future.exception() is not None:
+        return None
+    return future.result()[0]
+
+
+def _timed_coverage(store: RequestLogStore) -> tuple[dict[str, int] | None, float]:
+    started = time.perf_counter()
+    coverage = store.search_index_coverage()
+    return coverage, time.perf_counter() - started
+
+
+async def _search_index_coverage(
+    store: RequestLogStore, *, fresh_after: float | None = None
+) -> dict[str, int] | None:
+    """The index's coverage, counted again only once the last count is old enough.
+
+    On the search pool, never the default executor: it is a read of every
+    row, like a search's. Callers that arrive while a count runs share it.
+    ``fresh_after`` (a wall-clock time, the build's finish) makes a count
+    that started before it too old: the page stops asking once a build is
+    done, so the first answer after that must already be the final count.
+    """
+
+    now = time.monotonic()
+    entry = _search_coverage.get(id(store))
+    if entry is not None:
+        started, started_wall, future = entry
+        reuse = not future.done()
+        if not reuse and not future.cancelled() and future.exception() is None:
+            _coverage, seconds = future.result()
+            max_age = max(
+                SEARCH_COVERAGE_MAX_AGE_SECONDS, SEARCH_COVERAGE_AGE_FACTOR * seconds
+            )
+            reuse = now - started < max_age and (
+                fresh_after is None or started_wall >= fresh_after
+            )
+        if reuse:
+            try:
+                return (await asyncio.shield(future))[0]
+            except Exception:
+                _search_coverage.pop(id(store), None)
+                return None
+    future = run_on_search_pool(_timed_coverage, store)
+    _search_coverage[id(store)] = (now, time.time(), future)
+    try:
+        return (await asyncio.shield(future))[0]
+    except Exception:
+        # A count that failed (the log busy, the index unreadable) says
+        # nothing; the page shows the build state without it.
+        _search_coverage.pop(id(store), None)
+        return None
+
+
+@router.get("/admin/api/requests/search-index")
+async def search_index_status(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """What the request log's search index covers, and the build if one runs (7.92.0).
+
+    Declared before ``/admin/api/requests/{request_id}``, which would otherwise
+    read ``search-index`` as a request id. ``coverage`` is how many requests a
+    search answers without reading their stored bodies, of all of them.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {
+            "enabled": False,
+            "available": False,
+            "reason": _ORIGIN_BACKFILL_LOG_OFF,
+        }
+    status = await asyncio.to_thread(store.search_index_status)
+    finished = status.get("finished_at") if status.get("state") == "done" else None
+    coverage = (
+        await _search_index_coverage(
+            store, fresh_after=float(finished) if finished else None
+        )
+        if status.get("available")
+        else None
+    )
+    return {"enabled": True, **status, "coverage": coverage}
+
+
+@router.post("/admin/api/requests/search-index/build")
+async def start_search_index_build(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Index every request already logged, so searches stop reading their bodies.
+
+    Never automatic (new requests are indexed as they are written). It runs on
+    the request log's writer thread between requests and between searches, in
+    small steps, and continues after a pause or a restart from where it
+    stopped. It changes nothing in the log itself: the index is a file of its
+    own beside it.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_LOG_OFF)
+    status = await asyncio.to_thread(store.request_search_index_build)
+    if not status.get("available"):
+        raise HTTPException(status_code=409, detail=status.get("reason"))
+    coverage = _last_search_coverage(store)
+    _search_coverage.pop(id(store), None)
+    return {"enabled": True, **status, "coverage": coverage}
+
+
+@router.post("/admin/api/requests/search-index/pause")
+async def pause_search_index_build(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Pause a running build; "Build search index" continues it."""
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_LOG_OFF)
+    status = await asyncio.to_thread(store.pause_search_index_build)
+    return {"enabled": True, **status, "coverage": _last_search_coverage(store)}
+
+
 @router.get("/admin/api/requests/{request_id}")
 async def get_request_log_entry(
     request_id: str,
