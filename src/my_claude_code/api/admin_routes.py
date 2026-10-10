@@ -5279,6 +5279,23 @@ SEARCH_COVERAGE_AGE_FACTOR = 10.0
 _search_coverage: dict[int, tuple[float, float, asyncio.Future[Any]]] = {}
 
 
+def _last_search_coverage(store: RequestLogStore) -> dict[str, int] | None:
+    """The last finished coverage count, however old; None if there is none.
+
+    For the Build and Pause answers: the page paints the line from them and,
+    once paused, asks nothing more, so the line keeps what the index covers
+    without a button press waiting for a count.
+    """
+
+    entry = _search_coverage.get(id(store))
+    if entry is None:
+        return None
+    future = entry[2]
+    if not future.done() or future.cancelled() or future.exception() is not None:
+        return None
+    return future.result()[0]
+
+
 def _timed_coverage(store: RequestLogStore) -> tuple[dict[str, int] | None, float]:
     started = time.perf_counter()
     coverage = store.search_index_coverage()
@@ -5380,8 +5397,9 @@ async def start_search_index_build(
     status = await asyncio.to_thread(store.request_search_index_build)
     if not status.get("available"):
         raise HTTPException(status_code=409, detail=status.get("reason"))
+    coverage = _last_search_coverage(store)
     _search_coverage.pop(id(store), None)
-    return {"enabled": True, **status}
+    return {"enabled": True, **status, "coverage": coverage}
 
 
 @router.post("/admin/api/requests/search-index/pause")
@@ -5396,7 +5414,7 @@ async def pause_search_index_build(
     if store is None:
         raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_LOG_OFF)
     status = await asyncio.to_thread(store.pause_search_index_build)
-    return {"enabled": True, **status}
+    return {"enabled": True, **status, "coverage": _last_search_coverage(store)}
 
 
 @router.get("/admin/api/requests/{request_id}")

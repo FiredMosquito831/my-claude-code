@@ -110,6 +110,29 @@ def test_build_starts_only_on_a_post_and_pause_pauses_it(
     assert resumed.json()["state"] == "running"
 
 
+def test_pause_and_build_answers_carry_the_last_count_without_counting(
+    client: TestClient, store: RequestLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page paints the paused line from the Pause answer and asks nothing more."""
+
+    counted = _counting_coverage(store, monkeypatch)
+    client.get("/admin/api/requests/search-index")
+    assert len(counted) == 1
+    started = client.post("/admin/api/requests/search-index/build").json()
+    paused = client.post("/admin/api/requests/search-index/pause").json()
+    assert started["coverage"] == {"rows": 80, "covered": 80}
+    assert paused["state"] == "paused"
+    assert len(counted) == 1  # neither answer counted
+    # Build drops the cached count (the build changes it); the next status
+    # counts again, and Pause carries that one.
+    client.get("/admin/api/requests/search-index")
+    assert client.post("/admin/api/requests/search-index/pause").json()["coverage"] == {
+        "rows": 80,
+        "covered": 80,
+    }
+    assert len(counted) == 2
+
+
 def test_the_routes_are_loopback_only(
     client: TestClient, store: RequestLogStore
 ) -> None:
