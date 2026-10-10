@@ -94,6 +94,10 @@ _CHUNK_DICT_SIZE = 110 * 1024
 # then chunks are stored with none (id 0).
 _CHUNK_DICT_MIN_SAMPLES = 4_096
 _DIGEST_BYTES = 16
+# How much of the index file a search maps (the log's own rule: its size with
+# headroom, at most 1 GB) and the page cache it keeps.
+_MMAP_MAX_BYTES = 1 << 30
+_CACHE_KIB = 64 * 1024
 # The size the index file's WAL is cut back to after a checkpoint.
 _WAL_LIMIT_BYTES = 64 * 1024 * 1024
 # Rows per statement when a list of keys or digests is looked up.
@@ -473,6 +477,13 @@ class SearchIndex:
             with contextlib.suppress(sqlite3.Error):
                 conn.execute(f"DETACH DATABASE {SEARCH_SCHEMA}")
             return False
+        # A search reads the index's b-trees all over: map the file, as the
+        # log's own connections map theirs, rather than read it a page at a
+        # time through a 2 MB cache. Literals: PRAGMA takes no parameters.
+        with contextlib.suppress(OSError, sqlite3.Error):
+            size = min(int(self.path.stat().st_size * 1.25), _MMAP_MAX_BYTES)
+            conn.execute(f"PRAGMA {SEARCH_SCHEMA}.mmap_size={int(size)}")
+            conn.execute(f"PRAGMA {SEARCH_SCHEMA}.cache_size={-_CACHE_KIB}")
         return True
 
     # ----------------------------------------------------------- dictionaries
