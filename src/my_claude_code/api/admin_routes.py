@@ -5270,32 +5270,56 @@ async def start_origin_backfill(
 
 #: How long a search-index coverage count is reused (7.92.0). It reads every
 #: request's two blob links -- seconds on a large log -- and the page asks for
-#: it every couple of seconds while an index is being built.
+#: it every couple of seconds while an index is being built. A count is also
+#: reused for ``SEARCH_COVERAGE_AGE_FACTOR`` times as long as it took: on a
+#: 550,000-row log one takes about 28 s, and counting again every 30 s would
+#: keep a core busy for the whole build.
 SEARCH_COVERAGE_MAX_AGE_SECONDS = 30.0
-_search_coverage: dict[int, tuple[float, asyncio.Future[Any]]] = {}
+SEARCH_COVERAGE_AGE_FACTOR = 10.0
+_search_coverage: dict[int, tuple[float, float, asyncio.Future[Any]]] = {}
 
 
-async def _search_index_coverage(store: RequestLogStore) -> dict[str, int] | None:
-    """The index's coverage, counted at most once per ``SEARCH_COVERAGE_MAX_AGE_SECONDS``.
+def _timed_coverage(store: RequestLogStore) -> tuple[dict[str, int] | None, float]:
+    started = time.perf_counter()
+    coverage = store.search_index_coverage()
+    return coverage, time.perf_counter() - started
+
+
+async def _search_index_coverage(
+    store: RequestLogStore, *, fresh_after: float | None = None
+) -> dict[str, int] | None:
+    """The index's coverage, counted again only once the last count is old enough.
 
     On the search pool, never the default executor: it is a read of every
     row, like a search's. Callers that arrive while a count runs share it.
+    ``fresh_after`` (a wall-clock time, the build's finish) makes a count
+    that started before it too old: the page stops asking once a build is
+    done, so the first answer after that must already be the final count.
     """
 
     now = time.monotonic()
     entry = _search_coverage.get(id(store))
     if entry is not None:
-        started, future = entry
-        if not future.done() or now - started < SEARCH_COVERAGE_MAX_AGE_SECONDS:
+        started, started_wall, future = entry
+        reuse = not future.done()
+        if not reuse and not future.cancelled() and future.exception() is None:
+            _coverage, seconds = future.result()
+            max_age = max(
+                SEARCH_COVERAGE_MAX_AGE_SECONDS, SEARCH_COVERAGE_AGE_FACTOR * seconds
+            )
+            reuse = now - started < max_age and (
+                fresh_after is None or started_wall >= fresh_after
+            )
+        if reuse:
             try:
-                return await asyncio.shield(future)
+                return (await asyncio.shield(future))[0]
             except Exception:
                 _search_coverage.pop(id(store), None)
                 return None
-    future = run_on_search_pool(store.search_index_coverage)
-    _search_coverage[id(store)] = (now, future)
+    future = run_on_search_pool(_timed_coverage, store)
+    _search_coverage[id(store)] = (now, time.time(), future)
     try:
-        return await asyncio.shield(future)
+        return (await asyncio.shield(future))[0]
     except Exception:
         # A count that failed (the log busy, the index unreadable) says
         # nothing; the page shows the build state without it.
@@ -5324,7 +5348,14 @@ async def search_index_status(
             "reason": _ORIGIN_BACKFILL_LOG_OFF,
         }
     status = await asyncio.to_thread(store.search_index_status)
-    coverage = await _search_index_coverage(store) if status.get("available") else None
+    finished = status.get("finished_at") if status.get("state") == "done" else None
+    coverage = (
+        await _search_index_coverage(
+            store, fresh_after=float(finished) if finished else None
+        )
+        if status.get("available")
+        else None
+    )
     return {"enabled": True, **status, "coverage": coverage}
 
 

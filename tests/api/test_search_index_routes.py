@@ -1,5 +1,6 @@
 """The search index's routes on the Requests page (7.92.0)."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,57 @@ def test_status_says_what_the_index_covers(
     # Written by this version, so every row is covered from the start.
     assert body["coverage"] == {"rows": 80, "covered": 80}
     assert body["bytes"] > 0
+
+
+def _counting_coverage(
+    store: RequestLogStore, monkeypatch: pytest.MonkeyPatch, seconds: float = 0.0
+) -> list[float]:
+    counted: list[float] = []
+    original = store.search_index_coverage
+
+    def counting() -> dict[str, int] | None:
+        counted.append(time.time())
+        if seconds:
+            time.sleep(seconds)
+        return original()
+
+    monkeypatch.setattr(store, "search_index_coverage", counting)
+    admin_routes._search_coverage.pop(id(store), None)
+    return counted
+
+
+def test_a_count_from_before_a_build_finished_is_not_the_final_answer(
+    client: TestClient, store: RequestLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page stops asking once a build is done: that answer counts again."""
+
+    counted = _counting_coverage(store, monkeypatch)
+    client.get("/admin/api/requests/search-index")
+    client.get("/admin/api/requests/search-index")
+    assert len(counted) == 1  # reused within its age
+    with store._search_lock:
+        store._search_build = {"state": "done", "finished_at": time.time() + 0.01}
+    time.sleep(0.05)
+    done = client.get("/admin/api/requests/search-index").json()
+    assert len(counted) == 2
+    assert done["state"] == "done"
+    assert done["coverage"] == {"rows": 80, "covered": 80}
+    client.get("/admin/api/requests/search-index")
+    assert len(counted) == 2  # counted after the finish: reused
+
+
+def test_a_slow_count_is_reused_for_ten_times_as_long_as_it_took(
+    client: TestClient, store: RequestLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(admin_routes, "SEARCH_COVERAGE_MAX_AGE_SECONDS", 0.05)
+    counted = _counting_coverage(store, monkeypatch, seconds=0.1)
+    client.get("/admin/api/requests/search-index")
+    time.sleep(0.2)  # older than the floor, younger than 10 x 0.1 s
+    client.get("/admin/api/requests/search-index")
+    assert len(counted) == 1
+    time.sleep(1.0)
+    client.get("/admin/api/requests/search-index")
+    assert len(counted) == 2
 
 
 def test_build_starts_only_on_a_post_and_pause_pauses_it(
