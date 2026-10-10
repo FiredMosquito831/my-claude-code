@@ -1498,6 +1498,23 @@ def watch_connections(
         _CONNECTION_WATCHER.reset(token)
 
 
+def raise_if_interrupted(exc: sqlite3.Error) -> None:
+    """Re-raise a statement a stopped search interrupted (7.91.2).
+
+    A few readouts degrade to "nothing measured" when their query fails, so an
+    unreadable value never takes the page down. An interrupt is not that: it
+    is a search nobody waits for any more being stopped (7.91.1), and since
+    7.91.2 the page aborts every superseded load, so it happens on every typed
+    prefix. Degrading would log a fault that is not one and could leave a
+    half answer in the five-second answer cache for the next request with the
+    same search; raising lets the stopped answer end like the rest of it.
+    Nothing but a stopped search interrupts a request-log statement.
+    """
+
+    if isinstance(exc, sqlite3.OperationalError) and str(exc) == "interrupted":
+        raise exc
+
+
 # Aggregate columns of ``request_totals``, in the order the upsert binds them.
 _TOTALS_COUNTERS = (
     "requests",
@@ -9390,6 +9407,7 @@ class RequestLogStore:
                     args,
                 ).fetchone()
             except sqlite3.Error as exc:
+                raise_if_interrupted(exc)
                 # One unreadable params value must not take the analytics
                 # page down; report nothing measured instead.
                 logger.warning("Request log recovery aggregate skipped: {}", exc)
@@ -9422,6 +9440,7 @@ class RequestLogStore:
                     ).fetchall()
                 ]
             except sqlite3.Error as exc:
+                raise_if_interrupted(exc)
                 logger.warning("Request log upstream status breakdown skipped: {}", exc)
                 upstream_statuses = []
             series = self._series(conn, where, args, since=since, until=until)
@@ -10253,6 +10272,7 @@ class RequestLogStore:
                     )
                 ]
         except sqlite3.Error as exc:
+            raise_if_interrupted(exc)
             logger.warning("Server session history unavailable: {}", exc)
             return ()
         boundaries = restart_boundaries(sessions)
@@ -10359,6 +10379,7 @@ class RequestLogStore:
                         args,
                     ).fetchall()
             except sqlite3.Error as exc:
+                raise_if_interrupted(exc)
                 # A readout, not a control: an unreadable log means "no
                 # measurement", never an error banner over the page.
                 logger.warning("Cancelled breakdown unavailable: {}", exc)
@@ -10482,6 +10503,7 @@ class RequestLogStore:
                         args,
                     ).fetchall()
             except sqlite3.Error as exc:
+                raise_if_interrupted(exc)
                 logger.warning("No-answer breakdown unavailable: {}", exc)
                 return {
                     "successes": 0,
@@ -10799,6 +10821,7 @@ class RequestLogStore:
         below_inclusive: bool = False,
         rowid_after: int | None = None,
         rowid_through: int | None = None,
+        on_read: Callable[[float], None] | None = None,
     ) -> Generator[tuple[int, float]]:
         """``(rowid, ts_epoch)`` of every row a free-text search matches (7.91.1).
 
@@ -10812,8 +10835,38 @@ class RequestLogStore:
         < below``, or ``<=`` with ``below_inclusive``). ``rowid_after`` and
         ``rowid_through`` test only the rows written after a pass, by rowid.
         One connection, closed when the generator is closed.
+
+        ``on_read`` (7.91.2, the newest-first pass only) is handed the
+        ``ts_epoch`` of every row the pass reads, matched or not, in the order
+        it reads them: how far a search has got, for its progress line. The
+        body predicate is then the row's flag rather than a clause of the
+        ``WHERE``. It is the same expression over the same rows -- SQLite
+        tests it after every plain clause either way -- so exactly the same
+        rows match and arrive in the same order.
         """
 
+        newest_first = rowid_after is None and rowid_through is None
+        flagged = ""
+        flag_args: list[Any] = []
+        if on_read is not None and newest_first:
+            # The body predicate on its own; every other filter stays a clause
+            # of the ``WHERE`` below.
+            test, flag_args = self._where(
+                provider=None,
+                model=None,
+                status=None,
+                endpoint=None,
+                key=None,
+                since=None,
+                until=None,
+                q=q,
+                local=None,
+                harness=None,
+                session=None,
+                folder=None,
+                exit=None,
+            )
+            flagged = test.removeprefix(" WHERE ")
         where, args = self._where(
             provider=provider,
             model=model,
@@ -10822,7 +10875,7 @@ class RequestLogStore:
             key=key,
             since=since,
             until=until,
-            q=q,
+            q=None if flagged else q,
             local=local,
             harness=harness,
             session=session,
@@ -10841,7 +10894,16 @@ class RequestLogStore:
             args.append(rowid_through)
         if extra:
             where = f"{where}{' AND' if where else ' WHERE'} {' AND '.join(extra)}"
-        if rowid_after is None and rowid_through is None:
+        if flagged:
+            # The flag's arguments come first: the select list is bound before
+            # the ``WHERE``.
+            sql = (
+                f"SELECT rowid, ts_epoch, CASE WHEN {flagged} THEN 1 ELSE 0 END"
+                f" FROM requests INDEXED BY idx_requests_ts{where}"
+                " ORDER BY ts_epoch DESC"
+            )
+            args = [*flag_args, *args]
+        elif newest_first:
             # The timestamp index, named: what streams the rows newest first
             # rather than sorting them all at the end. Which rows the body
             # predicate reads is the same on any plan -- SQLite tests a
@@ -10854,8 +10916,15 @@ class RequestLogStore:
             sql = f"SELECT rowid, ts_epoch FROM requests{where}"
         conn = self._connect()
         try:
-            for row in conn.execute(sql, args):
-                yield int(row[0]), float(row[1])
+            if flagged and on_read is not None:
+                for row in conn.execute(sql, args):
+                    ts = float(row[1])
+                    on_read(ts)
+                    if row[2]:
+                        yield int(row[0]), ts
+            else:
+                for row in conn.execute(sql, args):
+                    yield int(row[0]), float(row[1])
         finally:
             conn.close()
 

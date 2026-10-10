@@ -17,6 +17,7 @@ routes the way the server runs them:
 
 import asyncio
 import json
+import random
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
@@ -38,7 +39,7 @@ from my_claude_code.core.stop_deadline import SHUTDOWN_MARKER_HEADER, stop_deadl
 from my_claude_code.runtime.application import ApplicationRuntime
 from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.api.support import create_test_app
-from tests.support.search_log import build_search_log
+from tests.support.search_log import build_search_log, make_record
 
 pytestmark = pytest.mark.local_serial
 
@@ -320,3 +321,140 @@ async def test_a_search_answer_is_kept_for_the_minute_like_any_other(
     assert calls["stats"] == 1
     assert first.json() == second.json()
     assert first.json()["total"] == store.count_requests(q="x")
+
+
+PROGRESS_ROUTE = "/admin/api/requests/search-progress"
+
+
+@pytest.mark.asyncio
+async def test_the_progress_route_reads_a_running_search_without_waiting_for_it(
+    store, client_for, monkeypatch
+) -> None:
+    """7.91.2: the page's progress line, from the search its count waits for.
+
+    The term is found nowhere, so the count waits for every row; the route
+    answers at once all the while, with the rows read growing towards the
+    rows in the window, and starts nothing when nothing is running.
+    """
+
+    total = store.count_requests(local="hide")
+    reads = Reads(store, delay=0.01)
+    monkeypatch.setattr(store, "_bodies_match", reads)
+    params = {"q": "zqxjvkw", "local": "hide"}
+    async with client_for(store) as client:
+        before = await client.get(PROGRESS_ROUTE, params=params)
+        no_search = await client.get(PROGRESS_ROUTE, params={"local": "hide"})
+        assert not search_jobs().running()
+        count = asyncio.ensure_future(
+            client.get("/admin/api/requests/count", params=params)
+        )
+        seen: list[dict[str, Any]] = []
+        slowest = 0.0
+        while not count.done():
+            await asyncio.sleep(0.1)
+            asked = time.perf_counter()
+            answer = await client.get(PROGRESS_ROUTE, params=params)
+            slowest = max(slowest, time.perf_counter() - asked)
+            assert answer.status_code == 200
+            seen.append(answer.json())
+        counted = await count
+        final = (await client.get(PROGRESS_ROUTE, params=params)).json()
+
+    assert before.json() == {"enabled": True, "searching": False}
+    assert no_search.json() == {"enabled": True, "searching": False}
+    assert counted.json() == {"enabled": True, "total": 0}
+    running = [s for s in seen if s["searching"] and not s["finished"]]
+    assert len(running) >= 3, seen
+    assert all(s["total"] == total and 0 <= s["read"] < total for s in running)
+    assert [s["read"] for s in running] == sorted(s["read"] for s in running)
+    assert final["searching"] is True and final["finished"] is True
+    assert final["read"] == final["total"] == total
+    assert final["matched"] == 0
+    assert isinstance(final["searched_back_to"], float)
+    # Never waits for the pass: each answer is a read of the search's state.
+    assert slowest < 0.5
+    assert reads.threads and all(
+        name.startswith("mcc-search") for name in reads.threads
+    )
+
+
+class Calls:
+    """Counts the body predicate, the expensive part of a pass."""
+
+    def __init__(self, store: RequestLogStore) -> None:
+        self.calls = 0
+        self._lock = threading.Lock()
+        self._real = store._bodies_match
+
+    def __call__(self, *args: Any) -> int:
+        with self._lock:
+            self.calls += 1
+        return self._real(*args)
+
+
+# What the page asks for in one load with a search, since 7.91.2: the seven
+# answers, the progress line, and (auto-refresh) the pulse.
+PAGE_LOAD_ROUTES = (
+    "/admin/api/requests?limit=25&offset=0",
+    "/admin/api/requests/count",
+    "/admin/api/requests/stats",
+    "/admin/api/requests/cost",
+    "/admin/api/requests/ttft",
+    "/admin/api/requests/no-answer",
+    "/admin/api/requests/origin",
+    PROGRESS_ROUTE,
+)
+
+
+@pytest.mark.asyncio
+async def test_auto_refresh_after_a_search_reads_only_the_new_rows(
+    tmp_path, client_for, monkeypatch
+) -> None:
+    """Q12: auto-refresh stays on during a search and checks only new rows.
+
+    The page's own sequence after the pass: the pulse, then a full reload of
+    every answer (the totals are due after a minute). With rows written since
+    the pass, the bodies read are those rows, once each, and nothing else.
+    """
+
+    path = tmp_path / "requests.db"
+    store, times = build_search_log(path, rows=120)
+    params = {"q": "x", "local": "hide"}
+    calls = Calls(store)
+    monkeypatch.setattr(store, "_bodies_match", calls)
+    async with client_for(store) as client:
+        first = await asyncio.gather(
+            *(client.get(route, params=params) for route in PAGE_LOAD_ROUTES)
+        )
+        assert [response.status_code for response in first] == [200] * len(
+            PAGE_LOAD_ROUTES
+        )
+        one_pass = calls.calls
+        writer = RequestLogStore(path, max_rows=0)
+        rng = random.Random(5)
+        for index in range(4):
+            record = make_record(rng, 900 + index, max(times) + 10 + index)
+            record.input_text = f"a newer prompt with x in it {index}"
+            record.output_text = ""
+            record.thinking_text = None
+            record.tool_calls = None
+            writer.enqueue(record)
+        writer.close()
+        calls.calls = 0
+        pulse = await client.get("/admin/api/requests/pulse", params=params)
+        reload = await asyncio.gather(
+            *(client.get(route, params=params) for route in PAGE_LOAD_ROUTES)
+        )
+        after_reload = calls.calls
+
+    monkeypatch.undo()
+    assert one_pass > 50
+    assert pulse.status_code == 200
+    assert [response.status_code for response in reload] == [200] * len(
+        PAGE_LOAD_ROUTES
+    )
+    # The four new rows, read once each: not another pass.
+    assert after_reload == 4
+    assert reload[1].json()["total"] == store.count_requests(**params)
+    assert pulse.json()["total"] == store.count_requests(**params)
+    store.close()

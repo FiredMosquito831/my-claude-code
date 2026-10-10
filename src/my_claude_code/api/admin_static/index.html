@@ -1295,6 +1295,17 @@
               <button id="reqForgetLearnedButton" class="secondary-button danger" type="button">Forget all learned facts</button>
               <button id="reqClearButton" class="secondary-button danger" type="button">Clear log</button>
             </div>
+            <!-- 7.91.2: what the search box is doing. A search saved from an
+                 earlier visit waits here for Run instead of running by itself;
+                 a running one says how far it has read. -->
+            <p id="reqSearchNotice" class="requests-search-notice" role="status" hidden>
+              <span id="reqSearchNoticeText"></span>
+              <span id="reqSearchNoticeActions" hidden>
+                <button id="reqSearchRun" class="requests-search-action" type="button">Run</button>
+                ·
+                <button id="reqSearchClear" class="requests-search-action" type="button">Clear</button>
+              </span>
+            </p>
             <div id="reqStatsCards" class="requests-cards"></div>
             <p id="reqRetentionNote" class="requests-retention" hidden></p>
             <div class="requests-lifetime">
@@ -4453,6 +4464,17 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>proxy 8082</code> finds one that says "restart the proxy" in the
                   prompt and "port 8082 is busy" in the reasoning. One word behaves as it
                   always did. Matching ignores case and matches inside words.
+                </p>
+                <p>
+                  A saved search no longer runs by itself when the page opens: the box
+                  shows it under a one-line notice, and you press <strong>Run</strong>
+                  (or Enter) to start it, or <strong>Clear</strong> to forget it. Typing
+                  cancels the previous search. While a search reads the log, newest
+                  first and over the window you picked, progress is shown where the
+                  pager said "counting&hellip;" &mdash; for example <em>searched back to
+                  12 Aug &middot; 412,000 of 598,683 rows</em>. The matching rows appear
+                  first; the count and the cards arrive together when the whole window
+                  has been read.
                 </p>
                 <h4>What the request body pane says</h4>
                 <p>

@@ -8877,3 +8877,260 @@ def test_removing_a_vendor_source_sends_one_put(rendered) -> None:
     assert removed["puts"] == [{"source": "src_v_gateway", "remove": True}]
     assert removed["gatewayCards"] == 0
     assert removed["presetGets"] == 1
+
+
+# ---------------------------- 7.91.2 the Requests page's half of the search fix
+#
+# One run of admin_jsdom_search_page.mjs (MCC_JSDOM_SCENARIO=search_page): the
+# real admin.js on a manual clock, opening on the Requests view with an
+# all-time "too long" saved from an earlier visit, against a fetch layer that
+# holds every search answer until the scenario ends its pass and ends a
+# request "aborted" when its signal is. The user's decisions of 2026-10-10:
+# Q1 the saved search is restored, not run; Q2 one pass with a progress line,
+# the list first, count and cards together; Q11 typing aborts the previous
+# load; Q12 auto-refresh stays on, checking only new rows.
+
+DASH = chr(0x2014)
+DOT = chr(0xB7)
+ELLIPSIS = chr(0x2026)
+EN_DASH = chr(0x2013)
+# What a load with a search asks while its pass reads: the list (answered
+# early), and the count and the cards (answered when it ends). The four panels
+# the pass also answers ask once it has ended, so that a browser's six
+# connections to the server are never all held by one search.
+DURING_PASS = sorted(
+    (
+        "/admin/api/requests",
+        "/admin/api/requests/count",
+        "/admin/api/requests/stats",
+    )
+)
+AFTER_PASS = sorted(
+    (
+        "/admin/api/requests/cost",
+        "/admin/api/requests/ttft",
+        "/admin/api/requests/no-answer",
+        "/admin/api/requests/origin",
+    )
+)
+SEARCH_ANSWERS = sorted((*DURING_PASS, *AFTER_PASS))
+SAVED_NOTICE = f"Saved search 'too long' (all time) {DASH} Run {DOT} Clear"
+# The user's own line: "searched back to 12 Aug · 412,000 of 598,683 rows".
+PROGRESS_SEP_11 = f"searched back to 11 Sep {DOT} 100,000 of 598,683 rows"
+PROGRESS_AUG_12 = f"searched back to 12 Aug {DOT} 412,000 of 598,683 rows"
+POLL_PATHS = ("/admin/api/requests/in-flight", "/admin/api/requests/pulse")
+
+
+@pytest.fixture(scope="module")
+def search_page() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="search_page")
+
+
+def _paths(entries: list[dict]) -> list[str]:
+    return sorted(entry["path"] for entry in entries)
+
+
+def test_the_search_page_scenario_runs_clean(search_page) -> None:
+    assert search_page["fatal"] is None
+    assert search_page["scriptErrors"] == []
+    assert search_page["consoleErrors"] == []
+    assert search_page["clockErrors"] == []
+    # Run and Clear exist: a page without them runs the saved search at once.
+    assert search_page["missingControls"] == []
+
+
+def test_a_saved_search_is_restored_but_not_run_at_start_up(search_page) -> None:
+    """Q1: the text and a notice, and not one request carrying the search."""
+
+    assert search_page["activeView"] == "requests"
+    start = search_page["startup"]
+    assert start["box"] == "too long"
+    assert start["noticeShown"] is True
+    assert start["actionsShown"] is True
+    assert start["notice"] == SAVED_NOTICE
+    # Nothing else about the saved state changed.
+    assert start["persistedSearch"] == "too long"
+    # The view loaded -- the table and the cards -- without the search.
+    loaded = {entry["path"] for entry in search_page["startupRequests"]}
+    assert {"/admin/api/requests", "/admin/api/requests/stats"} <= loaded
+    assert search_page["startupSearchRequests"] == []
+    assert all("q=" not in entry["url"] for entry in search_page["startupRequests"])
+    assert start["cards"] > 0
+    assert start["countingCards"] == 0
+    # A minute of auto-refresh later: pulses, and still no search.
+    idle = search_page["idleMinute"]
+    assert idle["pulses"] >= 3
+    assert idle["searchRequests"] == []
+    assert idle["after"]["notice"] == SAVED_NOTICE
+
+
+def test_run_starts_the_saved_search_and_every_search_request_can_be_aborted(
+    search_page,
+) -> None:
+    run = search_page["run"]
+    searching = [entry for entry in run["requests"] if entry["q"]]
+    assert _paths(searching) == DURING_PASS
+    assert all(entry["q"] == "too long" for entry in searching)
+    assert all(entry["signal"] for entry in searching)
+    # The requests without the search are as they were: no signal.
+    assert all(not entry["signal"] for entry in run["requests"] if not entry["q"])
+    after = run["afterClick"]
+    assert after["actionsShown"] is False
+    assert after["notice"] == f"Searching 'too long' (all time){ELLIPSIS}"
+    # The four panels, once the pass has ended: same search, same signal.
+    panels = search_page["panelsAfterPass"]
+    assert _paths(panels) == AFTER_PASS
+    assert all(e["q"] == "too long" and e["signal"] for e in panels)
+    assert all(e["outcome"] == "ok" for e in panels)
+
+
+def test_the_list_fills_first_and_the_progress_line_follows_the_pass(
+    search_page,
+) -> None:
+    """Q2: rows at once; then where it said "counting…", how far it has read."""
+
+    first = search_page["run"]["listFilledFirst"]
+    assert first["tableRows"] == 3
+    assert first["countOpen"] is True
+    assert first["countingCards"] == search_page["run"]["afterClick"]["cards"] > 0
+
+    one = search_page["progress1"]
+    two = search_page["progress2"]
+    assert one["notice"] == f"Searching 'too long' (all time) {DASH} {PROGRESS_SEP_11}"
+    assert one["pager"] == f"1{EN_DASH}3 {DOT} {PROGRESS_SEP_11}"
+    assert two["notice"] == f"Searching 'too long' (all time) {DASH} {PROGRESS_AUG_12}"
+    assert two["pager"] == f"1{EN_DASH}3 {DOT} {PROGRESS_AUG_12}"
+    assert two["countingCards"] == two["cards"]
+    polls = search_page["progressRequests"]
+    assert [entry["t"] for entry in polls] == [
+        polls[0]["t"],
+        polls[0]["t"] + 1000,
+    ]
+    assert all(entry["q"] == "too long" and entry["signal"] for entry in polls)
+
+
+def test_no_pulse_is_sent_while_the_pass_runs(search_page) -> None:
+    """Q12: a pulse with the search would wait for that same pass."""
+
+    during = search_page["duringPass"]
+    assert during["pulses"] == []
+    assert during["countsOrStats"] == []
+    # Thirty-one seconds of the progress line instead, once a second.
+    assert 30 <= during["progressPolls"] <= 32
+    assert during["after"]["pager"] == f"1{EN_DASH}3 {DOT} {PROGRESS_AUG_12}"
+
+
+def test_the_count_and_the_cards_land_together_when_the_pass_ends(search_page) -> None:
+    half = search_page["countAnsweredStatsNot"]
+    # The count has answered and the stats have not: nothing is painted yet.
+    assert half["pager"] == f"1{EN_DASH}3 {DOT} {PROGRESS_AUG_12}"
+    assert half["countingCards"] == half["cards"]
+    ended = search_page["passEnded"]
+    assert ended["pager"] == f"1{EN_DASH}7 of 7"
+    assert ended["countingCards"] == 0
+    assert ended["noticeShown"] is False
+    # And the progress line stops asking.
+    assert search_page["afterPassProgressPolls"] == 0
+
+
+def test_auto_refresh_after_the_pass_reads_only_the_table_and_the_pulse(
+    search_page,
+) -> None:
+    """Q12: after the pass, a tick is the pulse; a change re-reads the table.
+
+    Both carry the search, and the server answers both from the finished
+    pass plus the rows written since (``test_search_pool``); nothing asks
+    for the count, the cards or a new pass.
+    """
+
+    auto = search_page["autoAfterPass"]
+    baseline = [e for e in auto["baseline"] if e["path"] != POLL_PATHS[0]]
+    changed = [e for e in auto["changed"] if e["path"] != POLL_PATHS[0]]
+    assert [e["path"] for e in baseline] == ["/admin/api/requests/pulse"]
+    assert baseline[0]["q"] == "too long"
+    assert _paths(changed) == sorted(
+        (
+            "/admin/api/requests/pulse",
+            "/admin/api/requests",
+            "/admin/api/requests/lifetime",
+        )
+    )
+    assert all(
+        e["q"] == "too long"
+        for e in changed
+        if e["path"] != "/admin/api/requests/lifetime"
+    )
+    assert all(e["outcome"] == "ok" for e in changed)
+
+
+def test_typing_aborts_every_search_request_of_the_load_it_replaces(
+    search_page,
+) -> None:
+    """Q11: three prefixes 400 ms apart; only the last one's requests live."""
+
+    typing = search_page["typing"]
+    loads = typing["loads"]
+    assert [load["prefix"] for load in loads] == ["zq", "zqx", "zqxj"]
+    starts = [min(entry["t"] for entry in load["requests"]) for load in loads]
+    assert [later - earlier for earlier, later in pairwise(starts)] == [400, 400]
+    for superseded in loads[:2]:
+        # Aborted, and its four panels never asked at all.
+        assert _paths(superseded["requests"]) == DURING_PASS
+        assert all(entry["signal"] for entry in superseded["requests"])
+        assert all(entry["outcome"] == "aborted" for entry in superseded["requests"])
+    last = loads[2]
+    assert _paths(last["requests"]) == DURING_PASS
+    assert all(entry["outcome"] == "pending" for entry in last["requests"])
+    assert typing["abortCalls"] >= 2
+    finished = [
+        entry
+        for entry in typing["lastLoadAfterPass"]
+        if entry["path"] != "/admin/api/requests/search-progress"
+    ]
+    assert _paths(finished) == SEARCH_ANSWERS
+    assert all(entry["outcome"] == "ok" for entry in finished)
+    assert typing["afterPass"]["noticeShown"] is False
+
+
+def test_the_cards_say_counting_from_the_start_of_a_search(search_page) -> None:
+    """A word few rows contain: the list waits for the pass, the cards do not.
+
+    Here the list is held until the pass ends. The cards say "counting…" at
+    once instead of the last view's numbers, under the progress line.
+    """
+
+    during = search_page["typing"]["progressLine"]
+    assert during["notice"] == f"Searching 'zqxj' (all time){ELLIPSIS}"
+    assert during["countingCards"] == during["cards"] > 0
+    # Before a second is up the last view's rows stay (a common word's page
+    # is in by then); after it, the table says it is searching instead.
+    assert during["tableRows"] == 3
+    table = search_page["typing"]["searchingTable"]
+    assert table["rows"] == 1
+    assert table["firstCell"].startswith(f"Searching{ELLIPSIS} the matching requests")
+    assert table["pager"] == f"counting{ELLIPSIS}"
+
+
+def test_clear_empties_the_box_and_forgets_the_saved_search(search_page) -> None:
+    again = search_page["restoredAgain"]
+    assert (
+        again["notice"] == f"Saved search 'too long' (last 7d) {DASH} Run {DOT} Clear"
+    )
+    clear = search_page["clear"]
+    assert clear["after"]["box"] == ""
+    assert clear["after"]["noticeShown"] is False
+    assert clear["after"]["persistedSearch"] is None
+    loads = [entry for entry in clear["requests"] if entry["path"] not in POLL_PATHS]
+    assert loads == []
+
+
+def test_enter_runs_a_saved_search(search_page) -> None:
+    enter = search_page["enter"]
+    assert _paths(enter["searchRequests"]) == SEARCH_ANSWERS
+    assert all(entry["q"] == "too long" for entry in enter["searchRequests"])
+    assert enter["after"]["persistedSearch"] == "too long"
+
+
+def test_the_export_still_carries_the_search(search_page) -> None:
+    assert "q=too+long" in search_page["heldExportUrl"]
+    assert "q=too+long" in search_page["runExportUrl"]

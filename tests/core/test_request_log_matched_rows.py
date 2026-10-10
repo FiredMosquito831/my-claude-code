@@ -307,6 +307,76 @@ def test_a_pass_reads_newest_first_and_continues_below_a_point(log) -> None:
     )
 
 
+def _pass(
+    store: RequestLogStore, q: str, filters: dict[str, Any], **extra: Any
+) -> tuple[list[tuple[int, float]], list[tuple[int, float]], list[float]]:
+    """One pass both ways: the predicate as a clause, and as the row's flag."""
+
+    picked: dict[str, Any] = {name: filters.get(name) for name in _PASS_FILTERS}
+    picked["status"] = _base_status(filters.get("status"))
+    picked["since"] = filters.get("since")
+    picked["until"] = filters.get("until")
+    plain = list(store.match_rows(q=q, **picked, **extra))
+    read: list[float] = []
+    flagged = list(store.match_rows(q=q, **picked, **extra, on_read=read.append))
+    return plain, flagged, read
+
+
+@pytest.mark.parametrize("q", CORPUS)
+def test_a_pass_that_reports_every_row_read_finds_the_same_rows(log, q) -> None:
+    """7.91.2: the progress line's pass finds exactly what the predicate finds.
+
+    With ``on_read`` the body predicate moves from the ``WHERE`` to the row's
+    flag, so the pass can count the rows it reads that do not match. The rows
+    it yields, and their order, must be the predicate's own.
+    """
+
+    store, times = log
+    for since in _windows(times):
+        filters = {"local": "hide", "since": since}
+        plain, flagged, read = _pass(store, q, filters)
+        assert flagged == plain, (q, since)
+        # Every row of the window the pass reads, newest first, each once.
+        assert len(read) == store.count_requests(**filters)
+        assert read == sorted(read, reverse=True)
+        assert {ts for _rowid, ts in plain} <= set(read)
+
+
+@pytest.mark.parametrize("extra", FILTERS)
+def test_the_flagged_pass_is_the_same_under_every_filter(log, extra) -> None:
+    store, times = log
+    newest = max(times)
+    for q in ("x", "too long", "zqxjvkw", "ș"):
+        for since in (None, newest - 86400 * 0.3):
+            filters = {**extra, "since": since}
+            plain, flagged, read = _pass(store, q, filters)
+            assert flagged == plain, (q, extra, since)
+            pass_filters = {
+                name: value for name, value in filters.items() if name != "exit"
+            }
+            pass_filters["status"] = _base_status(filters.get("status"))
+            assert len(read) == store.count_requests(**pass_filters)
+
+
+def test_a_continued_pass_finds_the_same_rows_with_the_flag(log) -> None:
+    store, _times = log
+    # A continued pass, and the rows written after a pass (no flag there).
+    stamps = [ts for _rowid, ts in store.match_rows(q="x")]
+    middle = stamps[len(stamps) // 2]
+    for inclusive in (False, True):
+        plain, flagged, read = _pass(
+            store, "x", {}, below=middle, below_inclusive=inclusive
+        )
+        assert flagged == plain
+        assert read and max(read) <= middle
+    top = store.max_rowid()
+    seen: list[float] = []
+    assert sorted(
+        store.match_rows(q="x", rowid_after=0, rowid_through=top, on_read=seen.append)
+    ) == sorted(store.match_rows(q="x"))
+    assert seen == []
+
+
 def test_a_clear_moves_the_generation_the_rows_are_kept_under(tmp_path) -> None:
     store, _times = build_search_log(tmp_path / "requests.db", rows=12)
     before = store.clear_generation

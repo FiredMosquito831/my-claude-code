@@ -428,3 +428,232 @@ async def test_a_backfill_that_rewrites_a_filtered_column_is_read_again(log) -> 
     again = await _ask(store, filters, _count(store, filters))
     assert again == store.count_requests(**filters)
     assert again < first
+
+
+# ------------------------------------------------------------ 7.91.2: progress
+
+
+def _plain(filters: dict[str, Any]) -> dict[str, Any]:
+    """The filters without the search: what the pass reads its rows by."""
+
+    return {name: value for name, value in filters.items() if name != "q"}
+
+
+async def _progress(
+    store: RequestLogStore, filters: dict[str, Any]
+) -> dict[str, Any] | None:
+    return await search_jobs().progress(store, filters, run=asyncio.to_thread)
+
+
+@pytest.mark.asyncio
+async def test_progress_counts_every_row_read_before_the_first_match(
+    log, monkeypatch
+) -> None:
+    """A term found nowhere is the pass that needs a progress line most.
+
+    Its count and cards wait for the whole window to be read, and no row ever
+    matches: the time read back to must come from the rows read, not from the
+    last match, or the line would say nothing until the end.
+    """
+
+    store, times, _path = log
+    filters = _filters("zqxjvkw", local=None)
+    total = store.count_requests(**_plain(filters))
+    _reads(store, monkeypatch, delay=0.005)
+
+    assert await _progress(store, filters) is None
+    assert search_jobs().find(store, filters) is None
+    waiter = asyncio.ensure_future(_ask(store, filters, _count(store, filters)))
+    samples: list[dict[str, Any]] = []
+    waiters_seen: set[int] = set()
+    while not waiter.done():
+        await asyncio.sleep(0.1)
+        seen = await _progress(store, filters)
+        job = search_jobs().find(store, filters)
+        if seen is not None and job is not None:
+            samples.append(seen)
+            if not seen["finished"]:
+                waiters_seen.add(job.waiters)
+    assert await waiter == 0
+    final = await _progress(store, filters)
+
+    running = [s for s in samples if not s["finished"] and s["read"] > 0]
+    assert len(running) >= 3, samples
+    assert all(s["matched"] == 0 for s in running)
+    assert all(0 < s["read"] < total for s in running)
+    assert all(s["total"] == total for s in samples)
+    reads = [s["read"] for s in samples]
+    assert reads == sorted(reads)
+    back = [s["searched_back_to"] for s in running]
+    assert all(ts is not None and ts <= max(times) for ts in back)
+    assert back == sorted(back, reverse=True)
+    assert final is not None
+    assert final["finished"] is True
+    assert final["read"] == final["total"] == total
+    assert final["matched"] == 0
+    # Asking is never waiting: the count was the only waiter throughout.
+    assert waiters_seen == {1}
+
+
+@pytest.mark.asyncio
+async def test_progress_never_goes_back_when_a_pass_is_stopped_and_continued(
+    log, monkeypatch
+) -> None:
+    store, _times, _path = log
+    first = _filters("x", local=None)
+    second = _filters("too long", local=None)
+    want = store.count_requests(**first)
+    total = store.count_requests(**_plain(first))
+    _reads(store, monkeypatch, delay=0.005)
+    older = asyncio.ensure_future(_ask(store, first, _count(store, first)))
+    samples: list[dict[str, Any]] = []
+
+    async def sample() -> None:
+        while not older.done():
+            seen = await _progress(store, first)
+            if seen is not None:
+                samples.append(seen)
+            await asyncio.sleep(0.03)
+
+    sampler = asyncio.ensure_future(sample())
+    await asyncio.sleep(0.3)
+    stopped_at = await _progress(store, first)
+    # The newer question stops this pass; it continues once that is answered.
+    await _ask(store, second, _count(store, second))
+    assert await older == want
+    await sampler
+    final = await _progress(store, first)
+
+    assert stopped_at is not None
+    assert 0 < stopped_at["read"] < total
+    reads = [s["read"] for s in samples]
+    assert reads == sorted(reads)
+    back = [s["searched_back_to"] for s in samples if s["searched_back_to"] is not None]
+    assert back == sorted(back, reverse=True)
+    assert final is not None
+    assert final["finished"] is True
+    assert final["read"] == final["total"] == total
+
+
+@pytest.mark.asyncio
+async def test_asking_for_progress_starts_and_holds_nothing(log, monkeypatch) -> None:
+    store, _times, _path = log
+    monkeypatch.setattr(search_jobs_module, "SEARCH_GRACE_SECONDS", 0.3)
+    reads = _reads(store, monkeypatch, delay=0.01)
+    filters = _filters("x", local=None)
+    jobs_before = len(search_jobs()._jobs)
+
+    for _ in range(5):
+        assert await _progress(store, filters) is None
+    assert len(search_jobs()._jobs) == jobs_before
+    assert reads.calls == 0
+
+    gone = {"now": False}
+
+    async def disconnected() -> bool:
+        return gone["now"]
+
+    waiter = asyncio.ensure_future(
+        _ask(store, filters, _count(store, filters), disconnected=disconnected)
+    )
+    await asyncio.sleep(0.3)
+    job = search_jobs().find(store, filters)
+    assert job is not None and job.segment is not None
+    gone["now"] = True
+    with pytest.raises(SearchAbandoned):
+        await waiter
+    segment = job.segment
+    # Polled all through the grace and after it: the pass still stops.
+    for _ in range(12):
+        await _progress(store, filters)
+        await asyncio.sleep(0.05)
+    if segment is not None:
+        await asyncio.wait({segment}, timeout=5.0)
+    assert job.segment is None
+    assert job.waiters == 0
+    assert job.progress()["finished"] is False
+
+
+def _gone_after(flags: list[bool], index: int) -> Callable[[], Awaitable[bool]]:
+    async def disconnected() -> bool:
+        return flags[index]
+
+    return disconnected
+
+
+@pytest.mark.asyncio
+async def test_typing_three_prefixes_leaves_only_the_last_search_reading(
+    log, monkeypatch
+) -> None:
+    """The page's own sequence (7.91.2): a load per prefix, 400 ms apart.
+
+    Each load asks for the count, the stats, TTFT and origin of its prefix.
+    Starting the next load aborts the previous one's requests (the page's
+    ``AbortController``); the server sees the client leave, the superseded
+    searches lose every waiter, their passes stop, and only the last prefix
+    is read to the end.
+    """
+
+    store, _times, _path = log
+    monkeypatch.setattr(search_jobs_module, "SEARCH_GRACE_SECONDS", 0.3)
+    prefixes = ("too", "too l", "too long")
+    wanted = ("count", "stats", "ttft", "origin")
+    expected: dict[str, Any] = {}
+    last = _filters(prefixes[-1], local=None)
+    for name, compute in _page_load(store, last).items():
+        if name in wanted:
+            _fresh(store)
+            expected[name] = compute(None)
+    # 20 ms a row: a pass is seconds long, so 400 ms reads a small part of it.
+    reads = _reads(store, monkeypatch, delay=0.02)
+    reads.delay = 0.0
+    store.count_requests(**last)
+    full_pass = reads.calls
+    reads.delay = 0.02
+    reads.calls = 0
+    _fresh(store)
+
+    gone = [False] * len(prefixes)
+    loads: list[tuple[dict[str, Any], list[asyncio.Task[Any]]]] = []
+    for index, q in enumerate(prefixes):
+        if index:
+            # The new load aborts the previous one's requests.
+            gone[index - 1] = True
+        filters = _filters(q, local=None)
+        answers = _page_load(store, filters)
+        tasks = [
+            asyncio.ensure_future(
+                _ask(
+                    store,
+                    filters,
+                    answers[name],
+                    disconnected=_gone_after(gone, index),
+                )
+            )
+            for name in wanted
+        ]
+        loads.append((filters, tasks))
+        if index < len(prefixes) - 1:
+            await asyncio.sleep(0.4)
+
+    results = [
+        await asyncio.gather(*tasks, return_exceptions=True) for _f, tasks in loads
+    ]
+    # Past every grace period, so a superseded pass had its chance to stop.
+    await asyncio.sleep(0.3 + 0.5 + 0.2)
+    jobs = [search_jobs().find(store, filters) for filters, _tasks in loads]
+
+    assert dict(zip(wanted, results[-1], strict=True)) == expected
+    for superseded in results[:-1]:
+        assert all(isinstance(result, SearchAbandoned) for result in superseded)
+    assert all(job is not None for job in jobs)
+    superseded_jobs = [job for job in jobs[:-1] if job is not None]
+    assert [job.waiters for job in superseded_jobs] == [0, 0]
+    assert all(job.segment is None for job in superseded_jobs)
+    assert not any(job.progress()["finished"] for job in superseded_jobs)
+    assert jobs[-1] is not None and jobs[-1].progress()["finished"] is True
+    assert not search_jobs().running()
+    # One full pass for the search typed last, and only the start of the two
+    # it replaced.
+    assert full_pass > 100
+    assert reads.calls < full_pass + full_pass // 2

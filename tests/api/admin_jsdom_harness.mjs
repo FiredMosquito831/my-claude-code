@@ -4347,6 +4347,13 @@ if (process.env.MCC_JSDOM_SCENARIO === "pause_polls") {
   const { preparePausePollScenario } = await import("./admin_jsdom_pause_polls.mjs");
   scenario = preparePausePollScenario({ window, html, script, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=search_page (7.91.2): the Requests page's half of the
+   search stopgap -- a saved search restored but not run, the progress line,
+   aborted superseded loads -- on a manual clock (admin_jsdom_search_page.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "search_page") {
+  const { prepareSearchPageScenario } = await import("./admin_jsdom_search_page.mjs");
+  scenario = prepareSearchPageScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));

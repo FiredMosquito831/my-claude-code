@@ -37,6 +37,10 @@ What this module holds to, and the tests hold it:
   already read.
 - **A stop stops them all**, in milliseconds, so a shutdown never waits on a
   scan.
+- **It says how far it has got** (7.91.2): every row a pass reads is counted,
+  matched or not, so the page can show "searched back to 12 Aug · 412,000 of
+  598,683 rows" while the count and the cards wait for the pass to end.
+  Asking (``progress``) starts nothing and keeps nothing running.
 """
 
 import asyncio
@@ -173,6 +177,52 @@ class _Exact:
         return self.at < since
 
 
+class _Scan:
+    """The rows one segment of a pass has read, row by row (7.91.2).
+
+    Called by the pass's worker for every row it reads, matched or not, so the
+    page can say how far a search has got. Plain attributes: each is written
+    by that one worker and only read elsewhere, for a progress line.
+    """
+
+    __slots__ = ("at", "at_before", "base", "group", "read", "shown_before")
+
+    def __init__(
+        self, base: int, shown_before: int = 0, at_before: float | None = None
+    ) -> None:
+        # Rows earlier segments read that this one does not read again.
+        self.base = base
+        self.read = 0
+        # The timestamp of the last row read, and how many rows had been read
+        # before the first row with that timestamp.
+        self.at: float | None = None
+        self.group = base
+        # What the segment before this one had shown: a continued pass reads
+        # the rows past its last match again, and neither the count nor the
+        # time read back to may go back.
+        self.shown_before = shown_before
+        self.at_before = at_before
+
+    def __call__(self, ts: float) -> None:
+        if ts != self.at:
+            self.at = ts
+            self.group = self.base + self.read
+        self.read += 1
+
+    @property
+    def total(self) -> int:
+        return self.base + self.read
+
+    @property
+    def shown(self) -> int:
+        return max(self.shown_before, self.base + self.read)
+
+    @property
+    def oldest(self) -> float | None:
+        stamps = [ts for ts in (self.at, self.at_before) if ts is not None]
+        return min(stamps) if stamps else None
+
+
 @dataclass(frozen=True)
 class _Attempt:
     done: bool
@@ -213,7 +263,15 @@ class SearchJob:
         self._version = 0
         self._resets = 0
         self._snapshot: tuple[tuple[int, int, float, float], MatchedRows] | None = None
+        # 7.91.2: rows the pass has read that a continued pass will not read
+        # again (every row newer than ``_exact``), and the running segment's
+        # own count -- the "rows read" of the progress line.
+        self._read_kept = 0
+        self._scan: _Scan | None = None
         # The event loop's.
+        # The rows the pass reads in its window, ``(floor, rows)``: counted
+        # once per window by the progress route, without the search.
+        self.window_rows: tuple[float, int] | None = None
         self.floor = math.inf
         self.waiters = 0
         self.priority = 0
@@ -238,19 +296,30 @@ class SearchJob:
             return self._version + self._resets
 
     def progress(self) -> dict[str, Any]:
-        """How far the pass has got: rows matched, and the time read back to.
+        """How far the pass has got: rows matched, rows read, the time read back to.
 
-        ``searched_back_to`` is ``None`` before the first match, and ``-inf``
-        once all of time has been read.
+        ``read`` counts every row the pass has read, matched or not (7.91.2).
+        ``searched_back_to`` is the time of the oldest row read, ``None``
+        before the first; ``finished`` says the whole window has been read.
         """
 
         with self._lock:
             exact = self._exact
-            return {
-                "matched": len(self._rowids),
-                "searched_back_to": None if exact.at == math.inf else exact.at,
-                "finished": exact.inclusive,
-            }
+            matched = len(self._rowids)
+            read = self._read_kept
+            scan = self._scan
+        back_to = exact.at
+        if scan is not None:
+            read = max(read, scan.shown)
+            oldest = scan.oldest
+            if oldest is not None:
+                back_to = oldest
+        return {
+            "matched": matched,
+            "read": read,
+            "searched_back_to": None if back_to == math.inf else back_to,
+            "finished": exact.inclusive,
+        }
 
     def covers(self, since: float | None) -> bool:
         return self.exact.covers(-math.inf if since is None else since)
@@ -308,6 +377,18 @@ class SearchJob:
                     if self._resets == resets and self._high_water is None:
                         self._high_water = high_water
                         self._mark = mark
+            with self._lock:
+                before = self._scan
+                scan = (
+                    _Scan(self._read_kept, before.shown, before.oldest)
+                    if before is not None
+                    else _Scan(self._read_kept)
+                )
+                if self._resets == resets:
+                    self._scan = scan
+            # Rows read before the last match's timestamp: what a continued
+            # pass, which starts again at that timestamp, will not read again.
+            kept = scan.base
             batch: list[tuple[int, float]] = []
             flushed = time.monotonic()
             rows = self.store.match_rows(
@@ -315,15 +396,17 @@ class SearchJob:
                 since=since,
                 below=below,
                 below_inclusive=inclusive,
+                on_read=scan,
             )
             try:
                 for row in rows:
                     batch.append(row)
+                    kept = scan.group
                     if (
                         len(batch) >= _BATCH_ROWS
                         or time.monotonic() - flushed >= _BATCH_SECONDS
                     ):
-                        self._append(batch, resets, _Exact(batch[-1][1]))
+                        self._append(batch, resets, _Exact(batch[-1][1]), kept)
                         batch = []
                         flushed = time.monotonic()
                         self.notify()
@@ -331,18 +414,18 @@ class SearchJob:
                 if not stop.stopped:
                     raise
                 if batch:
-                    self._append(batch, resets, _Exact(batch[-1][1]))
+                    self._append(batch, resets, _Exact(batch[-1][1]), kept)
                 self.notify()
                 return False
             finally:
                 rows.close()
             done = _Exact(-math.inf if since is None else since, inclusive=True)
-            self._append(batch, resets, done)
+            self._append(batch, resets, done, scan.total)
             self.notify()
             return True
 
     def _append(
-        self, batch: list[tuple[int, float]], resets: int, exact: _Exact
+        self, batch: list[tuple[int, float]], resets: int, exact: _Exact, kept: int
     ) -> None:
         with self._lock:
             if self._resets != resets:
@@ -352,6 +435,7 @@ class SearchJob:
                 self._ts.append(ts)
             if exact.at <= self._exact.at:
                 self._exact = exact
+                self._read_kept = max(self._read_kept, kept)
             self._version += 1
 
     def catch_up(self) -> bool:
@@ -409,7 +493,10 @@ class SearchJob:
             self._high_water = None
             self._mark = None
             self._snapshot = None
+            self._read_kept = 0
+            self._scan = None
             self._resets += 1
+        self.window_rows = None
         self.notify()
 
     def snapshot(
@@ -609,6 +696,18 @@ class SearchJobs:
             self._jobs.move_to_end(key)
         return job
 
+    def find(self, store: RequestLogStore, filters: dict[str, Any]) -> SearchJob | None:
+        """The search these filters ask, if one exists (7.91.2). On the event loop.
+
+        Never creates one, never counts as its use: asking how far a search
+        has got must neither start a pass nor keep one from being dropped.
+        """
+
+        loop = asyncio.get_running_loop()
+        q = normalized_search(filters.get("q"))
+        key = self._key(loop, store, q, _job_filters(filters), filters.get("until"))
+        return self._jobs.get(key)
+
     def _evict(self) -> None:
         """Keep the newest searches; never one that is waited for or running."""
 
@@ -670,6 +769,55 @@ class SearchJobs:
 
     def running(self) -> list[SearchJob]:
         return [job for job in self._jobs.values() if job.segment is not None]
+
+    async def progress(
+        self,
+        store: RequestLogStore,
+        filters: dict[str, Any],
+        *,
+        run: Callable[..., Awaitable[Any]],
+    ) -> dict[str, Any] | None:
+        """How far the search these filters ask has got; None if there is none.
+
+        7.91.2, for the page's progress line ("searched back to 12 Aug ·
+        412,000 of 598,683 rows"). Reads the search's state and nothing else
+        (``find``): no pass is started, no waiter added, no body read. The one
+        query is ``total``, the rows the pass reads in its window -- the
+        page's filters without the search, a plain count -- run by ``run``
+        once per window and kept on the search.
+        """
+
+        job = self.find(store, filters)
+        if job is None:
+            return None
+        progress = job.progress()
+        floor = job.floor
+        total: int | None = None
+        if floor != math.inf:
+            cached = job.window_rows
+            if cached is not None and cached[0] == floor:
+                total = cached[1]
+            else:
+                since = None if floor == -math.inf else floor
+                total = int(
+                    await run(
+                        lambda: store.count_requests(
+                            **job.filters, since=since, until=job.until
+                        )
+                    )
+                )
+                job.window_rows = (floor, total)
+        back_to = progress["searched_back_to"]
+        return {
+            "finished": progress["finished"],
+            "matched": progress["matched"],
+            "read": progress["read"],
+            "total": total,
+            # A JSON number: the oldest row's time, never minus infinity.
+            "searched_back_to": back_to
+            if back_to is not None and math.isfinite(back_to)
+            else None,
+        }
 
     # --------------------------------------------------------------- answers
 
