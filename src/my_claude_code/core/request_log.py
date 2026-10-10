@@ -222,6 +222,9 @@ _SEARCH_DECODE_BATCH = 16
 _SEARCH_SWEEP_ROWS = 1_000
 # A failed index step waits this long before the next try.
 _SEARCH_RETRY_SECONDS = 60.0
+# A build says how long it has left only once it has run this long since it
+# was started or continued.
+_SEARCH_ETA_AFTER_SECONDS = 20.0
 # The newest rows of a search's window are read by the scan's own statement
 # before the index is considered for the rest: a window with no more rows than
 # this costs exactly what it always did (nothing else is opened or asked), the
@@ -11536,7 +11539,10 @@ class RequestLogStore:
             if state.get("state") == "running" and started and session_done:
                 elapsed = max(0.0, time.time() - float(started))
                 rate = session_done / elapsed if elapsed > 0 else 0.0
-                if rate > 0:
+                # A rate from the first seconds after a start or a Continue is
+                # noise (a resumed build on the full-size copy said 118 h for
+                # what took 64 min): no time left until it has run a while.
+                if rate > 0 and elapsed >= _SEARCH_ETA_AFTER_SECONDS:
                     eta = max(0.0, (int(total) - done) / rate)
         size = 0
         for path in (search.path, search.path.with_name(search.path.name + "-wal")):

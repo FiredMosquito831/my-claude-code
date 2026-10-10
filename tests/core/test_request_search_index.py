@@ -492,9 +492,39 @@ def test_a_build_under_way_leaves_a_mostly_uncovered_window_to_the_scan(
     assert coverage is not None
     assert coverage["covered"] < coverage["rows"] * 0.2
     for q in ("zqxjvkw", CORPUS[0]):
-        for chosen in ({"local": "all"}, {"local": "all", "since": sorted(_times)[192]}):
+        for chosen in (
+            {"local": "all"},
+            {"local": "all", "since": sorted(_times)[192]},
+        ):
             assert index_rows(store, q, **chosen) == scan_rows(store, q, **chosen)
     assert prepared == []
+
+
+def test_a_build_says_how_long_it_has_left_only_after_running_a_while(
+    tmp_path: Path,
+) -> None:
+    store, _times = build_search_log(tmp_path / "requests.db", rows=40, seed=3)
+    now = time.time()
+    running = {
+        "state": "running",
+        "started_at": now - 600,
+        "total": 1_000,
+        "done": 500,
+        "session_done": 3,
+    }
+    with store._search_lock:
+        store._search_build = {**running, "session_started": now - 2}
+    status = store.search_index_status()
+    assert status["percent"] == 50.0
+    assert status["eta_seconds"] is None
+    with store._search_lock:
+        store._search_build = {
+            **running,
+            "session_started": now - 60,
+            "session_done": 100,
+        }
+    status = store.search_index_status()
+    assert status["eta_seconds"] == pytest.approx(300, rel=0.05)
 
 
 def test_an_entry_under_another_address_is_never_answered_from_the_index(
