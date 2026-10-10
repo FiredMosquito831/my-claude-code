@@ -515,8 +515,10 @@ def test_a_words_postings_are_priced_whole_for_a_small_window(
     postings = {"count": 0}
     original = rs.SearchIndex.estimate
 
-    def estimate(self: rs.SearchIndex, conn: sqlite3.Connection, plans: Any) -> Any:
-        return {**original(self, conn, plans), "postings": postings["count"]}
+    def estimate(
+        self: rs.SearchIndex, conn: sqlite3.Connection, plans: Any, **kw: Any
+    ) -> Any:
+        return {**original(self, conn, plans, **kw), "postings": postings["count"]}
 
     monkeypatch.setattr(rs.SearchIndex, "estimate", estimate)
     q = "zqx"
@@ -532,6 +534,29 @@ def test_a_words_postings_are_priced_whole_for_a_small_window(
         store, q, local="all", since=since
     )
     assert prepared == []
+
+
+def test_pricing_stops_reading_counts_once_the_postings_pass_the_budget(
+    tmp_path: Path,
+) -> None:
+    """A trigram's count is read through its postings: past the budget, no more."""
+
+    path = tmp_path / "requests.db"
+    _write(path, [_record(1, 1000.0, input_text="alpha gamma", output_text="ok")])
+    store = RequestLogStore(path, max_rows=0)
+    store.close()
+    assert store._search is not None
+    conn = store._connect()
+    try:
+        assert store._search.attach(conn)
+        plans = rs.plan_terms("alpha gamma")
+        whole = store._search.estimate(conn, plans)
+        capped = store._search.estimate(conn, plans, max_postings=0)
+    finally:
+        conn.close()
+    assert whole["postings"] == 6  # alp lph pha gam amm mma, one chunk each
+    assert capped["postings"] == 1  # the first trigram passed the budget
+    assert whole["chunks"] >= 1
 
 
 def test_a_build_says_how_long_it_has_left_only_after_running_a_while(

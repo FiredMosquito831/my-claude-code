@@ -238,8 +238,11 @@ _SEARCH_SCAN_FIRST_ROWS = 256
 # investigation's all-time pass, 0.72 ms a row on a quiet machine).
 _SEARCH_COST_SCAN_ROW = 0.7e-3
 # A rest of the window the scan reads in less than this is scanned without
-# pricing the index at all: looking the words up costs about as much.
-_SEARCH_SCAN_SECONDS_MIN = 0.25
+# pricing the index at all. Pricing reads each trigram's document count
+# through its postings (0.04 us each, 0.06 s for a common one), so on a short
+# window it can cost a tenth of the scan while saving little: a search that
+# took under 1.5 s keeps exactly its cost.
+_SEARCH_SCAN_SECONDS_MIN = 1.5
 # The planner's prices, in seconds (measured on a full-size copy of a real
 # log; see the 7.92.0 PR): testing one chunk's text, reading one posting of a
 # trigram (every posting of every trigram a word has is read, whatever the
@@ -11923,17 +11926,18 @@ class RequestLogStore:
         if extra:
             where = f"{where}{' AND' if where else ' WHERE'} {' AND '.join(extra)}"
         try:
-            rest = int(
-                conn.execute(f"SELECT COUNT(*) FROM requests{where}", args).fetchone()[
-                    0
-                ]
-            )
+            counted = conn.execute(f"SELECT COUNT(*) FROM requests{where}", args)
+            rest = int(counted.fetchone()[0])
             scan_cost = rest * per_row
             if scan_cost <= _SEARCH_SCAN_SECONDS_MIN or not search.attach(conn):
                 return None
             self._search_cache(conn)
+            budget = _SEARCH_INDEX_MARGIN * scan_cost
             plans = plan_terms(q)
-            estimate = search.estimate(conn, plans)
+            # Past this many postings the words alone cost the budget.
+            estimate = search.estimate(
+                conn, plans, max_postings=int(budget / _SEARCH_COST_POSTING)
+            )
             total = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
             # A window reading under half the log looks up only the blobs its
             # rows name (``scope``): their share of the chunks tested and the
@@ -11949,7 +11953,6 @@ class RequestLogStore:
             per_row_index = _SEARCH_COST_PASS_ROW + (
                 _SEARCH_COST_SCOPE_ROW if scoped else 0.0
             )
-            budget = _SEARCH_INDEX_MARGIN * scan_cost
             if lookups + rest * per_row_index >= budget:
                 return None
             # Rows naming a blob the index does not hold (history before a

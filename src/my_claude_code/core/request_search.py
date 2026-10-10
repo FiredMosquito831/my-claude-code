@@ -1051,7 +1051,10 @@ class SearchIndex:
         return seen, hits
 
     def estimate(
-        self, conn: sqlite3.Connection, plans: Sequence[TermPlan]
+        self,
+        conn: sqlite3.Connection,
+        plans: Sequence[TermPlan],
+        max_postings: int | None = None,
     ) -> dict[str, int]:
         """What ``prepare`` would read for ``plans``, from the index's own counts.
 
@@ -1059,11 +1062,19 @@ class SearchIndex:
         rarest trigram's document count for a word the index narrows, every
         chunk for a word it cannot) and ``looked_up`` every chunk a
         three-letter word's postings name; ``postings`` is how many postings
-        the trigram queries read, which no window narrows.
+        the trigram queries read, which no window narrows. A trigram's count
+        is itself read through its postings (0.04 us each), so once
+        ``postings`` passes ``max_postings`` the rest are not looked up and
+        the answer only says it passed. ``chunks`` is the highest chunk id
+        (one b-tree step; ids are only ever added, so it bounds the count).
         """
 
         schema = SEARCH_SCHEMA
-        total = int(conn.execute(f"SELECT COUNT(*) FROM {schema}.chunks").fetchone()[0])
+        total = int(
+            conn.execute(
+                f"SELECT COALESCE(MAX(id), 0) FROM {schema}.chunks"
+            ).fetchone()[0]
+        )
         tested = 0
         looked_up = 0
         postings = 0
@@ -1073,6 +1084,8 @@ class SearchIndex:
                 continue
             smallest = total
             for gram in plan.grams:
+                if max_postings is not None and postings > max_postings:
+                    break
                 row = conn.execute(
                     f"SELECT doc FROM {schema}.grams_vocab WHERE term = ?", (gram,)
                 ).fetchone()
