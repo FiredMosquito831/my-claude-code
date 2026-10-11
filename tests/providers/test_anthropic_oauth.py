@@ -107,6 +107,26 @@ def test_a_third_party_harness_is_not_an_anthropic_client() -> None:
     assert is_claude_code_client(request) is False
 
 
+def test_the_claude_desktop_app_is_admitted_and_an_unlisted_value_is_not() -> None:
+    """The Claude desktop app is one of Anthropic's own clients, so the gate
+    admits its third-party-mode marker. The set is closed: a value nobody
+    listed is still refused.
+    """
+    desktop = _request(
+        "x-anthropic-billing-header: cc_version=2.1.258; "
+        "cc_entrypoint=claude-desktop-3p;\nYou are a Claude agent."
+    )
+    unlisted = _request(
+        "x-anthropic-billing-header: cc_version=2.1.258; "
+        "cc_entrypoint=sdk-evil;\nYou are a Claude agent."
+    )
+
+    assert detect_entrypoint(desktop) == "claude-desktop-3p"
+    assert is_claude_code_client(desktop) is True
+    assert detect_entrypoint(unlisted) == "sdk-evil"
+    assert is_claude_code_client(unlisted) is False
+
+
 @pytest.mark.parametrize("system", [None, "", "no marker at all", "cc_entrypoint="])
 def test_unmarked_requests_are_not_the_cli(system: Any) -> None:
     assert is_claude_code_cli(_request(system)) is False

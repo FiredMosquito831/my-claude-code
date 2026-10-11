@@ -1146,7 +1146,8 @@ made; it does not verify it, and this gate must never be described as if it
 did.
 
 `CLAUDE_CODE_ENTRYPOINTS` is a **closed set**, not a prefix match: `cli`,
-`cli-bg`, `sdk-cli`, `sdk-py`, `sdk-ts`. A `sdk-*` wildcard would admit whatever
+`cli-bg`, `sdk-cli`, `sdk-py`, `sdk-ts`,
+`claude-desktop-3p`. A `sdk-*` wildcard would admit whatever
 a future — or a hostile — client decided to call itself, and the point of the
 gate is that its membership is a decision somebody made on purpose. Adding an
 entrypoint there is a policy change, not a typo fix.
