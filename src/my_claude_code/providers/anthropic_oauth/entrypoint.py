@@ -54,8 +54,19 @@ CLI_ENTRYPOINT = "cli"
 #   sdk-cli  the Agent SDK driving the Claude Code binary
 #   sdk-py   the Python Agent SDK
 #   sdk-ts   the TypeScript Agent SDK
+#   claude-desktop-3p  the Claude desktop app, as it reports itself in
+#                      cc_entrypoint (meaning of the -3p suffix not confirmed)
+#   claude-desktop  the Claude desktop app, as it reports itself in cc_entrypoint
 CLAUDE_CODE_ENTRYPOINTS: frozenset[str] = frozenset(
-    {CLI_ENTRYPOINT, "cli-bg", "sdk-cli", "sdk-py", "sdk-ts"}
+    {
+        CLI_ENTRYPOINT,
+        "cli-bg",
+        "sdk-cli",
+        "sdk-py",
+        "sdk-ts",
+        "claude-desktop-3p",
+        "claude-desktop",
+    }
 )
 
 
