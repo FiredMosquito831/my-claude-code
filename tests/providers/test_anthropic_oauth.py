@@ -109,7 +109,7 @@ def test_a_third_party_harness_is_not_an_anthropic_client() -> None:
 
 def test_the_claude_desktop_app_is_admitted_and_an_unlisted_value_is_not() -> None:
     """The Claude desktop app is one of Anthropic's own clients, so the gate
-    admits its third-party-mode marker. The set is closed: a value nobody
+    admits the marker it reports in cc_entrypoint. The set is closed: a value nobody
     listed is still refused.
     """
     desktop = _request(
