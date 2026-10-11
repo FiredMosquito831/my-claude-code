@@ -116,6 +116,10 @@ def test_the_claude_desktop_app_is_admitted_and_an_unlisted_value_is_not() -> No
         "x-anthropic-billing-header: cc_version=2.1.258; "
         "cc_entrypoint=claude-desktop-3p;\nYou are a Claude agent."
     )
+    claude = _request(
+        "x-anthropic-billing-header: cc_version=2.1.258; "
+        "cc_entrypoint=claude-desktop;\nYou are a Claude agent."
+    )
     unlisted = _request(
         "x-anthropic-billing-header: cc_version=2.1.258; "
         "cc_entrypoint=sdk-evil;\nYou are a Claude agent."
@@ -123,6 +127,8 @@ def test_the_claude_desktop_app_is_admitted_and_an_unlisted_value_is_not() -> No
 
     assert detect_entrypoint(desktop) == "claude-desktop-3p"
     assert is_claude_code_client(desktop) is True
+    assert detect_entrypoint(claude) == "claude-desktop"
+    assert is_claude_code_client(claude) is True
     assert detect_entrypoint(unlisted) == "sdk-evil"
     assert is_claude_code_client(unlisted) is False
 

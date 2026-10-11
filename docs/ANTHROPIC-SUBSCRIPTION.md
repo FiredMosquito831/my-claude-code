@@ -92,7 +92,7 @@ and nothing in this document should be read as claiming otherwise.
 **The policy this gate enforces: the subscription credential may serve requests
 from Anthropic's own clients only — the Claude Code CLI and the Claude Agent
 SDK.** Those are the entrypoints `cli`, `cli-bg`, `sdk-cli`, `sdk-py`,
-`sdk-ts` and `claude-desktop-3p`. Every other harness routed through MCC — OpenCode, Cline, Crush, a
+`sdk-ts`, `claude-desktop-3p` and `claude-desktop`. Every other harness routed through MCC — OpenCode, Cline, Crush, a
 bare API call — is refused, with a message naming
 `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE` and pointing at the `anthropic` provider
 instead.
@@ -519,7 +519,7 @@ write to the file would not reach the keychain Claude Code reads.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE` | `true` | Refuse any request that did not come from Claude Code or the Claude Agent SDK (`cc_entrypoint` in `cli`, `cli-bg`, `sdk-cli`, `sdk-py`, `sdk-ts`, `claude-desktop-3p`) |
+| `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE` | `true` | Refuse any request that did not come from Claude Code or the Claude Agent SDK (`cc_entrypoint` in `cli`, `cli-bg`, `sdk-cli`, `sdk-py`, `sdk-ts`, `claude-desktop-3p`, `claude-desktop`) |
 | `ANTHROPIC_OAUTH_ACCESS_TOKEN` | *(empty)* | Raw token override, **one value only**. It carries no refresh token, so it **cannot be refreshed** — it will expire and stay expired. A comma-separated list is rejected at construction: several non-refreshing tokens are not a rotation pool. Prefer the login. |
 | `ANTHROPIC_OAUTH_UPSTREAM_BASE_URL` | `https://api.anthropic.com/v1` | Upstream override. Deliberately *not* `ANTHROPIC_BASE_URL`, which points Claude Code at MCC. |
 | `ANTHROPIC_OAUTH_PROXY` | *(empty)* | HTTP proxy for this provider |
