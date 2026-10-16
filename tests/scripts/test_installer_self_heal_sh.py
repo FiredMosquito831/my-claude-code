@@ -88,9 +88,23 @@ def _p(path: Path) -> str:
     return path.as_posix()
 
 
-def _run(
-    shell: str, script: Path, env: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
+def _run(shell: str, script: Path) -> subprocess.CompletedProcess[str]:
+    """Run ``script`` under ``shell`` with that shell's own userland first on PATH.
+
+    The extracted functions call ``ls``, ``sort -r`` and ``rm`` the way
+    install.sh does on a POSIX machine. On Windows the shell is an msys build
+    (Git for Windows on CI, ``C:\\msys64`` on a developer machine) started
+    from a Windows PATH, and where ``C:\\Windows\\System32`` precedes the msys
+    ``usr\\bin`` -- this machine's order -- ``sort`` is Windows' ``sort.exe``,
+    which rejects ``-r``: the sweep then read no candidates and removed
+    nothing, and the two ``sweep_keeps`` cases failed under both ``sh`` and
+    ``dash`` (7.92.2 and 7.92.3 local gates; never on the CI runner, where
+    ``sort`` resolved to the POSIX one). A login shell puts its ``/usr/bin``
+    first; so does this, so the result no longer depends on the caller's PATH.
+    """
+
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join([str(Path(shell).parent), env.get("PATH", "")])
     return subprocess.run(
         [shell, str(script)],
         capture_output=True,

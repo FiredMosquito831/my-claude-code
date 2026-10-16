@@ -365,7 +365,16 @@ async def test_the_progress_route_reads_a_running_search_without_waiting_for_it(
     assert counted.json() == {"enabled": True, "total": 0}
     running = [s for s in seen if s["searching"] and not s["finished"]]
     assert len(running) >= 3, seen
-    assert all(s["total"] == total and 0 <= s["read"] < total for s in running)
+    assert all(s["total"] == total for s in running), seen
+    # ``read == total`` with ``finished`` still false is a real state, not an
+    # over-count: the pass has read its last row but not yet made the append
+    # that marks the window finished (SearchJob._read, the final _append). A
+    # loaded runner can deschedule the search worker there for long enough
+    # that a 100 ms poll lands in it -- the 10-10 nightly and the v7.92.0
+    # suite both failed on exactly that. Every running answer stays within
+    # the window, and the first was read mid-pass.
+    assert all(0 <= s["read"] <= total for s in running), seen
+    assert running[0]["read"] < total, seen
     assert [s["read"] for s in running] == sorted(s["read"] for s in running)
     assert final["searching"] is True and final["finished"] is True
     assert final["read"] == final["total"] == total

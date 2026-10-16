@@ -1072,6 +1072,29 @@ class PowerShellHarness:
             return []
         return self.log.read_text(encoding="utf-8").splitlines()
 
+    def installer_as_file(self) -> Path:
+        """The real install.ps1 with the wrapper's network doubles after param().
+
+        Run with ``-File`` it keeps genuine -File semantics (WORKING-NOTES
+        section 17) while reading the fake release feed instead of
+        api.github.com.
+        """
+
+        installer = _install_ps1()
+        doubles = self.wrapper.read_text(encoding="utf-8")
+        doubles = doubles.split("$installer = [scriptblock]::Create", 1)[0]
+        doubles = doubles.replace("Set-StrictMode -Version Latest\n", "").replace(
+            '$ErrorActionPreference = "Stop"\n', ""
+        )
+        # The param() block ends at the first line that is exactly ")" -- not
+        # at the first ")\n", which is the `$RemainingArgs = @()` default two
+        # lines above it.
+        head, separator, tail = installer.partition("\n)\n")
+        assert separator, "install.ps1 no longer opens with a param() block"
+        as_file = self.root / "install-as-file.ps1"
+        as_file.write_text(head + separator + doubles + tail, encoding="utf-8")
+        return as_file
+
 
 @pytest.fixture(
     params=[
@@ -1346,6 +1369,17 @@ def test_install_ps1_stops_without_success_on_each_failure(
 def test_install_ps1_dry_run_never_executes_commands(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    """A dry run reads the release feed and changes nothing, offline.
+
+    This ran the bare script, so its one GET went to api.github.com for real,
+    and an unauthenticated runner minutes after a release met "(403)
+    Forbidden" from the release feed (7.81.0, 7.86.0, 7.90.1, 7.92.2). It now
+    runs the same real script under -File with the harness's doubles after
+    its param() block, so the feed is the fixture and every command the
+    script could run is a logged fake: the read is the one call allowed,
+    exactly as the install.sh twin asserts.
+    """
+
     result = subprocess.run(
         [
             powershell_harness.powershell,
@@ -1353,7 +1387,7 @@ def test_install_ps1_dry_run_never_executes_commands(
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(_repo_root() / "scripts" / "install.ps1"),
+            str(powershell_harness.installer_as_file()),
             "-DryRun",
         ],
         check=False,
@@ -1364,7 +1398,9 @@ def test_install_ps1_dry_run_never_executes_commands(
     )
 
     assert result.returncode == 0, result.stderr
-    assert powershell_harness.calls() == []
+    assert powershell_harness.calls() == [f"download:{FCC_LATEST_RELEASE_URL}"], (
+        "a dry run may read the release feed, but must change nothing"
+    )
     assert "Dry run complete. No changes were made." in result.stdout
     assert "is installed and verified." not in result.stdout
 
@@ -3473,7 +3509,6 @@ def test_the_smoke_job_calls_the_batch_file_rather_than_chaining_to_it() -> None
 @pytest.mark.local_serial
 def test_install_ps1_behaves_the_same_under_scriptblock_and_file(
     powershell_harness: PowerShellHarness,
-    tmp_path: Path,
 ) -> None:
     """Both published invocation shapes, one behaviour (invariant 10).
 
@@ -3489,20 +3524,7 @@ def test_install_ps1_behaves_the_same_under_scriptblock_and_file(
     powershell_harness.add_uv("0.11.28")
     scriptblock = powershell_harness.run("-DryRun")
 
-    installer = _install_ps1()
-    doubles = powershell_harness.wrapper.read_text(encoding="utf-8")
-    doubles = doubles.split("$installer = [scriptblock]::Create", 1)[0]
-    doubles = doubles.replace("Set-StrictMode -Version Latest\n", "").replace(
-        '$ErrorActionPreference = "Stop"\n', ""
-    )
-    # The param() block ends at the first line that is exactly ")" -- not at
-    # the first ")\n", which is the `$RemainingArgs = @()` default two lines
-    # above it.
-    head, separator, tail = installer.partition("\n)\n")
-    assert separator, "install.ps1 no longer opens with a param() block"
-    head = head + separator
-    as_file = tmp_path / "install-as-file.ps1"
-    as_file.write_text(head + doubles + tail, encoding="utf-8")
+    as_file = powershell_harness.installer_as_file()
 
     file_form = subprocess.run(
         [

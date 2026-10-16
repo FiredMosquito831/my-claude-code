@@ -115,6 +115,10 @@ jobs:
           USERPROFILE: ${{ runner.workspace }}\mcc-home
           APPDATA: ${{ runner.workspace }}\mcc-home\AppData\Roaming
           LOCALAPPDATA: ${{ runner.workspace }}\mcc-home\AppData\Local
+          # tests/contracts/test_admin_static_xss.py runs in this step, against
+          # the Node 22 + jsdom installed above: a missing one fails, never
+          # skips (only that file and the jsdom file read MCC_CI).
+          MCC_CI: "1"
         # xdist (`-n auto --dist loadgroup --max-worker-restart=0`) and
         # `faulthandler_timeout = 300` come from pyproject, exactly as for the
         # Linux pytest job. The jsdom file runs alone in the next step.

@@ -42,6 +42,17 @@ pytestmark = pytest.mark.local_serial
 #: room for a two-second hold.
 MAX_LOOP_GAP_MS = 400.0
 
+#: How many times a measurement is taken before it counts as a hold. The
+#: Windows suite runs this file beside three other xdist workers (CI does not
+#: split out ``local_serial``), and on 2026-10-16 the nightly measured a pause
+#: at 452 ms and a resume at 474 ms; a developer machine 430-499 ms in three
+#: of ten runs of this file alone. The click itself is ~100 ms here once warm and ~300 ms
+#: cold (three uncached parses of a 48 KB file), so those gaps were the worker
+#: being descheduled on top of it. A hold the code causes -- the 2092 ms this
+#: file exists for -- is there on every attempt; a deschedule is not. So the
+#: bound stays 400 ms and the best of three attempts must meet it.
+ATTEMPTS = 3
+
 #: How many visibility patterns the reporting machine carries. The line is
 #: ~35 KB on its own and is most of what makes the file expensive to parse.
 VISIBILITY_PATTERNS = 995
@@ -128,14 +139,20 @@ async def test_a_pause_or_resume_does_not_hold_the_loop(
     generation swap, which 6.35.1 measured at under a millisecond.
     """
 
-    async with _Heartbeat() as beat:
-        for _ in range(3):
-            prepared = persistence.prepare_admin_update(_pause(paused))
-            assert prepared.valid, prepared.errors
-            persistence.commit_prepared_admin_update(prepared)
-            await asyncio.sleep(0.02)
-    assert beat.max_gap < MAX_LOOP_GAP_MS, (
-        f"{label} held the loop for {beat.max_gap:.0f} ms"
+    held: list[float] = []
+    for _ in range(ATTEMPTS):
+        async with _Heartbeat() as beat:
+            for _ in range(3):
+                prepared = persistence.prepare_admin_update(_pause(paused))
+                assert prepared.valid, prepared.errors
+                persistence.commit_prepared_admin_update(prepared)
+                await asyncio.sleep(0.02)
+        held.append(beat.max_gap)
+        if beat.max_gap < MAX_LOOP_GAP_MS:
+            break
+    assert min(held) < MAX_LOOP_GAP_MS, (
+        f"{label} held the loop on every attempt: "
+        + ", ".join(f"{gap:.0f} ms" for gap in held)
     )
 
 
@@ -148,17 +165,29 @@ async def test_the_managed_layers_are_not_reparsed_once_per_read(
     The first read of a content pays for the parse; every read after it, until
     the content changes, must be very much cheaper. A ratio survives a slow
     runner in a way a millisecond bound does not.
+
+    Each side is the fastest of several samples, not one cold read against a
+    mean of warm ones: a worker descheduled during a warm read inflated the
+    mean past the bound on two Windows nightlies (cold 39.0 / warm 11.2 ms on
+    2026-10-12, 33.3 / 10.7 ms on 2026-10-16). A deschedule only ever adds
+    time, so the minimum is the cost of the code; a reparse on every read
+    would make every warm sample as slow as a cold one and still fail.
     """
 
-    sources.clear_env_parse_cache()
-    start = time.perf_counter()
-    first = sources.dotenv_values_from_file(reporting_machine_config)
-    cold = time.perf_counter() - start
+    colds: list[float] = []
+    for _ in range(3):
+        sources.clear_env_parse_cache()
+        start = time.perf_counter()
+        first = sources.dotenv_values_from_file(reporting_machine_config)
+        colds.append(time.perf_counter() - start)
+    cold = min(colds)
 
-    start = time.perf_counter()
+    warms: list[float] = []
     for _ in range(5):
+        start = time.perf_counter()
         again = sources.dotenv_values_from_file(reporting_machine_config)
-    warm = (time.perf_counter() - start) / 5
+        warms.append(time.perf_counter() - start)
+    warm = min(warms)
 
     assert again == first
     assert warm < cold / 4, f"cold {cold * 1000:.1f} ms, warm {warm * 1000:.1f} ms"
