@@ -182,6 +182,25 @@ def _golden(case: str, surface: str) -> Any:
     return GOLDEN["cases"][case][surface]
 
 
+def _session_minted(now: Any, golden: Any) -> Any:
+    """``now`` with its Responses ``prompt_cache_key`` set to the golden's.
+
+    The one value 7.92.2 changed on purpose: the cache key mirrors the
+    ``x-opencode-session`` id, which 7.49.0 derived from a digest (the golden
+    holds one) and 7.92.2 mints on the client's clock. The minted value is
+    checked for its shape here; every other byte is still compared.
+    """
+
+    if not isinstance(now, dict) or "prompt_cache_key" not in now:
+        return now
+    minted = now["prompt_cache_key"]
+    assert isinstance(minted, str)
+    assert minted.startswith("ses_")
+    assert len(minted) == len("ses_") + 26
+    assert golden["prompt_cache_key"].startswith("ses_")
+    return {**now, "prompt_cache_key": golden["prompt_cache_key"]}
+
+
 @functools.cache
 def _now() -> dict[str, dict[str, Any]]:
     """This code's bodies for every golden case, built once per session."""
@@ -206,8 +225,9 @@ def test_claude_code_request_is_byte_identical_to_7_49_0(
     sub-request and a tool-less side request, on all three doors.
     """
 
-    now = _now()[case][surface]
-    assert canonical(now) == canonical(_golden(case, surface))
+    golden = _golden(case, surface)
+    now = _session_minted(_now()[case][surface], golden)
+    assert canonical(now) == canonical(golden)
 
 
 @pytest.mark.parametrize(
@@ -226,8 +246,9 @@ def test_paid_model_and_other_providers_unchanged(case: str, surface: str) -> No
     sends exactly the body 7.49.0 sent for the same request.
     """
 
-    now = _now()[case][surface]
-    assert canonical(now) == canonical(_golden(case, surface))
+    golden = _golden(case, surface)
+    now = _session_minted(_now()[case][surface], golden)
+    assert canonical(now) == canonical(golden)
 
 
 def test_the_golden_was_written_by_the_release_before() -> None:
