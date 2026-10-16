@@ -39,10 +39,10 @@ import openai
 import pytest
 
 from my_claude_code.application.route_health import failure_counts_toward_bench
+from my_claude_code.config import settings as config_settings
 from my_claude_code.config.settings import (
     Settings,
     configured_opencode_free_tier_models,
-    get_settings,
 )
 from my_claude_code.core.anthropic.errors import anthropic_error_type_for_failure
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -96,6 +96,20 @@ FREE_TIER_BODY = {
         "message": "OpenCode's free tier can only be used from within OpenCode",
     }
 }
+
+
+def _clear_settings() -> None:
+    """Clear the settings cache production code actually reads.
+
+    Through the module attribute, never an imported name:
+    ``tests/config/test_env_aliases.py`` reloads the settings module, which
+    rebinds ``get_settings``. A ``get_settings`` imported before that clears
+    a cache nothing reads any more, so an ``OPENCODE_CLIENT_IDENTITY=mcc``
+    set by a test here was ignored whenever that file ran earlier in the same
+    worker (v7.92.3 Windows full suite, run 38929326307).
+    """
+
+    config_settings.get_settings.cache_clear()
 
 
 def _request(model: str, *, tools: list[str] | None = None) -> MessagesRequest:
@@ -382,12 +396,12 @@ def test_a_tool_less_free_request_carries_opencodes_five_names(
     assert provider.with_stand_ins(paid) is paid
     assert names(provider, paid) == []
     monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", "mcc")
-    get_settings.cache_clear()
+    _clear_settings()
     try:
         opted_out = _request(FREE)
         assert _provider().with_stand_ins(opted_out) is opted_out
     finally:
-        get_settings.cache_clear()
+        _clear_settings()
 
 
 @pytest.mark.asyncio
@@ -480,7 +494,7 @@ def test_the_opt_out_turns_the_whole_impersonation_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", "mcc")
-    get_settings.cache_clear()
+    _clear_settings()
     try:
         provider = _provider()
         assert provider.tool_catalogue_for(FREE) == {}
@@ -496,7 +510,7 @@ def test_the_opt_out_turns_the_whole_impersonation_off(
             "my-claude-code/"
         )
     finally:
-        get_settings.cache_clear()
+        _clear_settings()
 
 
 def test_a_chat_completions_provider_is_untouched() -> None:
@@ -649,24 +663,24 @@ def test_the_user_agent_has_the_three_segments_the_real_client_sends() -> None:
 def test_each_appended_segment_is_pinnable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENCODE_CLIENT_AI_SDK_VERSION", "9.9.9")
     monkeypatch.setenv("OPENCODE_CLIENT_RUNTIME", "node/24.0.0")
-    get_settings.cache_clear()
+    _clear_settings()
     try:
         assert opencode_user_agent("1.2.3") == (
             "opencode/1.2.3 ai-sdk/provider-utils/9.9.9 runtime/node/24.0.0"
         )
     finally:
-        get_settings.cache_clear()
+        _clear_settings()
 
 
 def test_a_blanked_pin_falls_back_rather_than_leaving_a_hole(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENCODE_CLIENT_AI_SDK_VERSION", "   ")
-    get_settings.cache_clear()
+    _clear_settings()
     try:
         assert "ai-sdk/provider-utils/4.0.40" in opencode_user_agent("1.2.3")
     finally:
-        get_settings.cache_clear()
+        _clear_settings()
 
 
 # -- the failure kind ----------------------------------------------------------
