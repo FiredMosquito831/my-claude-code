@@ -146,14 +146,24 @@ def rendered(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def _bytes_when_readable(path: Path) -> bytes:
-    """The file's bytes, waiting out a sharing violation (test side only)."""
+    """The file's bytes, waiting out a sharing violation (test side only).
+
+    Also waits out a moment with no file at all. On NTFS the replacing
+    adversary's ``os.replace`` can leave the name absent for an instant, which
+    the save path itself reports as "was there a moment ago and is missing
+    now" and refuses -- correctly. This read met the same instant and raised
+    ``FileNotFoundError``: six Windows suite runs from 7.79.0 to the
+    2026-10-16 nightly, five in the read that classifies a refusal and one in
+    the read before a save, never a lost setting. The adversary republishes
+    the file within its loop, so waiting for it is the honest read.
+    """
 
     deadline = time.monotonic() + 10.0
     while True:
         try:
             with open(path, "rb") as handle:
                 return handle.read()
-        except PermissionError:
+        except PermissionError, FileNotFoundError:
             if time.monotonic() > deadline:
                 raise
             time.sleep(0.001)
