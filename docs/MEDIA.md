@@ -32,6 +32,82 @@ edited = client.images.edit(
 The proxy token is the same one every other client uses (`Authorization: Bearer`,
 `x-api-key` or `x-goog-api-key`).
 
+## Tutorial: set up the Image rail and see the result
+
+1. **Model Config → Image rail.** Pick the model that should answer image
+   requests (the picker offers only image models, plus *Kind not known*), and
+   **Add fallback** for the next one to try. Only a provider that declares an
+   image endpoint can serve it (see the table below); a custom provider declares
+   one with its **Media endpoints** checkboxes. Save.
+
+<div align="center">
+  <img src="../assets/admin-media-image-rail.png" alt="The Image rail on Model Config with one model selected, a Pause button and Add fallback, under a sentence saying only providers that declare the endpoint can answer and that none answers with no model configured" width="860">
+  <p><em>Model Config → Image rail: one model, with room for fallbacks. (Screenshot from a test install whose model is a local stand-in provider.)</em></p>
+</div>
+
+2. **Send a request** from any OpenAI-shaped client, or with curl (every rail's
+   curl is in the next section):
+
+   ```sh
+   curl http://127.0.0.1:8082/v1/images/generations \
+     -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" -H "Content-Type: application/json" \
+     -d '{"prompt": "a red cube on a white table", "response_format": "b64_json"}'
+   ```
+
+3. **Analytics → Media** (near the bottom of the page) counts it per rail and
+   per provider and model: requests, succeeded, failed, cancelled, images out,
+   bytes, durations and cost. In the requests table the row is an ordinary one
+   whose Endpoint is `/v1/images/generations`; filter by that endpoint (or
+   Harness = *Script or curl*) to find it, and press **View** for its detail and,
+   with **Store generated media** on, a preview.
+
+<div align="center">
+  <img src="../assets/admin-media-analytics.png" alt="The Analytics Media card: a By rail table with one Image request, one Speech request and one failed Transcription request, and a By provider and model table below it" width="860">
+  <p><em>Analytics → Media: per rail, then per provider and model. The failed Transcription row is a request sent while that rail was empty (not routed).</em></p>
+</div>
+
+## Every rail with curl
+
+`$ANTHROPIC_AUTH_TOKEN` is your proxy token (Providers → Runtime). Model names
+that are not `provider/model` use the rail; a `provider/model` pins that model.
+The image and speech requests and the empty-rail answer below were run against a
+test install; the others follow the same OpenAI request shapes.
+
+```sh
+# Image: generate (Image rail)
+curl http://127.0.0.1:8082/v1/images/generations -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -H "Content-Type: application/json" -d '{"prompt": "a red cube", "response_format": "b64_json"}'
+
+# Image: edit, multipart (Image rail; served only by a provider that declares edits)
+curl http://127.0.0.1:8082/v1/images/edits -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -F prompt="make the cube blue" -F image=@scene.png -F mask=@mask.png
+
+# Speech (Speech rail): the answer is the audio file itself
+curl http://127.0.0.1:8082/v1/audio/speech -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -H "Content-Type: application/json" -d '{"model": "tts", "input": "Hello there", "voice": "alloy", "response_format": "wav"}' -o hello.wav
+
+# Transcription and translation (Transcription rail)
+curl http://127.0.0.1:8082/v1/audio/transcriptions -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -F model=whisper-1 -F file=@clip.wav
+curl http://127.0.0.1:8082/v1/audio/translations -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -F model=whisper-1 -F file=@clip.wav
+
+# Video (Video rail): submit, poll, download
+curl http://127.0.0.1:8082/v1/videos -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -H "Content-Type: application/json" -d '{"prompt": "a paper boat on a pond"}'
+curl http://127.0.0.1:8082/v1/videos/video_abc123 -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN"
+curl http://127.0.0.1:8082/v1/videos/video_abc123/content -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" -o boat.mp4
+```
+
+**An empty rail answers `404`**, on purpose, with the OpenAI error shape:
+
+```
+{"error":{"message":"No model is configured for the Transcription rail. Set MODEL_ASR (and optionally MODEL_ASR_FALLBACKS) on Model Config; a media request is never sent to a chat model.","type":"not_found_error","param":null,"code":null}}
+```
+
+It stays a `404` rather than a `503` because the OpenAI SDKs retry a `503`
+twice for nothing; the fix is a model on the rail, not a retry.
+
 ## How a request finds its model
 
 - The **endpoint** picks the rail: `images/generations` and `images/edits` are the Image rail,
@@ -400,8 +476,9 @@ uploaded files are always recorded by SHA-256, size and type (never their bytes)
 
 ### Keeping the images: `MEDIA_STORE_ENABLED`
 
-Off by default. When on, each generated image is also written as a file named by its SHA-256
-in the `media` folder beside the request log (`~/.mcc/logs/media/`). The same image is stored
+Off by default. When on, each generated image, speech file and downloaded video, and each image
+uploaded to an edit, is also written as a file named by its SHA-256 in the `media` folder beside
+the request log (`~/.mcc/logs/media/`). Uploaded audio (a transcription's input) is not kept. The same image is stored
 once. A file is deleted when the last request row that references it is pruned or the log is
 cleared; turning the setting off stops new copies and leaves existing files alone. It lives on
 **Analytics -> Request log**.
@@ -418,6 +495,37 @@ are stored, a preview (image, audio player or video player) loaded on demand fro
 `GET /admin/api/media/<sha256>`. That route answers only on the loopback address, serves image,
 audio and video types as themselves (anything else, SVG included, as a download) and is never
 used by list views.
+
+## Known limits today
+
+What the current release does, stated so nobody has to find it by trial (checked
+on 7.92.2; none of it changed since):
+
+- **A pinned `provider/model` is not limited to the rail.** A request that names
+  any keyed provider's model as `provider/model` is sent to it, whether or not
+  that model is on the rail.
+- **The requests table shows a media row with dashes** for turn and tokens; the
+  row carries no "image generated" label yet. Find media requests by their
+  Endpoint, the Harness *Script or curl*, or the **Media** card.
+- **Every OpenAI-door media row is labelled protocol `openai_images`**, speech,
+  transcription and video included.
+- **A client that hangs up before the answer is logged `success`**, not
+  `cancelled`, once the provider has answered.
+- **A wrong proxy token on an OpenAI media route answers `401`
+  `{"detail": "Invalid proxy authentication token"}`**, not OpenAI's `error`
+  envelope (the SDKs still raise on the status; the Gemini routes answer in
+  Google's shape).
+- **No upload size limit** of MCC's own (the provider's applies).
+- **Image `"stream": true` and speech `stream_format: "sse"` always answer
+  `400`**: no provider MCC knows documents either.
+- **A custom provider's video whose status answer carries no download URL**
+  cannot be downloaded through MCC: `GET /v1/videos/{id}/content` answers `409`.
+- **A deleted video job still counts** in the Media card's video jobs.
+- **Gemini `candidateCount: 2`** comes back as one candidate holding two images.
+- **Images attached to a Codex turn** reach the Responses door as `input_image`
+  parts, which it refuses with `400` ("Unsupported Responses content part type")
+  and no request-log row. Codex's own image tool (Codex 0.162.1, measured on a
+  test install) never sent an image request to MCC.
 
 ## Not yet
 

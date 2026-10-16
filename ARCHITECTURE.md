@@ -1124,8 +1124,9 @@ retries without the budget while preserving thinking enablement.
 ### The Anthropic Subscription Client Gate
 
 An Anthropic subscription credential may serve requests from Anthropic's own
-clients only — the Claude Code CLI and the Claude Agent SDK, which drives the
-Claude Code binary. Everything else routed through MCC (OpenCode, Cline, Crush,
+clients only — the Claude Code CLI, the Claude Agent SDK (which drives the
+Claude Code binary) and, since 7.92.1, the Claude desktop app
+(`claude-desktop-3p`, `claude-desktop`). Everything else routed through MCC (OpenCode, Cline, Crush,
 a bare API call) is refused by the OAuth provider and falls through to a
 provider carrying its own credential.
 

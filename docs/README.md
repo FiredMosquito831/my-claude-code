@@ -4,12 +4,12 @@ The [README](../README.md) is the map: what My Claude Code is, how to install it
 
 | Page | What is in it |
 | --- | --- |
-| [Usage Guide](./USAGE.md) | The manual. Install per platform, first run, connecting each coding agent and desktop app, providers and keys, tiers and routing, web search, analytics, rotation, limits, updating, security, troubleshooting. |
-| [Clients](./CLIENTS.md) | Editor integrations and any OpenAI-, Anthropic- or Gemini-shaped client that is not one of the launchers. |
+| [Usage Guide](./USAGE.md) | The manual. Install per platform, first run, connecting each coding agent and desktop app, providers and keys, tiers and routing, web search, analytics, rotation, limits, updating, security, using a VPN, WARP or Tor, troubleshooting. |
+| [Clients](./CLIENTS.md) | Editor integrations, and the API reference for any OpenAI-, Anthropic- or Gemini-shaped client that is not one of the launchers: one runnable example per endpoint, auth, errors. |
 | [OAuth providers](./OAUTH-PROVIDERS.md) | Sign-in-based providers: a Claude subscription, ChatGPT, Kimi For Coding. |
 | [Messaging](./MESSAGING.md) | Running sessions over Discord or Telegram, with voice-note transcription. |
 | [Routing reference](./ROUTING-REFERENCE.md) | Key rotation, fallback chains, output budgets, limits and resilience, and the token optimizer, as reference rather than tutorial. |
-| [Media routing](./MEDIA.md) | Image generation (and, one release at a time, edits, speech, transcription and video) routed over media rails with the chat engine's retry, key and proxy rules. |
+| [Media routing](./MEDIA.md) | Image generation and edits, speech, transcription and translation, and video, routed over media rails with the chat engine's retry, key and proxy rules; a curl per rail, an Image-rail walkthrough and today's known limits. |
 | [Web search](./WEB-SEARCH.md) | The `web_search` server tool, fulfilled at the proxy by 14 search providers instead of by Anthropic. |
 | [Claude Code config](./CLAUDE-CODE-CONFIG.md) | Pointing Claude Code at this proxy, per session or permanently. |
 | [Anthropic subscription](./ANTHROPIC-SUBSCRIPTION.md) | What signing in with a Claude subscription costs you, and why Anthropic does not permit it. |

@@ -42,6 +42,24 @@ DOCUMENTED_CONTROLS: tuple[str, ...] = (
     "All time",
     "Clear log",
     "Export",
+    "Build search index",
+    # Proxying: the VPN, WARP and Tor tutorial (USAGE §15) and the Guide's
+    # "Use a VPN, WARP or Tor" section send the reader to these by name.
+    "Scan this computer",
+    "Save Tor ports",
+    "Check Tor",
+    "New Tor identity",
+    "Copy torrc lines",
+    "Add to chain",
+    "Add all to chain",
+    "Add a VPN account",
+    "Add a gateway",
+    "Add a proxy list",
+    "Save and offer",
+    "Where does Direct come out?",
+    "Forget exit memory",
+    "Keep trying exits until one answers",
+    "Add proxy",
 )
 
 

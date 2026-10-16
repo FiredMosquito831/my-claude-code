@@ -2077,6 +2077,7 @@
                 <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-media">Generate images through the proxy</a>
+                <a href="#guide-vpn-tor">Use a VPN, WARP or Tor</a>
                 <a href="#guide-proxy-chains">What a proxy chain hides</a>
                 <a href="#guide-proxy-keep-trying">Keep trying exits until one answers</a>
                 <a href="#guide-proxy-sources">Proxies on this computer, and where each exit comes out</a>
@@ -2320,6 +2321,31 @@
                   its daily free quota, the 429 that resets at midnight UTC is recorded
                   against the provider and shown on <a href="#guide-learned">Models</a>.
                 </p>
+                <p id="guide-opencode-identity">
+                  <strong>What changed in 7.92.2 and 7.92.3.</strong> From 2026-10-13 the
+                  Zen free tier refused every request MCC sent with <code>403
+                  FreeTierError</code>: it reads a creation time out of the conversation id
+                  in <code>x-opencode-session</code>, and MCC's ids read weeks old. Since
+                  7.92.2 MCC mints that id the way OpenCode does &mdash; the clock at the
+                  moment MCC first sees the conversation, then random characters &mdash;
+                  one per conversation, kept until the server restarts. Since 7.92.3 it
+                  also sends <code>x-opencode-session-id</code> with the same value (as
+                  OpenCode 1.19.0 does), and when the agent calling MCC is OpenCode itself
+                  with an id in exactly OpenCode's shape, that id is sent on unchanged.
+                  The addresses are <code>https://opencode.ai/inference/v1</code> (Zen)
+                  and <code>https://opencode.ai/inference/go/v1</code> (Go), what the
+                  vendor's registry publishes; they are not a setting, so every install
+                  uses them from its next start. A request with no tools to a
+                  <em>free</em> model (a title or summary call) now carries OpenCode's
+                  five tool names, each marked as not to be called, because the free tier
+                  refuses tool-less requests; <em>Probe capabilities</em> asks free models
+                  the same way. Paid models and <code>OPENCODE_CLIENT_IDENTITY=mcc</code>
+                  are unchanged. The free-usage limit is counted per key &mdash; free
+                  models use OpenCode's own anonymous <code>public</code> key, not yours
+                  &mdash; and that shared bucket also follows the address you call from,
+                  which is why a <a href="#guide-vpn-tor">proxy chain</a> can lift it one
+                  exit at a time.
+                </p>
                 <p>
                   <strong>New in 6.74.0 &mdash; OpenCode Zen is four APIs, not one.</strong>
                   Which one a model is served on is a property of that model, published in
@@ -2446,7 +2472,8 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     entrypoints &mdash; <code>cli</code>, <code>cli-bg</code>,
                     <code>sdk-cli</code>, <code>sdk-py</code>, <code>sdk-ts</code> and
                     <code>claude-desktop-3p</code> and <code>claude-desktop</code>,
-                    which is the Claude Code CLI and the Claude Agent SDK. MCC reads the
+                    which is the Claude Code CLI, the Claude Agent SDK and (since 7.92.1)
+                    the Claude desktop app. MCC reads the
                     <code>cc_entrypoint</code> marker Claude Code writes into the request
                     body, and every other harness pointed at your proxy &mdash; OpenCode,
                     Cline, Crush, a bare API call &mdash; is refused rather than quietly
@@ -3618,7 +3645,9 @@ mcc-gemini</code></pre>
                       <td>Model</td>
                       <td>
                         any id from <code>GET /v1/models</code>, for example
-                        <code>anthropic/claude-sonnet-4-5</code>
+                        <code>mcc/medium</code> (your Sonnet tier). A
+                        <code>provider/model</code> id pins that one model and needs that
+                        provider's key
                       </td>
                     </tr>
                   </tbody>
@@ -3637,7 +3666,7 @@ mcc-gemini</code></pre>
                 <pre><code>curl http://127.0.0.1:8082/v1/chat/completions \
   -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"model": "anthropic/claude-sonnet-4-5", "stream": true,
+  -d '{"model": "mcc/medium", "stream": true,
        "messages": [{"role": "user", "content": "hello"}]}'</code></pre>
                 <p>
                   <code>GET /v1/models</code> answers in the OpenAI list shape, so a
@@ -3646,7 +3675,10 @@ mcc-gemini</code></pre>
                   the clients that display reasoning actually read. The
                   <strong>Requests</strong> page labels each of these rows
                   <code>openai_chat</code> in its Protocol row, so you can tell at a
-                  glance which door a request came through.
+                  glance which door a request came through. <code>/v1/responses</code>
+                  answers streamed requests only. Every endpoint, its auth headers, its
+                  error shapes and one runnable example each are in the <em>API
+                  reference</em> of <em>Clients</em> on the <strong>Docs</strong> page.
                 </p>
                 <p>
                   <strong>Four coding agents reach this proxy through that door,
@@ -3730,7 +3762,7 @@ mcc-gemini</code></pre>
                   same routing, fallback chain, reasoning gating and request log
                   as <code>/v1/messages</code>.
                 </p>
-                <pre><code>curl "http://127.0.0.1:8082/v1beta/models/anthropic/claude-sonnet-4-5:generateContent" \
+                <pre><code>curl "http://127.0.0.1:8082/v1beta/models/mcc/medium:generateContent" \
   -H "x-goog-api-key: $ANTHROPIC_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}'</code></pre>
@@ -3818,6 +3850,156 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   SearXNG, SerpAPI, SearchAPI and DDGS. All 66 advanced options live in the
                   Advanced options drawers, which are open when the page loads, and each
                   states what leaving it blank does.
+                </p>
+
+                <h3 id="guide-vpn-tor">Use a VPN, WARP or Tor</h3>
+                <p>
+                  For a provider that counts a free allowance per address (OpenCode
+                  Zen's free models), refuses your country, or should not see your home
+                  address. MCC never installs, starts or signs in to a VPN, WARP or tor:
+                  it uses what you run, and TLS stays strict, so no proxy or VPN can read
+                  your keys, prompts or replies. Find your row, then follow its steps.
+                </p>
+                <table class="guide-table">
+                  <thead><tr><th>What you have</th><th>What MCC can do</th><th>Steps</th></tr></thead>
+                  <tbody>
+                    <tr><td>Proton VPN Free, or a VPN app with no proxy (Surfshark, Windscribe)</td><td>The whole computer, MCC's <em>Direct</em> included, goes out through the app</td><td><a href="#guide-vpn-proton">1</a></td></tr>
+                    <tr><td>Proton VPN Plus, ExpressVPN</td><td>Split tunnelling: only MCC's program through the VPN</td><td><a href="#guide-vpn-split">2</a></td></tr>
+                    <tr><td>Mullvad or IVPN (app connected); a NordVPN, PIA, IPVanish or TorGuard account; Bright Data, Oxylabs, IPRoyal, Decodo; a Webshare list</td><td>Each proxy, session or row becomes a chain entry</td><td><a href="#guide-vpn-accounts">3</a></td></tr>
+                    <tr><td>Cloudflare WARP</td><td>Its proxy mode is a proxy on this computer</td><td><a href="#guide-vpn-warp">4</a></td></tr>
+                    <tr><td>A tor you run</td><td>Each SOCKS port is one identity and one entry</td><td><a href="#guide-proxy-tor">5</a></td></tr>
+                    <tr><td>A VPN that only gives OpenVPN or WireGuard files</td><td>Run gluetun in Docker yourself; one entry per container</td><td><a href="#guide-vpn-gluetun">6</a></td></tr>
+                  </tbody>
+                </table>
+
+                <h4 id="guide-vpn-proton">1. Proton VPN Free: turn the app on</h4>
+                <ol>
+                  <li>Connect the Proton VPN app. Nothing is set in MCC: everything MCC
+                    sends from this computer's own address &mdash; a provider with no
+                    chain, a chain's <em>Direct</em> entry, Direct fallback &mdash; now
+                    leaves through Proton.</li>
+                  <li>On the <strong>Proxying</strong> page press <em>Where does Direct
+                    come out?</em> on a provider's card: it shows the address and country
+                    the provider's own host saw. It sends only where that provider's
+                    traffic may leave from this computer right now; anywhere else nothing
+                    is sent and the card says why.</li>
+                </ol>
+                <img class="guide-shot" src="/admin/img/admin-proxy-direct-not-sent.png"
+                     alt="The Direct line of a proxy chain card reading Not sent: no proxy in OpenCode Zen's chain can be used right now and Direct fallback is off, so it would have gone out from this computer's own address"
+                     loading="lazy">
+                <p>
+                  Proton VPN Free (Proton's own pages, read 2026-10-06): no proxy, no
+                  split tunnelling, <strong>one device</strong>, a server picked at random
+                  from about ten countries, and <em>Change server</em> waits 45 seconds,
+                  then ten minutes. So it is one exit for the whole computer, and MCC
+                  cannot choose its country or press <em>Change server</em>.
+                  <strong>Gotchas:</strong> a chain with Direct fallback off never uses
+                  this computer's address, so the app changes nothing for it; a VPN or
+                  tool that sets the Windows or macOS <em>proxy</em> setting carries every
+                  Direct dial, and the log names it <code>direct via system proxy
+                  host:port</code>.
+                </p>
+
+                <h4 id="guide-vpn-split">2. Split tunnelling: only MCC through the VPN</h4>
+                <p>
+                  Proton VPN Plus and ExpressVPN can send only the programs you list
+                  through the VPN (Proton calls it <em>include</em> mode). List the
+                  program that opens MCC's connections: the <strong>Python interpreter
+                  running the server</strong> &mdash; not the <code>mcc-server</code>
+                  command, which only starts it, and not the desktop window. The server
+                  names its own process in the <code>x-mcc-pid</code> header of
+                  <code>/health</code>; in PowerShell:
+                </p>
+                <pre><code>$p = [int]((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8082/health).Headers['x-mcc-pid'] | Select-Object -First 1)
+(Get-Process -Id $p).Path</code></pre>
+                <p>
+                  On an installer-made Windows install that prints uv's own Python, for
+                  example
+                  <code>C:\Users\&lt;you&gt;\AppData\Roaming\uv\python\cpython-3.14.0-windows-x86_64-none\python.exe</code>.
+                  Add that file to the VPN app's list. <strong>Gotchas:</strong> every
+                  other program running on that same <code>python.exe</code> goes through
+                  the VPN too; an update that moves MCC to another Python changes the path,
+                  so run the two lines again after updating; your coding agents reach MCC
+                  on <code>127.0.0.1</code> and need no VPN; a WSL install was not tested.
+                </p>
+
+                <h4 id="guide-vpn-accounts">3. A VPN account, a gateway or a proxy list</h4>
+                <p>
+                  Under <em>Proxies on this computer</em> press <em>Add a VPN
+                  account</em>, <em>Add a gateway</em> or <em>Add a proxy list</em>, pick
+                  the preset, fill in your login, press <em>Save and offer</em> (it
+                  contacts nothing), then <em>Add all to chain</em> &mdash; each address is
+                  tested against that provider's own host first. Mullvad and IVPN take no
+                  login and answer only while their app's tunnel is connected; NordVPN
+                  wants its <em>service</em> credentials, not your login. Every vendor's
+                  facts are in <a href="#guide-proxy-vendors">VPN accounts, commercial
+                  gateways and proxy lists</a>.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-proxy-vpn-account.png"
+                     alt="The Add a VPN account form with the Mullvad (inside its tunnel) preset chosen, 10.64.0.1 in the hosts box, SOCKS5 on port 1080, and Save and offer"
+                     loading="lazy">
+
+                <h4 id="guide-vpn-warp">4. Cloudflare WARP</h4>
+                <p>
+                  Turn on the WARP desktop app's <strong>proxy mode</strong> (Cloudflare
+                  documents it under Preferences &rarr; Advanced &rarr; Configure Proxy,
+                  on a port you choose), then press <em>Scan this computer</em>, or type
+                  <code>socks5h://127.0.0.1:&lt;your port&gt;</code> into a chain card and
+                  press <em>Add proxy</em>. <strong>Gotchas:</strong> WARP is one exit,
+                  shared with other WARP users nearby, so two WARP entries are not two
+                  addresses; Cloudflare documents a 10-second limit per request for its
+                  Zero Trust client's proxy mode, so a long streamed answer may be cut.
+                </p>
+
+                <h4 id="guide-vpn-gluetun">6. gluetun: any VPN's OpenVPN or WireGuard file</h4>
+                <p>
+                  <a href="https://github.com/qdm12/gluetun" target="_blank" rel="noreferrer noopener">gluetun</a>
+                  is a VPN client in a Docker container with an optional HTTP proxy. You
+                  run it; MCC does not install or start Docker or gluetun. A Proton VPN
+                  WireGuard example, its proxy published on this computer only:
+                </p>
+                <pre><code>docker run -d --name gluetun-nl --cap-add=NET_ADMIN --device /dev/net/tun \
+  -p 127.0.0.1:8888:8888/tcp \
+  -e VPN_SERVICE_PROVIDER=protonvpn -e VPN_TYPE=wireguard \
+  -e WIREGUARD_PRIVATE_KEY=&lt;the PrivateKey of your Proton WireGuard file&gt; \
+  -e SERVER_COUNTRIES=Netherlands \
+  -e HTTPPROXY=on \
+  qmcgaw/gluetun</code></pre>
+                <p>
+                  Then press <em>Scan this computer</em> (8888 is one of the ports it
+                  asks) or add <code>http://127.0.0.1:8888</code> with <em>Add proxy</em>.
+                  A second container on another host port and country is a second exit.
+                  <strong>Gotchas:</strong> publish on <code>127.0.0.1</code>, or anything
+                  on your network can use the proxy; Proton VPN Free allows one device, so
+                  gluetun with a Free key while the app is connected may be refused (not
+                  tested).
+                </p>
+
+                <h4 id="guide-vpn-check">Check that it worked</h4>
+                <img class="guide-shot" src="/admin/img/admin-proxy-chain-card.png"
+                     alt="The OpenCode Zen chain card with four entries (two Tor ports, a gluetun HTTP proxy and WARP proxy mode), its What OpenCode Zen can see box, Fall back to this machine's own address unticked and Keep trying exits until one answers ticked"
+                     loading="lazy">
+                <p>
+                  A chain card (from a test install whose proxies are not running, so every
+                  entry reads unhealthy): its entries, <em>What &lt;provider&gt; can
+                  see</em>, Direct fallback and <em>Keep trying exits until one
+                  answers</em>, which is on for every chain. The Analytics
+                  <strong>Exit</strong> column shows the exit that answered (+N when more
+                  were tried), and a request's <em>View</em> lists every exit it dialled
+                  and what each one answered:
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-analytics-exit-detail.png"
+                     alt="A request's route attempts: the sentence Every exit this request could use in OpenCode Zen's proxy chain refused or failed it, and four proxy dials each switching to the next"
+                     loading="lazy">
+                <p>
+                  <strong>Worth knowing:</strong> a chain with one entry never switches
+                  and never falls back to Direct; Direct fallback, on for a new chain,
+                  sends from this computer only once every proxy in the chain is
+                  unhealthy; a refused exit is remembered until <em>Forget exit
+                  memory</em> or a restart; the OpenCode session id is the same on every
+                  exit. No VPN vendor found allows automated API traffic in its terms, and
+                  commercial proxies bind you to the use you declared to them: using them
+                  for a coding assistant is your call.
                 </p>
 
                 <h3 id="guide-proxy-chains">What a proxy chain hides</h3>
@@ -4003,6 +4185,9 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                     <a href="#guide-proxy-keep-trying">Keep trying exits until one
                     answers</a>).</li>
                 </ol>
+                <img class="guide-shot" src="/admin/img/admin-proxy-tor.png"
+                     alt="The Tor you run yourself card after saving two SOCKS ports and a control port: New Tor identity and Check Tor buttons, each port with Add to chain, Add all to chain, and the torrc lines to paste"
+                     loading="lazy">
                 <p>
                   <strong>One Tor port does not rotate.</strong> A chain with only one
                   proxy in it never switches and never falls back to this machine's own
@@ -4204,6 +4389,36 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   images is not benched for chat. Every request is logged with how many images
                   came back and their size; turn on <em>Store generated media</em> on
                   <strong>Analytics</strong> to keep the files too.
+                </p>
+                <p id="guide-media-walkthrough">
+                  <strong>Try it.</strong> Put a model on the Image rail on
+                  <strong>Model Config</strong>, send one request, then look at the
+                  <em>Media</em> card near the bottom of <strong>Analytics</strong>:
+                </p>
+                <pre><code>curl http://127.0.0.1:8082/v1/images/generations \
+  -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"prompt": "a red cube on a white table", "response_format": "b64_json"}'</code></pre>
+                <img class="guide-shot" src="/admin/img/admin-media-image-rail.png"
+                     alt="The Image rail on Model Config with one model selected, a Pause button and Add fallback"
+                     loading="lazy">
+                <img class="guide-shot" src="/admin/img/admin-media-analytics.png"
+                     alt="The Analytics Media card: a By rail table with one Image request, one Speech request and one failed Transcription request, and a By provider and model table"
+                     loading="lazy">
+                <p>
+                  An empty rail answers <code>404</code> &mdash; <em>No model is
+                  configured for the Image rail</em> &mdash; on purpose: the OpenAI SDKs
+                  would retry a <code>503</code> for nothing. <strong>Today</strong>, a
+                  media row in the requests table shows dashes for turn and tokens (find
+                  it by its Endpoint or the <em>Media</em> card), every OpenAI-door media
+                  row says protocol <code>openai_images</code>, a client that hangs up is
+                  logged <code>success</code>, a <code>provider/model</code> name reaches
+                  any keyed provider's model even off the rail, image
+                  <code>stream: true</code> and speech <code>stream_format: sse</code>
+                  answer <code>400</code>, and MCC sets no upload size limit of its own.
+                  A curl for every rail and the full list are on the <strong>Docs</strong>
+                  page under <em>Media routing</em> (<code>docs/MEDIA.md</code>); every
+                  endpoint, with one runnable example each, is in the <em>API
+                  reference</em> of <em>Clients</em> (<code>docs/CLIENTS.md</code>).
                 </p>
                 <p>
                   Each picker offers only its own kind of model: a chat route chat models, the
@@ -4783,9 +4998,11 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>auto</code>, <code>reported_only</code>, or
                   <code>computed_only</code>, the last being how you audit a provider's
                   own billing against a published price), and the LiteLLM source
-                  (<code>COST_SOURCE_LITELLM_ENABLED</code>, off &mdash; it costs one more
-                  cached 2.3&nbsp;MB file and one conditional fetch a day, and buys the
-                  misses). The <a href="#guide-learned">Models</a> page shows the
+                  (<code>COST_SOURCE_LITELLM_ENABLED</code>, off). <strong>No release
+                  downloads LiteLLM's price map yet:</strong> with that source on, MCC
+                  reads <code>~/.mcc/cache/litellm-prices.json</code> if the file exists
+                  and otherwise LiteLLM prices nothing, so on a fresh install turning it on
+                  changes nothing. The <a href="#guide-learned">Models</a> page shows the
                   resolved input, output, cache and reasoning rates per model in USD per
                   million tokens, each with the rung it came from &mdash; so you can see
                   what a request would be priced from before you send one.
