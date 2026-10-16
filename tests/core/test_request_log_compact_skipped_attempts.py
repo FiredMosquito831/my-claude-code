@@ -33,6 +33,9 @@ from my_claude_code.core.request_log import (
 
 _TS = 1_790_000_000.0
 _KEY = request_log_module._HISTORY_CONVERSION_KEY
+# The prompt chunk part (7.93.0) has its own module,
+# test_request_log_prompt_chunks.py.
+pytestmark = pytest.mark.usefixtures("no_prompt_chunk_store")
 _SKIPPED = RouteAttemptOutcome.SKIPPED
 _LADDER = {
     "ladder": {
@@ -944,7 +947,8 @@ def test_a_finished_7750_document_is_reopened_for_the_skipped_part_alone(
     state = _wait_done(path)
     store.close()
 
-    assert state["reopened_for"] == ["skipped"]
+    # 7.76.0's part and every later one (7.93.0: prompt chunks).
+    assert state["reopened_for"] == ["skipped", "chunks"]
     assert state["returned_at_reopen"] == 5
     for part in ("wire", "bodies", "metadata"):
         assert state[part] == earlier[part]

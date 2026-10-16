@@ -21583,25 +21583,46 @@ function logSizeNote(storage) {
   const rows = storage.rows == null ? null : Number(storage.rows);
   if (!size && rows == null) return "";
   const history = historyConversionNote(storage.history);
-  if (rows == null) return ` · ${size} on disk${history}`;
-  return ` · ${formatAnalyticsNumber(rows)} rows kept, ${size} on disk${history}`;
+  const chunks = chunkStoreNote(storage.history);
+  if (rows == null) return ` · ${size} on disk${chunks}${history}`;
+  return ` · ${formatAnalyticsNumber(rows)} rows kept, ${size} on disk${chunks}${history}`;
+}
+
+// 7.93.0: prompts stored as chunks live in the search index file beside the
+// log, so once any are, that file is part of what the log costs on disk.
+function chunkStoreNote(history) {
+  const store = history && history.chunk_store;
+  if (!store || !(Number(store.prompts) > 0)) return "";
+  const size = formatLogBytes(store.index_bytes);
+  return size
+    ? `, plus ${size} in the search index file, which holds the prompts stored as chunks`
+    : "";
 }
 
 // 7.74.0: while the background conversion of older history runs, say so and
 // how far it is. Nothing once it is done, and nothing from an older server.
 // 7.75.0 added the "metadata" part: repeated request metadata stored once.
 // 7.76.0 added the "skipped" part: skipped route attempts stored compactly.
+// 7.93.0 added the "prompts" part: prompts stored as chunks.
 const HISTORY_PHASE_LABELS = {
   snapshots: "snapshots",
   bodies: "bodies",
   metadata: "request metadata",
   skipped: "skipped route attempts",
+  prompts: "prompts, stored as chunks",
 };
+
+function historyConversionRunning(history) {
+  return !!history && (history.state === "converting" || history.state === "returning_space");
+}
 
 function historyConversionNote(history) {
   if (!history) return "";
   const percent = Number(history.percent);
   const shown = Number.isFinite(percent) ? ` ${percent}%` : "";
+  if (history.paused && historyConversionRunning(history)) {
+    return ` · compressing older history paused at${shown || " 0%"}`;
+  }
   if (history.state === "converting") {
     // A part a newer server added still reads as the conversion it is.
     const what = HISTORY_PHASE_LABELS[history.phase];
@@ -21614,6 +21635,32 @@ function historyConversionNote(history) {
     return ` · handing freed space back to the disk${shown}`;
   }
   return "";
+}
+
+// 7.93.0: Pause / Continue of the background history conversion, shown only
+// while it has something left to do.
+function paintHistoryPause(history) {
+  const button = byId("reqHistoryPause");
+  if (!button) return;
+  if (!historyConversionRunning(history)) {
+    button.hidden = true;
+    return;
+  }
+  button.textContent = history.paused ? "Continue" : "Pause";
+  button.dataset.action = history.paused ? "continue" : "pause";
+  button.hidden = false;
+}
+
+async function toggleHistoryConversion() {
+  const button = byId("reqHistoryPause");
+  const action = button && button.dataset.action === "continue" ? "continue" : "pause";
+  const history = await api(`/admin/api/requests/history-conversion/${action}`, {
+    method: "POST",
+    body: "{}",
+  });
+  paintHistoryPause(history);
+  renderRequestLifetime(await api("/admin/api/requests/lifetime"));
+  return history;
 }
 
 function renderRequestLifetime(lifetime) {
@@ -21636,6 +21683,7 @@ function renderRequestLifetime(lifetime) {
   // fast queries, not a limit nobody asked for -- but an invisible number is
   // one a reader cannot act on.
   span.textContent = `${period}${logSizeNote(lifetime.storage)}`;
+  paintHistoryPause(lifetime.storage && lifetime.storage.history);
   const successRate = requests
     ? ((Number(lifetime.success || 0) / requests) * 100).toFixed(1)
     : "0.0";
@@ -25876,6 +25924,9 @@ byId("reqSearchIndexBuild").addEventListener("click", () => {
 });
 byId("reqSearchIndexPause").addEventListener("click", () => {
   pauseSearchIndexBuild().catch((error) => showMessage(error.message, "error"));
+});
+byId("reqHistoryPause").addEventListener("click", () => {
+  toggleHistoryConversion().catch((error) => showMessage(error.message, "error"));
 });
 byId("reqPrevPage").addEventListener("click", () => {
   reqState.offset = Math.max(0, reqState.offset - reqState.limit);

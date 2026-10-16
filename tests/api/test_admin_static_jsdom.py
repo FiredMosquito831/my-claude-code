@@ -3917,6 +3917,52 @@ def test_the_history_note_names_the_skipped_attempts_part(rendered) -> None:
     )
 
 
+def test_the_history_note_names_the_prompt_chunk_part_and_a_pause(rendered) -> None:
+    """7.93.0: prompts stored as chunks say so, and a paused conversion says it is."""
+
+    notes = rendered["logReadout"]["historyNotes"]
+
+    assert notes["prompts"] == (
+        " · compressing older history (prompts, stored as chunks 37%)"
+    )
+    assert notes["paused"] == " · compressing older history paused at 37%"
+    assert notes["pausedSpace"] == " · compressing older history paused at 80%"
+    # Nothing left to do: a pause has nothing to say.
+    assert notes["pausedDone"] == ""
+
+
+def test_the_size_counts_the_chunk_store_once_it_holds_prompts(rendered) -> None:
+    """7.93.0: chunked prompts live in the search index file, so its size is shown."""
+
+    notes = rendered["logReadout"]["chunkNotes"]
+
+    assert notes["none"] == ""
+    assert notes["older"] == ""
+    assert notes["some"] == (
+        ", plus 2.12 GB in the search index file, which holds the prompts stored as"
+        " chunks"
+    )
+
+
+def test_the_history_conversion_can_be_paused_and_continued(rendered) -> None:
+    """7.93.0: Pause / Continue beside the log's size, only while there is work."""
+
+    button = rendered["logReadout"]["historyButton"]
+
+    assert button["atOpen"] == {"present": True, "hidden": False, "text": "Pause"}
+    assert button["paused"]["text"] == "Continue"
+    assert button["paused"]["hidden"] is False
+    assert button["done"]["hidden"] is True
+    assert button["space"] == {"present": True, "hidden": False, "text": "Pause"}
+    assert button["pausePosts"] == ["POST /admin/api/requests/history-conversion/pause"]
+    assert button["afterPause"]["text"] == "Continue"
+    assert "compressing older history paused at 37%" in button["spanAfterPause"]
+    assert button["continuePosts"] == [
+        "POST /admin/api/requests/history-conversion/continue"
+    ]
+    assert button["afterContinue"]["text"] == "Pause"
+
+
 def test_the_cost_card_ships_the_denominator_behind_its_totals(rendered) -> None:
     """A window where most models are unpriced must not read as a cheap week."""
 

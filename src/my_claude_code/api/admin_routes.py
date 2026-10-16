@@ -5417,6 +5417,40 @@ async def pause_search_index_build(
     return {"enabled": True, **status, "coverage": _last_search_coverage(store)}
 
 
+@router.post("/admin/api/requests/history-conversion/pause")
+async def pause_history_conversion(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Pause the background conversion of the request log's history (7.93.0).
+
+    It runs by itself between requests (storing prompts as chunks, handing
+    freed space back to the disk); a pause holds across restarts until
+    Continue. Nothing converted so far changes. Declared before
+    ``/admin/api/requests/{request_id}``.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_LOG_OFF)
+    return await asyncio.to_thread(store.pause_history_conversion)
+
+
+@router.post("/admin/api/requests/history-conversion/continue")
+async def continue_history_conversion(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Continue a paused history conversion from where it stopped (7.93.0)."""
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        raise HTTPException(status_code=409, detail=_ORIGIN_BACKFILL_LOG_OFF)
+    return await asyncio.to_thread(store.continue_history_conversion)
+
+
 @router.get("/admin/api/requests/{request_id}")
 async def get_request_log_entry(
     request_id: str,
