@@ -2893,7 +2893,7 @@ every request:
 | `User-Agent` | `opencode/<version>` — the OpenCode release installed on this machine, else the one this build was pinned against |
 | `x-opencode-client` | `cli` |
 | `x-opencode-project` | `global` |
-| `x-opencode-session` | one stable id per conversation — the id your coding agent supplied, or one derived from how the conversation opened |
+| `x-opencode-session` | one id per conversation, minted the way OpenCode mints one (its clock, then random characters) the first time MCC sees that conversation — named by your coding agent's own id, or by how the conversation opened — and kept until the server restarts |
 | `x-opencode-request` | a fresh id for this one call |
 
 **Say this plainly, because it is your account and your choice.** The default

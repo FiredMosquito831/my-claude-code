@@ -6,6 +6,7 @@ the wire, and the promise that no other provider's bytes moved.
 """
 
 import json
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -18,6 +19,7 @@ from my_claude_code.providers.openai_chat import (
     create_openai_chat_provider,
 )
 from my_claude_code.providers.openai_chat.client_identity import (
+    BASE62_ALPHABET,
     ClientIdentity,
     conversation_key_from_messages,
     derived_session_id,
@@ -122,7 +124,8 @@ def test_the_constant_headers_reach_the_sdk_as_default_headers(
     assert headers["user-agent"].startswith("opencode/")
     assert headers[OPENCODE_CLIENT_HEADER] == "cli"
     assert headers[OPENCODE_PROJECT_HEADER] == "global"
-    assert headers[OPENCODE_SESSION_HEADER].startswith("ses_f")
+    assert headers[OPENCODE_SESSION_HEADER].startswith("ses_")
+    assert len(headers[OPENCODE_SESSION_HEADER]) == len("ses_") + 26
     assert headers[OPENCODE_REQUEST_HEADER].startswith("msg_")
 
 
@@ -262,16 +265,47 @@ def test_the_request_header_is_new_on_every_call() -> None:
     assert len(seen) == 8
 
 
+def _session_head_ms(session: str) -> int:
+    """The creation clock a session id's head encodes (milliseconds mod 2**36)."""
+    return ((~int(session[4:16], 16)) & 0xFFFFFFFFFFFF) // 0x1000
+
+
+def _now_ms_in_head_range() -> int:
+    return int(time.time() * 1000) & ((1 << 36) - 1)
+
+
 def test_the_minted_ids_have_the_clients_own_shape() -> None:
     """``ses_`` + 12 hex + 14 base62, descending; ``msg_`` the same, ascending."""
     session = derived_session_id("anything")
     message = new_message_id()
     assert len(session) == len("ses_") + 26
     assert len(message) == len("msg_") + 26
-    assert session.startswith("ses_f")
+    assert session.startswith("ses_")
     assert all(char in "0123456789abcdef" for char in session[4:16])
+    assert all(char in BASE62_ALPHABET for char in session[16:])
     assert all(char in "0123456789abcdef" for char in message[4:16])
     assert int(message[4:16], 16) > 1_700_000_000_000
+    assert derived_session_id("anything") == session
+    assert derived_session_id("something else") != session
+
+
+def test_a_session_id_head_is_the_clock_at_first_sight_not_a_constant() -> None:
+    """7.92.2 regression: the head reads as *now*, the way OpenCode Zen reads it.
+
+    Until 7.92.1 the head was a digest forced to begin ``f``. The real
+    client's descending clock left ``f`` on 2026-10-03, and from 2026-10-13
+    Zen's free tier refused every such id -- each decoded to weeks ago -- with
+    ``403 FreeTierError``.
+    """
+    before = _now_ms_in_head_range()
+    sessions = [derived_session_id(f"regression-{index}") for index in range(32)]
+    after = _now_ms_in_head_range()
+    for session in sessions:
+        assert before - 5_000 <= _session_head_ms(session) <= after + 5_000
+    # Minted later sorts first: the head counts down.
+    heads = [session[4:16] for session in sessions]
+    assert heads == sorted(heads, reverse=True)
+    assert len(set(heads)) == len(heads)
 
 
 # ------------------------------------------------------------- the opt-out

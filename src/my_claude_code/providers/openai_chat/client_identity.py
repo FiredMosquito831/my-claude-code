@@ -32,7 +32,9 @@ value is closer to the identified client than a header that vanishes.
 
 import hashlib
 import os
+import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -46,12 +48,27 @@ ID_SUFFIX_CHARS = 14
 #: Length of the time-ordered hexadecimal head of an OpenCode-shaped identifier.
 ID_TIME_CHARS = 12
 
-#: Bound on the text hashed into a derived conversation key. A conversation is
+#: Bound on the text taken into a derived conversation key. A conversation is
 #: identified by how it *starts*, and the opening of a system prompt plus the
 #: opening of the first user turn is both stable across turns and far more than
 #: enough to separate two conversations. Bounding it also keeps the cost of the
 #: derivation flat as a conversation grows.
 MAX_CONVERSATION_KEY_CHARS = 4_096
+
+#: How many conversations' session ids one process remembers. Past it the
+#: conversation least recently seen is forgotten, and mints a new id if it
+#: comes back.
+MAX_REMEMBERED_SESSIONS = 4_096
+
+#: The time head is the low 48 bits of the client's descending clock.
+_TIME_HEAD_MASK = (1 << (4 * ID_TIME_CHARS)) - 1
+
+_session_ids: OrderedDict[tuple[str, bytes], str] = OrderedDict()
+_session_ids_lock = threading.Lock()
+#: Guarded by ``_session_ids_lock``: the millisecond of the last mint and how
+#: many ids were minted in it.
+_last_mint_ms = 0
+_mint_counter = 0
 
 
 def _base62(value: int, length: int) -> str:
@@ -69,33 +86,62 @@ def _random_suffix() -> str:
     return _base62(int.from_bytes(os.urandom(16), "big"), ID_SUFFIX_CHARS)
 
 
-def derived_session_id(conversation_key: str, *, prefix: str = "ses") -> str:
-    """A stable identifier for one conversation, in the identified client's shape.
+def _descending_time_head() -> str:
+    """The twelve-hex head the identified client stamps on a new session id.
 
-    The client this proxy identifies as mints session ids as ``ses_`` plus a
-    twelve-character time head plus a fourteen-character random tail, and its
-    session ids count *down*, so every one of them begins ``ses_f``. A proxy
-    has no conversations of its own, so the head and the tail are derived from
-    a digest of whatever identifies the conversation instead of from a clock
-    and a random source: the same conversation produces the same id on every
-    turn, two conversations produce different ids, and no conversation's id
-    can be predicted from another's.
-
-    The leading ``f`` is kept because it is a property of the shape, not an
-    accident of one sample.
+    The low 48 bits of ``~(milliseconds * 0x1000 + counter)``, where the
+    counter restarts at one each millisecond: a clock that counts *down*, so
+    a later session sorts first. Being a clock, it can be read back, and the
+    host does read it.
     """
-    digest = hashlib.sha256(conversation_key.encode("utf-8")).digest()
-    head = "f" + digest.hex()[: ID_TIME_CHARS - 1]
-    tail = _base62(int.from_bytes(digest[16:], "big"), ID_SUFFIX_CHARS)
-    return f"{prefix}_{head}{tail}"
+    global _last_mint_ms, _mint_counter
+    now_ms = int(time.time() * 1000)
+    if now_ms != _last_mint_ms:
+        _last_mint_ms = now_ms
+        _mint_counter = 0
+    _mint_counter += 1
+    return f"{~(now_ms * 0x1000 + _mint_counter) & _TIME_HEAD_MASK:012x}"
+
+
+def derived_session_id(conversation_key: str, *, prefix: str = "ses") -> str:
+    """The identifier for one conversation, in the identified client's shape.
+
+    The client this proxy identifies as mints a session id as ``ses_``, a
+    twelve-hex head that is its clock counting down (see
+    :func:`_descending_time_head`) and a fourteen-character random tail. A
+    proxy has no conversations of its own, so it mints that id the first time
+    this process sees a conversation and remembers it: the same conversation
+    carries the same id on every turn for the life of the process (a restart
+    mints a new one), and two conversations carry different ids.
+
+    Until 7.92.1 the id was a digest of the conversation forced to begin
+    ``ses_f``, read off a sample in which every real id did. That ``f`` was
+    the clock, not the shape: the real head's first digit has been ``e`` since
+    2026-10-03 04:22 UTC, and OpenCode Zen reads the head as a creation time.
+    From 2026-10-13 its free tier refused every digest id, all of which read
+    as weeks old, with ``403 FreeTierError``.
+    """
+    # Remembered by digest: the map holds 32 bytes per conversation however
+    # long the text that names it.
+    key = (prefix, hashlib.sha256(conversation_key.encode("utf-8")).digest())
+    with _session_ids_lock:
+        known = _session_ids.get(key)
+        if known is not None:
+            _session_ids.move_to_end(key)
+            return known
+        minted = f"{prefix}_{_descending_time_head()}{_random_suffix()}"
+        _session_ids[key] = minted
+        while len(_session_ids) > MAX_REMEMBERED_SESSIONS:
+            _session_ids.popitem(last=False)
+        return minted
 
 
 def new_message_id(*, prefix: str = "msg") -> str:
     """A fresh per-call identifier, in the identified client's ascending shape.
 
-    Message ids count *up* -- the head is the wall clock in milliseconds -- so
-    unlike the session id this one is minted rather than derived: it really is
-    a new thing at a new time, and saying so is true.
+    Message ids count *up* -- the head is the wall clock in milliseconds --
+    and unlike the session id, which is minted once per conversation, this
+    one is minted on every call: it really is a new thing at a new time.
     """
     head = f"{int(time.time() * 1000) & 0xFFFFFFFFFFFF:012x}"
     return f"{prefix}_{head}{_random_suffix()}"
@@ -254,6 +300,7 @@ __all__ = [
     "ID_SUFFIX_CHARS",
     "ID_TIME_CHARS",
     "MAX_CONVERSATION_KEY_CHARS",
+    "MAX_REMEMBERED_SESSIONS",
     "ClientIdentity",
     "conversation_key_from_messages",
     "derived_session_id",
