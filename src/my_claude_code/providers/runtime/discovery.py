@@ -161,8 +161,9 @@ def model_cache_provider_ids_for_settings(
     was therefore swept for nothing and listed as nothing -- an empty
     catalogue on the Models page of exactly the install 7.34.0 gave free
     models to. It has had a credential since that release: the anonymous
-    ``public`` slot, which ``GET /zen/v1/models`` answers with the full
-    catalogue, and one that costs the operator's key nothing to spend.
+    ``public`` slot, which Zen's ``GET /models`` answers with the full
+    catalogue (measured on ``/zen/v1``, the address before 7.92.3), and one
+    that costs the operator's key nothing to spend.
     """
     descriptors = get_provider_registry().all_descriptors()
     available = {

@@ -301,9 +301,24 @@ def test_opencode_go_provider_config_uses_correct_base_url_and_name():
         provider = create_provider("opencode_go", _make_settings())
 
     assert isinstance(provider, OpenAIChatProvider)
-    assert provider._base_url == "https://opencode.ai/zen/go/v1"
+    # 7.92.3: the address the vendor's registry publishes (``/zen/go/v1`` before).
+    assert provider._base_url == "https://opencode.ai/inference/go/v1"
     assert provider._provider_name == "OPENCODE_GO"
     assert provider._api_key == "test_opencode_key"
+
+
+def test_opencode_zen_provider_config_uses_the_registry_base_url() -> None:
+    """7.92.3: Zen's default is models.dev's ``provider.api``, not ``/zen/v1``.
+
+    Read from the catalogue at every build -- there is no setting that pins
+    it -- so an install that has run before moves with the release.
+    """
+    from my_claude_code.providers.runtime.config import build_provider_config
+
+    config = build_provider_config(PROVIDER_CATALOG["opencode"], _make_settings())
+    assert config.base_url == "https://opencode.ai/inference/v1"
+    assert PROVIDER_CATALOG["opencode"].base_url_attr is None
+    assert PROVIDER_CATALOG["opencode_go"].base_url_attr is None
 
 
 def test_opencode_go_catalog_uses_opencode_api_key() -> None:

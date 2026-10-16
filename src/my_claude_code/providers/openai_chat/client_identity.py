@@ -32,6 +32,7 @@ value is closer to the identified client than a header that vanishes.
 
 import hashlib
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -209,6 +210,18 @@ class ClientIdentity:
     constant: Callable[[], Mapping[str, str]]
     #: The header carrying the conversation id, or ``None``.
     session_header: str | None = None
+    #: Further headers the identified client fills with the *same* conversation
+    #: id, under another name. Each carries exactly the value
+    #: ``session_header`` carries on that request -- one id, never a second
+    #: one minted beside it. Empty, the default, sends ``session_header`` alone.
+    session_mirror_headers: tuple[str, ...] = ()
+    #: The exact shape of a conversation id the identified client mints itself,
+    #: or ``None``. When the inbound client *is* that client and names its
+    #: conversation with an id of this shape, the id is sent on verbatim instead
+    #: of a derived one: the host then sees the session its own client opened.
+    #: Matched whole; anything else -- another client's id, a truncated or
+    #: padded one -- is derived exactly as before.
+    inbound_session_pattern: re.Pattern[str] | None = None
     #: The header carrying the per-call id, or ``None``.
     request_header: str | None = None
     #: The header a probe deliberately leaves off, to ask whether this host
@@ -239,16 +252,23 @@ class ClientIdentity:
                 ordered[name] = value
         return ordered
 
-    def headers_for(self, conversation_key: str) -> dict[str, str]:
+    def headers_for(
+        self, conversation_key: str, *, inbound_sessions: Sequence[str | None] = ()
+    ) -> dict[str, str]:
         """The whole identity, for one conversation and one call.
 
         Built as one thing rather than two halves stitched together at the
         call site: the constant half is re-read every time, so an operator
         who changes which identity MCC presents sees it on the next request
         rather than on the next provider rebuild.
+
+        ``inbound_sessions`` are conversation ids the inbound client itself
+        sent, in preference order; see :meth:`passthrough_session`.
         """
         values = dict(self.constant())
-        values.update(self.request_headers(conversation_key))
+        values.update(
+            self.request_headers(conversation_key, inbound_sessions=inbound_sessions)
+        )
         return self._ordered(values)
 
     def default_headers(self) -> dict[str, str]:
@@ -262,16 +282,42 @@ class ClientIdentity:
         """
         return self.headers_for(self.context_free_key)
 
-    def request_headers(self, conversation_key: str) -> dict[str, str]:
+    def request_headers(
+        self, conversation_key: str, *, inbound_sessions: Sequence[str | None] = ()
+    ) -> dict[str, str]:
         """The half that varies, for one conversation and one call."""
         values: dict[str, str] = {}
         if self.session_header is not None:
-            values[self.session_header] = derived_session_id(
+            session = self.passthrough_session(inbound_sessions) or derived_session_id(
                 conversation_key or self.context_free_key
             )
+            values[self.session_header] = session
+            for name in self.session_mirror_headers:
+                values[name] = session
         if self.request_header is not None:
             values[self.request_header] = new_message_id()
         return self._ordered(values)
+
+    def passthrough_session(self, inbound_sessions: Sequence[str | None]) -> str | None:
+        """The first inbound id in the identified client's own shape, or ``None``.
+
+        ``None`` for an identity that declares no shape, so every other host
+        derives its id exactly as it always has. A candidate is trusted only
+        when it matches the declared shape *whole*.
+        """
+        pattern = self.inbound_session_pattern
+        if pattern is None:
+            return None
+        for candidate in inbound_sessions:
+            if isinstance(candidate, str) and pattern.fullmatch(candidate):
+                return candidate
+        return None
+
+    def session_header_names(self) -> tuple[str, ...]:
+        """Every header that carries the conversation id, the primary first."""
+        if self.session_header is None:
+            return ()
+        return (self.session_header, *self.session_mirror_headers)
 
     def header_names(self) -> tuple[str, ...]:
         """Every header name this identity can put on the wire."""
@@ -282,17 +328,22 @@ def identity_headers_for_body(
     identity: ClientIdentity | None,
     body: Mapping[str, Any],
     conversation_id: str | None,
+    *,
+    inbound_sessions: Sequence[str | None] = (),
 ) -> dict[str, str]:
     """The per-request half for one outbound body, or an empty mapping.
 
     ``conversation_id`` is what the inbound client called this conversation,
-    when it named one. Nothing here reads the model, the provider or the
-    credential: the only inputs are the declaration and the conversation.
+    when it named one. ``inbound_sessions`` are the ids an inbound client of
+    the identified program sent for it (empty for every other client); one in
+    the declared shape is sent on as it came, and otherwise the id is derived
+    as before. Nothing here reads the model, the provider or the credential:
+    the only inputs are the declaration and the conversation.
     """
     if identity is None:
         return {}
     key = conversation_id or conversation_key_from_messages(body.get("messages"))
-    return identity.headers_for(key)
+    return identity.headers_for(key, inbound_sessions=inbound_sessions)
 
 
 __all__ = [

@@ -12,6 +12,7 @@ import pytest
 
 from my_claude_code.providers.openai_chat.opencode_identity import (
     OPENCODE_SESSION_HEADER,
+    OPENCODE_SESSION_ID_HEADER,
 )
 from my_claude_code.providers.recovery import (
     FACT_CLIENT_IDENTITY_REQUIRED,
@@ -108,6 +109,66 @@ async def test_the_probe_spends_exactly_two_requests() -> None:
     assert OPENCODE_SESSION_HEADER not in seen[1].headers
     assert seen[0].headers["x-opencode-client"] == "cli"
     assert seen[1].headers["x-opencode-client"] == "cli"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "free"), [("some-free-model", True), ("a-paid-model", False)]
+)
+async def test_a_free_tier_probe_asks_in_the_shape_the_gate_admits(
+    model: str, free: bool
+) -> None:
+    """7.92.3 (user decision Q15): on a free-tier model both legs stream and
+    carry OpenCode's five tool names, because the gate refuses a non-streaming
+    tool-less body whatever the identity; a paid model's probe body is the one
+    every earlier release sent. The second leg leaves off the session id under
+    both of its names."""
+    import json
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"choices": []})
+
+    outcome = await probe_client_identity(
+        "opencode",
+        "https://example.invalid/v1",
+        "sk-probe-key",
+        model,
+        client=_client(handler),
+        now=NOW,
+    )
+    assert outcome is not None
+    assert len(seen) == 2
+    bodies = [json.loads(request.content) for request in seen]
+    if free:
+        for body in bodies:
+            assert body["stream"] is True
+            assert [tool["function"]["name"] for tool in body["tools"]] == [
+                "bash",
+                "edit",
+                "glob",
+                "grep",
+                "read",
+            ]
+    else:
+        assert (
+            bodies
+            == [
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": bodies[0]["max_tokens"],
+                    "stream": False,
+                }
+            ]
+            * 2
+        )
+        assert list(bodies[0]) == ["model", "messages", "max_tokens", "stream"]
+    assert OPENCODE_SESSION_ID_HEADER in seen[0].headers
+    assert OPENCODE_SESSION_HEADER not in seen[1].headers
+    assert OPENCODE_SESSION_ID_HEADER not in seen[1].headers
 
 
 @pytest.mark.asyncio

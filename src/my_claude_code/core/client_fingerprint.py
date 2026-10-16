@@ -67,6 +67,9 @@ _MIRRORED = (
 #
 # Here the value is read and immediately reduced to an opaque derived id for
 # a provider that needs a conversation identity; it is not mirrored verbatim.
+# The one exception (7.92.3, user decision 2026-10-16 Q5): OpenCode calling
+# OpenCode's own gateways through MCC, with an id in exactly the shape its own
+# client mints -- see ``ClientFingerprint.opencode_session_ids``.
 # It is also NOT added to ``core/request_headers.ALLOWED_HEADERS`` -- that
 # allow-list governs the ``headers`` column and is unchanged. The request log's
 # own ``session_id`` column is filled by ``core/request_origin.py`` from its
@@ -80,6 +83,15 @@ _SESSION_HEADERS = (
     "x-claude-session-id",
 )
 
+#: OpenCode's own conversation header, sent when its configured provider id
+#: starts ``opencode``. Kept apart from :data:`_SESSION_HEADERS` so that no
+#: existing derivation changes: it only feeds
+#: :attr:`ClientFingerprint.opencode_session_ids`.
+_OPENCODE_SESSION_HEADER = "x-opencode-session"
+
+#: The harness ids whose user-agent marks the caller as OpenCode itself.
+_OPENCODE_HARNESSES = frozenset({"opencode", "opencode2"})
+
 
 @dataclass(frozen=True, slots=True)
 class ClientFingerprint:
@@ -89,11 +101,34 @@ class ClientFingerprint:
     x_app: str | None = None
     anthropic_version: str | None = None
     anthropic_beta: str | None = None
-    #: What the client called this conversation, when it named one. Never
-    #: mirrored upstream verbatim -- a provider that needs a conversation
-    #: identity derives an opaque one from it. This record is not stored; the
-    #: request log's own origin columns come from ``core/request_origin.py``.
+    #: What the client called this conversation, when it named one. A provider
+    #: that needs a conversation identity derives an opaque one from it; the
+    #: one exception is :attr:`opencode_session_ids`. This record is not
+    #: stored; the request log's own origin columns come from
+    #: ``core/request_origin.py``.
     session_id: str | None = None
+    #: The inbound ``x-opencode-session`` header, which OpenCode's client sends
+    #: when the provider it is configured with has an id starting
+    #: ``opencode``. Read only through :attr:`opencode_session_ids`.
+    opencode_session: str | None = None
+
+    @property
+    def opencode_session_ids(self) -> tuple[str, ...]:
+        """The session ids an OpenCode client sent for itself, best first.
+
+        Empty unless the user-agent says the caller is OpenCode (``opencode``
+        or ``opencode2``). Then ``x-opencode-session`` first, and the generic
+        session header OpenCode sends under any other provider id
+        (``x-session-affinity`` / ``X-Session-Id``) second. These are only
+        *candidates*: the outbound identity sends one on verbatim (7.92.3) only
+        when it has exactly the shape OpenCode's own client mints, and derives
+        an id as before otherwise.
+        """
+        if classify_user_agent(self.user_agent).harness not in _OPENCODE_HARNESSES:
+            return ()
+        return tuple(
+            value for value in (self.opencode_session, self.session_id) if value
+        )
 
     @property
     def ua_entrypoint(self) -> str | None:
@@ -125,6 +160,7 @@ class ClientFingerprint:
                 self.anthropic_version,
                 self.anthropic_beta,
                 self.session_id,
+                self.opencode_session,
             )
         )
 
@@ -144,6 +180,7 @@ def fingerprint_from_headers(
         return EMPTY_FINGERPRINT
     seen: dict[str, str] = {}
     session: str | None = None
+    opencode_session: str | None = None
     for raw_name, raw_value in headers.items():
         name = str(raw_name).strip().lower()
         if not isinstance(raw_value, str) or not raw_value.strip():
@@ -152,7 +189,9 @@ def fingerprint_from_headers(
             seen[name] = raw_value.strip()[:MAX_MIRRORED_CHARS]
         elif session is None and name in _SESSION_HEADERS:
             session = raw_value.strip()[:MAX_MIRRORED_CHARS]
-    if not seen and session is None:
+        elif opencode_session is None and name == _OPENCODE_SESSION_HEADER:
+            opencode_session = raw_value.strip()[:MAX_MIRRORED_CHARS]
+    if not seen and session is None and opencode_session is None:
         return EMPTY_FINGERPRINT
     return ClientFingerprint(
         user_agent=seen.get("user-agent"),
@@ -160,6 +199,7 @@ def fingerprint_from_headers(
         anthropic_version=seen.get("anthropic-version"),
         anthropic_beta=seen.get("anthropic-beta"),
         session_id=session,
+        opencode_session=opencode_session,
     )
 
 

@@ -41,8 +41,9 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     "OPENCODE_API_KEY": {
         "label": "OpenCode API Key",
         "description": (
-            "OpenCode Zen curated gateway (opencode.ai/zen/v1) and OpenCode Go subscription "
-            "gateway (opencode.ai/zen/go/v1); single key from opencode.ai/auth."
+            "OpenCode Zen curated gateway (opencode.ai/inference/v1) and OpenCode Go "
+            "subscription gateway (opencode.ai/inference/go/v1); single key from "
+            "opencode.ai/auth."
         ),
     },
     "AI_GATEWAY_API_KEY": {

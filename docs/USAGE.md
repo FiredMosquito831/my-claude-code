@@ -2886,15 +2886,25 @@ none of them.
 
 So the check is a refusal, not a smaller allowance, and the header it acts on
 is the conversation id. Since 6.69.0 MCC sends all five, to both providers, on
-every request:
+every request — and since 7.92.3 a sixth, `x-opencode-session-id`, which
+OpenCode 1.19.0 sends with the same value as `x-opencode-session`:
 
 | Header | What MCC puts in it |
 | --- | --- |
 | `User-Agent` | `opencode/<version>` — the OpenCode release installed on this machine, else the one this build was pinned against |
 | `x-opencode-client` | `cli` |
 | `x-opencode-project` | `global` |
-| `x-opencode-session` | one id per conversation, minted the way OpenCode mints one (its clock, then random characters) the first time MCC sees that conversation — named by your coding agent's own id, or by how the conversation opened — and kept until the server restarts |
+| `x-opencode-session` | one id per conversation, minted the way OpenCode mints one (its clock, then random characters) the first time MCC sees that conversation — named by your coding agent's own id, or by how the conversation opened — and kept until the server restarts. **Since 7.92.3**, when the agent calling MCC is OpenCode itself and it sends a session id in exactly the shape OpenCode mints (`ses_`, 12 hex characters, 14 letters or digits), that id is sent on unchanged instead |
+| `x-opencode-session-id` | **New in 7.92.3.** The same value as `x-opencode-session` |
 | `x-opencode-request` | a fresh id for this one call |
+
+**Which address (7.92.3).** MCC calls OpenCode Zen at
+`https://opencode.ai/inference/v1` and OpenCode Go at
+`https://opencode.ai/inference/go/v1` — the addresses the vendor's own model
+registry (models.dev) publishes and OpenCode 1.19.0 uses. Until 7.92.2 they
+were `…/zen/v1` and `…/zen/go/v1`, which still answered on 2026-10-16. The
+address is not a setting and is not written to your `.env`: every install,
+including one that has run before, uses the new one from its next start.
 
 **Say this plainly, because it is your account and your choice.** The default
 identifies MCC's requests as the official OpenCode client's. MCC is not the
@@ -3004,8 +3014,8 @@ file with the `bash` tool (Codex's `exec_command`)"*. The fences:
 - only for those three agents;
 - only on free-tier models (the same scope as above), never with
   `OPENCODE_CLIENT_IDENTITY=mcc`;
-- only on a request that already has tools, so a tool-less request stays
-  tool-less;
+- only on a request that already has tools (a request with none is handled
+  separately since 7.92.3; see below);
 - only the roles the request lacks;
 - always after the agent's own tools, in a fixed order, so the prompt cache
   keeps its prefix;
@@ -3039,9 +3049,9 @@ the file and line, or for Droid the byte offset, it came from.
 
 Four was enough on `muse-spark-1.3-contributor-free` for a Cline-shaped request
 (`read, grep, bash, edit`, measured 2026-09-25), so Cline gets no stand-in.
-Aider sends no tools at all, so there is nothing to translate; its requests
-stay tool-less and are refused on gated free models, like every tool-less
-request. Google Antigravity publishes no source and no package that can be
+Aider sends no tools at all, so there is nothing to translate; since 7.92.3
+its requests to a free model carry OpenCode's five names like every tool-less
+request (see below). Google Antigravity publishes no source and no package that can be
 read without running its installer, so it has no row. A guessed row would fail
 silently.
 
@@ -3070,14 +3080,20 @@ everywhere else: a paid Zen model gets the byte-identical request it got in
 of the impersonation. A free-tier model will then answer `403`, which is the
 truthful outcome rather than a hidden one.
 
-A tool-less request on a free-tier model still fails, and that is deliberate:
-the real OpenCode client sends no `tools` key at all on its own title and
-compaction sub-requests — captured on 2026-09-19 — so those sub-requests are
-refused inside the genuine client too
+**Tool-less requests (7.92.3).** Until 7.92.2 a request with no tools — a
+title or summary call — was sent tool-less, because the real OpenCode 1.18.30
+client sent its own title and compaction sub-requests that way (captured
+2026-09-19), and those were refused inside the genuine client too
 ([#49592](https://github.com/anomalyco/opencode/issues/49592),
-[#49723](https://github.com/anomalyco/opencode/issues/49723)). Adding a
-catalogue MCC cannot honour, to a request the client it names would not have
-added one to, would be a worse lie than the one being refused.
+[#49723](https://github.com/anomalyco/opencode/issues/49723)). Measured again
+on 2026-10-16 with a freshly minted session id, MCC's exact tool-less request
+to `big-pickle` was still answered `403 FreeTierError`. So, by your decision,
+a request that offers no tools now carries OpenCode's five names (`bash`,
+`edit`, `glob`, `grep`, `read`) on free-tier models only. Each one's
+description says the agent offered no tools and it must not be called, and
+none takes any argument; if the model calls one anyway, the call reaches your
+agent as it is. A request that has tools, a paid model and
+`OPENCODE_CLIENT_IDENTITY=mcc` are unchanged.
 
 Such a refusal is now its own failure kind, `free_tier`, instead of
 `authentication`. It does not bench the key (the key is fine), it does not
@@ -3101,9 +3117,11 @@ MCC never forks a session and would be inventing a relationship, and
 `x-mcc-harness` — which coding agent sent the request is between you and MCC,
 and never travels upstream.
 
-The conversation id is derived, never forwarded: whatever your agent called
-its session is hashed into an opaque id, and the original is not written to
-the request log.
+The conversation id is derived, not forwarded: whatever your agent called its
+session is reduced to an opaque id, and the original is not written to the
+request log. The one exception (7.92.3): OpenCode itself, calling OpenCode's
+gateways through MCC with a session id in exactly OpenCode's own shape, has
+that id sent on unchanged — it is already the id OpenCode would have sent.
 
 **If the vendor turns the check back on**, MCC says so rather than quietly
 halving its own quota. A 429 that names the free daily quota and resets at
@@ -3111,7 +3129,11 @@ halving its own quota. A 429 that names the free daily quota and resets at
 **Models**; **Probe capabilities** on the OpenCode card also spends two
 requests asking the host directly, and records *"checked <date>, no difference
 observed"* when it cannot tell — which is the honest answer, not a clean bill
-of health.
+of health. Since 7.92.3 that probe, and the probe MCC makes when one endpoint
+refuses a model and it checks another, ask a free-tier model streaming and
+carrying OpenCode's five tool names: in the old shape — not streaming, no
+tools — the free tier refuses every probe whatever the identity, so it could
+only ever measure the gate.
 
 ### The free tier is metered per key, so free models use OpenCode's own
 

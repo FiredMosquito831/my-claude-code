@@ -37,6 +37,7 @@ from my_claude_code.providers.openai_chat.opencode_identity import (
     OPENCODE_PROJECT_HEADER,
     OPENCODE_REQUEST_HEADER,
     OPENCODE_SESSION_HEADER,
+    OPENCODE_SESSION_ID_HEADER,
     USER_AGENT_HEADER,
     identity_wire_record,
     opencode_constant_headers,
@@ -81,14 +82,17 @@ def _outbound_headers(provider_id: str, extra: dict[str, str] | None = None):
 
 
 @pytest.mark.parametrize("provider_id", OPENCODE_PROVIDERS)
-def test_the_opencode_profile_declares_the_five_client_identity_headers(
+def test_the_opencode_profile_declares_the_six_client_identity_headers(
     provider_id: str,
 ) -> None:
+    """Five since 6.69.0; ``x-opencode-session-id`` joined in 7.92.3, after the
+    session header and before every name that was already there."""
     identity = OPENAI_CHAT_PROFILES[provider_id].client_identity
     assert identity is not None
     assert identity.order == (
         OPENCODE_PROJECT_HEADER,
         OPENCODE_SESSION_HEADER,
+        OPENCODE_SESSION_ID_HEADER,
         OPENCODE_REQUEST_HEADER,
         OPENCODE_CLIENT_HEADER,
         USER_AGENT_HEADER,
@@ -153,7 +157,7 @@ def test_the_identity_headers_go_out_in_the_clients_own_order(
     vendor = [name for name in OPENCODE_HEADER_ORDER if name.startswith("x-opencode")]
     positions = [emitted.index(name.lower()) for name in vendor]
     assert positions == sorted(positions)
-    assert len(positions) == 4
+    assert len(positions) == 5
     assert emitted.count("user-agent") == 1
 
 
@@ -203,6 +207,63 @@ def test_the_session_header_is_mirrored_from_the_inbound_harness() -> None:
     body = {"messages": [{"role": "user", "content": "unrelated"}]}
     mirrored = identity_headers_for_body(identity, body, "client-session-42")
     assert mirrored[OPENCODE_SESSION_HEADER] == derived_session_id("client-session-42")
+
+
+#: An id in exactly the shape OpenCode's own client mints.
+_REAL_OPENCODE_SESSION = "ses_ebae6c65bffeASjcgoucUfkH8D"
+
+
+@pytest.mark.parametrize(
+    ("user_agent", "headers", "passes_through"),
+    [
+        # OpenCode under a provider id starting ``opencode``.
+        ("opencode/1.19.0", {"x-opencode-session": _REAL_OPENCODE_SESSION}, True),
+        # OpenCode under any other provider id (MCC's own ``mcc``).
+        ("opencode/1.18.35", {"x-session-affinity": _REAL_OPENCODE_SESSION}, True),
+        ("opencode2/0.0.1", {"x-opencode-session": _REAL_OPENCODE_SESSION}, True),
+        # The shape is checked whole: one character short, or upper-case hex.
+        ("opencode/1.19.0", {"x-opencode-session": _REAL_OPENCODE_SESSION[:-1]}, False),
+        (
+            "opencode/1.19.0",
+            {"x-opencode-session": "ses_EBAE6C65BFFEASjcgoucUfkH8D"},
+            False,
+        ),
+        # A client that is not OpenCode never has its id sent on verbatim.
+        (
+            "claude-cli/2.1.0 (external, cli)",
+            {"x-session-id": _REAL_OPENCODE_SESSION},
+            False,
+        ),
+        ("curl/8.0", {"x-opencode-session": _REAL_OPENCODE_SESSION}, False),
+    ],
+)
+def test_a_real_inbound_opencode_session_is_passed_through_verbatim(
+    user_agent: str, headers: dict[str, str], passes_through: bool
+) -> None:
+    """7.92.3 (user decision Q5): OpenCode's own session id reaches its gateway.
+
+    Anything else -- another client, or a value not in the exact shape --
+    derives the id exactly as before.
+    """
+    from my_claude_code.core.client_fingerprint import fingerprint_from_headers
+
+    identity = OPENAI_CHAT_PROFILES["opencode"].client_identity
+    assert identity is not None
+    inbound = fingerprint_from_headers({"user-agent": user_agent, **headers})
+    body = {"messages": [{"role": "user", "content": "pass-through"}]}
+    sent = identity_headers_for_body(
+        identity,
+        body,
+        inbound.session_id,
+        inbound_sessions=inbound.opencode_session_ids,
+    )
+    before = identity_headers_for_body(identity, body, inbound.session_id)
+    if passes_through:
+        assert sent[OPENCODE_SESSION_HEADER] == _REAL_OPENCODE_SESSION
+        assert sent[OPENCODE_SESSION_ID_HEADER] == _REAL_OPENCODE_SESSION
+    else:
+        assert sent[OPENCODE_SESSION_HEADER] == before[OPENCODE_SESSION_HEADER]
+        assert sent[OPENCODE_SESSION_HEADER] != _REAL_OPENCODE_SESSION
 
 
 def test_the_session_header_falls_back_to_a_stable_derived_id() -> None:
@@ -335,9 +396,41 @@ def test_the_opt_out_keeps_the_three_functional_headers() -> None:
             USER_AGENT_HEADER: "my-claude-code/9.9.9",
         },
         session_header=identity.session_header,
+        session_mirror_headers=identity.session_mirror_headers,
         request_header=identity.request_header,
     )
     assert set(truthful.headers_for("k")) == set(identity.headers_for("k"))
+
+
+# ------------------------------------------- 7.92.3: x-opencode-session-id
+
+
+@pytest.mark.parametrize("mode", ["opencode", "mcc"])
+@pytest.mark.parametrize("provider_id", OPENCODE_PROVIDERS)
+def test_the_session_id_header_carries_the_session_value_under_either_identity(
+    provider_id: str, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OpenCode 1.19.0 sends the conversation id twice, under two names, with
+    one value. MCC does the same on every request, in either identity mode:
+    like ``x-opencode-session`` it is functional, not a claim."""
+    monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", mode)
+    get_settings.cache_clear()
+    try:
+        identity = OPENAI_CHAT_PROFILES[provider_id].client_identity
+        assert identity is not None
+        body = {"messages": [{"role": "user", "content": "a 7.92.3 conversation"}]}
+        per_request = identity_headers_for_body(identity, body, None)
+        sent = _outbound_headers(provider_id)
+    finally:
+        get_settings.cache_clear()
+    assert (
+        per_request[OPENCODE_SESSION_ID_HEADER] == per_request[OPENCODE_SESSION_HEADER]
+    )
+    assert sent[OPENCODE_SESSION_ID_HEADER] == sent[OPENCODE_SESSION_HEADER]
+    names = list(per_request)
+    assert names.index(OPENCODE_SESSION_ID_HEADER) == (
+        names.index(OPENCODE_SESSION_HEADER) + 1
+    )
 
 
 def test_an_unknown_identity_is_refused_rather_than_guessed() -> None:

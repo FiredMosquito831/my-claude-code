@@ -46,7 +46,9 @@ from loguru import logger
 
 from my_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
+    STAND_IN_INPUT_SCHEMA,
     free_quota_reset,
+    model_is_zero_cost,
 )
 from my_claude_code.providers.recovery import (
     FACT_CLIENT_IDENTITY_REQUIRED,
@@ -118,13 +120,63 @@ def declared_identity_headers(provider_id: str) -> tuple[dict[str, str], str] | 
     )
 
 
-def _probe_body(model: str) -> dict[str, Any]:
-    return {
+def omitted_identity_headers(provider_id: str) -> frozenset[str]:
+    """Every header the second leg leaves off: the omitted one and its mirrors.
+
+    A header that carries the same conversation id under a second name
+    (``x-opencode-session-id`` since 7.92.3) goes with it, or the leg "without
+    the identity" would still be carrying it.
+    """
+    profile = OPENAI_CHAT_PROFILES.get(provider_id)
+    identity = getattr(profile, "client_identity", None)
+    if identity is None or identity.probe_omit_header is None:
+        return frozenset()
+    omitted = identity.probe_omit_header
+    if omitted == identity.session_header:
+        return frozenset(identity.session_header_names())
+    return frozenset({omitted})
+
+
+def free_tier_probe_tools(provider_id: str, model: str) -> tuple[tuple[str, str], ...]:
+    """The tools a probe of this model must carry to pass a free-tier gate.
+
+    Empty for every provider without a free-tier catalogue and for every model
+    outside its scope (or with the operator opted out), which leaves those
+    probes byte-for-byte what they were. Non-empty, the probe streams and
+    carries them: the gate refuses a non-streaming, tool-less body whatever
+    the identity, so a probe in that shape could only measure the gate.
+    """
+    profile = OPENAI_CHAT_PROFILES.get(provider_id)
+    catalogue = getattr(profile, "free_tier_tool_catalogue", None)
+    if catalogue is None:
+        return ()
+    return catalogue.roster_for_tool_less_request(
+        model, zero_cost=model_is_zero_cost(provider_id, model)
+    )
+
+
+def _probe_body(
+    model: str, free_tier_tools: tuple[tuple[str, str], ...] = ()
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": PROBE_MAX_TOKENS,
-        "stream": False,
+        "stream": bool(free_tier_tools),
     }
+    if free_tier_tools:
+        body["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": text,
+                    "parameters": dict(STAND_IN_INPUT_SCHEMA),
+                },
+            }
+            for name, text in free_tier_tools
+        ]
+    return body
 
 
 class _BodyError(Exception):
@@ -153,11 +205,24 @@ async def _leg(
     api_key: str,
     model: str,
     headers: Mapping[str, str],
+    free_tier_tools: tuple[tuple[str, str], ...] = (),
 ) -> tuple[int, str]:
     url = f"{base_url.rstrip('/')}/chat/completions"
     sent = {"Authorization": f"Bearer {api_key}", **headers}
-    response = await http.post(url, headers=sent, json=_probe_body(model))
-    return response.status_code, ("" if response.status_code < 300 else response.text)
+    body = _probe_body(model, free_tier_tools)
+    if not free_tier_tools:
+        response = await http.post(url, headers=sent, json=body)
+        return response.status_code, (
+            "" if response.status_code < 300 else response.text
+        )
+    # Streamed: read to the end and discard on success, read whole on refusal.
+    async with http.stream("POST", url, headers=sent, json=body) as response:
+        if response.status_code < 300:
+            async for _chunk in response.aiter_bytes():
+                pass
+            return response.status_code, ""
+        await response.aread()
+        return response.status_code, response.text
 
 
 async def probe_client_identity(
@@ -175,14 +240,16 @@ async def probe_client_identity(
     if declared is None or not (base_url and api_key and model):
         return None
     good, omitted = declared
-    bad = {name: value for name, value in good.items() if name != omitted}
+    left_off = omitted_identity_headers(provider_id) or frozenset({omitted})
+    bad = {name: value for name, value in good.items() if name not in left_off}
+    tools = free_tier_probe_tools(provider_id, model)
     owned = client is None
     http = client or bound_socks_handshake(
         httpx.AsyncClient(proxy=proxy or None, timeout=PROBE_TIMEOUT_SECONDS)
     )
     try:
-        good_status, good_text = await _leg(http, base_url, api_key, model, good)
-        bad_status, bad_text = await _leg(http, base_url, api_key, model, bad)
+        good_status, good_text = await _leg(http, base_url, api_key, model, good, tools)
+        bad_status, bad_text = await _leg(http, base_url, api_key, model, bad, tools)
     except Exception as exc:
         logger.debug("Identity probe failed: {}", type(exc).__name__)
         return IdentityProbeOutcome(
@@ -226,5 +293,7 @@ __all__ = [
     "DETAIL_PROBED",
     "IdentityProbeOutcome",
     "declared_identity_headers",
+    "free_tier_probe_tools",
+    "omitted_identity_headers",
     "probe_client_identity",
 ]

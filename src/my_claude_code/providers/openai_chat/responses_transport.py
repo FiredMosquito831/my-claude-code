@@ -28,7 +28,7 @@ of the real ``opencode-ai@1.18.30`` CLI taken on 2026-09-11
 """
 
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -86,6 +86,7 @@ from my_claude_code.providers.recovery import (
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .client_identity import ClientIdentity, identity_headers_for_body
+from .opencode_catalogue import STAND_IN_INPUT_SCHEMA
 from .opencode_identity import identity_wire_record
 
 #: What a surface probe asks for. Small enough that a host which answers it has
@@ -374,10 +375,12 @@ class ResponsesTransport:
         if self._identity is None:
             return {}
         constant = self._identity.default_headers()
+        inbound = current_fingerprint()
         varying = identity_headers_for_body(
             self._identity,
             {"messages": body.get("input")},
-            current_fingerprint().session_id,
+            inbound.session_id,
+            inbound_sessions=inbound.opencode_session_ids,
         )
         merged = {**constant, **varying}
         return {name: merged[name] for name in self._identity.order if name in merged}
@@ -524,12 +527,23 @@ class ResponsesTransport:
             await response.aread()
         return response
 
-    async def probe(self, model_id: str) -> None:
+    async def probe(
+        self,
+        model_id: str,
+        *,
+        free_tier_tools: Sequence[tuple[str, str]] = (),
+    ) -> None:
         """Ask this endpoint whether it serves one model, as cheaply as possible.
 
         Returns on success and raises whatever the host answered otherwise, so
         the caller can tell "the other surface works" from "both are broken"
         without this function having an opinion about either.
+
+        ``free_tier_tools`` is non-empty only for a free-tier model behind a
+        gate that refuses a non-streaming, tool-less body (7.92.3). The probe
+        then streams and carries those tools -- the shape the gate admits --
+        and reads the stream to its end, discarding it. Empty, the body is
+        byte-for-byte the one every earlier release sent.
         """
 
         body: dict[str, Any] = {
@@ -542,11 +556,26 @@ class ResponsesTransport:
                 }
             ],
             "store": False,
-            "stream": False,
+            "stream": bool(free_tier_tools),
             "max_output_tokens": PROBE_MAX_OUTPUT_TOKENS,
         }
+        if free_tier_tools:
+            body["tools"] = [
+                {
+                    "type": "function",
+                    "name": name,
+                    "description": text,
+                    "parameters": dict(STAND_IN_INPUT_SCHEMA),
+                }
+                for name, text in free_tier_tools
+            ]
         response = await self.send(body, self._headers(body))
-        await response.aclose()
+        try:
+            if free_tier_tools:
+                async for _chunk in response.aiter_bytes():
+                    pass
+        finally:
+            await response.aclose()
 
     async def _send_with_recovery(
         self,
