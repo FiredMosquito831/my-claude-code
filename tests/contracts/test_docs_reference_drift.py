@@ -595,6 +595,33 @@ _MUST_BE_DOCUMENTED: tuple[tuple[str, str], ...] = (
         "the only one that needs no root",
     ),
     (
+        "MODEL_IMAGE",
+        "the Image rail's model; an empty rail answers 404 and the only way to "
+        "know which setting fills it is to read it here",
+    ),
+    (
+        "MODEL_TTS",
+        "the Speech rail's model, same reason as MODEL_IMAGE",
+    ),
+    (
+        "MODEL_ASR",
+        "the Transcription rail's model, same reason as MODEL_IMAGE",
+    ),
+    (
+        "MODEL_VIDEO",
+        "the Video rail's model, same reason as MODEL_IMAGE",
+    ),
+    (
+        "MEDIA_STORE_ENABLED",
+        "whether generated media is kept on disk; off by default, so a user "
+        "who expects a preview has to be able to find the switch",
+    ),
+    (
+        "PROXY_CONNECT_TIMEOUT_SECONDS",
+        "the one setting the VPN, WARP and Tor tutorial tells a Tor user to "
+        "raise (decision 11 of 2026-10-06: document only)",
+    ),
+    (
         "MyClaudeCode-macos-universal.dmg",
         "the macOS installer asset. It is unsigned, so a reader who cannot "
         "find it documented also cannot find the xattr line that opens it",

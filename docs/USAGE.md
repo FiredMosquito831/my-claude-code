@@ -59,6 +59,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 - [14. Updating](#14-updating)
   - [Stopping and restarting, and how long it takes](#stopping-and-restarting-and-how-long-it-takes)
 - [15. Security and networking](#15-security-and-networking)
+  - [Tutorial: route a provider through a VPN, WARP or Tor](#tutorial-route-a-provider-through-a-vpn-warp-or-tor)
 - [16. Troubleshooting](#16-troubleshooting)
 - [Appendix: what changed in 6.x](#appendix-what-changed-in-6x)
 
@@ -727,7 +728,7 @@ rail's pause list unchanged logs nothing.
 | **Proxy API** | `http://127.0.0.1:8082` | your coding agent |
 | **Admin UI** | `http://127.0.0.1:8082/admin` | you, in a browser |
 
-Same port. The Admin UI is additionally restricted to loopback callers — see [Security and networking](#14-security-and-networking).
+Same port. The Admin UI is additionally restricted to loopback callers — see [Security and networking](#15-security-and-networking).
 
 ### Running the server with the desktop tray
 
@@ -1603,7 +1604,7 @@ would override the one you configure here.
 - `ANTHROPIC_BASE_URL` points Claude Code at your local server.
 - `ANTHROPIC_AUTH_TOKEN` is sent as a bearer token. It must match the proxy's own `ANTHROPIC_AUTH_TOKEN`. Since 6.65.0 that value is generated on your machine the first time `mcc-server` starts without a `.env`, so there is no shipped value to copy: read yours on the dashboard under **Providers -> Runtime**. On a loopback server (`HOST=127.0.0.1`, the default) the token may also be empty, in which case any value works.
 
-> **On the token:** it authenticates your agent *to the proxy*, nothing more. It is not a provider key. If you clear `ANTHROPIC_AUTH_TOKEN` on the server, the proxy stops requiring authentication altogether — convenient on a single-user machine, but read [Security and networking](#14-security-and-networking) first.
+> **On the token:** it authenticates your agent *to the proxy*, nothing more. It is not a provider key. If you clear `ANTHROPIC_AUTH_TOKEN` on the server, the proxy stops requiring authentication altogether — convenient on a single-user machine, but read [Security and networking](#15-security-and-networking) first.
 
 ### Step 3 — restart Claude Code and verify
 
@@ -2821,7 +2822,7 @@ One thing to know: the override for the upstream address is `ANTHROPIC_UPSTREAM_
 
 Their published terms state that plan OAuth credentials are for Claude Code and Claude.ai only, and that third-party products may not route requests through them. There is no "inside Claude Code" exemption, because once MCC is interposed it is MCC that presents your credential upstream. Anthropic may enforce without notice, and **the risk is to your Claude account**.
 
-If you enable it anyway, MCC refuses by default to use the subscription for anything that did not come from **Claude Code or the Claude Agent SDK** — it reads the `cc_entrypoint` marker Claude Code puts in the request body, so another harness pointed at your proxy is refused rather than silently billed to your plan. Since 6.36.0 the admitted set is `cli`, `cli-bg`, `sdk-cli`, `sdk-py`, `sdk-ts` and, since 7.92.1, `claude-desktop-3p` and `claude-desktop` (the Claude desktop app); before that it was `cli` alone, which refused Anthropic's own SDK.
+If you enable it anyway, MCC refuses by default to use the subscription for anything that did not come from **Claude Code, the Claude Agent SDK or the Claude desktop app** — it reads the `cc_entrypoint` marker Claude Code puts in the request body, so another harness pointed at your proxy is refused rather than silently billed to your plan. Since 6.36.0 the admitted set is `cli`, `cli-bg`, `sdk-cli`, `sdk-py`, `sdk-ts` and, since 7.92.1, `claude-desktop-3p` and `claude-desktop` (the Claude desktop app); before that it was `cli` alone, which refused Anthropic's own SDK.
 
 The Claude subscription card on the **Providers** page reports the plan and rate-limit tier, when the access and refresh tokens expire, the scopes (flagged if `user:inference` is missing, without which the credential cannot answer at all), and the 5-hour and weekly usage windows. Those windows are read from Anthropic's own `anthropic-ratelimit-unified-*` response headers and are never computed: until a real response has carried one, the card says *not yet observed* rather than guessing.
 
@@ -3476,7 +3477,7 @@ Unlike everything else on this page, a pause is written the moment you click it:
 | `IMAGE_JPEG_QUALITY` | re-encode a resized image as JPEG at this quality. `0` (default) never changes the format |
 | `IMAGE_DETAIL` | OpenAI's per-image detail knob: `auto` (default, sends no field), `low`, `high` |
 
-All six are comma-separated `provider/model` lists, written by the Pause button rather than typed, and **new in 6.21.0**. An entry is dropped from its list automatically when it leaves the route it was paused on.
+All eleven `_PAUSED` settings in this table are comma-separated `provider/model` lists, written by the Pause button rather than typed; the first seven are **new in 6.21.0** and the four media-rail ones arrived with their rails (7.60.0–7.64.0). An entry is dropped from its list automatically when it leaves the route it was paused on.
 
 **Failover stops once you have seen output.** This is the part people get wrong:
 
@@ -3495,7 +3496,7 @@ A chain rescues the failures that happen before the first word, not the ones tha
 | --- | --- | --- |
 | First-token deadline | `0` (no limit) | How long a model may stay silent before the next one takes over. Nothing has streamed yet, so you never see the switch. Ships off with the other deadlines, so nothing hands over on silence until you set it. |
 | Total request budget | `0` (no limit) | The whole request, across every attempt and retry. A stream that already started cannot be replaced, but it can be stopped. |
-| Eject mode | `rate_based` | How a failing **model** is benched. `rate_based` (default) skips a model when its failure rate over the last `FALLBACK_EJECT_WINDOW` requests (default 10) crosses `FALLBACK_EJECT_FAILURE_RATE` (default 50%), with at least `FALLBACK_EJECT_MIN_SAMPLES` (default 8) requests observed, for `FALLBACK_EJECT_SECONDS` (default **10 s** since 6.68.0 — until 6.0.0 a clamp inside route health silently cut that to 1 s for timeout and 5xx ejections, so a model you thought was benched for half a minute was back at the front of the chain a second later). A single blip never benches a working model; sustained failures do. `legacy` preserves the old consecutive-count behaviour keyed on `FALLBACK_EJECT_AFTER_FAILURES` / `FALLBACK_EJECT_SECONDS`. This is about models. It never touches a key — see [Multi-key rotation](#11-multi-key-rotation). |
+| Eject mode | `rate_based` | How a failing **model** is benched. `rate_based` (default) skips a model when its failure rate over the last `FALLBACK_EJECT_WINDOW` requests (default 10) crosses `FALLBACK_EJECT_FAILURE_RATE` (default 50%), with at least `FALLBACK_EJECT_MIN_SAMPLES` (default 8) requests observed, for `FALLBACK_EJECT_SECONDS` (default **10 s** since 6.68.0 — until 6.0.0 a clamp inside route health silently cut that to 1 s for timeout and 5xx ejections, so a model you thought was benched for half a minute was back at the front of the chain a second later). A single blip never benches a working model; sustained failures do. `legacy` preserves the old consecutive-count behaviour keyed on `FALLBACK_EJECT_AFTER_FAILURES` / `FALLBACK_EJECT_SECONDS`. This is about models. It never touches a key — see [Multi-key rotation](#12-multi-key-rotation). |
 | Retry primary once | `skip` | What happens when the primary model fails. `skip` (default) moves straight to the next fallback. `retry_once` gives the primary one more chance for transient errors (timeout, 5xx, 429) before falling through. Auth and invalid-request errors are never retried. |
 
 If every model on a route is benched, MCC tries them in order anyway — skipping a bad model is an optimisation, refusing to try anything is an outage.
@@ -4346,7 +4347,8 @@ Reasoning and tool calls are the majority of a real log: on a typical machine 55
 **Searches are answered from an index (7.92.0).** Until 7.92.0 every search unpacked and read every stored request in the window, and because each prompt repeats the whole conversation before it, an all-time search read tens of gigabytes of text: minutes per search on a large log. The **search index** keeps each distinct piece of text once, cut into small pieces at line ends, with a trigram index over them (SQLite FTS5), in its own file beside the log: `requests-search.db`. A search reads the newest few hundred requests of its window the old way (so the first page arrives as fast as it always did, and a small window costs exactly what it did), then looks its words up in the index for the rest and does not unpack those requests. When the index would not be clearly faster for a search (a short window, rows it does not cover yet), the rest is read the old way too.
 
 - **New requests** are indexed as they are written, after their row is saved, on the request log's own writer thread.
-- **Requests logged before** are indexed only when you press **Build search index** under the Requests filters. It works between requests and between searches, newest first, says how far it has got (*Build search index: 41 % · 3 min left*), can be paused, and continues after a restart from where it stopped.
+- **Requests logged before** are indexed only when you press **Build search index** under the Requests filters. It works between requests and between searches, newest first, says how far it has got (*Build search index: 41 % · 3 min left*), can be paused, and continues after a restart from where it stopped. **Press it once after updating to 7.92.0 or later.** Expect it to take a while on a big log: on a copy of a real log of about 600,000 requests it used about 84 minutes of CPU, paced so it yields to live traffic, and the index file came to 2.27 GB.
+- **A saved search is restored, not run (7.91.2).** Reopening the dashboard puts your last search back in the box with a notice and **Run** · **Clear** beside it; nothing is searched until you press **Run** or Enter, so opening the page never starts a long all-time search by itself.
 - **Results never change.** A row the index does not cover — history before the build, a row an older version wrote, a body it could not read — is searched the old way in the same search. The line under the filters says how much the index covers (*Search index covers 412,000 of 598,683 rows*).
 - **The log itself is unchanged**, so older versions still open it and ignore the index file. Deleting `requests-search.db` (with the server stopped) only resets the index; **Clear log** clears it with the log, and retention removes pruned requests from it too.
 - If this Python's SQLite has no FTS5 trigram tokenizer, the index is off, the line says so, and every search reads the stored requests as before.
@@ -4941,11 +4943,11 @@ Details worth knowing:
 - **Reasoning tokens price as output**, unless the winning source publishes a rate specifically for them. Almost none do, and that is the correct default: the hosts that publish nothing bill reasoning at the output rate.
 - **The vision adapter's describe calls are priced separately**, on their own row in the request modal's attempt list. A describe hop is a different model on a different key; folding it into the answering model's figure would make that model look more expensive than it was and would hide what describe mode actually cost. The modal says so explicitly when a request had one.
 - **Nothing is backfilled.** Requests logged before 6.54.0 stay unpriced forever. Pricing them at today's rates would produce a confident number that was never anybody's bill.
-- **There is no price table in the package.** Both sources are fetched at runtime with conditional requests and cached like every other catalogue. The LiteLLM refresh is integrity-checked before it is accepted — a minimum entry count, and no shrink past half of what is already cached — because it is served from a branch that changes about a hundred times a week and has shipped broken JSON before.
+- **There is no price table in the package.** models.dev is fetched at runtime with conditional requests and cached like every other catalogue. **LiteLLM's table is not downloaded by any release so far**: with the LiteLLM source on, MCC reads `~/.mcc/cache/litellm-prices.json` if that file exists, and otherwise LiteLLM prices nothing (and states no model kind) — the request falls to the next rung as if the source were off. The download code exists, integrity check included (a minimum entry count, and no shrink past half of what is already cached), but nothing calls it yet.
 
 The Models page shows the resolved input, output, cache and reasoning rates per model, in USD per million tokens, each with the ladder rung it came from — so you can see exactly what a request would be priced from before you send one.
 
-Controls live on this page under **Cost estimation**: the master toggle (on by default), which sources may price a request (`auto`, `reported only`, or `computed only` — the last ignores the host's own figure, which is how you audit a provider's billing against a published price), and the LiteLLM source (off by default; it costs one more cached 2.3 MB file and one conditional fetch a day).
+Controls live on this page under **Cost estimation**: the master toggle (on by default), which sources may price a request (`auto`, `reported only`, or `computed only` — the last ignores the host's own figure, which is how you audit a provider's billing against a published price), and the LiteLLM source (off by default; see above: today it reads a cached file that nothing downloads, so on a fresh install it changes nothing).
 
 <a id="tutorial-read-a-requests-cost"></a>
 
@@ -5033,7 +5035,7 @@ A **rate-limited key is benched for exactly as long as the provider says** — p
 
 Since 6.19.0 that bench is also scoped to the **model** it happened on. Gateways that front many models rate-limit them separately: measured on NVIDIA NIM on 2026-08-31, `moonshotai/kimi-k3` returned 429 on all three keys inside 0.1 s while `nvidia/nemotron-3-ultra` and a MiniMax model answered on those same keys in the same second — and NIM sends no `Retry-After` at all. Charging the whole key for that took **every** NIM model off the route for a full minute. Now the pair is benched, the key stays `HEALTHY`, and the key itself is benched only once `CREDENTIAL_MODEL_BENCH_ESCALATION` (default 2) different models are limited on it at once — which is what a genuinely key-wide limit looks like, one extra 429 later.
 
-Per-key state, usage and health are visible in the Admin UI, including which key served which request; the ladder and the no-header cooldown are the **Credential health** card on [Limits and resilience](#12-limits-and-resilience).
+Per-key state, usage and health are visible in the Admin UI, including which key served which request; the ladder and the no-header cooldown are the **Credential health** card on [Limits and resilience](#13-limits-and-resilience).
 
 <a id="tutorial-why-my-key-was-benched"></a>
 
@@ -5074,7 +5076,7 @@ The rule behind the table is "judge a key only on signals about the key". The sa
 - **`LOCKED_OUT`, one key, others healthy** — that key is wrong, expired or revoked. Remove it from the pool; the ladder is not going to heal a dead key, and by the third rejection it is out for a day.
 - **`LOCKED_OUT`, every key** — it is not the keys. Check that the provider is the one the key belongs to, and that your account still has API access.
 - **`COOLDOWN` constantly, on every key** — you are over the provider's rate limit, not short of keys. Lower `PROVIDER_RATE_LIMIT` and `PROVIDER_MAX_CONCURRENCY` on **Limits & Resilience → Retries & throughput** rather than adding a fourth key that will cool down alongside the other three.
-- **All keys `HEALTHY`, requests still failing** — nothing is wrong with your credentials. Read the chain panel's error kind: this is a model, deadline or benching question, and it lives on [Limits and resilience](#12-limits-and-resilience).
+- **All keys `HEALTHY`, requests still failing** — nothing is wrong with your credentials. Read the chain panel's error kind: this is a model, deadline or benching question, and it lives on [Limits and resilience](#13-limits-and-resilience).
 
 > **The deliberate gap.** A key that fails with a 5xx or a transport fault on *every single request* is never benched — rotation tries it once per request and the chain absorbs the cost. That is the trade MCC made knowingly: the failure classes that could identify such a key were the same ones emptying healthy pools by the thousand. A 401 or 403 still locks it out, which is how a genuinely dead key gets caught.
 >
@@ -5682,6 +5684,280 @@ Loopback-only (`HOST=127.0.0.1`) is the shipped default.
 ### What never leaves the machine
 
 Provider API keys are never sent to your agent, never written to the analytics stores, and never included in configuration snapshots — only masked `first4…last4` labels. Proxy credentials are stripped from any recorded URL. Since 7.89.0 the two files that can hold a proxy login, `proxy_chains.json` and `proxy_sources.json`, are written readable by you only (POSIX `0600`; on Windows you, `SYSTEM` and Administrators, nothing inherited). Since 7.90.0 `proxy_sources.json` may also hold a tor control password; tor's cookie is never stored anywhere — it is read from the file tor names at the moment you press a Tor button.
+
+### Tutorial: route a provider through a VPN, WARP or Tor
+
+Why you would: a provider that counts a free allowance **per address** (OpenCode
+Zen's free models answer a spent address with `429 FreeUsageLimitError` while
+other addresses still get answers), a provider that refuses your country, or a
+provider you would rather not show your home address. MCC never installs,
+starts, signs in to or registers a VPN, WARP or tor: it uses what you run, and
+it never weakens TLS for any of it — a proxy relays an encrypted tunnel and
+cannot read your keys, prompts or replies. The reference for every switch named
+here is [Proxy Chains](ROUTING-REFERENCE.md#proxy-chains-more-than-one-way-out).
+
+**Pick your path.**
+
+| What you have | What MCC can do with it | Steps |
+| --- | --- | --- |
+| **Proton VPN Free**, or any VPN app with no proxy (Surfshark, Windscribe, Proton Plus or ExpressVPN without split tunnelling) | The whole computer goes out through the app, so MCC's *Direct* does too | A |
+| **Proton VPN Plus**, **ExpressVPN** with split tunnelling | Only MCC's program goes through the VPN | B |
+| **Mullvad** or **IVPN** with its app connected | Every server's in-tunnel SOCKS5 proxy becomes a chain entry: many exits from one tunnel | C |
+| A **NordVPN**, **Private Internet Access**, **IPVanish** or **TorGuard** account | Their SOCKS5 hosts, with the account's *service* login, become chain entries | C |
+| **Bright Data** (datacenter or ISP zones), **Oxylabs**, **IPRoyal**, **Decodo** | N sessions of one gateway become N chain entries | C |
+| **Webshare**'s free plan, or any `ip:port:username:password` list | Each row becomes a chain entry | C |
+| **Cloudflare WARP** | Its proxy mode is a SOCKS5 proxy on this computer | D |
+| A **tor** you run | Each `SocksPort` is one identity and one chain entry; a button asks tor for new circuits | E |
+| A VPN that only gives you OpenVPN or WireGuard files | Run **gluetun** in Docker yourself and point an entry at its proxy | F |
+
+#### A. Proton VPN Free: turn the app on
+
+1. Connect the Proton VPN app. Nothing is set in MCC: every request MCC sends
+   from this computer's own address — a provider with no chain, a chain's
+   **Direct** entry, Direct fallback — now leaves through Proton.
+2. Check it on the **Proxying** page: **Where does Direct come out?** on a
+   provider's card fetches that provider's own `/cdn-cgi/trace` with no proxy
+   and shows the address and country it saw (providers behind Cloudflare, such
+   as OpenCode Zen and Anthropic's API, answer; others publish no trace and the
+   card says so). It sends only where that provider's traffic may leave from
+   this computer right now — no chain, a chain with a Direct entry, or every
+   proxy unhealthy with Direct fallback on. Anywhere else nothing is sent and
+   the card says why:
+
+<div align="center">
+  <img src="../assets/admin-proxy-direct-not-sent.png" alt="The Direct line of a proxy chain card reading: Not sent: no proxy in OpenCode Zen's chain can be used right now and Direct fallback is off, so it would have gone out from this computer's own address" width="860">
+  <p><em>Where does Direct come out? on a chain whose Direct fallback is off: nothing is sent, and the card says why.</em></p>
+</div>
+
+What Proton VPN Free is, from Proton's own pages (read 2026-10-06): no proxy,
+no split tunnelling (a paid feature), **one device**, and a server picked at
+random from about ten countries, where *Change server* waits 45 seconds and
+then ten minutes between changes. So it is one exit for the whole computer,
+you cannot choose its country, and MCC cannot press *Change server* for you.
+
+Gotchas:
+
+- **A chain with Direct fallback off never uses this computer's address**, so a
+  VPN app makes no difference to it: its own entries decide where it comes out.
+- **A system proxy is followed.** A VPN or corporate tool that sets the Windows
+  or macOS *proxy* setting (rather than a tunnel) carries every Direct dial; the
+  request log then names it `direct via system proxy host:port`.
+- **One device.** Running a second Proton Free connection (gluetun, step F)
+  while the app is connected may be refused or disconnect the app; that has not
+  been tested with MCC.
+
+#### B. Split tunnelling: only MCC through the VPN (Proton VPN Plus, ExpressVPN)
+
+Split tunnelling in **include** mode sends only the programs you list through
+the VPN (Proton documents it on Windows; ExpressVPN documents per-app split
+tunnelling on Windows). The program to list is the one that opens MCC's
+connections: the **Python interpreter running the server** — not the
+`mcc-server` command, which only starts it, and not the desktop window. Ask the
+running server which process it is (`/health` names it in its `x-mcc-pid`
+header) and where that program lives:
+
+```powershell
+$p = [int]((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8082/health).Headers['x-mcc-pid'] | Select-Object -First 1)
+(Get-Process -Id $p).Path
+```
+
+On a Windows install made by the installer this is uv's own Python, for example
+`C:\Users\<you>\AppData\Roaming\uv\python\cpython-3.14.0-windows-x86_64-none\python.exe`
+(what it printed on the machine these steps were written on). Add **that file**
+to the VPN app's include list, then press **Where does Direct come out?** to see
+the VPN's country.
+
+Gotchas:
+
+- **Every program that runs on that same `python.exe` goes through the VPN too**
+  (another tool installed with uv on the same Python, for example).
+- **Check again after an update** that moves MCC to another Python: run the two
+  lines again and update the list if the path changed.
+- Your coding agents reach MCC on `127.0.0.1`; they need no VPN.
+- A connection already open keeps its route until it closes.
+- MCC running inside **WSL** is a program inside the WSL virtual machine; whether
+  a Windows VPN app can select it by program has not been tested.
+
+#### C. A VPN account, a gateway or a proxy list
+
+On the **Proxying** page, under **Proxies on this computer**, press **Add a VPN
+account**, **Add a gateway** or **Add a proxy list**. A preset fills the form
+from the vendor's own documentation (host, port, session syntax, a link to the
+page and the day it was read); you keep or change every field. **Save and
+offer** contacts nothing: it offers each address on that card. Choose the chain
+and press **Add all to chain** (or **Add to chain** per address): each address is
+tested against that provider's own host first and refused if its tunnel breaks
+certificate validation.
+
+<div align="center">
+  <img src="../assets/admin-proxy-vpn-account.png" alt="The Add a VPN account form with the Mullvad (inside its tunnel) preset chosen: an explanation that it answers only while the Mullvad app's WireGuard tunnel is connected, 10.64.0.1 in the hosts box, SOCKS5 on port 1080, and Save and offer" width="860">
+  <p><em>Add a VPN account, Mullvad preset: the preset explains itself and fills the form; nothing is contacted until you save, and then only when an address is tested.</em></p>
+</div>
+
+| Source | What to type | Worth knowing |
+| --- | --- | --- |
+| NordVPN | its **service credentials** (Nord Account → Set up NordVPN manually), not your login; the preset fills `nl`, `se` and `us.socks.nordhold.net:1080` | SOCKS5 servers in the Netherlands, Sweden and the United States only; at most 10 connections at once per account; its HTTPS proxy on port 89 is untested with MCC and not offered |
+| Private Internet Access | `proxy-nl.privateinternetaccess.com:1080` with the SOCKS credentials you generate in its control panel | one exit, in the Netherlands |
+| IPVanish, TorGuard | their SOCKS5 hosts with the proxy login | one host is one address |
+| Mullvad, IVPN | nothing to log in with; `10.64.0.1` (Mullvad) or `10.1.0.1` (IVPN) is the server you are on, and every other server's proxy (`nl-ams-wg-socks5-001.relays.mullvad.net` and so on) is reachable through the same tunnel — one host per line | answers **only while the app's tunnel is connected** |
+| Bright Data | `brd.superproxy.io`, SOCKS5 on 22228 or HTTP on 44445, a datacenter or ISP zone | residential and mobile zones are **refused**: they need Bright Data's own certificate installed so it can decrypt your traffic |
+| Oxylabs | `pr.oxylabs.io:7777` | a session keeps its address until its session time or 60 s idle; 30 minutes or more keeps a quiet thinking pause from changing it |
+| IPRoyal | `geo.iproyal.com:12321` | the session goes in the **password**; without one it changes address on every request |
+| Decodo | `gate.decodo.com:7000` | |
+| Webshare (free plan) | paste the list, or its download link from your Webshare dashboard | 10 datacenter proxies, 1 GB a month, shared with other users; the link carries your token, so it is kept like a password and fetched only on **Fetch now** or the schedule you choose |
+
+A SOCKS5 login to a remote proxy crosses the network unencrypted (that is the
+protocol); it exposes the proxy login, never your API key. Logins, passwords
+and download links are kept in `proxy_sources.json` and in each address's URL in
+`proxy_chains.json`, both readable by you only, and are never shown again. The
+reference is [VPN accounts, gateways and proxy lists](ROUTING-REFERENCE.md#vpn-accounts-gateways-and-proxy-lists-7910).
+
+#### D. Cloudflare WARP
+
+1. In the WARP desktop app, turn on its **proxy mode** (Cloudflare documents it
+   under Preferences → Advanced → Configure Proxy, on a port you choose). MCC
+   does not install, register or sign in to WARP.
+2. On the **Proxying** page press **Scan this computer** (it asks `127.0.0.1`
+   only, on ports 1080, 8888, 9050, 9052, 9150, 25344 and 40000), or type
+   `socks5h://127.0.0.1:<your port>` into a chain card and press **Add proxy**.
+
+Gotchas: WARP is **one exit**, shared with other WARP users at the same
+Cloudflare location; two WARP entries are not two addresses (a card groups
+entries that come out of the same address — see
+[Where each exit comes out](ROUTING-REFERENCE.md#where-each-exit-comes-out-7890)).
+Cloudflare documents a **10-second limit per request** for the local proxy mode
+of its Zero Trust client; its consumer page states none, but a long streamed
+answer through WARP may be cut.
+
+#### E. A tor you run yourself
+
+<div align="center">
+  <img src="../assets/admin-proxy-tor.png" alt="The Tor you run yourself card after saving two SOCKS ports and a control port: New Tor identity and Check Tor buttons, each port with an Add to chain button, Add all to chain, and the torrc lines to paste" width="860">
+  <p><em>Tor you run yourself after Save Tor ports: one chain address per SOCKS port, and the torrc lines that match.</em></p>
+</div>
+
+1. **Choose ports**: two or more SOCKS ports (one identity each) and one control
+   port. Any free ports work; on some Windows computers 9050, 9052 and 9150 sit
+   in a range Windows reserves and nothing can listen there
+   (`netsh int ipv4 show excludedportrange protocol=tcp` lists the ranges). Type
+   them under **Tor you run yourself** and press **Save Tor ports** (it contacts
+   nothing).
+2. **Paste the torrc lines** the card shows (**Copy torrc lines**) into the
+   torrc your tor reads, and restart tor:
+
+   ```
+   SocksPort 127.0.0.1:19250
+   SocksPort 127.0.0.1:19251
+   ControlPort 127.0.0.1:19260
+   CookieAuthentication 1
+   ```
+
+3. **Check Tor**: MCC logs in to the control port and shows whether tor has a
+   circuit and which of your ports it really listens on.
+4. **Add all to chain**. Each port is tested against the provider's own host
+   first and goes by its own name, `Tor · 127.0.0.1:<port>`.
+5. Leave **Keep trying exits until one answers** ticked on that chain (it is on
+   by default): a 429 or a country refusal on one Tor port moves the same
+   request to the next port at once.
+
+**New Tor identity** sends `SIGNAL NEWNYM`: new requests on every port get new
+circuits. Tor allows one per 10 seconds, so a second press inside that window is
+refused by MCC with the seconds left and nothing is sent. MCC never asks for a
+new identity by itself — not after a refusal, not on a timer. A connection
+already open keeps its exit until it closes.
+
+**Raise `PROXY_CONNECT_TIMEOUT_SECONDS`** (Limits & Resilience → Credential
+health; default 10) to 30 or so when your chains use Tor: a fresh circuit can
+take longer than ten seconds to connect.
+
+**Logging in**: by default with tor's cookie, read only at the moment you press
+a button and never copied; MCC prefers `SAFECOOKIE`, where the cookie never
+crosses the connection. If tor runs as another user or inside WSL and MCC cannot
+read the cookie, give tor a `HashedControlPassword` (what `tor --hash-password`
+prints) and choose **Log in with a control password**. The Tor Project asks
+people not to push heavy or automated traffic through its volunteer exits. The
+reference is [Bring your own Tor](ROUTING-REFERENCE.md#bring-your-own-tor-7900).
+
+#### F. gluetun: any VPN's OpenVPN or WireGuard file, in Docker
+
+[gluetun](https://github.com/qdm12/gluetun) is a VPN client in a Docker
+container with an optional HTTP proxy. You run it; MCC does not install or
+start Docker or gluetun. Its wiki lists the providers it knows and the variables
+each needs. A Proton VPN WireGuard example, publishing its HTTP proxy on this
+computer only:
+
+```sh
+docker run -d --name gluetun-nl --cap-add=NET_ADMIN --device /dev/net/tun \
+  -p 127.0.0.1:8888:8888/tcp \
+  -e VPN_SERVICE_PROVIDER=protonvpn -e VPN_TYPE=wireguard \
+  -e WIREGUARD_PRIVATE_KEY=<the PrivateKey of your Proton WireGuard file> \
+  -e SERVER_COUNTRIES=Netherlands \
+  -e HTTPPROXY=on \
+  qmcgaw/gluetun
+```
+
+Then **Scan this computer** (8888 is one of the ports it asks) or add
+`http://127.0.0.1:8888` to a chain with **Add proxy**. A second container on
+another host port (`-p 127.0.0.1:8889:8888/tcp`, another country) is a second
+exit.
+
+Gotchas:
+
+- Publish the port on `127.0.0.1` as above; published on every interface, the
+  proxy is usable by anything on your network. If you give gluetun's proxy a
+  login, the scan asks for it and keeps it readable by you only.
+- The proxy relays MCC's TLS untouched, so it passes the interception check like
+  any honest proxy.
+- **Proton VPN Free allows one device**: gluetun with a Free WireGuard key while
+  the Proton app is connected may be refused (not tested).
+
+#### G. Check that it worked
+
+<div align="center">
+  <img src="../assets/admin-proxy-chain-card.png" alt="The OpenCode Zen chain card with four entries (two Tor ports, a gluetun HTTP proxy and WARP proxy mode), its What OpenCode Zen can see box, Fall back to this machine's own address unticked and Keep trying exits until one answers ticked" width="860">
+  <p><em>A chain card: its entries and their health, What OpenCode Zen can see, Direct fallback and Keep trying exits. (Screenshot from a test install whose proxies are not running, so every entry reads unhealthy.)</em></p>
+</div>
+
+- The card's **What &lt;provider&gt; can see** box says which traffic goes through the
+  chain and when, if ever, the provider sees this computer's address.
+- **Analytics → Exit** column: the exit of the attempt that answered, **+N** when
+  the request went out through more exits (all of them in its tooltip). The
+  **Exit** box in the toolbar filters the page — and its exports — by any part of
+  an exit's name.
+- A request's **View** lists every exit it dialled, what each answered, how long
+  it took and what MCC now remembers about it:
+
+<div align="center">
+  <img src="../assets/admin-analytics-exit.png" alt="The Analytics requests table with an Exit column: an OpenCode request whose exit reads WARP proxy mode with a +3 chip, and requests that went out with no proxy shown with a dash" width="860">
+  <p><em>Analytics: the Exit column, with +3 for a request that tried four exits.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-analytics-exit-detail.png" alt="A request's route attempts: the attempt failed with unavailable, the sentence Every exit this request could use in OpenCode Zen's proxy chain refused or failed it, and four proxy dials each switching to the next" width="860">
+  <p><em>The request detail: four proxy dials, each exit marked unreachable, and the one sentence saying the key was not charged.</em></p>
+</div>
+
+#### H. Defaults worth knowing
+
+- **Keep trying exits until one answers** is on for every chain (since 7.81.1):
+  a free-usage 429, a refusal for the exit's country, an exit that cannot be
+  reached or drops the connection before the first byte moves the request to
+  another exit on the same model, within your *Switches per request* and
+  `PROXY_MAX_LIVE_FAILURES`. Output that has started never moves.
+- **Exit memory** (7.81.0): a refused exit is skipped by later requests until the
+  wait the provider stated (or `PROXY_COOLDOWN_SECONDS`); **Forget exit memory**
+  on the card clears it; a restart forgets it.
+- **Direct fallback** (*Fall back to this machine's own address*) is on for a
+  new chain, and since 7.79.2 sends from this computer only once **every** proxy
+  in the chain is unhealthy. Untick it on a provider that must never see this
+  computer's address.
+- **A chain with one entry never switches and never falls back to Direct.** Give
+  it two or more entries for a refusal to move on.
+- **The OpenCode session id is the same on every exit**: one per conversation,
+  so a new exit is not a new client.
+- **Terms.** No VPN vendor found allows automated API traffic in its terms, and
+  commercial proxies bind you to the use you declared to them. Using them for a
+  coding assistant is your call.
 
 ---
 

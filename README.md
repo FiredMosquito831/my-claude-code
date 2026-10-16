@@ -166,6 +166,8 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | Bring your own Tor | A tor you run on ports you choose: each SOCKS port becomes one named chain address (one identity), the card shows the matching torrc lines, **Check Tor** reads its status and **New Tor identity** sends one NEWNYM at most every 10 s; MCC never downloads or starts tor and never asks for a new identity by itself | **Proxying** page | [Reference](docs/ROUTING-REFERENCE.md#bring-your-own-tor-7900) |
 | VPN accounts, gateways and proxy lists | A VPN's SOCKS5 hosts with its service login (NordVPN, PIA, IPVanish, TorGuard; Mullvad and IVPN inside their tunnels), a commercial gateway's N sessions (Bright Data datacenter/ISP, Oxylabs, IPRoyal, Decodo) or a provider's ip:port:user:pass list (Webshare) become named chain addresses; presets prefill each form from the vendor's documentation, logins and download links are stored owner-only and never shown, and a vendor list is fetched only on **Fetch now** or a schedule you switch on | **Proxying** page | [Reference](docs/ROUTING-REFERENCE.md#vpn-accounts-gateways-and-proxy-lists-7910) |
 | Where each exit comes out | `PROXY_CHECK_EXIT_IP_URL=provider` asks each provider's own host which address, country and WARP it saw, through the tunnel; entries sharing an exit are grouped, Keep one per exit pauses the duplicates, and Direct's own exit is shown where the chain would use it | **Proxying** page | [Reference](docs/ROUTING-REFERENCE.md#where-each-exit-comes-out-7890) |
+| VPN, WARP and Tor, step by step | Which path fits what you have -- Proton VPN Free through the app, split tunnelling only MCC's program, a VPN account's or gateway's proxies, WARP's proxy mode, your own tor, or gluetun in Docker -- with the exact program to include and the gotchas | **Proxying** page | [Tutorial](docs/USAGE.md#tutorial-route-a-provider-through-a-vpn-warp-or-tor) |
+| Per-model context window | Override the context window MCC extracted for one model; the provider's own figure stays shown beside it | **Models** page | [Guide](docs/USAGE.md#per-model-reasoning-and-output-preferences) |
 | OAuth providers | Claude subscription (**not permitted by Anthropic**), ChatGPT, Kimi For Coding | **Providers** page | [OAuth providers](docs/OAUTH-PROVIDERS.md) |
 
 ### Agents
@@ -179,7 +181,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | Generated catalogues | Each agent's model list carries real context windows, output ceilings, vision, tools and effort vocabulary | **Coding agents** page | [Guide](docs/USAGE.md#7-tutorial-connect-another-cli) |
 | Request attribution | Analytics names the coding agent behind every request | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Headless control | `mcc-apps list \| status \| configure [--preview] \| undo [--restore]` | terminal | [Guide](docs/USAGE.md#6-point-a-desktop-app-here) |
-| Other clients | Any OpenAI-, Anthropic- or Gemini-shaped client, plus VS Code and JetBrains ACP | anywhere | [Clients](docs/CLIENTS.md) |
+| Other clients | Any OpenAI-, Anthropic- or Gemini-shaped client, plus VS Code and JetBrains ACP; an API reference with one runnable example per endpoint | anywhere | [Clients](docs/CLIENTS.md#api-reference) |
 
 ### Observability and cost
 
@@ -187,6 +189,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | --- | --- | --- | --- |
 | Request log | Every completed request stored locally, searchable across prompt, reply, reasoning and tool calls | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Search index | Search the request log without unpacking stored requests: an index of each distinct piece of text, in its own file beside the log; new requests indexed as they are written, older ones when you press **Build search index**; the same results as before, always | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
+| Exit column | Which proxy exit answered each request (+N when more were tried), a filter by exit name, and every dial in the request detail | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Wire capture | The message and tool structure actually sent, bounded and inspectable | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Analytics | Range-aware rollups, p50/p95 latency, provider and model breakdowns, top errors, auto-refresh | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Cost with provenance | Each request priced once as it is logged, with the rung of the pricing ladder that answered stored beside it | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |

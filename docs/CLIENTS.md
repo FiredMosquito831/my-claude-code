@@ -1,6 +1,6 @@
 # Connecting other clients and editors
 
-Editor integrations and any OpenAI-, Anthropic- or Gemini-shaped client. Moved out of the README in 6.57.0; nothing here changed.
+Editor integrations, and the [API reference](#api-reference) for any OpenAI-, Anthropic- or Gemini-shaped client: every endpoint MCC serves, how to authenticate, and one runnable example each.
 
 For terminal use, start `mcc-server`, then run `mcc-claude`, `mcc-codex`, or `mcc-pi`. (The legacy `fcc-*` names were retired in 7.0.0: each prints the `mcc-*` name that replaced it and exits 1.) Use the guides below for editor integrations.
 
@@ -166,6 +166,137 @@ If the file does not exist, create it with a complete JSON object:
 Restart Claude Code or the IDE after saving the file.
 
 </details>
+
+## API reference
+
+MCC speaks four vendors' APIs on one port. Every example below was run against a
+test install (its tiers pointed at a local stand-in provider) and answered as shown;
+on your install the answer comes from the model your tier routes to.
+
+### Base URL and authentication
+
+| Client kind | Base URL to give it | Token header it sends (all accepted) |
+| --- | --- | --- |
+| Anthropic SDK, Claude Code | `http://127.0.0.1:8082` (the root; the SDK adds `/v1/messages`) | `x-api-key: <token>` or `Authorization: Bearer <token>` |
+| OpenAI SDK and compatible clients | `http://127.0.0.1:8082/v1` | `Authorization: Bearer <token>` |
+| Gemini SDK (`google-genai`), REST | `http://127.0.0.1:8082` (the SDK adds `/v1beta`) | `x-goog-api-key: <token>`, or `?key=<token>` |
+
+The token is `ANTHROPIC_AUTH_TOKEN` (dashboard: Providers → Runtime). With it
+empty, no token is asked for (see [Security](USAGE.md#15-security-and-networking)).
+A wrong or missing token answers `401`: `{"detail": "Invalid proxy authentication token"}`
+on the Anthropic and OpenAI doors (media included), and Google's error shape
+(`{"error": {"code": 401, "status": "UNAUTHENTICATED", ...}}`) on `/v1beta`.
+
+An optional `x-mcc-harness: <name>` request header names the client in
+**Analytics** (the `mcc-*` launchers set it); it is never sent upstream.
+
+### Which model a request gets
+
+| `model` you send | What answers |
+| --- | --- |
+| `mcc/cyber`, `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` | the Mythos, Fable, Opus, Sonnet and Haiku tiers on **Model Config**, with their fallback chains |
+| `mcc/vision` | the vision adapter's model |
+| a Claude name (`claude-sonnet-4-5`, `claude-opus-…`) | the tier its family maps to |
+| `provider/model` (`opencode/big-pickle`, `custom_x/y`) | that one model, which needs that provider's key |
+| anything else | the default route (`MODEL`) |
+
+`GET /v1/models` lists what your clients may pick.
+
+### Endpoints
+
+| Method and path | Speaks | Example |
+| --- | --- | --- |
+| `POST /v1/messages` | Anthropic Messages, streamed or not | [below](#messages) |
+| `POST /v1/messages/count_tokens` | Anthropic token count | [below](#count-tokens) |
+| `POST /v1/chat/completions` | OpenAI Chat Completions, streamed or not | [below](#chat-completions) |
+| `POST /v1/responses` | OpenAI Responses, **streamed only** | [below](#responses) |
+| `GET /v1/models` | OpenAI/Anthropic model list | [below](#models-and-health) |
+| `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens`; `GET /v1beta/models` | Google Gemini | [below](#gemini) |
+| `POST /v1/images/generations`, `/v1/images/edits`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/videos` (+ `GET`/`DELETE /v1/videos/{id}`, `GET /v1/videos/{id}/content`) | OpenAI media | [Media routing](MEDIA.md#every-rail-with-curl) |
+| `GET /health` | liveness | [below](#models-and-health) |
+
+#### Messages
+
+```sh
+curl http://127.0.0.1:8082/v1/messages \
+  -H "x-api-key: $ANTHROPIC_AUTH_TOKEN" -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "mcc/medium", "max_tokens": 256, "messages": [{"role": "user", "content": "Say hello"}]}'
+```
+
+Answers an Anthropic `message` (`"stream": true` gives Anthropic's event stream).
+
+#### Count tokens
+
+```sh
+curl http://127.0.0.1:8082/v1/messages/count_tokens \
+  -H "x-api-key: $ANTHROPIC_AUTH_TOKEN" -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "mcc/medium", "messages": [{"role": "user", "content": "Say hello"}]}'
+```
+
+Answers `{"input_tokens": 6}`. MCC counts locally; nothing is sent to a provider.
+
+#### Chat Completions
+
+```sh
+curl http://127.0.0.1:8082/v1/chat/completions \
+  -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"model": "mcc/medium", "stream": true, "messages": [{"role": "user", "content": "Say hello"}]}'
+```
+
+Server-sent `chat.completion.chunk` events ending in `data: [DONE]`; leave out
+`stream` for one `chat.completion`. Reasoning streams as `delta.reasoning_content`.
+
+#### Responses
+
+```sh
+curl -N http://127.0.0.1:8082/v1/responses \
+  -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"model": "mcc/medium", "input": "Say hello", "stream": true}'
+```
+
+`response.created` … `response.output_text.delta` … `response.completed`. A request
+with `"stream": false` answers `400`: *MCC /v1/responses supports streaming only*.
+
+#### Gemini
+
+```sh
+curl "http://127.0.0.1:8082/v1beta/models/claude-sonnet-4-5:generateContent" \
+  -H "x-goog-api-key: $ANTHROPIC_AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"contents": [{"role": "user", "parts": [{"text": "Say hello"}]}]}'
+```
+
+Answers `candidates[0].content.parts[].text` with `usageMetadata`; the path is the
+model (here the Sonnet tier, by its Claude name; a tier alias works in the path
+too, slash and all). `GET /v1beta/models` lists the same models in Google's shape. Asking for
+`IMAGE` or `AUDIO` in `generationConfig.responseModalities` uses the media rails
+([Media routing](MEDIA.md#gemini-shaped-requests-7650)).
+
+#### Models and health
+
+```sh
+curl http://127.0.0.1:8082/v1/models -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN"
+curl -i http://127.0.0.1:8082/health
+```
+
+`/health` needs no token and answers `{"status": "healthy"}`, with an
+`x-mcc-pid` header naming the server's process; while the server is starting
+it answers `503` with `"status": "starting"`.
+
+### Errors
+
+A routing or provider failure answers in the door's own vendor shape (OpenAI
+`{"error": {...}}`, Anthropic `{"type": "error", "error": {...}}`, Google
+`{"error": {"code", "status", ...}}`). Two answers do not: the `401` above, and a
+body that does not parse as the door's request (a `messages` that is not a
+list, say), which on the Anthropic and OpenAI doors answers `422` with a
+`{"detail": [...]}` list naming the field.
+A model whose provider has no key answers `503` naming the missing setting. A
+request every model of its chain refused ends with
+the last failure, its status and the sentence MCC wrote about it; the request
+detail on **Analytics** shows every attempt. An empty media rail answers `404`
+([why](MEDIA.md#every-rail-with-curl)).
 
 <a id="optional-integrations"></a>
 
