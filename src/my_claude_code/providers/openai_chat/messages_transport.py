@@ -320,10 +320,12 @@ class MessagesTransport:
         if self._identity is None:
             return {}
         constant = self._identity.default_headers()
+        inbound = current_fingerprint()
         varying = identity_headers_for_body(
             self._identity,
             {"messages": body.get("messages")},
-            current_fingerprint().session_id,
+            inbound.session_id,
+            inbound_sessions=inbound.opencode_session_ids,
         )
         merged = {**constant, **varying}
         return {name: merged[name] for name in self._identity.order if name in merged}

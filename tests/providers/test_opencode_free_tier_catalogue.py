@@ -26,8 +26,9 @@ What these tests hold:
 * ``OPENCODE_CLIENT_IDENTITY=mcc`` turns the whole impersonation off;
 * a ``FreeTierError`` is its own failure kind, benches nothing, and does not
   stop the chain;
-* nothing is ever appended, and a tool-less request is left tool-less --
-  which is what the real client sends on its own sub-requests.
+* nothing is appended to a request that has tools; a tool-less request on a
+  free model carries OpenCode's five names since 7.92.3, because the free tier
+  refuses it otherwise (measured 2026-10-16).
 """
 
 import json
@@ -343,17 +344,121 @@ def test_a_sub_request_shaped_turn_is_translated_too() -> None:
     assert [tool["name"] for tool in body["tools"]] == ["bash"]
 
 
-def test_a_tool_less_request_stays_tool_less() -> None:
-    """MCC does not invent a catalogue the real client would not have sent.
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+def test_a_tool_less_free_request_carries_opencodes_five_names(
+    surface: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """7.92.3, B4: measured first, then decided.
 
-    Captured 2026-09-19: the genuine ``opencode`` CLI's own title sub-request
-    carries no ``tools`` key, no ``tool_choice`` and no ``prompt_cache_key``.
-    Its free tier refuses that request too (anomalyco/opencode#49592, #49723).
-    Adding a catalogue MCC cannot honour, to a request the client it names
-    would not have added one to, would be the larger lie.
+    Until 7.92.2 a tool-less request was left tool-less: the genuine
+    ``opencode`` 1.18.30 title sub-request carried no ``tools`` key, and its
+    free tier refused it too (anomalyco/opencode#49592, #49723). On 2026-10-16
+    one probe sent MCC's exact tool-less body to ``big-pickle`` with a freshly
+    minted session id and got ``403 FreeTierError``
+    (``D:/mcc-scratch-zenid/probes/B4.txt``). The user decided (Q6) that such a
+    request on a free model carries OpenCode's own five names, each saying it
+    must not be called. A paid model and ``OPENCODE_CLIENT_IDENTITY=mcc`` are
+    left exactly as they were.
     """
-    body = _responses_body(_provider(), _request(FREE))
-    assert not body.get("tools")
+
+    def names(provider: Any, request: MessagesRequest) -> list[str]:
+        shaped = provider.with_stand_ins(request)
+        if surface == "responses":
+            body = _responses_body(provider, shaped)
+            return [tool["name"] for tool in body.get("tools") or ()]
+        body = provider._build_request_body(shaped, reasoning=REASONING)
+        return [tool["function"]["name"] for tool in body.get("tools") or ()]
+
+    provider = _provider()
+    assert names(provider, _request(FREE)) == ["bash", "edit", "glob", "grep", "read"]
+    assert names(provider, _request("big-pickle")) == [
+        "bash",
+        "edit",
+        "glob",
+        "grep",
+        "read",
+    ]
+    paid = _request(PAID)
+    assert provider.with_stand_ins(paid) is paid
+    assert names(provider, paid) == []
+    monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", "mcc")
+    get_settings.cache_clear()
+    try:
+        opted_out = _request(FREE)
+        assert _provider().with_stand_ins(opted_out) is opted_out
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "free"), [(FREE, True), (PAID, False)])
+async def test_surface_probes_ask_a_free_model_in_the_shape_the_gate_admits(
+    model: str, free: bool
+) -> None:
+    """7.92.3, B5 (user decision Q15): a probe in the old shape -- no stream,
+    no tools -- could only ever measure the free-tier gate. On a free model
+    both surface probes now stream and carry OpenCode's five names, reading the
+    stream to its end; on a paid model they send what they always sent."""
+    from my_claude_code.application.model_metadata import ResponseSurface
+
+    provider = _provider()
+    chat_calls: list[dict[str, Any]] = []
+
+    class _Stream:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __aiter__(self) -> _Stream:
+            return self
+
+        async def __anext__(self) -> object:
+            raise StopAsyncIteration
+
+        async def close(self) -> None:
+            self.closed = True
+
+    stream = _Stream()
+
+    async def create(**kwargs: Any) -> object:
+        chat_calls.append(kwargs)
+        return stream if kwargs.get("stream") else object()
+
+    provider._client.chat.completions.create = create
+    await provider._probe_surface(ResponseSurface.CHAT_COMPLETIONS, model)
+
+    responses_bodies: list[dict[str, Any]] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        responses_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=b""
+        )
+
+    provider._responses._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(upstream)
+    )
+    await provider._probe_surface(ResponseSurface.RESPONSES, model)
+
+    [chat] = chat_calls
+    [responses] = responses_bodies
+    roster = ["bash", "edit", "glob", "grep", "read"]
+    if free:
+        assert chat["stream"] is True
+        assert [tool["function"]["name"] for tool in chat["tools"]] == roster
+        assert stream.closed
+        assert responses["stream"] is True
+        assert [tool["name"] for tool in responses["tools"]] == roster
+    else:
+        assert chat["stream"] is False
+        assert "tools" not in chat
+        assert list(responses) == [
+            "model",
+            "input",
+            "store",
+            "stream",
+            "max_output_tokens",
+        ]
+        assert responses["stream"] is False
 
 
 # -- scope: everything outside it is byte-identical ----------------------------

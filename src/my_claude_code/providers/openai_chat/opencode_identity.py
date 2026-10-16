@@ -101,11 +101,14 @@ header list, and a byte-faithful user-agent belongs in a PATCH of its own.
 name a program for MCC's own name and version and the project id for ``mcc``.
 The three functional headers are unchanged: they are what the vendor asked
 for, and what buys prompt-cache stickiness, and neither depends on which
-program is claimed.
+program is claimed. (7.92.3 adds a fourth functional header,
+``x-opencode-session-id``, which carries the session id under the 1.19.0
+client's second name for it and follows the same rule.)
 """
 
 import json
 import os
+import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -132,6 +135,12 @@ from .client_identity import ClientIdentity
 OPENCODE_PROJECT_HEADER = "x-opencode-project"
 #: Header carrying the conversation, stable across its turns.
 OPENCODE_SESSION_HEADER = "x-opencode-session"
+#: The same conversation id under a second name. OpenCode 1.19.0 sends both,
+#: with one value (opencode-lite ``opencode_lite.py:928-937``, commit
+#: ``0fcf9f9b``, 2026-10-14, recorded from that client). Not needed to pass the
+#: free-tier gate on 2026-10-16 (probe P6 answered 200 without it); sent since
+#: 7.92.3 so the set matches the client the vendor builds the gate against.
+OPENCODE_SESSION_ID_HEADER = "x-opencode-session-id"
 #: Header carrying this one call.
 OPENCODE_REQUEST_HEADER = "x-opencode-request"
 #: Header naming which front end of the client is calling.
@@ -139,7 +148,7 @@ OPENCODE_CLIENT_HEADER = "x-opencode-client"
 #: The user-agent both branches of the client's own header block send.
 USER_AGENT_HEADER = "User-Agent"
 
-#: The five, in one fixed sequence. Read off the client's source in 6.69.0 as
+#: The five (six since 7.92.3), in one fixed sequence. Read off the client's source in 6.69.0 as
 #: "the order the client emits them"; the 2026-09-11 capture shows the client's
 #: real wire order is ``User-Agent``, ``x-opencode-client``,
 #: ``x-opencode-project``, ``x-opencode-request``, ``x-opencode-session``.
@@ -147,9 +156,14 @@ USER_AGENT_HEADER = "User-Agent"
 #: this is kept as it is: what it buys is that every set MCC builds -- both
 #: halves of an identity, and both of its wire surfaces -- is emitted the same
 #: way, which is what makes the sets comparable at all.
+#:
+#: 7.92.3 adds ``x-opencode-session-id`` directly after ``x-opencode-session``,
+#: which is where the 1.19.0 client emits it (immediately after the session
+#: header), and moves nothing else: every name already here keeps its place.
 OPENCODE_HEADER_ORDER: tuple[str, ...] = (
     OPENCODE_PROJECT_HEADER,
     OPENCODE_SESSION_HEADER,
+    OPENCODE_SESSION_ID_HEADER,
     OPENCODE_REQUEST_HEADER,
     OPENCODE_CLIENT_HEADER,
     USER_AGENT_HEADER,
@@ -316,12 +330,21 @@ def opencode_constant_headers() -> dict[str, str]:
 #: Zen and Go cannot drift apart -- the vendor's requirement landed on Go
 #: first and the free-tier limiter reads Zen, and a proxy that satisfied one
 #: of them would look like it had satisfied both.
+#: The shape of a session id the OpenCode client mints itself: ``ses_``, the
+#: twelve-hex descending clock head and a fourteen-character base62 tail (see
+#: :func:`~my_claude_code.providers.openai_chat.client_identity.derived_session_id`).
+#: An inbound OpenCode request whose own session id has exactly this shape has
+#: it sent on unchanged (7.92.3, user decision 2026-10-16 Q5).
+OPENCODE_SESSION_ID_PATTERN = re.compile(r"ses_[0-9a-f]{12}[0-9A-Za-z]{14}")
+
 OPENCODE_CLIENT_IDENTITY = ClientIdentity(
     order=OPENCODE_HEADER_ORDER,
     constant=opencode_constant_headers,
     session_header=OPENCODE_SESSION_HEADER,
+    session_mirror_headers=(OPENCODE_SESSION_ID_HEADER,),
     request_header=OPENCODE_REQUEST_HEADER,
     probe_omit_header=OPENCODE_SESSION_HEADER,
+    inbound_session_pattern=OPENCODE_SESSION_ID_PATTERN,
 )
 
 
@@ -366,6 +389,8 @@ __all__ = [
     "OPENCODE_PROJECT_VALUE",
     "OPENCODE_REQUEST_HEADER",
     "OPENCODE_SESSION_HEADER",
+    "OPENCODE_SESSION_ID_HEADER",
+    "OPENCODE_SESSION_ID_PATTERN",
     "USER_AGENT_HEADER",
     "VERSION_CACHE_SECONDS",
     "VERSION_SOURCE_INSTALLED",

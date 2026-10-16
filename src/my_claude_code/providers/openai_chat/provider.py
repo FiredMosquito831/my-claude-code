@@ -4,7 +4,14 @@ import asyncio
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+)
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
@@ -209,6 +216,35 @@ def _tool_definitions(request: MessagesRequest) -> tuple[tuple[str, str | None],
     """Each tool one request offers, as ``(name, description)``."""
 
     return tuple((tool.name, tool.description) for tool in request.tools or ())
+
+
+def _stand_in_tools(declared: Iterable[tuple[str, str]]) -> list[Tool]:
+    """Anthropic tools for MCC's own ``(name, description)`` declarations.
+
+    Every one takes :data:`STAND_IN_INPUT_SCHEMA`: a tool the client does not
+    have accepts no arguments it could act on.
+    """
+
+    return [
+        Tool(name=name, description=text, input_schema=dict(STAND_IN_INPUT_SCHEMA))
+        for name, text in declared
+    ]
+
+
+def _chat_probe_tools(declared: Iterable[tuple[str, str]]) -> list[Any]:
+    """The same declarations as Chat Completions ``tools`` entries."""
+
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": text,
+                "parameters": dict(STAND_IN_INPUT_SCHEMA),
+            },
+        }
+        for name, text in declared
+    ]
 
 
 class OpenAIChatProvider(BaseProvider):
@@ -537,13 +573,29 @@ class OpenAIChatProvider(BaseProvider):
         carry the same tools and every encode and decode site sees them. The
         fences are :meth:`FreeTierToolCatalogue.stand_ins_for_request`'s; a
         request none of them lets through -- every request of a profile with
-        no catalogue, every Claude Code request, every tool-less one -- is
-        returned as the same object.
+        no catalogue, every Claude Code request -- is returned as the same
+        object.
+
+        A request that offers no tools at all is the one other case (7.92.3):
+        on a free-tier model it carries OpenCode's five names
+        (:meth:`FreeTierToolCatalogue.roster_for_tool_less_request`), because
+        the free tier refuses a tool-less body; on any other model, and under
+        ``OPENCODE_CLIENT_IDENTITY=mcc``, it is returned as the same object.
         """
 
         catalogue = self._profile.free_tier_tool_catalogue
-        if catalogue is None or not request.tools:
+        if catalogue is None:
             return request
+        if not request.tools:
+            roster = catalogue.roster_for_tool_less_request(
+                request.model,
+                zero_cost=model_is_zero_cost(self._provider_id, request.model),
+            )
+            if not roster:
+                return request
+            return request.model_copy(
+                update={"tools": _stand_in_tools(roster)},
+            )
         stand_ins = catalogue.stand_ins_for_request(
             request.model,
             _tool_definitions(request),
@@ -552,10 +604,7 @@ class OpenAIChatProvider(BaseProvider):
         )
         if not stand_ins:
             return request
-        added = [
-            Tool(name=name, description=text, input_schema=dict(STAND_IN_INPUT_SCHEMA))
-            for name, text in stand_ins
-        ]
+        added = _stand_in_tools(stand_ins)
         return request.model_copy(update={"tools": [*request.tools, *added]})
 
     def tool_name_codec(self, request: MessagesRequest) -> OpenAIToolNameCodec | None:
@@ -701,10 +750,12 @@ class OpenAIChatProvider(BaseProvider):
                 # for every profile that declares no identity, and an empty
                 # mapping adds no kwarg at all, so their call is the call
                 # they have always made.
+                inbound = current_fingerprint()
                 identity = identity_headers_for_body(
                     self._profile.client_identity,
                     body,
-                    current_fingerprint().session_id,
+                    inbound.session_id,
+                    inbound_sessions=inbound.opencode_session_ids,
                 )
                 extra = {"extra_headers": identity} if identity else {}
                 record_wire_request(
@@ -1118,25 +1169,67 @@ class OpenAIChatProvider(BaseProvider):
         if surface is ResponseSurface.MESSAGES:
             await self._messages.probe(model_id)
             return
+        free_tier_tools = self._free_tier_probe_tools(model_id)
         if surface is ResponseSurface.RESPONSES:
-            await self._responses.probe(model_id)
+            if free_tier_tools:
+                await self._responses.probe(model_id, free_tier_tools=free_tier_tools)
+            else:
+                await self._responses.probe(model_id)
             return
-        await self._client.chat.completions.create(
+        inbound = current_fingerprint()
+        identity = (
+            {
+                "extra_headers": identity_headers_for_body(
+                    self._profile.client_identity,
+                    {"messages": [{"role": "user", "content": PROBE_PROMPT}]},
+                    inbound.session_id,
+                    inbound_sessions=inbound.opencode_session_ids,
+                )
+            }
+            if self._profile.client_identity is not None
+            else {}
+        )
+        if not free_tier_tools:
+            await self._client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": PROBE_PROMPT}],
+                max_tokens=PROBE_MAX_OUTPUT_TOKENS,
+                stream=False,
+                **identity,
+            )
+            return
+        # A free-tier model is behind a gate that refuses a non-streaming,
+        # tool-less body whatever the model can do, so a probe in that shape
+        # could only ever measure the gate. It asks in the shape the gate
+        # admits -- streaming, carrying OpenCode's five names -- and reads
+        # the stream to its end, discarding it.
+        stream = await self._client.chat.completions.create(
             model=model_id,
             messages=[{"role": "user", "content": PROBE_PROMPT}],
             max_tokens=PROBE_MAX_OUTPUT_TOKENS,
-            stream=False,
-            **(
-                {
-                    "extra_headers": identity_headers_for_body(
-                        self._profile.client_identity,
-                        {"messages": [{"role": "user", "content": PROBE_PROMPT}]},
-                        current_fingerprint().session_id,
-                    )
-                }
-                if self._profile.client_identity is not None
-                else {}
-            ),
+            stream=True,
+            tools=_chat_probe_tools(free_tier_tools),
+            **identity,
+        )
+        try:
+            async for _chunk in stream:
+                pass
+        finally:
+            await stream.close()
+
+    def _free_tier_probe_tools(self, model_id: str) -> tuple[tuple[str, str], ...]:
+        """The tools a surface probe of this model must carry, or ``()``.
+
+        Non-empty only for a model of a profile that declares a free-tier
+        catalogue, inside that scope, with the operator not opted out: the
+        same answer a tool-less client request to it gets (7.92.3).
+        """
+
+        catalogue = self._profile.free_tier_tool_catalogue
+        if catalogue is None:
+            return ()
+        return catalogue.roster_for_tool_less_request(
+            model_id, zero_cost=model_is_zero_cost(self._provider_id, model_id)
         )
 
 

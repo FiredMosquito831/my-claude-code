@@ -59,7 +59,9 @@ names and add five lowercase decoys so the classifier sees its catalogue -- is
 exactly probe H, and probe H is a 500. It also lies twice over: it tells the
 host about tools the model may call and MCC cannot run. (7.51.0 adds one
 fenced exception, for a client that has *no* tool for a role: see
-:data:`STAND_IN_INPUT_SCHEMA`. It never sits beside a name the client has.)
+:data:`STAND_IN_INPUT_SCHEMA`. It never sits beside a name the client has.
+7.92.3 adds a second, for a request that offers no tools at all: see
+:data:`TOOL_LESS_ROSTER_DESCRIPTION`.)
 
 **Scope: the free tier only.** This is a workaround for one vendor's
 anti-abuse gate on one tier. A paid Zen model, a Go model with credit, and
@@ -199,6 +201,30 @@ class ToolFamily:
 #: MCC never turns it into a shell command: that would be inventing behaviour.
 STAND_IN_INPUT_SCHEMA: Mapping[str, object] = MappingProxyType(
     {"type": "object", "properties": {}}
+)
+
+#: **Tool-less requests (7.92.3).** A request that offers no tools at all -- a
+#: client's title or summary call -- has no family to choose and no role to
+#: fill, so the stand-in fence above ("only a request that already has tools")
+#: left it with no catalogue, and the free tier refuses it. Measured
+#: 2026-10-16 (``D:/mcc-scratch-zenid/probes/B4.txt``): MCC's exact tool-less
+#: chat body to ``big-pickle``, with a freshly minted clock-shaped session id,
+#: answered ``403 FreeTierError``. The user decided (2026-10-16 Q6, "measure
+#: first") that such a request, on a free-tier model only, carries OpenCode's
+#: own five tool names, the way OpenCode's own client sends its tools on every
+#: call. Each one says in its description that the client offered nothing and
+#: it must not be called; the schema is :data:`STAND_IN_INPUT_SCHEMA`. They are
+#: listed in the order OpenCode's own client sends them (alphabetical). A
+#: request that has tools, a paid model and ``OPENCODE_CLIENT_IDENTITY=mcc``
+#: are untouched.
+TOOL_LESS_ROSTER_DESCRIPTION = (
+    "Not available in this request: the client offered no tools. Do not call "
+    "this tool; answer in text."
+)
+
+#: OpenCode's spellings for the five roles, in the order its client sends them.
+TOOL_LESS_ROSTER_NAMES: tuple[str, ...] = tuple(
+    sorted(OPENCODE_TOOL_CATALOGUE.values())
 )
 
 #: Codex runs every read and search through its shell. On the wire that shell
@@ -748,6 +774,24 @@ class FreeTierToolCatalogue:
             taken.add(role.casefold())
         return tuple(added)
 
+    def roster_for_tool_less_request(
+        self, model_id: str, *, zero_cost: bool = False
+    ) -> tuple[tuple[str, str], ...]:
+        """The ``(name, description)`` tools a request with *no* tools carries.
+
+        OpenCode's five names (:data:`TOOL_LESS_ROSTER_NAMES`) for a model
+        inside the free-tier scope when the operator has not opted out
+        (:meth:`catalogue_for`), and nothing otherwise. The caller asks only
+        for a request that offers no tools; a request with tools goes through
+        :meth:`stand_ins_for_request` exactly as before.
+        """
+
+        if not self.catalogue_for(model_id, zero_cost=zero_cost):
+            return ()
+        return tuple(
+            (name, TOOL_LESS_ROSTER_DESCRIPTION) for name in TOOL_LESS_ROSTER_NAMES
+        )
+
 
 #: The one instance both OpenCode profiles carry, so Zen and Go cannot drift
 #: apart -- the same argument :data:`OPENCODE_CLIENT_IDENTITY` is written for.
@@ -788,6 +832,8 @@ __all__ = [
     "OPENCODE_TOOL_CATALOGUE",
     "OPENCODE_TOOL_FAMILIES",
     "STAND_IN_INPUT_SCHEMA",
+    "TOOL_LESS_ROSTER_DESCRIPTION",
+    "TOOL_LESS_ROSTER_NAMES",
     "FreeTierToolCatalogue",
     "ToolFamily",
     "ToolFamilyProvenance",

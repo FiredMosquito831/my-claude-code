@@ -25,6 +25,7 @@ from .learned_dialect import (
 )
 from .opencode_catalogue import (
     OPENCODE_FREE_TIER_CATALOGUE,
+    STAND_IN_INPUT_SCHEMA,
     model_is_zero_cost,
 )
 from .opencode_identity import (
@@ -89,6 +90,7 @@ __all__ = [
     "OPENAI_STANDARD_REASONING",
     "OPENCODE_CLIENT_IDENTITY",
     "OPENCODE_FREE_TIER_CATALOGUE",
+    "STAND_IN_INPUT_SCHEMA",
     "ChatTemplateReasoning",
     "ClientIdentity",
     "NamedEffortReasoning",

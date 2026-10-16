@@ -227,7 +227,23 @@ def test_claude_code_request_is_byte_identical_to_7_49_0(
 
     golden = _golden(case, surface)
     now = _session_minted(_now()[case][surface], golden)
+    if case == "tool_less_free":
+        now = _tool_less_roster_removed(now)
     assert canonical(now) == canonical(golden)
+
+
+def _tool_less_roster_removed(now: dict[str, Any]) -> dict[str, Any]:
+    """``now`` without the one thing 7.92.3 adds to a tool-less free request.
+
+    User decision 2026-10-16 Q6, after the probe measured MCC's tool-less body
+    refused (``403 FreeTierError``): a request that offers no tools, on a
+    free-tier model, carries OpenCode's five names. That ``tools`` list is
+    checked here and removed; every other byte is still compared with the
+    7.49.0 golden.
+    """
+
+    assert _names(now) == ["bash", "edit", "glob", "grep", "read"]
+    return {key: value for key, value in now.items() if key != "tools"}
 
 
 @pytest.mark.parametrize(
@@ -992,8 +1008,21 @@ def test_stand_ins_never_added_to_claude_or_tool_less_requests(
     assert _stand_ins(claude) is claude
     sub_request = tool_request(FREE, ["Bash"])
     assert _stand_ins(sub_request) is sub_request
+    # A tool-less request gets no *stand-ins*: since 7.92.3 it carries
+    # OpenCode's five names instead (user decision 2026-10-16 Q6), none of
+    # them a family's stand-in, whatever its history replays.
     tool_less = tool_request(FREE, [], history=["exec_command"])
-    assert _stand_ins(tool_less) is tool_less
+    shaped = _stand_ins(tool_less)
+    assert [tool.name for tool in shaped.tools or ()] == [
+        "bash",
+        "edit",
+        "glob",
+        "grep",
+        "read",
+    ]
+    assert not OPENCODE_FREE_TIER_CATALOGUE.carried_stand_ins(
+        (tool.name, tool.description) for tool in shaped.tools or ()
+    )
     # Outside the scope, whatever the client.
     for model in (PAID, "kimi-k2.6"):
         paid = tool_request(model, CODEX_0_155_1)

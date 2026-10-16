@@ -51,8 +51,13 @@ LMSTUDIO_DEFAULT_BASE = "http://localhost:1234/v1"
 LLAMACPP_DEFAULT_BASE = "http://localhost:8080/v1"
 OLLAMA_DEFAULT_BASE = "http://localhost:11434"
 OLLAMA_CLOUD_DEFAULT_BASE = "https://ollama.com/v1"
-OPENCODE_DEFAULT_BASE = "https://opencode.ai/zen/v1"
-OPENCODE_GO_DEFAULT_BASE = "https://opencode.ai/zen/go/v1"
+# OpenCode Zen and Go, at the addresses the vendor's own registry publishes
+# (models.dev ``provider.api``, read 2026-10-16) and OpenCode 1.19.0 calls.
+# Until 7.92.2 these were ``/zen/v1`` and ``/zen/go/v1``, which still answered
+# on 2026-10-16. No setting overrides them: every install reads them from here
+# at start, so an existing install moves on its next start.
+OPENCODE_DEFAULT_BASE = "https://opencode.ai/inference/v1"
+OPENCODE_GO_DEFAULT_BASE = "https://opencode.ai/inference/go/v1"
 VERCEL_AI_GATEWAY_DEFAULT_BASE = "https://ai-gateway.vercel.sh/v1"
 HUGGINGFACE_DEFAULT_BASE = "https://router.huggingface.co/v1"
 COHERE_DEFAULT_BASE = "https://api.cohere.ai/compatibility/v1"
