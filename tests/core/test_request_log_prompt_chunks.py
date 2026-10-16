@@ -935,6 +935,27 @@ def test_after_a_clear_new_prompts_are_stored_as_chunks_again(
         assert raws[hashlib.sha256(packed).hexdigest()] == packed
 
 
+def test_a_scan_reads_chunks_through_its_own_cache_never_the_shared_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The planner times a scan's first rows to price the rest (7.92.0); a
+    cache earlier searches warmed would make those rows look free."""
+    path = tmp_path / "requests.db"
+    _write(path, monkeypatch, _records(24))
+    _convert(path)
+    store = _Reader(path, max_rows=0)
+    try:
+        with closing(store._connect()) as conn:
+            matched = list(store._match_rows_pass(conn, "turn", _filters(local="all")))
+        assert matched
+        assert len(store._chunk_reader._cache) == 0
+        # The shared cache still serves the detail, list and export.
+        assert store._decode_bodies(next(iter(_chunked(path).values())), -1)
+        assert len(store._chunk_reader._cache) > 0
+    finally:
+        store.close()
+
+
 # --------------------------------------------------------------- reader
 
 

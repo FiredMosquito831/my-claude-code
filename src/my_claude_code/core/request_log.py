@@ -1504,6 +1504,9 @@ _CHUNKS_READ_SHARE = 0.6
 # (``_run_chunk_sweep``), at most this often, and only after a prune removed
 # bodies -- plus once per process.
 _CHUNK_SWEEP_INTERVAL_SECONDS = 6 * 3600.0
+# Chunk texts a scan connection keeps for its own pass before starting its
+# cache over (about 30 MB at the measured 1.4 KB a chunk).
+_SCAN_CHUNKS_MAX = 20_000
 # A prompt that cannot be put back together is reported at most this often.
 _CHUNK_WARN_SECONDS = 300.0
 
@@ -3334,6 +3337,9 @@ class RequestLogStore:
         # no trigram tokenizer.
         self._chunk_reader = ChunkReader(search_index_path(self._db_path))
         self._chunk_warned_at = 0.0
+        # A scan connection's own chunk cache, handed to ``_bodies_match`` on
+        # the thread SQLite calls it on (see ``_connect``).
+        self._scan_local = threading.local()
         # Pause / Continue of the history conversion, from the storage line.
         self._history_paused = False
         # Writer thread only: the newest blob rowid the converter has looked
@@ -3489,9 +3495,39 @@ class RequestLogStore:
         conn.create_function(
             "fcc_body_matches", 3, self._body_matches, deterministic=True
         )
-        conn.create_function(
-            "fcc_bodies_match", 5, self._bodies_match, deterministic=True
-        )
+        # The chunks of prompts stored as chunks (7.93.0) a scan on this
+        # connection has read: its own, never the store's shared cache. The
+        # search planner prices the scan by timing its first rows; through a
+        # cache earlier searches warmed, those newest rows would look nearly
+        # free while the rest of the window is not, and the planner would
+        # pick the scan where the index is far cheaper (measured: 14 s -> 122 s
+        # for one 7-day search). A cache of the pass's own reads costs the
+        # first rows what it costs the rest: consecutive turns of a
+        # conversation share their chunks in both.
+        scan_chunks: dict[int, bytes] = {}
+
+        def bodies_match(
+            rest_payload: Any,
+            rest_dict: Any,
+            input_payload: Any,
+            input_dict: Any,
+            needle: Any,
+        ) -> int:
+            # SQLite calls this on the thread running the statement, so the
+            # cache rides on that thread for exactly this call; the predicate
+            # keeps its own five-argument form.
+            if len(scan_chunks) > _SCAN_CHUNKS_MAX:
+                scan_chunks.clear()
+            previous = getattr(self._scan_local, "chunks", None)
+            self._scan_local.chunks = scan_chunks
+            try:
+                return self._bodies_match(
+                    rest_payload, rest_dict, input_payload, input_dict, needle
+                )
+            finally:
+                self._scan_local.chunks = previous
+
+        conn.create_function("fcc_bodies_match", 5, bodies_match, deterministic=True)
         watcher = _CONNECTION_WATCHER.get()
         if watcher is not None:
             try:
@@ -3626,6 +3662,10 @@ class RequestLogStore:
     ) -> int:
         """SQL predicate over a request's two blobs, considered together.
 
+        A prompt stored as chunks (7.93.0) is read through the reading
+        connection's own chunk cache when the call comes from its SQL (see
+        ``_connect``), else through the store's shared one.
+
         They must be considered together: a search for "proxy 8082" can have
         one word in the prompt and the other in the reasoning, and requiring
         every word within a single blob would silently stop finding it.
@@ -3641,6 +3681,7 @@ class RequestLogStore:
         # that text's own bytes (its first spelling, ``literal``), so testing
         # the text instead of its JSON rejects exactly what it did before.
         bodies: list[tuple[bytes, bool]] = []
+        chunks: dict[int, bytes] | None = getattr(self._scan_local, "chunks", None)
         for payload, dict_id in (
             (rest_payload, rest_dict),
             (input_payload, input_dict),
@@ -3648,7 +3689,7 @@ class RequestLogStore:
             if payload is None:
                 continue
             if dict_id == _CHUNKED_DICT_ID:
-                text = self._chunked_text(bytes(payload))
+                text = self._chunked_text(bytes(payload), local=chunks)
                 if text is not None:
                     bodies.append((text, True))
             elif (raw := self._raw_payload(payload, dict_id)) is not None:
