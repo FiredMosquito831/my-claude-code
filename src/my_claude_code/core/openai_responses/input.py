@@ -1,8 +1,11 @@
 """Convert OpenAI Responses requests into Anthropic Messages payloads."""
 
+import base64
+import binascii
 import json
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from my_claude_code.core.trace import trace_event
 
@@ -23,6 +26,9 @@ from .tools import (
     required_str,
     responses_tool_name_to_anthropic_name,
 )
+
+#: How an inline image URL starts (the Chat Completions door's same constant).
+_DATA_URL_PREFIX = "data:"
 
 
 def convert_request_to_anthropic_payload(
@@ -197,7 +203,9 @@ def _append_message_item(
         raise ResponsesConversionError(f"Unsupported Responses message role: {role!r}")
     message = {
         "role": normalized_role,
-        "content": _convert_message_content(content),
+        "content": _convert_message_content(
+            content, allow_images=normalized_role == "user"
+        ),
     }
     if normalized_role == "assistant" and reasoning_content is not None:
         message["reasoning_content"] = reasoning_content
@@ -340,7 +348,9 @@ def _iter_input_items(value: Any) -> list[Any]:
     return [value]
 
 
-def _convert_message_content(content: Any) -> str | list[dict[str, Any]]:
+def _convert_message_content(
+    content: Any, *, allow_images: bool = False
+) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -360,6 +370,13 @@ def _convert_message_content(content: Any) -> str | list[dict[str, Any]]:
             if part_type == "refusal":
                 blocks.append({"type": "text", "text": str(part.get("refusal", ""))})
                 continue
+            if part_type == "input_image" and allow_images:
+                # 7.95.0: an image attached to a user turn (Codex ``-i`` or a
+                # paste) becomes the same image block the Chat Completions
+                # door builds, so the vision chain, describe mode and image
+                # capture see it exactly as they see that door's images.
+                blocks.append(_image_block(part))
+                continue
             raise ResponsesConversionError(
                 f"Unsupported Responses content part type: {part_type!r}"
             )
@@ -369,6 +386,58 @@ def _convert_message_content(content: Any) -> str | list[dict[str, Any]]:
     raise ResponsesConversionError(
         f"Unsupported Responses message content: {type(content).__name__}"
     )
+
+
+def _image_block(part: Mapping[str, Any]) -> dict[str, Any]:
+    """An ``input_image`` part as an Anthropic image block (7.95.0).
+
+    Byte for byte the block the Chat Completions door builds from an
+    ``image_url`` part: a base64 data URL becomes a ``base64`` source, an
+    http(s) URL a ``url`` source. ``detail`` has no Anthropic equivalent and
+    is dropped. A ``file_id`` names a file uploaded to OpenAI's Files API,
+    which MCC does not have, so it is refused by name rather than guessed at.
+    """
+    image_url = part.get("image_url")
+    url = image_url.get("url") if isinstance(image_url, Mapping) else image_url
+    if url is None or url == "":
+        file_id = part.get("file_id")
+        if isinstance(file_id, str) and file_id:
+            raise ResponsesConversionError(
+                f"input_image file_id {file_id!r} is not supported: MCC has no "
+                "Files API to read it from. Send the image inline as image_url "
+                "(a base64 data URL or an http(s) URL)."
+            )
+        raise ResponsesConversionError(
+            "input_image needs image_url: a base64 data URL or an http(s) URL."
+        )
+    if not isinstance(url, str):
+        raise ResponsesConversionError("input_image.image_url must be a string.")
+    if url.startswith(_DATA_URL_PREFIX):
+        return {"type": "image", "source": _data_url_source(url)}
+    if urlsplit(url).scheme.lower() in {"http", "https"}:
+        return {"type": "image", "source": {"type": "url", "url": url}}
+    raise ResponsesConversionError(
+        "input_image.image_url must be a base64 data URL or an http(s) URL."
+    )
+
+
+def _data_url_source(url: str) -> dict[str, Any]:
+    """A ``data:<type>;base64,<data>`` URL as an Anthropic ``base64`` source."""
+    header, separator, data = url[len(_DATA_URL_PREFIX) :].partition(",")
+    if not separator:
+        raise ResponsesConversionError("input_image.image_url is a malformed data URL")
+    if not header.endswith(";base64"):
+        raise ResponsesConversionError(
+            "Only base64 data URLs are supported for input_image"
+        )
+    media_type = header[: -len(";base64")] or "image/png"
+    try:
+        base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ResponsesConversionError(
+            "input_image data URL payload is not valid base64"
+        ) from exc
+    return {"type": "base64", "media_type": media_type, "data": data}
 
 
 def _content_as_text(content: Any) -> str:

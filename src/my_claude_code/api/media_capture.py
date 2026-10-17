@@ -20,7 +20,7 @@ thread (``RequestRecord.pricer``), so no request waits for it.
 
 import functools
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -36,7 +36,18 @@ from my_claude_code.application.media.request import (
     MediaRequest,
 )
 from my_claude_code.application.media_cost import MediaUsage, reported_audio_tokens
-from my_claude_code.config.media_surfaces import MEDIA_OPERATION_SPEECH
+from my_claude_code.config.media_surfaces import (
+    MEDIA_OPERATION_IMAGE_EDIT,
+    MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_SPEECH,
+    MEDIA_OPERATION_TRANSCRIBE,
+    MEDIA_OPERATION_TRANSLATE,
+    MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_SHAPE_OPENAI_IMAGES,
+    MEDIA_SHAPE_OPENAI_SPEECH,
+    MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
+    MEDIA_SHAPE_OPENAI_VIDEOS,
+)
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.client_fingerprint import (
     harness_from_headers,
@@ -64,7 +75,27 @@ from my_claude_code.core.request_log import (
 )
 
 #: The ``protocol`` a media row is logged under when the client spoke OpenAI.
+#: Since 7.95.0 only an image row's: the other operations are labelled by
+#: :func:`openai_media_protocol`. Rows written earlier keep the label they
+#: were written with.
 MEDIA_PROTOCOL_OPENAI = "openai_images"
+
+#: 7.95.0: an OpenAI-door row's ``protocol``, by operation -- the wire-shape
+#: word of the API the client spoke. A label only: nothing filters, groups or
+#: rolls up on ``protocol``.
+_OPENAI_PROTOCOL_BY_OPERATION: dict[str, str] = {
+    MEDIA_OPERATION_IMAGE_GENERATE: MEDIA_SHAPE_OPENAI_IMAGES,
+    MEDIA_OPERATION_IMAGE_EDIT: MEDIA_SHAPE_OPENAI_IMAGES,
+    MEDIA_OPERATION_SPEECH: MEDIA_SHAPE_OPENAI_SPEECH,
+    MEDIA_OPERATION_TRANSCRIBE: MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
+    MEDIA_OPERATION_TRANSLATE: MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
+    MEDIA_OPERATION_VIDEO_CREATE: MEDIA_SHAPE_OPENAI_VIDEOS,
+}
+
+
+def openai_media_protocol(operation: str) -> str:
+    """The ``protocol`` of a row whose client spoke OpenAI's ``operation`` API."""
+    return _OPENAI_PROTOCOL_BY_OPERATION.get(operation, MEDIA_PROTOCOL_OPENAI)
 
 
 def media_store_cap_bytes(settings: Settings) -> int:
@@ -153,9 +184,20 @@ class MediaCapture:
         request: MediaRequest,
         headers: Mapping[str, str] | None,
         protocol: str = MEDIA_PROTOCOL_OPENAI,
+        client_gone: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         self._store = store_from_settings(settings)
         self._protocol = protocol
+        # 7.95.0: asked once, by ``finish_answered``, whether the client is
+        # still there to receive a buffered answer (the request's own
+        # ``is_disconnected``).
+        self._client_gone = client_gone
+        # A buffered answer the provider produced and was paid for, whether
+        # or not the client stayed for it: its units are priced either way.
+        self._answered = False
+        # Fields of the client's body that were not sent upstream on purpose
+        # (7.95.0: the stream flags of a stream answered from a whole answer).
+        self._withheld: list[str] = []
         self._pricing = media_pricing(settings)
         self._store_bytes = bool(getattr(settings, "media_store_enabled", False))
         self._store_cap = media_store_cap_bytes(settings)
@@ -209,6 +251,14 @@ class MediaCapture:
         """The video job this request's answer created (``media_jobs``)."""
         self._job_id = job_id
 
+    def withheld(self, names: tuple[str, ...]) -> None:
+        """Fields of the client's body deliberately not forwarded (7.95.0).
+
+        Logged under ``params.media.not_forwarded`` beside the ones an
+        adapter could not map, so the row says what the host never saw.
+        """
+        self._withheld.extend(name for name in names if name not in self._withheld)
+
     def on_attempt(self, attempt: MediaAttempt, index: int) -> None:
         """The model the chain is about to try; the last one names the row."""
         if index != self._route_index:
@@ -258,6 +308,9 @@ class MediaCapture:
                 for upload in self._request.uploads
             ]
         not_forwarded = list(self._request.not_forwarded)
+        not_forwarded.extend(
+            name for name in self._withheld if name not in not_forwarded
+        )
         if outputs is not None:
             not_forwarded.extend(
                 name for name in outputs.not_forwarded if name not in not_forwarded
@@ -311,11 +364,15 @@ class MediaCapture:
         failed speech request still knows how many characters it was asked to
         speak, and pricing those would bill a request nobody was charged for.
         The token counters and the audio part of them are the host's own.
+
+        A buffered answer the provider finished counts as succeeded here even
+        when the client had hung up before it was sent (7.95.0, user decision
+        8): the row says ``cancelled``, and the provider billed it all the same.
         """
         usage = None if outputs is None else outputs.usage
         audio_in, audio_out = reported_audio_tokens(usage)
         operation = self._request.operation
-        succeeded = status == "success" and outputs is not None
+        succeeded = (status == "success" or self._answered) and outputs is not None
         prompt = self._request.prompt
         return MediaUsage(
             operation=operation,
@@ -396,6 +453,28 @@ class MediaCapture:
                 )
             )
         return tuple(records)
+
+    async def finish_answered(self, outputs: MediaOutputs) -> None:
+        """Write the row of a buffered answer the provider finished (7.95.0).
+
+        ``success`` -- unless the client hung up before the answer could be
+        sent (user decision 8): then ``cancelled``, with the outputs, the
+        video job and any stored files kept, and priced as the success it was
+        for the provider. Asked once, just before the row is written; a check
+        that itself fails counts as "still there", so a broken check never
+        turns an answered request into a cancelled one.
+        """
+        gone = False
+        if self._client_gone is not None:
+            try:
+                gone = await self._client_gone()
+            except Exception as exc:
+                logger.debug(
+                    "MEDIA: could not ask whether the client is still there: {}",
+                    type(exc).__name__,
+                )
+        self._answered = True
+        await self.finish("cancelled" if gone else "success", outputs=outputs)
 
     async def finish(
         self,

@@ -23,6 +23,7 @@ from openai import AsyncOpenAI
 
 from my_claude_code.api.wire_surfaces import wire_api_for_path
 from my_claude_code.config.credential_names import credential_fingerprint
+from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
 from my_claude_code.core import request_log
 from my_claude_code.providers.media.key_pool import MediaKeyPool
@@ -907,3 +908,205 @@ def test_content_redirect_to_storage_drops_the_key(monkeypatch, tmp_path) -> Non
     assert upstream.seen[-2].headers["authorization"] == f"Bearer {GEMINI_KEY}"
     assert upstream.seen[-1].url.host == "storage.example.test"
     assert "authorization" not in upstream.seen[-1].headers
+
+
+# ------------------------------------------- 7.95.0: custom video, rows, errors
+
+CUSTOM = "vid.example"
+CUSTOM_VIDEOS = "/v1/videos"
+CUSTOM_KEY = "sk-vid-" + "e" * 32
+
+
+def _custom_video_settings(monkeypatch, tmp_path: Path) -> Settings:
+    """A custom provider with only its Video box ticked, on the Video rail."""
+    monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path))
+    entry = get_provider_registry().add(
+        display_name="Vid",
+        base_url=f"https://{CUSTOM}/v1",
+        api_keys=(CUSTOM_KEY,),
+        media_operations=["video"],
+    )
+    assert entry.provider_id == "custom_vid"
+    return _settings(monkeypatch, tmp_path, MODEL_VIDEO="custom_vid/vid-1")
+
+
+def test_custom_video_without_url_downloads_from_content_path(
+    monkeypatch, tmp_path
+) -> None:
+    """P2 (decision 9): no URL in the status answer -> OpenAI's own content path."""
+    settings = _custom_video_settings(monkeypatch, tmp_path)
+    content = ("GET", CUSTOM, f"{CUSTOM_VIDEOS}/c-1/content")
+    upstream = Upstream(
+        {
+            ("POST", CUSTOM, CUSTOM_VIDEOS): [_job("c-1", "queued")],
+            ("GET", CUSTOM, f"{CUSTOM_VIDEOS}/c-1"): [_job("c-1", "completed")],
+            content: [
+                httpx.Response(200, content=MP4, headers={"content-type": "video/mp4"})
+            ],
+        }
+    )
+    client, _registry = _client(settings, upstream)
+    with client:
+        video = client.post("/v1/videos", json={"prompt": "p"}).json()
+        downloaded = client.get(f"/v1/videos/{video['id']}/content")
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == MP4
+    # A fresh status read first (its answer may carry a URL), then the path.
+    assert upstream.calls()[-2:] == [("GET", CUSTOM, f"{CUSTOM_VIDEOS}/c-1"), content]
+    assert upstream.seen[-1].headers["authorization"] == f"Bearer {CUSTOM_KEY}"
+
+
+def test_custom_video_with_url_still_uses_the_url(monkeypatch, tmp_path) -> None:
+    """Equality: a status answer naming a URL is fetched; the fallback is never asked."""
+    settings = _custom_video_settings(monkeypatch, tmp_path)
+    url = "https://cdn.example.test/clips/c-2.mp4"
+
+    def script(request: httpx.Request) -> httpx.Response | None:
+        if request.url.host == "cdn.example.test":
+            return httpx.Response(
+                200, content=MP4, headers={"content-type": "video/mp4"}
+            )
+        return None
+
+    upstream = Upstream(
+        {
+            ("POST", CUSTOM, CUSTOM_VIDEOS): [_job("c-2", "queued")],
+            ("GET", CUSTOM, f"{CUSTOM_VIDEOS}/c-2"): [
+                _job("c-2", "completed", url=url)
+            ],
+        },
+        script=script,
+    )
+    client, _registry = _client(settings, upstream)
+    with client:
+        video = client.post("/v1/videos", json={"prompt": "p"}).json()
+        downloaded = client.get(f"/v1/videos/{video['id']}/content")
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == MP4
+    assert [path for _method, _host, path in upstream.calls()] == [
+        CUSTOM_VIDEOS,
+        f"{CUSTOM_VIDEOS}/c-2",
+        "/clips/c-2.mp4",
+    ]
+    # A CDN on another host is fetched bare, as before.
+    assert "authorization" not in upstream.seen[-1].headers
+
+
+def test_fallback_404_keeps_the_409_sentence(monkeypatch, tmp_path) -> None:
+    """A host that does not serve the path: today's 409, never "expired"."""
+    settings = _custom_video_settings(monkeypatch, tmp_path)
+    upstream = Upstream(
+        {
+            ("POST", CUSTOM, CUSTOM_VIDEOS): [_job("c-3", "queued")],
+            ("GET", CUSTOM, f"{CUSTOM_VIDEOS}/c-3"): [_job("c-3", "completed")],
+        }
+    )
+    client, _registry = _client(settings, upstream)
+    with client:
+        video = client.post("/v1/videos", json={"prompt": "p"}).json()
+        response = client.get(f"/v1/videos/{video['id']}/content")
+    assert response.status_code == 409, response.text
+    error = response.json()["error"]
+    assert error["code"] is None
+    assert error["message"] == (
+        f"Video {video['id']} is not ready (status: completed; custom_vid gave "
+        "no address for the file yet)."
+    )
+    # The path was asked exactly once, after the fresh status read.
+    assert upstream.calls()[-1] == ("GET", CUSTOM, f"{CUSTOM_VIDEOS}/c-3/content")
+
+
+def test_builtin_without_content_path_unchanged(monkeypatch, tmp_path) -> None:
+    """Gemini declares no content path: no URL is still 409, nothing else asked."""
+    settings = _settings(
+        monkeypatch, tmp_path, MODEL_VIDEO="gemini/veo-3.1-generate-preview"
+    )
+    upstream = Upstream(
+        {
+            ("POST", GEMINI, GEMINI_VIDEOS): [_job("g-n", "processing")],
+            ("GET", GEMINI, f"{GEMINI_VIDEOS}/g-n"): [_job("g-n", "completed")],
+        }
+    )
+    client, _registry = _client(settings, upstream)
+    with client:
+        video = client.post("/v1/videos", json={"prompt": "p"}).json()
+        response = client.get(f"/v1/videos/{video['id']}/content")
+    assert response.status_code == 409
+    assert "gave no address for the file yet" in response.json()["error"]["message"]
+    assert upstream.calls() == [
+        ("POST", GEMINI, GEMINI_VIDEOS),
+        ("GET", GEMINI, f"{GEMINI_VIDEOS}/g-n"),
+    ]
+
+
+def test_row_protocol_is_openai_videos(monkeypatch, tmp_path) -> None:
+    """P3: a new video row is labelled by its own API, not ``openai_images``."""
+    settings = _settings(monkeypatch, tmp_path)
+    upstream = Upstream({("POST", OPENROUTER, OR_VIDEOS): [_job("or-p", "pending")]})
+    client, _registry = _client(settings, upstream)
+    with client:
+        assert client.post("/v1/videos", json={"prompt": "p"}).status_code == 200
+    (row,) = _requests(tmp_path)
+    assert row["protocol"] == "openai_videos"
+
+
+def _client_gone(monkeypatch, gone: bool) -> list[bool]:
+    """Fault injection for P4: what ``Request.is_disconnected`` answers."""
+    asked: list[bool] = []
+
+    async def is_disconnected(_request) -> bool:
+        asked.append(gone)
+        return gone
+
+    monkeypatch.setattr("starlette.requests.Request.is_disconnected", is_disconnected)
+    return asked
+
+
+def test_client_gone_before_answer_logs_cancelled(monkeypatch, tmp_path) -> None:
+    """P4 (decision 8): the job was accepted; the client left -> cancelled, job kept."""
+    settings = _settings(monkeypatch, tmp_path)
+    asked = _client_gone(monkeypatch, True)
+    upstream = Upstream({("POST", OPENROUTER, OR_VIDEOS): [_job("or-g", "pending")]})
+    client, _registry = _client(settings, upstream)
+    with client:
+        client.post("/v1/videos", json={"prompt": "p"})
+    assert asked == [True]
+    (row,) = _requests(tmp_path)
+    (job,) = _jobs(tmp_path)
+    assert row["status"] == "cancelled"
+    assert row["error_kind"] is None
+    assert row["media_job_id"] == job["job_id"]
+    assert job["upstream_id"] == "or-g"
+
+
+def test_client_present_logs_success(monkeypatch, tmp_path) -> None:
+    """Equality: a client still there is logged ``success``, as before."""
+    settings = _settings(monkeypatch, tmp_path)
+    asked = _client_gone(monkeypatch, False)
+    upstream = Upstream({("POST", OPENROUTER, OR_VIDEOS): [_job("or-s", "pending")]})
+    client, _registry = _client(settings, upstream)
+    with client:
+        assert client.post("/v1/videos", json={"prompt": "p"}).status_code == 200
+    assert asked == [False]
+    (row,) = _requests(tmp_path)
+    assert row["status"] == "success"
+
+
+def test_bad_token_on_job_path_answers_openai_envelope(monkeypatch, tmp_path) -> None:
+    """P5 (decision 10): a refused token on a job path reads like an OpenAI error."""
+    settings = _settings(monkeypatch, tmp_path, ANTHROPIC_AUTH_TOKEN="right-token")
+    client, _registry = _client(settings, Upstream())
+    with client:
+        response = client.get(
+            "/v1/videos/video_abc/content",
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+    assert response.status_code == 401
+    assert response.json() == {
+        "error": {
+            "message": "Invalid proxy authentication token",
+            "type": "authentication_error",
+            "param": None,
+            "code": None,
+        }
+    }

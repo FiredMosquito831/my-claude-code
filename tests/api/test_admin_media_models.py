@@ -245,6 +245,34 @@ def test_the_provider_table_lists_every_media_provider(monkeypatch, tmp_path):
     assert providers["together"]["custom"] is False
 
 
+def test_a_custom_video_box_shows_its_content_fallback(monkeypatch, tmp_path):
+    """7.95.0: the path asked only without a URL is shown as exactly that."""
+    registry = get_provider_registry()
+    registry.add(
+        display_name="Vid",
+        base_url="https://vid.example/v1",
+        api_keys=("sk-vid-aaaa1111",),
+        media_operations=["video"],
+    )
+
+    payload = _payload(_settings(monkeypatch, tmp_path))
+
+    providers = {entry["provider_id"]: entry for entry in payload["providers"]}
+    declared = providers["custom_vid"]["declared"]
+    assert [(op["operation"], op["label"], op["path"]) for op in declared] == [
+        ("video_create", "video create", "videos"),
+        ("video_retrieve", "video status", "videos/{id}"),
+        ("video_content", "video content (when no URL)", "videos/{id}/content"),
+    ]
+    # A built-in's declared content path keeps its plain label.
+    (content,) = [
+        op
+        for op in providers["open_router"]["declared"]
+        if op["operation"] == "video_content"
+    ]
+    assert content["label"] == "video content"
+
+
 def test_a_disabled_custom_provider_on_a_rail_says_so(monkeypatch, tmp_path):
     """A rail may still name a switched-off custom provider; it cannot serve."""
 

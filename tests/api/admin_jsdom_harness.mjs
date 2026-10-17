@@ -219,6 +219,8 @@ const FIELDS = [
     ["MODEL_ASR_FALLBACKS", "", "model_chain"],
     ["MODEL_VIDEO", "p1/v0", "optional_model"],
     ["MODEL_VIDEO_FALLBACKS", "", "model_chain"],
+    // 7.95.0: the upload limit every media rail shares, drawn in its own card.
+    ["MEDIA_UPLOAD_MAX_MB", "0", "number"],
     // The pause lists. Written by the Pause button rather than typed, so they
     // are never rendered as controls -- but they are in the payload, which is
     // where the page reads which rows are switched off.
@@ -12011,6 +12013,97 @@ const requestMedia = {};
   window.eval("closeRequestDetail()");
 }
 
+/* The Turn column's chips (7.95.0): a media row says what it did from the
+   list's media columns; every chat row's chips stay exactly as they were.
+   Driven through the real buildTurnShapeCell(). */
+const turnChips = {};
+{
+  const chipsOf = (row) => {
+    const cell = window.eval(`buildTurnShapeCell(${JSON.stringify(row)})`);
+    return {
+      empty: cell.className === "turn-chips-empty",
+      text: cell.textContent,
+      chips: Array.from(cell.querySelectorAll(".turn-chip")).map((chip) => [
+        chip.dataset.kind,
+        chip.textContent,
+      ]),
+    };
+  };
+  const media = {
+    imageOne: { status: "success", media_operation: "image_generate", output_image_count: 1 },
+    imageMany: {
+      status: "cancelled",
+      media_operation: "image_edit",
+      input_image_count: 1,
+      output_image_count: 3,
+    },
+    imageRefused: { status: "error", media_operation: "image_generate", output_image_count: null },
+    speechTimed: { status: "success", media_operation: "speech", output_audio_seconds: 4.25 },
+    speechUntimed: { status: "success", media_operation: "speech", output_audio_seconds: null },
+    speechRefused: { status: "error", media_operation: "speech" },
+    transcribed: {
+      status: "success",
+      media_operation: "transcribe",
+      input_audio_seconds: 31,
+      output_chars: 120,
+    },
+    translationRefused: { status: "error", media_operation: "translate", input_audio_seconds: 3 },
+    videoJob: { status: "success", media_operation: "video_create", media_job_id: "video_abc" },
+    videoTimed: {
+      status: "success",
+      media_operation: "video_create",
+      media_job_id: "video_abc",
+      output_video_seconds: 8,
+    },
+    videoRefused: { status: "error", media_operation: "video_create", media_job_id: null },
+  };
+  turnChips.media = Object.fromEntries(
+    Object.entries(media).map(([name, row]) => [name, chipsOf(row)]),
+  );
+  /* Chat rows, as every release before 7.95.0 drew them. */
+  const chat = {
+    bare: { status: "success" },
+    full: {
+      status: "success",
+      input_image_count: 2,
+      thinking_chars: 40,
+      tool_call_count: 3,
+      output_chars: 12,
+      media_operation: null,
+    },
+    oneTool: { status: "success", tool_call_count: 1 },
+  };
+  turnChips.chat = Object.fromEntries(
+    Object.entries(chat).map(([name, row]) => [name, chipsOf(row)]),
+  );
+}
+
+/* MEDIA_UPLOAD_MAX_MB (7.95.0): its own card under the media rails on Model
+   Config, never in the leftovers grid. */
+const mediaUploads = {};
+{
+  const configLink = navLinks.find((link) => link.dataset.view === "model_config");
+  if (configLink) {
+    configLink.click();
+    await settle();
+    const card = doc.querySelector(".route-media-uploads");
+    mediaUploads.card = Boolean(card);
+    mediaUploads.heading = card ? card.querySelector("h4")?.textContent || "" : "";
+    mediaUploads.note = card ? card.querySelector(".route-note")?.textContent || "" : "";
+    mediaUploads.input = Boolean(
+      card && card.querySelector("input[data-key='MEDIA_UPLOAD_MAX_MB']"),
+    );
+    mediaUploads.inTheLeftovers = Boolean(
+      doc.querySelector(".route-layout > .field-grid [data-key='MEDIA_UPLOAD_MAX_MB']"),
+    );
+    const cards = Array.from(doc.querySelectorAll(".route-layout > article"));
+    const last = cards.filter((node) => node.classList.contains("route-media")).pop();
+    mediaUploads.afterTheRails = Boolean(
+      card && last && cards.indexOf(card) === cards.indexOf(last) + 1,
+    );
+  }
+}
+
 /* Where a request came from (7.42.0): the Session, Folder, Origin chip and
    Requested model cells, the modal's provenance lines, and the folder backfill
    card on the Request log storage section. Driven through the real
@@ -13573,6 +13666,8 @@ console.log(
       imageRail,
       describedImages,
       requestMedia,
+      turnChips,
+      mediaUploads,
       analytics,
       costPanel,
       deferredRace,

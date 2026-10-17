@@ -1814,6 +1814,17 @@ textarea:focus-visible,
   max-width: 460px;
 }
 
+/* 7.95.0: MEDIA_UPLOAD_MAX_MB, the one setting every media rail shares. */
+.route-media-uploads {
+  border-style: dashed;
+  background: var(--panel);
+  margin-top: var(--space-3, 12px);
+}
+
+.route-media-uploads .field {
+  max-width: 460px;
+}
+
 .route-fallback-enter {
   animation: route-fallback-in var(--transition-normal);
 }
@@ -3512,6 +3523,13 @@ details.turn-pane > summary:focus-visible {
 .turn-chip[data-kind="image"] {
   border-color: var(--info-border, var(--line-strong));
   color: var(--info, var(--text-strong));
+}
+
+/* 7.95.0: what a media request did ("1 image generated", "speech · 4.2s"). */
+.turn-chip[data-kind="media"] {
+  border-color: var(--info-border, var(--line-strong));
+  color: var(--text-strong);
+  border-style: dashed;
 }
 
 /* ---- Which of the four things "cancelled" means ----

@@ -463,6 +463,8 @@ MODELS_KEYS = (
     "MODEL_VIDEO",
     "MODEL_VIDEO_FALLBACKS",
     "MODEL_VIDEO_PAUSED",
+    # The upload limit every media rail shares (7.95.0), its own card after them.
+    "MEDIA_UPLOAD_MAX_MB",
     "MODEL_VISIBILITY_ALLOW",
     "MODEL_VISIBILITY_DENY",
     "HARNESS_TIER_ALIASES",

@@ -4,6 +4,8 @@ The upstream is a MockTransport recording what it received; the audio it
 returns is a real WAV so the logged length can be checked against its header.
 """
 
+import base64
+import dataclasses
 import io
 import json
 import sqlite3
@@ -14,6 +16,8 @@ from typing import Any
 import httpx
 from fastapi.testclient import TestClient
 
+from my_claude_code.config.media_surfaces import speech_surface
+from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings
 from my_claude_code.core import request_log
 from my_claude_code.core.media_store import media_file_path, media_root
@@ -193,9 +197,21 @@ def test_falls_back_on_5xx(monkeypatch, tmp_path) -> None:
     assert [seen[0] for seen in upstream.seen] == ["api.groq.com", "api.together.ai"]
 
 
-def test_sse_request_skips_surfaces_that_do_not_declare_it(
+def _events(*events: dict[str, Any]) -> bytes:
+    return b"".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+        for event in events
+    )
+
+
+def test_sse_without_streaming_surface_answers_delta_and_done(
     monkeypatch, tmp_path
 ) -> None:
+    """Changed on purpose in 7.95.0 (user decision 12; it answered 400 before).
+
+    No speech host declares ``stream_format: "sse"``, so the request is served
+    whole and answered as one delta with the whole audio, then done.
+    """
     settings = _settings(monkeypatch, tmp_path)
     upstream = Upstream()
     with _client(settings, upstream) as client:
@@ -203,8 +219,90 @@ def test_sse_request_skips_surfaces_that_do_not_declare_it(
             "/v1/audio/speech",
             json={"input": "hi", "voice": "alloy", "stream_format": "sse"},
         )
-    assert response.status_code == 400
-    assert upstream.seen == []
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.content == _events(
+        {"type": "speech.audio.delta", "audio": base64.b64encode(WAV).decode()},
+        {"type": "speech.audio.done"},
+    )
+    row = _row(tmp_path)
+    assert row["status"] == "success"
+    assert row["stream"] == 1
+    assert row["output_audio_seconds"] == 1.5
+    assert row["media_bytes_out"] == len(WAV)
+
+
+def test_stream_flags_are_not_forwarded_on_the_buffered_fallback(
+    monkeypatch, tmp_path
+) -> None:
+    """The host is asked for a whole answer: every other field goes as sent."""
+    settings = _settings(monkeypatch, tmp_path)
+    upstream = Upstream()
+    with _client(settings, upstream) as client:
+        assert (
+            client.post(
+                "/v1/audio/speech",
+                json={
+                    "input": "hi",
+                    "voice": "alloy",
+                    "stream_format": "sse",
+                    "response_format": "wav",
+                },
+            ).status_code
+            == 200
+        )
+    ((_host, _path, body),) = upstream.seen
+    assert body == {
+        "model": "cartesia/sonic-2",
+        "input": "hi",
+        "voice": "alloy",
+        "response_format": "wav",
+    }
+
+
+def test_a_declared_speech_stream_is_still_forwarded(monkeypatch, tmp_path) -> None:
+    """``speech_surface(stream=True)``: a host that declares SSE gets the stream."""
+    descriptor = PROVIDER_CATALOG["together"]
+    monkeypatch.setitem(
+        PROVIDER_CATALOG,
+        "together",
+        dataclasses.replace(descriptor, media_surfaces=(speech_surface(stream=True),)),
+    )
+    frames = _events(
+        {"type": "speech.audio.delta", "audio": "AAAA"},
+        {"type": "speech.audio.done", "usage": {"input_tokens": 3}},
+    )
+    settings = _settings(monkeypatch, tmp_path)
+    upstream = Upstream(
+        {
+            "api.together.ai": [
+                httpx.Response(
+                    200, content=frames, headers={"content-type": "text/event-stream"}
+                )
+            ]
+        }
+    )
+    with _client(settings, upstream) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "hi", "voice": "alloy", "stream_format": "sse"},
+        )
+        assert response.status_code == 200
+        assert response.content == frames
+    assert upstream.seen[0][2]["stream_format"] == "sse"
+
+
+def test_row_protocol_is_openai_speech(monkeypatch, tmp_path) -> None:
+    """P3: a new speech row is labelled ``openai_speech`` (was ``openai_images``)."""
+    settings = _settings(monkeypatch, tmp_path)
+    with _client(settings, Upstream()) as client:
+        assert (
+            client.post(
+                "/v1/audio/speech", json={"input": "hi", "voice": "alloy"}
+            ).status_code
+            == 200
+        )
+    assert _row(tmp_path)["protocol"] == "openai_speech"
 
 
 def test_empty_rail_names_model_tts(monkeypatch, tmp_path) -> None:

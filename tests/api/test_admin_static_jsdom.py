@@ -7903,6 +7903,61 @@ def test_the_image_rail_is_its_own_card(rendered) -> None:
     assert rail["speechPrimaryInCard"] is True
 
 
+def test_the_upload_limit_has_its_own_card_under_the_media_rails(rendered) -> None:
+    """MEDIA_UPLOAD_MAX_MB (7.95.0): one setting shared by every media rail,
+    drawn as its own card straight after the four rails -- never a bare box
+    in the leftovers grid."""
+    uploads = rendered["mediaUploads"]
+    assert uploads["card"] is True
+    assert uploads["heading"] == "Media uploads"
+    assert uploads["input"] is True
+    assert uploads["inTheLeftovers"] is False
+    assert uploads["afterTheRails"] is True
+    assert "0 sets no limit" in uploads["note"]
+
+
+def test_requests_table_labels_media_rows(rendered) -> None:
+    """User decision 3 of 2026-10-04 (7.95.0): a media row says what it did.
+
+    After every chip a row already had, from the list's media columns; a row
+    that names an operation and produced nothing says only what it was.
+    """
+    media = rendered["turnChips"]["media"]
+
+    def chips(name: str) -> list[list[str]]:
+        return media[name]["chips"]
+
+    assert chips("imageOne") == [["media", "1 image generated"]]
+    # An edit keeps its input-image chip first; what came back follows.
+    assert chips("imageMany") == [["image", "image"], ["media", "3 images generated"]]
+    assert chips("imageRefused") == [["media", "image request"]]
+    assert chips("speechTimed") == [["media", "speech · 4.3s"]]
+    assert chips("speechUntimed") == [["media", "speech"]]
+    assert chips("speechRefused") == [["media", "speech request"]]
+    assert chips("transcribed") == [
+        ["response", "reply"],
+        ["media", "transcribed · 31s"],
+    ]
+    assert chips("translationRefused") == [["media", "translation request"]]
+    assert chips("videoJob") == [["media", "video job"]]
+    assert chips("videoTimed") == [["media", "video job · 8s"]]
+    assert chips("videoRefused") == [["media", "video request"]]
+    assert not any(row["empty"] for row in media.values())
+
+
+def test_chat_row_turn_chips_unchanged(rendered) -> None:
+    """Equality: a chat row's Turn cell is exactly what it was before 7.95.0."""
+    chat = rendered["turnChips"]["chat"]
+    assert chat["bare"] == {"empty": True, "text": "—", "chips": []}
+    assert chat["full"]["chips"] == [
+        ["image", "2 images"],
+        ["thinking", "thinking"],
+        ["tools", "3 tools"],
+        ["response", "reply"],
+    ]
+    assert chat["oneTool"]["chips"] == [["tools", "1 tool"]]
+
+
 # ------------------------------------------------------ 7.67.0 media dashboard
 
 _ADMIN_CSS = (STATIC_DIR / "admin.css").read_text(encoding="utf-8")

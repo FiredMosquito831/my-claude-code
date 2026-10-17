@@ -865,3 +865,30 @@ def test_a_streamed_speech_answer_keeps_its_usage() -> None:
     }
     assert outputs.count == 1
     assert parse_speech_stream(b"").usage is None
+
+
+def test_an_answer_the_client_hung_up_on_is_still_priced(monkeypatch, tmp_path) -> None:
+    """User decision 8 (7.95.0): cancelled, and its cost still counted.
+
+    The host produced the picture and billed it; the client had left before
+    MCC could send it. The per-image rate applies exactly as on a success.
+    """
+
+    async def gone(_request) -> bool:
+        return True
+
+    monkeypatch.setattr("starlette.requests.Request.is_disconnected", gone)
+    _litellm(
+        tmp_path,
+        {"xai/gpt-image-1": {"litellm_provider": "xai", "output_cost_per_image": 0.5}},
+    )
+    settings = _settings(monkeypatch, tmp_path, COST_SOURCE_LITELLM_ENABLED="true")
+    upstream = Upstream({("POST", XAI, "/v1/images/generations"): [_image_answer()]})
+    with _client(settings, upstream) as client:
+        client.post(
+            "/v1/images/generations", json={"model": "mcc/image", "prompt": "a cube"}
+        )
+    (row,) = _rows(tmp_path)
+    assert row["status"] == "cancelled"
+    assert (row["cost_usd"], row["cost_source"]) == (0.5, "litellm")
+    assert row["output_image_count"] == 1

@@ -3471,6 +3471,7 @@ Unlike everything else on this page, a pause is written the moment you click it:
 | `MODEL_VIDEO_FALLBACKS` | the Video rail's fallback chain (tried only before a provider accepts the job) |
 | `MODEL_VIDEO_PAUSED` | paused entries on the Video rail |
 | `MEDIA_FALLBACK_ON_UNDOWNLOADABLE` | off by default; on, a generated image MCC cannot download (Gemini-shaped requests) is retried on the next model on the Image rail ([Media routing](MEDIA.md)) |
+| `MEDIA_UPLOAD_MAX_MB` | the largest file a media request may upload, in MB (7.95.0; *Media uploads* card under the rails). `0` (default) sets no limit of MCC's own; above `0` a larger file is refused with `413` before any provider is asked ([Media routing](MEDIA.md#which-providers-can-serve-it)) |
 | `VISION_ADAPTER_MODE` | what the vision adapter does with an image: `route` (default, divert the whole request) or `describe` (describe the image, keep the model) |
 | `TOOL_RESULT_IMAGE_DELIVERY` | how an image a *tool* returned reaches a non-Anthropic model: `auto` (default), `attach`, `strip` |
 | `IMAGE_MAX_LONG_EDGE` | longest edge, in px, an outbound image may have. `1568` (default), `0` to send images untouched |

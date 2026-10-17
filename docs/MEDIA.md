@@ -69,7 +69,8 @@ The proxy token is the same one every other client uses (`Authorization: Bearer`
 ## Every rail with curl
 
 `$ANTHROPIC_AUTH_TOKEN` is your proxy token (Providers → Runtime). Model names
-that are not `provider/model` use the rail; a `provider/model` pins that model.
+that are not `provider/model` use the rail; a `provider/model` that is on the rail
+pins that model, and one that is not is refused with `400` (7.95.0).
 The image and speech requests and the empty-rail answer below were run against a
 test install; the others follow the same OpenAI request shapes.
 
@@ -113,7 +114,17 @@ twice for nothing; the fix is a model on the rail, not a retry.
 - The **endpoint** picks the rail: `images/generations` and `images/edits` are the Image rail,
   `audio/speech` the Speech rail, `audio/transcriptions` and `audio/translations` the
   Transcription rail, `videos` the Video rail.
-- A `model` written as `provider/model` (for example `xai/grok-2-image`) pins that one model.
+- A `model` written as `provider/model` (for example `xai/grok-2-image`) pins that one model --
+  **only if it is on that request's rail** (7.95.0). A `provider/model` that is not on the rail
+  is refused with `400` and nothing is sent, so spend stays where you configured it:
+
+  ```
+  {"error":{"message":"'together/flux' is not on the Image rail. Models on it: xai/grok-2-image, together/black-forest-labs/FLUX.1-schnell. Name one of them, or no provider/model at all to use the rail's chain; set the rail's models on Model Config (MODEL_IMAGE, MODEL_IMAGE_FALLBACKS).","type":"invalid_request_error","param":null,"code":null}}
+  ```
+
+  The refusal is logged (`error` / `invalid_request`) with no attempt and no cost. The same rule
+  holds on the Gemini door (a `provider/model` in the URL) and for `:predictLongRunning`. Before
+  7.95.0 any keyed provider's model could be named this way, on the rail or not.
 - Any other `model` -- a vendor name such as `gpt-image-2`, or none -- uses the rail:
   `MODEL_IMAGE` first, then `MODEL_IMAGE_FALLBACKS` in order, skipping anything in
   `MODEL_IMAGE_PAUSED`.
@@ -193,12 +204,28 @@ what the client receives -- `b64_json` or `url`, exactly as the host returned it
 each file -- in memory below the multipart library's own threshold, on disk above it -- and
 re-read from the start if the rail falls back to the next model; nothing is ever read whole on
 the server's event loop. The JSON variant (`images: [{"image_url": ...}]`) goes out as JSON.
-MCC sets no upload size limit of its own; the provider's limit applies, and a refusal is an
-ordinary failure.
 
-**Streaming** (`"stream": true`, partial images as server-sent events) is routed only to a
-surface documented to stream it. None of the providers above documents it yet, so a streaming
-request answers `400` rather than being sent somewhere that would reject it.
+**Upload size: `MEDIA_UPLOAD_MAX_MB`** (7.95.0, default `0`, 0 to 10,000,000; Model Config →
+*Media uploads*, under the four rails). `0` sets no limit of MCC's own and the provider's applies,
+as before. Above `0`, a media request carrying a file larger than that many megabytes -- an image
+to edit, audio to transcribe, a video's reference image, an inline image on the Gemini door -- is
+refused with `413` before any provider is asked, so nothing is spent on it:
+
+```
+{"error":{"message":"The file uploaded as 'image' is 30.0 MB, over MEDIA_UPLOAD_MAX_MB (20 MB). Nothing was sent to a provider. Send a smaller file, or raise MEDIA_UPLOAD_MAX_MB on Model Config (0 = no limit).","type":"request_too_large","param":null,"code":null}}
+```
+
+The refusal is logged (`error` / `invalid_request`). Each file is measured on its own.
+
+**Streaming** (`"stream": true`, partial images as server-sent events) is routed to a surface
+documented to stream it when the rail has one. None of the providers above documents it yet, so
+since 7.95.0 such a request is **served whole and answered as one event**: the request goes to
+the rail as an ordinary one with `stream` and `partial_images` not forwarded (they are listed in
+the row's `media.not_forwarded`), and the answer is a `text/event-stream` with one
+`image_generation.completed` event per picture (`image_edit.completed` for an edit), carrying
+the provider's `b64_json` (or `url`), `created_at`, the size/quality/format fields it sent and
+its `usage`. There are no partial images, because there were none. Before 7.95.0 such a request
+answered `400`. A rail where a model does declare streaming keeps routing the stream to it.
 
 ## Speech (text to speech)
 
@@ -223,10 +250,13 @@ audio = client.audio.speech.create(model="gpt-4o-mini-tts", voice="alloy", input
 document skips that provider without charging it, and the rail moves on; a client that names
 none gets the provider's own container. MCC ships no audio encoder.
 
-`stream_format: "sse"` is routed only to a surface that declares it (none does yet), so it
-answers `400`. A plain request is answered once the whole audio has arrived -- a failure
-before that falls back invisibly -- and the OpenAI SDK's streaming helpers still work, they
-simply receive the complete file.
+`stream_format: "sse"` is routed to a surface that declares it when the rail has one. None
+does yet, so since 7.95.0 the request is **served whole and answered as SSE**: `stream_format`
+is not forwarded, and the answer is one `speech.audio.delta` event carrying the whole audio
+(base64, exactly as the provider sent it) followed by `speech.audio.done` (with the provider's
+token `usage` when it reported one). Before 7.95.0 it answered `400`. A plain request is
+answered once the whole audio has arrived -- a failure before that falls back invisibly -- and
+the OpenAI SDK's streaming helpers still work, they simply receive the complete file.
 
 ## Transcription and translation (speech to text)
 
@@ -299,6 +329,16 @@ client.videos.download_content(video.id).write_to_file("boat.mp4")
 | Gemini | `videos` on its OpenAI-compatible base URL (multipart, as the OpenAI SDK sends it) | `videos/{id}` | the `url` in the status answer |
 | OpenRouter | `videos` (JSON: the SDK's form is re-encoded; `seconds` is sent as `duration`) | `videos/{id}` | `videos/{id}/content` |
 | DeepInfra | `videos` on its OpenAI-compatible base URL (JSON, re-encoded) | `videos/{id}` | `videos/{id}/content?variant=` |
+| A custom provider with its **Video** box ticked | `videos` | `videos/{id}` | the `url` in the status answer; when it carries none, `videos/{id}/content` (7.95.0) |
+
+**A custom provider's video with no download URL (7.95.0).** A custom provider's Video box
+declares OpenAI's `/videos` shape, and many such hosts serve the finished file only at
+`videos/{id}/content`, never naming a URL. `GET /v1/videos/{id}/content` therefore asks for a
+fresh status first, uses its URL if it has one -- exactly as before -- and otherwise downloads
+from `videos/{id}/content` with the job's own key. A host that does not serve that path answers
+the same `409` as before ("gave no address for the file yet"), never `video_expired`. Before
+7.95.0 such a video answered `409` forever. The built-in providers keep their documented
+addresses.
 
 The body is otherwise forwarded field for field with `model` replaced by the rail's model, so a
 host's own options (`aspect_ratio`, `resolution`, ... sent with the SDK's `extra_body`) reach
@@ -463,6 +503,29 @@ with the chain's attempts, plus:
 | `media_job_id` | the video job's MCC id (`video_...`) on the row of the request that submitted it |
 | `output_video_seconds` | the video's length as the provider reports it, written once a status check sees the job completed; empty until then |
 
+**The row's `protocol`** is the API the client spoke. Since 7.95.0 an OpenAI-door row says
+which one: `openai_images` (generation and edits), `openai_speech`, `openai_transcriptions`
+(transcription and translation) or `openai_videos`; a Gemini-door row says `gemini`. Rows written
+before 7.95.0 keep the label they were written with -- every OpenAI-door media row then read
+`openai_images` -- and are never rewritten. It is a label only: nothing filters or totals by it.
+
+**A client that hung up (7.95.0).** A request answered whole (every media request that did not
+stream) is logged `cancelled` -- not `success` -- when the client had already disconnected by the
+time the answer was ready. What came back is kept exactly as for a success (the images and their
+count, the stored files, a video's job, which a later status check still finds), and it is
+**still priced**: the provider produced it and billed it. A streamed request keeps the rule it
+has had since 7.78.4.
+
+**In the requests table (7.95.0)** the Turn column says what a media row did, after any chip it
+already had: `1 image generated` / `N images generated`, `speech · 4.2s` (or `speech` when the
+container states no length), `transcribed · 31s` / `translated · 31s`, `video job` (with `· 8s`
+once a status check has seen its length). A row that names an operation and produced nothing --
+a refusal, an error -- says only what it was: `image request`, `speech request`,
+`transcription request`, `translation request`, `video request`. Chat rows are drawn exactly as
+before. The list (`GET /admin/api/requests`) carries the six columns this reads --
+`media_operation`, `output_image_count`, `output_audio_seconds`, `input_audio_seconds`,
+`output_video_seconds`, `media_job_id` -- empty on chat rows.
+
 A video job's status checks and downloads do not add rows: the job itself (provider, model,
 which key by position and fingerprint, which proxy address, status, progress, the provider's
 error) is kept in the request log's `media_jobs` table and pruned with its submit row. The key
@@ -496,36 +559,62 @@ are stored, a preview (image, audio player or video player) loaded on demand fro
 audio and video types as themselves (anything else, SVG included, as a download) and is never
 used by list views.
 
+## Error answers
+
+Every failure of an OpenAI media route answers in OpenAI's error envelope, and since 7.95.0 so
+does a refused proxy token (or any other refusal before the route runs) on `/v1/images/*`,
+`/v1/audio/*` and `/v1/videos*`, which the OpenAI SDKs read:
+
+```
+{"error":{"message":"Invalid proxy authentication token","type":"authentication_error","param":null,"code":null}}
+```
+
+`401` is `authentication_error`, `403` `permission_error`, `404` `not_found_error`, anything else
+`invalid_request_error`. Before 7.95.0 these answered FastAPI's `{"detail": ...}`. The chat routes
+(`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) keep `{"detail": ...}` unchanged; the
+Gemini routes answer in Google's shape as before.
+
+## Codex
+
+- **Images you attach to a Codex turn** (`codex -i shot.png`, or a pasted image) work through MCC
+  since 7.95.0. Codex sends them to the Responses door as `input_image` parts; MCC turns each into
+  the same image block the Chat Completions door builds -- a base64 data URL or an `http(s)` URL --
+  so the model on your chat route sees the picture, and the vision adapter, describe mode and
+  image thumbnails treat it exactly as they treat a Chat Completions image. An `input_image` that
+  names a `file_id` (OpenAI's Files API, which MCC does not have) is refused with a `400` saying
+  so. Before 7.95.0 every attached image was refused with `400` and no request-log row.
+- **Images a Codex tool returns** (`view_image`) are still sent to the model as text, as before;
+  changing that changes requests that work today and is a separate decision.
+- **Codex's own image-generation tool does not use MCC.** Measured with Codex 0.162.1 against a
+  test install, with the provider `mcc-codex` writes, with `gpt-5.5`, and with the built-in OpenAI
+  provider pointed at MCC: none of them ever sent the hosted image tool, or any image request, to
+  MCC. With a ChatGPT sign-in it goes to chatgpt.com directly.
+- **Codex's `imagegen` skill can use your Image rail by hand.** The skill's command-line fallback
+  (`image_gen.py`) is an OpenAI SDK client: given `OPENAI_BASE_URL=http://127.0.0.1:8082/v1` and
+  `OPENAI_API_KEY=<your proxy token>` it sends `POST /v1/images/generations`, which MCC routes on the
+  Image rail. `mcc-codex` does **not** set these for you -- it keeps `OPENAI_*` out of Codex's
+  environment on purpose -- so set them yourself in the shell you run the skill from:
+
+  ```sh
+  OPENAI_BASE_URL=http://127.0.0.1:8082/v1 OPENAI_API_KEY="$ANTHROPIC_AUTH_TOKEN" \
+    python "$CODEX_HOME/skills/.system/imagegen/scripts/image_gen.py" generate --prompt "a red cube"
+  ```
+
 ## Known limits today
 
 What the current release does, stated so nobody has to find it by trial (checked
-on 7.92.2; none of it changed since):
+on 7.95.0):
 
-- **A pinned `provider/model` is not limited to the rail.** A request that names
-  any keyed provider's model as `provider/model` is sent to it, whether or not
-  that model is on the rail.
-- **The requests table shows a media row with dashes** for turn and tokens; the
-  row carries no "image generated" label yet. Find media requests by their
-  Endpoint, the Harness *Script or curl*, or the **Media** card.
-- **Every OpenAI-door media row is labelled protocol `openai_images`**, speech,
-  transcription and video included.
-- **A client that hangs up before the answer is logged `success`**, not
-  `cancelled`, once the provider has answered.
-- **A wrong proxy token on an OpenAI media route answers `401`
-  `{"detail": "Invalid proxy authentication token"}`**, not OpenAI's `error`
-  envelope (the SDKs still raise on the status; the Gemini routes answer in
-  Google's shape).
-- **No upload size limit** of MCC's own (the provider's applies).
-- **Image `"stream": true` and speech `stream_format: "sse"` always answer
-  `400`**: no provider MCC knows documents either.
-- **A custom provider's video whose status answer carries no download URL**
-  cannot be downloaded through MCC: `GET /v1/videos/{id}/content` answers `409`.
 - **A deleted video job still counts** in the Media card's video jobs.
 - **Gemini `candidateCount: 2`** comes back as one candidate holding two images.
-- **Images attached to a Codex turn** reach the Responses door as `input_image`
-  parts, which it refuses with `400` ("Unsupported Responses content part type")
-  and no request-log row. Codex's own image tool (Codex 0.162.1, measured on a
-  test install) never sent an image request to MCC.
+- **A streamed image or speech request on a rail with no streaming provider** gets
+  its whole answer as one event, never partial images or audio chunks: no provider
+  MCC knows documents either stream.
+- **Images returned by a Codex tool** (`view_image`) reach the model as text (above).
+- **Codex's own image tool** never reaches MCC (above).
+- **Which request fields each media model accepts** (Agnes video's `mode`, image
+  `image_config`, ...) is not published yet; a provider's refusal is passed back
+  as it said it.
 
 ## Not yet
 

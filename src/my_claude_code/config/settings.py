@@ -77,6 +77,7 @@ from .constants import (
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
     MAX_OUTPUT_TOKENS_FLOOR,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+    MEDIA_UPLOAD_MAX_MB_DEFAULT,
     MODEL_DISCOVERY_REFRESH_SECONDS_DEFAULT,
     MODEL_METADATA_OPENROUTER_LIVE_DEFAULT,
     MODEL_PROBE_NEW_MODELS_DEFAULT,
@@ -866,6 +867,12 @@ class Settings(BaseSettings):
     )
     model_video_paused: str | None = Field(
         default=None, validation_alias="MODEL_VIDEO_PAUSED"
+    )
+    # The largest file a media request may upload, in MB (7.95.0). 0 sets no
+    # limit of MCC's own; above 0, a larger upload is refused 413 before any
+    # provider is asked, so nothing is spent on it.
+    media_upload_max_mb: int = Field(
+        default=MEDIA_UPLOAD_MAX_MB_DEFAULT, validation_alias="MEDIA_UPLOAD_MAX_MB"
     )
 
     # ==================== Coding agent tier aliases ====================

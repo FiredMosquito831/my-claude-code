@@ -536,6 +536,9 @@ def test_orphans_made_outside_a_pass_are_swept_by_the_next_pass_as_before(
             description="a cat",
             described_by="vision-model",
         )
+        # Described longer ago than the grace: no request can still be in
+        # flight for it (7.95.0 keeps a FRESH one -- the tests below).
+        _age_description(store.db_path, "img-never-logged")
         # Re-written with a new prompt: its old prompt, named by no other
         # request, loses its last name without any request being deleted.
         conn = store._connect()
@@ -646,3 +649,153 @@ def test_a_rolled_back_pass_still_owes_its_sweeps(
     monkeypatch.setattr(store, "_sweep_orphans", fail)
     assert store.prune() == 0
     assert store._full_sweeps_owed == set(request_log_module._ORPHAN_SWEEP_TABLES)
+
+
+# ------------------------------------------- 7.95.0: in-flight descriptions
+#
+# A picture is described (vision describe mode) while the request carrying it
+# is still in flight, so its ``image_blobs`` row is written before the
+# request's row and before the link that names it. The whole sweep used to
+# delete it in that window; the next request with the same picture then paid
+# for a second description. A description newer than the grace that already
+# protects a video job written before its row is kept, and the sweep is owed
+# again so it goes once the grace has passed if no link ever arrives.
+
+_GRACE = request_log_module._MEDIA_JOB_ORPHAN_GRACE_SECONDS
+
+
+def _describe(store: RequestLogStore, sha: str) -> None:
+    store.store_image_description(
+        sha=sha,
+        kind="image",
+        media_type="image/png",
+        source_bytes=3,
+        description="a cat",
+        described_by="vision-model",
+    )
+
+
+def _age_description(path: Path, sha: str) -> None:
+    """Move a description back past the grace, as if made over an hour ago."""
+    with closing(sqlite3.connect(path)) as conn, conn:
+        conn.execute(
+            "UPDATE image_blobs SET described_at = described_at - ? WHERE sha = ?",
+            (_GRACE + 60.0, sha),
+        )
+
+
+def _without(
+    dump: dict[str, list[tuple[Any, ...]]], sha: str
+) -> dict[str, list[tuple[Any, ...]]]:
+    """``dump`` with one ``image_blobs`` row taken out (its key is the sha)."""
+    return {
+        table: [row for row in rows if table != "image_blobs" or row[0] != sha]
+        for table, rows in dump.items()
+    }
+
+
+def test_whole_sweep_keeps_a_fresh_unlinked_description(
+    template: Path, tmp_path: Path, deleted_files: list[tuple[str, ...]]
+) -> None:
+    reference, new = _pair(template, tmp_path)
+    old_side = RequestLogStore(reference, max_rows=1_000)
+    old_side.close()
+    assert _reference_prune(reference, 1_000, {}) == 0
+    _describe(old_side, "img-in-flight")
+    assert _reference_prune(reference, 1_000, {}) == 0
+
+    store = _warm_new_store(new)
+    _describe(store, "img-in-flight")
+    assert store._full_sweeps_owed == {"image_blobs"}
+    assert store.prune() == 0
+
+    new_rows = _dump(new)
+    kept = [row for row in new_rows["image_blobs"] if row[0] == "img-in-flight"]
+    assert len(kept) == 1
+    # Everything else is exactly what the old prune left.
+    assert _without(new_rows, "img-in-flight") == _dump(reference)
+    assert not [
+        row for row in _dump(reference)["image_blobs"] if row[0] == "img-in-flight"
+    ]
+
+
+def test_old_unlinked_description_is_still_swept(
+    template: Path, tmp_path: Path, deleted_files: list[tuple[str, ...]]
+) -> None:
+    reference, new = _pair(template, tmp_path)
+    old_side = RequestLogStore(reference, max_rows=1_000)
+    old_side.close()
+    assert _reference_prune(reference, 1_000, {}) == 0
+    _describe(old_side, "img-long-gone")
+    _age_description(reference, "img-long-gone")
+    assert _reference_prune(reference, 1_000, {}) == 0
+
+    store = _warm_new_store(new)
+    _describe(store, "img-long-gone")
+    _age_description(new, "img-long-gone")
+    assert store.prune() == 0
+
+    assert store._full_sweeps_owed == set()
+    assert _dump(new) == _dump(reference)
+
+
+def test_exempt_rows_reowe_the_sweep(
+    template: Path,
+    tmp_path: Path,
+    deleted_files: list[tuple[str, ...]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, new = _pair(template, tmp_path)
+    store = _warm_new_store(new)
+    _describe(store, "img-in-flight")
+    assert store.prune() == 0
+    # Kept, and owed again: the next pass looks at it once more.
+    assert store._full_sweeps_owed == {"image_blobs"}
+
+    # The grace has passed and its request never arrived: the owed sweep
+    # removes it. (A negative grace stands in for an hour going by.)
+    monkeypatch.setattr(request_log_module, "_MEDIA_JOB_ORPHAN_GRACE_SECONDS", -1.0)
+    assert store.prune() == 0
+    assert store._full_sweeps_owed == set()
+    assert not [row for row in _dump(new)["image_blobs"] if row[0] == "img-in-flight"]
+
+
+def test_a_linked_fresh_description_owes_nothing(
+    template: Path, tmp_path: Path, deleted_files: list[tuple[str, ...]]
+) -> None:
+    """A described picture a surviving request names is simply kept, as before."""
+    _, new = _pair(template, tmp_path)
+    store = _warm_new_store(new)
+    _describe(store, "img-shared")
+    assert store.prune() == 0
+    assert store._full_sweeps_owed == set()
+    (row,) = [row for row in _dump(new)["image_blobs"] if row[0] == "img-shared"]
+    assert "a cat" in row
+
+
+def test_targeted_sweep_keeps_a_fresh_description_of_a_pruned_picture(
+    template: Path, tmp_path: Path, deleted_files: list[tuple[str, ...]]
+) -> None:
+    """The same rule on the targeted path, so the two sweeps find the same rows.
+
+    ``img-0`` is named only by the oldest request; it is being described for a
+    new request still in flight when that oldest one is pruned.
+    """
+    reference, new = _pair(template, tmp_path)
+    old_side = RequestLogStore(reference, max_rows=1_000)
+    old_side.close()
+    assert _reference_prune(reference, 1_000, {}) == 0
+    _describe(old_side, "img-0")
+    assert _reference_prune(reference, _RECORDS - 1, {}) == 1
+
+    store = _warm_new_store(new)
+    _describe(store, "img-0")
+    assert store.prune() == 0
+    assert store._full_sweeps_owed == set()
+    store._max_rows = _RECORDS - 1
+    assert store.prune() == 1
+
+    new_rows = _dump(new)
+    assert [row[0] for row in new_rows["image_blobs"] if row[0] == "img-0"] == ["img-0"]
+    assert _without(new_rows, "img-0") == _dump(reference)
+    assert store._full_sweeps_owed == {"image_blobs"}

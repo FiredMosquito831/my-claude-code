@@ -92,6 +92,8 @@ wire_api = "responses"
 
 Match the model and port to the Admin UI. The `env_key` reads the same proxy auth token the `mcc-codex` launcher sets for each process. `mcc-server` publishes the catalog file under `~/.mcc/` on startup and whenever the model inventory changes, so restart the Codex App after setup or model changes, then select an MCC model from its model picker.
 
+**Images in Codex (7.95.0).** An image you attach to a Codex turn (`codex -i shot.png`, or a paste) now reaches the model on your route: MCC's Responses door accepts it as the same image the Chat Completions door sends (before 7.95.0 it answered `400` and the turn failed). Images a Codex tool returns (`view_image`) still reach the model as text. Codex's own image-generation tool never calls MCC (measured with Codex 0.162.1). Its `imagegen` skill's command-line fallback can use your **Image rail** if you point it at MCC yourself -- `mcc-codex` does not set `OPENAI_*` for Codex, on purpose: run the skill with `OPENAI_BASE_URL=http://127.0.0.1:8082/v1` and `OPENAI_API_KEY` set to your proxy token ([Media routing → Codex](MEDIA.md#codex)).
+
 </details>
 
 <details>
@@ -184,8 +186,10 @@ on your install the answer comes from the model your tier routes to.
 The token is `ANTHROPIC_AUTH_TOKEN` (dashboard: Providers → Runtime). With it
 empty, no token is asked for (see [Security](USAGE.md#15-security-and-networking)).
 A wrong or missing token answers `401`: `{"detail": "Invalid proxy authentication token"}`
-on the Anthropic and OpenAI doors (media included), and Google's error shape
-(`{"error": {"code": 401, "status": "UNAUTHENTICATED", ...}}`) on `/v1beta`.
+on the Anthropic and OpenAI chat doors, OpenAI's envelope
+(`{"error": {"message": "Invalid proxy authentication token", "type": "authentication_error", ...}}`)
+on the OpenAI media routes (`/v1/images/*`, `/v1/audio/*`, `/v1/videos*`, since 7.95.0), and
+Google's error shape (`{"error": {"code": 401, "status": "UNAUTHENTICATED", ...}}`) on `/v1beta`.
 
 An optional `x-mcc-harness: <name>` request header names the client in
 **Analytics** (the `mcc-*` launchers set it); it is never sent upstream.
@@ -200,7 +204,10 @@ An optional `x-mcc-harness: <name>` request header names the client in
 | `provider/model` (`opencode/big-pickle`, `custom_x/y`) | that one model, which needs that provider's key |
 | anything else | the default route (`MODEL`) |
 
-`GET /v1/models` lists what your clients may pick.
+`GET /v1/models` lists what your clients may pick. The media routes pick their
+rail by endpoint; a `provider/model` sent there must be one of that rail's models
+(7.95.0: one that is not is refused with `400`; any other name uses the rail --
+[Media routing](MEDIA.md#how-a-request-finds-its-model)).
 
 ### Endpoints
 
@@ -258,6 +265,10 @@ curl -N http://127.0.0.1:8082/v1/responses \
 
 `response.created` … `response.output_text.delta` … `response.completed`. A request
 with `"stream": false` answers `400`: *MCC /v1/responses supports streaming only*.
+An image in a user message (`{"type": "input_image", "image_url": "data:image/png;base64,…"}`
+or an `https://` URL) is accepted since 7.95.0 and reaches the model as the same image the
+Chat Completions door sends; an `input_image` with a `file_id` answers `400` (MCC has no
+Files API).
 
 #### Gemini
 
@@ -288,8 +299,9 @@ it answers `503` with `"status": "starting"`.
 
 A routing or provider failure answers in the door's own vendor shape (OpenAI
 `{"error": {...}}`, Anthropic `{"type": "error", "error": {...}}`, Google
-`{"error": {"code", "status", ...}}`). Two answers do not: the `401` above, and a
-body that does not parse as the door's request (a `messages` that is not a
+`{"error": {"code", "status", ...}}`). Two answers do not: the `401` above on the
+chat doors (the OpenAI media routes answer it in OpenAI's envelope since 7.95.0),
+and a body that does not parse as the door's request (a `messages` that is not a
 list, say), which on the Anthropic and OpenAI doors answers `422` with a
 `{"detail": [...]}` list naming the field.
 A model whose provider has no key answers `503` naming the missing setting. A

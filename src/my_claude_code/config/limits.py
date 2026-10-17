@@ -344,6 +344,12 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "request_watchdog_log_max_mb": LimitRange(
         0.0, 1_024.0, "0 writes no JSONL; the WARNING line in server.log stays"
     ),
+    # The largest file a media request may upload (7.95.0). 0 sets no limit of
+    # MCC's own; the ceiling is the media store cap's, a sanity bound on a
+    # hand-typed number and not an opinion about any provider's limit.
+    "media_upload_max_mb": LimitRange(
+        0.0, 10_000_000.0, "0 sets no limit; the provider's own applies"
+    ),
 }
 
 

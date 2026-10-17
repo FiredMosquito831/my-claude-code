@@ -925,3 +925,72 @@ def test_genai_sdk_generate_videos_round_trip(monkeypatch, tmp_path, base) -> No
         "seconds": b"8",
         "aspect_ratio": b"16:9",
     }
+
+
+# ---------------------------------------------------------------- 7.95.0
+
+
+def _client_gone(monkeypatch, gone: bool) -> list[bool]:
+    """Fault injection for P4: what ``Request.is_disconnected`` answers."""
+    asked: list[bool] = []
+
+    async def is_disconnected(_request) -> bool:
+        asked.append(gone)
+        return gone
+
+    monkeypatch.setattr("starlette.requests.Request.is_disconnected", is_disconnected)
+    return asked
+
+
+def test_client_gone_before_answer_logs_cancelled(monkeypatch, tmp_path) -> None:
+    """P4 (user decision 8) on the Gemini door: cancelled, outputs kept."""
+    settings = _settings(monkeypatch, tmp_path)
+    asked = _client_gone(monkeypatch, True)
+    upstream = Upstream(
+        {("POST", XAI, IMAGES_GENERATIONS): [_images({"b64_json": _b64(PNG_OUT)})]}
+    )
+    with _client(settings, upstream) as client:
+        client.post(IMAGE_PATH, json=_image_request())
+    assert asked == [True]
+    (row,) = _requests(tmp_path)
+    assert (row["status"], row["error_kind"]) == ("cancelled", None)
+    assert row["protocol"] == "gemini"
+    assert row["output_image_count"] == 1
+
+
+def test_client_present_logs_success(monkeypatch, tmp_path) -> None:
+    """Equality: a client still there is logged ``success``, as before."""
+    settings = _settings(monkeypatch, tmp_path)
+    asked = _client_gone(monkeypatch, False)
+    upstream = Upstream(
+        {("POST", XAI, IMAGES_GENERATIONS): [_images({"b64_json": _b64(PNG_OUT)})]}
+    )
+    with _client(settings, upstream) as client:
+        assert client.post(IMAGE_PATH, json=_image_request()).status_code == 200
+    assert asked == [False]
+    (row,) = _requests(tmp_path)
+    assert row["status"] == "success"
+
+
+def test_a_url_model_off_the_rail_is_refused_in_googles_envelope(
+    monkeypatch, tmp_path
+) -> None:
+    """P9 on the Gemini door: a ``provider/model`` in the URL must be on the rail."""
+    settings = _settings(monkeypatch, tmp_path)
+    upstream = Upstream(
+        {("POST", XAI, IMAGES_GENERATIONS): [_images({"b64_json": _b64(PNG_OUT)})]}
+    )
+    with _client(settings, upstream) as client:
+        response = client.post(
+            "/v1beta/models/together/flux:generateContent", json=_image_request()
+        )
+        on_rail = client.post(
+            "/v1beta/models/xai/grok-2-image:generateContent",
+            json=_image_request(),
+        )
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["status"] == "INVALID_ARGUMENT"
+    assert "'together/flux' is not on the Image rail" in error["message"]
+    assert on_rail.status_code == 200, on_rail.text
+    assert [call[1] for call in upstream.calls()] == [XAI]
