@@ -9,6 +9,7 @@ import base64
 import dataclasses
 import json
 import sqlite3
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.api import media_routes
 from my_claude_code.config.media_surfaces import image_generation_surface
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings
@@ -24,7 +26,7 @@ from my_claude_code.core import request_log
 from my_claude_code.core.media_store import media_file_path, media_root
 from my_claude_code.providers.media.key_pool import MediaKeyPool
 from my_claude_code.providers.media.registry import MediaRegistry
-from tests.api.support import attempts_as_read, create_test_app
+from tests.api.support import attempts_as_read, create_test_app, requests_as_read
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 PNG_B64 = base64.b64encode(PNG).decode()
@@ -82,6 +84,19 @@ def _rows(tmp_path: Path) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
     try:
         return list(conn.execute("SELECT * FROM requests ORDER BY ts_epoch"))
+    finally:
+        conn.close()
+
+
+def _read_rows(tmp_path: Path) -> list[dict[str, Any]]:
+    """The rows as the log reads them back (stored-once metadata restored)."""
+    request_log.reset_request_log_stores()
+    conn = sqlite3.connect(tmp_path / "requests.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        return requests_as_read(
+            conn, conn.execute("SELECT * FROM requests ORDER BY ts_epoch").fetchall()
+        )
     finally:
         conn.close()
 
@@ -236,7 +251,35 @@ def test_every_ref_paused_names_the_setting(monkeypatch, tmp_path) -> None:
     assert "MODEL_IMAGE_PAUSED" in response.json()["error"]["message"]
 
 
-def test_direct_provider_ref_is_a_single_candidate(monkeypatch, tmp_path) -> None:
+def test_pinned_ref_on_the_rail_is_a_single_candidate(monkeypatch, tmp_path) -> None:
+    """A ``provider/model`` the rail lists pins that one model (as before 7.95.0)."""
+    settings = _settings(
+        monkeypatch,
+        tmp_path,
+        MODEL_IMAGE="xai/grok-2-image",
+        MODEL_IMAGE_FALLBACKS="together/flux",
+    )
+    upstream = Upstream()
+    with _client(settings, upstream) as client:
+        response = client.post(
+            "/v1/images/generations",
+            json={"model": "together/flux", "prompt": "p"},
+        )
+    assert response.status_code == 200
+    assert [(seen[0], seen[2]["model"]) for seen in upstream.seen] == [
+        ("api.together.ai", "flux")
+    ]
+
+
+def test_pinned_ref_off_the_rail_is_refused_and_nothing_is_sent(
+    monkeypatch, tmp_path
+) -> None:
+    """Binding decision 5 of 2026-10-04 (P9): only the rail's own models.
+
+    Before 7.95.0 any keyed provider's model could be named off the rail and
+    was billed there. Now it is refused 400 naming the rail's models; nothing
+    is sent, no attempt is charged, and the refusal has its row.
+    """
     settings = _settings(
         monkeypatch,
         tmp_path,
@@ -249,9 +292,34 @@ def test_direct_provider_ref_is_a_single_candidate(monkeypatch, tmp_path) -> Non
             "/v1/images/generations",
             json={"model": "together/some-other-model", "prompt": "p"},
         )
-    assert response.status_code == 200
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["message"].startswith(
+        "'together/some-other-model' is not on the Image rail. Models on it: "
+        "xai/grok-2-image, together/flux."
+    )
+    assert "MODEL_IMAGE" in error["message"]
+    assert upstream.seen == []
+    (row,) = _rows(tmp_path)
+    assert (row["status"], row["error_kind"]) == ("error", "invalid_request")
+    assert row["provider"] is None
+    assert _attempts(tmp_path, row["id"]) == []
+
+
+def test_an_unprefixed_model_name_still_uses_the_rail(monkeypatch, tmp_path) -> None:
+    """Equality: a vendor name (no known provider) routes on the rail's chain."""
+    settings = _settings(monkeypatch, tmp_path, MODEL_IMAGE="xai/grok-2-image")
+    upstream = Upstream()
+    with _client(settings, upstream) as client:
+        for model in ("gpt-image-2", "black-forest-labs/FLUX.1-schnell"):
+            response = client.post(
+                "/v1/images/generations", json={"model": model, "prompt": "p"}
+            )
+            assert response.status_code == 200
     assert [(seen[0], seen[2]["model"]) for seen in upstream.seen] == [
-        ("api.together.ai", "some-other-model")
+        ("api.x.ai", "grok-2-image"),
+        ("api.x.ai", "grok-2-image"),
     ]
 
 
@@ -407,16 +475,119 @@ def test_sse_partials_are_forwarded_and_the_completed_image_is_logged(
 
 
 def test_a_stream_request_skips_a_surface_that_cannot_stream(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, streaming_xai
 ) -> None:
-    settings = _settings(monkeypatch, tmp_path, MODEL_IMAGE="xai/grok-2-image")
-    upstream = Upstream()
+    """Changed on purpose in 7.95.0 (user decision 12).
+
+    Before, a rail whose only model could not stream answered 400 here. That
+    request is now served whole (see the next test), so what this pins is the
+    routing that did not change: on a rail where a candidate DOES declare a
+    stream, a surface that cannot stream is skipped, uncharged, for it.
+    """
+    settings = _settings(
+        monkeypatch,
+        tmp_path,
+        MODEL_IMAGE="together/flux",
+        MODEL_IMAGE_FALLBACKS="xai/grok-2-image",
+    )
+    frames = _sse(
+        {
+            "type": "image_generation.completed",
+            "b64_json": PNG_B64,
+        }
+    )
+    upstream = Upstream(
+        {
+            "api.x.ai": [
+                httpx.Response(
+                    200, content=frames, headers={"content-type": "text/event-stream"}
+                )
+            ]
+        }
+    )
     with _client(settings, upstream) as client:
         response = client.post(
             "/v1/images/generations", json={"prompt": "p", "stream": True}
         )
-    assert response.status_code == 400
-    assert upstream.seen == []
+        assert response.status_code == 200
+        assert response.content == frames
+    assert [(seen[0], seen[2].get("stream")) for seen in upstream.seen] == [
+        ("api.x.ai", True)
+    ]
+    (row,) = _rows(tmp_path)
+    attempts = _attempts(tmp_path, row["id"])
+    assert [(a["outcome"], a["error_kind"]) for a in attempts] == [
+        ("skipped", "unsupported"),
+        ("succeeded", None),
+    ]
+
+
+def test_stream_without_streaming_surface_answers_one_completed_event(
+    monkeypatch, tmp_path
+) -> None:
+    """User decision 12 (P7, option A): served whole, answered as one event.
+
+    xAI declares no streaming images endpoint. The request goes out with its
+    stream flags removed; the picture comes back as one
+    ``image_generation.completed`` event carrying the host's ``b64_json``.
+    """
+    settings = _settings(monkeypatch, tmp_path, MODEL_IMAGE="xai/grok-2-image")
+    upstream = Upstream({"api.x.ai": [_image_ok(output_tokens=9)]})
+    with _client(settings, upstream) as client:
+        response = client.post(
+            "/v1/images/generations",
+            json={"prompt": "p", "stream": True, "partial_images": 2, "size": "1K"},
+        )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.content == _sse(
+        {
+            "type": "image_generation.completed",
+            "b64_json": PNG_B64,
+            "created_at": 1,
+            "usage": {"output_tokens": 9},
+        }
+    )
+    ((_host, _auth, body),) = upstream.seen
+    assert body == {"model": "grok-2-image", "prompt": "p", "size": "1K"}
+    (row,) = _read_rows(tmp_path)
+    assert row["status"] == "success"
+    assert row["stream"] == 1
+    assert row["output_image_count"] == 1
+    assert row["tokens_out"] == 9
+    media = json.loads(row["params"])["media"]
+    assert media["not_forwarded"] == ["stream", "partial_images"]
+
+
+def test_a_whole_answered_stream_is_logged_before_the_store_closes(
+    monkeypatch, tmp_path
+) -> None:
+    """The one-event answer is a buffered answer: its row is written first.
+
+    The parser is held 0.3 s on its worker thread, as a loaded machine can
+    hold it; the stores are closed the moment the response is back, as a
+    server's own stop does, and the row is there.
+    """
+    parse = media_routes.parse_images_response
+
+    def slow_parse(body: bytes):
+        time.sleep(0.3)
+        return parse(body)
+
+    monkeypatch.setattr(media_routes, "parse_images_response", slow_parse)
+    settings = _settings(monkeypatch, tmp_path, MODEL_IMAGE="xai/grok-2-image")
+    with _client(settings, Upstream()) as client:
+        response = client.post(
+            "/v1/images/generations", json={"prompt": "p", "stream": True}
+        )
+        request_log.reset_request_log_stores()
+        assert response.status_code == 200
+    (row,) = _rows(tmp_path)
+    assert (row["status"], row["stream"], row["output_image_count"]) == (
+        "success",
+        1,
+        1,
+    )
 
 
 def test_media_refs_never_reach_the_chat_model_list(monkeypatch, tmp_path) -> None:
@@ -482,3 +653,147 @@ def test_a_media_auth_failure_never_touches_the_chat_key_books(
         chat_health = asyncio.run(chat_books())
     assert [entry["state"] for entry in chat_health] == ["HEALTHY", "HEALTHY"]
     assert route_health_registry(settings).why("xai/grok-2-image") is None
+
+
+# ---------------------------------------------------------------- 7.95.0
+
+
+def test_row_protocol_stays_openai_images(monkeypatch, tmp_path) -> None:
+    """P3 equality: an image row keeps ``openai_images``; only others moved."""
+    settings = _settings(monkeypatch, tmp_path, MODEL_IMAGE="xai/grok-2-image")
+    with _client(settings, Upstream()) as client:
+        assert (
+            client.post("/v1/images/generations", json={"prompt": "p"}).status_code
+            == 200
+        )
+    (row,) = _rows(tmp_path)
+    assert row["protocol"] == "openai_images"
+
+
+def _client_gone(monkeypatch, gone: bool) -> list[bool]:
+    """Fault injection for P4: what ``Request.is_disconnected`` answers."""
+    asked: list[bool] = []
+
+    async def is_disconnected(_request) -> bool:
+        asked.append(gone)
+        return gone
+
+    monkeypatch.setattr("starlette.requests.Request.is_disconnected", is_disconnected)
+    return asked
+
+
+def test_client_gone_before_answer_logs_cancelled(monkeypatch, tmp_path) -> None:
+    """P4 (user decision 8): the host answered, the client had left.
+
+    Logged ``cancelled`` -- not ``success`` -- with what came back kept, and
+    priced like the success it was for the provider, which billed it.
+    """
+    settings = _settings(
+        monkeypatch,
+        tmp_path,
+        MODEL_IMAGE="xai/grok-2-image",
+        MEDIA_STORE_ENABLED="true",
+    )
+    asked = _client_gone(monkeypatch, True)
+    upstream = Upstream(
+        {
+            "api.x.ai": [
+                httpx.Response(
+                    200,
+                    json={
+                        "created": 1,
+                        "data": [{"b64_json": PNG_B64}],
+                        "usage": {"cost": 0.04, "is_byok": False},
+                    },
+                )
+            ]
+        }
+    )
+    with _client(settings, upstream) as client:
+        client.post("/v1/images/generations", json={"prompt": "p"})
+    assert asked == [True]
+    (row,) = _rows(tmp_path)
+    assert row["status"] == "cancelled"
+    assert row["error_kind"] is None
+    assert row["output_image_count"] == 1
+    assert row["media_sha_out"] is not None
+    # The host's own figure; a per-image rate is covered in test_media_cost.
+    assert (row["cost_usd"], row["cost_source"]) == (0.04, "provider")
+    path = media_file_path(
+        media_root(tmp_path / "requests.db"), row["media_sha_out"], "image/png"
+    )
+    assert path.read_bytes() == PNG
+
+
+def test_client_present_logs_success(monkeypatch, tmp_path) -> None:
+    """Equality: a client still there is logged ``success``, as before."""
+    settings = _settings(monkeypatch, tmp_path, MODEL_IMAGE="xai/grok-2-image")
+    asked = _client_gone(monkeypatch, False)
+    with _client(settings, Upstream()) as client:
+        assert (
+            client.post("/v1/images/generations", json={"prompt": "p"}).status_code
+            == 200
+        )
+    assert asked == [False]
+    (row,) = _rows(tmp_path)
+    assert row["status"] == "success"
+
+
+def test_bad_token_answers_openai_envelope(monkeypatch, tmp_path) -> None:
+    """P5 (user decision 10): an OpenAI SDK reads a refused token as an error."""
+    settings = _settings(
+        monkeypatch,
+        tmp_path,
+        MODEL_IMAGE="xai/grok-2-image",
+        ANTHROPIC_AUTH_TOKEN="right-token",
+    )
+    upstream = Upstream()
+    with _client(settings, upstream) as client:
+        for path in (
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/audio/speech",
+            "/v1/audio/transcriptions",
+            "/v1/audio/translations",
+            "/v1/videos",
+        ):
+            response = client.post(
+                path,
+                json={"prompt": "p"},
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+            assert response.status_code == 401, path
+            assert response.json() == {
+                "error": {
+                    "message": "Invalid proxy authentication token",
+                    "type": "authentication_error",
+                    "param": None,
+                    "code": None,
+                }
+            }, path
+            assert response.headers["request-id"].startswith("req_"), path
+        missing = client.post("/v1/images/generations", json={"prompt": "p"})
+    assert missing.status_code == 401
+    assert missing.json()["error"]["message"] == "Missing proxy authentication token"
+    assert upstream.seen == []
+
+
+def test_chat_door_bad_token_body_unchanged(monkeypatch, tmp_path) -> None:
+    """P5 equality: the chat doors keep FastAPI's ``{"detail"}`` body."""
+    settings = _settings(
+        monkeypatch,
+        tmp_path,
+        MODEL_IMAGE="xai/grok-2-image",
+        ANTHROPIC_AUTH_TOKEN="right-token",
+    )
+    with _client(settings, Upstream()) as client:
+        for path in ("/v1/chat/completions", "/v1/responses", "/v1/messages"):
+            response = client.post(
+                path,
+                json={"model": "m", "messages": []},
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+            assert response.status_code == 401, path
+            assert response.json() == {
+                "detail": "Invalid proxy authentication token"
+            }, path

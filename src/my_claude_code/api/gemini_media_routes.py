@@ -388,7 +388,9 @@ def _generate_complete(
         except BaseException:
             await capture.finish("cancelled")
             raise
-        await capture.finish("success", outputs=outputs)
+        # ``cancelled`` if the client already hung up (7.95.0), priced as
+        # answered: the provider produced it.
+        await capture.finish_answered(outputs)
         if stream:
             return Response(
                 content=body,

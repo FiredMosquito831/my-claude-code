@@ -824,7 +824,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "(the OpenAI images API). "
             "A media rail, never a chat tier: it is not offered to coding agents and "
             "is never reached from /v1/messages. A client that names a provider/model "
-            "ref pins that model; any other model name uses this rail. None answers "
+            "ref on this rail pins that model; a ref that is not on the rail is "
+            "refused (400) and nothing is sent; any other model name uses this rail. "
+            "None answers "
             "the endpoint with 'no model configured' instead of borrowing a chat model. "
             "Only providers that declare an image endpoint can serve it."
         ),
@@ -867,8 +869,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Model that serves POST /v1/audio/speech (the OpenAI text-to-speech "
             "API). A media rail, never a chat tier. A client that names a "
-            "provider/model ref pins that model; any other model name uses this "
-            "rail. Only providers that declare a speech endpoint can serve it; a "
+            "provider/model ref on this rail pins that model; a ref that is not on "
+            "the rail is refused (400) and nothing is sent; any other model name "
+            "uses this rail. Only providers that declare a speech endpoint can "
+            "serve it; a "
             "client that names a response_format a provider does not document "
             "skips that provider (MCC never transcodes audio)."
         ),
@@ -909,8 +913,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Model that serves POST /v1/audio/transcriptions and "
             "/v1/audio/translations (the OpenAI speech-to-text API). A media rail, "
-            "never a chat tier. A client that names a provider/model ref pins that "
-            "model; any other model name uses this rail. Only providers that "
+            "never a chat tier. A client that names a provider/model ref on this "
+            "rail pins that model; a ref that is not on the rail is refused (400) "
+            "and nothing is sent; any other model name uses this rail. Only "
+            "providers that "
             "declare the endpoint can serve it; a translation skips providers that "
             "declare transcription only."
         ),
@@ -951,8 +957,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="model_video",
         description=(
             "Model that serves POST /v1/videos (the OpenAI Videos API shape). A media "
-            "rail, never a chat tier. A client that names a provider/model ref pins "
-            "that model; any other model name uses this rail. The rail is walked only "
+            "rail, never a chat tier. A client that names a provider/model ref on "
+            "this rail pins that model; a ref that is not on the rail is refused "
+            "(400) and nothing is sent; any other model name uses this rail. The "
+            "rail is walked only "
             "until a provider accepts the job: from then on every status check, "
             "download and delete goes to that provider with the same key."
         ),
@@ -985,6 +993,24 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "the rail is paused the endpoint names this setting."
         ),
         affects_providers=False,
+    ),
+    ConfigFieldSpec(
+        "MEDIA_UPLOAD_MAX_MB",
+        "Largest media upload (MB)",
+        "models",
+        "number",
+        settings_attr="media_upload_max_mb",
+        default="0",
+        affects_providers=False,
+        minimum=0,
+        maximum=10_000_000,
+        description=(
+            "0 = no limit of MCC's own; the provider's applies. Above 0, a media "
+            "request carrying a file larger than this many MB (an image to edit, "
+            "audio to transcribe, a video's reference image) is refused with 413 "
+            "before any provider is asked, so nothing is spent on it. The request "
+            "log keeps a row for the refusal."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_VISIBILITY_ALLOW",

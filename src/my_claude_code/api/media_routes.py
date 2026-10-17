@@ -13,13 +13,17 @@ writes one request-log row.
 A non-streaming request is answered only once a model has produced the whole
 answer, so any failure before that falls back invisibly. A streaming request
 commits on the first forwarded event; an upstream failure after that ends the
-stream with an OpenAI ``error`` event.
+stream with an OpenAI ``error`` event. Since 7.95.0 a streamed image or speech
+request on a rail where no candidate declares a stream is served whole and
+answered as one final SSE event, and a buffered answer whose client hung up
+before it was sent is logged ``cancelled`` (still priced: the host billed it).
 
 Uploads are parsed by Starlette's form parser, which spools a file to disk
 above the multipart library's own threshold (user decision 10: the library
 default) and writes rolled-over files from a worker thread. They are hashed
 off the loop, streamed to the upstream from the spooled copy, and closed when
-the request is finished with them.
+the request is finished with them. ``MEDIA_UPLOAD_MAX_MB`` (7.95.0, default 0 =
+no limit) refuses a larger file with 413 before any provider is asked.
 """
 
 import asyncio
@@ -44,6 +48,7 @@ from my_claude_code.application.media.ports import MediaProviderResolver
 from my_claude_code.application.media.rails import MediaRouter, chat_probe_candidates
 from my_claude_code.application.media.request import (
     MediaChunk,
+    MediaPlan,
     MediaRail,
     MediaRequest,
     MediaResponse,
@@ -56,7 +61,10 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
+    surface_for,
 )
+from my_claude_code.config.provider_registry import get_provider_registry
+from my_claude_code.config.settings import Settings
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import (
     ExecutionFailure,
@@ -70,12 +78,14 @@ from my_claude_code.core.openai_common.errors import (
     openai_error_type_for_failure,
 )
 from my_claude_code.core.openai_images import (
+    images_answer_events,
     parse_images_response,
     parse_images_stream,
 )
 from my_claude_code.core.openai_speech import (
     parse_speech_response,
     parse_speech_stream,
+    speech_answer_events,
 )
 from my_claude_code.core.openai_transcriptions import (
     parse_transcription_response,
@@ -84,7 +94,11 @@ from my_claude_code.core.openai_transcriptions import (
 )
 
 from .dependencies import get_services, require_proxy_auth, resolve_provider
-from .media_capture import MEDIA_PROTOCOL_OPENAI, MediaCapture
+from .media_capture import (
+    MEDIA_PROTOCOL_OPENAI,
+    MediaCapture,
+    openai_media_protocol,
+)
 from .ports import ApiServices
 from .request_ids import get_request_id
 from .response_streams import ManagedStreamingResponse, bind_response_lifetime
@@ -100,6 +114,8 @@ router = APIRouter()
 
 #: Bytes hashed per worker-thread read of an uploaded file.
 _HASH_CHUNK_BYTES = 1024 * 1024
+#: ``MEDIA_UPLOAD_MAX_MB``'s unit.
+_BYTES_PER_MB = 1024 * 1024
 
 Cleanup = Callable[[], Awaitable[None]]
 #: How a buffered (non-streaming) answer is turned into the client's response.
@@ -316,6 +332,7 @@ async def _serve(
         )
     lease: RequestRuntimeLease | None = None
     capture: MediaCapture | None = None
+    one_event = False
     try:
         lease = await services.requests.acquire()
         settings = lease.settings
@@ -325,12 +342,25 @@ async def _serve(
             endpoint=endpoint,
             request=media_request,
             headers=request.headers,
-            protocol=wire.protocol,
+            protocol=(
+                openai_media_protocol(media_request.operation)
+                if wire is OPENAI_WIRE
+                else wire.protocol
+            ),
+            client_gone=request.is_disconnected,
         )
+        _check_upload_sizes(settings, media_request.uploads)
         plan = MediaRouter(
             settings, probe_candidates=lambda: chat_probe_candidates(settings)
         ).plan(media_request)
         capture.set_plan(plan)
+        if _answer_stream_from_whole(media_request, plan):
+            # 7.95.0 (user decision 12): nothing on this rail declares a
+            # stream, so the request is served whole -- its stream flags not
+            # forwarded -- and answered as one final SSE event.
+            plan, withheld = _whole_answer_plan(plan, media_request)
+            capture.withheld(withheld)
+            one_event = True
         stream = _executor(lease, media.resolver(settings)).execute(
             plan,
             request_id=request_id,
@@ -363,6 +393,18 @@ async def _serve(
         await cleanup()
         raise
 
+    if one_event:
+        try:
+            return await _complete_as_one_event(
+                first,
+                stream,
+                lease,
+                capture,
+                _parser_for(media_request),
+                operation=media_request.operation,
+            )
+        finally:
+            await cleanup()
     if not media_request.stream:
         answer = _complete_response if complete is None else complete
         try:
@@ -541,7 +583,9 @@ async def create_speech(
     """Synthesize speech through the Speech rail (OpenAI ``audio.speech``).
 
     The answer is the audio itself, returned with the host's own Content-Type.
-    ``stream_format: "sse"`` is routed only to a surface that declares it.
+    ``stream_format: "sse"`` is routed only to a surface that declares it;
+    on a rail where none does it is served whole and answered as one
+    ``speech.audio.delta`` and ``speech.audio.done`` (7.95.0).
     """
     payload = await _read_json_object(request)
     if payload is None:
@@ -636,12 +680,152 @@ async def _complete_response(
             FailureKind.UPSTREAM,
         )
     outputs: MediaOutputs = await asyncio.to_thread(parse, first)
-    await capture.finish("success", outputs=outputs)
+    # ``success``, or ``cancelled`` if the client already hung up (7.95.0).
+    await capture.finish_answered(outputs)
     return Response(
         content=first.body,
         status_code=first.status_code,
         media_type=first.content_type or "application/json",
     )
+
+
+#: 7.95.0: the client fields that ask for a streamed answer, per operation
+#: that can be answered as one final event instead. Transcription is not
+#: here: only images and speech had no streaming host at all.
+_STREAM_FIELDS: dict[str, tuple[str, ...]] = {
+    MEDIA_OPERATION_IMAGE_GENERATE: ("stream", "partial_images"),
+    MEDIA_OPERATION_IMAGE_EDIT: ("stream", "partial_images"),
+    MEDIA_OPERATION_SPEECH: ("stream_format",),
+}
+
+
+def _answer_stream_from_whole(media_request: MediaRequest, plan: MediaPlan) -> bool:
+    """Whether a streamed request is to be served whole and answered as one event.
+
+    Only an image or speech request that asked for a stream, and only when
+    no candidate on its plan declares a streaming surface for the operation
+    -- the requests that were refused 400 before 7.95.0. A rail with any
+    candidate that declares a stream keeps today's routing exactly.
+    """
+    if not media_request.stream or media_request.operation not in _STREAM_FIELDS:
+        return False
+    descriptors = get_provider_registry().all_descriptors()
+    for attempt in plan.attempts:
+        descriptor = descriptors.get(attempt.resolved.provider_id)
+        if descriptor is None:
+            continue
+        surface = surface_for(descriptor.media_surfaces, media_request.operation)
+        if surface is not None and surface.stream:
+            return False
+    return True
+
+
+def _whole_answer_plan(
+    plan: MediaPlan, media_request: MediaRequest
+) -> tuple[MediaPlan, tuple[str, ...]]:
+    """The plan with its stream flags removed: ``(plan, names withheld)``.
+
+    The same candidates in the same order, asked for a whole answer; every
+    other field of the client's body is forwarded as before.
+    """
+    fields = _STREAM_FIELDS[media_request.operation]
+    whole = dataclasses.replace(
+        media_request,
+        stream=False,
+        body={
+            key: value for key, value in media_request.body.items() if key not in fields
+        },
+    )
+    withheld = tuple(name for name in fields if name in media_request.body)
+    return (
+        dataclasses.replace(
+            plan,
+            attempts=tuple(
+                dataclasses.replace(attempt, request=whole) for attempt in plan.attempts
+            ),
+        ),
+        withheld,
+    )
+
+
+async def _complete_as_one_event(
+    first: MediaChunk,
+    stream: AsyncIterator[MediaChunk],
+    lease: RequestRuntimeLease,
+    capture: MediaCapture,
+    parse: Callable[[MediaResponse], MediaOutputs],
+    *,
+    operation: str,
+) -> Response:
+    """A streamed request served whole, answered as SSE (7.95.0, decision 12).
+
+    Images: one ``image_generation.completed`` (``image_edit.completed``)
+    event per picture, ``b64_json`` as the host sent it. Speech: one
+    ``speech.audio.delta`` with the whole audio, then ``speech.audio.done``.
+    The precedent is Gemini's ``:streamGenerateContent``, answered as one
+    event. The row is written before the answer is returned, like any
+    buffered answer; the lease is released before returning.
+    """
+    try:
+        async for _extra in stream:
+            pass
+    finally:
+        await lease.release()
+    if not isinstance(first, MediaResponse):
+        await capture.finish("error", error=RuntimeError("unexpected stream frame"))
+        return _error_response(
+            502,
+            "The provider streamed an answer that was not asked for.",
+            FailureKind.UPSTREAM,
+        )
+    outputs: MediaOutputs = await asyncio.to_thread(parse, first)
+    if operation == MEDIA_OPERATION_SPEECH:
+        frames: bytes | None = await asyncio.to_thread(
+            speech_answer_events, first.body, outputs.usage
+        )
+    else:
+        frames = await asyncio.to_thread(
+            images_answer_events,
+            first.body,
+            edit=operation == MEDIA_OPERATION_IMAGE_EDIT,
+        )
+    if frames is None:
+        error = RuntimeError("the provider's answer carried no image")
+        await capture.finish("error", error=error, outputs=outputs)
+        return _error_response(
+            502,
+            "The provider answered without an image MCC could send as an event.",
+            FailureKind.UPSTREAM,
+        )
+    await capture.finish_answered(outputs)
+    return Response(content=frames, media_type="text/event-stream")
+
+
+def _check_upload_sizes(settings: Settings, uploads: tuple[MediaUpload, ...]) -> None:
+    """``MEDIA_UPLOAD_MAX_MB`` (7.95.0): refuse a file over it before any spend.
+
+    Raised before the plan is made, so no provider is asked and nothing is
+    charged; the row is logged ``error`` / ``invalid_request``. 0 -- the
+    default -- sets no limit of MCC's own.
+    """
+    limit_mb = int(getattr(settings, "media_upload_max_mb", 0) or 0)
+    if limit_mb <= 0:
+        return
+    limit = limit_mb * _BYTES_PER_MB
+    for upload in uploads:
+        if upload.size > limit:
+            raise ExecutionFailure(
+                kind=FailureKind.INVALID_REQUEST,
+                status_code=413,
+                message=(
+                    f"The file uploaded as '{upload.field}' is "
+                    f"{upload.size / _BYTES_PER_MB:.1f} MB, over "
+                    f"MEDIA_UPLOAD_MAX_MB ({limit_mb} MB). Nothing was sent to "
+                    "a provider. Send a smaller file, or raise "
+                    "MEDIA_UPLOAD_MAX_MB on Model Config (0 = no limit)."
+                ),
+                retryable=False,
+            )
 
 
 async def _stream_body(

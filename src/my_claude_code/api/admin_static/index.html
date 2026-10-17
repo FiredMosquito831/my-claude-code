@@ -1600,7 +1600,8 @@
                     <th class="req-col-requested-model">Requested model</th>
                     <th>Model</th>
                     <th>Status</th>
-                    <th>Turn</th>
+                    <th
+                      title="What the turn contained: the images that went in, thinking, tool calls, a reply. A media request says what it did: 1 image generated, speech · 4.2s, transcribed · 31s, video job -- or image request, speech request, transcription request, video request when it produced nothing.">Turn</th>
                     <th>Tokens</th>
                     <th>Cost</th>
                     <th>TTFT</th>
@@ -4407,7 +4408,9 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Video rail</strong>), primary first,
                   then its fallbacks, with the same retry, key-rotation, 429, pause and proxy
                   rules as a chat chain. A <code>provider/model</code> in the request pins that
-                  model; any other name uses the rail. Only providers that declare an image
+                  model when it is on the rail (since 7.95.0 one that is not is refused with
+                  <code>400</code> naming the rail's models, and nothing is sent); any other name
+                  uses the rail. Only providers that declare an image
                   endpoint can serve it (Gemini, xAI, Together, DeepInfra, Agnes, SiliconFlow,
                   ZenMux); any other model on the rail is skipped without being charged.
                 </p>
@@ -4449,14 +4452,22 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 <p>
                   An empty rail answers <code>404</code> &mdash; <em>No model is
                   configured for the Image rail</em> &mdash; on purpose: the OpenAI SDKs
-                  would retry a <code>503</code> for nothing. <strong>Today</strong>, a
-                  media row in the requests table shows dashes for turn and tokens (find
-                  it by its Endpoint or the <em>Media</em> card), every OpenAI-door media
-                  row says protocol <code>openai_images</code>, a client that hangs up is
-                  logged <code>success</code>, a <code>provider/model</code> name reaches
-                  any keyed provider's model even off the rail, image
-                  <code>stream: true</code> and speech <code>stream_format: sse</code>
-                  answer <code>400</code>, and MCC sets no upload size limit of its own.
+                  would retry a <code>503</code> for nothing. <strong>Since 7.95.0</strong>
+                  a media row's <em>Turn</em> cell in the requests table says what it did
+                  (<em>1 image generated</em>, <em>speech &middot; 4.2s</em>,
+                  <em>transcribed &middot; 31s</em>, <em>video job</em>, or
+                  <em>image request</em> for one that produced nothing); each row is labelled
+                  by its own API (<code>openai_speech</code>, <code>openai_videos</code>,
+                  &hellip;; older rows keep <code>openai_images</code>); a client that hung up
+                  before a whole answer was ready is logged <code>cancelled</code> and still
+                  priced, because the provider billed it; a wrong proxy token answers in
+                  OpenAI's error shape; image <code>stream: true</code> and speech
+                  <code>stream_format: sse</code> are answered as one final event when no
+                  provider on the rail streams; a custom provider's video with no download
+                  link is fetched from <code>videos/{id}/content</code>; and
+                  <code>MEDIA_UPLOAD_MAX_MB</code> (the <em>Media uploads</em> card under the
+                  rails, <code>0</code> = no limit) refuses a larger upload with
+                  <code>413</code> before anything is spent.
                   A curl for every rail and the full list are on the <strong>Docs</strong>
                   page under <em>Media routing</em> (<code>docs/MEDIA.md</code>); every
                   endpoint, with one runnable example each, is in the <em>API
@@ -4488,6 +4499,15 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   A screenshot is the most expensive thing an agent routinely sends, and
                   three separate mechanisms decide what actually leaves this machine.
                   They are all on <strong>Model Config</strong>.
+                </p>
+                <p class="guide-note">
+                  <strong>Codex too, since 7.95.0.</strong> An image attached to a Codex
+                  turn (<code>codex -i shot.png</code>, or a paste) reaches MCC's Responses
+                  door as an <code>input_image</code> and becomes the same image a Chat
+                  Completions client sends, so everything below applies to it. Before, it
+                  was refused with <code>400</code>. Images a Codex <em>tool</em> returns
+                  (<code>view_image</code>) still reach the model as text, and Codex's own
+                  image-generation tool never calls MCC.
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-vision-adapter-mode.png"
                      alt="Model Config: the vision adapter, its mode selector, and the Tool-Returned Images control"

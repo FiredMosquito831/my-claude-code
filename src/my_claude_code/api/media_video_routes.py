@@ -167,6 +167,21 @@ def _declared(provider_id: str, operation: str) -> MediaSurface | None:
     return surface_for(descriptor.media_surfaces, operation)
 
 
+def _content_surfaces(
+    provider_id: str,
+) -> tuple[MediaSurface | None, MediaSurface | None]:
+    """``(declared content path, fallback path)`` for a provider's videos.
+
+    At most one is set. The first is where the host documents the finished
+    file, asked first; the second (7.95.0, a custom provider's ``video``
+    box) is asked only when the retrieve answer carries no URL.
+    """
+    content = _declared(provider_id, MEDIA_OPERATION_VIDEO_CONTENT)
+    if content is not None and content.only_without_url:
+        return None, content
+    return content, None
+
+
 def _base_type(content_type: str) -> str:
     return content_type.split(";")[0].strip().lower() or _DEFAULT_VIDEO_TYPE
 
@@ -294,7 +309,9 @@ def _video_complete(
                 FailureKind.UPSTREAM,
             )
         capture.set_job(record.job_id)
-        await capture.finish("success", outputs=MediaOutputs())
+        # ``cancelled`` if the client already hung up (7.95.0); the job stays
+        # recorded either way, so a later retrieve or download still finds it.
+        await capture.finish_answered(MediaOutputs())
         return answer(_job_row(record), upstream)
 
     return complete
@@ -713,10 +730,17 @@ async def _open_download(
     wire: MediaWire = OPENAI_WIRE,
     pricing: MediaPricing | None = None,
 ) -> MediaDownload | JSONResponse:
-    """Open the job's file on its own key: declared content path, else its URL."""
+    """Open the job's file on its own key: declared content path, else its URL.
+
+    A host whose content path is only a fallback (``only_without_url``) is
+    read like one with none -- a fresh retrieve first, its URL if it names
+    one -- and only a retrieve with no URL asks the fallback path; a 404 or
+    410 there is the same "no address" 409 as before it existed, not
+    "expired": nothing says the file was ever at that path.
+    """
     video_id = str(job["job_id"])
     provider = str(job["provider"])
-    content = _declared(provider, MEDIA_OPERATION_VIDEO_CONTENT)
+    content, fallback = _content_surfaces(provider)
     upstream: UpstreamJob | None = None
     current: Mapping[str, Any] = job
     if content is None or job.get("status") != STATUS_COMPLETED:
@@ -734,12 +758,27 @@ async def _open_download(
             f"Video {video_id} is not ready (status: {status or 'unknown'}).", wire
         )
     url = None if upstream is None else upstream.result_url
+    no_address = (
+        f"Video {video_id} is not ready (status: {status}; {provider} gave "
+        "no address for the file yet)."
+    )
     if content is None and not url:
-        return _conflict(
-            f"Video {video_id} is not ready (status: {status}; {provider} gave "
-            "no address for the file yet).",
-            wire,
-        )
+        if fallback is None:
+            return _conflict(no_address, wire)
+        try:
+            return await client.download(
+                operation=MEDIA_OPERATION_VIDEO_CONTENT,
+                upstream_id=str(job["upstream_id"]),
+                url=None,
+                model=str(job["model"]),
+                request_id=request_id,
+                query=query,
+            )
+        except Exception as exc:
+            failure = find_execution_failure(exc)
+            if failure is not None and failure.status_code in {404, 410}:
+                return _conflict(no_address, wire)
+            return wire.failure(exc)
     try:
         return await client.download(
             operation=None if content is None else MEDIA_OPERATION_VIDEO_CONTENT,
@@ -771,7 +810,8 @@ async def _content(
         return loaded
     store, job = loaded
     provider = str(job["provider"])
-    content = _declared(provider, MEDIA_OPERATION_VIDEO_CONTENT)
+    # A fallback content path (7.95.0) declares no variant: like no path.
+    content, _fallback = _content_surfaces(provider)
     if variant != "video" and (content is None or "variant" not in content.query):
         return wire.error(
             400,

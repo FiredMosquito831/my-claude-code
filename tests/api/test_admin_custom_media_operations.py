@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_SPEECH,
+    MEDIA_OPERATION_VIDEO_CONTENT,
     MEDIA_OPERATION_VIDEO_CREATE,
     MEDIA_OPERATION_VIDEO_RETRIEVE,
 )
@@ -88,10 +89,15 @@ def test_declared_operations_round_trip_into_descriptor_surfaces(monkeypatch, tm
     registry = get_provider_registry()
     assert _stored(registry)["media_operations"] == ["speech", "video"]
     descriptor = registry.all_descriptors()["custom_speaker"]
-    assert [(s.operation, s.path) for s in descriptor.media_surfaces] == [
-        (MEDIA_OPERATION_SPEECH, "audio/speech"),
-        (MEDIA_OPERATION_VIDEO_CREATE, "videos"),
-        (MEDIA_OPERATION_VIDEO_RETRIEVE, "videos/{id}"),
+    # 7.95.0 (user decision 9): the Video box also stands for OpenAI's own
+    # content path, asked only when the status answer carries no file URL.
+    assert [
+        (s.operation, s.path, s.only_without_url) for s in descriptor.media_surfaces
+    ] == [
+        (MEDIA_OPERATION_SPEECH, "audio/speech", False),
+        (MEDIA_OPERATION_VIDEO_CREATE, "videos", False),
+        (MEDIA_OPERATION_VIDEO_RETRIEVE, "videos/{id}", False),
+        (MEDIA_OPERATION_VIDEO_CONTENT, "videos/{id}/content", True),
     ]
     listed = client.get("/admin/api/custom-providers").json()["providers"]
     assert listed[0]["media_operations"] == ["speech", "video"]

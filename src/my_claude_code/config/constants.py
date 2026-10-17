@@ -1067,6 +1067,12 @@ IMAGE_MAX_LONG_EDGE_DEFAULT = 1568
 # only, and it is skipped outright for any image carrying an alpha channel.
 IMAGE_JPEG_QUALITY_DEFAULT = 0
 
+# The largest file a media request may upload, in MB (7.95.0): an image to
+# edit, audio to transcribe, a video's reference frame. 0 -- the default --
+# sets no limit of MCC's own, and the provider's applies, exactly as before
+# the setting existed. A user's ceiling, never an invented one (Part IV §1).
+MEDIA_UPLOAD_MAX_MB_DEFAULT = 0
+
 # What the vision adapter does with a request whose images the route's own
 # model is published as unable to read.
 # `route` sends the whole request to MODEL_VISION and lets that model answer

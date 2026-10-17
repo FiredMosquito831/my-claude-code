@@ -9194,6 +9194,30 @@ function renderModelRouting(fields, allFields) {
     wrap.appendChild(media);
   });
 
+  // 7.95.0: the upload limit every media rail shares, drawn under them.
+  const uploadField = fieldByKey.get("MEDIA_UPLOAD_MAX_MB");
+  if (uploadField) {
+    const uploads = document.createElement("article");
+    uploads.className = "route-card route-media-uploads";
+    uploads.dataset.key = uploadField.key;
+    const head = document.createElement("header");
+    head.className = "route-card-head";
+    const name = document.createElement("h4");
+    name.className = "route-tier";
+    name.textContent = "Media uploads";
+    head.appendChild(name);
+    uploads.appendChild(head);
+    const note = document.createElement("p");
+    note.className = "route-note";
+    note.textContent =
+      "One limit for every media rail: an image to edit, audio to transcribe, a " +
+      "video's reference image. A larger file is refused before any provider is " +
+      "asked, so nothing is spent on it. 0 sets no limit of MCC's own.";
+    uploads.appendChild(note);
+    uploads.appendChild(renderField(uploadField));
+    wrap.appendChild(uploads);
+  }
+
   // Anything the manifest adds to this section later still has to appear.
   const claimed = new Set([
     "MODEL_VISION",
@@ -9203,6 +9227,7 @@ function renderModelRouting(fields, allFields) {
     "VISION_ADAPTER_MODE",
     // Drawn in the media rail cards above.
     ...MEDIA_RAILS.flatMap((spec) => [spec.modelKey, spec.chainKey]),
+    "MEDIA_UPLOAD_MAX_MB",
     ...ROUTE_TIERS.flatMap((tier) => [tier.modelKey, tier.chainKey]),
     // The pause lists are written by the Pause button beside the ref they
     // name, never typed. Leaving them unclaimed would render six bare text
@@ -22828,6 +22853,9 @@ function buildTurnShapeCell(row) {
     chips.push(["tools", row.tool_call_count === 1 ? "1 tool" : `${row.tool_call_count} tools`]);
   }
   if (row.output_chars) chips.push(["response", "reply"]);
+  // 7.95.0: what a media request did, after everything above.
+  const media = mediaTurnChip(row);
+  if (media) chips.push(["media", media]);
   if (chips.length === 0) {
     td.className = "turn-chips-empty";
     td.textContent = "—";
@@ -22842,6 +22870,45 @@ function buildTurnShapeCell(row) {
   });
   td.appendChild(wrap);
   return td;
+}
+
+/**
+ * The turn chip of a media row (7.95.0), from the list's media columns:
+ * "1 image generated", "speech · 4.2s", "transcribed · 31.0s", "video job".
+ * A row that names an operation and produced nothing -- a refusal, an error --
+ * says only what it was ("image request"). `null` on every chat row and on
+ * rows written before 7.60.0, which carry no operation.
+ */
+function mediaTurnChip(row) {
+  const operation = row.media_operation;
+  if (!operation) return null;
+  const seconds = (value) =>
+    value === null || value === undefined || !Number.isFinite(Number(value))
+      ? ""
+      : ` · ${Math.round(Number(value) * 10) / 10}s`;
+  const answered = row.status === "success";
+  if (operation === "image_generate" || operation === "image_edit") {
+    const count = Number(row.output_image_count);
+    if (Number.isFinite(count) && count > 0) {
+      return count === 1 ? "1 image generated" : `${count} images generated`;
+    }
+    return "image request";
+  }
+  if (operation === "speech") {
+    const length = seconds(row.output_audio_seconds);
+    if (length) return `speech${length}`;
+    return answered ? "speech" : "speech request";
+  }
+  if (operation === "transcribe" || operation === "translate") {
+    const word = operation === "translate" ? "translated" : "transcribed";
+    if (answered || row.output_chars) return `${word}${seconds(row.input_audio_seconds)}`;
+    return operation === "translate" ? "translation request" : "transcription request";
+  }
+  if (operation === "video_create") {
+    if (row.media_job_id) return `video job${seconds(row.output_video_seconds)}`;
+    return "video request";
+  }
+  return "media request";
 }
 
 function renderReqPager() {

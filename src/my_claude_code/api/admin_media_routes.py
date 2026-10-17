@@ -135,9 +135,13 @@ def _declared(descriptor: ProviderDescriptor | None) -> list[dict[str, Any]]:
 
 
 def _surface_entry(surface: MediaSurface) -> dict[str, Any]:
+    label = OPERATION_LABELS.get(surface.operation, surface.operation)
+    if surface.only_without_url:
+        # 7.95.0: asked only when the host's status answer has no file URL.
+        label = f"{label} (when no URL)"
     return {
         "operation": surface.operation,
-        "label": OPERATION_LABELS.get(surface.operation, surface.operation),
+        "label": label,
         "path": surface.path,
         "stream": surface.stream,
         "formats": None if surface.formats is None else list(surface.formats),

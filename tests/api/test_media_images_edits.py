@@ -308,3 +308,56 @@ def test_input_thumbnails_are_kept_when_media_storage_is_on(
     finally:
         conn.close()
     assert thumbs == [(64, 32, 1)]
+
+
+# ------------------------------------------------ 7.95.0: MEDIA_UPLOAD_MAX_MB
+
+MB = 1024 * 1024
+
+
+def test_upload_over_limit_is_413_and_never_sent(monkeypatch, tmp_path) -> None:
+    """User decision 11: a file over the limit is refused before any spend."""
+    settings = _settings(monkeypatch, tmp_path, MEDIA_UPLOAD_MAX_MB="1")
+    upstream = Upstream()
+    big = PNG + b"\x00" * (MB + 1 - len(PNG))
+    with _client(settings, upstream) as client:
+        response = client.post(
+            "/v1/images/edits",
+            data={"prompt": "p"},
+            files=[
+                ("image[]", ("small.png", PNG, "image/png")),
+                ("image[]", ("big.png", big, "image/png")),
+            ],
+        )
+    assert response.status_code == 413, response.text
+    error = response.json()["error"]
+    assert error["type"] == "request_too_large"
+    assert "MEDIA_UPLOAD_MAX_MB (1 MB)" in error["message"]
+    assert "'image[]'" in error["message"]
+    assert upstream.seen == []
+    row = _row(tmp_path)
+    assert (row["status"], row["error_kind"]) == ("error", "invalid_request")
+    assert row["provider"] is None
+
+
+@pytest.mark.parametrize(("limit", "size"), [("0", 3 * MB), ("1", MB)])
+def test_limit_zero_accepts_any_size(monkeypatch, tmp_path, limit, size) -> None:
+    """Equality: 0 (the default) sets no limit; a file of exactly the limit passes."""
+    settings = _settings(monkeypatch, tmp_path, MEDIA_UPLOAD_MAX_MB=limit)
+    upstream = Upstream()
+    upload = PNG + b"\x00" * (size - len(PNG))
+    with _client(settings, upstream) as client:
+        response = client.post(
+            "/v1/images/edits",
+            data={"prompt": "p"},
+            files=[("image", ("a.png", upload, "image/png"))],
+        )
+    assert response.status_code == 200, response.text
+    assert len(upstream.seen) == 1
+    assert _row(tmp_path)["status"] == "success"
+
+
+def test_the_default_limit_is_zero(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("MEDIA_UPLOAD_MAX_MB", raising=False)
+    assert Settings.model_validate({}).media_upload_max_mb == 0

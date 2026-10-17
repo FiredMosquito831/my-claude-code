@@ -53,7 +53,20 @@ from .request_ids import (
 )
 from .routes import router
 from .validation_log import summarize_request_validation_body
-from .wire_surfaces import is_gemini_shaped, is_openai_shaped, wire_api_for_path
+from .wire_surfaces import (
+    is_gemini_shaped,
+    is_media_path,
+    is_openai_shaped,
+    wire_api_for_path,
+)
+
+#: An HTTP refusal on a media route, as the OpenAI error ``type`` its client
+#: reads; any other status is ``invalid_request_error``.
+_OPENAI_HTTP_ERROR_TYPES: dict[int, str] = {
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+}
 
 
 def create_app(services: ApiServices) -> FastAPI:
@@ -90,14 +103,30 @@ def create_app(services: ApiServices) -> FastAPI:
         ``{"error": {code, message, status}}`` and reports "unknown error" for
         anything else, so a rejected proxy token would tell a Gemini CLI user
         nothing at all. Only that surface is reshaped.
+
+        7.95.0: so are the OpenAI-door media routes (images, audio, videos),
+        whose clients are OpenAI SDKs reading ``{"error": {message, type}}``
+        -- a bad token there used to read ``{"detail": ...}``. The chat doors
+        (``/v1/chat/completions``, ``/v1/responses``, ``/v1/messages``) keep
+        the ``{"detail": ...}`` body unchanged.
         """
 
-        if not is_gemini_shaped(wire_api_for_path(request.url.path)):
-            return await starlette_http_exception_handler(request, exc)
+        path = request.url.path
         detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        if is_gemini_shaped(wire_api_for_path(path)):
+            content = gemini_error_payload(message=detail, code=exc.status_code)
+        elif is_media_path(path):
+            content = openai_error_payload(
+                message=detail,
+                error_type=_OPENAI_HTTP_ERROR_TYPES.get(
+                    exc.status_code, "invalid_request_error"
+                ),
+            )
+        else:
+            return await starlette_http_exception_handler(request, exc)
         response = JSONResponse(
             status_code=exc.status_code,
-            content=gemini_error_payload(message=detail, code=exc.status_code),
+            content=content,
             headers=getattr(exc, "headers", None),
         )
         attach_request_id_headers(

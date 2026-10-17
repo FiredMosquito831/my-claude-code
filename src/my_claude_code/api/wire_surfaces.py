@@ -90,3 +90,29 @@ def is_openai_shaped(wire_api: WireApi) -> bool:
 def is_gemini_shaped(wire_api: WireApi) -> bool:
     """Whether this surface reports failure in the Google error envelope."""
     return wire_api in _GEMINI_SHAPED
+
+
+#: The OpenAI-door media paths (7.60.0-7.64.0): what an images, audio or
+#: videos client of the OpenAI SDK sends to.
+_MEDIA_PATHS: frozenset[str] = frozenset(
+    {
+        IMAGES_GENERATIONS_ENDPOINT,
+        IMAGES_EDITS_ENDPOINT,
+        AUDIO_SPEECH_ENDPOINT,
+        AUDIO_TRANSCRIPTIONS_ENDPOINT,
+        AUDIO_TRANSLATIONS_ENDPOINT,
+        VIDEOS_ENDPOINT,
+    }
+)
+
+
+def is_media_path(path: str) -> bool:
+    """Whether ``path`` is one of the OpenAI-door media routes (7.95.0).
+
+    The six media endpoints and a video job's own paths
+    (``/v1/videos/{id}``, ``.../content``). Asked by the app's HTTP-refusal
+    handler, which answers these -- and only these, of the OpenAI-shaped
+    paths -- in OpenAI's error envelope: a chat door keeps the
+    ``{"detail": ...}`` body its clients and tests have always read.
+    """
+    return path in _MEDIA_PATHS or path.startswith(VIDEOS_ENDPOINT + "/")

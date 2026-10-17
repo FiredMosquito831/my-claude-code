@@ -657,6 +657,16 @@ _LIST_METADATA_COLUMNS = (
     "parent_session_id",
     "project_dir",
     "origin_source",
+    # What a media request did (7.95.0): the operation and what came back, so
+    # a list row can say "1 image generated" or "speech · 4.2s" without being
+    # opened. Counts and lengths, never bytes; NULL on every chat row and on
+    # every row written before 7.60.0.
+    "media_operation",
+    "output_image_count",
+    "output_audio_seconds",
+    "input_audio_seconds",
+    "output_video_seconds",
+    "media_job_id",
 )
 
 #: Everything :func:`classify_cancelled` reads off a request row.
@@ -13333,14 +13343,48 @@ class RequestLogStore:
             "sha NOT IN (SELECT sha FROM request_images WHERE sha IS NOT NULL)"
         )
         if "image_blobs" in owed:
-            conn.execute(f"DELETE FROM image_blobs WHERE sha IS NULL OR {still_named}")
+            # 7.95.0: a description stored within the grace is a picture whose
+            # request may still be in flight -- written before its row, exactly
+            # the case ``_MEDIA_JOB_ORPHAN_GRACE_SECONDS`` gives a video job.
+            # Kept, and the whole sweep owed again so it goes once the grace
+            # has passed if no link ever arrives.
+            fresh = time.time() - _MEDIA_JOB_ORPHAN_GRACE_SECONDS
+            conn.execute(
+                "DELETE FROM image_blobs WHERE (sha IS NULL OR"
+                f" {still_named}) AND (described_at IS NULL OR described_at <= ?)",
+                (fresh,),
+            )
+            if conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM image_blobs WHERE described_at > ?"
+                f" AND (sha IS NULL OR {still_named}))",
+                (fresh,),
+            ).fetchone()[0]:
+                self._owe_full_sweeps("image_blobs")
         else:
+            # The same exemption, so the two sweeps still find the same rows:
+            # a picture an old, pruned request carried may be described right
+            # now for a new one whose row is not written yet.
+            fresh = time.time() - _MEDIA_JOB_ORPHAN_GRACE_SECONDS
+            kept = False
             for chunk in blob_chunks(image_shas):
                 conn.execute(
                     "DELETE FROM image_blobs WHERE sha IN"
-                    f" ({', '.join('?' * len(chunk))}) AND {still_named}",
-                    chunk,
+                    f" ({', '.join('?' * len(chunk))}) AND {still_named}"
+                    " AND (described_at IS NULL OR described_at <= ?)",
+                    [*chunk, fresh],
                 )
+                # A primary-key lookup, not a scan of the links: a fresh row
+                # still named by a link is owed a sweep it will survive, which
+                # costs one whole sweep and deletes nothing it should not.
+                kept = kept or bool(
+                    conn.execute(
+                        "SELECT EXISTS (SELECT 1 FROM image_blobs WHERE sha IN"
+                        f" ({', '.join('?' * len(chunk))}) AND described_at > ?)",
+                        [*chunk, fresh],
+                    ).fetchone()[0]
+                )
+            if kept:
+                self._owe_full_sweeps("image_blobs")
         # Generated media follow the same rule, and a stored file goes with
         # its last row. The files are deleted here, on the writer thread,
         # never on the event loop.

@@ -24,6 +24,7 @@ import pytest
 
 from my_claude_code.application.execution import ProviderExecutor, RouteAttemptRecord
 from my_claude_code.application.media.rails import (
+    MediaModelNotOnRail,
     MediaRouter,
     configured_media_model_refs,
     rail_refs,
@@ -521,12 +522,19 @@ def test_a_media_rail_tries_a_model_at_every_place_it_is_listed(settings) -> Non
 
 
 def test_a_media_ref_named_directly_is_still_one_attempt(settings) -> None:
+    """A pinned ref is one attempt, however often its rail lists it.
+
+    Since 7.95.0 (binding decision 5 of 2026-10-04) the pinned ref must be
+    one of the rail's own models; a ref off the rail is refused outright.
+    """
     settings.model_image = IMG_A
     settings.model_image_fallbacks = f"{IMG_A},{IMG_A}"
 
-    plan = MediaRouter(settings).plan(_media_request(IMG_B))
+    plan = MediaRouter(settings).plan(_media_request(IMG_A))
 
-    assert plan.model_refs() == (IMG_B,)
+    assert plan.model_refs() == (IMG_A,)
+    with pytest.raises(MediaModelNotOnRail):
+        MediaRouter(settings).plan(_media_request(IMG_B))
 
 
 def test_a_media_rail_without_a_repeat_resolves_exactly_as_before(settings) -> None:

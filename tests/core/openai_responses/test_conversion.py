@@ -2,6 +2,10 @@ from typing import Any
 
 import pytest
 
+from my_claude_code.core.openai_chat_completions import (
+    OpenAIChatCompletionRequest,
+    OpenAIChatCompletionsAdapter,
+)
 from my_claude_code.core.openai_responses import (
     OpenAIResponsesAdapter,
     OpenAIResponsesRequest,
@@ -685,3 +689,146 @@ def test_non_string_function_call_output_is_normalised():
     assert isinstance(content, str)
     assert content.startswith("first")
     assert "input_image" in content
+
+
+# ------------------------------------------------- 7.95.0: images attached in Codex
+
+_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+
+def _codex_turn(*parts: dict[str, Any]) -> dict[str, Any]:
+    """A user message as Codex sends one with an attached image (``-i``)."""
+    return {
+        "model": "gpt-5.5",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "<image name=[Image #1]>"},
+                    *parts,
+                    {"type": "input_text", "text": "</image>"},
+                    {"type": "input_text", "text": "what is in this picture?"},
+                ],
+            }
+        ],
+    }
+
+
+def test_user_input_image_becomes_an_image_block() -> None:
+    """R1 (user decision 15): a data URL image is the Chat door's base64 block."""
+    payload = _to_anthropic_payload(
+        _codex_turn(
+            {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{_PNG_B64}",
+                "detail": "auto",
+            }
+        )
+    )
+
+    (message,) = payload["messages"]
+    assert message["role"] == "user"
+    assert message["content"] == [
+        {"type": "text", "text": "<image name=[Image #1]>"},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": _PNG_B64},
+        },
+        {"type": "text", "text": "</image>"},
+        {"type": "text", "text": "what is in this picture?"},
+    ]
+
+
+def test_user_input_image_url_source() -> None:
+    payload = _to_anthropic_payload(
+        _codex_turn(
+            {"type": "input_image", "image_url": "https://example.test/cat.png"}
+        )
+    )
+
+    blocks = payload["messages"][0]["content"]
+    assert blocks[1] == {
+        "type": "image",
+        "source": {"type": "url", "url": "https://example.test/cat.png"},
+    }
+
+
+def test_the_block_is_byte_for_byte_the_chat_doors() -> None:
+    """Equality: the same picture through both OpenAI doors, the same block."""
+    for url in (f"data:image/jpeg;base64,{_PNG_B64}", "https://example.test/a.png"):
+        responses = _to_anthropic_payload(
+            {
+                "model": "m",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_image", "image_url": url}],
+                    }
+                ],
+            }
+        )
+        chat = OpenAIChatCompletionsAdapter().to_anthropic_payload(
+            OpenAIChatCompletionRequest.model_validate(
+                {
+                    "model": "m",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": url}}
+                            ],
+                        }
+                    ],
+                }
+            )
+        )
+        assert responses["messages"][0]["content"] == chat["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    ("part", "said"),
+    [
+        (
+            {"type": "input_image", "file_id": "file-abc123"},
+            "input_image file_id 'file-abc123' is not supported",
+        ),
+        ({"type": "input_image"}, "input_image needs image_url"),
+        (
+            {"type": "input_image", "image_url": "file:///C:/cat.png"},
+            "must be a base64 data URL or an http(s) URL",
+        ),
+        (
+            {"type": "input_image", "image_url": "data:image/png;base64,!!!"},
+            "not valid base64",
+        ),
+    ],
+)
+def test_input_image_file_id_is_a_clear_400(part: dict[str, Any], said: str) -> None:
+    with pytest.raises(_CONVERSION_ERROR) as raised:
+        _to_anthropic_payload(_codex_turn(part))
+    assert said in str(raised.value)
+
+
+@pytest.mark.parametrize("role", ["assistant", "system", "developer"])
+def test_an_image_outside_a_user_turn_is_still_refused(role: str) -> None:
+    """Only a user turn can carry a picture; the old error is unchanged."""
+    with pytest.raises(_CONVERSION_ERROR) as raised:
+        _to_anthropic_payload(
+            {
+                "model": "m",
+                "input": [
+                    {"role": "user", "content": "hi"},
+                    {
+                        "role": role,
+                        "content": [
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:image/png;base64,{_PNG_B64}",
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+    assert str(raised.value) == "Unsupported Responses content part type: 'input_image'"

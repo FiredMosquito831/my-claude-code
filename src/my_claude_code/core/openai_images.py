@@ -115,6 +115,50 @@ def inline_image_urls(body: bytes, fetched: Mapping[int, bytes]) -> bytes:
     return json.dumps(payload).encode()
 
 
+#: Top-level fields of a whole answer carried onto its completed events.
+_ANSWER_FIELDS = ("size", "quality", "background", "output_format")
+
+
+def images_answer_events(body: bytes, *, edit: bool = False) -> bytes | None:
+    """A whole images answer as the SSE a streaming client reads (7.95.0).
+
+    One ``image_generation.completed`` (``image_edit.completed`` for an edit)
+    event per picture, carrying the picture's own fields as the host sent
+    them (``b64_json``, or ``url`` from a host that answers with a link), the
+    answer's ``created`` as ``created_at`` and its size / quality /
+    background / output format; the answer's ``usage`` rides on the last
+    event. No partial images: there were none. ``None`` when the body holds
+    no picture to send.
+    """
+
+    try:
+        payload = json.loads(body)
+    except ValueError, UnicodeDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    items = payload.get("data")
+    if not isinstance(items, list) or not items:
+        return None
+    kind = "image_edit.completed" if edit else "image_generation.completed"
+    usage = payload.get("usage")
+    frames: list[bytes] = []
+    for position, item in enumerate(items):
+        if not isinstance(item, dict):
+            return None
+        event: dict[str, Any] = {"type": kind}
+        event.update((str(key), value) for key, value in item.items() if key != "type")
+        if isinstance(payload.get("created"), int):
+            event["created_at"] = payload["created"]
+        for field in _ANSWER_FIELDS:
+            if field in payload:
+                event[field] = payload[field]
+        if isinstance(usage, dict) and position == len(items) - 1:
+            event["usage"] = usage
+        frames.append(f"event: {kind}\ndata: {json.dumps(event)}\n\n".encode())
+    return b"".join(frames)
+
+
 def parse_images_stream(frames: bytes) -> MediaOutputs:
     """Measure a streamed answer from its ``*.completed`` events.
 

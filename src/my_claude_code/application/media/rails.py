@@ -46,6 +46,18 @@ class MediaRailNotConfigured(ApplicationError):
     status_code = 404
 
 
+class MediaModelNotOnRail(ApplicationError):
+    """A pinned ``provider/model`` that is not on this request's rail (7.95.0).
+
+    Binding decision 5 of 2026-10-04: an app may name only the rail's own
+    models, so spend stays where the operator configured it. Refused before
+    anything is sent, so no provider is asked and nothing is charged.
+    """
+
+    kind = FailureKind.INVALID_REQUEST
+    status_code = 400
+
+
 def _setting(settings: Settings, attr: str) -> str:
     value = getattr(settings, attr, None)
     return value if isinstance(value, str) else ""
@@ -114,16 +126,27 @@ class MediaRouter:
         names = RAIL_SETTINGS[request.rail]
         requested = request.model.strip()
         refs: tuple[str, ...]
+        on_rail = rail_refs(self._settings, request.rail)
         if (
             requested
             and "/" in requested
             and _known_provider(parse_provider_type(requested))
         ):
             # A ``provider/model`` ref pins one candidate, the same rule the
-            # chat router applies to a direct ref.
-            refs = (requested,)
+            # chat router applies to a direct ref -- but only one of this
+            # rail's own models (7.95.0, binding decision 5 of 2026-10-04).
+            # An empty rail keeps its documented 404 below.
+            if on_rail and requested not in on_rail:
+                listed = ", ".join(dict.fromkeys(on_rail))
+                raise MediaModelNotOnRail(
+                    f"'{requested}' is not on the {names.label} rail. Models on "
+                    f"it: {listed}. Name one of them, or no provider/model at "
+                    f"all to use the rail's chain; set the rail's models on "
+                    f"Model Config ({names.model_env}, {names.fallbacks_env})."
+                )
+            refs = (requested,) if on_rail else ()
         else:
-            refs = rail_refs(self._settings, request.rail)
+            refs = on_rail
         attempts: list[MediaAttempt] = []
         for ref in refs:
             provider_id = parse_provider_type(ref)

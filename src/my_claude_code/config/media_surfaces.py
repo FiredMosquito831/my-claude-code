@@ -159,6 +159,12 @@ class MediaSurface:
     #: list is not forwarded (and is logged as such). ``None``: the host
     #: judges the name.
     voices: tuple[str, ...] | None = None
+    #: 7.95.0: a ``video_content`` path asked only when the host's retrieve
+    #: answer names no URL for the finished file -- a custom provider's
+    #: ``video`` box, whose host may serve OpenAI's ``videos/{id}/content``
+    #: and never says so. ``False`` (every built-in): the path is the declared
+    #: home of the file and is asked first.
+    only_without_url: bool = False
 
 
 def image_generation_surface(
@@ -193,14 +199,23 @@ def image_edit_surface(
 
 
 def speech_surface(
-    path: str = "audio/speech", *, formats: tuple[str, ...] | None = None
+    path: str = "audio/speech",
+    *,
+    formats: tuple[str, ...] | None = None,
+    stream: bool = False,
 ) -> MediaSurface:
-    """The OpenAI ``POST /audio/speech`` shape: the answer is the audio itself."""
+    """The OpenAI ``POST /audio/speech`` shape: the answer is the audio itself.
+
+    ``stream`` (7.95.0) is whether the host documents ``stream_format:
+    "sse"``; no declaration sets it yet, and a streamed request on a rail
+    where nothing declares it is answered from a whole answer instead.
+    """
 
     return MediaSurface(
         operation=MEDIA_OPERATION_SPEECH,
         shape=MEDIA_SHAPE_OPENAI_SPEECH,
         path=path,
+        stream=stream,
         formats=formats,
     )
 
@@ -267,12 +282,17 @@ def video_surfaces(
     encoding: str | None = None,
     renames: tuple[tuple[str, str], ...] = (),
     content_query: tuple[str, ...] = (),
+    content_fallback: str | None = None,
 ) -> tuple[MediaSurface, ...]:
     """The OpenAI ``/videos`` job shape: create, then calls on the job.
 
     ``{id}`` in a path is the upstream job id (``job_path``). A host with no
     ``content`` path serves the finished video at a URL in its retrieve
     answer; a host with no ``delete`` path documents no delete.
+
+    ``content_fallback`` (7.95.0) is a content path asked only when the
+    retrieve answer carries no URL (``MediaSurface.only_without_url``); it is
+    ignored when ``content`` is declared.
     """
 
     surfaces = [
@@ -298,6 +318,15 @@ def video_surfaces(
                 query=content_query,
             )
         )
+    elif content_fallback is not None:
+        surfaces.append(
+            MediaSurface(
+                operation=MEDIA_OPERATION_VIDEO_CONTENT,
+                shape=MEDIA_SHAPE_OPENAI_VIDEOS,
+                path=content_fallback,
+                only_without_url=True,
+            )
+        )
     if delete is not None:
         surfaces.append(
             MediaSurface(
@@ -313,9 +342,14 @@ def video_surfaces(
 #: serves, in the card's order. Each is OpenAI's own endpoint at its default
 #: path, joined onto the provider's base URL; ``video`` is the job shape of
 #: ``video_surfaces()`` (create + retrieve; the finished file is read from the
-#: URL the host's retrieve answer carries). Declared by the operator, like the
-#: chat ``surfaces`` beside it -- only they know what their gateway fronts.
+#: URL the host's retrieve answer carries -- and, since 7.95.0, from OpenAI's
+#: own ``videos/{id}/content`` when that answer carries none). Declared by the
+#: operator, like the chat ``surfaces`` beside it -- only they know what their
+#: gateway fronts.
 CUSTOM_MEDIA_VIDEO = "video"
+#: Where OpenAI's ``/videos`` API serves a finished file: what a custom
+#: provider's ``video`` box is asked for when its retrieve answer has no URL.
+CUSTOM_VIDEO_CONTENT_FALLBACK = "videos/{id}/content"
 CUSTOM_MEDIA_OPERATIONS: tuple[str, ...] = (
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_EDIT,
@@ -350,7 +384,9 @@ def custom_media_surfaces(operations: tuple[str, ...]) -> tuple[MediaSurface, ..
         elif operation == MEDIA_OPERATION_TRANSLATE:
             surfaces.append(translation_surface())
         else:
-            surfaces.extend(video_surfaces())
+            surfaces.extend(
+                video_surfaces(content_fallback=CUSTOM_VIDEO_CONTENT_FALLBACK)
+            )
     return tuple(surfaces)
 
 

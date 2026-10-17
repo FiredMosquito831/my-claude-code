@@ -363,3 +363,29 @@ def test_mistral_declares_streaming_transcription() -> None:
     assert (
         transcription_surface(stream=True) in PROVIDER_CATALOG["mistral"].media_surfaces
     )
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/v1/audio/translations"])
+def test_row_protocol_is_openai_transcriptions(monkeypatch, tmp_path, path) -> None:
+    """P3 (7.95.0): both ASR doors are labelled by their own API."""
+    settings = _settings(monkeypatch, tmp_path)
+    with _client(settings, Upstream()) as client:
+        response = client.post(path, files=[("file", ("clip.wav", WAV, "audio/wav"))])
+        assert response.status_code == 200, response.text
+    assert _row(tmp_path)["protocol"] == "openai_transcriptions"
+
+
+def test_a_stream_on_a_rail_that_cannot_stream_is_still_refused(
+    monkeypatch, tmp_path
+) -> None:
+    """Equality: decision 12 covers images and speech only; ASR keeps its 400."""
+    settings = _settings(monkeypatch, tmp_path)
+    upstream = Upstream()
+    with _client(settings, upstream) as client:
+        response = client.post(
+            "/v1/audio/transcriptions",
+            data={"stream": "true"},
+            files=[("file", ("clip.wav", WAV, "audio/wav"))],
+        )
+    assert response.status_code == 400
+    assert upstream.seen == []

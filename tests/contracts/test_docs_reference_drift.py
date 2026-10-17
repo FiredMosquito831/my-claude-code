@@ -617,6 +617,11 @@ _MUST_BE_DOCUMENTED: tuple[tuple[str, str], ...] = (
         "who expects a preview has to be able to find the switch",
     ),
     (
+        "MEDIA_UPLOAD_MAX_MB",
+        "the media upload limit (7.95.0, user decision 11); a client refused "
+        "with 413 is told the setting's name, so the docs must say what it is",
+    ),
+    (
         "PROXY_CONNECT_TIMEOUT_SECONDS",
         "the one setting the VPN, WARP and Tor tutorial tells a Tor user to "
         "raise (decision 11 of 2026-10-06: document only)",

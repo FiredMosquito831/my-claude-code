@@ -7,9 +7,11 @@ came back -- SHA-256, size, type, and the length when the container states it
 "not measured"). Synchronous: called through ``asyncio.to_thread``.
 """
 
+import base64
 import io
 import json
 import wave
+from collections.abc import Mapping
 from typing import Any
 
 from my_claude_code.core.media_outputs import GeneratedMedia, MediaOutputs
@@ -52,6 +54,27 @@ def parse_speech_response(body: bytes, content_type: str | None) -> MediaOutputs
         count=1,
         items=(GeneratedMedia(sha256=sha256_hex(body), mime=mime, data=body),),
         audio_seconds=seconds,
+    )
+
+
+def speech_answer_events(body: bytes, usage: Mapping[str, Any] | None) -> bytes:
+    """A whole speech answer as ``stream_format: "sse"`` events (7.95.0).
+
+    One ``speech.audio.delta`` carrying the whole audio, base64-encoded and
+    exactly as the host sent it (never transcoded), then ``speech.audio.done``
+    -- with the host's token ``usage`` when its answer reported one.
+    """
+
+    delta = {
+        "type": "speech.audio.delta",
+        "audio": base64.b64encode(body).decode("ascii"),
+    }
+    done: dict[str, Any] = {"type": "speech.audio.done"}
+    if usage:
+        done["usage"] = {str(key): value for key, value in usage.items()}
+    return b"".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+        for event in (delta, done)
     )
 
 

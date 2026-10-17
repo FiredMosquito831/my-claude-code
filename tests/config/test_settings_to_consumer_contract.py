@@ -7,6 +7,7 @@ server, and nothing changes. One test per hop, from `Settings` to the object
 that reads the value.
 """
 
+import io
 from typing import Any
 from unittest.mock import patch
 
@@ -14,10 +15,14 @@ import pytest
 from fastapi import Response
 from fastapi.testclient import TestClient
 
-from my_claude_code.api import gemini_media_routes
+from my_claude_code.api import gemini_media_routes, media_routes
 from my_claude_code.api.media_capture import MediaCapture
 from my_claude_code.application.execution import route_execution_policy
-from my_claude_code.application.media.request import MediaRail, MediaRequest
+from my_claude_code.application.media.request import (
+    MediaRail,
+    MediaRequest,
+    MediaUpload,
+)
 from my_claude_code.cli.harnesses.catalogue_client import fetch_catalogue_models
 from my_claude_code.config.limits import range_for
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
@@ -27,7 +32,7 @@ from my_claude_code.config.settings import (
     parse_lockout_tiers,
 )
 from my_claude_code.core.credential_rotation import PROVIDER_TUNING
-from my_claude_code.core.failures import FailureKind
+from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.media_outputs import MediaOutputs
 from my_claude_code.core.rate_limit import (
     MAX_HOST_STATED_COOLDOWN_SECONDS,
@@ -1010,6 +1015,30 @@ async def test_the_media_store_cap_reaches_the_row_the_writer_trims_by(
     await capture.finish("success", outputs=MediaOutputs())
     (record,) = written
     assert record.media_store_max_bytes == held
+
+
+@pytest.mark.parametrize(("value", "refused"), [("0", False), ("1", True)])
+def test_the_upload_limit_reaches_the_media_upload_check(
+    value: str, refused: bool
+) -> None:
+    """7.95.0's MEDIA_UPLOAD_MAX_MB: read per request by every media door."""
+
+    settings = Settings.model_validate({"MEDIA_UPLOAD_MAX_MB": value})
+    upload = MediaUpload(
+        field="file",
+        filename="clip.wav",
+        content_type="audio/wav",
+        size=2 * 1024 * 1024,
+        sha256="0" * 64,
+        file=io.BytesIO(),
+    )
+    if not refused:
+        media_routes._check_upload_sizes(settings, (upload,))
+        return
+    with pytest.raises(ExecutionFailure) as raised:
+        media_routes._check_upload_sizes(settings, (upload,))
+    assert raised.value.status_code == 413
+    assert "MEDIA_UPLOAD_MAX_MB (1 MB)" in raised.value.message
 
 
 @pytest.mark.parametrize(("value", "inline"), [(None, False), ("true", True)])
