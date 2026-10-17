@@ -770,15 +770,26 @@ def test_the_mark_keeps_chunks_only_the_log_still_names(
     with closing(sqlite3.connect(index)) as conn, conn:
         for table in ("blobs", "units", "links"):
             conn.execute(f"DELETE FROM {table}")
-    with closing(sqlite3.connect(index)) as conn:
-        chunks_before = int(conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+
+    def chunk_count() -> int:
+        with closing(sqlite3.connect(index)) as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+
+    chunks_before = chunk_count()
     monkeypatch.setattr(rl, "_CHUNK_SWEEP_INTERVAL_SECONDS", 0.0)
     store = RequestLogStore(path, max_rows=0)
 
     def swept() -> bool:
+        # Judged by what the sweep did, then by its state: ``is_alive()`` is
+        # False until a started thread has signalled that it runs, so "the
+        # mark thread is set and not alive" alone held before the mark had
+        # run at all (the Windows suite on v7.93.0, under load).
         marker = store._chunk_marker
         return (
-            marker is not None and not marker.is_alive() and store._chunk_mark is None
+            chunk_count() < chunks_before
+            and marker is not None
+            and not marker.is_alive()
+            and store._chunk_mark is None
         )
 
     try:
@@ -786,8 +797,7 @@ def test_the_mark_keeps_chunks_only_the_log_still_names(
         _wait(swept)
     finally:
         store.close()
-    with closing(sqlite3.connect(index)) as conn:
-        chunks_after = int(conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+    chunks_after = chunk_count()
     # The sweep ran: the replies' chunks, which nothing names now, are gone ...
     assert chunks_after < chunks_before
     # ... and every chunk a prompt's chunk list names is still there.
