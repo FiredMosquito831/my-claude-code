@@ -30,6 +30,9 @@ from my_claude_code.core.request_log import (
 
 _TS = 1_790_000_000.0
 _KEY = request_log_module._HISTORY_CONVERSION_KEY
+# These tests read stored bodies as zstd frames; the prompt chunk part
+# (7.93.0) has its own module, test_request_log_prompt_chunks.py.
+pytestmark = pytest.mark.usefixtures("no_prompt_chunk_store")
 #: Taken at import, before any fixture replaces it on the class.
 _ORIGINAL_RUN = RequestLogStore._run_history_conversion
 

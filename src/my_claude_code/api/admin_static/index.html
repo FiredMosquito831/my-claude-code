@@ -1320,6 +1320,9 @@
               <div class="chart-heading">
                 <h4>All time</h4>
                 <span id="reqLifetimeSpan" class="requests-indicator"></span>
+                <!-- 7.93.0: the background conversion of older history (prompts
+                     stored as chunks, freed space handed back) can be paused. -->
+                <button id="reqHistoryPause" class="requests-search-action" type="button" hidden>Pause</button>
               </div>
               <p class="requests-retention">
                 Counted once per request and never pruned, so these keep rising
@@ -4714,7 +4717,8 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   the log the index covers (<em>Search index covers 412,000 of 598,683
                   rows</em>). Rows it does not cover are searched the old way in the same
                   search, so the results are always exactly what they were before; only
-                  the time changes. Deleting the file only resets the index, and
+                  the time changes. Since 7.93.0 the file also holds the prompts the
+                  log stores as chunks, so keep it with the log and do not delete it;
                   <strong>Clear log</strong> clears it with the log. If this Python's
                   SQLite cannot keep the index, the line says so and searches read every
                   stored request, as before.
@@ -4910,6 +4914,20 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Analytics figure read exactly as before. An older version leaves the
                   skipped attempts of converted requests out of its route trace until
                   you update again; nothing is deleted.
+                </p>
+                <p>
+                  Since 7.93.0 each prompt is stored once per repeated part. Turn N+1 of
+                  a conversation repeats turn N, so the log keeps a prompt as the list
+                  of the search index's chunks it is made of, each chunk stored once in
+                  the index file beside the log. Older prompts are converted by the
+                  same background conversion and new ones shortly after they are
+                  written, each read back byte for byte before its stored form is
+                  replaced; the file shrinks in steps as freed space is handed back.
+                  <strong>Pause</strong> beside the log's size stops it until you press
+                  <strong>Continue</strong>. Everything on these pages reads and
+                  searches exactly as before. An older version shows converted prompts
+                  as empty until you update again; nothing is deleted. The search index
+                  file now holds prompt text: keep it with the log.
                 </p>
                 <h4>No traffic, or no server?</h4>
                 <p>

@@ -26,6 +26,9 @@ from my_claude_code.core.request_log import RequestLogStore, RequestRecord
 
 _TS = 1_790_000_000.0
 _KEY = request_log_module._HISTORY_CONVERSION_KEY
+# The prompt chunk part (7.93.0) has its own module,
+# test_request_log_prompt_chunks.py.
+pytestmark = pytest.mark.usefixtures("no_prompt_chunk_store")
 _REFS = ("headers_ref", "route_chain_ref", "params_ref")
 _UA_CLAUDE = "claude-cli/2.1.258 (external, cli)"
 
@@ -626,8 +629,9 @@ def test_a_finished_7740_document_is_reopened_for_the_parts_it_lacks(
     state = _wait_done(path)
     store.close()
 
-    # 7.75.0's part and every later one (7.76.0: skipped attempts).
-    assert state["reopened_for"] == ["metadata", "skipped"]
+    # 7.75.0's part and every later one (7.76.0: skipped attempts; 7.93.0:
+    # prompt chunks).
+    assert state["reopened_for"] == ["metadata", "skipped", "chunks"]
     assert state["returned_at_reopen"] == 5
     assert state["reopened_at"] > earlier["done_at"]
     assert state["done_at"] >= state["reopened_at"]
@@ -659,6 +663,7 @@ def test_a_fresh_conversion_runs_every_part_in_order(
         "bodies",
         "metadata",
         "skipped",
+        "chunks",
     ]
     done = [state[name]["done_at"] for name in request_log_module._HISTORY_PHASES]
     assert all(at is not None for at in done)

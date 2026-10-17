@@ -12,6 +12,7 @@ import sqlite3
 import struct
 import threading
 import time
+import zlib
 from collections import Counter, OrderedDict
 from collections.abc import (
     Callable,
@@ -64,9 +65,13 @@ from my_claude_code.core.request_origin import (
 from my_claude_code.core.request_search import (
     SEARCH_SCHEMA,
     BlobUnits,
+    ChunkReader,
     SearchIndex,
     TermTables,
+    chunk_marks,
+    mark_chunk,
     plan_terms,
+    search_index_path,
     search_index_support,
 )
 from my_claude_code.core.success_reasons import (
@@ -1457,7 +1462,53 @@ _DATA_MARK_IGNORED_KEYS = frozenset({_HISTORY_CONVERSION_KEY})
 # ``_HISTORY_CONVERSION_KEY`` document. A part added by a later release is
 # missing from a document an earlier one finished; the document is then opened
 # again for that part alone (``_reopen_history_state``).
-_HISTORY_PHASES = ("wire", "bodies", "metadata", "skipped")
+_HISTORY_PHASES = ("wire", "bodies", "metadata", "skipped", "chunks")
+# Pause / Continue of the conversion (7.93.0), set from the Request log
+# storage line. Its own key, so a pause survives a restart and an older
+# version, which never reads it, is not stopped by it.
+_HISTORY_PAUSED_KEY = "history_conversion_paused_v1"
+
+# The prompt chunk store (7.93.0). A prompt is 98 % of a request's bytes, and
+# turn N+1 of a conversation repeats turn N: on a real log 97.8 % of each
+# prompt's bytes are the previous prompt of its session. The search index
+# (7.92.0, ``core/request_search.py``) already cuts every prompt into chunks
+# that end on a newline and keeps each distinct chunk once, compressed, in its
+# own file beside the log. A prompt blob the index holds is stored in the log
+# as the list of those chunk ids instead of its compressed bytes:
+#
+# - ``body_blobs.dict_id`` is ``_CHUNKED_DICT_ID``, which names no dictionary;
+# - ``body_blobs.payload`` is the envelope: byte 0 ``_CHUNK_ENVELOPE_V1``, the
+#   number of chunks and each chunk id as unsigned LEB128 varints, then
+#   ``_CHUNK_CHECK_BYTES`` check bytes: CRC-32 and length of the prompt's text.
+#
+# Reading it puts the chunks back together, checked against those bytes:
+# the prompt's text, which is all a reader of a prompt blob ever takes from it
+# (``{"i": text}``); packed as the writer packs it (``pack_fields``) it is
+# the stored bytes themselves. Before a row is converted both are proven: the
+# packed bytes equal the stored ones and hash to the content address
+# (``body_blobs.sha``), and the text reads as the stored bytes did. ``sha``
+# and every ``request_bodies`` row naming it stay as they are. An older version takes
+# -1 for a dictionary it does not have, fails to decompress the envelope
+# (0xC1 starts no zstd frame), and shows the prompt as empty: nothing is
+# deleted, and the prompt comes back with an update.
+_CHUNKED_DICT_ID = -1
+_CHUNK_ENVELOPE_V1 = 0xC1
+_CHUNK_CHECK_BYTES = 8
+# Blobs one conversion step (one commit) converts at most; the step also ends
+# on ``_HISTORY_STEP_SECONDS``. The investigation's batch size (spec §11.6).
+_CHUNKS_STEP_BLOBS = 200
+# Share of the step's time budget spent reading and decoding candidates; the
+# rest goes to proving and writing what was read.
+_CHUNKS_READ_SHARE = 0.6
+# Unreferenced chunks are deleted by a mark over every manifest and a sweep
+# (``_run_chunk_sweep``), at most this often, and only after a prune removed
+# bodies -- plus once per process.
+_CHUNK_SWEEP_INTERVAL_SECONDS = 6 * 3600.0
+# Chunk texts a scan connection keeps for its own pass before starting its
+# cache over (about 30 MB at the measured 1.4 KB a chunk).
+_SCAN_CHUNKS_MAX = 20_000
+# A prompt that cannot be put back together is reported at most this often.
+_CHUNK_WARN_SECONDS = 300.0
 
 # Request metadata stored once (7.75.0). ``headers``, ``route_chain`` and
 # ``params`` repeat a few hundred distinct values across hundreds of thousands
@@ -3280,6 +3331,30 @@ class RequestLogStore:
         self._search_active = 0
         # New bodies indexed as they were written: blobs, seconds.
         self._search_written = [0, 0.0]
+        # The prompt chunk store (7.93.0; see ``_CHUNKED_DICT_ID``). Every
+        # thread reads chunked prompts through this, whether or not this
+        # Python could keep the search index itself: reading chunks back needs
+        # no trigram tokenizer.
+        self._chunk_reader = ChunkReader(search_index_path(self._db_path))
+        self._chunk_warned_at = 0.0
+        # A scan connection's own chunk cache, handed to ``_bodies_match`` on
+        # the thread SQLite calls it on (see ``_connect``).
+        self._scan_local = threading.local()
+        # Pause / Continue of the history conversion, from the storage line.
+        self._history_paused = False
+        # Writer thread only: the newest blob rowid the converter has looked
+        # at after the history was done (new prompts are converted as they
+        # come, idle only).
+        self._chunks_tail_seen = 0
+        # Mark-and-sweep of unreferenced chunks: due once per process and
+        # after a prune removed bodies; the mark runs on a thread of its own
+        # and hands ``(marks, top, swept through)`` to the writer thread.
+        self._chunk_sweep_due = True
+        self._chunk_sweep_at = 0.0
+        self._chunk_mark: tuple[bytearray, int, int] | None = None
+        self._chunk_mark_deleted = 0
+        self._chunk_marker: threading.Thread | None = None
+        self._chunk_mark_lock = threading.Lock()
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=self._queue_max_size)
         self._inserts_since_prune = 0
         # Session-level "stop asking": set when the historical cost backfill
@@ -3420,9 +3495,39 @@ class RequestLogStore:
         conn.create_function(
             "fcc_body_matches", 3, self._body_matches, deterministic=True
         )
-        conn.create_function(
-            "fcc_bodies_match", 5, self._bodies_match, deterministic=True
-        )
+        # The chunks of prompts stored as chunks (7.93.0) a scan on this
+        # connection has read: its own, never the store's shared cache. The
+        # search planner prices the scan by timing its first rows; through a
+        # cache earlier searches warmed, those newest rows would look nearly
+        # free while the rest of the window is not, and the planner would
+        # pick the scan where the index is far cheaper (measured: 14 s -> 122 s
+        # for one 7-day search). A cache of the pass's own reads costs the
+        # first rows what it costs the rest: consecutive turns of a
+        # conversation share their chunks in both.
+        scan_chunks: dict[int, bytes] = {}
+
+        def bodies_match(
+            rest_payload: Any,
+            rest_dict: Any,
+            input_payload: Any,
+            input_dict: Any,
+            needle: Any,
+        ) -> int:
+            # SQLite calls this on the thread running the statement, so the
+            # cache rides on that thread for exactly this call; the predicate
+            # keeps its own five-argument form.
+            if len(scan_chunks) > _SCAN_CHUNKS_MAX:
+                scan_chunks.clear()
+            previous = getattr(self._scan_local, "chunks", None)
+            self._scan_local.chunks = scan_chunks
+            try:
+                return self._bodies_match(
+                    rest_payload, rest_dict, input_payload, input_dict, needle
+                )
+            finally:
+                self._scan_local.chunks = previous
+
+        conn.create_function("fcc_bodies_match", 5, bodies_match, deterministic=True)
         watcher = _CONNECTION_WATCHER.get()
         if watcher is not None:
             try:
@@ -3537,6 +3642,9 @@ class RequestLogStore:
     def _decode_bodies(self, payload: Any, dict_id: Any) -> dict[str, Any]:
         if payload is None:
             return {}
+        if dict_id == _CHUNKED_DICT_ID:
+            text = self._chunked_text(bytes(payload))
+            return {} if text is None else self._chunked_bodies(text)
         try:
             raw = zstd.decompress(bytes(payload), zstd_dict=self._dictionary(dict_id))
         except (zstd.ZstdError, ValueError) as exc:
@@ -3554,6 +3662,10 @@ class RequestLogStore:
     ) -> int:
         """SQL predicate over a request's two blobs, considered together.
 
+        A prompt stored as chunks (7.93.0) is read through the reading
+        connection's own chunk cache when the call comes from its SQL (see
+        ``_connect``), else through the store's shared one.
+
         They must be considered together: a search for "proxy 8082" can have
         one word in the prompt and the other in the reasoning, and requiring
         every word within a single blob would silently stop finding it.
@@ -3563,19 +3675,29 @@ class RequestLogStore:
         terms = str(needle).split()
         if not terms:
             return 0
-        raws = [
-            raw
-            for payload, dict_id in (
-                (rest_payload, rest_dict),
-                (input_payload, input_dict),
-            )
-            if payload is not None
-            and (raw := self._raw_payload(payload, dict_id)) is not None
-        ]
-        if not raws:
+        # Each blob as stored bytes, or -- a prompt stored as chunks (7.93.0)
+        # -- as its text: the byte pre-filter below only ever rejects a word
+        # absent from every candidate, and a word in a prompt's text is in
+        # that text's own bytes (its first spelling, ``literal``), so testing
+        # the text instead of its JSON rejects exactly what it did before.
+        bodies: list[tuple[bytes, bool]] = []
+        chunks: dict[int, bytes] | None = getattr(self._scan_local, "chunks", None)
+        for payload, dict_id in (
+            (rest_payload, rest_dict),
+            (input_payload, input_dict),
+        ):
+            if payload is None:
+                continue
+            if dict_id == _CHUNKED_DICT_ID:
+                text = self._chunked_text(bytes(payload), local=chunks)
+                if text is not None:
+                    bodies.append((text, True))
+            elif (raw := self._raw_payload(payload, dict_id)) is not None:
+                bodies.append((raw, False))
+        if not bodies:
             return 0
         probes = [term.encode("utf-8", "surrogatepass").lower() for term in terms]
-        lowered = [raw.lower() for raw in raws]
+        lowered = [body.lower() for body, _chunked in bodies]
         for term in terms:
             stored = _stored_probes(term)
             if stored and not any(
@@ -3583,8 +3705,10 @@ class RequestLogStore:
             ):
                 return 0
         merged: dict[str, Any] = {}
-        for raw in raws:
-            merged.update(unpack_bodies(raw))
+        for body, chunked in bodies:
+            merged.update(
+                self._chunked_bodies(body) if chunked else unpack_bodies(body)
+            )
         haystack = searchable_text(merged).encode("utf-8", "surrogatepass").lower()
         return int(all(probe in haystack for probe in probes))
 
@@ -4279,10 +4403,13 @@ class RequestLogStore:
         """
         if not self._compress_bodies:
             return
-        if self._history_done and self._history_index_checked:
-            return
         now = time.monotonic()
-        if now < self._history_retry_at:
+        if now < self._history_retry_at or self._history_paused:
+            return
+        if self._history_done and self._history_index_checked:
+            # 7.93.0: prompts written since are stored as chunks too, here,
+            # between requests, never on the write path.
+            self._run_chunk_tail(conn, now)
             return
         try:
             # Checked every start, even after the conversion is done: an older
@@ -4515,6 +4642,8 @@ class RequestLogStore:
             progressed = self._convert_metadata_step(conn)
         elif pending and pending[0] == "skipped":
             progressed = self._convert_skipped_step(conn)
+        elif pending and pending[0] == "chunks":
+            progressed = self._convert_chunks_step(conn)
         if self._queue.empty() and self._return_space_step(conn):
             progressed = True
         state = self._load_history_state(conn)
@@ -4541,6 +4670,11 @@ class RequestLogStore:
             work.append("repeated request metadata of older rows is stored once")
         if "skipped" in pending:
             work.append("older skipped route attempts are stored compactly")
+        if "chunks" in pending:
+            work.append(
+                "prompts are stored once per repeated part, as chunks of the"
+                " search index file"
+            )
         on_disk = int(state.get("bytes_at_reopen") or state["bytes_at_start"]) / 1e9
         if not work:
             logger.info(
@@ -4735,7 +4869,8 @@ class RequestLogStore:
                     )
                     target = targets.get(kind) if kind is not None else None
                     dict_id = None if row[2] is None else int(row[2])
-                    if target is None or dict_id == target:
+                    # A prompt stored as chunks (7.93.0) has nothing to recompress.
+                    if target is None or dict_id in (target, _CHUNKED_DICT_ID):
                         phase["kept"] += 1
                     else:
                         payload = conn.execute(
@@ -5144,6 +5279,404 @@ class RequestLogStore:
             + (len(first["key_label"].encode("utf-8")) if first["key_label"] else 0)
         )
 
+    # ------------------------------------------------ prompt chunk store (7.93.0)
+
+    def _convert_chunks_step(
+        self, conn: sqlite3.Connection, *, tail: bool = False
+    ) -> bool:
+        """Store the next prompt blobs as chunk lists; one log transaction (7.93.0).
+
+        See ``_CHUNKED_DICT_ID``. Walks ``body_blobs`` by rowid from the
+        part's cursor, at most ``_CHUNKS_STEP_BLOBS`` prompt blobs and
+        ``_HISTORY_STEP_SECONDS`` a step, in three stages:
+
+        1. read: each blob is decoded as it is stored and must hash back to
+           its address; only a prompt blob exactly as ``pack_fields`` writes
+           it (``{"i": text}``) is a candidate;
+        2. index: candidates the search index lacks are added to it, and the
+           index file is committed with ``synchronous=FULL`` -- on disk before
+           anything in the log names its chunks;
+        3. prove and write, under the log's write lock: the chunk list is read
+           back through ``_chunked_raw`` (the readers' own decoder, chunks read
+           from the file, never from a cache) and must give the stored bytes
+           exactly, and their address; only then is the row rewritten, and
+           only if it still holds exactly what stage 1 read.
+
+        Anything else -- an undecodable blob, a mismatch, a row changed
+        meanwhile -- stays exactly as it is and is counted (``failed``), or,
+        for blobs that are not a plain prompt, ``kept``. With ``tail`` the
+        history is done and this converts prompts written since: no part is
+        finished and no space is counted, because new rows reuse what it frees.
+        """
+        search, sconn = self._search, self._search_conn
+        if search is None or search.unusable is not None:
+            if tail:
+                return False
+            reason = (
+                search.unusable if search is not None else self._search_off
+            ) or "the search index is off for this log"
+            return self._skip_chunks_phase(conn, reason)
+        if sconn is None:
+            return False
+        # The index file's rule (7.92.0): its writes wait while a search runs.
+        with self._search_lock:
+            if self._search_active:
+                return False
+        self._search_check_cleared(conn)
+        started = time.perf_counter()
+        read_end = started + _HISTORY_STEP_SECONDS * _CHUNKS_READ_SHARE
+        state = self._load_history_state(conn)
+        marker = int(state["chunks"]["through"])
+        top = int(
+            conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM body_blobs").fetchone()[0]
+        )
+        # Rowids start again below the walk after a Clear log (or a VACUUM
+        # renumbered the table): walk it again from the start; a prompt
+        # stored as chunks already costs one look.
+        cursor = 0 if top < marker else marker
+        rows = conn.execute(
+            "SELECT b.rowid, b.sha, b.dict_id FROM body_blobs b"
+            " WHERE b.rowid > ? AND b.rowid <= ?"
+            " AND EXISTS (SELECT 1 FROM request_bodies r WHERE r.input_sha = b.sha)"
+            " ORDER BY b.rowid LIMIT ?",
+            (cursor, top, _CHUNKS_STEP_BLOBS),
+        ).fetchall()
+        kept = failed = 0
+        reached = cursor
+        # (rowid, sha, dict_id, payload, raw, address, units)
+        items: list[tuple[int, str, Any, bytes, bytes, bytes, BlobUnits]] = []
+        for rowid, sha, dict_id in rows:
+            reached = int(rowid)
+            if dict_id != _CHUNKED_DICT_ID:
+                stored = conn.execute(
+                    "SELECT payload FROM body_blobs WHERE rowid = ?", (reached,)
+                ).fetchone()
+                payload = bytes(stored[0]) if stored and stored[0] is not None else b""
+                raw = self._raw_payload(payload, dict_id) if payload else None
+                address = _sha_bytes(str(sha))
+                if (
+                    raw is None
+                    or address is None
+                    or hashlib.sha256(raw).digest() != address
+                ):
+                    failed += 1
+                else:
+                    read = search_units(raw, True)
+                    if read is None or read[0] != 1 or 0 not in read[1]:
+                        # Not a plain prompt blob: an older combined body, an
+                        # empty prompt, a form ``pack_fields`` does not write.
+                        kept += 1
+                    else:
+                        items.append(
+                            (
+                                reached,
+                                str(sha),
+                                dict_id,
+                                payload,
+                                raw,
+                                address,
+                                BlobUnits(sha=address, fields=read[0], units=read[1]),
+                            )
+                        )
+            if time.perf_counter() >= read_end:
+                break
+        walked_all = not rows or (
+            len(rows) < _CHUNKS_STEP_BLOBS and reached == int(rows[-1][0])
+        )
+        through = top if walked_all else reached
+        try:
+            known = search.known(sconn, [item[5] for item in items])
+            fresh = [item[6] for item in items if item[5] not in known]
+            # Always one durable commit of the index file before the log
+            # names a chunk: it puts on disk every chunk this step will name,
+            # including ones indexed a moment ago with ``synchronous=NORMAL``.
+            sconn.execute("PRAGMA synchronous=FULL")
+            try:
+                with sconn:
+                    if fresh:
+                        search.add(sconn, fresh)
+                    search.meta_set(sconn, "chunk_store_through", str(through))
+            finally:
+                sconn.execute("PRAGMA synchronous=NORMAL")
+        except Exception as exc:  # the index failing leaves every row as it is
+            with contextlib.suppress(sqlite3.Error):
+                sconn.rollback()
+            logger.warning("Request log prompt chunk store paused: {}", exc)
+            self._history_retry_at = time.monotonic() + 60.0
+            return False
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(conn)
+            phase = state["chunks"]
+            if int(phase["through"]) != marker:
+                # Another process moved the walk meanwhile: its step stands.
+                conn.commit()
+                return True
+            if phase["end"] is None:
+                phase["end"] = top
+            freelist_before = self._freelist_count(conn)
+            local: dict[int, bytes] = {}
+            converted = 0
+            bytes_before = bytes_after = 0
+            for rowid, sha, dict_id, payload, raw, address, units in items:
+                chunk_ids = search.unit_chunk_ids(sconn, address, 0)
+                if chunk_ids is None:
+                    failed += 1
+                    continue
+                envelope = _chunk_envelope(
+                    chunk_ids, units.units[0].encode("utf-8", "surrogatepass")
+                )
+                if len(envelope) >= len(payload):
+                    kept += 1
+                    continue
+                # Both forms a reader takes, from the chunks as the file holds
+                # them: the stored bytes (and so their address), and the body
+                # the detail, list, export and search read -- which for this
+                # blob is ``unpack_bodies(raw)``, the prompt stage 1 parsed.
+                text = self._chunked_text(envelope, local=local)
+                packed = None if text is None else _packed_prompt(text)
+                if (
+                    text is None
+                    or packed is None
+                    or packed != raw
+                    or hashlib.sha256(packed).digest() != address
+                    or self._chunked_bodies(text) != {"input_text": units.units[0]}
+                ):
+                    failed += 1
+                    continue
+                written = conn.execute(
+                    "UPDATE body_blobs SET dict_id = ?, payload = ?"
+                    " WHERE rowid = ? AND sha = ? AND dict_id IS ? AND payload = ?",
+                    (_CHUNKED_DICT_ID, envelope, rowid, sha, dict_id, payload),
+                ).rowcount
+                if written != 1:
+                    failed += 1
+                    continue
+                converted += 1
+                bytes_before += len(payload)
+                bytes_after += len(envelope)
+            phase["converted"] += converted
+            phase["kept"] += kept
+            phase["failed"] += failed
+            phase["bytes_before"] += bytes_before
+            phase["bytes_after"] += bytes_after
+            phase["through"] = through
+            finished = walked_all and not tail
+            if finished:
+                phase["done_at"] = time.time()
+            if not tail:
+                state["freed_pages"] = int(state["freed_pages"]) + max(
+                    0, self._freelist_count(conn) - freelist_before
+                )
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if failed:
+            logger.warning(
+                "Request log prompt chunk store left {} prompts as they were:"
+                " they did not decode, or their chunk list did not give back the"
+                " same bytes",
+                failed,
+            )
+        if tail and walked_all:
+            self._chunks_tail_seen = top
+            return False
+        return True
+
+    def _skip_chunks_phase(self, conn: sqlite3.Connection, reason: str) -> bool:
+        """Close the chunk part without converting anything: there is no index file to hold chunks."""
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self._load_history_state(conn)
+            phase = state["chunks"]
+            phase["done_at"] = time.time()
+            phase["skipped"] = reason
+            self._save_history_state(conn, state)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        logger.info("Request log prompt chunk store not used: {}", reason)
+        return True
+
+    def _run_chunk_tail(self, conn: sqlite3.Connection, now: float) -> None:
+        """Writer thread, idle only, after the history: store new prompts as chunks.
+
+        One cheap look at the newest blob rowid per idle tick; steps only when
+        a blob was written since the last look, and not while a search runs.
+        """
+        if self._search is None or self._search_conn is None:
+            return
+        try:
+            top = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(rowid), 0) FROM body_blobs"
+                ).fetchone()[0]
+            )
+            if top <= self._chunks_tail_seen:
+                return
+            deadline = now + _HISTORY_IDLE_SLICE_SECONDS
+            while self._search_may_go(deadline):
+                if not self._convert_chunks_step(conn, tail=True):
+                    break
+        except sqlite3.Error as exc:
+            with contextlib.suppress(sqlite3.Error):
+                conn.rollback()
+            logger.warning("Request log prompt chunk store paused: {}", exc)
+            self._history_retry_at = time.monotonic() + 60.0
+
+    def pause_history_conversion(self) -> dict[str, Any]:
+        """Pause the background conversion (Request log storage line); any thread.
+
+        Kept across restarts; the conversion continues only when asked.
+        """
+        self._set_history_paused(True)
+        return self.history_conversion_status()
+
+    def continue_history_conversion(self) -> dict[str, Any]:
+        """Continue a paused conversion from where it stopped; any thread."""
+        self._set_history_paused(False)
+        return self.history_conversion_status()
+
+    def _set_history_paused(self, paused: bool) -> None:
+        self._history_paused = paused
+        try:
+            with self._connection() as conn:
+                if paused:
+                    self._meta_set(conn, _HISTORY_PAUSED_KEY, str(time.time()))
+                else:
+                    conn.execute(
+                        "DELETE FROM request_log_meta WHERE key = ?",
+                        (_HISTORY_PAUSED_KEY,),
+                    )
+        except sqlite3.Error as exc:
+            # The pause holds for this process either way.
+            logger.warning("Request log conversion pause not saved: {}", exc)
+
+    def _run_chunk_sweep(self, sconn: sqlite3.Connection, deadline: float) -> bool:
+        """Writer thread: delete chunks no manifest names, by mark and sweep. True when done for now.
+
+        The mark (``_mark_chunks``) runs on a thread of its own and reads
+        every manifest -- each unit of the index and each chunked prompt of
+        the log -- into a bitmap over chunk ids; then this sweeps, in steps
+        under the index's write lock, every chunk below the highest id that
+        is unmarked and has no link (``SearchIndex.sweep_chunks``). A sweep
+        that misses a chunk leaves it for the next mark; nothing here can
+        delete a chunk a manifest names.
+        """
+        search = self._search
+        if search is None:
+            return True
+        with self._chunk_mark_lock:
+            mark = self._chunk_mark
+        if mark is None:
+            now = time.monotonic()
+            marking = self._chunk_marker is not None and self._chunk_marker.is_alive()
+            if self._chunk_sweep_due and now >= self._chunk_sweep_at and not marking:
+                self._chunk_sweep_due = False
+                self._chunk_sweep_at = now + _CHUNK_SWEEP_INTERVAL_SECONDS
+                self._chunk_marker = threading.Thread(
+                    target=self._mark_chunks,
+                    args=(search.generation,),
+                    name="mcc-request-log-chunk-mark",
+                    daemon=True,
+                )
+                self._chunk_marker.start()
+            return True
+        marks, top, through = mark
+        while self._search_may_go(deadline):
+            step_end = min(deadline, time.monotonic() + _SEARCH_STEP_SECONDS)
+            sconn.execute("BEGIN IMMEDIATE")
+            try:
+                deleted, through = search.sweep_chunks(
+                    sconn, marks, top, through, step_end
+                )
+                sconn.commit()
+            except BaseException:
+                sconn.rollback()
+                raise
+            with self._chunk_mark_lock:
+                if self._chunk_mark is None:
+                    return True
+                swept = self._chunk_mark_deleted + deleted
+                self._chunk_mark_deleted = swept
+                self._chunk_mark = (marks, top, through) if through < top else None
+            if through >= top:
+                if swept:
+                    logger.info(
+                        "Request log search index: {} chunks no request names any"
+                        " more were removed",
+                        swept,
+                    )
+                return True
+        return False
+
+    def _mark_chunks(self, generation: int) -> None:
+        """Chunk mark thread: a bitmap of every chunk id a manifest names.
+
+        Reads only, each file in one read transaction: first the index's
+        units (every blob it holds), then the log's chunked prompts. A chunk
+        added after the index was read has an id above ``top`` and is never
+        swept; one a manifest started naming since has a link, and the sweep
+        keeps every chunk with a link.
+        """
+        search = self._search
+        if search is None:
+            return
+        started = time.perf_counter()
+        try:
+            iconn = sqlite3.connect(search.path, timeout=10)
+            try:
+                iconn.execute("PRAGMA query_only=1")
+                iconn.execute("BEGIN")
+                top = int(
+                    iconn.execute("SELECT COALESCE(MAX(id), 0) FROM chunks").fetchone()[
+                        0
+                    ]
+                )
+                marks = chunk_marks(top)
+                units = SearchIndex.mark_unit_chunks(iconn, marks)
+                iconn.commit()
+            finally:
+                iconn.close()
+            prompts = 0
+            with self._trainer_conn_lock, self._connection() as conn:
+                cursor = conn.execute(
+                    "SELECT payload FROM body_blobs WHERE dict_id = ?",
+                    (_CHUNKED_DICT_ID,),
+                )
+                while not self._closed.is_set():
+                    rows = cursor.fetchmany(_HISTORY_FETCH_ROWS * 32)
+                    if not rows:
+                        break
+                    for (payload,) in rows:
+                        try:
+                            chunk_ids, _check = _read_chunk_envelope(bytes(payload))
+                        except ValueError:
+                            continue
+                        prompts += 1
+                        for chunk_id in chunk_ids:
+                            mark_chunk(marks, chunk_id)
+                if self._closed.is_set():
+                    return
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("Request log chunk mark skipped: {}", exc)
+            return
+        with self._chunk_mark_lock:
+            if search.generation == generation:
+                self._chunk_mark = (marks, top, 0)
+                self._chunk_mark_deleted = 0
+        logger.debug(
+            "Request log chunk mark: {} units and {} chunked prompts over {} chunks"
+            " in {:.1f}s",
+            units,
+            prompts,
+            top,
+            time.perf_counter() - started,
+        )
+
     def _space_owed(self, conn: sqlite3.Connection, state: dict[str, Any]) -> int:
         """Pages the conversion freed that are not handed back yet.
 
@@ -5253,6 +5786,13 @@ class RequestLogStore:
                 f" ({int(skipped['bytes_before']) / 1e9:.2f} GB ->"
                 f" {int(skipped['bytes_after']) / 1e6:.2f} MB)"
             )
+        if "chunks" in ran and not state["chunks"].get("skipped"):
+            chunks = state["chunks"]
+            work.append(
+                f"{chunks['converted']} prompts stored as chunks"
+                f" ({int(chunks['bytes_before']) / 1e9:.2f} GB ->"
+                f" {int(chunks['bytes_after']) / 1e6:.2f} MB of chunk lists)"
+            )
         returned = int(state["returned_pages"]) - int(
             state.get("returned_at_reopen") or 0
         )
@@ -5298,10 +5838,31 @@ class RequestLogStore:
                 raw = self._meta_get(conn, _HISTORY_CONVERSION_KEY)
             state = json.loads(raw) if raw else None
         except sqlite3.Error, ValueError:
-            return {**idle, "state": "unknown"}
+            return {**idle, "state": "unknown", "paused": self._history_paused}
         if not isinstance(state, dict):
-            return {**idle, "state": "pending"}
-        return _history_status(state)
+            return {**idle, "state": "pending", "paused": self._history_paused}
+        status = _history_status(state)
+        status["paused"] = self._history_paused
+        chunks = state.get("chunks") or {}
+        # 7.93.0: what the prompt chunk store holds, and where (the search
+        # index file now holds prompt text too, so its size is part of the log).
+        status["chunk_store"] = {
+            "prompts": int(chunks.get("converted") or 0),
+            "bytes_before": int(chunks.get("bytes_before") or 0),
+            "bytes_after": int(chunks.get("bytes_after") or 0),
+            "failed": int(chunks.get("failed") or 0),
+            "index_bytes": self._search_file_bytes(),
+        }
+        return status
+
+    def _search_file_bytes(self) -> int:
+        """The search index file and its WAL, in bytes; 0 when there is none."""
+        path = search_index_path(self._db_path)
+        size = 0
+        for each in (path, path.with_name(path.name + "-wal")):
+            with contextlib.suppress(OSError):
+                size += each.stat().st_size
+        return size
 
     # ------------------------------------------------ origin folder backfill
 
@@ -6273,10 +6834,81 @@ class RequestLogStore:
     def _raw_payload(self, payload: Any, dict_id: Any) -> bytes | None:
         if payload is None:
             return None
+        if dict_id == _CHUNKED_DICT_ID:
+            return self._chunked_raw(bytes(payload))
         try:
             return zstd.decompress(bytes(payload), zstd_dict=self._dictionary(dict_id))
         except zstd.ZstdError, ValueError:
             return None
+
+    def _chunked_text(
+        self, envelope: bytes, *, local: dict[int, bytes] | None = None
+    ) -> bytes | None:
+        """The prompt text a chunk-store envelope stands for, as UTF-8 bytes, or None (7.93.0).
+
+        The one decoder: every reader -- detail, list, export, the scan's
+        ``fcc_bodies_match``, the dictionary trainer, the index's catch-up --
+        and the conversion's own proof start here, so what the proof checked
+        is what a reader gets. The chunks are joined and accepted only when
+        they match the envelope's check bytes (``_chunk_check``); a mismatch
+        through the cache is retried from the file. None reads as an empty
+        prompt, as an undecodable blob always has, and is reported in the log.
+        """
+        try:
+            ids, check = _read_chunk_envelope(envelope)
+        except ValueError as exc:
+            self._warn_chunked(f"not a chunk list ({exc})")
+            return None
+        # From the cache first, then from the file; a caller's own ``local``
+        # cache (the conversion's proof) is the only source when given.
+        for cached in (True,) if local is not None else (True, False):
+            texts = self._chunk_reader.texts(ids, cached=cached, local=local)
+            if texts is None:
+                continue
+            text = b"".join(texts)
+            if _chunk_check(text) == check:
+                return text
+            if cached and local is None:
+                self._chunk_reader.forget(ids)
+        self._warn_chunked(
+            f"its {len(ids)} chunks are missing from {self._chunk_reader.path.name}"
+            " or do not rebuild it"
+        )
+        return None
+
+    def _chunked_raw(
+        self, envelope: bytes, *, local: dict[int, bytes] | None = None
+    ) -> bytes | None:
+        """The packed prompt a chunk-store envelope stands for, or None (7.93.0).
+
+        For readers that want the stored bytes themselves (the index's
+        catch-up, the dictionary trainer, the compaction): the text packed
+        exactly as the writer packs a prompt (``pack_fields``).
+        """
+        text = self._chunked_text(envelope, local=local)
+        return None if text is None else _packed_prompt(text)
+
+    @staticmethod
+    def _chunked_bodies(text: bytes) -> dict[str, Any]:
+        """What ``unpack_bodies`` gives for a prompt blob, from its text (7.93.0).
+
+        A prompt blob is ``{"i": text}``, so unpacking it is this one key;
+        reading it from the text skips packing it as JSON only to parse it
+        back. The conversion proves, for every prompt it converts, that this
+        equals ``unpack_bodies`` of the stored bytes.
+        """
+        return {"input_text": text.decode("utf-8", "surrogatepass")}
+
+    def _warn_chunked(self, why: str) -> None:
+        now = time.monotonic()
+        if now - self._chunk_warned_at < _CHUNK_WARN_SECONDS:
+            return
+        self._chunk_warned_at = now
+        logger.warning(
+            "Request log: a prompt stored as chunks could not be read back: {}."
+            " It shows as empty; nothing was changed.",
+            why,
+        )
 
     @staticmethod
     def _ensure_session_columns(conn: sqlite3.Connection) -> None:
@@ -6425,6 +7057,9 @@ class RequestLogStore:
             self._dictionaries_checked.set()
             session_id = self._open_session(conn)
             self._search_start(conn)
+            # A pause pressed in an earlier run holds (7.93.0).
+            if self._meta_get(conn, _HISTORY_PAUSED_KEY) is not None:
+                self._history_paused = True
             last_heartbeat = time.monotonic()
             while not stopping:
                 # Between batches, never inside one: see ``retune``. A
@@ -8039,6 +8674,9 @@ class RequestLogStore:
         # result that arrives after the writer stopped is never stored.
         with self._trainer_conn_lock:
             pass
+        # Chunked prompts read since are read through these; a reader that
+        # starts after the close opens nothing (7.93.0).
+        self._chunk_reader.close()
         remaining = self._queue.qsize()
         if self._writer.is_alive() and remaining:
             logger.warning(
@@ -11120,17 +11758,28 @@ class RequestLogStore:
         self._search_seen_generation = search.generation
         self._search_sweep_from = 0
         self._search_catchup_due = True
+        # A mark taken before the clear describes chunks that are gone.
+        with self._chunk_mark_lock:
+            self._chunk_mark = None
+        self._chunks_tail_seen = 0
         self._search_adopt(conn, sconn)
 
-    def _clear_search_index(self) -> None:
-        """Erase the index's text with the log's (``clear``); any thread."""
+    def _clear_search_index(self, *, keep_chunks: bool = False) -> None:
+        """Erase the index's text with the log's (``clear``); any thread.
+
+        ``keep_chunks`` before the log's own erase has committed: the chunks
+        may hold prompts the log stores as chunk lists (7.93.0), which must
+        outlive an erase that fails.
+        """
 
         if self._search is None:
             return
         try:
-            self._search.clear()
+            self._search.clear(keep_chunks=keep_chunks)
         except sqlite3.Error as exc:
             logger.warning("Request log search index not cleared: {}", exc)
+        if not keep_chunks:
+            self._chunk_reader.forget()
         with self._search_lock:
             self._search_build = {"state": "idle"}
             self._search_build_dirty = False
@@ -11229,6 +11878,8 @@ class RequestLogStore:
             ):
                 return
             if self._search_sweep_due and not self._search_sweep(conn, sconn, deadline):
+                return
+            if not self._run_chunk_sweep(sconn, deadline):
                 return
             if not self._search_may_go(deadline):
                 return
@@ -11372,6 +12023,8 @@ class RequestLogStore:
             if stale:
                 with sconn:
                     search.remove(sconn, stale)
+                # Their chunks go by mark and sweep, never here (7.93.0).
+                self._chunk_sweep_due = True
             self._search_sweep_from = entries[-1][0]
         return False
 
@@ -12815,8 +13468,9 @@ class RequestLogStore:
         # The search index holds the requests' text, so it goes too (7.92.0):
         # before the log's erase, so a search never treats a body as indexed
         # once the log has none, and after it, for anything the writer indexed
-        # in between.
-        self._clear_search_index()
+        # in between. Its chunks only after (7.93.0): they may be the only copy
+        # of prompts the log stores as chunk lists, should the erase fail.
+        self._clear_search_index(keep_chunks=True)
         with self._connection() as conn:
             cursor = conn.execute("DELETE FROM requests")
             conn.execute("DELETE FROM request_totals")
@@ -14065,6 +14719,7 @@ def _history_status(state: Mapping[str, Any]) -> dict[str, Any]:
         "bodies": "bodies",
         "metadata": "metadata",
         "skipped": "skipped",
+        "chunks": "prompts",
     }
     for name in _HISTORY_PHASES:
         phase = state.get(name) or {}
@@ -14095,6 +14750,73 @@ def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
         if not byte & 0x80:
             return value, offset
         shift += 7
+
+
+def _packed_prompt(text: bytes) -> bytes | None:
+    """A prompt's text (its UTF-8 bytes, as the index's chunks hold them) packed as the writer packs it.
+
+    ``pack_fields`` with the prompt field only: the bytes ``body_blobs.sha``
+    of a prompt blob hashes. None when the bytes are not text a prompt could
+    hold (``surrogatepass`` round-trips every string Python can hold).
+    """
+    try:
+        value = text.decode("utf-8", "surrogatepass")
+    except UnicodeDecodeError:
+        return None
+    return pack_fields({"input_text": value}, _INPUT_FIELDS)
+
+
+def _chunk_check(text: bytes) -> bytes:
+    """The check bytes of a chunked prompt: CRC-32 and length of its text, little-endian.
+
+    A guard against a chunk read back under the wrong id (an id an older
+    version freed and SQLite handed out again, a stale cache entry), cheap
+    enough for every read: 3.7 GB/s against 0.9 GB/s for SHA-256 here. The
+    byte-for-byte proof against the content address is the conversion's, once.
+    """
+    return struct.pack("<II", zlib.crc32(text), len(text) & 0xFFFFFFFF)
+
+
+def _chunk_envelope(chunk_ids: Sequence[int], text: bytes) -> bytes:
+    """The ``body_blobs.payload`` of a prompt stored as chunks (``_CHUNKED_DICT_ID``).
+
+    ``text`` is the prompt's UTF-8 (``surrogatepass``) bytes: its chunks joined.
+    """
+    out = bytearray((_CHUNK_ENVELOPE_V1,))
+    out += _varint(len(chunk_ids))
+    for chunk_id in chunk_ids:
+        out += _varint(int(chunk_id))
+    out += _chunk_check(text)
+    return bytes(out)
+
+
+def _read_chunk_envelope(data: bytes) -> tuple[list[int], bytes]:
+    """``(chunk ids, check bytes)`` of a chunk-store envelope, or ValueError.
+
+    One pass over the varints (a call per varint cost more than the rest of
+    reading a prompt back).
+    """
+    end = len(data) - _CHUNK_CHECK_BYTES
+    if end < 2 or data[0] != _CHUNK_ENVELOPE_V1:
+        raise ValueError("unknown chunk envelope")
+    ids: list[int] = []
+    count = -1
+    value = shift = 0
+    for byte in data[1:end]:
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80:
+            shift += 7
+            if shift > 63:
+                raise ValueError("chunk envelope varint too long")
+            continue
+        if count < 0:
+            count = value
+        else:
+            ids.append(value)
+        value = shift = 0
+    if shift or count < 0 or len(ids) != count:
+        raise ValueError("chunk envelope has the wrong length")
+    return ids, data[end:]
 
 
 def _spread[T](items: Sequence[T], count: int) -> list[T]:

@@ -326,6 +326,26 @@ def _reset_search_jobs():
     search_jobs().stop_all()
 
 
+@pytest.fixture
+def no_prompt_chunk_store(monkeypatch):
+    """The history conversion's prompt chunk part (7.93.0) does nothing here.
+
+    For tests of the conversion's earlier parts and of the search index's
+    build: they read ``body_blobs`` payloads as zstd frames, or count what
+    only "Build search index" indexes, and the chunk part would change both.
+    The part closes at once, as it does on a log without a search index;
+    ``tests/core/test_request_log_prompt_chunks.py`` covers it.
+    """
+    from my_claude_code.core.request_log import RequestLogStore
+
+    def skip(self, conn, *, tail=False):
+        if tail:
+            return False
+        return self._skip_chunks_phase(conn, "off in this test")
+
+    monkeypatch.setattr(RequestLogStore, "_convert_chunks_step", skip)
+
+
 @pytest.fixture(autouse=True)
 def _reset_search_index_coverage():
     """Forget the search index's cached coverage counts between tests (7.92.0).

@@ -8881,7 +8881,65 @@ const logReadout = {};
     space: historyNote({ state: "returning_space", phase: "space", percent: 99 }),
     done: historyNote({ state: "done", phase: null, percent: 100 }),
     future: historyNote({ state: "converting", phase: "a-later-part", percent: 5 }),
+    // 7.93.0: the prompt chunk part, and a paused conversion.
+    prompts: historyNote({ state: "converting", phase: "prompts", percent: 37 }),
+    paused: historyNote({ state: "converting", phase: "prompts", percent: 37, paused: true }),
+    pausedSpace: historyNote({ state: "returning_space", phase: "space", percent: 80, paused: true }),
+    pausedDone: historyNote({ state: "done", phase: null, percent: 100, paused: true }),
   };
+  // 7.93.0: the chunk store's own size, once it holds prompts.
+  const chunkNote = window.eval("chunkStoreNote");
+  logReadout.chunkNotes = {
+    none: chunkNote({ state: "done", chunk_store: { prompts: 0, index_bytes: 2271457280 } }),
+    some: chunkNote({ state: "done", chunk_store: { prompts: 421345, index_bytes: 2271457280 } }),
+    older: chunkNote({ state: "done" }),
+  };
+  // The Pause / Continue button beside the size, and what it posts.
+  const button = doc.getElementById("reqHistoryPause");
+  const readButton = () => ({
+    present: Boolean(button),
+    hidden: button ? button.hidden : null,
+    text: button ? button.textContent : null,
+  });
+  logReadout.historyButton = { atOpen: readButton() };
+  const paintPause = (history) => {
+    window.eval(`paintHistoryPause(${JSON.stringify(history)})`);
+    return readButton();
+  };
+  logReadout.historyButton.paused = paintPause({ state: "converting", phase: "prompts", percent: 5, paused: true });
+  logReadout.historyButton.done = paintPause({ state: "done", phase: null, percent: 100, paused: false });
+  logReadout.historyButton.space = paintPause({ state: "returning_space", phase: "space", percent: 9, paused: false });
+  const savedLifetime = ROUTES["/admin/api/requests/lifetime"];
+  const pausedHistory = { state: "converting", phase: "prompts", percent: 37, returned_bytes: 0, paused: true };
+  ROUTES["/admin/api/requests/history-conversion/pause"] = pausedHistory;
+  ROUTES["/admin/api/requests/lifetime"] = {
+    ...savedLifetime,
+    storage: { ...savedLifetime.storage, history: pausedHistory },
+  };
+  paintPause({ state: "converting", phase: "prompts", percent: 37, paused: false });
+  let posted = fetchBodies.length;
+  if (button) {
+    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  logReadout.historyButton.pausePosts = fetchBodies
+    .slice(posted)
+    .filter((entry) => entry.path.startsWith("/admin/api/requests/history-conversion"))
+    .map((entry) => `${entry.method} ${entry.path}`);
+  logReadout.historyButton.afterPause = readButton();
+  logReadout.historyButton.spanAfterPause = doc.getElementById("reqLifetimeSpan").textContent;
+  ROUTES["/admin/api/requests/history-conversion/continue"] = { ...pausedHistory, paused: false };
+  ROUTES["/admin/api/requests/lifetime"] = savedLifetime;
+  posted = fetchBodies.length;
+  if (button) {
+    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  logReadout.historyButton.continuePosts = fetchBodies
+    .slice(posted)
+    .filter((entry) => entry.path.startsWith("/admin/api/requests/history-conversion"))
+    .map((entry) => `${entry.method} ${entry.path}`);
+  logReadout.historyButton.afterContinue = readButton();
 }
 
 // ------------------------------------------------------- cost panel timing

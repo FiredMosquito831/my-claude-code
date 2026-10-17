@@ -933,6 +933,11 @@ def test_an_index_failure_never_costs_a_row(
     )
 
 
+# Since 7.93.0 the history conversion indexes every older prompt it stores as
+# chunks (that is where their chunks live); replies, reasoning and tool calls
+# of older requests are still indexed only by the build. These tests are about
+# the build, so the conversion's chunk part is off in them.
+@pytest.mark.usefixtures("no_prompt_chunk_store")
 def test_history_is_indexed_only_when_the_build_is_asked_for(
     tmp_path: Path, force_index: list[int]
 ) -> None:
@@ -960,6 +965,7 @@ def test_history_is_indexed_only_when_the_build_is_asked_for(
     _assert_identical(store, ("too long", "prompt", "1", "zq"))
 
 
+@pytest.mark.usefixtures("no_prompt_chunk_store")
 def test_a_build_continues_after_a_restart_from_where_it_stopped(
     tmp_path: Path,
 ) -> None:
@@ -1003,6 +1009,7 @@ def test_a_build_continues_after_a_restart_from_where_it_stopped(
     assert store.search_index_status()["done"] == len(keys)
 
 
+@pytest.mark.usefixtures("no_prompt_chunk_store")
 def test_pause_stops_the_build_and_continue_resumes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1104,7 +1111,12 @@ def test_bodies_an_older_version_wrote_are_caught_up_on_the_next_start(
     )
 
 
-def test_retention_takes_pruned_text_out_of_the_index(tmp_path: Path) -> None:
+def test_retention_takes_pruned_text_out_of_the_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Chunks go by mark and sweep (7.93.0), at most every few hours on a
+    # real log; here after every prune.
+    monkeypatch.setattr(rl, "_CHUNK_SWEEP_INTERVAL_SECONDS", 0.0)
     path = tmp_path / "requests.db"
     store = RequestLogStore(path, max_rows=5, queue_max_size=300)
     for n in range(120):
@@ -1120,12 +1132,24 @@ def test_retention_takes_pruned_text_out_of_the_index(tmp_path: Path) -> None:
 
     # The prune deleted most rows; the sweep follows between requests.
     _wait(lambda: len(blob_keys()) < 120 and _indexed_keys(store) == blob_keys())
+
+    def counts() -> tuple[int, int]:
+        sconn = _index_conn(store)
+        try:
+            linked = sconn.execute(
+                "SELECT COUNT(DISTINCT chunk) FROM links"
+            ).fetchone()[0]
+            chunks = sconn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        finally:
+            sconn.close()
+        return int(linked), int(chunks)
+
+    # Then the mark and sweep removes every chunk nothing names but the
+    # highest one, which is never deleted (an id is never handed out twice).
+    _wait(lambda: counts()[1] - counts()[0] <= 1)
     store.close()
-    sconn = _index_conn(store)
-    linked = sconn.execute("SELECT COUNT(DISTINCT chunk) FROM links").fetchone()[0]
-    chunks = sconn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    sconn.close()
-    assert chunks == linked
+    linked, chunks = counts()
+    assert chunks - linked in (0, 1)
 
 
 def test_every_prompt_rebuilds_byte_for_byte_from_its_chunks(tmp_path: Path) -> None:

@@ -36,9 +36,18 @@ tested against every chunk's text. Chunks the trigram index cannot represent
 exactly (NUL, a lone surrogate, under three characters) are kept out of it and
 always tested. Nothing ever decompresses a request body.
 
-The log itself is unchanged, so any version reads it as before, and an older
-version simply ignores this file. A request is answered from the index only
-when both of its blobs are in it under their current content address
+Since 7.93.0 the chunks are more than an index: the log stores a prompt the
+index holds as the list of its chunk ids (the prompt chunk store,
+``request_log._CHUNKED_DICT_ID``), so this file holds prompt text the log keeps
+nowhere else. Hence: ``remove`` never deletes a chunk; unreferenced chunks go
+only by a mark over every manifest and a sweep (``sweep_chunks``); ``clear``
+erases chunks only after the log's own erase; ``ChunkReader`` reads them back
+on any thread.
+
+Before 7.93.0 the log itself was unchanged by the index, so any version read
+it as before, and an older version simply ignores this file. A request is
+answered from the index only when both of its blobs are in it under their
+current content address
 (``covered``); every other request -- older history before "Build search
 index" was pressed, rows an older version wrote, a blob the index could not
 read -- is answered by the old scan of its bodies, in the same pass. So a
@@ -55,6 +64,7 @@ import threading
 import time
 import zlib
 from array import array
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from compression import zstd
 from dataclasses import dataclass
@@ -683,9 +693,17 @@ class SearchIndex:
         return found
 
     def remove(self, conn: sqlite3.Connection, keys: Iterable[int]) -> int:
-        """Drop the given blob keys, then every chunk no unit names any more."""
+        """Drop the given blob keys: their units and their links, never a chunk.
 
-        orphans: set[int] = set()
+        Since 7.93.0 a chunk can hold a prompt the log no longer keeps
+        anywhere else (the prompt chunk store), so no count of who names a
+        chunk ever deletes it here. A chunk no unit names any more stays until
+        ``sweep_chunks`` -- a mark over every manifest, then a sweep -- finds it
+        unmarked: a bug in that only leaves a chunk behind, never takes one a
+        prompt still needs. A chunk left over changes no search result: no
+        unit and no link leads to it.
+        """
+
         removed = 0
         for key in keys:
             unit_rows = conn.execute(
@@ -697,29 +715,109 @@ class SearchIndex:
                     "DELETE FROM links WHERE chunk = ? AND key = ? AND field = ?",
                     [(chunk_id, key, int(field)) for chunk_id in chunk_ids],
                 )
-                orphans.update(chunk_ids)
             conn.execute("DELETE FROM units WHERE key = ?", (key,))
             removed += conn.execute("DELETE FROM blobs WHERE key = ?", (key,)).rowcount
-        for chunk_id in sorted(orphans):
-            if conn.execute(
-                "SELECT 1 FROM links WHERE chunk = ? LIMIT 1", (chunk_id,)
-            ).fetchone():
-                continue
-            row = conn.execute(
-                "SELECT flags FROM chunks WHERE id = ?", (chunk_id,)
-            ).fetchone()
-            if row is None:
-                continue
-            if not int(row[0]) & FLAG_TESTED:
-                conn.execute("DELETE FROM grams WHERE rowid = ?", (chunk_id,))
-            conn.execute("DELETE FROM chunks WHERE id = ?", (chunk_id,))
         return removed
 
-    def clear(self) -> None:
+    # ------------------------------------------------- prompt chunk store (7.93.0)
+
+    def unit_chunk_ids(
+        self, conn: sqlite3.Connection, sha: bytes, field: int
+    ) -> array | None:
+        """The chunk ids of one blob's unit, in order; None when the index lacks it."""
+
+        row = conn.execute(
+            "SELECT u.manifest FROM blobs AS b JOIN units AS u"
+            " ON u.key = b.key AND u.field = ? WHERE b.sha = ?",
+            (field, sha),
+        ).fetchone()
+        return None if row is None else manifest_ids(bytes(row[0]))
+
+    @staticmethod
+    def mark_unit_chunks(conn: sqlite3.Connection, marks: bytearray) -> int:
+        """Mark every chunk id any unit's manifest names; how many units were read.
+
+        ``conn`` is a connection to the index file itself, inside the read
+        transaction the whole mark runs in. ``marks`` is a bitmap over chunk
+        ids (``chunk_marks``); ids past its end are not chunks a sweep of it
+        considers, so they are skipped.
+        """
+
+        units = 0
+        limit = len(marks) * 8
+        cursor = conn.execute("SELECT manifest FROM units")
+        try:
+            while True:
+                rows = cursor.fetchmany(_TEST_BATCH)
+                if not rows:
+                    return units
+                for (manifest,) in rows:
+                    units += 1
+                    for chunk_id in manifest_ids(bytes(manifest)):
+                        if chunk_id < limit:
+                            marks[chunk_id >> 3] |= 1 << (chunk_id & 7)
+        finally:
+            cursor.close()
+
+    @staticmethod
+    def sweep_chunks(
+        conn: sqlite3.Connection,
+        marks: bytearray,
+        top: int,
+        after: int,
+        step_end: float,
+    ) -> tuple[int, int]:
+        """Delete unmarked chunks with ids in ``(after, top)``; ``(deleted, last id seen)``.
+
+        One step of the sweep, inside the caller's IMMEDIATE transaction on
+        the writer's index connection, until ``step_end``. ``marks`` is the
+        bitmap a mark filled from every manifest -- the index's units and the
+        log's chunked prompts -- and ``top`` the highest chunk id when it ran:
+        a chunk added since is never considered, and ``top`` itself is never
+        deleted, so SQLite never hands an id out twice (a new chunk takes the
+        highest id plus one). A chunk that gained a link since the mark --
+        a new unit that shares it -- stays too. The decision is the mark;
+        nothing is ever deleted because a count reached zero.
+        """
+
+        deleted = 0
+        last = after
+        limit = len(marks) * 8
+        while True:
+            rows = conn.execute(
+                "SELECT id, flags FROM chunks WHERE id > ? AND id < ?"
+                " ORDER BY id LIMIT ?",
+                (last, top, _LOOKUP_CHUNK),
+            ).fetchall()
+            if not rows:
+                return deleted, top
+            for chunk_id, flags in rows:
+                chunk_id = int(chunk_id)
+                last = chunk_id
+                # Outside the bitmap means the mark never saw it: keep it.
+                if chunk_id >= limit or marks[chunk_id >> 3] & (1 << (chunk_id & 7)):
+                    continue
+                if conn.execute(
+                    "SELECT 1 FROM links WHERE chunk = ? LIMIT 1", (chunk_id,)
+                ).fetchone():
+                    continue
+                if not int(flags) & FLAG_TESTED:
+                    conn.execute("DELETE FROM grams WHERE rowid = ?", (chunk_id,))
+                conn.execute("DELETE FROM chunks WHERE id = ?", (chunk_id,))
+                deleted += 1
+            if time.perf_counter() >= step_end:
+                return deleted, last
+
+    def clear(self, *, keep_chunks: bool = False) -> None:
         """Erase every indexed text (the log was cleared). Any thread.
 
         Dictionaries stay, as the log's own do: a chunk compressed with one is
         unreadable without it, and the writer may hold its id.
+
+        ``keep_chunks`` (7.93.0) erases what makes a body count as indexed --
+        blobs, units, links -- and keeps the chunks themselves: a chunk may
+        hold a prompt the log keeps nowhere else (the prompt chunk store), so
+        the chunks go only once the log's own erase has committed.
         """
 
         if not self.path.exists():
@@ -729,8 +827,12 @@ class SearchIndex:
             if self._schema_version(conn) != SEARCH_INDEX_SCHEMA_VERSION:
                 return
             with conn:
-                conn.execute("INSERT INTO grams (grams) VALUES ('delete-all')")
-                for table in ("chunks", "blobs", "units", "links"):
+                if keep_chunks:
+                    tables: tuple[str, ...] = ("blobs", "units", "links")
+                else:
+                    conn.execute("INSERT INTO grams (grams) VALUES ('delete-all')")
+                    tables = ("chunks", "blobs", "units", "links")
+                for table in tables:
                     conn.execute(f"DELETE FROM {table}")
                 conn.execute(
                     "DELETE FROM meta WHERE key IN (?, ?, ?)",
@@ -1104,6 +1206,202 @@ class SearchIndex:
             "looked_up": looked_up,
             "postings": postings,
         }
+
+
+def chunk_marks(top: int) -> bytearray:
+    """An empty bitmap over chunk ids ``0..top`` for one mark-and-sweep."""
+
+    return bytearray((max(0, top) >> 3) + 1)
+
+
+def mark_chunk(marks: bytearray, chunk_id: int) -> None:
+    """Mark ``chunk_id`` in ``marks``; an id past the bitmap is never swept anyway."""
+
+    if 0 <= chunk_id < len(marks) * 8:
+        marks[chunk_id >> 3] |= 1 << (chunk_id & 7)
+
+
+class ChunkReader:
+    """Reads chunk text back out of the index file, for the log's chunked prompts (7.93.0).
+
+    Since 7.93.0 a prompt the log stores as a chunk list (``request_log``'s
+    prompt chunk store) is put back together from the chunks this file holds.
+    Any thread reads through it: connections of its own to the index file,
+    opened when first needed and reused, never the writer's. It needs no
+    trigram tokenizer -- only the ``chunks`` and ``chunk_dicts`` tables -- so
+    a log converted on one machine reads on any.
+
+    Decoded chunks are kept in a small cache, by id, oldest out first: turn
+    N+1 of a conversation is turn N's chunks and one more, so reading a
+    session's prompts one after the other decodes each chunk once. A cached text is only ever a hint: the
+    caller checks what it rebuilt against the prompt's own check bytes and
+    asks again with ``cached=False`` when they differ (an id an older version
+    deleted and SQLite handed out again).
+    """
+
+    def __init__(self, path: Path, cache_bytes: int = 32 * 1024 * 1024) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        self._idle: list[sqlite3.Connection] = []
+        self._open: list[sqlite3.Connection] = []
+        self._dicts: dict[int, Any] = {}
+        self._cache: OrderedDict[int, bytes] = OrderedDict()
+        self._cache_bytes = 0
+        self._cache_max = max(0, cache_bytes)
+
+    def _acquire(self) -> sqlite3.Connection | None:
+        with self._lock:
+            if self._idle:
+                return self._idle.pop()
+        # Never creates the file: a missing index holds no chunk.
+        if not self.path.exists():
+            return None
+        conn = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+        try:
+            conn.execute("PRAGMA query_only=1")
+        except sqlite3.Error:
+            conn.close()
+            raise
+        with self._lock:
+            self._open.append(conn)
+        return conn
+
+    def _release(self, conn: sqlite3.Connection) -> None:
+        with self._lock:
+            if conn in self._open and len(self._idle) < _READER_IDLE_MAX:
+                self._idle.append(conn)
+                return
+            with contextlib.suppress(ValueError):
+                self._open.remove(conn)
+        conn.close()
+
+    def close(self) -> None:
+        """Close every connection this reader holds and drop its cache.
+
+        Not final, like the log's own connections: a read after it opens a
+        connection again.
+        """
+        with self._lock:
+            conns, self._open, self._idle = list(self._open), [], []
+            self._cache.clear()
+            self._cache_bytes = 0
+        for conn in conns:
+            with contextlib.suppress(sqlite3.Error):
+                conn.close()
+
+    def forget(self, ids: Iterable[int] | None = None) -> None:
+        """Drop cached texts: these ids, or every one (a clear)."""
+
+        with self._lock:
+            if ids is None:
+                self._cache.clear()
+                self._cache_bytes = 0
+                return
+            for chunk_id in ids:
+                text = self._cache.pop(chunk_id, None)
+                if text is not None:
+                    self._cache_bytes -= len(text)
+
+    def _digested(self, conn: sqlite3.Connection, dict_id: int) -> Any:
+        if not dict_id:
+            return None
+        with self._lock:
+            found = self._dicts.get(dict_id)
+        if found is not None:
+            return found
+        row = conn.execute(
+            "SELECT content FROM chunk_dicts WHERE id = ?", (dict_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"search index dictionary {dict_id} is missing")
+        digested = zstd.ZstdDict(bytes(row[0])).as_digested_dict
+        with self._lock:
+            self._dicts.setdefault(dict_id, digested)
+        return digested
+
+    def texts(
+        self,
+        ids: Sequence[int],
+        *,
+        cached: bool = True,
+        local: dict[int, bytes] | None = None,
+    ) -> list[bytes] | None:
+        """The original bytes of each chunk in ``ids``, in order; None if any is missing.
+
+        ``cached=False`` reads every chunk from the file. ``local`` is a
+        caller's own cache for one piece of work (the conversion's proof reads
+        each chunk of a step from the file once, never from the LRU).
+        """
+
+        if cached and local is None:
+            # The common case, a prompt whose chunks were all read lately.
+            with self._lock:
+                cache = self._cache
+                try:
+                    return [cache[chunk_id] for chunk_id in ids]
+                except KeyError:
+                    pass
+        found: dict[int, bytes] = {}
+        wanted = list(dict.fromkeys(ids))
+        missing: list[int] = []
+        if local is not None:
+            for chunk_id in wanted:
+                text = local.get(chunk_id)
+                if text is None:
+                    missing.append(chunk_id)
+                else:
+                    found[chunk_id] = text
+        elif cached:
+            with self._lock:
+                for chunk_id in wanted:
+                    text = self._cache.get(chunk_id)
+                    if text is None:
+                        missing.append(chunk_id)
+                    else:
+                        found[chunk_id] = text
+        else:
+            missing = wanted
+        if missing:
+            conn = self._acquire()
+            if conn is None:
+                return None
+            read: dict[int, bytes] = {}
+            try:
+                for start in range(0, len(missing), _LOOKUP_CHUNK):
+                    part = missing[start : start + _LOOKUP_CHUNK]
+                    for chunk_id, dict_id, data in conn.execute(
+                        "SELECT id, dict_id, data FROM chunks"
+                        f" WHERE id IN ({', '.join('?' * len(part))})",
+                        part,
+                    ):
+                        read[int(chunk_id)] = zstd.decompress(
+                            bytes(data), zstd_dict=self._digested(conn, int(dict_id))
+                        )
+            except (sqlite3.Error, zstd.ZstdError, ValueError) as exc:
+                logger.debug("Request log chunk read failed: {}", exc)
+                return None
+            finally:
+                self._release(conn)
+            found.update(read)
+            if local is not None:
+                local.update(read)
+            elif cached and self._cache_max:
+                with self._lock:
+                    for chunk_id, text in read.items():
+                        if chunk_id in self._cache:
+                            continue
+                        self._cache[chunk_id] = text
+                        self._cache_bytes += len(text)
+                    while self._cache_bytes > self._cache_max and self._cache:
+                        _evicted, text = self._cache.popitem(last=False)
+                        self._cache_bytes -= len(text)
+        if len(found) != len(wanted):
+            return None
+        return [found[chunk_id] for chunk_id in ids]
+
+
+# Idle reader connections a ``ChunkReader`` keeps for reuse.
+_READER_IDLE_MAX = 8
 
 
 def _chunk_flags(chunk: bytes) -> tuple[int, str | None]:
