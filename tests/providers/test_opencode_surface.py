@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import openai
 import pytest
 
 from my_claude_code.application.errors import ApplicationUnavailableError
@@ -322,8 +323,14 @@ def test_the_alternatives_never_include_the_surface_that_just_failed() -> None:
 class _FakeResponses:
     """A Responses transport that answers exactly what a test tells it to."""
 
-    def __init__(self, *, probe_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        probe_error: Exception | None = None,
+        stream_error: Exception | None = None,
+    ) -> None:
         self.probe_error = probe_error
+        self.stream_error = stream_error
         self.probes: list[str] = []
         self.streamed: list[str] = []
         self.url = "https://opencode.ai/zen/v1/responses"
@@ -338,8 +345,11 @@ class _FakeResponses:
 
     def stream(self, request, **_: Any):
         self.streamed.append(request.model)
+        error = self.stream_error
 
         async def _run():
+            if error is not None:
+                raise error
             yield "event: message_start\n\n"
 
         return _run()
@@ -425,6 +435,177 @@ async def test_a_failure_on_both_surfaces_raises_the_hosts_own_failure() -> None
     assert learned_fact_store().facts_for_model("opencode", "m") == ()
     # Still resolvable, still routable: nothing was withheld.
     assert _resolve("m").surface is ResponseSurface.CHAT_COMPLETIONS
+
+
+# --------------------------------------------------------------------------
+# a country refusal (7.96.1)
+# --------------------------------------------------------------------------
+
+REGION_BODY = {
+    "type": "error",
+    "error": {
+        "type": "RegionError",
+        "message": "This model is not available in your country.",
+    },
+}
+
+
+def _region_403(carrier: str) -> Exception:
+    """Zen's country refusal, on either carrier the chat door can raise."""
+
+    if carrier == "httpx":
+        return _error(403, REGION_BODY)
+    request = httpx.Request("POST", "https://opencode.ai/zen/v1/chat/completions")
+    return openai.PermissionDeniedError(
+        "Error code: 403",
+        response=httpx.Response(403, json=REGION_BODY, request=request),
+        body=REGION_BODY["error"],
+    )
+
+
+def _know_chat_door(source: str, monkeypatch) -> None:
+    """Make model ``m`` resolve to Chat Completions *because* of ``source``."""
+
+    if source == "override":
+        _write_registry(**{"m": {}})
+        table = overrides_module.ModelParameterOverrides.from_document(
+            {"models": {"opencode/m": {"response_surface": "chat_completions"}}}
+        )
+        monkeypatch.setattr(
+            "my_claude_code.providers.openai_chat.response_surface.current_model_overrides",
+            lambda: table,
+        )
+    elif source == "learned":
+        _write_registry(**{"m": {}})
+        remember_response_surface(
+            "opencode", "m", ResponseSurface.CHAT_COMPLETIONS, evidence="probe"
+        )
+    else:
+        _write_registry(**{"m": _npm("@ai-sdk/openai-compatible")})
+
+
+class _FakeMessages:
+    """A Messages transport whose probe is counted and refused."""
+
+    def __init__(self) -> None:
+        self.probes: list[str] = []
+
+    async def probe(self, model_id: str) -> None:
+        self.probes.append(model_id)
+        raise _error(403, REGION_BODY)
+
+    def stream(self, request, **_: Any):
+        raise AssertionError("the Messages door is never streamed here")
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("carrier", ["httpx", "openai"])
+@pytest.mark.parametrize("source", ["override", "learned", "registry"])
+async def test_a_country_refusal_on_a_known_door_never_probes_the_others(
+    source: str, carrier: str, monkeypatch
+) -> None:
+    """The other doors are behind the same refused address.
+
+    The Responses fake would *serve* a probe, so a probe that ran would turn
+    this failure into a success. Instead the host's own 403 must reach the
+    proxy pool untouched, with no probe made and nothing learned.
+    """
+
+    _know_chat_door(source, monkeypatch)
+    provider = _provider()
+    assert provider.resolved_surface("m").source.value == source
+    fake = _FakeResponses()
+    provider._responses_transport = fake
+    _chat_raises(provider, _region_403(carrier))
+
+    with pytest.raises(ExecutionFailure) as caught:
+        await _drain(provider.stream_response(_request("m")))
+
+    assert caught.value.status_code == 403
+    assert fake.probes == []
+    assert fake.streamed == []
+    resolved = provider.resolved_surface("m")
+    assert resolved.surface is ResponseSurface.CHAT_COMPLETIONS
+    assert resolved.source.value == source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("carrier", ["httpx", "openai"])
+async def test_a_country_refusal_on_a_guessed_door_still_probes_and_learns(
+    carrier: str,
+) -> None:
+    """anomalyco/opencode#47969, kept.
+
+    Zen sometimes answers the *wrong door* with this same country 403 while
+    ``/responses`` serves the identical request from the same address. On a
+    door nobody vouched for, the probe is what recovers the request and
+    teaches MCC the right door.
+    """
+
+    _write_registry(**{"m": {}})
+    provider = _provider()
+    assert provider.resolved_surface("m").source is ResponseSurfaceSource.PROFILE
+    fake = _FakeResponses()
+    provider._responses_transport = fake
+    _chat_raises(provider, _region_403(carrier))
+
+    events = await _drain(provider.stream_response(_request("m")))
+
+    assert events, "the probe on the other door must actually serve the request"
+    assert fake.probes == ["m"]
+    assert fake.streamed == ["m"]
+    surface_facts = [
+        (fact.value, fact.source)
+        for fact in learned_fact_store().facts_for_model("opencode", "m")
+        if fact.fact_kind == "response_surface"
+    ]
+    assert surface_facts == [("responses", "probe")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["override", "learned", "registry"])
+async def test_a_known_door_still_probes_on_a_wrong_door_answer_that_is_not_a_country(
+    source: str, monkeypatch
+) -> None:
+    """Only the country refusal is exempted; a bare 500 still means a wrong door."""
+
+    _know_chat_door(source, monkeypatch)
+    provider = _provider()
+    fake = _FakeResponses()
+    provider._responses_transport = fake
+    _chat_raises(provider, _error(500, BARE_500_BODY))
+
+    events = await _drain(provider.stream_response(_request("m")))
+
+    assert events
+    assert fake.probes == ["m"]
+    assert fake.streamed == ["m"]
+
+
+@pytest.mark.asyncio
+async def test_a_country_refusal_on_the_door_a_probe_just_proved_probes_no_further() -> (
+    None
+):
+    """The door a probe proved inside this request is a known door from then on."""
+
+    _write_registry(**{"m": {}})
+    provider = _provider()
+    fake = _FakeResponses(stream_error=_error(403, REGION_BODY))
+    provider._responses_transport = fake
+    messages = _FakeMessages()
+    provider._messages_transport = messages
+    _chat_raises(provider, _error(500, BARE_500_BODY))
+
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        await _drain(provider.stream_response(_request("m")))
+
+    assert caught.value.response.status_code == 403
+    assert fake.probes == ["m"]
+    assert fake.streamed == ["m"]
+    assert messages.probes == []
 
 
 @pytest.mark.asyncio
