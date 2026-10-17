@@ -18,6 +18,7 @@ from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.providers.base import BaseProvider
 from my_claude_code.providers.model_listing import ModelListResponseError
 
+from . import models_dev
 from .model_cache import ProviderModelCache
 
 ProviderResolver = Callable[[str], BaseProvider]
@@ -92,7 +93,17 @@ class ConfiguredModelValidator:
                     )
                     continue
                 model_ids = frozenset(info.model_id for info in result)
-                self._model_cache.cache_model_infos(provider_id, result)
+                # Enriched from models.dev exactly as discovery's seam
+                # (``discovery.cache_enriched_model_infos``) enriches before it
+                # caches -- that module imports this one, so the seam cannot
+                # be called from here. Caching the raw list overwrote the
+                # enriched records a sweep had already stored, so a configured
+                # provider's window, limits and modalities read "unknown"
+                # until the next sweep (7.97.0).
+                enriched = await models_dev.enrich_provider_model_infos(
+                    result, provider_id=provider_id
+                )
+                self._model_cache.cache_model_infos(provider_id, enriched)
                 failures.extend(
                     self._format_missing_model_failure(ref)
                     for ref in provider_refs

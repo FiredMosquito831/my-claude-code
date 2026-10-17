@@ -277,15 +277,19 @@ async def refresh_litellm_cache(path: Path | None = None) -> bool:
     disk is kept: a stale price is a knowable error, a truncated table is a
     silent one. With nothing on disk to keep, the pinned immutable commit is
     tried once as the floor.
+
+    Reading the copy on disk and writing the new one run on a worker thread
+    (7.97.0, when a release first called this): each is a 2.3 MB JSON pass,
+    measured at about 55 ms apiece, which the event loop would otherwise hold.
     """
     cache_path = path if path is not None else litellm_cache_path()
-    cached = read_litellm_cache(cache_path)
+    cached = await asyncio.to_thread(read_litellm_cache, cache_path)
     previous = cached.index if cached else None
     fetched = await fetch_litellm_prices(cached.etag if cached else None)
     if fetched is not None and fetched.not_modified:
         return _touch_litellm_cache(cache_path)
     if fetched is not None and payload_passes_integrity(fetched.index, previous):
-        return _store(cache_path, fetched)
+        return await asyncio.to_thread(_store, cache_path, fetched)
     if fetched is not None:
         logger.debug(
             "LiteLLM price payload rejected by the integrity check; keeping the cache"
@@ -295,7 +299,7 @@ async def refresh_litellm_cache(path: Path | None = None) -> bool:
     pinned = await fetch_litellm_prices(None, LITELLM_PINNED_URL)
     if pinned is None or not payload_passes_integrity(pinned.index, None):
         return False
-    return _store(cache_path, pinned)
+    return await asyncio.to_thread(_store, cache_path, pinned)
 
 
 def _store(cache_path: Path, fetched: LiteLLMFetch) -> bool:
@@ -316,6 +320,26 @@ def _touch_litellm_cache(cache_path: Path) -> bool:
         logger.debug("LiteLLM cache touch failed silently: {}", exc)
         return False
     return True
+
+
+def litellm_refresh_is_due(settings: Settings, path: Path | None = None) -> bool:
+    """Whether the sweep should fetch: the source is on, and no fresh table is on disk.
+
+    The freshness rule is :func:`read_litellm_cache`'s own -- the cache file's
+    mtime against ``LITELLM_CACHE_TTL_SECONDS`` -- read from a ``stat`` so the
+    question costs nothing next to parsing the 2.3 MB table. Off (what ships),
+    nothing is ever fetched (7.97.0).
+    """
+
+    if not bool(getattr(settings, "cost_source_litellm_enabled", False)):
+        return False
+    cache_path = path if path is not None else litellm_cache_path()
+    try:
+        mtime = cache_path.stat().st_mtime
+    except OSError:
+        return True
+    age = datetime.now(UTC).timestamp() - mtime
+    return age >= float(settings.litellm_cache_ttl_seconds)
 
 
 def schedule_litellm_refresh(path: Path | None = None) -> None:
@@ -429,11 +453,16 @@ def litellm_rate_card(
     Walks :func:`_candidate_entries` and answers with the first entry that
     states a token rate; a bare key must agree with the routed provider before
     its price is accepted.
+
+    The map is the parsed copy :func:`_stored_map` keeps per file mark (7.97.0)
+    -- the same one the kind and display rungs read -- rather than a fresh
+    parse of the 2.3 MB file for every priced request: until 7.97.0 nothing
+    downloaded the file, so that parse never ran; now a release does.
     """
-    cache = read_litellm_cache(path)
-    if cache is None:
+    stored = _stored_map(path if path is not None else litellm_cache_path())
+    if stored is None:
         return None
-    for key, entry, label in _candidate_entries(cache.index, provider_id, model_id):
+    for key, entry, label in _candidate_entries(stored[1], provider_id, model_id):
         card = _rate_card(key, entry, label)
         if card is not None:
             return card
@@ -479,13 +508,13 @@ def litellm_media_card(
 ) -> MediaRateCard | None:
     """LiteLLM's media rates for one routed (provider, model), or ``None``.
 
-    The same candidate walk as :func:`litellm_rate_card`; the first entry that
-    states any token or unit rate answers.
+    The same candidate walk as :func:`litellm_rate_card`, over the same parsed
+    copy; the first entry that states any token or unit rate answers.
     """
-    cache = read_litellm_cache(path)
-    if cache is None:
+    stored = _stored_map(path if path is not None else litellm_cache_path())
+    if stored is None:
         return None
-    for key, entry, label in _candidate_entries(cache.index, provider_id, model_id):
+    for key, entry, label in _candidate_entries(stored[1], provider_id, model_id):
         card = _media_card(key, entry, label)
         if card is not None:
             return card
@@ -711,6 +740,7 @@ __all__ = [
     "litellm_model_entries",
     "litellm_model_facts",
     "litellm_rate_card",
+    "litellm_refresh_is_due",
     "payload_passes_integrity",
     "read_litellm_cache",
     "refresh_litellm_cache",

@@ -12809,9 +12809,9 @@ function buildAnthropicOAuthControl(wrapper) {
   warningText.textContent =
     "Anthropic does not permit routing requests through Free, Pro, or Max " +
     "plan credentials in third-party tools, and this provider additionally " +
-    "refuses any request that did not come from Claude Code or the Claude " +
-    "Agent SDK. Read docs/ANTHROPIC-SUBSCRIPTION.md before using either " +
-    "option below.";
+    "refuses any request that did not come from Claude Code, the Claude " +
+    "Agent SDK or the Claude desktop app. Read docs/ANTHROPIC-SUBSCRIPTION.md " +
+    "before using either option below.";
   warning.appendChild(warningText);
 
   const status = document.createElement("div");

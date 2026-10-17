@@ -60,7 +60,11 @@ class VertexProvider(GoogleOpenAIProvider):
         )
         self._model_list_client = bound_socks_handshake(
             httpx.AsyncClient(
-                proxy=config.proxy,
+                # "" is "no proxy" everywhere in MCC, but httpx reads any
+                # string as a proxy URL and refuses this one ("Unknown scheme
+                # for proxy URL"), which stopped an unproxied Vertex provider
+                # from being built at all. ``None`` is httpx's own default.
+                proxy=config.proxy or None,
                 timeout=httpx.Timeout(
                     config.http_read_timeout,
                     connect=config.http_connect_timeout,

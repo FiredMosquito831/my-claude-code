@@ -54,8 +54,8 @@ REQUIRE_SETTING = "ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE"
 
 _REFUSAL = (
     "The Anthropic subscription provider only serves requests that come from "
-    "Anthropic's own clients -- the Claude Code CLI or the Claude Agent SDK. "
-    "This request reports cc_entrypoint={reported}, so it was refused rather "
+    "Anthropic's own clients -- the Claude Code CLI, the Claude Agent SDK or "
+    "the Claude desktop app. This request reports cc_entrypoint={reported}, so it was refused rather "
     "than billed to your Claude subscription. Route it to the `anthropic` "
     f"provider (Claude Console API key) instead, or set {REQUIRE_SETTING}"
     "=false if you have read docs/ANTHROPIC-SUBSCRIPTION.md and accept what "

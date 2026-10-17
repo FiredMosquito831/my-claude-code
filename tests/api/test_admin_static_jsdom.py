@@ -3007,6 +3007,21 @@ def test_sign_in_becomes_sign_in_another_account_once_one_is_stored(
     assert labels["stored"]["managedEnabled"] is True
 
 
+def test_the_subscription_warning_names_every_client_the_gate_admits(
+    rendered: dict,
+) -> None:
+    """7.97.0: since 7.92.1 the gate admits the Claude desktop app as well as
+    Claude Code and the Agent SDK; the card's warning says so."""
+    text = rendered["anthropicOAuthWarning"]["text"]
+
+    assert "does not permit" in text
+    assert (
+        "did not come from Claude Code, the Claude Agent SDK or the Claude "
+        "desktop app." in text
+    )
+    assert "ANTHROPIC-SUBSCRIPTION.md" in text
+
+
 def test_the_shared_row_explains_why_it_is_read_only() -> None:
     """7.69.1: a shared row says who owns it and why MCC will not renew it.
 

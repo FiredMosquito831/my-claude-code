@@ -10612,6 +10612,25 @@ const anthropicOAuthSignInLabel = await (async () => {
   return { empty, stored };
 })();
 
+/* The Claude-subscription card's warning, as the real builder draws it
+   (7.97.0): it names every client the gate admits since 7.92.1. */
+const anthropicOAuthWarning = await (async () => {
+  ROUTES["/admin/api/anthropic-oauth/sources"] = {
+    claude_code: { available: false },
+    mcc: { available: false },
+    accounts: [],
+    windows: { observed: false },
+  };
+  const wrapper = doc.createElement("div");
+  window.eval("buildAnthropicOAuthControl")(wrapper);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  delete ROUTES["/admin/api/anthropic-oauth/sources"];
+  const warning = wrapper.querySelector(".guide-note-warn");
+  return {
+    text: ((warning && warning.textContent) || "").replace(/\s+/g, " ").trim(),
+  };
+})();
+
 /* ------------------------------------------------------ the Image rail (7.60.0)
    A media rail is drawn as its own card with the ordinary rail editor; none
    of its three settings may fall into the leftovers grid. */
@@ -13808,6 +13827,7 @@ console.log(
       rtkToggles,
       anthropicOAuthCard,
       anthropicOAuthSignInLabel,
+      anthropicOAuthWarning,
       fetched: Array.from(new Set(fetchCalls)).sort(),
     },
     null,

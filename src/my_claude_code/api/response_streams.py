@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import weakref
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -289,6 +290,7 @@ class ManagedStreamingResponse(StreamingResponse):
             preserved_error=preserved_error,
         )
         budget = _cleanup_wait_budget()
+        abandoned: asyncio.CancelledError | None = None
         try:
             if budget is None:
                 await close_body
@@ -304,16 +306,31 @@ class ManagedStreamingResponse(StreamingResponse):
                 await asyncio.wait_for(close_body, budget)
         except TimeoutError:
             _trace_response_cleanup_failure("close_body", TimeoutError())
+        except asyncio.CancelledError as exc:
+            # Any other cancellation is control flow and propagates at once,
+            # unreleased, as it always has.
+            if asyncio.current_task() not in _ABANDONED_CLEANUPS:
+                raise
+            # The waiter gave up on this cleanup (``_abandon_cleanup``). Its
+            # bound and the one above measure to the same hard deadline, so
+            # whichever timer the loop runs first wins; when it is the
+            # waiter's, the cancellation lands inside the close above. The
+            # close is given up, the release below still runs, and the
+            # cancellation is restored after it -- otherwise the lease stays
+            # held and the provider drain reports a runtime that failed to
+            # close (the ``test_bounded_shutdown`` flake, 7.97.0).
+            abandoned = exc
         except Exception as exc:
             _trace_response_cleanup_failure("close_body", exc)
 
         release = self._release
-        if release is None:
-            return
-        try:
-            await release()
-        except Exception as exc:
-            _trace_response_cleanup_failure("release_resource", exc)
+        if release is not None:
+            try:
+                await release()
+            except Exception as exc:
+                _trace_response_cleanup_failure("release_resource", exc)
+        if abandoned is not None:
+            raise abandoned
 
 
 async def _wait_for_cleanup(task: asyncio.Task[None]) -> None:
@@ -330,8 +347,11 @@ async def _wait_for_cleanup(task: asyncio.Task[None]) -> None:
 
     A stop that has been requested therefore bounds this wait against the shared
     stop deadline. Past it the cleanup task is cancelled and abandoned, the
-    caller's cancellation is restored, and the stop proceeds. Nothing changes
-    for a request cancelled while the server is running normally.
+    caller's cancellation is restored, and the stop proceeds. The cancellation
+    ends the cleanup's body close, never its release: ``_cleanup`` still
+    releases the lease before it lets the cancellation through, so abandoning
+    the close cannot leave the provider drain waiting. Nothing changes for a
+    request cancelled while the server is running normally.
     """
     cancellation: asyncio.CancelledError | None = None
     while not task.done():
@@ -378,9 +398,17 @@ def _cleanup_wait_budget() -> float | None:
     return deadline.teardown_remaining()
 
 
+#: Cleanup tasks ``_abandon_cleanup`` cancelled at the stop deadline (7.97.0).
+#: ``ManagedStreamingResponse._cleanup`` reads it to tell that cancellation --
+#: after which the lease must still be released -- from every other one, which
+#: stays control flow. Weak, so a finished task leaves no trace.
+_ABANDONED_CLEANUPS: weakref.WeakSet[asyncio.Task[Any]] = weakref.WeakSet()
+
+
 def _abandon_cleanup(task: asyncio.Task[None]) -> None:
     """Cancel a cleanup that outlived the stop deadline and stop waiting on it."""
 
+    _ABANDONED_CLEANUPS.add(task)
     task.cancel()
     # The task outlives this await, so nothing would otherwise retrieve its
     # outcome and asyncio would log "exception was never retrieved" during an

@@ -204,11 +204,21 @@ def _is_high_entropy_secret(text: str) -> bool:
     return False
 
 
-def redact_string_value(text: str) -> str:
-    """Redact one structured string leaf, by exact match, entropy, then shape."""
+def redact_string_value(text: str, *, known_ids: frozenset[str] = frozenset()) -> str:
+    """Redact one structured string leaf, by exact match, entropy, then shape.
+
+    ``known_ids`` (7.97.0) is declared data: model ids a catalogue lists. A
+    value EQUAL to one of them skips the entropy rung only -- a Hugging Face id
+    such as ``meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8`` is a 40+
+    character run with digits and both cases, which is exactly what that rung
+    exists to catch. The configured-credential match above it and the shape
+    scrubber below it still run on every value, and nothing that is not an
+    exact known id is treated any differently. Empty -- every caller but the
+    "Everything known" view -- is the rule as it always was.
+    """
     if _is_configured_credential(text):
         return REDACTED
-    if _is_high_entropy_secret(text):
+    if text not in known_ids and _is_high_entropy_secret(text):
         return REDACTED
     return redact_sensitive_error_text(text)
 
@@ -220,7 +230,7 @@ def _is_secret_key(key: str) -> bool:
     return any(marker in lowered for marker in _SECRET_KEY_SUBSTRINGS)
 
 
-def redact_wire_value(value: Any) -> Any:
+def redact_wire_value(value: Any, *, known_ids: frozenset[str] = frozenset()) -> Any:
     """Recursively redact credentials by key name and by value shape.
 
     Four passes, because each alone leaks. A key named ``api_key`` is redacted
@@ -234,17 +244,23 @@ def redact_wire_value(value: Any) -> Any:
     which covers a key smuggled into a field nobody thought to name (``sk-``,
     ``nvapi-``, ``gsk_``, ``csk-``, ``xai-``, ``fw_``, ``ya29.``, ``AKIA``, a
     JWT, ``Bearer x``).
+
+    ``known_ids`` reaches every string leaf; see :func:`redact_string_value`.
     """
     if isinstance(value, Mapping):
         out: dict[str, Any] = {}
         for raw_key, item in value.items():
             key = str(raw_key)
-            out[key] = REDACTED if _is_secret_key(key) else redact_wire_value(item)
+            out[key] = (
+                REDACTED
+                if _is_secret_key(key)
+                else redact_wire_value(item, known_ids=known_ids)
+            )
         return out
     if isinstance(value, str):
-        return redact_string_value(value)
+        return redact_string_value(value, known_ids=known_ids)
     if isinstance(value, list | tuple):
-        return [redact_wire_value(item) for item in value]
+        return [redact_wire_value(item, known_ids=known_ids) for item in value]
     return value
 
 
