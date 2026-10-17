@@ -61,6 +61,52 @@ WEBSEARCH_PROXY=""
 
 You can also configure everything from **Admin UI → Web Search**. The route summary shows the complete configured chain and the last observed terminal route; the effective card is highlighted, providers can be selected directly, and each card exposes testing, key health, rotation, and advanced options. Deep per-provider pricing, my-tier details, and a capability matrix live in [research/web-search-providers.md](../research/web-search-providers.md) and [research/web-search-advanced.md](../research/web-search-advanced.md).
 
+### Optional client-side search and page fetching with Parallel MCP
+
+For Claude Code sessions launched with `mcc-claude`, you can also add
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
+directly to Claude Code. It provides `web_search` and `web_fetch` tools for
+finding current information and reading specific pages. The anonymous endpoint
+needs no account or API key; search runs in Fast mode. Free access has rate
+limits and is intended for exploration and light use.
+
+With Claude Code installed, run these commands from the project where you will
+use it:
+
+```bash
+claude mcp add --transport http --scope local parallel-search https://search.parallel.ai/mcp
+claude mcp get parallel-search
+mcc-claude
+```
+
+`--scope local` keeps the server in your personal Claude Code configuration for
+this project, without adding a shared `.mcp.json` or enabling it in other
+projects. In the new session, run `/mcp` and confirm `parallel-search` is
+connected. Approve tool use when Claude Code asks. Try:
+
+```text
+Use parallel-search to find the current Python release notes on python.org,
+then fetch the release-notes page and summarize the changes with source links.
+```
+
+This is a separate client-side path from the `parallel` provider in the table
+above. That native provider uses `PARALLEL_API_KEY` and MCC's search routing;
+the MCP tools connect from Claude Code to Parallel directly. MCC's
+`WEB_SEARCH_PROVIDER`, fallback policy, `WEBSEARCH_PROXY`, and Web Search
+analytics do not control or record those MCP requests. Queries and fetched URLs
+are sent to Parallel. Adding this server leaves MCC's native search settings
+unchanged, including any disabled search setting; manage the MCP server
+separately in Claude Code.
+
+To remove this project's local server entry:
+
+```bash
+claude mcp remove --scope local parallel-search
+```
+
+See [Claude Code's MCP guide](https://code.claude.com/docs/en/mcp) for other
+scopes, connection troubleshooting, and managed MCP restrictions.
+
 ### Multi-key rotation (web search keys)
 
 Comma-separate multiple keys in the same variable and pick a policy via `{ENV}_ROTATION`:
