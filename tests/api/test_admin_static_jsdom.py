@@ -6969,6 +6969,57 @@ def test_the_exit_filter_suggests_the_exits_on_the_page(rendered) -> None:
     assert len(options) == len(set(options))
 
 
+# ------------------------------------------------ exit refusal facts (7.96.0)
+
+#: The chip's count sign, spelled as a named escape for the linter.
+TIMES = "\N{MULTIPLICATION SIGN}"
+
+
+def test_the_exit_cell_title_counts_the_exit_refusals(rendered) -> None:
+    cells = rendered["exitFacts"]["cells"]
+
+    assert cells["refused"]["text"] == "exit-c.example:1080+2"
+    assert f"Exit refusals: country refused {TIMES}2." in cells["refused"]["title"]
+    assert "not the key" in cells["refused"]["title"]
+    assert (
+        f"Exit refusals: country refused {TIMES}1 · challenged {TIMES}1."
+        in cells["both"]["title"]
+    )
+    # No exit recorded (no chain, no proxy) and still refused for the country:
+    # this computer's own address was refused, and the title says so too.
+    assert cells["noExit"]["text"] == "—"
+    assert f"Exit refusals: country refused {TIMES}1." in cells["noExit"]["title"]
+
+
+def test_an_exit_cell_without_facts_is_what_it_was(rendered) -> None:
+    cell = rendered["exitFacts"]["cells"]["old"]
+
+    assert cell["text"] == "203.0.113.7:1080"
+    assert cell["title"] == "Answered through 203.0.113.7:1080."
+    assert "refus" not in cell["title"]
+
+
+def test_the_request_detail_shows_the_facts_on_the_attempt_that_met_them(
+    rendered,
+) -> None:
+    detail = rendered["exitFacts"]["detail"]
+
+    (chip,) = detail["chips"]
+    assert chip["text"] == f"country refused {TIMES}1 · challenged {TIMES}2"
+    assert chip["className"] == "req-chain-summary req-chain-exitfact"
+    assert "about the address the request left from, not the key" in chip["title"]
+    assert chip["text"] in detail["ladderSummaries"]
+
+
+def test_an_old_row_renders_no_fact_chip(rendered) -> None:
+    """R7: a stored ladder served without ``exit_facts`` draws nothing new."""
+    old = rendered["exitFacts"]["oldDetail"]
+
+    assert old["chips"] == []
+    assert "country refused" not in old["chainText"]
+    assert "challenged" not in old["chainText"]
+
+
 def test_the_table_has_no_folder_cell_and_the_detail_keeps_folder(rendered) -> None:
     exit_cells = rendered["requestExitCell"]
 

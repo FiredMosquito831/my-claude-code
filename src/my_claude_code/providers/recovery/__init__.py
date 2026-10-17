@@ -93,7 +93,12 @@ from .store import (
     reset_learned_fact_store,
     set_learned_fact_store,
 )
-from .surface import is_region_refusal, surface_shaped_failure
+from .surface import (
+    is_region_refusal,
+    region_refusal_on_cause_chain,
+    region_uncharged_reason,
+    surface_shaped_failure,
+)
 from .tool_schema_refusal import (
     DROP_KEYWORD,
     DROPPABLE_KEYWORDS,
@@ -213,6 +218,8 @@ __all__ = [
     "prune_tool_catalogue",
     "refusal_from_detail",
     "refuses_tool_name_length_unstated",
+    "region_refusal_on_cause_chain",
+    "region_uncharged_reason",
     "rejected_reasoning_field",
     "rejected_tool_name_max_length",
     "rejected_tool_schema_keyword",

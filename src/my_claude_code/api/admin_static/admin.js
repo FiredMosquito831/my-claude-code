@@ -22463,6 +22463,25 @@ function buildFolderCell(row) {
 const EXIT_SYSTEM_PROXY_PREFIX = "direct via system proxy ";
 const EXIT_MASKED_TEXT = "(masked)";
 
+/* 7.96.0: the exit refusals a request's stored tries show, counted by the
+   server as the row is read (`exit_facts` on an attempt's ladder, `facts` on
+   the row's exit) and present only when above zero. */
+const EXIT_FACTS_TITLE =
+  "Counted from the stored upstream tries. Country refused: a 403 saying the model " +
+  "is not available in the caller's country. Challenged: a bot-challenge page in " +
+  "front of the host. Both are about the address the request left from, not the key.";
+
+/** "country refused ×2 · challenged ×1", or "" when there is nothing to say. */
+function exitFactsText(facts) {
+  if (!facts || typeof facts !== "object") return "";
+  const parts = [];
+  const refused = Number(facts.region_refused || 0);
+  const challenged = Number(facts.challenged || 0);
+  if (refused > 0) parts.push(`country refused ×${refused}`);
+  if (challenged > 0) parts.push(`challenged ×${challenged}`);
+  return parts.join(" · ");
+}
+
 function maskedExitAddress(text) {
   if (!text.includes("@") && !text.includes("://")) return text;
   return proxyMaskedLabel(text) || EXIT_MASKED_TEXT;
@@ -22543,6 +22562,8 @@ function buildExitCell(row) {
     td.appendChild(more);
     lines.push(`Exits tried, in order: ${tried.join(", ")}`);
   }
+  const facts = exitFactsText(row && row.exit && row.exit.facts);
+  if (facts) lines.push(`Exit refusals: ${facts}. ${EXIT_FACTS_TITLE}`);
   td.title = lines.join("\n");
   return td;
 }
@@ -24441,6 +24462,17 @@ function renderRequestChain(row) {
       continued.className = "req-chain-summary req-chain-continued";
       continued.textContent = continuedText;
       head.appendChild(continued);
+    }
+
+    // 7.96.0: exit refusals this attempt's tries show, counted when the row
+    // is read. Absent on every attempt that met none.
+    const factsText = exitFactsText(ladderOf(attempt) && ladderOf(attempt).exit_facts);
+    if (factsText) {
+      const facts = document.createElement("span");
+      facts.className = "req-chain-summary req-chain-exitfact";
+      facts.textContent = factsText;
+      facts.title = EXIT_FACTS_TITLE;
+      head.appendChild(facts);
     }
 
     // Which credential served this attempt. The request row names only the

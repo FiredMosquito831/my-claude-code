@@ -83,6 +83,10 @@ from my_claude_code.core.upstream_ladder import record_credential_decision
 from my_claude_code.providers.failure_policy import (
     retryable_upstream_transport_error,
 )
+from my_claude_code.providers.recovery import (
+    region_refusal_on_cause_chain,
+    region_uncharged_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -377,7 +381,14 @@ class CredentialRotationState:
         outcome the user asked for and the one the numbers support.
         """
         rotate = error_justifies_rotation(error)
-        failure_class = credential_failure_class(error)
+        cls = credential_failure_class(error)
+        # 7.96.0: a 403 whose host words say the caller's *country* was refused
+        # is about the address the request came from, not the key. It still
+        # rotates exactly as before (``rotate`` is decided above); only the
+        # health record is left alone. ``auth`` alone: a body that also names
+        # a billing phrase stays the quota bench it always was.
+        region = cls == "auth" and region_refusal_on_cause_chain(error)
+        failure_class = None if region else cls
         failure = find_execution_failure(error)
         status = (
             failure.status_code if failure is not None else _status_from_error(error)
@@ -400,7 +411,11 @@ class CredentialRotationState:
                 key_index=index,
                 cls=None,
                 status=status,
-                reason=_uncharged_reason(status, failure),
+                reason=(
+                    region_uncharged_reason()
+                    if region
+                    else _uncharged_reason(status, failure)
+                ),
             )
             return rotate
         # ``None`` means the provider published no Retry-After, which the

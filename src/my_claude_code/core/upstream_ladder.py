@@ -49,9 +49,10 @@ what they were without a chain.
 """
 
 import json
+import re
 import time
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -919,6 +920,104 @@ def ladder_proxy_label(payload: Mapping[str, Any]) -> str | None:
         if label:
             return str(label)
     return None
+
+
+# ---------------------------------------------------------- exit facts --
+#
+# 7.96.0. Two things an exit can meet that are about the *address* rather than
+# the key or the model, counted per attempt from the tries the ladder already
+# stores -- so they are derived when a row is read, never written, and every
+# attempt logged before this release shows them too. Nothing here changes what
+# is stored or how a request is routed.
+
+#: The host refused the caller's country: the words ``providers/recovery/
+#: surface.py``'s ``_REGION_PATTERN`` matches on a live error (OpenCode Zen's
+#: ``RegionError``, "This model is not available in your country."). ``core``
+#: may not import ``providers``, so the words are mirrored here and
+#: ``tests/core/test_upstream_ladder_exit_facts.py`` pins the two together.
+_REGION_WORDS = re.compile(
+    r"regionerror|not available in your country|region[_ ]not[_ ]supported"
+)
+
+#: An edge put a bot challenge in front of the host: Cloudflare's
+#: ``cf-mitigated: challenge``, its "Just a moment..." interstitial, or the
+#: ``challenge-platform`` script that page loads.
+_CHALLENGE_WORDS = re.compile(r"cf-mitigated|just a moment|challenge-platform")
+
+#: A country refusal arrives as a 403; a challenge as a 403 or a 503.
+_REGION_STATUSES = frozenset({403})
+_CHALLENGE_STATUSES = frozenset({403, 503})
+
+
+def _head_words(head: Any) -> str:
+    """The readable text of a stored response head, lowercased.
+
+    A head is recorded only when a refusal body could not be decoded; its
+    first bytes are kept as hex, which is where a challenge page's title is.
+    """
+
+    if not isinstance(head, Mapping):
+        return ""
+    parts = [
+        str(value)
+        for name, value in head.items()
+        if name != "body_head_hex" and isinstance(value, str)
+    ]
+    raw = head.get("body_head_hex")
+    if isinstance(raw, str):
+        # Not hex after all: there is nothing to read, which is no fact.
+        with suppress(ValueError):
+            parts.append(bytes.fromhex(raw).decode("utf-8", "replace"))
+    return "\n".join(parts).lower()
+
+
+def exit_facts(tries: Any) -> dict[str, int]:
+    """Count the exit refusals among one attempt's stored tries.
+
+    ``region_refused`` -- a 403 whose stored body says the caller's country
+    was refused. ``challenged`` -- a 403 or 503 whose stored body or response
+    head is a bot challenge. A count is present only when it is above zero, so
+    an attempt that met neither answers ``{}``.
+    """
+
+    if not isinstance(tries, list):
+        return {}
+    region = 0
+    challenged = 0
+    for row in tries:
+        if not isinstance(row, Mapping) or row.get("source") != "upstream":
+            continue
+        status = row.get("status")
+        body = row.get("body")
+        text = body.lower() if isinstance(body, str) else ""
+        if status in _REGION_STATUSES and _REGION_WORDS.search(text):
+            region += 1
+        if status in _CHALLENGE_STATUSES and (
+            _CHALLENGE_WORDS.search(text)
+            or _CHALLENGE_WORDS.search(_head_words(row.get("response_head")))
+        ):
+            challenged += 1
+    facts: dict[str, int] = {}
+    if region:
+        facts["region_refused"] = region
+    if challenged:
+        facts["challenged"] = challenged
+    return facts
+
+
+def add_exit_facts(params: Any) -> None:
+    """Add ``exit_facts`` to a stored attempt's ladder as it is read.
+
+    Only when the attempt met at least one, so every other attempt reads
+    exactly as it was stored.
+    """
+
+    ladder = params.get("ladder") if isinstance(params, dict) else None
+    if not isinstance(ladder, dict):
+        return
+    facts = exit_facts(ladder.get("tries"))
+    if facts:
+        ladder["exit_facts"] = facts
 
 
 def _seconds(milliseconds: float) -> str:

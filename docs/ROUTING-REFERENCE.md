@@ -409,6 +409,23 @@ For a provider whose allowance follows the **address** — OpenCode Zen's free m
 
 **What it costs.** Each bad exit costs what it costs today — a refused connect up to `PROXY_CONNECT_TIMEOUT_SECONDS`, a 429 a second or two, a silent exit up to `HTTP_READ_TIMEOUT` — but once per memory window rather than once per request. Nothing new bounds a request's total time; with the deadlines at `0` your client's own timeout is the outer bound. The request body (and so the prompt cache) and the OpenCode session id are the same on every exit.
 
+#### A country refusal is not charged to the key (7.96.0)
+
+A `403` whose host words say the caller's **country** was refused (`RegionError`, "not available in your country") is about the address the request came from, not the key. Since 7.96.0 it leaves the key's health untouched on **every** route: no lockout, no step up `CREDENTIAL_LOCKOUT_TIERS`. A ticked chain already worked this way since 7.81.0 (the exits run out as a `502 UNAVAILABLE` that charges nothing); the change is for everything else — an unticked chain, a one-entry chain, a static proxy, no proxy at all, a Direct entry or the Direct fallback that was refused, and the media key pool. Before 7.96.0 those routes locked the key out, one tier per refusal: on one install, 1,450 lockouts in thirty days (3 s, 6 s and 60 s with a `3,6,60` ladder), all on OpenCode Zen, all through proxy exits.
+
+Nothing else moves. The request still tries the next key, then the next model of your fallback chain, exactly as before. An unticked chain still does not move to another exit — unticked keeps meaning "don't keep trying exits". A body that also names a billing phrase is still a credits bench, a plain `401`/`403` still locks the key out, and a genuine `401` raised while a country refusal was being handled is still charged (only the error's explicit cause is read). Country words that appear only in the request the host echoed back are not the host's words. There is no setting: the only other position would re-create the wrong lockout. The request detail's credential row says *403 country refusal — the address it came from, not the key; nothing benched*.
+
+#### Exit refusal facts (7.96.0)
+
+Each attempt's stored upstream tries are read for two things that are about the exit rather than the key or the model:
+
+| Fact | What the stored try shows |
+| --- | --- |
+| **country refused** | a `403` whose body has the host's country words (`RegionError`, "not available in your country") |
+| **challenged** | a `403` or `503` whose body or recorded response head is a bot challenge (Cloudflare's `cf-mitigated`, "Just a moment…", `challenge-platform`) |
+
+The request detail marks the attempt with a chip — *country refused ×2*, *challenged ×1* — and the Requests table's **Exit** cell counts them in its tooltip. They are counted when the row is read, from what the log already holds, so requests logged before 7.96.0 show them too; nothing new is stored, and an attempt that met neither renders exactly as before. The opt-in **Exit** export field gains *Country refused* and *Challenged*: the counts across the request's attempts, `0` where a ladder was stored and nothing was met, empty where no ladder was stored. OpenAI's own wording ("Country, region, or territory not supported") is not read as a country refusal yet.
+
 #### Rotation policies
 
 The same four names and the same meanings credential rotation uses: `single`, `round_robin`, `least_used`, `failover` (`on_error` is an accepted alias). `failover` is the default and the conservative one: it pins to the first healthy entry and changes nothing until something breaks. **`round_robin` is the one that multiplies a per-address allowance** — with four working addresses a per-IP limit applies four times over, from the first request rather than only after an error. Under `failover` and `single` the order of the entries decides which address is used, and since 7.56.0 MCC can keep the fastest healthy one first for you — see *Keep the fastest healthy proxy first* below.

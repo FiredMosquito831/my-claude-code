@@ -89,7 +89,11 @@ from my_claude_code.core.tool_catalogue import (
     ToolFingerprinter,
     split_member_shas,
 )
-from my_claude_code.core.upstream_ladder import format_status_census
+from my_claude_code.core.upstream_ladder import (
+    add_exit_facts,
+    exit_facts,
+    format_status_census,
+)
 from my_claude_code.core.version import package_version
 
 # ``core`` must not import ``config`` (import-boundary contract), so the
@@ -326,6 +330,26 @@ def _like_contains(text: str) -> str:
         .replace("_", f"{_LIKE_ESCAPE}_")
     )
     return f"%{escaped}%"
+
+
+#: Which attempts' stored tries are worth parsing for exit facts (7.96.0): only
+#: those whose text holds one of the words
+#: :func:`~my_claude_code.core.upstream_ladder.exit_facts` looks for, or a
+#: response head it decodes. A cheap superset -- LIKE is case-blind and ``_``
+#: matches the space too -- so the Exit column parses nothing on a page with no
+#: refusal on it. The words themselves are decided by ``exit_facts``.
+_EXIT_FACT_WORDS_SQL = " OR ".join(
+    f"params LIKE '%{word}%'"
+    for word in (
+        "regionerror",
+        "not available in your country",
+        "region_not_supported",
+        "cf-mitigated",
+        "just a moment",
+        "challenge-platform",
+        "body_head_hex",
+    )
+)
 
 
 def _note_exit(tried: list[str], label: Any) -> None:
@@ -7860,7 +7884,9 @@ class RequestLogStore:
                 "error_kind": row["error_kind"],
                 "error_message": row["error_message"],
                 "duration_ms": row["duration_ms"],
-                "params": _loads_or_none(row["params"]),
+                # 7.96.0: the exit refusals its stored tries show, added to
+                # the ladder as it is read -- only where there are any.
+                "params": _with_exit_facts(_loads_or_none(row["params"])),
                 "wire_body": _loads_or_none(self._decode_wire_body(row["wire_body"])),
                 "reasoning_emitted": (
                     None
@@ -7979,7 +8005,10 @@ class RequestLogStore:
 
     @staticmethod
     def _fetch_exits(
-        conn: sqlite3.Connection, answering: Mapping[str, Any]
+        conn: sqlite3.Connection,
+        answering: Mapping[str, Any],
+        *,
+        laddered: set[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """The exit each request went out through, for the Exit column (7.88.0).
 
@@ -8002,6 +8031,17 @@ class RequestLogStore:
         (``media_jobs.proxy_label``), so a request whose attempts named none
         takes its job's. Every label is masked again on the way out
         (:func:`masked_exit_label`). One batched read per page, never per row.
+
+        * ``facts`` (7.96.0) -- present only when the request's stored tries
+          show an exit refusal: ``region_refused`` (a 403 refusing the
+          caller's country) and ``challenged`` (a bot challenge), each counted
+          across every attempt and only when above zero
+          (:func:`~my_claude_code.core.upstream_ladder.exit_facts`). The tries
+          are parsed only for attempts whose stored text holds one of the
+          words, so a page with none reads what it read before.
+
+        ``laddered``, when given, collects the requests with at least one
+        stored ladder: the ones whose facts were measured, zero or not.
         """
 
         ids = list(answering)
@@ -8014,7 +8054,10 @@ class RequestLogStore:
         attempts = conn.execute(
             "SELECT request_id, attempt, proxy_label,"
             " CASE WHEN params LIKE '%\"dials\"%' AND json_valid(params)"
-            " THEN json_extract(params, '$.ladder.dials') END AS dials"
+            " THEN json_extract(params, '$.ladder.dials') END AS dials,"
+            " CASE WHEN params LIKE '%\"ladder\"%' THEN 1 ELSE 0 END AS laddered,"
+            f" CASE WHEN ({_EXIT_FACT_WORDS_SQL}) AND json_valid(params)"
+            " THEN json_extract(params, '$.ladder.tries') END AS fact_tries"
             " FROM request_attempts"
             f" WHERE request_id IN ({markers}) ORDER BY request_id, attempt",
             ids,
@@ -8035,6 +8078,7 @@ class RequestLogStore:
             rows = by_request.get(request_id, [])
             tried: list[str] = []
             label: str | None = None
+            facts: dict[str, int] = {}
             for row in rows:
                 dials = _loads_or_none(row["dials"]) if row["dials"] else None
                 if isinstance(dials, list):
@@ -8042,6 +8086,12 @@ class RequestLogStore:
                         if isinstance(dial, Mapping):
                             _note_exit(tried, dial.get("proxy"))
                 _note_exit(tried, row["proxy_label"])
+                if row["fact_tries"]:
+                    found = exit_facts(_loads_or_none(row["fact_tries"]))
+                    for name, count in found.items():
+                        facts[name] = facts.get(name, 0) + count
+                if laddered is not None and row["laddered"]:
+                    laddered.add(request_id)
             if rows:
                 route_attempt = answering[request_id]
                 chosen = next(
@@ -8054,6 +8104,8 @@ class RequestLogStore:
                     _note_exit(tried, job_label)
                 label = tried[-1] if tried else None
             out[request_id] = {"label": label, "tried": tried}
+            if facts:
+                out[request_id]["facts"] = facts
         return out
 
     @staticmethod
@@ -9593,9 +9645,12 @@ class RequestLogStore:
                 # The Exit columns, from the same one batched read the
                 # Requests table's Exit cell uses, so a download and the page
                 # it came from name the same exits.
+                laddered: set[str] = set()
                 exits = (
                     self._fetch_exits(
-                        conn, {str(row["id"]): row["route_attempt"] for row in rows}
+                        conn,
+                        {str(row["id"]): row["route_attempt"] for row in rows},
+                        laddered=laddered,
                     )
                     if need_exits
                     else {}
@@ -9618,6 +9673,18 @@ class RequestLogStore:
                         # chain and no proxy is not a measurement of Direct.
                         data["exit"] = found["label"] or ""
                         data["exits"] = "; ".join(found["tried"])
+                        # 7.96.0: the exit refusals its stored tries show.
+                        # A count, zero included, wherever a ladder was
+                        # stored; empty where none was, which is "not
+                        # measured" rather than "none".
+                        facts = found.get("facts") or {}
+                        measured = str(row["id"]) in laddered
+                        data["exit_region_refused"] = (
+                            facts.get("region_refused", 0) if measured else None
+                        )
+                        data["exit_challenged"] = (
+                            facts.get("challenged", 0) if measured else None
+                        )
                     yield data
                 cursor = (rows[-1]["ts_epoch"], rows[-1]["id"])
         finally:
@@ -14729,6 +14796,12 @@ def _loads_or_none(raw: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+def _with_exit_facts(params: Any) -> Any:
+    """An attempt's parsed ``params`` with its ladder's exit facts added (7.96.0)."""
+    add_exit_facts(params)
+    return params
 
 
 def _varint(value: int) -> bytes:

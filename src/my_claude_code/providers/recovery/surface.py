@@ -102,6 +102,47 @@ def is_region_refusal(error: BaseException) -> bool:
     return False
 
 
+#: What the credential pool records when a country refusal left the key alone
+#: (7.96.0). Said in the operator's terms: the host refused the address the
+#: request came from -- an exit, or this computer's own -- and the key is not
+#: what failed, so nothing was benched.
+_REGION_UNCHARGED_REASON = (
+    "403 country refusal -- the address it came from, not the key; nothing benched"
+)
+
+
+def region_refusal_on_cause_chain(error: BaseException) -> bool:
+    """Whether a country refusal is on ``error``'s *explicit* cause chain.
+
+    The credential pool's reader (7.96.0): a ``403`` whose host words match
+    :data:`_REGION_PATTERN` -- the same words test :func:`is_region_refusal`
+    makes -- on ``error`` or on an exception it was raised *from*. Only
+    ``__cause__`` is followed. :func:`is_region_refusal` also follows
+    ``__context__``, which is right for moving to another exit and too loose
+    for deciding a key's health: a genuine ``401`` raised while a country
+    refusal was being handled carries that refusal on its context, and it must
+    still lock the key. Every MCC classifier raises its failure ``from`` the
+    host's error, so the explicit chain is where the host's words are.
+    """
+
+    current: BaseException | None = error
+    seen = 0
+    while current is not None and seen < _CAUSE_DEPTH:
+        seen += 1
+        if isinstance(current, Exception) and upstream_status_code(current) == 403:
+            spoken = upstream_complaint(current)
+            if spoken != str(current).lower() and _REGION_PATTERN.search(spoken):
+                return True
+        current = current.__cause__
+    return False
+
+
+def region_uncharged_reason() -> str:
+    """The credential decision's reason when a country refusal charged nothing."""
+
+    return _REGION_UNCHARGED_REASON
+
+
 def surface_shaped_failure(error: Exception) -> str | None:
     """Return the evidence that this rejection is about the *endpoint*.
 

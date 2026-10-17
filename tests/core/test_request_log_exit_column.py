@@ -446,7 +446,13 @@ class TestTheExport:
         assert REQUEST_FIELD_IDS[-2:] == ("exit", "origin")
         assert request_detail_columns(["exit"]) == request_detail_columns([])
         derived = request_detail_derived_columns(["exit"])
-        assert derived[-2:] == ["exit", "exits"]
+        # 7.96.0 (user decision 5): the exit refusal counts join the group.
+        assert derived[-4:] == [
+            "exit",
+            "exits",
+            "exit_region_refused",
+            "exit_challenged",
+        ]
         assert request_detail_headers(["exit", "exits"]) == ["Exit", "Exits tried"]
         assert "exit" not in request_detail_derived_columns(DEFAULT_REQUEST_FIELDS)
         # Folder stays where it was.

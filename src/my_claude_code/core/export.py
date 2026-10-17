@@ -415,8 +415,10 @@ _REQUEST_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
     "ladder": ("ladder_tries", "ladder_statuses", "ladder_root_cause"),
     # The answering attempt's exit, and every exit tried in dial order joined
     # with "; " -- the cell's text and its title. Empty when none was
-    # recorded (no chain and no proxy), never a made-up "direct".
-    "exit": ("exit", "exits"),
+    # recorded (no chain and no proxy), never a made-up "direct". 7.96.0 adds
+    # the exit refusals the request's stored tries show -- a country refused,
+    # a bot challenge -- counted, and empty where no ladder was stored.
+    "exit": ("exit", "exits", "exit_region_refused", "exit_challenged"),
 }
 
 # Reverse map: column -> gating field id.
@@ -493,6 +495,8 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "ladder_root_cause",
     "exit",
     "exits",
+    "exit_region_refused",
+    "exit_challenged",
 )
 
 _REQUEST_COLUMN_LABELS: dict[str, str] = {
@@ -563,6 +567,8 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "ladder_root_cause": "Root cause",
     "exit": "Exit",
     "exits": "Exits tried",
+    "exit_region_refused": "Country refused",
+    "exit_challenged": "Challenged",
 }
 
 

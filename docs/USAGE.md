@@ -3215,6 +3215,10 @@ request*, and MCC remembers the refused exits so later requests skip them.
 When the switch limit is reached the request moves to the next model without
 pausing it. See
 [Keep trying exits until one answers](ROUTING-REFERENCE.md#keep-trying-exits-until-one-answers-7810).
+With the box unticked, or on a one-entry chain, a static proxy or no proxy at
+all, a refusal for the country goes to the next model as it always did -- and
+since 7.96.0 it no longer locks the key out on the way
+([details](ROUTING-REFERENCE.md#a-country-refusal-is-not-charged-to-the-key-7960)).
 
 **A VPN, WARP or Tor you already run (7.89.0).** **Scan this computer** on the
 **Proxying** page finds a proxy listening on this machine (WARP in proxy mode,
@@ -4684,7 +4688,12 @@ an exit's name, ignoring case (`tokyo`, `1080`, `direct`), against **every** exi
 through, not only the one that answered, so a request that a chain moved off a refusing exit is found
 by either exit. Its suggestions are the exits on the page being shown. An export gains an opt-in
 **Exit** field: *Exit* (the answering exit, empty when none was recorded) and *Exits tried* (every
-exit, in dial order, separated by `; `). Like Session and Folder it is not part of the hourly
+exit, in dial order, separated by `; `), and since 7.96.0 *Country refused* and *Challenged*: how
+many of the request's tries met a 403 refusing the caller's country or a bot-challenge page (`0`
+when a ladder was stored and met neither, empty when none was stored). The request detail marks an
+attempt that met them with a *country refused ×n* / *challenged ×n* chip and the Exit cell's
+tooltip counts them; both are read from the stored tries, so older requests show them too
+([details](ROUTING-REFERENCE.md#exit-refusal-facts-7960)). Like Session and Folder it is not part of the hourly
 statistics, so a filtered page is counted from the stored requests; each request it reads costs one
 lookup of its attempts.
 
@@ -5206,7 +5215,7 @@ Set a positive number only to hold a metered key back on purpose. When you do, t
 
 ### Credential health
 
-What one key's failures cost it, and it is a short list. A **401 or 403** walks the lockout ladder — `CREDENTIAL_LOCKOUT_TIERS`, five minutes then an hour then a day by default, one step per consecutive rejection and staying at the last entry. A **429** benches the key for exactly as long as the provider asked in its `Retry-After`, or for `RATE_LIMIT_COOLDOWN_SECONDS` when it sends no header — and only for the model it happened on, until `CREDENTIAL_MODEL_BENCH_ESCALATION` (default 2) different models are limited on that key at the same time, which is when the limit is the key's rather than the model's. A **timeout or a 5xx costs a key nothing at all**, because the same keys serve every model in your chain and neither failure is the key's doing.
+What one key's failures cost it, and it is a short list. A **401 or 403** walks the lockout ladder — `CREDENTIAL_LOCKOUT_TIERS`, five minutes then an hour then a day by default, one step per consecutive rejection and staying at the last entry. A 403 whose words say your **country** was refused (`RegionError`, "not available in your country") is the exception: it is about the address the request came from, not the key, and since 7.96.0 it costs the key nothing — the request still tries the next key and then the next model ([details](ROUTING-REFERENCE.md#a-country-refusal-is-not-charged-to-the-key-7960)). A **429** benches the key for exactly as long as the provider asked in its `Retry-After`, or for `RATE_LIMIT_COOLDOWN_SECONDS` when it sends no header — and only for the model it happened on, until `CREDENTIAL_MODEL_BENCH_ESCALATION` (default 2) different models are limited on that key at the same time, which is when the limit is the key's rather than the model's. A **timeout or a 5xx costs a key nothing at all**, because the same keys serve every model in your chain and neither failure is the key's doing.
 
 What the *request* does after that 429 is `RATE_LIMIT_ROUTES_AROUND_MODEL`. **Off (the default since 7.78.10)** follows your chain order: the model is retried on the same key up to `PROVIDER_RETRY_ATTEMPTS` times with a short wait between tries, then each other key of the provider gets the same tries, and only then does the request move to the next chain entry. **On** (the default from 6.20.0 to 7.78.9) benches the pair and sends the request straight to a later model on the **same provider** — same pool, same key — with no sleeps, no provider-wide block and no key rotation; the chain entries in between are skipped for that request. With it on and no other model on that provider in your chain, MCC asks one 16-token question of a model you already configured there: a `200` says the key is fine and only the model is limited, a `429` says the limit is the key's after all and it is benched and rotated. That probe appears in the request-detail ladder as its own row, tagged `probe`, and never as a request in your analytics.
 
@@ -6075,7 +6084,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 
 | Setting | Default | What it decides |
 | --- | --- | --- |
-| `CREDENTIAL_LOCKOUT_TIERS` | `300,3600,86400` | The auth lockout ladder, in seconds. A 401/403 takes the next entry each time and stays on the last one. Any comma-separated list of positive seconds works; the field spells your list back at you as *1st auth failure: 5m out · 2nd: 1h out · 3rd and after: 1d out*. |
+| `CREDENTIAL_LOCKOUT_TIERS` | `300,3600,86400` | The auth lockout ladder, in seconds. A 401/403 takes the next entry each time and stays on the last one (a 403 refusing your country does not, since 7.96.0). Any comma-separated list of positive seconds works; the field spells your list back at you as *1st auth failure: 5m out · 2nd: 1h out · 3rd and after: 1d out*. |
 | `RATE_LIMIT_COOLDOWN_SECONDS` | `60` | Used when a 429 arrives with no `Retry-After` and no equivalent header, and — since 6.34.0 — as the whole-key bench for an account the provider says is out of credits. When a header does arrive, the provider's own number wins. Capped at one hour either way. Named in the `All API keys for this provider are in cooldown` error since 6.16.0, alongside the **Credential health** card that edits it. |
 | `CREDENTIAL_MODEL_BENCH_ESCALATION` | `2` | New in 6.19.0. A 429 benches the (key, model) pair, not the key; this is how many different models must be limited on one key at once before the key itself is benched. `1` restores the 6.18.0 whole-key bench, `0` never escalates. |
 | `FALLBACK_FIRST_TOKEN_TIMEOUT` | `0` (no limit) | **Changed in 6.16.0** — was `180`. Silence before any output. The only deadline that produces a failover. |

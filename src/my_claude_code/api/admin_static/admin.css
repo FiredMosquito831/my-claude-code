@@ -8132,6 +8132,14 @@ audio.req-media-preview {
   white-space: normal;
 }
 
+/* 7.96.0: what the exits met that was about the address, not the key or the
+   model -- "country refused ×n", "challenged ×n". Warning-coloured: the fix is
+   a different exit, not a different key. */
+.req-chain-exitfact {
+  color: var(--warn);
+  white-space: normal;
+}
+
 .req-chain-rootcause {
   margin: 6px 0 0;
   font-size: 12px;
