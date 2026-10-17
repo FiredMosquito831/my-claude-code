@@ -32,6 +32,18 @@ leg's configuration passes ``**leg_pool_kwargs(config.http_keepalive_expiry)``.
   the OpenAI SDK's ``DEFAULT_CONNECTION_LIMITS`` for the SDK's client -- so a
   proxied leg's pool is never smaller or larger than an unproxied one's.
 
+What it cannot do
+-----------------
+
+A connection only goes back to the pool when its response was read to the
+end. Responses and Messages streams are (their readers run the body out), and
+so is every request that is not a stream. A Chat Completions stream is not:
+the OpenAI SDK's ``AsyncStream`` stops at ``data: [DONE]`` and closes the
+response before the chunked body's terminator, which closes the connection
+whatever its keep-alive says (measured on the 7.94.0 scratch chain: one new
+tunnel per Chat Completions stream with the setting at 0 and at 60). Changing
+how that stream ends is not a constructor argument and is not done here.
+
 Nothing about trust, timeouts, redirects or the proxy itself is touched. The
 SOCKS5 handshake bound and the dial clock wrap the pool's network backend
 after construction and do not read the limits.
