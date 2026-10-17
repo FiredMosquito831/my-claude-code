@@ -207,6 +207,14 @@ class ProviderConfig:
     # Read only to say in the request log which address carried a request;
     # nothing that dials reads it.
     proxy_label: str = ""
+    # How long this instance's HTTP clients keep an idle pooled connection, in
+    # seconds (7.94.0, ``PROXY_KEEPALIVE_SECONDS``). ``None`` -- the default,
+    # and the value of everything that is not a proxied chain leg -- says
+    # nothing to the client constructors, so they are built from exactly the
+    # arguments they always were. Set only by the chain fan-out
+    # (``providers/runtime/factory.py`` and the media registry), on the same
+    # line that hands a proxied leg its own connect timeout.
+    http_keepalive_expiry: float | None = None
 
     def rate_limit_cooldown(self) -> RateLimitCooldown:
         """The operator's whole 429 policy, as one value to hand around.

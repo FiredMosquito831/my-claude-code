@@ -20,6 +20,7 @@ from typing import NoReturn
 
 import pytest
 
+from my_claude_code.config.admin.manifest import FIELD_BY_KEY
 from my_claude_code.core.upstream_ladder import _TIMES
 
 HARNESS = Path(__file__).with_name("admin_jsdom_harness.mjs")
@@ -4848,6 +4849,32 @@ def test_jsdom_the_unhealthy_wording_names_the_round(rendered) -> None:
     assert "tries" not in round_["intercepted"], round_["intercepted"]
 
 
+def test_jsdom_the_two_proxy_speed_fields_render_with_their_help(rendered) -> None:
+    """7.94.0: the keep-alive and the recency half-life, each on the card the
+    other proxy tunables live on, with a number input, its range and its help.
+    """
+
+    fields = rendered["limits"]["proxySpeedFields"]
+    for key in PROXY_SPEED_FIELDS:
+        shown = fields[key]
+        shipped = FIELD_BY_KEY[key]
+        assert shown is not None, f"{key} did not render"
+        # What renders is what the manifest ships, word for word.
+        assert shown["card"] == f"section-{shipped.section_id}"
+        assert shown["label"] == shipped.label
+        assert shown["help"] == " ".join(shipped.description.split())
+        assert shown["inputType"] == "number"
+        assert shown["min"] == f"{shipped.minimum:g}"
+        assert shown["max"] == f"{shipped.maximum:g}"
+        assert shown["advancedTag"]
+        assert f"desc-{key}" in shown["describedBy"].split()
+    assert "60 is recommended" in fields["PROXY_KEEPALIVE_SECONDS"]["help"]
+    recency = fields["PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES"]["help"]
+    assert recency.startswith(
+        "0 -- what ships -- orders a chain by measured speed only"
+    )
+
+
 def test_jsdom_the_two_fetch_selects_are_on_limits_and_resilience(rendered) -> None:
     """Every tunable is reachable from the dashboard, on the page it belongs to."""
 
@@ -5955,6 +5982,13 @@ def test_typed_saved_and_exported_key_filters_still_mean_the_mask(rendered) -> N
 # really on it, and the collapse a reader chooses really comes back.
 
 COOLDOWN_FIELDS = ("RATE_LIMIT_COOLDOWN_MAX_SECONDS", "RATE_LIMIT_COOLDOWN_MODE")
+#: 7.94.0's two proxy speed settings ship ``advanced`` too, and the harness
+#: renders them on the same card, so the card's advanced set is both groups.
+PROXY_SPEED_FIELDS = (
+    "PROXY_KEEPALIVE_SECONDS",
+    "PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES",
+)
+ADVANCED_ON_THE_CARD = (*COOLDOWN_FIELDS, *PROXY_SPEED_FIELDS)
 SECTION_STORAGE_KEY = "mcc.advancedCollapsed.section:credential_health"
 
 
@@ -6053,7 +6087,7 @@ def test_jsdom_advanced_fields_sort_after_the_common_ones(rendered) -> None:
     order = rendered["advancedFields"]["section"]["all"]
     tagged = set(rendered["advancedFields"]["section"]["tagged"])
 
-    assert tagged == set(COOLDOWN_FIELDS)
+    assert tagged == set(ADVANCED_ON_THE_CARD)
     first_advanced = min(order.index(key) for key in tagged)
     assert all(key in tagged for key in order[first_advanced:]), (
         f"a common field sits below an advanced one: {order}"
@@ -6063,7 +6097,9 @@ def test_jsdom_advanced_fields_sort_after_the_common_ones(rendered) -> None:
 
 
 def test_jsdom_an_advanced_field_says_it_is_advanced(rendered) -> None:
-    assert set(rendered["advancedFields"]["section"]["tagged"]) == set(COOLDOWN_FIELDS)
+    assert set(rendered["advancedFields"]["section"]["tagged"]) == set(
+        ADVANCED_ON_THE_CARD
+    )
     assert rendered["advancedFields"]["provider"]["tagged"] == ["HARNESS_PROXY"]
 
 
@@ -6084,7 +6120,7 @@ def test_jsdom_collapsing_hides_only_the_advanced_fields(rendered) -> None:
     assert collapsed["collapsed"] is True
     assert collapsed["label"] == "Show advanced"
     assert collapsed["shown"] == [
-        key for key in section["all"] if key not in COOLDOWN_FIELDS
+        key for key in section["all"] if key not in ADVANCED_ON_THE_CARD
     ]
 
 

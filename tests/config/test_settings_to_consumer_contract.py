@@ -901,6 +901,93 @@ def test_the_resort_interval_reaches_the_speed_order_writer() -> None:
     )
 
 
+def test_the_proxy_keepalive_reaches_a_proxied_leg_and_nothing_else() -> None:
+    """7.94.0's PROXY_KEEPALIVE_SECONDS: default 0, bounds 0-3600, read."""
+
+    from pydantic import ValidationError
+
+    from my_claude_code.providers.base import (
+        ProviderConfig,
+        ProxyChainPlan,
+        ProxyLeg,
+    )
+    from my_claude_code.providers.runtime.factory import _create_single_provider
+
+    assert Settings.model_validate({}).proxy_keepalive_seconds == 0.0
+    for bad in (-1, 3601):
+        with pytest.raises(ValidationError):
+            Settings.model_validate({"PROXY_KEEPALIVE_SECONDS": bad})
+    plan = ProxyChainPlan(
+        legs=(
+            ProxyLeg(url="http://203.0.113.7:8080", label="203.0.113.7:8080"),
+            ProxyLeg(url="", label=""),
+        ),
+        policy="failover",
+        on=frozenset(),
+        scope="provider",
+        max_switches=2,
+    )
+    chained = ProviderConfig(
+        api_key="k", base_url="http://up.test/v1", proxy_chain=plan
+    )
+    for value, expected in ((None, None), (0, None), (60, 60.0)):
+        env: dict[str, object] = {"nvidia_nim_api_key": "k"}
+        if value is not None:
+            env["PROXY_KEEPALIVE_SECONDS"] = value
+        settings = Settings.model_validate(env)
+        pool: Any = _create_single_provider(
+            PROVIDER_CATALOG["nvidia_nim"], chained, settings
+        )
+        assert pool._pool.get(0)._config.http_keepalive_expiry == expected
+        # The chain's Direct entry and its Direct fallback: never.
+        assert pool._pool.get(1).leaf._config.http_keepalive_expiry is None
+        assert pool._pool.get(2).leaf._config.http_keepalive_expiry is None
+        # A provider with no chain, and a single fixed proxy: never.
+        for config in (
+            ProviderConfig(api_key="k", base_url="http://up.test/v1"),
+            ProviderConfig(
+                api_key="k",
+                base_url="http://up.test/v1",
+                proxy="http://203.0.113.9:8080",
+            ),
+        ):
+            single: Any = _create_single_provider(
+                PROVIDER_CATALOG["nvidia_nim"], config, settings
+            )
+            leaf = getattr(single, "leaf", single)
+            assert leaf._config.http_keepalive_expiry is None
+
+
+def test_the_recency_half_life_reaches_the_speed_order_writer_only() -> None:
+    """7.94.0's PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES: default 0, 0-1440, read."""
+
+    import inspect
+
+    from pydantic import ValidationError
+
+    from my_claude_code.api import admin_proxy_routes
+
+    assert Settings.model_validate({}).proxy_order_recency_half_life_minutes == 0
+    assert (
+        Settings.model_validate(
+            {"PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES": 10}
+        ).proxy_order_recency_half_life_minutes
+        == 10
+    )
+    for bad in (-1, 1441):
+        with pytest.raises(ValidationError):
+            Settings.model_validate({"PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES": bad})
+    writer = inspect.getsource(admin_proxy_routes.commit_speed_order)
+    assert '"proxy_order_recency_half_life_minutes"' in writer
+    assert "recency_half_life_seconds=recency_half_life_seconds" in writer
+    # The page's speed readout and "Pause all but the fastest" never read it.
+    for reader in (
+        admin_proxy_routes.commit_pause_all_but_fastest,
+        admin_proxy_routes._speed,
+    ):
+        assert "recency" not in inspect.getsource(reader)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("value", "held"), [("0", 0), ("5", 5 * 1024 * 1024)])
 async def test_the_media_store_cap_reaches_the_row_the_writer_trims_by(

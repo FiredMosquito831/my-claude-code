@@ -93,6 +93,7 @@ from my_claude_code.config.constants import (
     PROXY_FEED_MAX_DEFAULT,
     PROXY_FEED_MINIMUM_MINUTES,
     PROXY_FETCH_TEST_CONCURRENCY_MAX,
+    PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_DEFAULT,
     PROXY_ORDER_RESORT_MINUTES_DEFAULT,
     ROTATION_POLICY_ORDER,
 )
@@ -1070,6 +1071,18 @@ def commit_speed_order(
             settings, "proxy_order_resort_minutes", PROXY_ORDER_RESORT_MINUTES_DEFAULT
         )
     )
+    # 7.94.0: the half-life of an address's standing since a real request last
+    # succeeded through it. 0 -- what ships -- is the 7.56.0 order exactly.
+    recency_half_life_seconds = 60.0 * max(
+        0.0,
+        float(
+            getattr(
+                settings,
+                "proxy_order_recency_half_life_minutes",
+                PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_DEFAULT,
+            )
+        ),
+    )
     with _CHAIN_WRITE_LOCK:
         store = load_proxy_chains()
         chain = store.chain(provider_id)
@@ -1090,6 +1103,7 @@ def commit_speed_order(
             failure_cost_ms=failure_cost_ms,
             slow_ms=slow_ms,
             now=None if now is None else now.timestamp(),
+            recency_half_life_seconds=recency_half_life_seconds,
         )
         plan = plan_speed_order(
             facts,
@@ -1135,9 +1149,11 @@ def _order_outcome(
         "changed": bool(plan is not None and plan.changed),
         "reason": reason,
         "old_first": "" if old is None else old.name,
-        "old_rank": None if old is None else old.rank_key,
+        # The rank the order compared: ``rank_key`` itself unless recency was
+        # on (7.94.0), so the log and the page say why the order is what it is.
+        "old_rank": None if old is None else old.effective_rank,
         "new_first": "" if new is None else new.name,
-        "new_rank": None if new is None else new.rank_key,
+        "new_rank": None if new is None else new.effective_rank,
     }
 
 

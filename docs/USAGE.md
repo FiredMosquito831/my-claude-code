@@ -5969,6 +5969,19 @@ Gotchas:
   it two or more entries for a refusal to move on.
 - **The OpenCode session id is the same on every exit**: one per conversation,
   so a new exit is not a new client.
+- **Keep-alive and recency are off until you set them** (7.94.0, Limits &
+  Resilience → Credential health). `PROXY_KEEPALIVE_SECONDS` keeps an idle
+  connection through each proxy exit open so the next request through it skips
+  the proxy's tunnel handshake and the TLS handshake — the HTTP library's own
+  default closes it after 5 seconds; **60 is recommended**. Responses and
+  Messages streams and non-streamed requests reuse the connection; a Chat
+  Completions stream closes it when it ends, so it gains nothing. It reaches
+  only the proxy entries of a chain with two or more entries.
+  `PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES` makes **Keep the fastest healthy
+  proxy first** and **Sort by speed now** prefer exits a real request (answered,
+  or a first token — never a health check alone) succeeded through lately;
+  **10 is a good start**, 0 orders by speed only. Both apply on **Save**. The
+  reference is [Keep-alive and recency](ROUTING-REFERENCE.md#keep-alive-and-recency-7940).
 - **Terms.** No VPN vendor found allows automated API traffic in its terms, and
   commercial proxies bind you to the use you declared to them. Using them for a
   coding assistant is your call.

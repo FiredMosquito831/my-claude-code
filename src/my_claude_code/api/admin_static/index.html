@@ -2083,6 +2083,7 @@
                 <a href="#guide-vpn-tor">Use a VPN, WARP or Tor</a>
                 <a href="#guide-proxy-chains">What a proxy chain hides</a>
                 <a href="#guide-proxy-keep-trying">Keep trying exits until one answers</a>
+                <a href="#guide-proxy-speed">Faster proxy exits</a>
                 <a href="#guide-proxy-sources">Proxies on this computer, and where each exit comes out</a>
                 <a href="#guide-proxy-tor">Bring your own Tor</a>
                 <a href="#guide-proxy-vendors">VPN accounts, gateways and proxy lists</a>
@@ -4100,6 +4101,44 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   the first byte has reached your client the request stays on its exit.
                   A drop while a model is still thinking (before any answer text) counts
                   as after the first byte.
+                </p>
+
+                <h3 id="guide-proxy-speed">Faster proxy exits: keep-alive and recency</h3>
+                <p>
+                  Two settings on <a href="#guide-limits">Limits &amp; Resilience</a>
+                  &rarr; Credential health, both <strong>0 (off)</strong> until you set
+                  them. With both at 0 everything is built exactly as before.
+                </p>
+                <ul>
+                  <li><code>PROXY_KEEPALIVE_SECONDS</code> &mdash; how long a connection
+                    through a proxy exit stays open while idle. The HTTP library closes an
+                    idle connection after 5 seconds, so nearly every request through a
+                    proxy dialled it again and ran the proxy's tunnel handshake and the
+                    TLS handshake before the first byte; through a free proxy that alone
+                    can take tens of seconds. <strong>Set 60</strong>: requests up to a
+                    minute apart through the same exit then reuse its connection
+                    &mdash; Responses and Messages streams and requests that are not
+                    streamed; a Chat Completions stream closes its connection when it
+                    ends, so it gains nothing. It
+                    reaches only the proxy entries of a chain with two or more entries
+                    &mdash; no chain, a single fixed proxy, Direct entries and the Direct
+                    fallback are untouched. A proxy that silently drops an idle
+                    connection can make the first request after a pause fail on that
+                    exit; the chain then moves on, as for any dropped connection.</li>
+                  <li><code>PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES</code> &mdash; makes
+                    <em>Keep the fastest healthy proxy first</em> and <em>Sort by speed
+                    now</em> prefer exits a real request succeeded through lately (the
+                    provider answered, or a first token arrived &mdash; a health check
+                    alone never counts). An exit one half-life staler than the chain's
+                    most recently proven one ranks as if it were twice as slow.
+                    <strong>10 is a good start</strong>; 0 orders by speed only. It
+                    changes only which entry is first in the saved order: which exits are
+                    healthy, benched or skipped, and how a request moves between them,
+                    are untouched.</li>
+                </ul>
+                <p>
+                  Both apply on <strong>Save</strong>. The reference is
+                  <code>docs/ROUTING-REFERENCE.md</code>, <em>Keep-alive and recency</em>.
                 </p>
 
                 <h3 id="guide-proxy-sources">Proxies on this computer, and where each exit comes out</h3>

@@ -31,6 +31,7 @@ from my_claude_code.providers.openai_chat import (
     profile_with_declared_surfaces,
     profile_with_learned_dialect,
 )
+from my_claude_code.providers.proxy_keepalive import proxied_leg_keepalive
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .config import build_provider_config
@@ -356,6 +357,7 @@ def _create_single_provider(
         getattr(settings, "proxy_connect_timeout_seconds", None)
         or PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT
     )
+    keepalive_expiry = proxied_leg_keepalive(settings)
 
     def build_leg(index: int) -> BaseProvider:
         """One leg's leaf provider, built the first time it is used.
@@ -406,6 +408,10 @@ def _create_single_provider(
         #   the provider's, untouched, on every surface.
         # * a limiter that will not dial the same dead address twice; see
         #   ``proxy_leg.ProxiedLegRateLimiter``.
+        # * since 7.94.0, ``PROXY_KEEPALIVE_SECONDS`` as its clients' idle
+        #   keep-alive, when the operator set one; ``None`` -- the setting at
+        #   0 -- builds the clients from exactly the arguments they had. See
+        #   ``providers/proxy_keepalive.py``.
         #
         # A leg of a chain with "Keep trying exits until one answers" ticked
         # (7.81.0) also does not retry on the same exit what the exit refused
@@ -417,6 +423,7 @@ def _create_single_provider(
             proxy=url,
             proxy_chain=None,
             http_connect_timeout=connect_timeout,
+            http_keepalive_expiry=keepalive_expiry,
         )
         if not plan.until_served:
             return _create_leaf_provider(

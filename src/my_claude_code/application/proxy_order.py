@@ -35,10 +35,23 @@ is not demoted for a bench either.
 A change below the first healthy entry is never written on its own: it rides
 along with a first-entry change, or waits for the operator's "Sort by speed
 now", which applies the same sort without those thresholds.
+
+**Recency** (7.94.0, ``PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES``, 0 by default).
+With a half-life set, each address's rank is multiplied by
+``core/proxy_speed.recency_factor`` of the time since a real request last
+succeeded through it, counted from the most recently proven address of the
+same chain -- so the freshest keeps its plain speed rank, one a half-life
+staler ranks twice as slow, and a chain where nothing has been proven yet
+(or the setting at 0) sorts exactly as before. The rank every rule above
+compares is that product (:attr:`EntryFacts.effective_rank`), so a stale first
+entry can lose its place to a recently proven one through the same margin,
+sample and interval rules. Only the speed order passes the half-life: the
+page's speed readout and "Pause all but the fastest" are unchanged.
 """
 
+import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from my_claude_code.config.proxy_chains import ProxyChain, ProxyChains
@@ -47,7 +60,7 @@ from my_claude_code.core.proxy_rotation import (
     PROXY_INTERCEPTION,
     PROXY_REACHABILITY,
 )
-from my_claude_code.core.proxy_speed import PROXY_SPEED
+from my_claude_code.core.proxy_speed import PROXY_SPEED, recency_factor
 
 #: The policies speed ordering is offered for (user decision 7). Under
 #: ``round_robin`` and ``least_used`` the order does not decide which address
@@ -88,6 +101,21 @@ class EntryFacts:
     rank_key: float | None
     #: Check and dial samples inside the ledger's 24-hour window.
     samples: int
+    #: The recency multiplier (7.94.0): exactly 1.0 unless the speed order was
+    #: asked for with a half-life and this chain has a proven address.
+    recency_factor: float = 1.0
+
+    @property
+    def effective_rank(self) -> float | None:
+        """The rank the order compares: ``rank_key`` times the recency factor.
+
+        The very same value as ``rank_key`` whenever the factor is 1.0, which
+        is every entry while ``PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES`` is 0.
+        """
+
+        if self.rank_key is None or self.recency_factor == 1.0:
+            return self.rank_key
+        return self.rank_key * self.recency_factor
 
     @property
     def pinned(self) -> bool:
@@ -138,8 +166,14 @@ def entry_facts(
     failure_cost_ms: float,
     slow_ms: float,
     now: float | None = None,
+    recency_half_life_seconds: float = 0.0,
 ) -> tuple[EntryFacts, ...]:
-    """Read every entry's standing from the store and the ledgers."""
+    """Read every entry's standing from the store and the ledgers.
+
+    ``recency_half_life_seconds`` is ``PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES``
+    in seconds; 0 -- the default, and what every caller but the speed order
+    passes -- reads exactly what 7.56.0 read.
+    """
 
     facts: list[EntryFacts] = []
     for index, entry in enumerate(chain.entries):
@@ -203,7 +237,62 @@ def entry_facts(
                 samples=score.samples,
             )
         )
+    if recency_half_life_seconds > 0:
+        return _with_recency(
+            facts,
+            provider_id,
+            half_life_seconds=float(recency_half_life_seconds),
+            now=time.time() if now is None else now,
+        )
     return tuple(facts)
+
+
+def _with_recency(
+    facts: Sequence[EntryFacts],
+    provider_id: str,
+    *,
+    half_life_seconds: float,
+    now: float,
+) -> tuple[EntryFacts, ...]:
+    """Each address's recency factor, counted from the chain's freshest proof.
+
+    The age that counts is how much longer ago an address was last proven
+    than the most recently proven rankable address of this chain, so the
+    freshest keeps its plain rank and the millisecond margins of the order
+    keep their meaning. A chain with no proven rankable address keeps every
+    factor at 1.0 -- exactly the 7.56.0 order -- and an address never proven
+    in the window, while another is, takes the factor's cap.
+    """
+
+    proven: dict[int, float | None] = {
+        fact.index: PROXY_SPEED.last_success_at(fact.label, provider_id, now=now)
+        for fact in facts
+        if fact.label and not fact.direct
+    }
+    ages = [
+        max(0.0, now - at)
+        for fact in facts
+        if fact.rankable and (at := proven.get(fact.index)) is not None
+    ]
+    if not ages:
+        return tuple(facts)
+    freshest = min(ages)
+    weighted: list[EntryFacts] = []
+    for fact in facts:
+        if fact.index not in proven:
+            weighted.append(fact)
+            continue
+        at = proven[fact.index]
+        age = None if at is None else max(0.0, (now - at) - freshest)
+        weighted.append(
+            replace(fact, recency_factor=recency_factor(age, half_life_seconds))
+        )
+    return tuple(weighted)
+
+
+def _sort_rank(fact: EntryFacts) -> float:
+    rank = fact.effective_rank
+    return 0.0 if rank is None else rank
 
 
 def ranked(facts: Sequence[EntryFacts]) -> list[EntryFacts]:
@@ -211,15 +300,13 @@ def ranked(facts: Sequence[EntryFacts]) -> list[EntryFacts]:
 
     ``sorted`` is stable, and ``facts`` is in chain order, so two entries with
     the same rank -- or two MCC has not measured -- keep the order the
-    operator gave them.
+    operator gave them. The rank is :attr:`EntryFacts.effective_rank`, which is
+    ``rank_key`` itself unless the speed order was asked for with recency.
     """
 
     return sorted(
         (fact for fact in facts if fact.rankable),
-        key=lambda fact: (
-            fact.rank_key is None,
-            0.0 if fact.rank_key is None else fact.rank_key,
-        ),
+        key=lambda fact: (fact.rank_key is None, _sort_rank(fact)),
     )
 
 
@@ -286,7 +373,10 @@ def plan_speed_order(
             "the first healthy entry would not change; a change further down "
             "waits for one that does, or for Sort by speed now",
         )
-    if new_first.rank_key is None:  # pragma: no cover - ranked sorts None last
+    # The ranks every rule compares: ``rank_key`` itself unless the order was
+    # asked for with recency (7.94.0), then times each entry's factor.
+    newcomer = new_first.effective_rank
+    if newcomer is None:  # pragma: no cover - ranked sorts None last
         return plan(False, "the newcomer has no measured setup")
     if new_first.samples < RESORT_MIN_SAMPLES:
         return plan(
@@ -294,14 +384,14 @@ def plan_speed_order(
             f"{new_first.name} has {new_first.samples} sample(s); "
             f"{RESORT_MIN_SAMPLES} are needed",
         )
-    incumbent = old_first.rank_key
+    incumbent = old_first.effective_rank
     if incumbent is not None and not (
-        new_first.rank_key <= RESORT_MARGIN_RATIO * incumbent
-        and incumbent - new_first.rank_key >= RESORT_MARGIN_MS
+        newcomer <= RESORT_MARGIN_RATIO * incumbent
+        and incumbent - newcomer >= RESORT_MARGIN_MS
     ):
         return plan(
             False,
-            f"{new_first.name} ({new_first.rank_key:.0f} ms) is not clearly "
+            f"{new_first.name} ({newcomer:.0f} ms) is not clearly "
             f"faster than {old_first.name} ({incumbent:.0f} ms)",
         )
     since = minutes_since(last_sorted_at, now=now)

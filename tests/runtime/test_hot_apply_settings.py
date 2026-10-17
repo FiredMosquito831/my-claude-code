@@ -120,7 +120,7 @@ PROVIDER_CONFIG_FIELDS: dict[str, tuple[str, str, object]] = {
     "LOG_API_ERROR_TRACEBACKS": ("true", "log_api_error_tracebacks", True),
 }
 
-#: The four read where a proxied pool is built. key -> (value, reader)
+#: The five read where a proxied pool is built. key -> (value, reader)
 PROXY_POOL_FIELDS: dict[str, tuple[str, Callable[[Any], object], object]] = {
     "PROXY_MAX_SWITCHES_PER_REQUEST": ("3", lambda leg: leg._max_switches, 3),
     "PROXY_MAX_OPEN_LEGS": ("7", lambda leg: leg._pool._max_open, 7),
@@ -129,6 +129,12 @@ PROXY_POOL_FIELDS: dict[str, tuple[str, Callable[[Any], object], object]] = {
         "4",
         lambda leg: leg._pool._build(0)._config.http_connect_timeout,
         4.0,
+    ),
+    # 7.94.0: a saved keep-alive reaches the next proxied leg's clients.
+    "PROXY_KEEPALIVE_SECONDS": (
+        "60",
+        lambda leg: leg._pool._build(0)._config.http_keepalive_expiry,
+        60.0,
     ),
 }
 
@@ -399,12 +405,15 @@ def test_the_restart_list_is_exactly_the_fields_that_physically_need_one() -> No
 
 
 def test_every_hot_field_has_a_proof_here() -> None:
-    """116 fields made hot; each is in exactly one proof table above."""
+    """117 fields proved hot; each is in exactly one proof table above.
+
+    116 made hot in 7.48.0, plus 7.94.0's PROXY_KEEPALIVE_SECONDS.
+    """
 
     for key in HOT_KEYS:
         assert key in FIELD_BY_KEY, key
         assert FIELD_BY_KEY[key].restart_required is False, key
-    assert len(HOT_KEYS) == 116
+    assert len(HOT_KEYS) == 117
     assert len(ROTATION_KEYS) == 52
     for key in HOT_KEYS:
         assert "Requires restart" not in FIELD_BY_KEY[key].description, key

@@ -341,6 +341,8 @@ There is **no limit** on a fresh install. 7.13 capped a chain at twelve entries 
 
 `PROXY_CONNECT_TIMEOUT_SECONDS` (default `10`, range `1`–`120`) is what one dead address actually costs. It bounds **establishing the proxied connection** and nothing else: read, write and pool timeouts stay on the provider's own settings, and a provider with no chain is not affected. Since 7.36.1 "establishing" includes the **SOCKS5 handshake**, which `httpcore` 1.0.9 performs with no deadline of any kind — a `socks5`/`socks5h` rung that completed the TCP accept and then never answered the greeting held the request for ever, and neither this setting nor `HTTP_READ_TIMEOUT` nor the pool timeout reached that read. An HTTP `CONNECT` rung was never affected: its tunnel is carried by an ordinary HTTP/1.1 connection that already honours the request's own timeouts. An expired handshake is now the same `ConnectTimeout`-class failure a dead TCP dial produces, so the rung is benched and the chain switches exactly as it always did. Since 7.20.0 a proxied connect failure is also surfaced to the chain on the **first** dial — `PROVIDER_RETRY_ATTEMPTS` used to run its ladder *inside* the leg, so every dead address was dialled twice before the chain was told. Since 7.52.1 it is also surfaced **without the retry backoff**: the leg used to sleep its backoff (about 2.3 s, measured on 571 of 590 live connect failures) before stopping the second dial, so each dead address cost that much extra before the next one was tried. Status retries (`429`, `5xx`) inside a leg are unchanged: the address answered, so a second knock can still help.
 
+`PROXY_KEEPALIVE_SECONDS` (default `0`, range `0`–`3600`, since 7.94.0) is how long a proxied leg keeps an **idle** connection for the next request; see [Keep-alive and recency](#keep-alive-and-recency-7940) below. It changes nothing about how long establishing a connection may take.
+
 #### What counts as the address's fault (7.20.0)
 
 Two failure shapes were previously filed against the **model**. Both are now read as the address's, and both only when the request was actually going out through a proxy and nothing had been yielded yet:
@@ -512,6 +514,30 @@ A change further down the list is never written on its own: it rides along with 
 - **Pause all but the fastest N** pauses every address in the chain except the N best-ranked healthy ones. Nothing is removed and nothing is un-paused; each paused row's **Resume** (then **Save**) brings it back. It is refused, with a message, while MCC has measured no healthy address in the chain. MCC never does this by itself.
 
 **Never touched by any of this:** the selection engine (`core/proxy_rotation.py`, `providers/runtime/proxy_rotating.py`), a chain with the switch off, a disabled chain (by the loop), what a pause, a refusal or a bench means, and which addresses are in a chain.
+
+#### Keep-alive and recency (7.94.0)
+
+Two settings on **Limits & Resilience → Credential health**, both **0 (off)** until you set them. With both at 0 every client and every order is built exactly as in 7.93.0.
+
+**`PROXY_KEEPALIVE_SECONDS`** — how long a connection through a proxy exit stays open while idle, so the next request through the same exit reuses it. The HTTP library MCC uses closes an idle connection after **5 seconds** and MCC never said otherwise, so nearly every proxied request opened a new connection to the proxy, ran its tunnel handshake (`CONNECT` or SOCKS5) and then the TLS handshake through it. Through free proxies that handshake has been measured at 2.8–51.9 s (opencode-lite's measurement, quoted in the 7.94.0 investigation). **60 is recommended** when your chains use proxies: requests up to a minute apart through the same exit then skip all of it.
+
+- **Which requests gain.** Responses and Messages streams, and every request that is not streamed, hand their connection back to the pool when they finish, so the next one reuses it. A **Chat Completions stream does not**: the OpenAI client MCC uses for that endpoint stops reading at `data: [DONE]` and closes the response before the body's end, which closes the connection — with or without this setting. Such a request pays the handshake each time; changing how that stream ends is not part of this setting.
+- **Measured** (7.94.0, a local chain of SOCKS5 proxies that each add 1.5 s to a new tunnel, 30 streaming requests per endpoint, the same provider asked again every 8–12 s): median time to first token 1.61 s → **0.08 s** on the Responses and Messages endpoints (30 new connections → 1), 1.61 s → 1.61 s on Chat Completions (30 → 30); 180 of 180 answered. Against a proxy that closes idle tunnels itself, 16 of 16 answered, each on a fresh tunnel.
+- **Which clients.** Every HTTP client a chain leg *with an address* builds: the OpenAI-compatible chat client (the SDK's own pool sizes are kept), the Responses and Messages clients, the Anthropic, ChatGPT-OAuth, Cloudflare, GitHub Models and Vertex clients, and a media leg's client. Only how long an idle connection lives changes; pool sizes, timeouts, redirects and certificate checks are untouched.
+- **Which are not.** A provider with no chain, a single fixed proxy (`<PROVIDER>_PROXY`, or a chain with one usable entry), a chain's **Direct** entry and the **Direct fallback** are built with exactly the arguments they had before — the release proves it by recording every client constructor's arguments with the setting unset, 0 and 60.
+- **When it applies.** On **Save**, to requests that start after it: saving rebuilds the providers, as every proxy setting does. A request already running keeps the connections it had.
+- **What still dials.** A request's dial rows keep naming the exit exactly as before; a reused connection simply has no connect or tunnel time on its row, which is how the request log already shows "not measured".
+- **The catch.** A proxy that drops an idle connection *without telling the other side* can make the first request after a pause fail on that exit; MCC then treats it as any dropped connection — the chain moves on, as it always has. A proxy that closes the connection properly costs nothing: the closed connection is discarded and a new one opened.
+
+**`PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES`** — prefer exits a real request succeeded through lately, in the order **Keep the fastest healthy proxy first** and **Sort by speed now** write. At 0 the order is by measured speed only, exactly as above. With a number, each address's rank is multiplied by `2 ^ (age ÷ half-life)`, where *age* is how much longer ago a real request last succeeded through it than through the chain's most recently proven address:
+
+- the most recently proven address keeps its plain speed rank; one a half-life staler ranks as if it were twice as slow, two half-lives four times; past 16 half-lives (or never proven in the last 24 hours, while another address is) the factor stops at 2^16;
+- **a real success** is a dial whose request the provider answered (below 400) or a first token through the address. **A health check alone never counts**: it proves the tunnel opens, not that the provider serves through it;
+- a chain where nothing has been proven yet sorts exactly as it does at 0;
+- the same rules decide whether an automatic order is written — the 0.75× / 500 ms margin, the three samples, `PROXY_ORDER_RESORT_MINUTES` — compared on the recency-weighted rank, which is also the rank the `PROXY ORDER:` log line prints;
+- live requests are measured only while the request log is on (it is by default). **10 is a good start.**
+
+It changes only which entry is first in a chain's saved order. The selection engine, `PROXY_MAX_SWITCHES_PER_REQUEST`, `PROXY_MAX_LIVE_FAILURES`, health checks, benches, exit memory, the Direct rule, the page's speed readout and **Pause all but the fastest N** are untouched.
 
 #### Testing an address before you rely on it
 
