@@ -720,6 +720,11 @@ class ApplicationRuntime:
             # rather than waiting out the next sweep (7.84.0). Off needs
             # nothing: the rung reads the setting on every listing.
             self.provider_manager.schedule_openrouter_live_refresh(current)
+        if changed("cost_source_litellm_enabled"):
+            # Switched on: fetch LiteLLM's price table now if none is fresh on
+            # disk, rather than waiting out the next sweep (7.97.0). Off needs
+            # nothing: every reader checks the setting first.
+            self.provider_manager.schedule_litellm_refresh(current)
         if changed("proxy_check_enabled", "proxy_check_interval_minutes"):
             self._proxy_check_timer.rearm()
         if changed("proxy_feed_refresh_enabled", "proxy_feed_refresh_minutes"):

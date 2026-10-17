@@ -1821,14 +1821,8 @@ def _model_knowledge(services: ApiServices, model_ref: str) -> dict[str, Any] | 
     """
 
     settings = services.requests.current_settings()
-    info = next(
-        (
-            item
-            for item in services.requests.cached_prefixed_model_infos()
-            if item.model_id == model_ref
-        ),
-        None,
-    )
+    catalogue = services.requests.cached_prefixed_model_infos()
+    info = next((item for item in catalogue if item.model_id == model_ref), None)
     configured_refs = frozenset(
         ref.model_ref for ref in configured_chat_model_refs(settings)
     )
@@ -1869,6 +1863,14 @@ def _model_knowledge(services: ApiServices, model_ref: str) -> dict[str, Any] | 
         provider_row=overrides.providers.get(normalize_override_key(provider_id), {}),
         media_placements=placements,
         catalogue_as_of=_iso_or_none(refresh.get("last_refreshed_at")),
+        # Declared data: every id the catalogue lists, as a ref and bare, is
+        # a model id and never a secret, so the rows' scrubber leaves exactly
+        # those values to read as themselves (7.97.0).
+        catalogue_ids=frozenset(
+            name
+            for item in catalogue
+            for name in (item.model_id, parse_model_name(item.model_id))
+        ),
     )
 
 

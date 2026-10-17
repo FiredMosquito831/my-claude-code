@@ -2111,10 +2111,11 @@ def test_admin_static_anthropic_oauth_card_shows_disclaimer_before_buttons():
     assert warning_index < login_button_index
     assert "does not permit" in control_body
     # 6.36.0 widened the gate from the terminal CLI alone to Anthropic's own
-    # clients -- Claude Code and the Claude Agent SDK -- so the card no longer
-    # names one entrypoint. It must still say what it refuses.
-    assert "Claude Code or the Claude" in control_body
-    assert "Agent SDK" in control_body
+    # clients -- Claude Code and the Claude Agent SDK -- and 7.92.1 to the
+    # Claude desktop app, so the card names all three (7.97.0). It must still
+    # say what it refuses.
+    assert "Claude Code, the Claude" in control_body
+    assert "Agent SDK or the Claude desktop app" in control_body
     assert "ANTHROPIC-SUBSCRIPTION.md" in control_body
     # The paste field replaced window.prompt, which some browsers suppress and
     # which cannot restate the warning above the input.

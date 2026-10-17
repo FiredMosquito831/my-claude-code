@@ -3467,6 +3467,7 @@ def model_knowledge_payload(
     provider_row: Mapping[str, Any],
     media_placements: Mapping[str, frozenset[str]] | None,
     catalogue_as_of: str | None,
+    catalogue_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Everything known about one model, beside what the ladder used.
 
@@ -3574,6 +3575,7 @@ def model_knowledge_payload(
             vendor_row,
             provider_label,
             catalogue_as_of,
+            catalogue_ids,
         ),
         "learned": learned_facts,
         "operator": {
@@ -3611,6 +3613,8 @@ def _row_entry(
     as_of: str | None,
     row: Mapping[str, Any],
     consulted: bool = True,
+    *,
+    known_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     return {
         "source": source,
@@ -3619,7 +3623,7 @@ def _row_entry(
         "match": match,
         "as_of": as_of,
         "consulted": consulted,
-        "row": redact_wire_value(row),
+        "row": redact_wire_value(row, known_ids=known_ids),
     }
 
 
@@ -3632,9 +3636,23 @@ def _knowledge_rows(
     vendor_row: VendorClientRow | None,
     provider_label: str,
     catalogue_as_of: str | None,
+    catalogue_ids: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Every source's own row about this model, verbatim, scrubbed."""
+    """Every source's own row about this model, verbatim, scrubbed.
 
+    ``catalogue_ids`` are the model ids the catalogue lists (7.97.0). With the
+    ids each row below is filed under -- shown unredacted in its ``key`` column
+    already -- they are the declared ids the scrubber's entropy rung leaves
+    alone, so a long Hugging Face id inside a row reads as itself rather than
+    ``<redacted>``. Every other value is scrubbed exactly as before.
+    """
+
+    known = (
+        catalogue_ids
+        | {model_id}
+        | {stored.key for stored in published}
+        | {found_row.model_key for found_row in models_dev.rows}
+    )
     rows: list[dict[str, Any]] = []
     found = _record_row(model_id, info, published)
     if found is not None:
@@ -3653,6 +3671,7 @@ def _knowledge_rows(
                 f"{match}; {where}",
                 catalogue_as_of,
                 row,
+                known_ids=known,
             )
         )
     rows.extend(
@@ -3663,6 +3682,7 @@ def _knowledge_rows(
             None if answer is None else answer.tier_label,
             stored.as_of,
             stored.row,
+            known_ids=known,
         )
         for stored in published
         if stored.source == ROW_SOURCE_OPENROUTER_LIVE
@@ -3678,6 +3698,7 @@ def _knowledge_rows(
                 models_dev.fetched_at,
                 found_row.row,
                 found_row.consulted,
+                known_ids=known,
             )
         )
     rows.extend(
@@ -3688,6 +3709,7 @@ def _knowledge_rows(
             stored.match,
             stored.as_of,
             stored.row,
+            known_ids=known,
         )
         for stored in published
         if stored.source == ROW_SOURCE_LITELLM
@@ -3702,6 +3724,7 @@ def _knowledge_rows(
                 label,
                 None,
                 row,
+                known_ids=known,
             )
         )
     return rows

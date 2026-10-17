@@ -1579,6 +1579,34 @@ _VALUE_CACHE_MAX = 4_096
 # quietly blind to most of the transcript.
 _SEARCHED_COLUMNS = ("input_text", "output_text", "thinking_text", "tool_calls")
 
+
+def _inline_search(terms: Sequence[str]) -> tuple[str, list[str]]:
+    """A free-text search's predicate over a row's inline columns, and its args.
+
+    Every term must be in one of :data:`_SEARCHED_COLUMNS`. A row written with
+    body compression off keeps its tool calls inline as ``json.dumps`` text,
+    ``ensure_ascii`` on, so "résumé" sits in that column as ``r\\u00e9sum\\u00e9``
+    and a LIKE for the word itself never met it: a non-ASCII word inside an
+    uncompressed row's tool calls was never found (7.97.0). For such a term the
+    ``tool_calls`` column is also tested for its escaped spelling -- the one
+    ``_stored_probes`` already looks for in compressed blobs. A term JSON writes
+    as itself (all ASCII, the usual case) gets the clause it always had, SQL and
+    arguments both.
+    """
+    groups: list[str] = []
+    args: list[str] = []
+    for term in terms:
+        tests = [f"{column} LIKE ?" for column in _SEARCHED_COLUMNS]
+        args.extend([f"%{term}%"] * len(_SEARCHED_COLUMNS))
+        if _is_json_transparent(term):
+            escaped = json.dumps(term)[1:-1]
+            if escaped != term:
+                tests.append("tool_calls LIKE ?")
+                args.append(f"%{escaped}%")
+        groups.append("(" + " OR ".join(tests) + ")")
+    return " AND ".join(groups), args
+
+
 # A free-text search's matched rows (7.91.1), standing in for the body
 # predicate in every answer of that search; see ``MatchedRows``. ``+rowid``
 # rather than ``rowid``: the unary plus keeps the term from driving the plan, so
@@ -8878,15 +8906,9 @@ class RequestLogStore:
             # the search index for every request whose two blobs it holds
             # under their current address, and by ``fcc_bodies_match`` --
             # exactly the clause below -- for every other request. The inline
-            # half is unchanged.
-            inline = " AND ".join(
-                "("
-                + " OR ".join(f"{column} LIKE ?" for column in _SEARCHED_COLUMNS)
-                + ")"
-                for _ in terms
-            )
-            for term in terms:
-                args.extend([f"%{term}%"] * len(_SEARCHED_COLUMNS))
+            # half is the same one (``_inline_search``).
+            inline, inline_args = _inline_search(terms)
+            args.extend(inline_args)
             clauses.append(f"(({inline}) OR EXISTS ({_indexed_bodies_sql(indexed)}))")
             args.append(q)
         elif terms:
@@ -8895,14 +8917,8 @@ class RequestLogStore:
             # no caller of ``_where`` needs to know about the second table --
             # and takes the whole query rather than one term at a time, so a
             # row is decompressed once however many terms were typed.
-            inline = " AND ".join(
-                "("
-                + " OR ".join(f"{column} LIKE ?" for column in _SEARCHED_COLUMNS)
-                + ")"
-                for _ in terms
-            )
-            for term in terms:
-                args.extend([f"%{term}%"] * len(_SEARCHED_COLUMNS))
+            inline, inline_args = _inline_search(terms)
+            args.extend(inline_args)
             clauses.append(
                 f"(({inline}) OR EXISTS ("
                 " SELECT 1 FROM request_bodies r"

@@ -755,6 +755,28 @@ def _isolate_openrouter_live(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_litellm_prices(monkeypatch):
+    """No test may download LiteLLM's price table.
+
+    7.97.0 fetches the table in the background after a catalogue sweep while
+    ``COST_SOURCE_LITELLM_ENABLED`` is on and no fresh copy is stored -- which,
+    in a hermetic home, is every such test that runs a sweep. The one network
+    call answers as an offline fetch does (``None``). The store itself is left
+    where ``litellm_cache_path()`` puts it -- under the hermetic home, or under
+    the ``MCC_CONFIG_DIR`` a test sets, where the pricing tests seed it. A
+    test of the fetch itself puts the real function back, by the reference it
+    imported.
+    """
+    from my_claude_code.providers.runtime import litellm_prices
+
+    async def _offline(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(litellm_prices, "fetch_litellm_prices", _offline)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_display_fact_memos():
     """Forget 7.85.0's two process-wide memos between tests.
 

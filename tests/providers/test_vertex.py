@@ -1,5 +1,6 @@
 """Focused tests for the Google Vertex AI provider construction and auth."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -345,3 +346,57 @@ def test_vertex_reasoning_off_maps_to_zero_budget() -> None:
         "thinking_budget": 0,
         "include_thoughts": False,
     }
+
+
+def _unpatched_vertex_provider(proxy: str) -> VertexProvider:
+    """A Vertex provider built on REAL httpx clients -- nothing patched.
+
+    Every test above patches ``httpx.AsyncClient``, which is how an unproxied
+    Vertex provider that could not be built at all (7.93.0 to 7.96.1) passed
+    the suite: ``ProviderConfig.proxy`` is ``""`` for "no proxy", and httpx
+    refused ``proxy=""`` with "Unknown scheme for proxy URL".
+    """
+
+    return VertexProvider(
+        ProviderConfig(
+            api_key="",
+            base_url=VERTEX_DEFAULT_BASE,
+            rate_limit=10,
+            rate_window=60,
+            proxy=proxy,
+        ),
+        project_id=_PROJECT_ID,
+        location="global",
+        rate_limiter=passthrough_rate_limiter(),
+        access_token_provider=GoogleAccessTokenProvider(
+            lambda: FakeCredentials(token="access-token", expired=False)
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unproxied_vertex_provider_builds_with_no_proxy() -> None:
+    provider = _unpatched_vertex_provider("")
+    try:
+        client = provider._model_list_client
+        # No proxy mount at all: the client dials directly, as every other
+        # unproxied provider's client does.
+        assert not client._mounts
+    finally:
+        await provider.cleanup()
+
+
+def test_a_proxied_vertex_model_list_client_still_gets_its_proxy() -> None:
+    proxy = "socks5://203.0.113.8:1080"
+    recorded: list[dict[str, object]] = []
+    real_init = httpx.AsyncClient.__init__
+
+    def recording(self: httpx.AsyncClient, **kwargs: Any) -> None:
+        recorded.append(dict(kwargs))
+        real_init(self, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "__init__", recording):
+        _unpatched_vertex_provider(proxy)
+
+    assert recorded, "Vertex built no httpx client"
+    assert recorded[0]["proxy"] == proxy

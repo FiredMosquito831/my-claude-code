@@ -5083,11 +5083,13 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>auto</code>, <code>reported_only</code>, or
                   <code>computed_only</code>, the last being how you audit a provider's
                   own billing against a published price), and the LiteLLM source
-                  (<code>COST_SOURCE_LITELLM_ENABLED</code>, off). <strong>No release
-                  downloads LiteLLM's price map yet:</strong> with that source on, MCC
-                  reads <code>~/.mcc/cache/litellm-prices.json</code> if the file exists
-                  and otherwise LiteLLM prices nothing, so on a fresh install turning it on
-                  changes nothing. The <a href="#guide-learned">Models</a> page shows the
+                  (<code>COST_SOURCE_LITELLM_ENABLED</code>, off). <strong>Since 7.97.0
+                  turning it on downloads LiteLLM's price map</strong> into
+                  <code>~/.mcc/cache/litellm-prices.json</code> &mdash; at once, then in the
+                  background after a catalogue sweep whenever the copy is older than
+                  <code>LITELLM_CACHE_TTL_SECONDS</code> &mdash; and until the first download
+                  lands LiteLLM prices nothing. Off, nothing is fetched. The
+                  <a href="#guide-learned">Models</a> page shows the
                   resolved input, output, cache and reasoning rates per model in USD per
                   million tokens, each with the rung it came from &mdash; so you can see
                   what a request would be priced from before you send one.

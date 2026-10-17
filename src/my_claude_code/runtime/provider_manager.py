@@ -56,8 +56,11 @@ from my_claude_code.providers.runtime.discovery import (
     model_cache_provider_ids_for_settings,
 )
 from my_claude_code.providers.runtime.litellm_prices import (
+    litellm_cache_path,
     litellm_model_catalogue,
     litellm_model_entries,
+    litellm_refresh_is_due,
+    refresh_litellm_cache,
 )
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.models_dev import (
@@ -189,6 +192,10 @@ class ProviderRuntimeManager:
         # sweep when it is due (7.84.0). Held so a second sweep never starts a
         # second download and a close can cancel it.
         self._openrouter_live_task: asyncio.Task[None] | None = None
+        # LiteLLM's price table, fetched the same way while
+        # ``COST_SOURCE_LITELLM_ENABLED`` is on (7.97.0). Held for the same two
+        # reasons: one download at a time, and a close can cancel it.
+        self._litellm_task: asyncio.Task[None] | None = None
         # When the last sweep finished, for the dashboard's "last refreshed"
         # readout. None until one has completed in this process.
         self._last_refresh_at: float | None = None
@@ -587,6 +594,47 @@ class ProviderRuntimeManager:
         if outcome.status == "fetched":
             # The agent catalogues read the rung; republish them on the new list.
             self._publish_model_catalog()
+
+    def schedule_litellm_refresh(self, settings: Settings | None = None) -> None:
+        """Fetch LiteLLM's price table in the background if it is due (7.97.0).
+
+        Due = ``COST_SOURCE_LITELLM_ENABLED`` is on and the table on disk is
+        absent or older than ``LITELLM_CACHE_TTL_SECONDS``. Until 7.97.0 the
+        fetch existed (``refresh_litellm_cache``: conditional GET, integrity
+        check, the pinned commit as the floor) and nothing called it, so the
+        source priced nothing unless the file was already on disk. Same shape
+        as :meth:`schedule_openrouter_live_refresh`: one download at a time,
+        the path bound here on the caller's thread, never on a request path.
+        Off -- what ships -- nothing is fetched.
+        """
+        if self._closing or self._closed:
+            return
+        task = self._litellm_task
+        if task is not None and not task.done():
+            return
+        current = settings if settings is not None else self._current.settings
+        path = litellm_cache_path()
+        if not litellm_refresh_is_due(current, path):
+            return
+        self._litellm_task = asyncio.create_task(self._refresh_litellm(path))
+
+    async def _refresh_litellm(self, path: Path) -> None:
+        try:
+            refreshed = await refresh_litellm_cache(path)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug(
+                "LiteLLM price table refresh failed: exc_type={}", type(exc).__name__
+            )
+            return
+        if not refreshed:
+            logger.debug("LiteLLM price table not refreshed; the copy on disk stays")
+            return
+        logger.info("LiteLLM price table refreshed: {}", path.name)
+        # The kind lists and agent catalogues read the map's own words
+        # (7.85.0); republish them on the new table, as the live list does.
+        self._publish_model_catalog()
 
     def _declaration_at(
         self, provider_id: str, model_id: str
@@ -1072,6 +1120,7 @@ class ProviderRuntimeManager:
                 self._closing = True
                 await self._cancel_refresh()
                 await self._cancel_openrouter_live()
+                await self._cancel_litellm()
                 current = self._current
                 if not current.retired:
                     current.retired = True
@@ -1167,6 +1216,8 @@ class ProviderRuntimeManager:
             # OpenRouter's live list rides on the sweep's cadence (7.84.0):
             # fetched in the background when due, never awaited here.
             self.schedule_openrouter_live_refresh(generation.settings)
+            # So does LiteLLM's price table while its source is on (7.97.0).
+            self.schedule_litellm_refresh(generation.settings)
             return result
         finally:
             await self._release(generation)
@@ -1198,6 +1249,14 @@ class ProviderRuntimeManager:
     async def _cancel_openrouter_live(self) -> None:
         task = self._openrouter_live_task
         self._openrouter_live_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _cancel_litellm(self) -> None:
+        task = self._litellm_task
+        self._litellm_task = None
         if task is None or task.done():
             return
         task.cancel()

@@ -1477,11 +1477,28 @@ def render_xlsx(
             yield chunk
 
 
+#: The characters openpyxl refuses in a cell (its ``ILLEGAL_CHARACTERS_RE``:
+#: the C0 controls except tab, line feed and carriage return), each mapped to
+#: its Unicode control picture -- ``\x00`` to U+2400, ``\x1b`` to U+241B -- so
+#: the cell still shows where the character was. Before 7.97.0 one such
+#: character anywhere in a prompt (an ANSI colour code in pasted terminal
+#: output) raised ``IllegalCharacterError`` and the whole export failed.
+#: Written out rather than imported: openpyxl is a deferred import here, and
+#: ``tests/core/test_export_xlsx_control_chars.py`` pins this set to openpyxl's.
+_XLSX_ILLEGAL = {
+    code: chr(0x2400 + code)
+    for code in (*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20))
+}
+
+
 def _xlsx_cell(value: Any) -> Any:
     if value is None:
         return ""
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, str):
+        # Every other character, and every non-string value, is unchanged.
+        return value.translate(_XLSX_ILLEGAL)
     return value
 
 

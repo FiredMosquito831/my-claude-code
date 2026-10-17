@@ -873,8 +873,9 @@ def _anthropic_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
             "default": "true",
             "description": (
                 "On (the default), any request that did not come from "
-                "Anthropic's own clients -- the Claude Code CLI or the Claude "
-                "Agent SDK -- is refused. Turning it off routes every other "
+                "Anthropic's own clients -- the Claude Code CLI, the Claude "
+                "Agent SDK or the Claude desktop app -- is refused. Turning it "
+                "off routes every other "
                 "harness onto the subscription credential, which is the case "
                 "Anthropic's policy names explicitly -- read "
                 "docs/ANTHROPIC-SUBSCRIPTION.md first."

@@ -111,12 +111,28 @@ def clear_env_parse_cache() -> None:
     _PARSE_CACHE.clear()
 
 
+def _parse_dotenv_text(text: str) -> dict[str, str]:
+    """``dotenv_values`` over ``text``, interpolating only when there is a ``${``.
+
+    python-dotenv's interpolation copies the whole of ``os.environ`` once for
+    EVERY key it resolves -- 208,300 ``os.environ`` reads in one cold save of a
+    first-start ``.env`` (#266) -- and that was most of the save's time. It
+    only ever rewrites ``${NAME}`` / ``${NAME:-default}``; no escape a dotenv
+    value may use produces ``$`` or ``{``, so a text with no ``${`` in it
+    resolves every value to itself and skipping the pass returns the same
+    mapping, key for key and in the same order (7.97.0). A text that has one
+    is interpolated exactly as before.
+    """
+
+    values = dotenv_values(stream=StringIO(text), interpolate="${" in text)
+    return {key: "" if value is None else value for key, value in values.items()}
+
+
 def dotenv_values_from_text(text: str) -> dict[str, str]:
     """Parse dotenv text into string values."""
 
     def parse() -> dict[str, str]:
-        values = dotenv_values(stream=StringIO(text))
-        return {key: "" if value is None else value for key, value in values.items()}
+        return _parse_dotenv_text(text)
 
     return _cached_parse("text", text.encode("utf-8", "surrogatepass"), parse)
 
@@ -175,8 +191,7 @@ def dotenv_values_from_bytes(path: Path, raw: bytes) -> dict[str, str]:
         # is what ``io.open(path, encoding="utf-8")`` does inside
         # ``dotenv_values(path)``, newline translation included.
         text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
-        values = dotenv_values(stream=StringIO(text))
-        return {key: "" if value is None else value for key, value in values.items()}
+        return _parse_dotenv_text(text)
 
     return _cached_parse(str(path), raw, parse)
 
