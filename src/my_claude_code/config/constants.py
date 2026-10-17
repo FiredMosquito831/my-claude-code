@@ -449,6 +449,19 @@ PROXY_MAX_LIVE_FAILURES_MAX = 1000
 PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT = 10.0
 PROXY_CONNECT_TIMEOUT_SECONDS_MIN = 1.0
 PROXY_CONNECT_TIMEOUT_SECONDS_MAX = 120.0
+# How long a *proxied* leg keeps an idle pooled connection open for the next
+# request (7.94.0). 0 -- what ships -- says nothing to the HTTP library, which
+# closes an idle connection after its own 5 seconds, so every request more than
+# five seconds after the last one through the same exit dials the proxy, runs
+# the tunnel handshake and the TLS handshake again. Through a free proxy that
+# handshake measured 2.8-51.9 s. A number here is handed to the clients of a
+# chain leg that has an address and to nothing else: a direct rung, the Direct
+# fallback, a single static proxy and a provider with no chain are built with
+# exactly the arguments they had before. Opt-in, because a connection held open
+# is one more socket held to a stranger's machine.
+PROXY_KEEPALIVE_SECONDS_DEFAULT = 0.0
+PROXY_KEEPALIVE_SECONDS_MIN = 0.0
+PROXY_KEEPALIVE_SECONDS_MAX = 3600.0
 # Whether the health re-prober runs. TRUE, and unlike the background *checker*
 # above this is on by default because it is not a new outbound conversation:
 # it re-tests only the addresses that have ALREADY failed while carrying this
@@ -613,6 +626,18 @@ PROXY_CHECK_LINK_GUARD_DEFAULT = True
 PROXY_ORDER_RESORT_MINUTES_DEFAULT = 30
 PROXY_ORDER_RESORT_MINUTES_MIN = 5
 PROXY_ORDER_RESORT_MINUTES_MAX = 1440
+# Recency in the speed order (7.94.0): the half-life, in minutes, of an
+# address's standing since the last time a REAL request succeeded through it --
+# an answered dial or a first token, never a health check alone. 0 -- what
+# ships -- is the speed order exactly as 7.56.0 wrote it. A number makes an
+# address that has not carried a successful request for one half-life rank as
+# if it were twice as slow, two half-lives four times, and so on, measured from
+# the most recently proven address of the same chain. It changes only the order
+# MCC writes into a chain with "Keep the fastest healthy proxy first" on, or on
+# "Sort by speed now"; never the selection engine, a bench or a health check.
+PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_DEFAULT = 0
+PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_MIN = 0
+PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_MAX = 1440
 # How many addresses the background health re-prober has in flight. This is NOT
 # the fetch sweep, and not the operator's Add either -- both of those are paced
 # by PROXY_FETCH_TEST_CONCURRENCY. This one number belongs to the loop that

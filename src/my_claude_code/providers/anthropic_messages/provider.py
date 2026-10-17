@@ -42,6 +42,7 @@ from my_claude_code.providers.http import (
     read_error_body,
 )
 from my_claude_code.providers.model_listing import model_infos_from_ids
+from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     ANTHROPIC_OUTPUT_FIELDS,
@@ -184,6 +185,8 @@ class AnthropicMessagesProvider(BaseProvider):
                     read=config.http_read_timeout,
                     write=config.http_write_timeout,
                 ),
+                # A proxied chain leg's keep-alive (7.94.0); nothing otherwise.
+                **leg_pool_kwargs(config.http_keepalive_expiry),
             )
         )
 

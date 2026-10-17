@@ -162,6 +162,9 @@ from .constants import (
     PROXY_FETCH_TEST_CONCURRENCY_MAX,
     PROXY_FETCH_TEST_CONCURRENCY_MIN,
     PROXY_HEALTH_REPROBE_ENABLED_DEFAULT,
+    PROXY_KEEPALIVE_SECONDS_DEFAULT,
+    PROXY_KEEPALIVE_SECONDS_MAX,
+    PROXY_KEEPALIVE_SECONDS_MIN,
     PROXY_MAX_LIVE_FAILURES_DEFAULT,
     PROXY_MAX_LIVE_FAILURES_MAX,
     PROXY_MAX_LIVE_FAILURES_MIN,
@@ -171,6 +174,9 @@ from .constants import (
     PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
     PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
     PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
+    PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_DEFAULT,
+    PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_MAX,
+    PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_MIN,
     PROXY_ORDER_RESORT_MINUTES_DEFAULT,
     PROXY_ORDER_RESORT_MINUTES_MAX,
     PROXY_ORDER_RESORT_MINUTES_MIN,
@@ -1294,6 +1300,15 @@ class Settings(BaseSettings):
         ge=PROXY_CONNECT_TIMEOUT_SECONDS_MIN,
         le=PROXY_CONNECT_TIMEOUT_SECONDS_MAX,
     )
+    # How long a proxied leg's HTTP clients keep an idle connection for the
+    # next request (7.94.0). 0 says nothing and leaves the library's own 5 s.
+    # Proxied chain legs only, like the connect timeout above.
+    proxy_keepalive_seconds: float = Field(
+        default=PROXY_KEEPALIVE_SECONDS_DEFAULT,
+        validation_alias="PROXY_KEEPALIVE_SECONDS",
+        ge=PROXY_KEEPALIVE_SECONDS_MIN,
+        le=PROXY_KEEPALIVE_SECONDS_MAX,
+    )
     # Whether the health re-prober re-tests benched addresses so they can come
     # back. On: a bench expiring is "due for a re-check", never "usable again".
     proxy_health_reprobe_enabled: bool = Field(
@@ -1412,6 +1427,15 @@ class Settings(BaseSettings):
         validation_alias="PROXY_ORDER_RESORT_MINUTES",
         ge=PROXY_ORDER_RESORT_MINUTES_MIN,
         le=PROXY_ORDER_RESORT_MINUTES_MAX,
+    )
+    # The half-life, in minutes, of an address's standing in the speed order
+    # since a real request last succeeded through it (7.94.0). 0 is the speed
+    # order exactly as 7.56.0 wrote it.
+    proxy_order_recency_half_life_minutes: int = Field(
+        default=PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_DEFAULT,
+        validation_alias="PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES",
+        ge=PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_MIN,
+        le=PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES_MAX,
     )
     # How many addresses a check sweep has in flight. Not the fetch sweep --
     # this paces the background health re-probe and the operator's own Add.

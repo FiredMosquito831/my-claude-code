@@ -72,6 +72,7 @@ from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
+from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
@@ -164,7 +165,13 @@ class MediaLeaf:
             self._client = httpx.AsyncClient(transport=transport, timeout=timeout)
         else:
             self._client = bound_socks_handshake(
-                httpx.AsyncClient(proxy=config.proxy or None, timeout=timeout)
+                httpx.AsyncClient(
+                    proxy=config.proxy or None,
+                    timeout=timeout,
+                    # A proxied chain leg's keep-alive (7.94.0); nothing
+                    # otherwise.
+                    **leg_pool_kwargs(config.http_keepalive_expiry),
+                )
             )
 
     @property

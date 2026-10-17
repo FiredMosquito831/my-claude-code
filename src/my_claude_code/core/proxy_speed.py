@@ -73,6 +73,18 @@ cannot read settings, so the caller passes it.
 ``dead`` and ``refused`` are not computed here. They stay the reachability and
 interception ledgers' verdicts, exactly as before.
 
+**Recency** (7.94.0, ``PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES``). The score
+above has no clock in it: an address that answered every check this morning
+and has carried nothing since ranks as well as one that served a request a
+minute ago. :meth:`ProxySpeedLedger.last_success_at` says when a REAL request
+last succeeded through an address -- a dial whose request was answered, or a
+first token through it; never a health check, which proves the tunnel opens
+and nothing about the provider behind it -- and :func:`recency_factor` turns
+the time since into ``2 ** (age / half_life)``. The speed order
+(``application/proxy_order.py``) multiplies its rank by that factor; nothing
+here changes :func:`score_samples`, the page's speed readout or a label, and a
+half-life of 0 is a factor of exactly 1.
+
 **What this module is not.** It never reads a file and never names one: the
 application layer loads and flushes it (``application/proxy_speed_store.py``),
 so ``core`` keeps importing nothing first-party. Nothing on the request path
@@ -133,6 +145,12 @@ KIND_CHECK = "check"
 KIND_DIAL = "dial"
 KIND_TTFT = "ttft"
 SAMPLE_KINDS = (KIND_CHECK, KIND_DIAL, KIND_TTFT)
+
+#: How many half-lives of staleness count towards the recency factor
+#: (7.94.0). Past this an address is as stale as one no real request ever
+#: succeeded through: its factor stops at ``2 ** 16``, so stale addresses keep
+#: their speed order among themselves and every rank stays a finite number.
+RECENCY_MAX_HALF_LIVES = 16.0
 
 STATE_WORKING = "working"
 STATE_SLOW = "slow"
@@ -289,6 +307,24 @@ def expected_setup_ms(setup_ms: float, rate: float, failure_cost_ms: float) -> f
 
     rate = min(1.0, max(1e-6, rate))
     return setup_ms + (1.0 - rate) / rate * max(0.0, failure_cost_ms)
+
+
+def recency_factor(age_seconds: float | None, half_life_seconds: float) -> float:
+    """How much slower an address ranks for not having been proven lately.
+
+    ``2 ** (age / half_life)``: 1.0 for an address a real request has just
+    succeeded through, 2.0 one half-life later, 4.0 two, capped at
+    :data:`RECENCY_MAX_HALF_LIVES` half-lives. ``age_seconds`` ``None`` means no
+    real success inside the window and takes the cap. A half-life of 0 or less
+    is the setting switched off, and the factor is exactly 1.0.
+    """
+
+    if half_life_seconds <= 0:
+        return 1.0
+    if age_seconds is None:
+        return 2.0**RECENCY_MAX_HALF_LIVES
+    half_lives = max(0.0, float(age_seconds)) / float(half_life_seconds)
+    return 2.0 ** min(half_lives, RECENCY_MAX_HALF_LIVES)
 
 
 def speed_state(
@@ -466,6 +502,39 @@ class ProxySpeedLedger:
         return score_samples(
             samples, ratios, failure_cost_ms=failure_cost_ms, slow_ms=slow_ms
         )
+
+    def last_success_at(
+        self,
+        address: str,
+        provider: str,
+        *,
+        now: float | None = None,
+    ) -> float | None:
+        """When a REAL request last succeeded through this key, inside the window.
+
+        A real success is a ``dial`` sample that passed -- its row's outcome
+        was ``answered``: the last upstream try through the address came back
+        below 400 -- or a ``ttft`` sample, which exists only for a proxied
+        attempt that produced a first token. A ``check`` is never one: it
+        proves the tunnel opens, not that the provider served a request
+        through it. ``None`` when nothing in the last
+        :data:`SCORE_WINDOW_SECONDS` qualifies.
+        """
+
+        key = _key(address, provider)
+        wall = time.time() if now is None else now
+        horizon = wall - SCORE_WINDOW_SECONDS
+        with self._lock:
+            record = None if key is None else self._records.get(key)
+            if record is None:
+                return None
+            times = [
+                sample.at
+                for sample in record.samples
+                if sample.kind == KIND_DIAL and sample.ok and sample.at >= horizon
+            ]
+            times.extend(sample.at for sample in record.ttft if sample.at >= horizon)
+        return max(times) if times else None
 
     def samples(self, address: str, provider: str) -> list[SpeedSample]:
         """Every stored sample of one key, both rings, oldest first. For tests."""
@@ -731,6 +800,7 @@ __all__ = [
     "MODEL_TTFT_BASELINE_MIN",
     "MODEL_TTFT_WINDOW",
     "PROXY_SPEED",
+    "RECENCY_MAX_HALF_LIVES",
     "SAMPLE_RING",
     "SCORE_WINDOW_SECONDS",
     "SPEED_STATES",
@@ -745,6 +815,7 @@ __all__ = [
     "SpeedScore",
     "dial_sample",
     "expected_setup_ms",
+    "recency_factor",
     "score_samples",
     "speed_state",
     "success_rate",

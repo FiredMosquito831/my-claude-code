@@ -2884,6 +2884,34 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_KEEPALIVE_SECONDS",
+        "Keep idle proxy connections open (seconds)",
+        "credential_health",
+        "number",
+        settings_attr="proxy_keepalive_seconds",
+        default="0",
+        advanced=True,
+        minimum=0,
+        maximum=3600,
+        description=(
+            "How long a connection through a proxy address stays open while "
+            "idle, so the next request through the same address reuses it. "
+            "0 -- what ships -- leaves the HTTP library's own 5 seconds: a "
+            "request more than five seconds after the last one through that "
+            "address dials the proxy and runs the tunnel and TLS handshakes "
+            "again, which through a free proxy has measured 2.8 to 52 "
+            "seconds. 60 is recommended when your chains use proxies: "
+            "requests up to a minute apart then skip the handshake. Only the "
+            "proxy entries of a chain with two or more entries are affected; "
+            "a provider with no chain, a single fixed proxy, a Direct entry "
+            "and the Direct fallback keep exactly what they had. Applies to "
+            "requests after Save. A proxy that silently drops idle "
+            "connections can make the first request after a pause fail on "
+            "that address, and the chain moves on as for any dropped "
+            "connection."
+        ),
+    ),
+    ConfigFieldSpec(
         "PROXY_MAX_LIVE_FAILURES",
         "Live proxy failures before going direct",
         "credential_health",
@@ -3271,6 +3299,34 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "addresses of similar speed, and it bounds how often that "
             "provider is rebuilt for a new order. 'Sort by speed now' is "
             "not held back by it."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES",
+        "Prefer recently proven proxies (half-life, minutes)",
+        "credential_health",
+        "number",
+        settings_attr="proxy_order_recency_half_life_minutes",
+        default="0",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        minimum=0,
+        maximum=1440,
+        description=(
+            "0 -- what ships -- orders a chain by measured speed only, "
+            "exactly as before. A number makes an address that has not "
+            "carried a successful request for that many minutes rank as if "
+            "it were twice as slow, for two half-lives four times, counted "
+            "from the most recently proven address of the same chain. A "
+            "successful request is one the provider answered, or that "
+            "produced a first token, through that address; a health check "
+            "alone never counts. It changes only the order MCC writes with "
+            "'Keep the fastest healthy proxy first' on, or on 'Sort by speed "
+            "now' -- which addresses are healthy, benched or skipped, and how "
+            "a request moves between them, are untouched. Live requests are "
+            "measured only while the request log is on (it is by default). "
+            "10 is a good start."
         ),
     ),
     ConfigFieldSpec(

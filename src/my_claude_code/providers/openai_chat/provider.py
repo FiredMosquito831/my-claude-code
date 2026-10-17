@@ -88,6 +88,7 @@ from my_claude_code.providers.model_listing import (
     merge_model_list_pages,
     validate_model_list_page,
 )
+from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     OutputCapRecovery,
@@ -180,7 +181,10 @@ def _async_openai_client_class() -> type[AsyncOpenAI]:
 
 
 def _proxied_http_client(
-    proxy: str, base_url: str, timeout: httpx.Timeout
+    proxy: str,
+    base_url: str,
+    timeout: httpx.Timeout,
+    keepalive_expiry: float | None = None,
 ) -> httpx.AsyncClient:
     """The client a proxied provider runs on: the SDK's own, through a proxy.
 
@@ -203,12 +207,21 @@ def _proxied_http_client(
     its own connect timeout; see :mod:`my_claude_code.providers.socks_deadline`.
     Nothing about the client's configuration changes, and for an ``http`` rung
     the call is a no-op.
+
+    Since 7.94.0 a proxied chain leg with ``PROXY_KEEPALIVE_SECONDS`` set
+    passes ``keepalive_expiry``: the SDK's own pool sizes are kept and only how
+    long an idle connection lives changes. ``None`` adds no argument at all.
     """
 
-    from openai import DefaultAsyncHttpxClient
+    from openai import DEFAULT_CONNECTION_LIMITS, DefaultAsyncHttpxClient
 
     return bound_socks_handshake(
-        DefaultAsyncHttpxClient(base_url=base_url, timeout=timeout, proxy=proxy)
+        DefaultAsyncHttpxClient(
+            base_url=base_url,
+            timeout=timeout,
+            proxy=proxy,
+            **leg_pool_kwargs(keepalive_expiry, base=DEFAULT_CONNECTION_LIMITS),
+        )
     )
 
 
@@ -331,7 +344,12 @@ class OpenAIChatProvider(BaseProvider):
         # of its choosing, and a hand-rolled ``httpx.AsyncClient`` silently got
         # neither. See :func:`_proxied_http_client`.
         http_client = (
-            _proxied_http_client(config.proxy, self._base_url, request_timeout)
+            _proxied_http_client(
+                config.proxy,
+                self._base_url,
+                request_timeout,
+                config.http_keepalive_expiry,
+            )
             if config.proxy
             else None
         )

@@ -28,6 +28,7 @@ from my_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
     classify_provider_failure,
 )
+from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
@@ -75,6 +76,8 @@ class AnthropicProvider(BaseProvider):
                     read=config.http_read_timeout,
                     write=config.http_write_timeout,
                 ),
+                # A proxied chain leg's keep-alive (7.94.0); nothing otherwise.
+                **leg_pool_kwargs(config.http_keepalive_expiry),
             )
         )
 

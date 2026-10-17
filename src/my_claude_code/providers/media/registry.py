@@ -43,6 +43,7 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.providers.base import MaskedRefusalPlan, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
+from my_claude_code.providers.proxy_keepalive import proxied_leg_keepalive
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.runtime.config import build_provider_config
 from my_claude_code.providers.runtime.exit_rotation import credential_identity
@@ -249,6 +250,9 @@ class MediaRegistry:
             getattr(settings, "proxy_connect_timeout_seconds", None)
             or PROXY_CONNECT_TIMEOUT_SECONDS_DEFAULT
         )
+        # Chat's rule (7.94.0): a proxied leg's clients keep an idle
+        # connection for PROXY_KEEPALIVE_SECONDS; ``None`` at 0.
+        keepalive_expiry = proxied_leg_keepalive(settings)
 
         def build_leg(index: int) -> MediaNode:
             url = legs[index].url if index < len(legs) else ""
@@ -265,6 +269,7 @@ class MediaRegistry:
                     proxy=url,
                     proxy_chain=None,
                     http_connect_timeout=connect_timeout,
+                    http_keepalive_expiry=keepalive_expiry,
                 ),
                 proxied_leg=True,
             )
