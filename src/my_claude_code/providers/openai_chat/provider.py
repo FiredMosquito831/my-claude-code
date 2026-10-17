@@ -97,6 +97,7 @@ from my_claude_code.providers.recovery import (
     RecoveryLadder,
     RecoveryMemory,
     learned_fact_store,
+    region_refusal_on_cause_chain,
     surface_shaped_failure,
 )
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
@@ -1001,7 +1002,10 @@ class OpenAIChatProvider(BaseProvider):
         declares more than one surface, only on a refusal
         ``providers/recovery/surface.py`` recognises as being about the
         endpoint, only before a single byte has been committed to the client,
-        and at most once per surface.
+        and at most once per surface. Since 7.96.1 a country refusal on a door
+        MCC *knows* (override, learned, registry) does not fire it: the other
+        doors are behind the same refused address. On a guessed door it still
+        does, because there a country 403 can be the vendor's wrong-door answer.
 
         A probe that succeeds is written down (``source="probe"``) so the next
         request goes straight to the right door; a failure on every surface is
@@ -1020,6 +1024,12 @@ class OpenAIChatProvider(BaseProvider):
         attempted: list[ResponseSurface] = []
         surface = resolved.surface
         label = resolved.label
+        # Whether the door being knocked on is one MCC *knows* serves this
+        # model -- the operator named it, a probe proved it, or the vendor's
+        # registry published it -- rather than the profile's guess. Read from
+        # the source the door was chosen by, not re-resolved later, so a fact
+        # another request learns meanwhile cannot change what this one tried.
+        door_known = resolved.source in _KNOWN_SURFACE_SOURCES
         while True:
             attempted.append(surface)
             committed = False
@@ -1040,6 +1050,25 @@ class OpenAIChatProvider(BaseProvider):
                 evidence = _surface_failure_evidence(error)
                 if committed or evidence is None:
                     raise
+                if door_known and region_refusal_on_cause_chain(error):
+                    # 7.96.1. A country refusal on a door MCC knows is right is
+                    # about the address the request came from, and every other
+                    # door is behind the same address: probing them only
+                    # spends dials the host refuses for the same reason before
+                    # the proxy pool can move to another exit. On a *guessed*
+                    # door the probe still runs, because there the vendor's
+                    # wrong-door answer is sometimes this same country 403
+                    # (anomalyco/opencode#47969) and the probe is what serves
+                    # the request.
+                    logger.info(
+                        "{}_STREAM: {} refused {} for the caller's country on "
+                        "a known surface; not probing the other surfaces "
+                        "through the same address",
+                        self._provider_name,
+                        request.model,
+                        surface.value,
+                    )
+                    raise
                 learned = await self._probe_for_another_surface(
                     request.model, surface, attempted, evidence
                 )
@@ -1049,6 +1078,7 @@ class OpenAIChatProvider(BaseProvider):
                 label = ResolvedResponseSurface(
                     learned, ResponseSurfaceSource.LEARNED, "proved by a probe"
                 ).label
+                door_known = True
 
     def _stream_on_surface(
         self,
@@ -1249,6 +1279,19 @@ class OpenAIChatProvider(BaseProvider):
         return catalogue.roster_for_tool_less_request(
             model_id, zero_cost=model_is_zero_cost(self._provider_id, model_id)
         )
+
+
+#: The surface sources that mean MCC *knows* a model's door (7.96.1): the
+#: operator's override, a probe this deployment passed, the vendor's registry.
+#: ``PROFILE`` and ``DEFAULT`` are the door nobody vouched for, where a country
+#: 403 may be the vendor's wrong-door answer and the surface probe still runs.
+_KNOWN_SURFACE_SOURCES = frozenset(
+    {
+        ResponseSurfaceSource.OVERRIDE,
+        ResponseSurfaceSource.LEARNED,
+        ResponseSurfaceSource.REGISTRY,
+    }
+)
 
 
 #: How far up a ``__cause__`` chain the surface matcher looks. The stream
