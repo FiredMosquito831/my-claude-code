@@ -13610,6 +13610,111 @@ const mediaDashboard = {};
   await new Promise((resolve) => setTimeout(resolve, 300));
 }
 
+/* 7.96.0: exit refusal facts -- "country refused ×n" / "challenged ×n" on a
+   request detail attempt and in the Exit cell's title, counted by the server
+   when the row is read. A row without them (every row before 7.96.0 that met
+   neither, and every row the server sends without the key) renders exactly as
+   it did. */
+const exitFacts = {};
+{
+  const base = {
+    ts_iso: "2026-10-17T10:00:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "opencode",
+    requested_model: "claude-opus-4",
+    resolved_model: "muse-spark-1.3",
+    status: "success",
+    tokens_in: 10,
+    tokens_out: 20,
+    duration_ms: 900,
+  };
+  const cases = {
+    refused: {
+      exit: {
+        label: "exit-c.example:1080",
+        tried: ["exit-a.example:1080", "exit-b.example:1080", "exit-c.example:1080"],
+        facts: { region_refused: 2 },
+      },
+    },
+    both: {
+      exit: {
+        label: "203.0.113.7:1080",
+        tried: ["203.0.113.7:1080"],
+        facts: { region_refused: 1, challenged: 1 },
+      },
+    },
+    noExit: { exit: { label: null, tried: [], facts: { region_refused: 1 } } },
+    old: { exit: { label: "203.0.113.7:1080", tried: ["203.0.113.7:1080"] } },
+  };
+  const names = Object.keys(cases);
+  const rows = names.map((name) => ({ ...base, id: `req-facts-${name}`, ...cases[name] }));
+  window.eval(`renderRequestsTable(${JSON.stringify(rows)})`);
+  const trs = Array.from(doc.getElementById("reqTableBody").querySelectorAll("tr"));
+  exitFacts.cells = {};
+  names.forEach((name, index) => {
+    const td = trs[index] ? trs[index].querySelector("td.req-col-exit") : null;
+    exitFacts.cells[name] = td ? { text: td.textContent, title: td.title } : null;
+  });
+
+  const refusal = {
+    source: "upstream",
+    key_index: 0,
+    status: 403,
+    proxy: "exit-a.example:1080",
+    body: '{"type": "error", "error": {"type": "RegionError", "message": "This model is not available in your country."}}',
+  };
+  const ladder = (extra) =>
+    Object.assign(
+      {
+        tries: [refusal, { source: "upstream", key_index: 0, status: 200 }],
+        summary: { tries: 2, probes: 0, statuses_by_code: { 403: 1 }, keys: 1 },
+        credentials: [],
+      },
+      extra,
+    );
+  const drive = (row) => {
+    const seen = driveDetail(row);
+    const chain = doc.getElementById("reqDetailChain");
+    return {
+      chips: Array.from(chain.querySelectorAll(".req-chain-exitfact")).map((el) => ({
+        text: el.textContent,
+        title: el.title,
+        className: el.className,
+      })),
+      ladderSummaries: seen.ladderSummaries,
+      chainText: (chain.textContent || "").replace(/\s+/g, " ").trim(),
+    };
+  };
+  exitFacts.detail = drive({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "model_rejected",
+        error_message: "rig: refused",
+        params: { ladder: ladder({ exit_facts: { region_refused: 1, challenged: 2 } }) },
+      }),
+      detailAttempt({ attempt: 1, params: { ladder: ladder({}) } }),
+    ],
+  });
+  // The same stored ladder as a release before 7.96.0 served it: no key.
+  exitFacts.oldDetail = drive({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "model_rejected",
+        error_message: "rig: refused",
+        params: { ladder: ladder({}) },
+      }),
+      detailAttempt({ attempt: 1, params: null }),
+    ],
+  });
+}
+
 console.log(
   JSON.stringify(
     {
@@ -13626,6 +13731,7 @@ console.log(
       originFilters,
       requestExitCell,
       exitFilter,
+      exitFacts,
       keyFilter,
       modelKinds,
       credHints,

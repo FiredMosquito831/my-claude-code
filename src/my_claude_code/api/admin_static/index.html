@@ -4093,6 +4093,14 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                     what MCC now remembers about it, how many exits were skipped from
                     memory, and &mdash; when every usable exit refused &mdash; one sentence
                     saying so.</li>
+                  <li>Since 7.96.0, on every chain (ticked or not) and without one, an
+                    attempt whose tries met a country refusal or a bot-challenge page
+                    carries a <em>country refused &times;n</em> /
+                    <em>challenged &times;n</em> chip in the request detail, and the
+                    Exit cell's tooltip counts them. They are read from the stored
+                    tries, so older requests show them too. A country refusal never
+                    locks the key out any more; an unticked chain still does not move
+                    to another exit on one.</li>
                 </ul>
                 <p>
                   Time: each bad exit costs what it costs today (a refused connect up to
@@ -5919,7 +5927,12 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   <code>CREDENTIAL_LOCKOUT_TIERS</code> is the ladder a
                   <strong>401/403</strong> walks — <code>300,3600,86400</code>,
                   so five minutes, then an hour, then a day for each successive
-                  auth failure — and <code>RATE_LIMIT_COOLDOWN_SECONDS</code> is
+                  auth failure (a 403 that says your <strong>country</strong> was
+                  refused &mdash; <code>RegionError</code>, &ldquo;not available in
+                  your country&rdquo; &mdash; is about the address, not the key, and
+                  since 7.96.0 costs the key nothing; the request still tries the
+                  next key, then the next model) — and
+                  <code>RATE_LIMIT_COOLDOWN_SECONDS</code> is
                   only the fallback for a <strong>429</strong> that arrives
                   without a <code>Retry-After</code> header, capped at an hour
                   either way. That 429 bench is scoped to the one model it
