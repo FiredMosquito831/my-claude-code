@@ -70,8 +70,8 @@ finding current information and reading specific pages. The anonymous endpoint
 needs no account or API key; search runs in Fast mode. Free access has rate
 limits and is intended for exploration and light use.
 
-With Claude Code installed, run these commands from the project where you will
-use it:
+With Claude Code installed and MCC running (`mcc-server` in another terminal
+if needed), run these commands from the project where you will use it:
 
 ```bash
 claude mcp add --transport http --scope local parallel-search https://search.parallel.ai/mcp
