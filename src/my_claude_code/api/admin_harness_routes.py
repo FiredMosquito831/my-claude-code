@@ -84,6 +84,7 @@ from my_claude_code.config.harnesses import (
     harness_command_lines,
     harness_specs,
 )
+from my_claude_code.config.mcp_media import mcp_media_document
 from my_claude_code.config.paths import harness_catalogue_path
 from my_claude_code.config.rtk import load_rtk_state
 from my_claude_code.config.settings import Settings
@@ -524,6 +525,18 @@ def _catalogue_models_payload(
             else models
         )
         document, defaulted = serialise(catalogue.format_id, harness_models)
+        # The launcher writes this document when the file is missing, so it
+        # carries exactly what the background publisher writes: the media
+        # MCP server for an app whose button is on, added outside the
+        # serialiser (7.99.0, risk R13). Off, the document is unchanged.
+        document = dict(
+            mcp_media_document(
+                spec.id,
+                document,
+                apps_value=settings.mcp_media_apps,
+                environ=os.environ,
+            )
+        )
         entry: dict[str, Any] = {
             "format": catalogue.format_id,
             "filename": catalogue.filename,

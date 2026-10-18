@@ -23,6 +23,7 @@ _SHELL_HELPER_NAMES = frozenset(
         "download_verified_release_wheel",
         "install_my_claude_code",
         "configure_and_verify_my_claude_code",
+        "launcher_introduced_in",
         "ensure_uv",
         "verify_uv",
         "require_curl",
@@ -57,6 +58,7 @@ _POWERSHELL_HELPER_NAMES = frozenset(
         "Invoke-StagedInstall",
         "Update-UvReceiptEntrypoint",
         "Configure-AndConfirmFreeClaudeCode",
+        "Get-LauncherIntroducedIn",
     }
 )
 
@@ -201,7 +203,7 @@ if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
         mcc-qwen mcc-crush \
         mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini \
         mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
-        mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-apps \
+        mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-apps mcc-mcp \
         mcc-desktop my-claude-code fcc-server fcc-claude fcc-claude-old fcc-pi \
         fcc-init fcc-chatgpt-oauth-login fcc-anthropic-oauth-login \
         fcc-compact-log fcc-help fcc-rtk fcc-migrate fcc-desktop free-claude-code \
@@ -975,7 +977,7 @@ if "%FAIL_STEP%"=="fcc-install" exit /b 53
 if "%FAIL_STEP%"=="fcc-install-disk-full" goto install_disk_full
 if "%FAIL_STEP%"=="fcc-install-locked" goto install_locked
 if not exist "%FAKE_TOOL_BIN%" mkdir "%FAKE_TOOL_BIN%"
-for %%N in (fcc-anthropic-oauth-login fcc-chatgpt-oauth-login fcc-claude fcc-claude-old fcc-codex fcc-compact-log fcc-desktop fcc-help fcc-init fcc-migrate fcc-pi fcc-rtk fcc-server free-claude-code mcc-aider mcc-anthropic-oauth-login mcc-apps mcc-chatgpt-oauth-login mcc-claude mcc-claude-old mcc-cline mcc-codex mcc-commandcode mcc-compact-log mcc-crush mcc-desktop mcc-droid mcc-gemini mcc-goose mcc-help mcc-init mcc-kilo mcc-kimi mcc-migrate mcc-opencode mcc-opencode2 mcc-pi mcc-qwen mcc-rtk mcc-server my-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
+for %%N in (fcc-anthropic-oauth-login fcc-chatgpt-oauth-login fcc-claude fcc-claude-old fcc-codex fcc-compact-log fcc-desktop fcc-help fcc-init fcc-migrate fcc-pi fcc-rtk fcc-server free-claude-code mcc-aider mcc-anthropic-oauth-login mcc-apps mcc-chatgpt-oauth-login mcc-claude mcc-claude-old mcc-cline mcc-codex mcc-commandcode mcc-compact-log mcc-crush mcc-desktop mcc-droid mcc-gemini mcc-goose mcc-help mcc-init mcc-kilo mcc-kimi mcc-mcp mcc-migrate mcc-opencode mcc-opencode2 mcc-pi mcc-qwen mcc-rtk mcc-server my-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
 if "%FAIL_STEP%"=="fcc-missing" del /q "%FAKE_TOOL_BIN%\mcc-server.cmd" >nul
 exit /b 0
 :install_disk_full
@@ -3008,7 +3010,9 @@ def _launcher_commands() -> list[str]:
     return re.findall(r'"([A-Za-z0-9._-]+)"', body.split("return @(", 1)[1])
 
 
-def _verification_runner(tmp_path: Path, func_file: Path, tool_bin: Path) -> Path:
+def _verification_runner(
+    tmp_path: Path, func_file: Path, tool_bin: Path, expected_version: str = "6.30.1"
+) -> Path:
     """A harness around Configure-AndConfirmFreeClaudeCode.
 
     ``FAKE_SHADOW`` is a path returned by the stubbed Get-ApplicationCommand
@@ -3036,13 +3040,13 @@ function Invoke-NativeCommand {{ param([string] $FilePath, [string[]] $Arguments
 function Invoke-NativeCapture {{
     param([string] $FilePath, [string[]] $Arguments = @())
     if ($FilePath -eq "C:\\fake\\uv.exe") {{ return $toolBin }}
-    return "my-claude-code 6.30.1"
+    return "my-claude-code {expected_version}"
 }}
 function Add-PathEntry {{ param([string] $PathEntry) }}
 $DryRun = $false
 . "{func_file.as_posix()}"
-Configure-AndConfirmFreeClaudeCode -ExpectedVersion "6.30.1"
-Write-Host "My Claude Code 6.30.1 is installed and verified."
+Configure-AndConfirmFreeClaudeCode -ExpectedVersion "{expected_version}"
+Write-Host "My Claude Code {expected_version} is installed and verified."
 """,
         encoding="utf-8",
     )
@@ -3060,6 +3064,8 @@ def _verification_functions(tmp_path: Path) -> Path:
         + _extract_function_definition(installer_text, "Get-ShadowingProgram")
         + _extract_function_definition(installer_text, "Write-ShadowingProgramWarning")
         + _extract_function_definition(installer_text, "Get-LauncherCommands")
+        + _extract_function_definition(installer_text, "Get-LauncherIntroducedIn")
+        + _extract_function_definition(installer_text, "Test-VersionAtLeast")
         + _extract_function_definition(
             installer_text, "Configure-AndConfirmFreeClaudeCode"
         ),
@@ -3187,6 +3193,38 @@ def test_install_ps1_still_refuses_when_a_launcher_is_absent_from_the_uv_bin_dir
     assert "Installed, but these commands are missing:" in result.stdout
     for name in ("mcc-kimi", "mcc-crush"):
         assert name in result.stdout
+
+
+@pytest.mark.local_serial
+def test_install_ps1_expects_mcc_mcp_only_from_the_release_that_ships_it(
+    powershell_harness: PowerShellHarness,
+    tmp_path: Path,
+) -> None:
+    """7.99.0: a wheel from before mcc-mcp existed is not missing it.
+
+    The CI smoke run installs the latest PUBLISHED wheel with this branch's
+    script, and -Version installs any earlier one. From 7.99.0 on, a missing
+    mcc-mcp is still refused like any other missing command.
+    """
+    tool_bin = _populated_tool_bin(tmp_path)
+    (tool_bin / "mcc-mcp.exe").unlink()
+    functions = _verification_functions(tmp_path)
+
+    older = _run_verification(
+        powershell_harness,
+        _verification_runner(tmp_path, functions, tool_bin, "7.98.0"),
+        "",
+    )
+    assert older.returncode == 0, older.stdout + older.stderr
+    assert "is installed and verified." in older.stdout
+
+    current = _run_verification(
+        powershell_harness,
+        _verification_runner(tmp_path, functions, tool_bin, "7.99.0"),
+        "",
+    )
+    assert current.returncode != 0, current.stdout + current.stderr
+    assert "Installed, but these commands are missing: mcc-mcp" in current.stdout
 
 
 @pytest.mark.local_serial

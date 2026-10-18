@@ -77,6 +77,7 @@ from .constants import (
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
     MAX_OUTPUT_TOKENS_FLOOR,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+    MCP_MEDIA_APPS_DEFAULT,
     MEDIA_UPLOAD_MAX_MB_DEFAULT,
     MODEL_DISCOVERY_REFRESH_SECONDS_DEFAULT,
     MODEL_METADATA_OPENROUTER_LIVE_DEFAULT,
@@ -885,6 +886,14 @@ class Settings(BaseSettings):
     # anyway -- an id that used to work must keep working.
     harness_tier_aliases: bool = Field(
         default=True, validation_alias="HARNESS_TIER_ALIASES"
+    )
+    # ==================== Media MCP server (7.99.0) ====================
+    # The apps MCC registers its media server (``mcc-mcp``) with, as a comma
+    # list of app ids (``config/mcp_media.py``). Written by each Coding agents
+    # card's Add / Remove MCP server button; empty registers it nowhere, so
+    # every generated document and launch line is exactly what it was before.
+    mcp_media_apps: str = Field(
+        default=MCP_MEDIA_APPS_DEFAULT, validation_alias="MCP_MEDIA_APPS"
     )
 
     # ==================== Model visibility ====================

@@ -14,6 +14,8 @@ EXPECTED_STEP_IDS = (
     "models",
     "client",
     "connect_agents",
+    # 7.99.0: the media server step (the user's 2026-10-18 12:53 amendment).
+    "media_tools",
     "websearch",
     "messaging",
     "analytics",

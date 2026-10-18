@@ -4535,7 +4535,7 @@ function Configure-AndConfirmFreeClaudeCode {
     if ($DryRun) {
         Write-Host "+ uv tool update-shell"
         Write-Host "+ uv tool dir --bin"
-        Write-Host "+ verify mcc-server, mcc-claude, mcc-codex, mcc-pi, mcc-help, and my-claude-code in the uv tool bin directory"
+        Write-Host "+ verify mcc-server, mcc-claude, mcc-codex, mcc-pi, mcc-help, mcc-mcp, and my-claude-code in the uv tool bin directory"
         Write-Host "+ mcc-server --version"
         return
     }
@@ -4577,7 +4577,12 @@ function Configure-AndConfirmFreeClaudeCode {
     $installedCommands = @{}
     $missingCommands = @()
     $shadowedCommands = @()
+    $introducedIn = Get-LauncherIntroducedIn
     foreach ($commandName in Get-LauncherCommands) {
+        if ($introducedIn.ContainsKey($commandName) -and
+            -not (Test-VersionAtLeast -Version $ExpectedVersion -Minimum $introducedIn[$commandName])) {
+            continue
+        }
         $launcher = Get-LauncherInBinDirectory -BinDir $toolBinPath -Name $commandName
         if ($null -eq $launcher) {
             $missingCommands += $commandName
@@ -4636,6 +4641,7 @@ function Write-MccCommandReference {
     Write-Host "  mcc-init                Create or repair ~/.mcc/.env"
     Write-Host "  mcc-rtk                 Manage the RTK token optimizer"
     Write-Host "  mcc-apps                Point desktop apps here (list/status/configure/undo)"
+    Write-Host "  mcc-mcp                 Media tools for MCP apps (add it per agent on the Coding agents page)"
     Write-Host "  mcc-help                Show what each command does"
     if ($script:EnableDesktop) {
         Write-Host ""
@@ -4786,8 +4792,23 @@ function Get-LauncherCommands {
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
         "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-migrate",
         "mcc-apps", "mcc-desktop", "my-claude-code",
-        "fcc-migrate"
+        "fcc-migrate",
+        # 7.99.0: the media MCP server an app keeps running for its session,
+        # Claude Desktop all day, so it is a launcher that can hold a shim.
+        "mcc-mcp"
     )
+}
+
+function Get-LauncherIntroducedIn {
+    # The first release that publishes a command, for each command added since
+    # the verification below began checking the bin directory. A wheel older
+    # than that has no such command, so installing it (-Version, or the CI
+    # smoke run, which installs the latest PUBLISHED wheel with this script)
+    # must not report the command as missing. Every other command is expected
+    # of every version.
+    return @{
+        "mcc-mcp" = "7.99.0"
+    }
 }
 
 function Get-McmHolders {

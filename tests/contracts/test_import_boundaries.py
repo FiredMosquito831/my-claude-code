@@ -19,7 +19,12 @@ ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
     "messaging": {"core"},
     "providers": {"application", "config", "core"},
     "websearch": {"config", "core"},
-    "api": {"application", "config", "core", "websearch"},
+    # 7.99.0: ``mcc-mcp``, MCC's media MCP server. A program of its own that
+    # reads MCC's settings and talks to MCC over loopback, so it needs only
+    # what a launcher needs; ``api`` reads its pure tool derivation to show
+    # the MCC media server card what the tool list costs.
+    "mcp_media": {"config", "core"},
+    "api": {"application", "config", "core", "mcp_media", "websearch"},
     "cli": {"config", "core"},
     "runtime": {
         "api",
@@ -723,6 +728,36 @@ def test_core_does_not_import_provider_transport_sdks() -> None:
     ]
 
     assert sorted(offenders) == []
+
+
+#: The one module allowed to import the MCP SDK (7.99.0). The server process
+#: never loads it -- the dashboard's MCC media server card reads ``tools``,
+#: which is pure -- so neither the server's start-up nor its memory pays for
+#: an SDK only ``mcc-mcp`` speaks.
+MCP_SDK_OWNER = "my_claude_code.mcp_media.server"
+
+
+def test_the_mcp_sdk_has_one_owner() -> None:
+    sdk_roots = {"mcp", "mcp_types"}
+    importers = sorted(
+        {
+            record.importer
+            for record in _scan_imports(_PACKAGE_ROOT)
+            if record.imported.split(".", 1)[0] in sdk_roots
+        }
+    )
+    assert importers == [MCP_SDK_OWNER]
+
+
+def test_the_server_never_imports_the_mcp_server_module() -> None:
+    """Nothing the server imports reaches ``mcc-mcp``'s SDK-backed module."""
+
+    offenders = sorted(
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.imported == MCP_SDK_OWNER and record.importer != MCP_SDK_OWNER
+    )
+    assert offenders == []
 
 
 def test_providers_do_not_own_wire_error_type_literals() -> None:

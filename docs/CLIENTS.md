@@ -32,6 +32,25 @@ original beside it first.
   <p><em>Desktop apps: the file each application reads, the keys MCC replaces, and a dry run before anything is written.</em></p>
 </div>
 
+### Media tools for an agent: MCC's media server (MCP, 7.99.0)
+
+Every agent card (and the Claude Desktop card) has an **Add MCP server** button. It gives
+that agent MCC's media server, `mcc-mcp`: tools for the media rails you filled in on
+Model Config -- `generate_image`, `edit_image`, `speak`, `transcribe`, `translate_audio`,
+`create_video` / `get_video`, and the free `media_status` -- so the agent can make
+pictures, speech, transcripts and video itself. **Remove MCP server** takes it out and
+puts back exactly what was there. MCC writes it only into what it already owns (the
+`mcc-claude` and `mcc-codex` launch lines, its config layers for OpenCode, OpenCode 2,
+Kilo, Crush, Qwen Code and Gemini CLI, and its own Claude Desktop document), never into
+your own files, and the token never goes into any of them: `mcc-mcp` reads it from MCC's
+settings. Each agent asks before a tool that spends money; for OpenCode and Kilo MCC's
+layer turns that ask on. The agent sends a few KB of tool text with each request while it
+has the server -- the **MCC media server** card on the same page shows the figure, the
+tools your rails give, and a line to add `mcc-mcp` to any other MCP app. Codex lists the
+server but its model does not see the tools yet, and OpenCode 2's first `run` after its
+service starts can begin before the server connects ([Known limits](MEDIA.md#known-limits-today)). Details:
+[Coding agents: the media server](MEDIA.md#coding-agents-the-media-server-mcp-7990).
+
 <details>
 <summary><strong>Claude Code in VS Code</strong></summary>
 
@@ -315,6 +334,12 @@ after that model's host had refused a request with *mode is required*. Without a
 answers `401` with `{"detail": ...}`, as `/v1/models` does. Read only: nothing a request
 sends changes. Fields, states and sources:
 [Request fields per model](MEDIA.md#request-fields-per-model-7980).
+
+The images doors also take an opt-in request header, `x-mcc-inline-images: 1` (since
+7.99.0; `mcc-mcp` sends it): every picture comes back as `b64_json`, and one the
+provider answered with only a link is downloaded by MCC through that provider's own
+client and proxy, so the caller never fetches a provider's address itself. Without the
+header an answer is exactly what it was.
 
 ### Errors
 

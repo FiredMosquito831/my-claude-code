@@ -86,10 +86,10 @@ from my_claude_code.core.media_store import sha256_hex
 from my_claude_code.core.request_log import store_from_settings
 
 from .dependencies import get_services, require_proxy_auth
+from .media_answer_fetch import answer_client, fetch_answer_file
 from .media_capture import MediaCapture, media_pricing
 from .media_routes import Cleanup, Complete, MediaWire, _serve
 from .media_video_routes import (
-    _answering_key,
     _client_for,
     _content,
     _load,
@@ -252,60 +252,6 @@ async def _inline_uploads(
 # ------------------------------------------------------- generateContent
 
 
-def _answer_client(
-    media: MediaRuntimePort, settings: Settings, capture: MediaCapture
-) -> tuple[MediaJobClient, str]:
-    """The key and leg that answered, to fetch what its answer points at."""
-    routed = capture.routed
-    if routed is None:
-        raise ExecutionFailure(
-            kind=FailureKind.UPSTREAM,
-            status_code=502,
-            message="The image answer named URLs, and no provider answered it.",
-            retryable=False,
-        )
-    provider_id = routed.resolved.provider_id
-    key_index, _label, fingerprint = _answering_key(media, settings, provider_id)
-    client = media.job_client(
-        settings,
-        provider_id,
-        key_fingerprint=fingerprint,
-        key_index=key_index,
-        proxy_label=capture.proxy_label,
-    )
-    if client is None:
-        raise ExecutionFailure(
-            kind=FailureKind.UPSTREAM,
-            status_code=502,
-            message=(
-                f"{provider_id} answered with image URLs, and the key that asked "
-                "is no longer configured to fetch them."
-            ),
-            retryable=False,
-        )
-    return client, routed.resolved.provider_model
-
-
-async def _fetch(
-    client: MediaJobClient, url: str, *, model: str, request_id: str
-) -> tuple[bytes, str]:
-    """One URL-only image, downloaded whole: its bytes and the host's type.
-
-    Through the answering key's own leaf, one call, never retried elsewhere;
-    a key goes only to the provider's own host (a CDN URL is fetched bare).
-    """
-    download = await client.download(
-        operation=None, upstream_id="", url=url, model=model, request_id=request_id
-    )
-    data = bytearray()
-    try:
-        async for chunk in download.chunks:
-            data.extend(chunk)
-    finally:
-        await download.close()
-    return bytes(data), download.content_type
-
-
 async def _image_parts(
     media: MediaRuntimePort,
     settings: Settings,
@@ -322,8 +268,8 @@ async def _image_parts(
             parts.append(item)
             continue
         if client is None:
-            client = _answer_client(media, settings, capture)
-        data, content_type = await _fetch(
+            client = answer_client(media, settings, capture)
+        data, content_type = await fetch_answer_file(
             client[0], item, model=client[1], request_id=capture.request_id
         )
         part, generated = await asyncio.to_thread(

@@ -62,6 +62,15 @@ PROXY_CHAINS_FILENAME = "proxy_chains.json"
 CREDENTIAL_NAMES_FILENAME = "credential_names.json"
 PROXY_FETCH_STATUS_FILENAME = "proxy_fetch_status.json"
 PROXY_SPEED_FILENAME = "proxy_speed.json"
+# 7.99.0: MCC's media MCP server (``mcc-mcp``). The Claude Code registration
+# ``mcc-claude`` hands to ``--mcp-config=``, the folder Claude Desktop's
+# results are saved in (it has no working folder of its own), and the last
+# media catalogue ``mcc-mcp`` read, so a start while MCC is not answering
+# offers the same tool list -- the same bytes -- as the session before.
+MCP_MEDIA_CLAUDE_CONFIG_FILENAME = "mcp-claude.json"
+MCP_MEDIA_OUTPUT_DIRNAME = "mcp-media"
+MCP_MEDIA_CACHE_DIRNAME = "cache"
+MCP_MEDIA_CATALOGUE_CACHE_FILENAME = "mcp-media-catalogue.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
 MACOS_MANAGED_SETTINGS_PATH = (
@@ -662,6 +671,38 @@ def harness_catalogue_path(filename: str) -> Path:
     """
 
     return config_dir_path() / filename
+
+
+def mcp_media_claude_config_path() -> Path:
+    """Return MCC's own ``--mcp-config`` document for ``mcc-claude`` (7.99.0).
+
+    Written by the launcher only while Claude Code's media switch is on, and
+    deleted by the dashboard's Remove; never a file in ``~/.claude``.
+    """
+
+    return config_dir_path() / MCP_MEDIA_CLAUDE_CONFIG_FILENAME
+
+
+def mcp_media_output_dir() -> Path:
+    """Return where ``mcc-mcp`` saves results for an app with no working folder.
+
+    Claude Desktop's registration names it (``--out``); every coding CLI saves
+    in the folder it started the media server in.
+    """
+
+    return config_dir_path() / MCP_MEDIA_OUTPUT_DIRNAME
+
+
+def mcp_media_catalogue_cache_path() -> Path:
+    """Return the last ``GET /v1/media/models`` body ``mcc-mcp`` read.
+
+    The tool list is a pure function of it, so a start while MCC is not
+    answering rebuilds the previous session's tools byte for byte.
+    """
+
+    return (
+        config_dir_path() / MCP_MEDIA_CACHE_DIRNAME / MCP_MEDIA_CATALOGUE_CACHE_FILENAME
+    )
 
 
 def chatgpt_oauth_auth_path() -> Path:

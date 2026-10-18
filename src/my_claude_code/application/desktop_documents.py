@@ -240,6 +240,7 @@ def sidecar_document(
     *,
     proxy_root_url: str,
     auth_token: str = "",
+    mcp_server: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return the whole document MCC owns for an app that keeps one.
 
@@ -254,6 +255,11 @@ def sidecar_document(
     only for a sidecar declaring ``holds_credential``; the file it lands in is
     written 0600 by ``config/desktop_apply._write_owned_file``, and the plan
     diff masks the field before any of it is rendered.
+
+    ``mcp_server`` is MCC's media MCP server entry (7.99.0), passed only
+    while the app's *Add MCP server* button is on; it goes under the key the
+    sidecar declares (``mcp_servers_key``) as a one-element list. ``None`` --
+    the default -- writes the document exactly as before.
     """
 
     if spec.sidecar is None:
@@ -278,6 +284,8 @@ def sidecar_document(
             document[spec.sidecar.headers_key] = with_harness_id(
                 {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}, spec.id
             )
+        if mcp_server is not None and spec.sidecar.mcp_servers_key:
+            document[spec.sidecar.mcp_servers_key] = [dict(mcp_server)]
         return document
 
     if not spec.catalogue_format_id:

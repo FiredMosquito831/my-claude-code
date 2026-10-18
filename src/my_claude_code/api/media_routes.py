@@ -44,7 +44,10 @@ from my_claude_code.application.media.executor import (
     MediaExecutor,
     media_route_health_registry,
 )
-from my_claude_code.application.media.ports import MediaProviderResolver
+from my_claude_code.application.media.ports import (
+    MediaProviderResolver,
+    MediaRuntimePort,
+)
 from my_claude_code.application.media.rails import MediaRouter, chat_probe_candidates
 from my_claude_code.application.media.request import (
     MediaChunk,
@@ -55,6 +58,7 @@ from my_claude_code.application.media.request import (
     MediaUpload,
 )
 from my_claude_code.application.ports import RequestRuntimeLease
+from my_claude_code.config.mcp_media import MCP_MEDIA_INLINE_IMAGES_HEADER
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
@@ -94,6 +98,7 @@ from my_claude_code.core.openai_transcriptions import (
 )
 
 from .dependencies import get_services, require_proxy_auth, resolve_provider
+from .media_answer_fetch import inline_url_pictures
 from .media_capture import (
     MEDIA_PROTOCOL_OPENAI,
     MediaCapture,
@@ -444,8 +449,13 @@ async def create_image(
         body={key: value for key, value in payload.items() if key != "model"},
         stream=payload.get("stream") is True,
     )
+    media_request, complete = _with_inline_pictures(request, services, media_request)
     return await _serve(
-        request, services, media_request, endpoint=IMAGES_GENERATIONS_ENDPOINT
+        request,
+        services,
+        media_request,
+        endpoint=IMAGES_GENERATIONS_ENDPOINT,
+        complete=complete,
     )
 
 
@@ -483,12 +493,16 @@ async def edit_image(
             stream=_stream_flag(fields.get("stream")),
             uploads=uploads,
         )
+        media_request, complete = _with_inline_pictures(
+            request, services, media_request
+        )
         return await _serve(
             request,
             services,
             media_request,
             endpoint=IMAGES_EDITS_ENDPOINT,
             cleanup=close_form,
+            complete=complete,
         )
     payload = await _read_json_object(request)
     if payload is None:
@@ -507,9 +521,89 @@ async def edit_image(
         body={key: value for key, value in payload.items() if key != "model"},
         stream=payload.get("stream") is True,
     )
+    media_request, complete = _with_inline_pictures(request, services, media_request)
     return await _serve(
-        request, services, media_request, endpoint=IMAGES_EDITS_ENDPOINT
+        request,
+        services,
+        media_request,
+        endpoint=IMAGES_EDITS_ENDPOINT,
+        complete=complete,
     )
+
+
+def _inline_pictures_asked(request: Request) -> bool:
+    value = request.headers.get(MCP_MEDIA_INLINE_IMAGES_HEADER, "")
+    return value.strip().lower() in {"1", "true", "yes"}
+
+
+def _with_inline_pictures(
+    request: Request, services: ApiServices, media_request: MediaRequest
+) -> tuple[MediaRequest, Complete | None]:
+    """The request and its answer step, for a client that wants bytes (7.99.0).
+
+    ``MCP_MEDIA_INLINE_IMAGES_HEADER`` -- sent by ``mcc-mcp``, opt-in for any
+    client -- asks for every picture as ``b64_json``. A picture the provider
+    answered with only a link to is downloaded by MCC with the answering key,
+    through its own proxy leg, by the download the Gemini image door already
+    uses, and with that door's ``MEDIA_FALLBACK_ON_UNDOWNLOADABLE`` meaning:
+    on, inside the attempt (a failed download falls back); off, after the
+    answer committed (a failed download is this client's error). No new retry
+    or fallback rule (IV.8). Without the header, or for a streamed request,
+    the request and its answer are exactly what they were.
+    """
+
+    if media_request.stream or not _inline_pictures_asked(request):
+        return media_request, None
+    if services.requests.current_settings().media_fallback_on_undownloadable:
+        return dataclasses.replace(media_request, inline_urls=True), None
+    media = services.media
+    if media is None:
+        return media_request, None
+    return media_request, _inlining_complete(media)
+
+
+def _inlining_complete(media: MediaRuntimePort) -> Complete:
+    """Answer a buffered images request with every picture inline."""
+
+    async def complete(
+        first: MediaChunk,
+        rest: AsyncIterator[MediaChunk],
+        lease: RequestRuntimeLease,
+        capture: MediaCapture,
+        parse: Callable[[MediaResponse], MediaOutputs],
+    ) -> Response:
+        try:
+            try:
+                async for _extra in rest:
+                    pass
+                if not isinstance(first, MediaResponse):
+                    raise ExecutionFailure(
+                        kind=FailureKind.UPSTREAM,
+                        status_code=502,
+                        message="The provider streamed an answer that was not asked for.",
+                        retryable=False,
+                    )
+                answer = await inline_url_pictures(
+                    media, lease.settings, capture, first
+                )
+                outputs: MediaOutputs = await asyncio.to_thread(parse, answer)
+            finally:
+                await lease.release()
+        except Exception as exc:
+            await capture.finish("error", error=exc)
+            return _failure_response(exc)
+        except BaseException:
+            await capture.finish("cancelled")
+            raise
+        # ``success``, or ``cancelled`` if the client already hung up (7.95.0).
+        await capture.finish_answered(outputs)
+        return Response(
+            content=answer.body,
+            status_code=answer.status_code,
+            media_type=answer.content_type or "application/json",
+        )
+
+    return complete
 
 
 def _parse_images(response: MediaResponse) -> MediaOutputs:

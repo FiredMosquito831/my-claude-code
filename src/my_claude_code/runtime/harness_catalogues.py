@@ -80,6 +80,7 @@ from my_claude_code.config.harnesses import (
     HarnessSpec,
     harness_specs,
 )
+from my_claude_code.config.mcp_media import mcp_media_document
 from my_claude_code.config.paths import harness_catalogue_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
@@ -209,6 +210,19 @@ class HarnessCatalogueFanoutPublisher:
             # the same two serialisers. The launch path resolves it in
             # ``cli/harnesses/catalogue_client.harness_catalogue``.
             document = with_harness_id(document, spec.id)
+            # 7.99.0: MCC's media MCP server, for an app whose Add MCP server
+            # button is on -- added here, after and outside ``serialise()``,
+            # so the desktop apps' Configure documents, which come from the
+            # same serialisers, never carry a launcher's switch (risk R13).
+            # Off, the document is unchanged, key for key.
+            document = dict(
+                mcp_media_document(
+                    spec.id,
+                    document,
+                    apps_value=settings.mcp_media_apps,
+                    environ=os.environ,
+                )
+            )
             if catalogue.merge is not None:
                 merge_owned_block(
                     path=path,

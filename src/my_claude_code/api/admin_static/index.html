@@ -933,6 +933,31 @@
               <div id="codingAgentsList" class="coding-agents-list"></div>
             </section>
 
+            <!-- 7.99.0: MCC's media MCP server. Each agent card above (and the
+                 Claude Desktop card below) carries its own Add / Remove MCP
+                 server button; this card is the server itself: installed or
+                 not, the tools it offers from the media rails as they are
+                 now, what that tool list costs per request, and a line to copy
+                 into an app MCC does not launch. Filled by renderMcpMediaCard
+                 from /admin/api/mcp-media. -->
+            <section class="settings-section" id="mcpMediaServerCard"
+              aria-label="MCC media server">
+              <div class="section-heading">
+                <div>
+                  <h3 id="mcpMediaHeading">MCC media server</h3>
+                  <p>
+                    Gives a coding agent tools for the media rails you filled in on
+                    Model Config, so it can make pictures, speech, transcripts and
+                    video itself. Off for every agent until you press
+                    <strong>Add MCP server</strong> on its card; Remove puts back
+                    exactly what was there.
+                  </p>
+                </div>
+              </div>
+              <div id="mcpMediaServerBody" class="mcp-media-server-body"
+                aria-live="polite"></div>
+            </section>
+
             <section class="settings-section" aria-label="Desktop apps">
               <div class="section-heading">
                 <div>
@@ -962,6 +987,11 @@
               </p>
               <div id="desktopAppsList" class="coding-agents-list"></div>
             </section>
+
+            <!-- The one setting this page owns (MCP_MEDIA_APPS), rendered by
+                 renderSections() from the manifest's mcp_media section. -->
+            <div id="codingAgentsSettings" class="form-sections"
+              aria-label="Coding agents settings"></div>
           </section>
 
           <section id="view-model_config" class="admin-view" data-view="model_config" hidden>
@@ -2087,6 +2117,7 @@
                 <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-media">Generate images through the proxy</a>
+                <a href="#guide-media-mcp">Let a coding agent make media (MCP)</a>
                 <a href="#guide-vpn-tor">Use a VPN, WARP or Tor</a>
                 <a href="#guide-proxy-chains">What a proxy chain hides</a>
                 <a href="#guide-proxy-keep-trying">Keep trying exits until one answers</a>
@@ -4525,6 +4556,60 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   described stays listed for chat and appears on a media rail under
                   <em>Kind not known</em>, and a value you already saved is never dropped -- it
                   is marked. The <strong>Models</strong> page has a filter chip per kind.
+                </p>
+
+                <h3 id="guide-media-mcp">Let a coding agent make media itself (MCP)</h3>
+                <p>
+                  <strong>Since 7.99.0.</strong> An agent does not know MCC serves
+                  pictures, speech, transcripts and video unless something tells it.
+                  MCC's media server, <code>mcc-mcp</code>, is that something: a small
+                  program installed with MCC that an agent starts over MCP and that offers
+                  one tool per media rail you filled in on <strong>Model Config</strong>
+                  &mdash; <code>generate_image</code>, <code>edit_image</code>,
+                  <code>speak</code>, <code>transcribe</code>,
+                  <code>translate_audio</code>, <code>create_video</code> with
+                  <code>get_video</code> &mdash; plus <code>media_status</code>, which is
+                  free and says what is configured. Every field a tool takes comes from
+                  the rail's own models (the same lists as <code>/v1/media/models</code>),
+                  labelled with which models take, need or refuse it.
+                </p>
+                <p>
+                  <strong>Add it per agent.</strong> Open <strong>Coding agents</strong> and
+                  press <em>Add MCP server</em> on the agent's card; <em>Remove MCP
+                  server</em> takes it out and puts back exactly what was there. MCC writes
+                  it only where it already writes: the launch line of
+                  <code>mcc-claude</code> (its own <code>--mcp-config=</code> file) and
+                  <code>mcc-codex</code> (<code>-c</code> settings for that launch), the
+                  config layers it owns for OpenCode, OpenCode 2, Kilo, Crush, Qwen Code and
+                  Gemini CLI, and its own Claude Desktop document &mdash; never your own
+                  <code>~/.claude.json</code>, <code>config.toml</code> or
+                  <code>opencode.json</code>. The agent's next session lists the tools.
+                  Claude Desktop needs its card under <em>Desktop apps</em> configured, and
+                  one relaunch. Gemini CLI starts MCP servers only in a folder you trusted.
+                </p>
+                <p>
+                  <strong>What it costs, and who asks.</strong> Each agent that has the
+                  server sends its tool list with every request &mdash; a few KB, shown on
+                  the <em>MCC media server</em> card &mdash; built once per session, so it
+                  stays byte for byte the same from turn to turn and the prompt cache
+                  keeps its prefix. The tools that spend money are never marked
+                  read-only, so an agent that asks before a tool asks before these; for
+                  OpenCode and Kilo, which do not ask by default, MCC's own config layer
+                  turns their <em>ask</em> on for those tools. MCC adds no limit of its own.
+                </p>
+                <p>
+                  <strong>Where results go.</strong> Files are saved in the folder the agent
+                  is working in (Claude Desktop, which has none: the
+                  <code>mcp-media</code> folder of MCC's configuration folder), never over
+                  an existing file; the agent can name another folder. Pictures are also
+                  shown to the model; speech and video are given as paths. A video tool
+                  returns a job id at once, and <code>get_video</code> saves it when it is
+                  done. A call the agent stops waiting for still finishes and is listed by
+                  <code>media_status</code> &mdash; the provider bills it either way. The
+                  server reads MCC's address and token from MCC's own settings, so no app
+                  file carries the token, and it talks only to MCC: a picture a provider
+                  answers with a link is downloaded by MCC through that provider's proxy.
+                  For an app MCC does not launch, the card has a line to copy.
                 </p>
 
                 <h3 id="guide-images">Images, and what they cost</h3>

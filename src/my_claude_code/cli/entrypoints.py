@@ -62,6 +62,8 @@ Manage and inspect:
   mcc-rtk                 Manage the RTK token optimizer
   mcc-apps                Point desktop apps here, and take it back out
                           (list | status | configure | undo)
+  mcc-mcp                 Media tools for MCP apps (started by the app; add it
+                          with Add MCP server on the Coding agents page)
   mcc-help                Show this command reference
 
 The legacy fcc-* commands were retired in 7.0.0. They are still installed for

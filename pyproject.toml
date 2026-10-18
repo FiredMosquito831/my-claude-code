@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "7.98.0"
+version = "7.99.0"
 description = "Local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents: 57 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -47,6 +47,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pillow>=11.4.0",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",
+    "mcp>=2.3,<3",
 ]
 
 [project.urls]
@@ -84,6 +85,9 @@ mcc-rtk = "my_claude_code.cli.entrypoints:rtk"
 mcc-apps = "my_claude_code.cli.entrypoints:apps"
 mcc-help = "my_claude_code.cli.entrypoints:help_command"
 mcc-migrate = "my_claude_code.cli.entrypoints:migrate_config_dir"
+# MCC's media server for MCP apps (7.99.0): started by an app over stdio,
+# never by the user; the Coding agents page's Add MCP server button registers it.
+mcc-mcp = "my_claude_code.mcp_media.server:main"
 # Retired command family (the pre-5.0.0 free-claude-code owner). 7.0.0 removed
 # the legacy surface: these names are still installed, but every one of them is
 # a tombstone that prints the mcc-* name that replaced it and exits 1. They are

@@ -16,6 +16,7 @@ its base URL at the proxy and keeps its own code.
 | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content`, `GET /v1/videos`, `DELETE /v1/videos/{id}` | 7.64.0 | Video | `MODEL_VIDEO`, `MODEL_VIDEO_FALLBACKS`, `MODEL_VIDEO_PAUSED` |
 | Gemini `:generateContent` / `:streamGenerateContent` with image or audio output, `:predictLongRunning`, `GET /v1beta/operations/{id}` | 7.65.0 | Image, Speech, Video | the same rails |
 | `GET /v1/media/models`: every media rail model and the request fields it takes ([Request fields per model](#request-fields-per-model-7980)) | 7.98.0 | every rail | none (read only) |
+| `mcc-mcp`: the rails as tools for a coding agent, over MCP, added per agent ([Coding agents: the media server](#coding-agents-the-media-server-mcp-7990)) | 7.99.0 | every rail | `MCP_MEDIA_APPS` (the Add / Remove MCP server buttons) |
 
 ```python
 from openai import OpenAI
@@ -535,6 +536,80 @@ Run on a scratch server whose fake Agnes had answered the two refusals above (ab
 
 A media model still never appears in `/v1/models` or a coding agent's catalogue.
 
+## Coding agents: the media server (MCP) (7.99.0)
+
+A coding agent does not know MCC serves pictures, speech, transcripts and video unless
+something tells it. `mcc-mcp`, installed with MCC, is that something: a small program an
+agent starts over [MCP](https://modelcontextprotocol.io) (stdio) that offers the rails you
+filled in as tools. MCC never adds a tool to a request on its own; an agent gets these
+only when you add the server to it.
+
+**Add it per agent.** On the dashboard's **Coding agents** page, each agent card has an
+**Add MCP server** button; **Remove MCP server** takes it out again and puts back exactly
+what was there. The buttons write one setting, `MCP_MEDIA_APPS` (a comma list of app ids;
+empty = nowhere), which is also on that page. The server is written only into what MCC
+already owns:
+
+| Agent | Where MCC puts it | Asks before a tool that spends money |
+|---|---|---|
+| Claude Code (`mcc-claude`) | MCC's own file, passed as `--mcp-config=<file>` (the `=` form: the option takes several files, so `--mcp-config <file> mcp list` would eat your own arguments) | yes, Claude Code's own prompt |
+| Codex (`mcc-codex`) | `-c mcp_servers.mcc_media.command=... -c mcp_servers.mcc_media.args=[...]`, for that launch only (listed, but the model does not see the tools yet: [Known limits](#known-limits-today)) | yes: no tool that spends is marked read-only |
+| OpenCode, OpenCode 2, Kilo | MCC's config layer (`OPENCODE_CONFIG` / `KILO_CONFIG`) under `mcp`, plus `permission` set to `ask` for the paid tools, because these apps do not ask by default | yes, set by MCC's layer |
+| Crush | MCC's `CRUSH_GLOBAL_CONFIG` document under `mcp` | yes, Crush's own prompt |
+| Qwen Code, Gemini CLI | MCC's system settings file under `mcpServers` (never `trust`) | yes; Gemini CLI starts MCP servers only in a folder you trusted |
+| Claude Desktop | MCC's own Claude Desktop document as `managedMcpServers` (absolute command; no tool policy) when that card is configured; relaunch once | yes, Claude Desktop's own prompt |
+
+Your own files -- `~/.claude.json`, Codex's `config.toml`, `opencode.json`, Command Code's
+`mcp.json` -- are never written. Kimi Code, Goose, Cline and Droid speak MCP but have not
+been measured on an installed copy yet; Pi has no MCP client (MCC's Pi extension will offer
+the tools later); Aider has none at all. For any other MCP app, the **MCC media server**
+card on that page has the line to add as a local (stdio) server:
+
+```text
+"<the mcc-mcp path the card shows>" --app <your-app>
+```
+
+**What the agent sees.** `media_status` (free: what is configured, where MCC is, and this
+session's results) and one tool per job whose rail has a model: `generate_image`,
+`edit_image`, `speak`, `transcribe`, `translate_audio`, `create_video` with `get_video`. The
+tools are built from [`/v1/media/models`](#request-fields-per-model-7980) once, when the
+agent starts the server: the rail's models are an optional `model` choice (left out, the
+rail runs in order), and every field any of them takes is offered, labelled with which
+models take, need or refuse it -- in plain JSON Schema (`type`, `enum`, `items`,
+`description`), never `x-mcc`, `not` or `const`. Files are passed as local paths
+(`image_paths`, `mask_path`, `audio_path`, `input_reference_path`) and uploaded by the
+server.
+
+**What it costs.** An agent with the server sends its tool list with every request: about
+10 KB (10,374 bytes) for eight tools on a test install with one model on each of the four
+rails; more models on a rail add a little; the **MCC media server** card shows the figure
+for your rails.
+It is built once per session from one read of the catalogue, in a fixed order, with no
+date or counter in it, so it is byte for byte the same from turn to turn and the prompt
+cache keeps its prefix. A rail change reaches the agent at its next session.
+
+**Where results go.** In the folder the agent works in (Claude Desktop, which has none:
+`mcp-media` in MCC's configuration folder), never over an existing file -- a taken name gets
+`-1`, `-2`; the agent may name another folder with `save_to`. Pictures also come back to
+the model as images; speech and video come back as paths. `create_video` answers at once
+with the job id and `get_video` saves the video when it is done. A call the agent stops
+waiting for keeps running, saves its file and is listed by `media_status` as finished after
+the app stopped waiting -- the provider bills it either way.
+
+**Where MCC is, and the token.** `mcc-mcp` reads MCC's address and token from MCC's own
+settings, the way the `mcc-*` launchers do, with one difference: a `PORT` or `HOST` in
+MCC's `.env` wins over the same name in the agent's environment (an app may pass a `PORT`
+of its own, such as a web project's dev server). No app file, prompt or shell ever holds
+the token. It talks to MCC on loopback only and ignores proxy variables for it; a picture a
+provider answers with only a link is downloaded by MCC through that provider's client and
+proxy (the request header `x-mcc-inline-images: 1` on the image doors asks for it, with the
+same `MEDIA_FALLBACK_ON_UNDOWNLOADABLE` meaning the Gemini image door has). When MCC is not
+running, a call says so and names the address; when MCC is older than 7.98.0,
+`media_status` says to update it.
+
+**Spending.** The gate is each agent's own "allow this tool?" prompt. MCC adds no limit and
+no confirm step of its own, and never writes an app's "trust" or "always allow" setting.
+
 ## Where to see it on the dashboard (7.67.0)
 
 - **Models page -> Media models.** One row per model on a media rail: which rail(s), its place
@@ -716,6 +791,27 @@ on 7.95.0; the last item on 7.98.0):
   Agnes' own model list carries any fields has not been measured; a `supported_parameters`
   list on any provider's row is read when present. OpenRouter's and LiteLLM's lists
   are not read for fields until a measurement shows they carry any.
+- **The media server (7.99.0)** reaches only the agents in the table
+  [above](#coding-agents-the-media-server-mcp-7990). Whether Claude Desktop's local
+  configuration library honours `managedMcpServers` is confirmed by one relaunch of the
+  app with the button on; MCC cannot run Claude Desktop itself. The agents' own files
+  (Codex `config.toml`, `opencode.json`, Command Code `mcp.json`) are a later release,
+  through the Desktop apps Configure / Undo with a backup.
+- **Codex lists the media server but its model does not see the tools yet** (measured
+  2026-10-18 with the Codex CLI on this machine). `mcc-codex mcp list` shows `mcc_media`
+  enabled, but MCC's Codex catalogue tells Codex its models support tool search, so Codex
+  offers MCP tools only through its `tool_search` tool, which MCC's Responses door does not
+  carry; and Codex gives a server that is not `required` about one second to start, where
+  `mcc-mcp` takes about three. With both changed by hand on a scratch install the call
+  worked end to end. Which of them MCC should change is a decision for a later release.
+- **OpenCode 2 (preview)** offers MCP tools inside its Code Mode, through its `execute`
+  tool, once its background service has connected the server. The first `mcc-opencode2 run`
+  after the service starts sent its turn before `mcc-mcp` had connected, so that turn had no
+  media tools; the next run's model saw `tools.mcc_media.generate_image`, and OpenCode 2
+  asked before it (a one-shot `run` declines what it would ask, so nothing was spent).
+- **Qwen Code and Gemini CLI** load MCP tools on demand: the first turn offers their own
+  `tool_search`, and the media tools appear after it -- from then on the tool list is the
+  same from turn to turn.
 
 ## Not yet
 
