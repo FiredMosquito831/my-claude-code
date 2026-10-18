@@ -223,6 +223,17 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "server writes at all; the flags below add specific payloads to it.",
         advanced=True,
     ),
+    # 7.99.0: on the Coding agents page, under the cards whose Add / Remove
+    # MCP server buttons write it.
+    ConfigSectionSpec(
+        "mcp_media",
+        "MCC media server (MCP)",
+        "Which coding agents get MCC's media server, mcc-mcp: tools for the "
+        "media rails you filled in, so an agent can make pictures, speech, "
+        "transcripts and video itself. The buttons on each agent card above "
+        "write this list; nothing else reads it, and an empty list adds the "
+        "server nowhere.",
+    ),
 )
 
 
@@ -1078,6 +1089,30 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "keep the pickers to concrete refs only -- an agent that already "
             "names a tier keeps working either way."
         ),
+    ),
+    ConfigFieldSpec(
+        "MCP_MEDIA_APPS",
+        "Agents with the media server",
+        "mcp_media",
+        "text",
+        settings_attr="mcp_media_apps",
+        default="",
+        description=(
+            "Comma-separated app ids that get MCC's media MCP server: claude, "
+            "codex, opencode, opencode2, kilo, crush, qwen_code, gemini_cli, "
+            "claude_desktop. Each agent card's Add MCP server / Remove MCP "
+            "server button writes this for you. An app on the list is told "
+            "where mcc-mcp is in a file or launch line MCC already owns -- "
+            "never your own config -- and is offered one tool per media rail "
+            "you filled in, which adds a few KB of tool text to each of its "
+            "requests. Empty adds it nowhere, and every launch is exactly as "
+            "before. The apps ask before a tool that spends money; MCC adds "
+            "no limit of its own."
+        ),
+        # Read where the documents and launch lines are built, never by a
+        # provider client: an apply republishes the agents' config layers
+        # without rebuilding a single provider.
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "FALLBACK_SKIP_KINDS",

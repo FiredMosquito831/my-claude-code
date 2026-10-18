@@ -10994,3 +10994,84 @@ audio.req-media-preview {
   color: var(--muted);
   white-space: nowrap;
 }
+
+/* MCC media server (7.99.0): the Add / Remove MCP server row on each agent
+   card, and the MCC media server card on the Coding agents page. */
+.mcp-media-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.mcp-media-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-media-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mcp-media-pending {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--warn-border);
+  border-radius: 8px;
+  background: var(--warn-bg);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mcp-media-button {
+  min-height: 0;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.mcp-media-server-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-media-rails {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.mcp-media-copy {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Below a media rail on Model Config: how a coding agent reaches it. */
+.route-mcp-note {
+  margin-top: var(--space-2);
+}
+
+.route-mcp-link {
+  color: var(--accent);
+}

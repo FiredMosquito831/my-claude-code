@@ -52,7 +52,6 @@ from my_claude_code.config.media_surfaces import (
 )
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
-from my_claude_code.core.credential_attribution import current_credential
 from my_claude_code.core.failures import (
     ExecutionFailure,
     FailureKind,
@@ -78,6 +77,7 @@ from my_claude_code.core.request_log import (
 )
 
 from .dependencies import get_services, require_proxy_auth
+from .media_answer_fetch import answering_key
 from .media_capture import (
     MediaCapture,
     MediaPricing,
@@ -198,23 +198,6 @@ def _job_row(record: MediaJobRecord) -> dict[str, Any]:
     return row
 
 
-def _answering_key(
-    media: MediaRuntimePort, settings: Settings, provider_id: str
-) -> tuple[int | None, str | None, str | None]:
-    """The key that answered this request: ``(index, label, fingerprint)``.
-
-    Read from the credential attribution the capture installed; the
-    fingerprint (never the key) is what finds the key again after a reorder.
-    """
-    key_index, key_label = current_credential()
-    fingerprint = (
-        media.key_fingerprint(settings, provider_id, key_index)
-        if key_index is not None and key_index >= 0
-        else None
-    )
-    return key_index, key_label, fingerprint
-
-
 #: How an accepted, recorded job is shown to the client: ``(job row, host's answer)``.
 JobAnswer = Callable[[Mapping[str, Any], UpstreamJob], Response]
 
@@ -267,7 +250,7 @@ def _video_complete(
             await capture.finish("error", error=error)
             return wire.error(502, str(error), FailureKind.UPSTREAM)
         provider_id = routed.resolved.provider_id
-        key_index, key_label, fingerprint = _answering_key(media, settings, provider_id)
+        key_index, key_label, fingerprint = answering_key(media, settings, provider_id)
         now = time.time()
         size = upstream.size or media_request.body.get("size")
         record = MediaJobRecord(

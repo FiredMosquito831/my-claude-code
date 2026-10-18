@@ -184,6 +184,17 @@ const FIELDS = [
     value: "p1/m1",
     default: "",
   },
+  /* 7.99.0: the list the Add / Remove MCP server buttons write, drawn at the
+     foot of the Coding agents page; two agents have the server. */
+  {
+    key: "MCP_MEDIA_APPS",
+    label: "Agents with the media server",
+    section: "mcp_media",
+    type: "text",
+    value: "codex,claude_desktop",
+    default: "",
+    description: "Comma-separated app ids that get MCC's media MCP server.",
+  },
   /* Routes the deadline calculator divides the budget between. Opus is the
      longest chain (10), Sonnet 3, Haiku 1, and Fable is empty on both halves
      so the "a route with no model of its own is skipped" branch is exercised
@@ -598,7 +609,60 @@ const SECTIONS = [
   { id: "request_log", label: "Request log storage", description: "What the log keeps." },
   { id: "diagnostics", label: "Diagnostics", description: "Logging flags." },
   { id: "desktop", label: "Desktop", description: "Tray and window timing." },
+  // 7.99.0: the one setting the Coding agents page owns.
+  {
+    id: "mcp_media",
+    label: "MCC media server (MCP)",
+    description: "Which coding agents get MCC's media server.",
+  },
 ];
+
+/* 7.99.0: the MCC media server card and each card's Add / Remove MCP server
+   button, as /admin/api/mcp-media answers it. One app of each kind the
+   cards can show: off (Claude Code, OpenCode), on (Codex), on but not yet
+   written (Claude Desktop, unconfigured), and three with no button. The POST
+   to /admin/api/mcp-media/apps is answered from this same document, flipped
+   (see the fetch stub), as the real route answers with its refreshed state. */
+const MCP_MEDIA_STATE = {
+  server_name: "mcc_media",
+  command: "C:\\Users\\dev\\.local\\bin\\mcc-mcp.exe",
+  installed: true,
+  apps_value: "codex,claude_desktop",
+  apps: [
+    { app_id: "claude", display_name: "Claude Code", support: "button", on: false,
+      asks: "Claude Code asks before it runs an MCP tool you have not allowed.",
+      note: "Takes effect at the next mcc-claude launch.", pending: "" },
+    { app_id: "codex", display_name: "Codex CLI", support: "button", on: true,
+      asks: "Codex asks before each media tool that spends money.",
+      note: "Takes effect at the next mcc-codex launch.", pending: "" },
+    { app_id: "opencode", display_name: "OpenCode", support: "button", on: false,
+      asks: "MCC's own config layer sets its ask for the tools that spend money.",
+      note: "Takes effect at the next mcc-opencode launch.", pending: "" },
+    { app_id: "claude_desktop", display_name: "Claude Desktop", support: "button",
+      on: true, asks: "Claude Desktop asks before each tool.",
+      note: "Relaunch Claude Desktop once to load it.",
+      pending: "Not written yet: press Configure on the Claude Desktop card." },
+    { app_id: "kimi_code", display_name: "Kimi Code", support: "not_measured",
+      on: false, asks: "", note: "Speaks MCP; not measured on an installed copy yet.",
+      pending: "" },
+    { app_id: "pi", display_name: "Pi", support: "extension_later", on: false,
+      asks: "", note: "Pi has no MCP client.", pending: "" },
+    { app_id: "aider", display_name: "Aider", support: "no_mcp", on: false, asks: "",
+      note: "Aider has no MCP client, so there is nothing to add.", pending: "" },
+  ],
+  tools: ["media_status", "generate_image", "edit_image", "speak", "create_video", "get_video"],
+  tool_bytes: 11795,
+  rails: [
+    { rail: "image", label: "Image", models: ["p1/i0"], tools: ["generate_image", "edit_image"] },
+    { rail: "tts", label: "Speech", models: ["p1/t0"], tools: ["speak"] },
+    { rail: "asr", label: "Transcription", models: [], tools: [] },
+    { rail: "video", label: "Video", models: ["p1/v0"], tools: ["create_video", "get_video"] },
+  ],
+  claude_desktop_state: "installed",
+  claude_desktop_out_dir: "C:\\Users\\dev\\.mcc\\mcp-media",
+  copy_line: "\"C:\\\\Users\\\\dev\\\\.local\\\\bin\\\\mcc-mcp.exe\" --app <your-app>",
+  copy_json: "{\n  \"mcpServers\": {\n    \"mcc_media\": {}\n  }\n}",
+};
 
 const daily = (n) =>
   Array.from({ length: n }, (_, i) => ({
@@ -1322,6 +1386,7 @@ const ROUTES = {
     },
   },
   "/admin/api/onboarding": { dismissed: true, complete: true, steps: [] },
+  "/admin/api/mcp-media": MCP_MEDIA_STATE,
   "/admin/api/providers/local-status": { providers: [] },
   "/admin/api/config/validate": { valid: true, errors: [] },
   "/admin/api/version": { current: "5.47.1" },
@@ -3672,6 +3737,26 @@ window.fetch = async (url, options = {}) => {
     (options.method || "GET").toUpperCase() === "POST"
   ) {
     body = customCreateResult;
+  }
+  /* 7.99.0: one card's Add / Remove MCP server. The route answers with the
+     whole refreshed state, so the stub flips that app in the same document
+     the GET serves and returns it, with the route's one-line message. */
+  if (
+    String(url).split("?")[0] === "/admin/api/mcp-media/apps" &&
+    (options.method || "GET").toUpperCase() === "POST"
+  ) {
+    const sent = JSON.parse(options.body);
+    const next = JSON.parse(JSON.stringify(ROUTES["/admin/api/mcp-media"]));
+    next.apps = next.apps.map((app) =>
+      app.app_id === sent.app ? { ...app, on: Boolean(sent.add) } : app,
+    );
+    next.apps_value = next.apps
+      .filter((app) => app.on)
+      .map((app) => app.app_id)
+      .join(",");
+    next.message = `${sent.add ? "Added to" : "Removed from"} ${sent.app}.`;
+    ROUTES["/admin/api/mcp-media"] = next;
+    body = next;
   }
   /* The feed routes, emulated against the same document the page reads back,
      because that is the whole point of the pair: the save writes `enabled` on
@@ -10426,6 +10511,77 @@ if (codingAgentsLink) {
   }
 }
 
+/* ------------------------------------------------ MCC media server (7.99.0)
+   The user's 2026-10-18 12:53 wording: an explicit Add MCP server / Remove
+   MCP server button on each agent card, showing the current state; the MCC
+   media server card; and the one setting, drawn at the foot of the page. One
+   press of Add proves what is sent and that the button flips. */
+const mcpMedia = { present: false };
+if (codingAgentsLink) {
+  codingAgentsLink.click();
+  await settle();
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  const flat = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim() : null);
+  const captureControls = () =>
+    Object.fromEntries(
+      Array.from(doc.querySelectorAll(".mcp-media-control")).map((host) => {
+        const button = host.querySelector(".mcp-media-button");
+        return [
+          host.dataset.mcpApp,
+          {
+            hidden: host.hidden,
+            inDesktopCard: Boolean(host.closest(".desktop-app-card")),
+            state: flat(host.querySelector(".mcp-media-state")),
+            button: button ? button.textContent : null,
+            action: button ? button.dataset.mcpAction : null,
+            disabled: button ? button.disabled : null,
+            pending: flat(host.querySelector(".mcp-media-pending")),
+            notes: Array.from(host.querySelectorAll(".mcp-media-note")).map(flat),
+          },
+        ];
+      }),
+    );
+  mcpMedia.present = Boolean(doc.getElementById("mcpMediaServerCard"));
+  mcpMedia.before = captureControls();
+  const serverBody = doc.getElementById("mcpMediaServerBody");
+  mcpMedia.serverCard = flat(serverBody);
+  mcpMedia.serverPill = flat(serverBody && serverBody.querySelector(".status-pill"));
+  mcpMedia.copyBlocks = serverBody
+    ? Array.from(serverBody.querySelectorAll(".mcp-media-copy")).map((pre) => pre.textContent)
+    : [];
+  mcpMedia.rails = serverBody
+    ? Array.from(serverBody.querySelectorAll(".mcp-media-rails li")).map(flat)
+    : [];
+  const heading = doc.getElementById("mcpMediaHeading");
+  const guide = heading ? heading.querySelector(".guide-link") : null;
+  mcpMedia.guideAnchor = guide ? guide.dataset.guideAnchor : null;
+  mcpMedia.guideLabel = guide ? guide.textContent : null;
+  const settingsHost = doc.getElementById("codingAgentsSettings");
+  const fieldSelector =
+    "input[data-key='MCP_MEDIA_APPS'], textarea[data-key='MCP_MEDIA_APPS']";
+  const field = settingsHost ? settingsHost.querySelector(fieldSelector) : null;
+  mcpMedia.fieldRendered = Boolean(field);
+  mcpMedia.fieldValue = field ? field.value : null;
+  const addButton = Array.from(doc.querySelectorAll(".mcp-media-button")).find(
+    (button) => button.dataset.mcpApp === "claude",
+  );
+  const bodiesBefore = fetchBodies.length;
+  if (addButton) {
+    addButton.click();
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  mcpMedia.posted = fetchBodies
+    .slice(bodiesBefore)
+    .filter((entry) => entry.path === "/admin/api/mcp-media/apps")
+    .map((entry) => ({ method: entry.method, body: entry.body }));
+  mcpMedia.after = captureControls();
+  const fieldAfter = settingsHost ? settingsHost.querySelector(fieldSelector) : null;
+  mcpMedia.fieldValueAfter = fieldAfter ? fieldAfter.value : null;
+  mcpMedia.fieldOriginalAfter = fieldAfter ? fieldAfter.dataset.original : null;
+  mcpMedia.messageAfter = flat(doc.getElementById("messageArea"));
+}
+
 const rtkToggleContainer = doc.getElementById("rtkAgentToggles");
 const rtkToggles = rtkToggleContainer
   ? Array.from(rtkToggleContainer.querySelectorAll("input[type=checkbox]")).map(
@@ -10669,6 +10825,23 @@ const imageRail = {};
       "MODEL_VIDEO_PAUSED",
     ]
       .filter((key) => doc.querySelector(`.route-layout > .field-grid [data-key='${key}']`));
+    /* 7.99.0: under each media rail, how a coding agent reaches it -- shown
+       only -- with a link to the Coding agents page. */
+    imageRail.mcpNotes = Array.from(doc.querySelectorAll(".route-mcp-note")).map(
+      (note) => ({
+        rail: note.dataset.mcpRail,
+        inMediaCard: Boolean(note.closest(".route-media")),
+        text: (note.textContent || "").replace(/\s+/g, " ").trim(),
+        link: note.querySelector(".route-mcp-link")?.textContent || null,
+      }),
+    );
+    const mcpLink = doc.querySelector(".route-mcp-link");
+    if (mcpLink) {
+      mcpLink.click();
+      await settle();
+      imageRail.mcpLinkView =
+        doc.querySelector(".admin-view.active")?.dataset.view || null;
+    }
   }
 }
 
@@ -13850,10 +14023,71 @@ const exitFacts = {};
   });
 }
 
+/* ----------------------------------------- Get Started: media server step
+   7.99.0, the user's 2026-10-18 12:53 amendment: Get Started points at the
+   Coding agents buttons. The step is the server's (config/onboarding.py); the
+   Python test pins this fixture's words to it, so what is asserted here is
+   that the generic renderer shows it, opens it as the next step, and links
+   the Guide section through the declared anchor table. */
+const getStartedMedia = {};
+{
+  ROUTES["/admin/api/onboarding"] = {
+    dismissed: false,
+    complete: true,
+    required_done: 3,
+    required_total: 3,
+    steps: [
+      {
+        id: "media_tools",
+        label: "Let your coding agents make media (optional)",
+        description:
+          "MCC's media server gives a coding agent tools for the media rails you filled in.",
+        view: "coding_agents",
+        optional: true,
+        done: false,
+        instructions: [
+          "Fill a media rail first: Model Config, the Image, Speech, Transcription or Video rail.",
+          "Open the Coding agents page and press Add MCP server on the card of the agent that should have the tools.",
+        ],
+        target: "#mcpMediaServerCard",
+        guide_anchors: ["guide-media-mcp"],
+        agents: [],
+      },
+    ],
+  };
+  const getStartedLink = navLinks.find((link) => link.dataset.view === "get_started");
+  if (getStartedLink) {
+    getStartedLink.click();
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // An earlier scenario may have opened another step; open this one the
+    // way a reader does, by its header.
+    const mediaStep = () => doc.querySelector("#getStartedSteps .get-started-step");
+    if (mediaStep() && !mediaStep().classList.contains("expanded")) {
+      mediaStep().querySelector(".get-started-step-header")?.click();
+      await settle();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    const steps = Array.from(doc.querySelectorAll("#getStartedSteps .get-started-step"));
+    getStartedMedia.steps = steps.map((step) => ({
+      label: step.querySelector(".get-started-step-header strong")?.textContent || null,
+      expanded: step.classList.contains("expanded"),
+      guides: Array.from(step.querySelectorAll(".get-started-step-guides .guide-link")).map(
+        (link) => ({ anchor: link.dataset.guideAnchor, text: link.textContent }),
+      ),
+      instructions: Array.from(
+        step.querySelectorAll(".get-started-step-instructions li"),
+      ).map((item) => (item.textContent || "").replace(/\s+/g, " ").trim()),
+    }));
+  }
+}
+
 console.log(
   JSON.stringify(
     {
       fatal: null,
+      mcpMedia,
+      getStartedMedia,
       // What this run actually cost, so the subprocess bound in
       // test_admin_static_jsdom.py can be tuned from evidence rather than
       // from whichever machine last timed out.

@@ -9525,3 +9525,114 @@ def test_enter_runs_a_saved_search(search_page) -> None:
 def test_the_export_still_carries_the_search(search_page) -> None:
     assert "q=too+long" in search_page["heldExportUrl"]
     assert "q=too+long" in search_page["runExportUrl"]
+
+
+# ------------------------------------------------- MCC media server (7.99.0)
+# The user's 2026-10-18 12:53 amendment: an explicit Add MCP server / Remove
+# MCP server button on each agent card, showing the current state; the server
+# referenced on Get Started and below each media rail on Model Config.
+
+
+def test_each_agent_card_shows_its_mcp_server_button_state(rendered: dict) -> None:
+    before = rendered["mcpMedia"]["before"]
+
+    off = before["claude"]
+    assert off["hidden"] is False
+    assert off["button"] == "Add MCP server"
+    assert off["action"] == "add"
+    assert off["state"].startswith("No MCP server")
+
+    on = before["codex"]
+    assert on["button"] == "Remove MCP server"
+    assert on["action"] == "remove"
+    assert on["state"].startswith("MCP server added")
+    assert on["notes"][0].startswith("Codex asks before")
+
+    # No MCP client: the card says so and offers nothing to press.
+    aider = before["aider"]
+    assert aider["button"] is None
+    assert aider["state"] == "MCP server: not possible, no MCP client"
+
+    # The desktop card carries its own button, and says what is still to do.
+    desktop = before["claude_desktop"]
+    assert desktop["inDesktopCard"] is True
+    assert desktop["button"] == "Remove MCP server"
+    assert desktop["pending"].startswith("Not written yet")
+
+
+def test_add_mcp_server_posts_one_app_and_flips_the_button(rendered: dict) -> None:
+    media = rendered["mcpMedia"]
+    assert media["posted"] == [
+        {"method": "POST", "body": {"app": "claude", "add": True}}
+    ]
+    assert media["after"]["claude"]["button"] == "Remove MCP server"
+    assert media["after"]["claude"]["state"].startswith("MCP server added")
+    # Every other card is as it was.
+    assert media["after"]["codex"] == media["before"]["codex"]
+    # The setting at the foot of the page follows the buttons and is not left
+    # reading as an unsaved edit.
+    assert media["fieldValueAfter"] == "claude,codex,claude_desktop"
+    assert media["fieldOriginalAfter"] == media["fieldValueAfter"]
+    assert media["messageAfter"] == "Added to claude."
+
+
+def test_mcc_media_server_card_shows_status_bytes_and_copy_line(rendered: dict) -> None:
+    media = rendered["mcpMedia"]
+    assert media["present"] is True
+    assert media["serverPill"] == "Installed"
+    assert "mcc-mcp.exe" in media["serverCard"]
+    assert "about 11.5 KB of tool text" in media["serverCard"]
+    assert "Added to: Codex CLI, Claude Desktop." in media["serverCard"]
+    assert media["rails"] == [
+        "Image: p1/i0 -> generate_image, edit_image",
+        "Speech: p1/t0 -> speak",
+        "Transcription: empty",
+        "Video: p1/v0 -> create_video, get_video",
+    ]
+    assert len(media["copyBlocks"]) == 2
+    assert media["copyBlocks"][0].endswith("--app <your-app>")
+    assert media["guideAnchor"] == "guide-media-mcp"
+    assert media["guideLabel"] == "Guide"
+    assert media["fieldRendered"] is True
+    assert media["fieldValue"] == "codex,claude_desktop"
+
+
+def test_model_config_media_rails_say_how_an_agent_reaches_them(rendered: dict) -> None:
+    rail = rendered["imageRail"]
+    notes = {note["rail"]: note for note in rail["mcpNotes"]}
+    assert list(notes) == ["image", "tts", "asr", "video"]
+    assert all(note["inMediaCard"] for note in notes.values())
+    assert "as generate_image and edit_image" in notes["image"]["text"]
+    assert "as speak" in notes["tts"]["text"]
+    assert "as transcribe and translate_audio" in notes["asr"]["text"]
+    assert "as create_video and get_video" in notes["video"]["text"]
+    # Counted from MCP_MEDIA_APPS (the fixture's two agents); display only.
+    assert "2 agents have it." in notes["image"]["text"]
+    assert notes["image"]["link"] == "Add or remove it on Coding agents"
+    assert rail["mcpLinkView"] == "coding_agents"
+
+
+def test_get_started_points_at_the_add_mcp_server_button(
+    rendered: dict, monkeypatch, tmp_path: Path
+) -> None:
+    from my_claude_code.config.onboarding import build_state
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    server_step = next(
+        step
+        for step in build_state(
+            claude_settings_configured=False, has_requests=False
+        ).steps
+        if step.id == "media_tools"
+    )
+    (step,) = rendered["getStartedMedia"]["steps"]
+    # The fixture's words are the server's step, so this is the real item.
+    assert step["label"] == server_step.label
+    assert step["instructions"] == list(server_step.instructions[:2])
+    assert server_step.view == "coding_agents"
+    assert server_step.target == "#mcpMediaServerCard"
+    assert step["expanded"] is True
+    assert step["guides"] == [
+        {"anchor": "guide-media-mcp", "text": "Guide: media server"}
+    ]

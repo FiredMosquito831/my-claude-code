@@ -9,8 +9,15 @@ from my_claude_code.cli.claude_env import (
     build_minimal_claude_proxy_env,
 )
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
+from my_claude_code.config.atomic_json import write_json_document_atomically_if_changed
+from my_claude_code.config.mcp_media import (
+    claude_mcp_config_document,
+    mcp_media_command,
+    mcp_media_on,
+)
+from my_claude_code.config.paths import mcp_media_claude_config_path
 from my_claude_code.config.server_urls import local_proxy_root_url
-from my_claude_code.config.settings import get_settings
+from my_claude_code.config.settings import Settings, get_settings
 
 from .common import preflight_proxy, run_client_process
 
@@ -99,7 +106,11 @@ def _launch_claude(
     binary_path = resolve_harness_binary(spec)
     args = list(sys.argv[1:] if argv is None else argv)
     run_client_process(
-        command=build_claude_launcher_command(binary_path=binary_path, argv=args),
+        command=build_claude_launcher_command(
+            binary_path=binary_path,
+            argv=args,
+            mcp_config=claude_mcp_config(settings, os.environ),
+        ),
         env=build_env(
             proxy_root_url=proxy_root_url,
             auth_token=settings.anthropic_auth_token,
@@ -118,9 +129,56 @@ def claude_binary_name() -> str:
     return spec_for(HARNESS_ID).binary
 
 
-def build_claude_launcher_command(
-    *, binary_path: str, argv: Sequence[str]
-) -> list[str]:
-    """Return the Claude wrapper command without changing user arguments."""
+def claude_mcp_config(settings: Settings, environ: Mapping[str, str]) -> str | None:
+    """MCC's own ``--mcp-config`` file, while Claude Code's media button is on.
 
-    return [binary_path, *argv]
+    7.99.0: the dashboard's *Add MCP server* puts ``claude`` in
+    ``MCP_MEDIA_APPS``; this writes MCC's file under the config folder (never
+    ``~/.claude.json``, which Claude Code rewrites itself) and returns its
+    path. Off -- the default -- it writes nothing and the launch is exactly
+    what it was. A missing ``mcc-mcp`` or an unwritable file launches without
+    the server and says so, rather than refusing the session.
+    """
+
+    if not mcp_media_on(settings.mcp_media_apps, HARNESS_ID):
+        return None
+    command = mcp_media_command()
+    if command is None:
+        print(
+            "My Claude Code warning: the media MCP server (mcc-mcp) is not "
+            "installed beside MCC; launching Claude Code without it. "
+            "Reinstall MCC to restore it.",
+            file=sys.stderr,
+        )
+        return None
+    path = mcp_media_claude_config_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_document_atomically_if_changed(
+            path, claude_mcp_config_document(command, environ)
+        )
+    except OSError as exc:
+        print(
+            f"My Claude Code warning: could not write {path} "
+            f"({type(exc).__name__}); launching Claude Code without the media "
+            "MCP server.",
+            file=sys.stderr,
+        )
+        return None
+    return str(path)
+
+
+def build_claude_launcher_command(
+    *, binary_path: str, argv: Sequence[str], mcp_config: str | None = None
+) -> list[str]:
+    """Return the Claude wrapper command without changing user arguments.
+
+    ``mcp_config`` (7.99.0) is MCC's media-server file, given only while the
+    button is on, and always as ``--mcp-config=<file>``: Claude Code's option
+    takes several files, so the spaced form would read the user's own next
+    arguments -- ``mcp list``, a prompt -- as more files (risk R4).
+    """
+
+    if mcp_config is None:
+        return [binary_path, *argv]
+    return [binary_path, f"--mcp-config={mcp_config}", *argv]

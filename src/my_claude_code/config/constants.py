@@ -1073,6 +1073,12 @@ IMAGE_JPEG_QUALITY_DEFAULT = 0
 # the setting existed. A user's ceiling, never an invented one (Part IV §1).
 MEDIA_UPLOAD_MAX_MB_DEFAULT = 0
 
+# Which apps get MCC's media MCP server (7.99.0): a comma list of app ids, set
+# by each card's Add / Remove MCP server button on the Coding agents page.
+# Empty -- the default -- adds it nowhere, and every generated document and
+# launch line is byte-identical to a release without it (opt-in, IV.7).
+MCP_MEDIA_APPS_DEFAULT = ""
+
 # What the vision adapter does with a request whose images the route's own
 # model is published as unable to read.
 # `route` sends the whole request to MODEL_VISION and lets that model answer

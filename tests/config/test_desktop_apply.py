@@ -32,6 +32,7 @@ from my_claude_code.config.desktop_apps import (
     desktop_app,
 )
 from my_claude_code.config.document_codecs import DocumentFormat, parse_document
+from my_claude_code.config.mcp_media import desktop_mcp_server
 from my_claude_code.config.restore_record import UndoMode, read_entry
 
 #: Two routes, enough to make a real owned document for the states below.
@@ -1771,3 +1772,134 @@ def test_a_second_configure_clears_the_undone_stamp(tmp_path):
     # re-apply must not bury that under yesterday's MCC output.
     prior = {".".join(value.key_path): value.prior_value for value in entry.overwritten}
     assert prior["model"] == "gpt-5.6-luna"
+
+
+# ------------------------------------------- the media MCP server (7.99.0)
+# Decision 9 of 2026-10-18: Claude Desktop gets MCC's media server inside the
+# document MCC owns outright -- ``managedMcpServers``, an absolute command --
+# only while its Add MCP server button is on; Undo deletes the document and
+# the server with it.
+
+
+def _media_entry(tmp_path: Path) -> dict[str, object]:
+    command = str(tmp_path / "bin" / "mcc-mcp")
+    entry = desktop_mcp_server(
+        "claude_desktop",
+        apps_value="claude_desktop",
+        environ={},
+        out_dir=str(tmp_path / "mcp-media"),
+        command=command,
+    )
+    assert entry is not None
+    return entry
+
+
+def test_the_media_server_is_in_mccs_claude_desktop_document_only_when_on(tmp_path):
+    spec = desktop_app("claude_desktop")
+    entry = _media_entry(tmp_path)
+    off = _claude_desktop_document()
+    on = sidecar_document(
+        spec,
+        (),
+        proxy_root_url="http://127.0.0.1:8082",
+        auth_token="scratch-token",
+        mcp_server=entry,
+    )
+    assert on is not None
+    assert "managedMcpServers" not in off
+    assert on["managedMcpServers"] == [entry]
+    # Everything else in the document is what it was.
+    assert {
+        key: value for key, value in on.items() if key != "managedMcpServers"
+    } == off
+    assert entry["transport"] == "stdio"
+    assert Path(str(entry["command"])).is_absolute()
+    assert entry["args"] == [
+        "--app",
+        "claude_desktop",
+        "--out",
+        str(tmp_path / "mcp-media"),
+    ]
+    # No tool policy (each tool asks) and no credential in the entry.
+    assert "toolPolicy" not in entry
+    assert "scratch-token" not in json.dumps(entry)
+    # Off, an unknown app, or no program to name: no entry at all.
+    for apps_value in ("", "claude,codex", "nonsense"):
+        assert (
+            desktop_mcp_server(
+                "claude_desktop", apps_value=apps_value, environ={}, command="x"
+            )
+            is None
+        ), apps_value
+    assert (
+        desktop_mcp_server(
+            "claude_desktop", apps_value="claude_desktop", environ={}, command=""
+        )
+        is None
+    )
+
+
+def test_remove_rewrites_mccs_document_byte_for_byte_and_undo_deletes_it(tmp_path):
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    off = _claude_desktop_document()
+    on = sidecar_document(
+        spec,
+        (),
+        proxy_root_url="http://127.0.0.1:8082",
+        auth_token="scratch-token",
+        mcp_server=_media_entry(tmp_path),
+    )
+    assert on is not None
+    scalars = {"appliedId": CLAUDE_DESKTOP_CONFIG_ID}
+    sidecar = desktop_apply.sidecar_path_for(spec, env)
+    assert sidecar is not None
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars=scalars,
+        sidecar_document=off,
+        record_path=record,
+    )
+    before = sidecar.read_bytes()
+    meta_before = document_path(spec, env).read_bytes()
+
+    # Add: only MCC's own document changes.
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars=scalars,
+        sidecar_document=on,
+        record_path=record,
+    )
+    assert b"managedMcpServers" in sidecar.read_bytes()
+    assert document_path(spec, env).read_bytes() == meta_before
+
+    # Remove: the document is back, byte for byte.
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars=scalars,
+        sidecar_document=off,
+        record_path=record,
+    )
+    assert sidecar.read_bytes() == before
+
+    # And with the server in it, Undo removes MCC's document whole.
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars=scalars,
+        sidecar_document=on,
+        record_path=record,
+    )
+    result = desktop_apply.undo(spec, env=env, record_path=record)
+    assert result.removed_sidecar is True
+    assert not sidecar.exists()

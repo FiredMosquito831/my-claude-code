@@ -1530,12 +1530,24 @@ WRAPPER
     printf 'Created macOS app bundle: %s\n' "$app_dir"
 }
 
+launcher_introduced_in() {
+    # The first release that publishes a command, for each command added since
+    # the verification below began checking the bin directory. A wheel older
+    # than that has no such command, so installing it (--version, or the CI
+    # smoke run, which installs the latest PUBLISHED wheel with this script)
+    # must not report the command as missing. Prints nothing for every other
+    # command: those are expected of every version.
+    case $1 in
+        mcc-mcp) printf '7.99.0\n' ;;
+    esac
+}
+
 configure_and_verify_my_claude_code() {
     run "$uv_bin" tool update-shell
 
     if [ "$dry_run" -eq 1 ]; then
         print_command "$uv_bin" tool dir --bin
-        printf '+ verify mcc-server, mcc-claude, mcc-codex, mcc-pi, mcc-help, and my-claude-code in the uv tool bin directory\n'
+        printf '+ verify mcc-server, mcc-claude, mcc-codex, mcc-pi, mcc-help, mcc-mcp, and my-claude-code in the uv tool bin directory\n'
         print_command mcc-server --version
         return 0
     fi
@@ -1586,8 +1598,12 @@ configure_and_verify_my_claude_code() {
         mcc-qwen mcc-crush \
         mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini \
         mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
-        mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-apps \
+        mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-apps mcc-mcp \
         mcc-desktop my-claude-code; do
+        introduced=$(launcher_introduced_in "$command_name")
+        if [ -n "$introduced" ] && ! version_at_least "$MCC_VERSION" "$introduced"; then
+            continue
+        fi
         if [ ! -x "$tool_bin/$command_name" ]; then
             if [ -z "$missing_commands" ]; then
                 missing_commands="$command_name"
@@ -3198,6 +3214,7 @@ else
     printf '  mcc-init                Create or repair ~/.mcc/.env\n'
     printf '  mcc-rtk                 Manage the RTK token optimizer\n'
     printf '  mcc-apps                Point desktop apps here (list/status/configure/undo)\n'
+    printf '  mcc-mcp                 Media tools for MCP apps (add it per agent on the Coding agents page)\n'
     printf '  mcc-help                Show what each command does\n'
     if [ "$enable_desktop" -eq 1 ]; then
         if [ -n "$desktop_launcher_created" ]; then

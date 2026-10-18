@@ -68,6 +68,7 @@ from my_claude_code.config.desktop_apps import (
     desktop_app,
 )
 from my_claude_code.config.harness_tiers import current_harness_tiers
+from my_claude_code.config.mcp_media import desktop_mcp_server, mcp_media_on
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.restore_record import UndoMode
 from my_claude_code.config.server_urls import local_proxy_root_url
@@ -186,6 +187,9 @@ def _documents(
                 if spec.sidecar is not None and spec.sidecar.holds_credential
                 else ""
             ),
+            mcp_server=desktop_mcp_server(
+                spec.id, apps_value=settings.mcp_media_apps, environ=os.environ
+            ),
         ),
     )
 
@@ -257,6 +261,13 @@ def _spec_payload(
             [
                 *spec.sidecar.fields,
                 *([spec.sidecar.headers_key] if spec.sidecar.headers_key else []),
+                # 7.99.0: named only while this app's Add MCP server is on.
+                *(
+                    [spec.sidecar.mcp_servers_key]
+                    if spec.sidecar.mcp_servers_key
+                    and mcp_media_on(settings.mcp_media_apps, spec.id)
+                    else []
+                ),
             ]
             if spec.sidecar is not None
             else []
@@ -337,6 +348,9 @@ def _list_payload(settings: Settings, services: ApiServices) -> dict[str, Any]:
                     token
                     if spec.sidecar is not None and spec.sidecar.holds_credential
                     else ""
+                ),
+                mcp_server=desktop_mcp_server(
+                    spec.id, apps_value=settings.mcp_media_apps, environ=os.environ
                 ),
             )
         try:

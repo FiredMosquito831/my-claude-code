@@ -318,6 +318,12 @@ class DesktopSidecar:
     #: list like any other, so it comes from the package that owns those rather
     #: than from a shape spelled out in the writer.
     models_format_id: str = ""
+    #: The key MCC's media MCP server goes under in this file, for an app
+    #: that reads MCP servers from it (7.99.0). Empty for every other app.
+    #: Filled only while that app's *Add MCP server* button is on
+    #: (``MCP_MEDIA_APPS``), so a file written with it off is the same file
+    #: as before 7.99.0; Undo deletes the file and the server with it.
+    mcp_servers_key: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1666,6 +1672,13 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             },
             headers_key="",
             models_format_id="claude_desktop",
+            # Documented beside inferenceProvider and inferenceModels, in the
+            # same availability class ("MDM + Bootstrap"), as an array of
+            # servers whose stdio command must be an absolute path
+            # (claude.com/docs/third-party/claude-desktop/configuration, read
+            # 2026-10-18). Whether the local library honours it is the one
+            # relaunch of the user's real app the release notes ask for (R5).
+            mcp_servers_key="managedMcpServers",
         ),
         managed_sources=(
             DesktopManagedSource(

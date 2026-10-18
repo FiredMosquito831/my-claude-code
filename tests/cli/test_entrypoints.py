@@ -263,6 +263,7 @@ def test_help_command_documents_every_mcc_command(
         "mcc-compact-log",
         "mcc-rtk",
         "mcc-desktop",
+        "mcc-mcp",
         "mcc-help",
     ):
         assert command in out

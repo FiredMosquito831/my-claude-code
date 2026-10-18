@@ -186,13 +186,15 @@ const VIEW_GROUPS = [
   },
   {
     // One page per concept: which agents exist, what MCC tells each of them,
-    // and the RTK toggle. It claims no manifest section, so `containerId`
-    // stays null and renderSections() skips it.
+    // and the RTK toggle. Since 7.99.0 it also claims the one setting its
+    // Add / Remove MCP server buttons write (MCP_MEDIA_APPS), drawn at the
+    // foot of the page with its help text; the cards themselves are rendered
+    // by renderHarnesses(), which renderSections() never touches.
     id: "coding_agents",
     label: "Coding agents",
     title: "Coding agents",
-    sections: [],
-    containerId: null,
+    sections: ["mcp_media"],
+    containerId: "codingAgentsSettings",
   },
   {
     id: "model_config",
@@ -7602,6 +7604,7 @@ const GUIDE_ANCHORS = {
   learned: "guide-learned",
   images: "guide-images",
   cost: "guide-cost",
+  media_mcp: "guide-media-mcp",
 };
 
 // The surfaces that exist in the static markup. Everything else is appended by
@@ -7610,6 +7613,7 @@ const GUIDE_LINK_MOUNTS = [
   ["#codingAgentsHeading", "cli"],
   ["#desktopAppsHeading", "desktop_apps"],
   ["#reqCostHeading", "cost"],
+  ["#mcpMediaHeading", "media_mcp"],
 ];
 
 const GUIDE_VIEW_ID = "guide";
@@ -7665,6 +7669,7 @@ function mountGuideLinks() {
 const GUIDE_LINK_LABELS = {
   cli: "Guide: CLI agents",
   desktop_apps: "Guide: desktop apps",
+  media_mcp: "Guide: media server",
 };
 
 function guideLinkLabel(purpose) {
@@ -7850,6 +7855,7 @@ const MEDIA_RAILS = [
     chainKey: "MODEL_IMAGE_FALLBACKS",
     tier: "image",
     title: "Image rail",
+    mcpTools: ["generate_image", "edit_image"],
     note:
       "Serves POST /v1/images/generations and /v1/images/edits. Only providers " +
       "that declare the endpoint can answer it; a model on any other provider is skipped " +
@@ -7861,6 +7867,7 @@ const MEDIA_RAILS = [
     chainKey: "MODEL_TTS_FALLBACKS",
     tier: "tts",
     title: "Speech rail",
+    mcpTools: ["speak"],
     note:
       "Serves POST /v1/audio/speech (text to speech). Only providers that declare " +
       "a speech endpoint can answer it; a client that names a format a provider " +
@@ -7872,6 +7879,7 @@ const MEDIA_RAILS = [
     chainKey: "MODEL_ASR_FALLBACKS",
     tier: "asr",
     title: "Transcription rail",
+    mcpTools: ["transcribe", "translate_audio"],
     note:
       "Serves POST /v1/audio/transcriptions and /v1/audio/translations (speech " +
       "to text). Only providers that declare the endpoint can answer it; a " +
@@ -7883,6 +7891,7 @@ const MEDIA_RAILS = [
     chainKey: "MODEL_VIDEO_FALLBACKS",
     tier: "video",
     title: "Video rail",
+    mcpTools: ["create_video", "get_video"],
     note:
       "Serves POST /v1/videos (a video is a job: submit, then poll). The rail is " +
       "walked only until a provider accepts the job; after that, status checks, " +
@@ -7891,6 +7900,43 @@ const MEDIA_RAILS = [
   },
 ];
 
+
+/** Below a media rail: the media server's tools for it, and where to add it.
+ *
+ * 7.99.0. A coding agent reaches this rail through MCC's media MCP server,
+ * which is added per agent on the Coding agents page; this says so, names the
+ * tools the rail gives an agent, and counts the agents that have it from the
+ * one setting the buttons write. Display only: it reads MCP_MEDIA_APPS and
+ * changes nothing a request sends. */
+function mcpMediaRailNote(spec) {
+  const note = document.createElement("p");
+  note.className = "route-note route-mcp-note";
+  note.dataset.mcpRail = spec.tier;
+  const field = state.fields && state.fields.get("MCP_MEDIA_APPS");
+  const added = String((field && field.value) || "")
+    .split(/[\s,]+/)
+    .filter(Boolean).length;
+  note.append(
+    document.createTextNode(
+      `Coding agents reach this rail through MCC's media server (MCP) as ` +
+        `${spec.mcpTools.join(" and ")}. ` +
+        (added
+          ? `${added} ${added === 1 ? "agent has" : "agents have"} it. `
+          : "No agent has it yet. "),
+    ),
+  );
+  const link = document.createElement("a");
+  link.className = "route-mcp-link";
+  link.href = "#mcpMediaServerCard";
+  link.textContent = "Add or remove it on Coding agents";
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    state.userNavigated = true;
+    setActiveView("coding_agents", { scroll: true });
+  });
+  note.append(link);
+  return note;
+}
 
 /** Put the harness alias for a route beside its heading, if it has one.
  *
@@ -9191,6 +9237,9 @@ function renderModelRouting(fields, allFields) {
     rail.className = "field route-rail route-media-control";
     appendRouteRail(rail, modelField, fieldByKey.get(spec.chainKey));
     media.appendChild(rail);
+    // 7.99.0 (the user's 2026-10-18 12:53 amendment): below the rail, how a
+    // coding agent reaches it. Shown only: nothing routed or sent changes.
+    media.appendChild(mcpMediaRailNote(spec));
     wrap.appendChild(media);
   });
 
@@ -17316,6 +17365,10 @@ async function loadHarnesses() {
   await loadHarnessTiers();
   renderHarnesses();
   renderRtkState();
+  // 7.99.0: each card's Add / Remove MCP server button and the MCC media
+  // server card. Its own request and its own failure: the cards above are
+  // complete without it, and fill their button in when it lands.
+  await loadMcpMedia();
 }
 
 function renderHarnesses(errorMessage) {
@@ -17332,8 +17385,11 @@ function renderHarnesses(errorMessage) {
   }
   clearHarnessTierRails();
   (state.harnesses || []).forEach((harness) => {
-    list.append(harnessCard(harness));
+    const card = harnessCard(harness);
+    card.append(mcpMediaControlHost(harness.id));
+    list.append(card);
   });
+  renderMcpMediaControls();
   syncRoutePauseUi();
 }
 
@@ -17468,8 +17524,250 @@ function renderDesktopApps(errorMessage) {
     return;
   }
   (state.desktopApps || []).forEach((app) => {
-    list.append(desktopAppCard(app));
+    const card = desktopAppCard(app);
+    card.append(mcpMediaControlHost(app.id));
+    list.append(card);
   });
+  renderMcpMediaControls();
+}
+
+/* --------------------------------------------------------------------- */
+/* MCC media server (7.99.0)                                               */
+/* --------------------------------------------------------------------- */
+/* Every agent card carries an Add MCP server / Remove MCP server button (the
+   user's 2026-10-18 12:53 wording), and one card shows the server itself.
+   The button writes MCP_MEDIA_APPS through /admin/api/mcp-media/apps, which
+   republishes the config layers MCC owns and, for Claude Desktop, rewrites
+   MCC's own document when that card is configured. Nothing here writes an
+   app's own file, and Remove puts back exactly what was there. Which apps
+   have a button, and what each says about asking before a paid tool, is the
+   server's table (config/mcp_media.py), never a list in this file. */
+
+const MCP_MEDIA_SUPPORT_LABELS = {
+  not_measured: "MCP server: not measured yet",
+  extension_later: "MCP server: through MCC's Pi extension, later",
+  no_mcp: "MCP server: not possible, no MCP client",
+  own_file_later: "MCP server: your own file, not written by MCC yet",
+};
+
+async function loadMcpMedia() {
+  try {
+    state.mcpMedia = await api("/admin/api/mcp-media");
+  } catch (error) {
+    // An older server has no such route; the cards keep no button and the
+    // card says why.
+    state.mcpMedia = { error: error.message };
+  }
+  renderMcpMediaCard();
+  renderMcpMediaControls();
+}
+
+function mcpMediaApp(appId) {
+  const apps = (state.mcpMedia && state.mcpMedia.apps) || [];
+  return apps.find((app) => app.app_id === appId) || null;
+}
+
+function mcpMediaControlHost(appId) {
+  const host = document.createElement("div");
+  host.className = "mcp-media-control";
+  host.dataset.mcpApp = appId;
+  host.hidden = true;
+  return host;
+}
+
+function renderMcpMediaControls() {
+  document.querySelectorAll(".mcp-media-control").forEach((host) => {
+    fillMcpMediaControl(host, mcpMediaApp(host.dataset.mcpApp));
+  });
+}
+
+function mcpMediaParagraph(className, text) {
+  const paragraph = document.createElement("p");
+  paragraph.className = className;
+  paragraph.textContent = text;
+  return paragraph;
+}
+
+function fillMcpMediaControl(host, app) {
+  host.textContent = "";
+  host.hidden = !app;
+  if (!app) return;
+  if (app.support !== "button") {
+    host.append(
+      mcpMediaParagraph(
+        "mcp-media-state",
+        MCP_MEDIA_SUPPORT_LABELS[app.support] || "MCP server: not available",
+      ),
+    );
+    if (app.note) host.append(mcpMediaParagraph("mcp-media-note", app.note));
+    return;
+  }
+  const media = state.mcpMedia || {};
+  const line = document.createElement("p");
+  line.className = "mcp-media-state";
+  const pill = document.createElement("span");
+  pill.className = app.on ? "status-pill ok" : "status-pill";
+  pill.textContent = app.on ? "MCP server added" : "No MCP server";
+  line.append(
+    pill,
+    document.createTextNode(
+      app.on
+        ? " This agent is offered MCC's media tools."
+        : " This agent is not offered MCC's media tools.",
+    ),
+  );
+  host.append(line);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = app.on
+    ? "secondary-button mcp-media-button"
+    : "primary-button mcp-media-button";
+  button.dataset.mcpApp = app.app_id;
+  button.dataset.mcpAction = app.on ? "remove" : "add";
+  button.textContent = app.on ? "Remove MCP server" : "Add MCP server";
+  if (!app.on && media.installed === false) {
+    button.disabled = true;
+    button.title = "mcc-mcp is not installed beside MCC. Reinstall or update MCC.";
+  }
+  button.addEventListener("click", () => toggleMcpMedia(app, button));
+  host.append(button);
+
+  if (app.pending) host.append(mcpMediaParagraph("mcp-media-pending", app.pending));
+  if (app.asks) host.append(mcpMediaParagraph("mcp-media-note", app.asks));
+  if (app.note) host.append(mcpMediaParagraph("mcp-media-note", app.note));
+}
+
+async function toggleMcpMedia(app, button) {
+  button.disabled = true;
+  try {
+    const result = await api("/admin/api/mcp-media/apps", {
+      method: "POST",
+      body: JSON.stringify({ app: app.app_id, add: !app.on }),
+    });
+    state.mcpMedia = result;
+    syncMcpMediaField(result.apps_value);
+    renderMcpMediaCard();
+    renderMcpMediaControls();
+    showMessage(result.message || "Saved.", "ok");
+    // A desktop card's own badge follows what MCC's document now holds.
+    const desktopCard = Array.from(
+      document.querySelectorAll("[data-desktop-app]"),
+    ).some((card) => card.dataset.desktopApp === app.app_id);
+    if (desktopCard) {
+      loadDesktopApps().catch((error) => showMessage(error.message, "error"));
+    }
+  } catch (error) {
+    button.disabled = false;
+    showMessage(error.message, "error");
+  }
+}
+
+/** Keep the MCP_MEDIA_APPS field at the foot of the page in step with the
+ * buttons, without marking it as an unsaved edit. */
+function syncMcpMediaField(value) {
+  const text = String(value || "");
+  const field = state.fields && state.fields.get("MCP_MEDIA_APPS");
+  if (field) field.value = text;
+  document.querySelectorAll('[data-key="MCP_MEDIA_APPS"]').forEach((input) => {
+    if (!input.matches("input, textarea")) return;
+    input.value = text;
+    input.dataset.original = text;
+  });
+}
+
+function formatToolBytes(bytes) {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes)) return "not measured";
+  return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} bytes`;
+}
+
+function renderMcpMediaCard() {
+  const body = byId("mcpMediaServerBody");
+  if (!body) return;
+  body.textContent = "";
+  const media = state.mcpMedia;
+  if (!media) return;
+  if (media.error) {
+    body.append(
+      mcpMediaParagraph(
+        "mcp-media-pending",
+        `Could not read the media server's state: ${media.error}. If this ` +
+          "server is older than 7.99.0, update MCC.",
+      ),
+    );
+    return;
+  }
+
+  const status = document.createElement("p");
+  status.className = "mcp-media-state";
+  const pill = document.createElement("span");
+  pill.className = media.installed ? "status-pill ok" : "status-pill error";
+  pill.textContent = media.installed ? "Installed" : "Not installed";
+  status.append(
+    pill,
+    document.createTextNode(
+      media.installed
+        ? ` mcc-mcp: ${media.command}`
+        : " mcc-mcp was not found beside this MCC. Reinstall or update MCC.",
+    ),
+  );
+  body.append(status);
+
+  const on = (media.apps || []).filter((app) => app.on);
+  body.append(
+    mcpMediaParagraph(
+      "mcp-media-note",
+      on.length
+        ? `Added to: ${on.map((app) => app.display_name).join(", ")}.`
+        : "Added to no agent yet. Press Add MCP server on an agent's card.",
+    ),
+  );
+
+  const tools = media.tools || [];
+  if (media.tools_error) body.append(mcpMediaParagraph("mcp-media-pending", media.tools_error));
+  body.append(
+    mcpMediaParagraph(
+      "mcp-media-note",
+      tools.length > 1
+        ? `Tools from your rails now: ${tools.join(", ")}. Each app that has the ` +
+            `server sends about ${formatToolBytes(media.tool_bytes)} of tool ` +
+            "text with every request; the list is built once per session, so it " +
+            "stays the same from turn to turn."
+        : "No media rail has a model yet, so an agent would be offered media_status " +
+            "alone. Put a model on a rail on Model Config.",
+    ),
+  );
+  if (media.rails && media.rails.length) {
+    const list = document.createElement("ul");
+    list.className = "mcp-media-rails";
+    media.rails.forEach((rail) => {
+      const item = document.createElement("li");
+      const models = rail.models && rail.models.length ? rail.models.join(", ") : "empty";
+      const offered = rail.tools && rail.tools.length ? ` -> ${rail.tools.join(", ")}` : "";
+      item.textContent = `${rail.label}: ${models}${offered}`;
+      list.append(item);
+    });
+    body.append(list);
+  }
+
+  if (media.installed && media.copy_line) {
+    body.append(
+      mcpMediaParagraph(
+        "mcp-media-note",
+        "For an app MCC does not launch, add a local (stdio) MCP server that runs " +
+          "this line, with your app's name in place of <your-app>. It reads MCC's " +
+          "address and token from MCC's own settings; nothing secret goes in the app.",
+      ),
+    );
+    const line = document.createElement("pre");
+    line.className = "mcp-media-copy";
+    line.textContent = media.copy_line;
+    body.append(line);
+    const json = document.createElement("pre");
+    json.className = "mcp-media-copy";
+    json.textContent = media.copy_json;
+    body.append(json);
+  }
 }
 
 function desktopAppCard(app) {

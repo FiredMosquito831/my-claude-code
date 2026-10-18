@@ -35,6 +35,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Tutorial: configure a desktop app, and undo it](#tutorial-configure-a-desktop-app-and-undo-it)
   - [Without a browser: `mcc-apps`](#without-a-browser-mcc-apps)
 - [7. Tutorial: connect another CLI](#7-tutorial-connect-another-cli)
+  - [Media tools for an agent: the MCC media server](#media-tools-for-an-agent-the-mcc-media-server-7990)
 - [8. Providers and API keys](#8-providers-and-api-keys)
   - [Using Claude models](#using-claude-models)
   - [OpenCode Zen and OpenCode Go: what MCC sends about itself](#opencode-zen-and-opencode-go-what-mcc-sends-about-itself)
@@ -2768,6 +2769,33 @@ budget. The `0` is recorded under `_mcc_defaulted` like every other
 substitution.
 
 **Editor integrations** work the same way — Claude Code and Codex in VS Code, or Claude Code through JetBrains ACP. Point them at the proxy address and they behave normally.
+
+### Media tools for an agent: the MCC media server (7.99.0)
+
+An agent learns that MCC serves pictures, speech, transcripts and video from MCC's
+media server, `mcc-mcp`, and from nothing else: MCC never adds a tool to a request on
+its own. Add it to one agent at a time on the **Coding agents** page: each card has an
+**Add MCP server** button, and **Remove MCP server** puts back exactly what was there.
+The buttons write `MCP_MEDIA_APPS`, a comma list of app ids (`claude`, `codex`,
+`opencode`, `opencode2`, `kilo`, `crush`, `qwen_code`, `gemini_cli`, `claude_desktop`;
+empty, the default, adds it nowhere), which is also on that page.
+
+| With the button on | What MCC changes, and only that |
+|---|---|
+| `mcc-claude` | adds `--mcp-config=<MCC's mcp-claude.json>` before your arguments (always the `=` form) |
+| `mcc-codex` | adds `-c mcp_servers.mcc_media.command=…` and `-c mcp_servers.mcc_media.args=[…]` |
+| `mcc-opencode`, `mcc-opencode2`, `mcc-kilo` | MCC's config layer gains `mcp.mcc_media` and `permission` `ask` for the paid tools |
+| `mcc-crush` | MCC's global config gains `mcp.mcc_media` |
+| `mcc-qwen`, `mcc-gemini` | MCC's system settings gain `mcpServers.mcc_media` (never `trust`) |
+| Claude Desktop | MCC's own document gains `managedMcpServers` when that card is configured; relaunch once |
+
+The agent's next session lists `media_status` and one tool per job whose rail has a
+model. Each spending tool goes through the agent's own "allow this tool?" prompt; the
+tool list adds a few KB to each of that agent's requests and stays the same from turn
+to turn. Results are saved in the agent's working folder, never over an existing file.
+Gemini CLI starts MCP servers only in a folder you trusted. Codex lists the server but
+its model does not see the tools yet ([Known limits](MEDIA.md#known-limits-today)). The
+full reference: [docs/MEDIA.md](MEDIA.md#coding-agents-the-media-server-mcp-7990).
 
 ---
 

@@ -222,3 +222,41 @@ class TestDesktopShortcutConfigDir:
         assert 'icons_dir="$HOME/.local/share/icons/hicolor/256x256/apps"' in desktop
         assert ".mcc" not in desktop
         assert ".fcc" not in desktop
+
+
+def test_a_command_newer_than_the_installed_wheel_is_not_reported_missing() -> None:
+    """7.99.0: the verification expects ``mcc-mcp`` only from the release that ships it.
+
+    The CI smoke run installs the latest PUBLISHED wheel with this branch's
+    scripts, and ``-Version`` / ``--version`` installs any earlier one. Neither
+    wheel has a command a later release added, and neither is a failed
+    install -- but every command the installed release does publish is still
+    verified, and every gated command is still a published, detected launcher.
+    """
+
+    ps1 = INSTALL_PS1.read_text(encoding="utf-8")
+    sh = INSTALL_SH.read_text(encoding="utf-8")
+
+    table = re.search(
+        r"function Get-LauncherIntroducedIn.*?return @\{(?P<body>.*?)\}", ps1, re.DOTALL
+    )
+    assert table is not None, "Get-LauncherIntroducedIn not found in install.ps1"
+    gated = dict(re.findall(r'"([a-z0-9-]+)"\s*=\s*"([0-9.]+)"', table.group("body")))
+    assert gated == {"mcc-mcp": "7.99.0"}
+    assert set(gated) <= _published_commands() & _detected_launchers()
+
+    confirm = re.search(
+        r"function Configure-AndConfirmFreeClaudeCode.*?\n\}", ps1, re.DOTALL
+    )
+    assert confirm is not None
+    assert (
+        "Test-VersionAtLeast -Version $ExpectedVersion "
+        "-Minimum $introducedIn[$commandName]"
+    ) in confirm.group(0)
+
+    case = re.search(r"launcher_introduced_in\(\) \{.*?\n\}", sh, re.DOTALL)
+    assert case is not None, "launcher_introduced_in not found in install.sh"
+    assert dict(re.findall(r"([a-z0-9-]+)\) printf '([0-9.]+)", case.group(0))) == gated
+    verify = sh.split("configure_and_verify_my_claude_code() {", 1)[1]
+    verify = verify.split("\n}\n", 1)[0]
+    assert 'version_at_least "$MCC_VERSION" "$introduced"' in verify

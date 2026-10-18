@@ -19,6 +19,11 @@ from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_f
 from my_claude_code.config.atomic_json import (
     write_json_document_atomically_if_changed,
 )
+from my_claude_code.config.mcp_media import (
+    codex_config_arguments,
+    mcp_media_command,
+    mcp_media_on,
+)
 from my_claude_code.config.paths import codex_model_catalog_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
@@ -71,6 +76,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
             settings=settings,
             proxy_root_url=proxy_root_url,
             catalog_config_args=catalog_args,
+            mcp_config_args=codex_mcp_config_args(settings, os.environ),
         ),
         env=build_codex_launcher_env(
             auth_token=settings.anthropic_auth_token,
@@ -95,8 +101,14 @@ def build_codex_launcher_command(
     settings: Settings,
     proxy_root_url: str,
     catalog_config_args: Sequence[str] = (),
+    mcp_config_args: Sequence[str] = (),
 ) -> list[str]:
-    """Return a Codex command with ephemeral FCC provider config."""
+    """Return a Codex command with ephemeral FCC provider config.
+
+    ``mcp_config_args`` (7.99.0) are the media MCP server's ``-c`` settings,
+    present only while Codex's *Add MCP server* button is on; empty -- the
+    default -- leaves the command exactly as it was.
+    """
 
     return [
         binary_path,
@@ -105,8 +117,32 @@ def build_codex_launcher_command(
             api_url=_ensure_v1_url(proxy_root_url),
             model=getattr(settings, "model", None),
         ),
+        *mcp_config_args,
         *argv,
     ]
+
+
+def codex_mcp_config_args(settings: Settings, environ: Mapping[str, str]) -> list[str]:
+    """The media MCP server's ``-c`` settings for one launch, while it is on.
+
+    Codex keeps them for that launch only, so ``config.toml`` is never
+    rewritten; Codex asks before each media tool that spends money, because
+    none is marked read-only. A missing ``mcc-mcp`` launches without the
+    server and says so.
+    """
+
+    if not mcp_media_on(settings.mcp_media_apps, HARNESS_ID):
+        return []
+    command = mcp_media_command()
+    if command is None:
+        print(
+            "My Claude Code warning: the media MCP server (mcc-mcp) is not "
+            "installed beside MCC; launching Codex without it. Reinstall MCC "
+            "to restore it.",
+            file=sys.stderr,
+        )
+        return []
+    return codex_config_arguments(command, environ)
 
 
 def build_codex_launcher_env(

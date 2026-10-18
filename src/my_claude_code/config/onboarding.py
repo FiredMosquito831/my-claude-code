@@ -17,6 +17,7 @@ from .desktop_apply import DesktopApplyError, is_installed
 from .desktop_apply import probe as probe_desktop
 from .desktop_apps import DESKTOP_APPS, DesktopAppState, DesktopAppStatus
 from .harnesses import harness_specs
+from .mcp_media import parse_mcp_media_apps
 from .model_refs import parse_provider_type
 from .paths import onboarding_state_path
 from .provider_catalog import PROVIDER_CATALOG
@@ -215,6 +216,18 @@ def _fallback_model_configured() -> bool:
     return bool(str(state.get(descriptor.credential_env, {}).get("value", "")).strip())
 
 
+def _media_server_added() -> bool:
+    """Return True once any app has MCC's media MCP server (7.99.0).
+
+    The same setting the Coding agents buttons write; derived, never a visit.
+    """
+
+    state = load_value_state()
+    return bool(
+        parse_mcp_media_apps(str(state.get("MCP_MEDIA_APPS", {}).get("value", "")))
+    )
+
+
 def detect_agents(
     *,
     env: Mapping[str, str] | None = None,
@@ -376,6 +389,35 @@ def build_state(
             target="#codingAgentsList",
             guide_anchors=("guide-cli", "guide-desktop-apps"),
             agents=agents,
+        ),
+        OnboardingStep(
+            # 7.99.0, the user's 2026-10-18 12:53 amendment: the media server
+            # is referenced here too (it replaces "no Get Started media step",
+            # 2026-10-04 decision 8). Optional, and done only once an app
+            # really has the server.
+            id="media_tools",
+            label="Let your coding agents make media (optional)",
+            description=(
+                "MCC's media server gives a coding agent tools for the media "
+                "rails you filled in - pictures, speech, transcripts and video - "
+                "so it can make them itself instead of being told how. It is "
+                "added to one agent at a time with a button, and taken out "
+                "with another."
+            ),
+            view="coding_agents",
+            optional=True,
+            done=_media_server_added(),
+            instructions=(
+                "Fill a media rail first: Model Config, the Image, Speech, "
+                "Transcription or Video rail.",
+                "Open the Coding agents page and press Add MCP server on the "
+                "card of the agent that should have the tools.",
+                "Start a new session of that agent. It lists media_status and "
+                "one tool per filled rail, and asks you before any tool that "
+                "spends money.",
+            ),
+            target="#mcpMediaServerCard",
+            guide_anchors=("guide-media-mcp",),
         ),
         OnboardingStep(
             id="websearch",
