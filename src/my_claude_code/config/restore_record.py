@@ -43,6 +43,12 @@ silently reverting an edit the user made on purpose.
 The record lives in MCC's own directory, never beside the user's file, and is
 mode 0600 because a prior value can be a credential -- the very case that
 makes restoring worth doing.
+
+Since 7.100.0 it also remembers the media MCP server entry MCC adds to a
+user's own file (``mcp_servers`` below): which keys it created, the exact text
+it inserted, and whether the file or its folder existed at all -- the facts
+that let *Remove MCP server* and Undo give the file back byte for byte, and
+that let a card tell MCC's entry from one the user wrote under the same name.
 """
 
 import hashlib
@@ -417,4 +423,219 @@ def forget_entry(subject: str, *, path: Path | None = None) -> None:
     subjects = dict(subjects)
     del subjects[subject]
     write_json_document_atomically(record_path, _with_subjects(record, subjects))
+    _harden(record_path)
+
+
+def refresh_document_sha256(
+    subject: str, *, before: str, after: str, path: Path | None = None
+) -> bool:
+    """Move one subject's document hash from ``before`` to ``after``, and only then.
+
+    7.100.0. The media server entry is a second key MCC may own in the same
+    document as a card's inference keys (Codex's ``config.toml``, OpenCode's
+    ``opencode.json``). Adding or removing it rewrites that document, and
+    ``RESTORE`` refuses when the document's hash is not the one Configure
+    recorded -- so without this, pressing *Add MCP server* after Configure
+    would have disarmed "Restore the original values" for good.
+
+    Conditional on purpose: the hash moves only when it still names the bytes
+    MCC itself just replaced. A document the user edited by hand since
+    Configure keeps the old hash, so ``RESTORE`` still declines to revert their
+    edit. An undone record is left alone too: its stamp is the fact the probe
+    reads, and rewriting the entry here would drop it.
+    """
+
+    record_path = path if path is not None else restore_record_path()
+    entry = read_entry(subject, path=record_path)
+    if entry is None or entry.undone_at or entry.document_sha256 != before:
+        return False
+    if before == after:
+        return False
+    record = _load_record(record_path)
+    subjects = record.get("subjects")
+    subjects = dict(subjects) if isinstance(subjects, dict) else {}
+    subjects[subject] = RestoreEntry(
+        subject=entry.subject,
+        document_path=entry.document_path,
+        document_sha256=after,
+        overwritten=entry.overwritten,
+    ).as_payload()
+    write_json_document_atomically(record_path, _with_subjects(record, subjects))
+    _harden(record_path)
+    return True
+
+
+# --------------------------------------------------------------------------
+# MCC's media MCP server entry in a user's own file (7.100.0)
+# --------------------------------------------------------------------------
+#
+# A key of its own in the same side record: ``mcp_servers``, beside
+# ``subjects`` and ``repairs``. Every writer above rebuilds the record from
+# what it loaded (``_with_subjects``), so a third top-level key needs none of
+# them changed -- which is the reason ``_with_subjects`` exists.
+#
+# The entry answers "is the ``mcc_media`` server in this file MCC's?". A file
+# that carries one MCC never wrote -- a user who pasted MCC's own line into it,
+# or a different program under the same name -- has no record here, and the
+# card says so and offers no button: Add would overwrite something of theirs
+# and Remove would delete it.
+
+#: Top-level key of the side record holding MCC's MCP server entries.
+MCP_RECORD_KEY = "mcp_servers"
+
+
+@dataclass(frozen=True, slots=True)
+class McpServerRecord:
+    """What MCC added to one app's file for its media server, and how to take it out."""
+
+    #: The desktop app id the entry belongs to.
+    subject: str
+    #: Absolute path of the file, as a string.
+    document_path: str
+    #: Every key MCC created, outermost first, with the value it wrote. The
+    #: server entry comes first; OpenCode's ``permission`` keys follow it.
+    created: tuple[tuple[tuple[str, ...], object], ...]
+    #: The text each edit inserted and the text it replaced, in the order the
+    #: edits were made. Removal takes them back out in reverse, so a file that
+    #: has not been touched since comes back byte for byte.
+    splices: tuple[tuple[str, str], ...]
+    #: Containers that did not exist before MCC's first key went in. Removal
+    #: drops one only when MCC's departure leaves it empty.
+    created_parents: tuple[tuple[str, ...], ...] = ()
+    #: Whether the file itself did not exist before the entry went in.
+    created_file: bool = False
+    #: Directories created on the way to the file, deepest first.
+    created_dirs: tuple[str, ...] = ()
+    #: When the entry was written, ISO-8601 UTC.
+    added_at: str = ""
+
+    @property
+    def server_value(self) -> object:
+        """The server entry MCC wrote (the first created key)."""
+
+        return self.created[0][1] if self.created else None
+
+    def as_payload(self) -> dict[str, object]:
+        return {
+            "subject": self.subject,
+            "document_path": self.document_path,
+            "created": [
+                {"key_path": list(key_path), "value": value}
+                for key_path, value in self.created
+            ],
+            "splices": [
+                {"inserted": inserted, "replaced": replaced}
+                for inserted, replaced in self.splices
+            ],
+            "created_parents": [list(key_path) for key_path in self.created_parents],
+            "created_file": self.created_file,
+            "created_dirs": list(self.created_dirs),
+            "added_at": self.added_at,
+        }
+
+
+def _string_keyed(value: object) -> dict[str, object] | None:
+    """A mapping as a ``dict[str, object]``; ``isinstance`` alone narrows to Unknown."""
+
+    if not isinstance(value, Mapping):
+        return None
+    return {str(key): item for key, item in value.items()}
+
+
+def _items(payload: Mapping[str, object], key: str) -> list[object]:
+    value = payload.get(key)
+    return list(value) if isinstance(value, list) else []
+
+
+def _mcp_records(record: Mapping[str, object]) -> dict[str, object]:
+    return _string_keyed(record.get(MCP_RECORD_KEY)) or {}
+
+
+def write_mcp_record(entry: McpServerRecord, *, path: Path | None = None) -> Path:
+    """Record the media server entry MCC just wrote into one app's file."""
+
+    record_path = path if path is not None else restore_record_path()
+    record = _load_record(record_path)
+    entries = _mcp_records(record)
+    stamped = entry
+    if not entry.added_at:
+        stamped = McpServerRecord(
+            subject=entry.subject,
+            document_path=entry.document_path,
+            created=entry.created,
+            splices=entry.splices,
+            created_parents=entry.created_parents,
+            created_file=entry.created_file,
+            created_dirs=entry.created_dirs,
+            added_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        )
+    entries[entry.subject] = stamped.as_payload()
+    updated = dict(record)
+    updated[MCP_RECORD_KEY] = entries
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_document_atomically(record_path, updated)
+    _harden(record_path)
+    return record_path
+
+
+def _key_path(value: object) -> tuple[str, ...] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    return tuple(str(part) for part in value)
+
+
+def read_mcp_record(
+    subject: str, *, path: Path | None = None
+) -> McpServerRecord | None:
+    """Return the media server entry MCC recorded for one app, or None."""
+
+    record_path = path if path is not None else restore_record_path()
+    payload = _string_keyed(_mcp_records(_load_record(record_path)).get(subject))
+    if payload is None:
+        return None
+    created: list[tuple[tuple[str, ...], object]] = []
+    for raw in _items(payload, "created"):
+        item = _string_keyed(raw)
+        key_path = _key_path(item.get("key_path")) if item is not None else None
+        if item is not None and key_path is not None:
+            created.append((key_path, item.get("value")))
+    if not created:
+        return None
+    splices: list[tuple[str, str]] = []
+    for raw in _items(payload, "splices"):
+        item = _string_keyed(raw)
+        if item is None:
+            continue
+        inserted, replaced = item.get("inserted"), item.get("replaced")
+        if isinstance(inserted, str) and isinstance(replaced, str):
+            splices.append((inserted, replaced))
+    parents = tuple(
+        key_path
+        for key_path in (_key_path(item) for item in _items(payload, "created_parents"))
+        if key_path is not None
+    )
+    return McpServerRecord(
+        subject=str(payload.get("subject", subject)),
+        document_path=str(payload.get("document_path", "")),
+        created=tuple(created),
+        splices=tuple(splices),
+        created_parents=parents,
+        created_file=bool(payload.get("created_file")),
+        created_dirs=tuple(str(item) for item in _items(payload, "created_dirs")),
+        added_at=str(payload.get("added_at", "")),
+    )
+
+
+def forget_mcp_record(subject: str, *, path: Path | None = None) -> None:
+    """Drop one app's media server record: the entry is gone, or no longer MCC's."""
+
+    record_path = path if path is not None else restore_record_path()
+    record = _load_record(record_path)
+    entries = _mcp_records(record)
+    if subject not in entries:
+        return
+    del entries[subject]
+    updated = dict(record)
+    updated[MCP_RECORD_KEY] = entries
+    write_json_document_atomically(record_path, updated)
     _harden(record_path)

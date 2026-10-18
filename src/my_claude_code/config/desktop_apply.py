@@ -49,13 +49,14 @@ successfully and then ignored is the same invisible failure as a file written
 to the wrong path.
 """
 
+import copy
 import json
 import os
 import re
 import shutil
 import stat
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from difflib import unified_diff
@@ -68,6 +69,8 @@ from my_claude_code.config.desktop_apps import (
     DesktopAppStatus,
     DesktopDocument,
     DesktopManagedSource,
+    DesktopMcpDocument,
+    DesktopMcpState,
     DesktopPath,
     DesktopSidecar,
     TokenForm,
@@ -82,19 +85,26 @@ from my_claude_code.config.document_codecs import (
     mask_json_text,
     parse_document,
 )
+from my_claude_code.config.mcp_media import opencode_permission_keys
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.restore_record import (
+    McpServerRecord,
     RestoreEntry,
     UndoMode,
     capture_overwritten,
     document_sha256,
     forget_entry,
+    forget_mcp_record,
     forget_repairs,
     mark_undone,
     read_entry,
+    read_mcp_record,
     read_repairs,
     record_repairs,
+    refresh_document_sha256,
+    value_at,
     write_entry,
+    write_mcp_record,
 )
 
 
@@ -160,6 +170,9 @@ class DesktopWriteResult:
     sidecar_path: str = ""
     removed_sidecar: bool = False
     restored_keys: tuple[str, ...] = ()
+    #: Whether Undo also took MCC's media server entry out of the app's
+    #: file (7.100.0). False for every card that never had one.
+    removed_mcp_server: bool = False
 
 
 #: What a token looks like once it is safe to show. The plan diff is rendered
@@ -1697,6 +1710,16 @@ def undo(
                 restore[".".join(value.key_path)] = value.prior_value
                 restored_keys.append(".".join(value.key_path))
 
+    # 7.100.0: MCC's media server entry, when MCC added one to this app's
+    # files. ``None`` -- every card that never had one -- leaves everything
+    # below exactly as it was.
+    mcp_record = (
+        read_mcp_record(spec.id, path=record_path) if spec.mcp is not None else None
+    )
+    mcp_here = mcp_record is not None and mcp_path_for(spec, env) == path
+    removed_mcp_server = False
+    delete_document = False
+
     if edits_the_text(spec.document, before_text):
         edits: list[SetTable | SetScalar | DeleteKey] = []
         if spec.document.owned_key_path:
@@ -1707,7 +1730,21 @@ def undo(
                 edits.append(SetScalar(key_path, restore[label]))
             else:
                 edits.append(DeleteKey(key_path))
-        after_text = apply_edits(before_text, document_format, edits)
+        if mcp_here and mcp_record is not None:
+            after_text, removed_mcp_server = _undo_mcp_in_text(
+                spec,
+                mcp_record,
+                before_text,
+                document_format,
+                lambda text: apply_edits(text, document_format, edits),
+            )
+            delete_document = (
+                removed_mcp_server
+                and mcp_record.created_file
+                and _mcp_empty(after_text)
+            )
+        else:
+            after_text = apply_edits(before_text, document_format, edits)
     else:
         stripped = _remove_from_object(document, spec.document, restore=restore)
         after_text = _json_text(stripped, before_text)
@@ -1742,10 +1779,28 @@ def undo(
                 pass
 
     changed = after_text != before_text
-    if changed:
+    if changed and delete_document and mcp_record is not None:
+        # The file did not exist before MCC's media server entry created it,
+        # and with MCC's keys gone nothing is left in it: it goes, as Remove
+        # MCP server would have done.
+        _remove_created(path, mcp_record)
+    elif changed:
         _backup_library_once(path, spec)
         _backup_once(path, spec.document.backup_suffix)
-        _write_text(path, after_text)
+        if removed_mcp_server:
+            # The entry's own write keeps the file's line endings; so does the
+            # Undo that takes it out.
+            _raw, crlf = _read_mcp_text(path)
+            _write_mcp_text(path, after_text, crlf=crlf)
+        else:
+            _write_text(path, after_text)
+
+    if mcp_record is not None:
+        if mcp_here:
+            if removed_mcp_server or not _mcp_entry_present(spec, path):
+                forget_mcp_record(spec.id, path=record_path)
+        else:
+            removed_mcp_server = _undo_mcp_elsewhere(spec, env, record_path)
 
     # Whatever else Undo did, MCC's configuration is no longer meant to be
     # here -- so the one-time repair note goes with it. It says "an earlier
@@ -1770,12 +1825,769 @@ def undo(
 
     return DesktopWriteResult(
         app_id=spec.id,
-        changed=changed or removed_sidecar,
+        changed=changed or removed_sidecar or removed_mcp_server,
         document_path=str(path),
         sidecar_path=sidecar_display,
         removed_sidecar=removed_sidecar,
         restored_keys=tuple(restored_keys),
+        removed_mcp_server=removed_mcp_server,
     )
+
+
+# --------------------------------------------------------------------------
+# The second key a card owns: MCC's media MCP server entry (7.100.0)
+# --------------------------------------------------------------------------
+#
+# Decision 11 of 2026-10-18: MCC's media server goes into the user's *own*
+# files through the Desktop apps cards -- Codex's ``config.toml``, OpenCode's
+# ``opencode.json``, Command Code's ``mcp.json`` and, as the fallback behind
+# MCC's own document, Claude Desktop's ``claude_desktop_config.json``. It is
+# the same four steps as the inference key above, for one more key, and the
+# same promises: nothing is written until the button is pressed, the plan
+# shows exactly the entry and nothing else, the first write takes the
+# one-time backup, and Remove or Undo gives the file back byte for byte.
+#
+# Three things are done here that the inference key does not need, each for a
+# reason measured in the files these apps write:
+#
+# * **Ownership is recorded, not inferred.** A file can already carry an
+#   ``mcc_media`` server MCC did not write -- the line on the MCC media server
+#   card is made to be pasted into exactly these files. So "MCC's entry" means
+#   the entry MCC's record says it wrote, unchanged; anything else under the
+#   name is the user's, and the card refuses both buttons rather than
+#   overwrite or delete it.
+# * **Removal is the exact inverse of the edit.** The text each edit inserted
+#   is recorded, and Remove takes that text back out when the file still
+#   holds it once; the result is then checked against the parsed document
+#   with MCC's keys deleted. The structural delete the inference key uses is
+#   the fallback, for a file edited around the entry since -- it is correct
+#   but greedy about blank lines, so it is not the first answer.
+# * **Line endings are the file's.** A file written with CRLF is edited as LF
+#   and written back with CRLF, so a Notepad-edited ``config.toml`` survives
+#   an Add / Remove cycle unchanged. (Configure's own write still normalises
+#   to LF, as it always has.)
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopMcpProbe:
+    """MCC's media server entry in one app's file, as it is right now."""
+
+    app_id: str
+    state: DesktopMcpState
+    #: The file the entry lives in, absolute, or "" when no path resolves.
+    document_path: str
+    document_exists: bool
+    #: The entry's key, e.g. ``mcp_servers.mcc_media``.
+    key_label: str
+    #: The one-time backup beside the file, when one exists.
+    backup_path: str = ""
+    #: The parse error, when the state is ``unreadable``.
+    error: str = ""
+    #: The higher-precedence source, when the state is ``managed``.
+    managed_by: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopMcpPlan:
+    """What *Add MCP server* or *Remove MCP server* would write. Nothing written."""
+
+    app_id: str
+    document_path: str
+    #: True for Add, False for Remove.
+    add: bool
+    #: Unified diff of the file, secrets masked: only the entry changes.
+    diff: str
+    #: True when the file already says exactly this.
+    no_op: bool
+    #: The file does not exist yet and Add would create it.
+    creates_file: bool = False
+    #: MCC created the file for the entry, and Remove would delete it again.
+    removes_file: bool = False
+    #: Where the one-time backup is, or would be taken.
+    backup_path: str = ""
+    #: Whether that backup already exists (taken by an earlier MCC edit).
+    backup_exists: bool = False
+    #: The app's own per-tool permission keys Add sets to ``ask``.
+    ask_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopMcpResult:
+    """What one Add or Remove actually did."""
+
+    app_id: str
+    changed: bool
+    document_path: str
+    added: bool
+    backup_path: str = ""
+    created_file: bool = False
+    removed_file: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _McpChange:
+    """One Add or Remove, computed and checked, before anything is written."""
+
+    path: Path
+    before: str
+    after: str
+    crlf: bool
+    existed: bool
+    no_op: bool
+    delete_file: bool = False
+    record: McpServerRecord | None = None
+
+
+def mcp_path_for(spec: DesktopAppSpec, env: Mapping[str, str]) -> Path | None:
+    """Return the file this app reads its MCP servers from, or None."""
+
+    if spec.mcp is None:
+        return None
+    return resolve_path(spec.mcp.paths, env)
+
+
+def _require_mcp(spec: DesktopAppSpec) -> DesktopMcpDocument:
+    if spec.mcp is None:
+        raise DesktopApplyError(
+            f"MCC does not add its media server to {spec.display_name}."
+        )
+    return spec.mcp
+
+
+def _read_mcp_text(path: Path) -> tuple[str | None, bool]:
+    """Return ``(text with LF line ends, written_with_crlf)``; None when missing."""
+
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return None, False
+    except OSError as exc:
+        raise DesktopApplyError(f"cannot read {path}: {exc}") from exc
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise DesktopApplyError(f"{path} is not UTF-8 text: {exc}") from exc
+    crlf = "\r\n" in text and "\n" not in text.replace("\r\n", "")
+    return text.replace("\r\n", "\n").replace("\r", "\n"), crlf
+
+
+def _mcp_parse(text: str, document_format: DocumentFormat) -> dict[str, object]:
+    """Return the file as a mapping. A blank file is an empty one."""
+
+    if not text.strip():
+        return {}
+    mapping = _as_object_map(parse_document(text, document_format))
+    if mapping is None:
+        raise DocumentFormatError("the document is not a map of keys")
+    return mapping
+
+
+def _mcp_backup_path(path: Path, mcp_doc: DesktopMcpDocument) -> Path:
+    return path.with_name(path.name + mcp_doc.backup_suffix)
+
+
+def _mcp_owned(
+    record: McpServerRecord | None,
+    path: Path,
+    document: Mapping[str, object],
+    mcp_doc: DesktopMcpDocument,
+) -> bool:
+    """Whether the ``mcc_media`` entry in this file is the one MCC recorded writing."""
+
+    if record is None or record.document_path != str(path):
+        return False
+    value, present = value_at(document, mcp_doc.entry_key_path)
+    return present and value == record.server_value
+
+
+def _foreign_message(spec: DesktopAppSpec, path: Path) -> str:
+    return (
+        f"{path} already has an MCP server named mcc_media that MCC did not "
+        "add, or that has been changed since MCC added it. It is yours, so "
+        "MCC leaves it exactly as it is: Add would overwrite it and Remove "
+        f"would delete it. Rename or remove it there if you want {spec.display_name}'s "
+        "card to manage MCC's own."
+    )
+
+
+def _mcp_gate(spec: DesktopAppSpec, env: Mapping[str, str]) -> None:
+    """The refusals Configure makes, made for the media server entry too."""
+
+    managed_by, keys = managed_override(spec, env)
+    if managed_by:
+        raise DesktopApplyError(
+            f"{spec.display_name} is configured by {managed_by}, which outranks "
+            f"the files MCC writes ({', '.join(keys)}). MCC will not write a "
+            "file the app is going to ignore."
+        )
+    if not is_installed(spec, env):
+        raise DesktopApplyError(
+            f"{spec.display_name} is not installed on this machine, so MCC will "
+            "not write a file nothing is going to read."
+        )
+
+
+def _set_edit(key_path: tuple[str, ...], value: object) -> SetTable | SetScalar:
+    if isinstance(value, Mapping):
+        return SetTable(key_path, {str(key): item for key, item in value.items()})
+    return SetScalar(key_path, value)
+
+
+def _splice(before: str, after: str) -> tuple[str, str]:
+    """Return ``(inserted, replaced)``: the one region an edit changed."""
+
+    limit = min(len(before), len(after))
+    prefix = 0
+    while prefix < limit and before[prefix] == after[prefix]:
+        prefix += 1
+    suffix = 0
+    while (
+        suffix < limit - prefix
+        and before[len(before) - 1 - suffix] == after[len(after) - 1 - suffix]
+    ):
+        suffix += 1
+    return after[prefix : len(after) - suffix], before[prefix : len(before) - suffix]
+
+
+def _mcp_created_keys(
+    document: Mapping[str, object],
+    mcp_doc: DesktopMcpDocument,
+    entry: Mapping[str, object],
+) -> list[tuple[tuple[str, ...], object]]:
+    """Every key Add creates: the server entry, then the app's own ``ask`` keys.
+
+    An ask key is added only where the user has set nothing for that tool, and
+    never into a permission that is one word for every tool -- OpenCode's
+    schema takes ``"permission": "allow"`` as a policy for all of them, and
+    turning it into a map would replace the user's choice (decision 8 is that
+    the app's *own* prompt is the gate, not that MCC overrides it).
+    """
+
+    created: list[tuple[tuple[str, ...], object]] = [
+        (mcp_doc.entry_key_path, copy.deepcopy(dict(entry)))
+    ]
+    if mcp_doc.ask_map_key:
+        current, present = value_at(document, mcp_doc.ask_map_key)
+        mapping: Mapping[str, object] | None = (
+            _as_object_map(current) if present else {}
+        )
+        if mapping is not None:
+            created.extend(
+                ((*mcp_doc.ask_map_key, key), "ask")
+                for key in opencode_permission_keys()
+                if key not in mapping
+            )
+    return created
+
+
+def _absent_parents(
+    document: Mapping[str, object],
+    created: Sequence[tuple[tuple[str, ...], object]],
+) -> tuple[tuple[str, ...], ...]:
+    parents: list[tuple[str, ...]] = []
+    for key_path, _value in created:
+        for depth in range(1, len(key_path)):
+            prefix = key_path[:depth]
+            _found, present = value_at(document, prefix)
+            if not present and prefix not in parents:
+                parents.append(prefix)
+    return tuple(parents)
+
+
+def _mcp_add_text(
+    before: str,
+    document_format: DocumentFormat,
+    created: Sequence[tuple[tuple[str, ...], object]],
+) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """Return the file with every created key in it, and each edit's splice."""
+
+    if not before.strip():
+        # No file, or a blank one: nothing of anybody's to keep, so the
+        # document is written whole -- as Configure writes a new one -- and
+        # its one splice is the whole file.
+        if document_format is DocumentFormat.TOML:
+            text = ""
+            for key_path, value in created:
+                text = apply_edits(text, document_format, [_set_edit(key_path, value)])
+        else:
+            built: dict[str, object] = {}
+            for key_path, value in created:
+                _set_in(built, key_path, copy.deepcopy(value))
+            text = json.dumps(built, indent=2) + "\n"
+        return text, ((text, before),)
+    text = before
+    splices: list[tuple[str, str]] = []
+    for key_path, value in created:
+        updated = apply_edits(text, document_format, [_set_edit(key_path, value)])
+        splices.append(_splice(text, updated))
+        text = updated
+    return text, tuple(splices)
+
+
+def _mcp_removal_text(
+    text: str,
+    document_format: DocumentFormat,
+    record: McpServerRecord,
+    *,
+    exact_only: bool = False,
+) -> str | None:
+    """Return the file with MCC's keys taken out, or None when that cannot be done.
+
+    The exact inverse first: every recorded splice, newest first, where the
+    text each one inserted is still in the file exactly once. The result has
+    to parse to the current document minus MCC's keys (and minus a container
+    MCC created that is now empty) -- or it is not used. Then, unless
+    ``exact_only``, the structural delete, held to the same check. A key the
+    user has changed since (an ``ask`` turned into ``allow``) is theirs and
+    stays.
+    """
+
+    try:
+        document = _mcp_parse(text, document_format)
+    except DocumentFormatError:
+        return None
+    owned = [
+        (key_path, value)
+        for key_path, value in record.created
+        if value_at(document, key_path) == (value, True)
+    ]
+    if not owned or owned[0][0] != record.created[0][0]:
+        return None
+    expected = copy.deepcopy(document)
+    for key_path, _value in owned:
+        _delete_in(expected, key_path)
+    for parent in sorted(record.created_parents, key=len, reverse=True):
+        value, present = value_at(expected, parent)
+        if present and value == {}:
+            _delete_in(expected, parent)
+
+    def matches(candidate: str) -> bool:
+        try:
+            return _mcp_parse(candidate, document_format) == expected
+        except DocumentFormatError:
+            return False
+
+    if len(owned) == len(record.created) and record.splices:
+        candidate: str | None = text
+        for inserted, replaced in reversed(record.splices):
+            if candidate is None or not inserted or candidate.count(inserted) != 1:
+                candidate = None
+                break
+            candidate = candidate.replace(inserted, replaced, 1)
+        if candidate is not None and matches(candidate):
+            return candidate
+    if exact_only:
+        return None
+    edits: list[SetTable | SetScalar | DeleteKey] = [
+        DeleteKey(
+            key_path,
+            prune_empty_ancestors=key_path[:-1] in record.created_parents,
+        )
+        for key_path, _value in reversed(owned)
+    ]
+    try:
+        candidate = apply_edits(text, document_format, edits)
+    except DocumentFormatError:
+        return None
+    return candidate if matches(candidate) else None
+
+
+def _mcp_empty(text: str) -> bool:
+    return text.strip() in ("", "{}")
+
+
+def _mcp_change(
+    spec: DesktopAppSpec,
+    env: Mapping[str, str],
+    *,
+    add: bool,
+    entry: Mapping[str, object] | None,
+    record_path: Path | None,
+) -> _McpChange:
+    """Compute one Add or Remove and check it, touching no disk."""
+
+    mcp_doc = _require_mcp(spec)
+    _mcp_gate(spec, env)
+    path = mcp_path_for(spec, env)
+    if path is None:
+        raise DesktopApplyError(f"{spec.id} declares no MCP file for this platform")
+    raw_text, crlf = _read_mcp_text(path)
+    existed = raw_text is not None
+    before = raw_text or ""
+    try:
+        document = _mcp_parse(before, mcp_doc.document_format)
+    except DocumentFormatError as exc:
+        raise DesktopApplyError(
+            f"cannot parse {path}: {exc}. MCC writes nothing into a file it cannot read."
+        ) from exc
+    record = read_mcp_record(spec.id, path=record_path)
+    value, present = value_at(document, mcp_doc.entry_key_path)
+    owned = _mcp_owned(record, path, document, mcp_doc)
+    if present and not owned:
+        raise DesktopApplyError(_foreign_message(spec, path))
+
+    if not add:
+        if not present or record is None:
+            return _McpChange(path, before, before, crlf, existed, no_op=True)
+        after = _mcp_removal_text(before, mcp_doc.document_format, record)
+        if after is None:
+            raise DesktopApplyError(
+                f"MCC could not take its media server entry out of {path} "
+                "without changing anything else in it, so it wrote nothing. "
+                f"Delete {mcp_doc.entry_key_label} there by hand."
+            )
+        return _McpChange(
+            path,
+            before,
+            after,
+            crlf,
+            existed,
+            no_op=after == before,
+            delete_file=record.created_file and _mcp_empty(after),
+            record=record,
+        )
+
+    if entry is None:
+        raise DesktopApplyError(
+            "mcc-mcp was not found beside this MCC, so there is nothing to add"
+        )
+    if present and value == dict(entry):
+        return _McpChange(
+            path, before, before, crlf, existed, no_op=True, record=record
+        )
+
+    # Adding over MCC's own older entry is a Remove and then an Add, so the
+    # record's splices always lead back to the file as it was before MCC.
+    base = before
+    created_file = not existed
+    created_dirs: tuple[str, ...] = ()
+    if present and record is not None:
+        removed = _mcp_removal_text(before, mcp_doc.document_format, record)
+        if removed is None:
+            raise DesktopApplyError(
+                f"MCC could not update its media server entry in {path} without "
+                "changing anything else in it, so it wrote nothing."
+            )
+        base = removed
+        created_file = record.created_file
+        created_dirs = record.created_dirs
+    base_document = _mcp_parse(base, mcp_doc.document_format)
+    created = _mcp_created_keys(base_document, mcp_doc, entry)
+    try:
+        after, splices = _mcp_add_text(base, mcp_doc.document_format, created)
+    except DocumentFormatError as exc:
+        raise DesktopApplyError(f"cannot add MCC's entry to {path}: {exc}") from exc
+
+    expected = copy.deepcopy(base_document)
+    for key_path, item in created:
+        _set_in(expected, key_path, copy.deepcopy(item))
+    try:
+        produced = _mcp_parse(after, mcp_doc.document_format)
+    except DocumentFormatError:
+        produced = None
+    if produced != expected:
+        # The check that makes "only the entry appears" a fact rather than a
+        # hope: a ``config.toml`` declaring ``mcp_servers`` as one inline
+        # table cannot take a table of its own after it, and the result would
+        # be a file Codex refuses to load.
+        raise DesktopApplyError(
+            f"MCC could not add its media server entry to {path} without "
+            "changing something else in it, so it wrote nothing. Add the "
+            "server by hand with the line on the MCC media server card."
+        )
+    if not existed:
+        missing: list[str] = []
+        parent = path.parent
+        while not parent.exists() and parent != parent.parent:
+            missing.append(str(parent))
+            parent = parent.parent
+        created_dirs = tuple(missing)
+    return _McpChange(
+        path,
+        before,
+        after,
+        crlf,
+        existed,
+        no_op=after == before,
+        record=McpServerRecord(
+            subject=spec.id,
+            document_path=str(path),
+            created=tuple(created),
+            splices=splices,
+            created_parents=_absent_parents(base_document, created),
+            created_file=created_file,
+            created_dirs=created_dirs,
+        ),
+    )
+
+
+def _mcp_render(text: str, document_format: DocumentFormat) -> str:
+    if document_format is DocumentFormat.JSON:
+        return mask_json_text(text, _SECRET_KEYS)
+    return _mask_text(text)
+
+
+def probe_mcp(
+    spec: DesktopAppSpec,
+    *,
+    env: Mapping[str, str],
+    expected_entry: Mapping[str, object] | None,
+    record_path: Path | None = None,
+) -> DesktopMcpProbe:
+    """Return the state of MCC's media server entry in one app's file.
+
+    ``expected_entry`` is what Add would write now; ``None`` when ``mcc-mcp``
+    cannot be found, in which case MCC's own entry reads ``added`` rather than
+    ``outdated`` -- there is nothing to compare it with.
+    """
+
+    mcp_doc = _require_mcp(spec)
+    label = mcp_doc.entry_key_label
+    path = mcp_path_for(spec, env)
+    display = str(path) if path is not None else ""
+    if not is_installed(spec, env):
+        return DesktopMcpProbe(
+            spec.id, DesktopMcpState.NOT_INSTALLED, display, False, label
+        )
+    managed_by, _keys = managed_override(spec, env)
+    if managed_by:
+        return DesktopMcpProbe(
+            spec.id,
+            DesktopMcpState.MANAGED,
+            display,
+            False,
+            label,
+            managed_by=managed_by,
+        )
+    if path is None:
+        return DesktopMcpProbe(spec.id, DesktopMcpState.UNREADABLE, "", False, label)
+    backup = _mcp_backup_path(path, mcp_doc)
+    backup_display = str(backup) if backup.exists() else ""
+    try:
+        text, _crlf = _read_mcp_text(path)
+        document = _mcp_parse(text or "", mcp_doc.document_format)
+    except (DesktopApplyError, DocumentFormatError) as exc:
+        return DesktopMcpProbe(
+            spec.id,
+            DesktopMcpState.UNREADABLE,
+            display,
+            path.exists(),
+            label,
+            backup_path=backup_display,
+            error=str(exc),
+        )
+    value, present = value_at(document, mcp_doc.entry_key_path)
+    if not present:
+        state = DesktopMcpState.ABSENT
+    elif not _mcp_owned(
+        read_mcp_record(spec.id, path=record_path), path, document, mcp_doc
+    ):
+        state = DesktopMcpState.FOREIGN
+    elif expected_entry is not None and value != dict(expected_entry):
+        state = DesktopMcpState.OUTDATED
+    else:
+        state = DesktopMcpState.ADDED
+    return DesktopMcpProbe(
+        spec.id,
+        state,
+        display,
+        text is not None,
+        label,
+        backup_path=backup_display,
+    )
+
+
+def plan_mcp(
+    spec: DesktopAppSpec,
+    *,
+    env: Mapping[str, str],
+    add: bool,
+    entry: Mapping[str, object] | None,
+    record_path: Path | None = None,
+) -> DesktopMcpPlan:
+    """Return what *Add* or *Remove MCP server* would write. Touches no disk."""
+
+    mcp_doc = _require_mcp(spec)
+    change = _mcp_change(spec, env, add=add, entry=entry, record_path=record_path)
+    backup = _mcp_backup_path(change.path, mcp_doc)
+    after = "" if change.delete_file else change.after
+    diff = (
+        ""
+        if change.no_op
+        else _diff(
+            _mcp_render(change.before, mcp_doc.document_format),
+            _mcp_render(after, mcp_doc.document_format),
+            change.path,
+        )
+    )
+    ask_keys = (
+        tuple(".".join(key_path) for key_path, _value in change.record.created[1:])
+        if add and change.record is not None and not change.no_op
+        else ()
+    )
+    return DesktopMcpPlan(
+        app_id=spec.id,
+        document_path=str(change.path),
+        add=add,
+        diff=diff,
+        no_op=change.no_op,
+        creates_file=add and not change.existed and not change.no_op,
+        removes_file=change.delete_file,
+        backup_path=str(backup),
+        backup_exists=backup.exists(),
+        ask_keys=ask_keys,
+    )
+
+
+def _write_mcp_text(path: Path, text: str, *, crlf: bool) -> None:
+    """Write the file atomically, in its own line endings and at its own mode.
+
+    The mode matters: once Configure has put MCC's token into ``config.toml``
+    or ``opencode.json`` the file is 0600, and a fresh temporary file would
+    replace it at the umask's 0644 -- a downgrade nobody asked for.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".mcc-tmp")
+    data = text.replace("\n", "\r\n") if crlf else text
+    temporary.write_bytes(data.encode("utf-8"))
+    if path.exists() and sys.platform != "win32":
+        shutil.copymode(path, temporary)
+    os.replace(temporary, path)
+
+
+def _remove_created(path: Path, record: McpServerRecord) -> None:
+    """Delete a file MCC created for the entry, and the folders it created for it."""
+
+    path.unlink(missing_ok=True)
+    for directory in record.created_dirs:
+        try:
+            os.rmdir(directory)
+        except OSError:
+            break
+
+
+def _mcp_entry_present(spec: DesktopAppSpec, path: Path) -> bool:
+    """Whether the file still carries an ``mcc_media`` entry, anybody's."""
+
+    mcp_doc = _require_mcp(spec)
+    try:
+        text, _crlf = _read_mcp_text(path)
+        document = _mcp_parse(text or "", mcp_doc.document_format)
+    except DesktopApplyError, DocumentFormatError:
+        return True
+    return value_at(document, mcp_doc.entry_key_path)[1]
+
+
+def _same_document(spec: DesktopAppSpec, env: Mapping[str, str], path: Path) -> bool:
+    return spec.document is not None and document_path_for(spec, env) == path
+
+
+def apply_mcp(
+    spec: DesktopAppSpec,
+    *,
+    env: Mapping[str, str],
+    add: bool,
+    entry: Mapping[str, object] | None,
+    record_path: Path | None = None,
+) -> DesktopMcpResult:
+    """Add MCC's media server entry to the app's file, or take it out again."""
+
+    mcp_doc = _require_mcp(spec)
+    change = _mcp_change(spec, env, add=add, entry=entry, record_path=record_path)
+    path = change.path
+    backup = _mcp_backup_path(path, mcp_doc)
+    if change.no_op:
+        if not add:
+            forget_mcp_record(spec.id, path=record_path)
+        return DesktopMcpResult(
+            spec.id,
+            False,
+            str(path),
+            add,
+            backup_path=str(backup) if backup.exists() else "",
+        )
+
+    before_sha = document_sha256(path) if change.existed else ""
+    if change.delete_file and change.record is not None:
+        # MCC created this file for the entry and nothing else is in it now:
+        # it goes, with any folder MCC created for it, and no backup is taken
+        # of a file that was only ever MCC's.
+        _remove_created(path, change.record)
+    else:
+        if change.existed and change.before.strip():
+            # The one-time copy, the same one Configure takes and beside the
+            # same file: it is never overwritten, so it is the file as it was
+            # before MCC's first edit of either key.
+            _backup_once(path, mcp_doc.backup_suffix)
+        _write_mcp_text(path, change.after, crlf=change.crlf)
+    if before_sha and path.exists() and _same_document(spec, env, path):
+        refresh_document_sha256(
+            spec.id, before=before_sha, after=document_sha256(path), path=record_path
+        )
+    if add and change.record is not None:
+        write_mcp_record(change.record, path=record_path)
+    elif not add:
+        forget_mcp_record(spec.id, path=record_path)
+    return DesktopMcpResult(
+        spec.id,
+        True,
+        str(path),
+        add,
+        backup_path=str(backup) if backup.exists() else "",
+        created_file=add and not change.existed,
+        removed_file=change.delete_file,
+    )
+
+
+def _undo_mcp_in_text(
+    spec: DesktopAppSpec,
+    record: McpServerRecord,
+    before_text: str,
+    document_format: DocumentFormat,
+    inference: Callable[[str], str],
+) -> tuple[str, bool]:
+    """Undo's text when the entry shares the inference key's document.
+
+    Whichever was written last comes out first, so both come out exactly: the
+    entry's own splices are tried on the file as it stands, and only if they
+    no longer apply is the inference key removed first and the entry after it.
+    Returns ``(text, entry_removed)``; an entry that is no longer MCC's stays.
+    """
+
+    assert spec.mcp is not None
+    try:
+        document = _mcp_parse(before_text, document_format)
+    except DocumentFormatError:
+        return inference(before_text), False
+    value, present = value_at(document, spec.mcp.entry_key_path)
+    if not present or value != record.server_value:
+        return inference(before_text), False
+    first = _mcp_removal_text(before_text, document_format, record, exact_only=True)
+    if first is not None:
+        return inference(first), True
+    middle = inference(before_text)
+    second = _mcp_removal_text(middle, document_format, record)
+    if second is None:
+        return middle, False
+    return second, True
+
+
+def _undo_mcp_elsewhere(
+    spec: DesktopAppSpec, env: Mapping[str, str], record_path: Path | None
+) -> bool:
+    """Undo's half for an entry in a file of its own (Command Code, Claude Desktop)."""
+
+    try:
+        result = apply_mcp(
+            spec, env=env, add=False, entry=None, record_path=record_path
+        )
+    except DesktopApplyError:
+        # Not MCC's any more (changed, or replaced by the user's own), or not
+        # removable without touching anything else: it stays, and so does the
+        # card's account of it. Undo of the inference key goes ahead.
+        return False
+    return result.changed
 
 
 def _as_object_map(value: object) -> dict[str, object] | None:
@@ -1795,15 +2607,22 @@ def _as_object_map(value: object) -> dict[str, object] | None:
 
 __all__ = [
     "DesktopApplyError",
+    "DesktopMcpPlan",
+    "DesktopMcpProbe",
+    "DesktopMcpResult",
     "DesktopPlan",
     "DesktopProbe",
     "DesktopSidecar",
     "DesktopWriteResult",
     "apply",
+    "apply_mcp",
     "document_path_for",
     "is_installed",
+    "mcp_path_for",
     "plan",
+    "plan_mcp",
     "probe",
+    "probe_mcp",
     "repair_legacy",
     "sidecar_path_for",
     "undo",

@@ -17526,6 +17526,10 @@ function renderDesktopApps(errorMessage) {
   (state.desktopApps || []).forEach((app) => {
     const card = desktopAppCard(app);
     card.append(mcpMediaControlHost(app.id));
+    // 7.100.0: the media server in the app's own file (for Claude Desktop,
+    // the fallback below MCC's own document), or why there is none yet.
+    const fileControl = desktopMcpSection(app);
+    if (fileControl) card.append(fileControl);
     list.append(card);
   });
   renderMcpMediaControls();
@@ -17548,6 +17552,7 @@ const MCP_MEDIA_SUPPORT_LABELS = {
   extension_later: "MCP server: through MCC's Pi extension, later",
   no_mcp: "MCP server: not possible, no MCP client",
   own_file_later: "MCP server: your own file, not written by MCC yet",
+  desktop_card: "MCP server: from its card under Desktop apps (your own file)",
 };
 
 async function loadMcpMedia() {
@@ -17722,6 +17727,24 @@ function renderMcpMediaCard() {
         : "Added to no agent yet. Press Add MCP server on an agent's card.",
     ),
   );
+  // 7.100.0: the apps whose own file can carry it, written from their cards
+  // under Desktop apps (plan first, one-time backup, Undo).
+  const files = media.desktop_files || [];
+  if (files.length) {
+    const inFiles = files
+      .map((row) => {
+        const name = row.fallback ? `${row.display_name} (fallback)` : row.display_name;
+        const there = row.state === "added" || row.state === "outdated";
+        return `${name}: ${there ? "added" : "not added"}`;
+      })
+      .join("; ");
+    body.append(
+      mcpMediaParagraph(
+        "mcp-media-note",
+        `In your own files, from each app's card under Desktop apps: ${inFiles}.`,
+      ),
+    );
+  }
 
   const tools = media.tools || [];
   if (media.tools_error) body.append(mcpMediaParagraph("mcp-media-pending", media.tools_error));
@@ -18197,10 +18220,14 @@ function desktopAppActions(app) {
         say(
           result.changed
             ? `Removed MCC's keys from ${result.document_path}.` +
-              (restored ? ` Restored your values at: ${restored}.` : "")
+              (restored ? ` Restored your values at: ${restored}.` : "") +
+              (result.removed_mcp_server
+                ? " MCC's media server entry was taken out too."
+                : "")
             : "Nothing of MCC's was in that file.",
         );
         await loadDesktopApps();
+        if (result.removed_mcp_server) loadMcpMedia();
       } catch (error) {
         say(error.message);
       }
@@ -18232,6 +18259,280 @@ function desktopPlanText(plan) {
   }
   (plan.actions || []).forEach((action) => parts.push(`-> ${action}`));
   return parts.join("\n");
+}
+
+/* --------------------------------------------------------------------- */
+/* MCC media server in an app's own file (7.100.0)                         */
+/* --------------------------------------------------------------------- */
+/* The second key a Desktop apps card owns, with the agent cards' wording:
+   Add MCP server / Remove MCP server. What differs is whose file it is. These
+   buttons write the user's own config, so a press shows the plan diff first
+   and nothing is written until "Write it"; the first write takes a one-time
+   backup beside the file; Undo takes the entry out with the rest of MCC's
+   keys. The state is the server's probe (app.mcp) -- the browser never
+   guesses whether an mcc_media entry is MCC's. */
+
+const DESKTOP_MCP_LABELS = {
+  added: "MCP server added",
+  outdated: "MCP server added (earlier install)",
+  absent: "No MCP server",
+  foreign: "An mcc_media entry MCC did not add",
+  unreadable: "File will not parse",
+  managed: "Managed by your organisation",
+};
+
+const DESKTOP_MCP_SENTENCES = {
+  added: "MCC's media tools are in this app's own file.",
+  outdated:
+    "MCC's entry was written by an earlier install. Add MCP server again to " +
+    "bring it up to date, or remove it.",
+  absent: "This app's own file does not offer MCC's media tools.",
+  foreign:
+    "The file already has an MCP server named mcc_media that MCC did not add, " +
+    "or one changed since MCC added it. It is yours, so MCC leaves it exactly " +
+    "as it is and offers no button.",
+};
+
+/** The media server block of one Desktop apps card, or null for none. */
+function desktopMcpSection(app) {
+  if (!app.mcp) {
+    if (!app.mcp_note) return null;
+    const host = document.createElement("div");
+    host.className = "desktop-mcp-control";
+    host.dataset.desktopMcp = app.id;
+    host.append(mcpMediaParagraph("mcp-media-note", app.mcp_note));
+    return host;
+  }
+  const mcp = app.mcp;
+  const stateId = mcp.state;
+  // An app that is not here has its reason on the card already.
+  if (stateId === "not_installed") return null;
+  const added = stateId === "added" || stateId === "outdated";
+  const suffix = mcp.fallback ? " (fallback)" : "";
+
+  const host = document.createElement("div");
+  host.className = "desktop-mcp-control";
+  host.dataset.desktopMcp = app.id;
+
+  const line = document.createElement("p");
+  line.className = "mcp-media-state";
+  const pill = document.createElement("span");
+  pill.className = added
+    ? "status-pill ok"
+    : stateId === "absent"
+      ? "status-pill"
+      : "status-pill warn";
+  pill.dataset.mcpState = stateId;
+  pill.textContent = `${DESKTOP_MCP_LABELS[stateId] || stateId}${suffix}`;
+  const sentence =
+    stateId === "unreadable"
+      ? `MCC will not write a file it cannot read: ${mcp.error || ""}`
+      : stateId === "managed"
+        ? `${mcp.managed_by} outranks this app's files, so MCC writes none of them.`
+        : DESKTOP_MCP_SENTENCES[stateId] || "";
+  line.append(pill, document.createTextNode(` ${sentence}`));
+  host.append(line);
+
+  const meta = document.createElement("dl");
+  meta.className = "agent-meta desktop-mcp-meta";
+  const rows = [
+    ["MCP file", mcp.display_path],
+    ["MCC owns", mcp.ask_map ? `${mcp.key}, and ${mcp.ask_map}.mcc_media_* asks it adds` : mcp.key],
+    [
+      "Backup",
+      mcp.backup_path
+        ? `${mcp.backup_path} (taken once, never overwritten)`
+        : "taken once, beside the file, before MCC's first edit of it",
+    ],
+  ];
+  rows.forEach(([label, value]) => {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const definition = document.createElement("dd");
+    definition.textContent = value;
+    meta.append(term, definition);
+  });
+  host.append(meta);
+
+  if (stateId === "absent" || added) {
+    host.append(desktopMcpActions(app, stateId, suffix));
+  }
+  if (mcp.asks) host.append(mcpMediaParagraph("mcp-media-note", mcp.asks));
+  if (mcp.note) {
+    host.append(
+      mcpMediaParagraph(mcp.fallback ? "mcp-media-pending" : "mcp-media-note", mcp.note),
+    );
+  }
+  return host;
+}
+
+/** The buttons: one press shows the plan, a second writes it. */
+function desktopMcpActions(app, stateId, suffix) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "desktop-app-actions";
+  const key = `${app.id}:mcp`;
+
+  const status = document.createElement("p");
+  status.className = "desktop-app-status";
+  status.setAttribute("role", "status");
+  status.textContent = state.desktopAppMessages[key] || "";
+  const say = (message) => {
+    state.desktopAppMessages[key] = message;
+    status.textContent = message;
+  };
+
+  const preview = document.createElement("pre");
+  preview.className = "desktop-preview";
+  preview.dataset.role = "mcp-preview";
+  preview.hidden = true;
+
+  const confirmRow = document.createElement("div");
+  confirmRow.className = "desktop-action-row";
+  confirmRow.hidden = true;
+  const write = document.createElement("button");
+  write.type = "button";
+  write.className = "primary-button mcp-media-button";
+  write.dataset.role = "mcp-write";
+  write.textContent = "Write it";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary-button mcp-media-button";
+  cancel.dataset.role = "mcp-cancel";
+  cancel.textContent = "Cancel";
+  confirmRow.append(write, cancel);
+
+  let pending = null;
+  const showPlan = async (add) => {
+    say("");
+    confirmRow.hidden = true;
+    pending = null;
+    try {
+      const plan = await api(`/admin/api/desktop-apps/${app.id}/mcp/plan`, {
+        method: "POST",
+        body: JSON.stringify({ add }),
+      });
+      preview.hidden = false;
+      preview.textContent = desktopMcpPlanText(plan);
+      if (!plan.no_op) {
+        pending = add;
+        confirmRow.hidden = false;
+      }
+    } catch (error) {
+      preview.hidden = true;
+      say(error.message);
+    }
+  };
+
+  write.addEventListener("click", async () => {
+    if (pending === null) return;
+    const add = pending;
+    write.disabled = true;
+    try {
+      const result = await api(`/admin/api/desktop-apps/${app.id}/mcp`, {
+        method: "POST",
+        body: JSON.stringify({ add }),
+      });
+      say(desktopMcpResultText(app, result));
+      await loadDesktopApps();
+      loadMcpMedia();
+    } catch (error) {
+      write.disabled = false;
+      say(error.message);
+    }
+  });
+  cancel.addEventListener("click", () => {
+    pending = null;
+    preview.hidden = true;
+    confirmRow.hidden = true;
+    say("Nothing was written.");
+  });
+
+  const row = document.createElement("div");
+  row.className = "desktop-action-row";
+  const installed = app.mcp.installed !== false;
+  const addButton = (label) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "primary-button mcp-media-button";
+    button.dataset.role = "mcp-add";
+    button.dataset.mcpAction = "add";
+    button.textContent = label;
+    if (!installed) {
+      button.disabled = true;
+      button.title = "mcc-mcp is not installed beside MCC. Reinstall or update MCC.";
+    }
+    button.addEventListener("click", () => showPlan(true));
+    return button;
+  };
+  if (stateId === "absent") row.append(addButton(`Add MCP server${suffix}`));
+  if (stateId === "outdated") row.append(addButton(`Add MCP server${suffix}`));
+  if (stateId === "added" || stateId === "outdated") {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary-button mcp-media-button";
+    remove.dataset.role = "mcp-remove";
+    remove.dataset.mcpAction = "remove";
+    remove.textContent = `Remove MCP server${suffix}`;
+    remove.addEventListener("click", () => showPlan(false));
+    row.append(remove);
+  }
+  wrapper.append(row, preview, confirmRow, status);
+  return wrapper;
+}
+
+/** One MCP plan as the preview text: the diff, then what else will happen. */
+function desktopMcpPlanText(plan) {
+  if (plan.no_op) {
+    return plan.add
+      ? "Already there, exactly as MCC would write it. Nothing to do."
+      : "Nothing of MCC's is in this file. Nothing to do.";
+  }
+  const parts = [`--- ${plan.document_path}`, plan.diff || "(no change to this file)"];
+  if (plan.creates_file) {
+    parts.push(
+      "-> The file does not exist yet: MCC creates it, and Remove MCP server deletes it again.",
+    );
+  }
+  if (plan.removes_file) {
+    parts.push("-> MCC created this file for the entry, so removing it deletes the file.");
+  }
+  if (plan.add && !plan.creates_file) {
+    parts.push(
+      plan.backup_exists
+        ? `-> Your one-time backup is already at ${plan.backup_path}; it is never overwritten.`
+        : `-> Before writing, MCC copies the file once to ${plan.backup_path}.`,
+    );
+  }
+  if ((plan.ask_keys || []).length) {
+    parts.push(
+      "-> Also sets this app's own ask for the tools that spend money: " +
+        `${plan.ask_keys.join(", ")}.`,
+    );
+  }
+  parts.push("-> Nothing is written until you press Write it.");
+  return parts.join("\n");
+}
+
+function desktopMcpResultText(app, result) {
+  if (!result.changed) {
+    return result.add
+      ? "No change: the file already had MCC's entry."
+      : "Nothing of MCC's was in that file.";
+  }
+  if (result.add) {
+    return (
+      `Added MCC's media server to ${result.document_path}.` +
+      (result.backup_path
+        ? ` Your original is at ${result.backup_path}.`
+        : result.created_file
+          ? " The file did not exist; MCC created it, and Remove MCP server deletes it again."
+          : "") +
+      ` Restart ${app.display_name} to load it.`
+    );
+  }
+  return result.removed_file
+    ? `Removed MCC's media server and deleted ${result.document_path}, which MCC had created for it.`
+    : `Removed MCC's media server from ${result.document_path}. Restart ${app.display_name} to drop it.`;
 }
 
 /* ------------------------------------------------------------- agent tiers

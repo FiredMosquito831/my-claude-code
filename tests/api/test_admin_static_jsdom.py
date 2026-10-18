@@ -9636,3 +9636,85 @@ def test_get_started_points_at_the_add_mcp_server_button(
     assert step["guides"] == [
         {"anchor": "guide-media-mcp", "text": "Guide: media server"}
     ]
+
+
+# ------------------------------------- MCC media server in your own files (7.100.0)
+# Decision 11: the Desktop apps cards add the server to the user's own file,
+# with the agent cards' Add / Remove MCP server wording, the plan diff before
+# anything is written, a one-time backup and Undo.
+
+
+def test_desktop_cards_show_the_media_server_in_the_apps_own_file(
+    rendered: dict,
+) -> None:
+    files = rendered["desktopApps"]["mcpFiles"]
+
+    codex = files["codex_desktop"]
+    assert codex["inCard"] is True
+    assert codex["pill"] == "No MCP server"
+    assert codex["buttons"] == [
+        {"label": "Add MCP server", "action": "add", "disabled": False}
+    ]
+    assert codex["metaTerms"] == ["MCP file", "MCC owns", "Backup"]
+    assert codex["metaValues"][:2] == ["~/.codex/config.toml", "mcp_servers.mcc_media"]
+    assert "taken once" in codex["metaValues"][2]
+    assert codex["notes"][0].startswith("Codex asks before")
+
+    opencode = files["opencode_desktop"]
+    assert opencode["pill"] == "MCP server added"
+    assert opencode["buttons"] == [
+        {"label": "Remove MCP server", "action": "remove", "disabled": False}
+    ]
+    assert "permission.mcc_media_*" in opencode["metaValues"][1]
+    assert opencode["metaValues"][2].startswith("/home/u/opencode.json.mcc-backup")
+
+    # Claude Desktop: MCC's own document stays the primary (its PR 1 button is
+    # on the same card); this is the fallback, and it says what it costs.
+    claude = files["claude_desktop"]
+    assert claude["pill"] == "No MCP server (fallback)"
+    assert claude["buttons"][0]["label"] == "Add MCP server (fallback)"
+    assert claude["pending"].startswith("Fallback, 60 s tool limit there.")
+
+    # An entry MCC did not write: named, never offered a button.
+    foreign = files["codex_removed"]
+    assert foreign["pill"] == "An mcc_media entry MCC did not add"
+    assert foreign["buttons"] == []
+    assert "It is yours" in foreign["state"]
+
+    # Not measured yet: a dated line, no button.
+    assert files["roo_code"]["buttons"] == []
+    assert files["roo_code"]["notes"][0].startswith("MCP server: not measured yet")
+    # A card with no MCP file at all has no block.
+    assert files["goose_desktop"] is None
+
+
+def test_add_mcp_server_on_a_desktop_card_shows_the_plan_before_writing(
+    rendered: dict,
+) -> None:
+    flow = rendered["desktopApps"]["mcpFlow"]
+
+    # The first press asks for the plan and writes nothing.
+    assert flow["planPosts"] == [{"method": "POST", "body": {"add": True}}]
+    assert flow["writesBeforeConfirm"] == 0
+    assert flow["previewHidden"] is False
+    assert flow["previewText"].startswith("--- /home/u/.codex/config.toml")
+    assert "+[mcp_servers.mcc_media]" in flow["previewText"]
+    assert (
+        "-> Before writing, MCC copies the file once to "
+        "/home/u/.codex/config.toml.mcc-backup."
+    ) in flow["previewText"]
+    assert flow["previewText"].endswith(
+        "-> Nothing is written until you press Write it."
+    )
+    assert flow["confirmHidden"] is False
+    assert flow["confirmLabel"] == "Write it"
+
+    # The second press is the one write, and the card follows it.
+    assert flow["writes"] == [{"method": "POST", "body": {"add": True}}]
+    assert flow["after"]["pill"] == "MCP server added"
+    assert flow["after"]["buttons"][0]["label"] == "Remove MCP server"
+    assert flow["status"] == (
+        "Added MCC's media server to /home/u/.codex/config.toml. Your original "
+        "is at /home/u/.codex/config.toml.mcc-backup. Restart Codex desktop to "
+        "load it."
+    )

@@ -4611,6 +4611,27 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   answers with a link is downloaded by MCC through that provider's proxy.
                   For an app MCC does not launch, the card has a line to copy.
                 </p>
+                <p>
+                  <strong>In your own app files (7.100.0).</strong> An app you start from
+                  its own icon reads its MCP servers from <em>your</em> file, which the
+                  buttons above never touch. The cards under <em>Desktop apps</em> have
+                  the same <em>Add MCP server</em> / <em>Remove MCP server</em> button for
+                  that file: Codex desktop (and plain <code>codex</code>) in
+                  <code>~/.codex/config.toml</code> as <code>[mcp_servers.mcc_media]</code>,
+                  OpenCode desktop (and plain <code>opencode</code>) in
+                  <code>opencode.json</code> as <code>mcp.mcc_media</code> plus OpenCode's
+                  own <em>ask</em> for the tools that spend money, Command Code in
+                  <code>~/.commandcode/mcp.json</code>. The first press shows the change and
+                  a <em>Write it</em> button &mdash; nothing is written before you press it
+                  &mdash; the first write takes a one-time backup beside the file, and
+                  <em>Remove MCP server</em> or the card's <em>Undo</em> gives the file back
+                  byte for byte. An <code>mcc_media</code> entry MCC did not add is left
+                  alone and the card says so. Claude Desktop's card has it as a
+                  <em>fallback</em> for <code>claude_desktop_config.json</code>, where the
+                  app gives a tool 60 seconds: press it only if a relaunch did not bring the
+                  tools from MCC's own document. VS Code and Roo Code: not measured yet.
+                  Restart the app after a change.
+                </p>
 
                 <h3 id="guide-images">Images, and what they cost</h3>
                 <p>

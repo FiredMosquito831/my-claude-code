@@ -21,6 +21,11 @@ values, as on every re-apply.
 
 Loopback and local Origin only (``require_loopback_admin``). Nothing here
 carries a token.
+
+7.100.0: the card also lists the Desktop apps whose *own* file can carry the
+server (``desktop_files``) and what each holds now. Those are written from
+each app's card under Desktop apps, never from here, so this setting and this
+route never touch a user's file.
 """
 
 import asyncio
@@ -34,7 +39,12 @@ from pydantic import BaseModel
 from my_claude_code.config.desktop_apply import DesktopApplyError
 from my_claude_code.config.desktop_apply import apply as apply_desktop
 from my_claude_code.config.desktop_apply import probe as probe_desktop
-from my_claude_code.config.desktop_apps import DesktopAppState, desktop_app
+from my_claude_code.config.desktop_apps import (
+    DESKTOP_APPS,
+    DesktopAppState,
+    DesktopAppStatus,
+    desktop_app,
+)
 from my_claude_code.config.mcp_media import (
     MCP_MEDIA_APP_TABLE,
     MCP_MEDIA_SERVER_NAME,
@@ -54,7 +64,7 @@ from my_claude_code.config.paths import (
 from my_claude_code.config.settings import Settings
 from my_claude_code.mcp_media.tools import derive_tools, tool_list_bytes
 
-from .admin_desktop_app_routes import _documents
+from .admin_desktop_app_routes import _documents, _mcp_state
 from .admin_media_routes import media_request_catalogue, request_schema_inputs
 from .admin_routes import require_loopback_admin
 from .dependencies import get_services
@@ -140,6 +150,26 @@ def _pending(app: McpMediaApp, on: bool, desktop_state: str | None) -> str:
     return ""
 
 
+def _desktop_files() -> list[dict[str, Any]]:
+    """Each Desktop apps card that can put the server in the user's own file (7.100.0)."""
+
+    rows: list[dict[str, Any]] = []
+    for spec in DESKTOP_APPS:
+        if spec.mcp is None or spec.status is not DesktopAppStatus.SERVABLE:
+            continue
+        state = _mcp_state(spec)
+        rows.append(
+            {
+                "app_id": spec.id,
+                "display_name": spec.display_name,
+                "display_path": spec.mcp.display_path,
+                "fallback": spec.mcp.fallback,
+                "state": state["state"] if state else None,
+            }
+        )
+    return rows
+
+
 def _payload(services: ApiServices, settings: Settings, learned: Any) -> dict[str, Any]:
     command = mcp_media_command()
     on = set(parse_mcp_media_apps(settings.mcp_media_apps))
@@ -180,6 +210,8 @@ def _payload(services: ApiServices, settings: Settings, learned: Any) -> dict[st
         **tools,
         "claude_desktop_state": desktop_state,
         "claude_desktop_out_dir": str(mcp_media_output_dir()),
+        # The apps whose own file can carry the server, and what each holds.
+        "desktop_files": _desktop_files(),
         # For an app MCC does not launch: the program and its arguments, and
         # the ``mcpServers`` entry most apps' own files take. No token: the
         # server reads it from MCC's settings.

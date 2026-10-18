@@ -98,6 +98,11 @@ class DeleteKey:
     """Remove one key at a key path, table or scalar, if it is there."""
 
     key_path: tuple[str, ...]
+    #: JSON only: also drop the containers this removal leaves empty. The
+    #: default, and what Configure's Undo has always done. False keeps a
+    #: container the user had before MCC added its key (7.100.0's media
+    #: server entry records which containers it created).
+    prune_empty_ancestors: bool = True
 
 
 Edit = SetTable | SetScalar | DeleteKey
@@ -749,8 +754,8 @@ def _apply_json_edits(text: str, edits: Sequence[Edit]) -> str:
                 text = _json_set(text, key_path, dict(value))
             case SetScalar(key_path=key_path, value=value):
                 text = _json_set(text, key_path, value)
-            case DeleteKey(key_path=key_path):
-                text = _json_delete(text, key_path)
+            case DeleteKey(key_path=key_path, prune_empty_ancestors=prune):
+                text = _json_delete(text, key_path, prune=prune)
     return text
 
 
@@ -840,7 +845,7 @@ def _json_insert_member(
     )
 
 
-def _json_delete(text: str, key_path: Sequence[str]) -> str:
+def _json_delete(text: str, key_path: Sequence[str], *, prune: bool = True) -> str:
     """Remove one key, and the ancestors MCC's departure left empty.
 
     Pruning is the same promise ``config/desktop_apply._prune_empty_ancestors``
@@ -848,9 +853,12 @@ def _json_delete(text: str, key_path: Sequence[str]) -> str:
     ``provider`` map means Configure created ``provider`` too, and leaving
     ``"provider": {}`` behind is MCC's litter in a document it promised to
     leave alone. An ancestor still holding somebody else's keys is theirs.
+    ``prune=False`` removes the key alone, for a container the caller knows
+    was there before MCC.
     """
 
-    for depth in range(len(key_path), 0, -1):
+    stop = 0 if prune else len(key_path) - 1
+    for depth in range(len(key_path), stop, -1):
         path = key_path[:depth]
         node = _json_root_object(text)
         member: _JsonMember | None = None

@@ -2611,7 +2611,15 @@ const ROUTES = {
         overwrites: ["model_provider", "model"], sets_default_model: true,
         probe: { state: "configured", document_path: "/home/u/.codex/config.toml",
           document_exists: true, error: "", token_env_present: true,
-          restorable: true } },
+          restorable: true },
+        // 7.100.0: MCC's media server in the app's own file, not added yet.
+        mcp: { state: "absent", key: "mcp_servers.mcc_media",
+          display_path: "~/.codex/config.toml",
+          document_path: "/home/u/.codex/config.toml", document_exists: true,
+          backup_path: "", error: "", managed_by: "", fallback: false,
+          installed: true, ask_map: "",
+          asks: "Codex asks before each media tool that spends money: none of them is marked read-only.",
+          note: "The Codex CLI reads this file too, so plain codex gets the server as well." } },
       { id: "opencode_desktop", display_name: "OpenCode desktop",
         summary: "OpenCode expands {env:...} references.",
         status: "servable", doc_url: "https://example.invalid/opencode",
@@ -2624,7 +2632,14 @@ const ROUTES = {
         sidecar_path: "", overwrites: [], sets_default_model: false,
         probe: { state: "drifted", document_path: "/home/u/opencode.json",
           document_exists: true, error: "", token_env_present: false,
-          restorable: false } },
+          restorable: false },
+        mcp: { state: "added", key: "mcp.mcc_media",
+          display_path: "~/.config/opencode/opencode.json",
+          document_path: "/home/u/opencode.json", document_exists: true,
+          backup_path: "/home/u/opencode.json.mcc-backup", error: "",
+          managed_by: "", fallback: false, installed: true, ask_map: "permission",
+          asks: "OpenCode does not ask before a tool by default, so MCC also sets OpenCode's own ask for the media tools that spend money, in the same file.",
+          note: "" } },
       { id: "goose_desktop", display_name: "Goose desktop",
         summary: "MCC owns a whole file and names it in config.yaml.",
         status: "servable", doc_url: "https://example.invalid/goose",
@@ -2687,7 +2702,15 @@ const ROUTES = {
         probe: { state: "configured",
           document_path: "/home/u/Claude-3p/configLibrary/_meta.json",
           document_exists: true, error: "", token_env_present: false,
-          restorable: true, managed_by: "", managed_keys: [] } },
+          restorable: true, managed_by: "", managed_keys: [] },
+        // The fallback below MCC's own document (decision 9).
+        mcp: { state: "absent", key: "mcpServers.mcc_media",
+          display_path: "%LOCALAPPDATA%\\Claude-3p\\claude_desktop_config.json",
+          document_path: "/home/u/Claude-3p/claude_desktop_config.json",
+          document_exists: true, backup_path: "", error: "", managed_by: "",
+          fallback: true, installed: true, ask_map: "",
+          asks: "Claude Desktop asks before each tool: MCC writes no tool policy.",
+          note: "Fallback, 60 s tool limit there. Use it only if, after a relaunch, the media tools from MCC's own document did not show up." } },
       // A machine whose organisation manages the app: the card has no button
       // at all, and says what is enforcing that.
       { id: "roo_code", display_name: "Roo Code (VS Code)",
@@ -2707,7 +2730,8 @@ const ROUTES = {
           document_exists: false, error: "", token_env_present: false,
           restorable: false,
           managed_by: "Machine policy (HKLM\\SOFTWARE\\Policies\\Claude)",
-          managed_keys: ["inferenceProvider"] } },
+          managed_keys: ["inferenceProvider"] },
+        mcp_note: "MCP server: not measured yet. This app speaks MCP, but where it keeps its MCP servers has not been measured on an installed copy (2026-10-18), so MCC does not write it." },
       // 6.84.0's two new probe states, and the demotion that goes with them.
       // A file MCC wrote whose credential cannot resolve is not configured,
       // and keys that vanished with nobody pressing Undo are the application
@@ -2743,7 +2767,13 @@ const ROUTES = {
         overwrites: ["model_provider", "model"], sets_default_model: true,
         probe: { state: "removed_by_app",
           document_path: "/home/u/.codex/config.toml", document_exists: true,
-          error: "", token_env_present: false, restorable: true } },
+          error: "", token_env_present: false, restorable: true },
+        // An mcc_media entry the user wrote: no button, and the card says why.
+        mcp: { state: "foreign", key: "mcp_servers.mcc_media",
+          display_path: "~/.codex/config.toml",
+          document_path: "/home/u/.codex/config.toml", document_exists: true,
+          backup_path: "", error: "", managed_by: "", fallback: false,
+          installed: true, ask_map: "", asks: "", note: "" } },
       { id: "antigravity", display_name: "Antigravity (agy CLI)",
         summary: "The endpoint and the key are environment variables.",
         status: "instructions_only", doc_url: "https://example.invalid/agy",
@@ -2779,6 +2809,15 @@ const ROUTES = {
         probe: { state: "not_routable", document_path: "", document_exists: false,
           error: "", token_env_present: false, restorable: false } },
     ],
+  },
+  // 7.100.0: what Add MCP server would write into Codex's own config.toml.
+  "/admin/api/desktop-apps/codex_desktop/mcp/plan": {
+    add: true,
+    document_path: "/home/u/.codex/config.toml",
+    diff: "--- a/config.toml\n+++ b/config.toml\n@@ -2,0 +3,4 @@\n+\n+[mcp_servers.mcc_media]\n+command = \"C:\\\\MCC\\\\Scripts\\\\mcc-mcp.exe\"\n+args = [\"--app\", \"codex_desktop\"]\n",
+    no_op: false, creates_file: false, removes_file: false,
+    backup_path: "/home/u/.codex/config.toml.mcc-backup", backup_exists: false,
+    ask_keys: [],
   },
   "/admin/api/desktop-apps/codex_desktop/plan": {
     document_path: "/home/u/.codex/config.toml",
@@ -3757,6 +3796,33 @@ window.fetch = async (url, options = {}) => {
     next.message = `${sent.add ? "Added to" : "Removed from"} ${sent.app}.`;
     ROUTES["/admin/api/mcp-media"] = next;
     body = next;
+  }
+  /* 7.100.0: Add / Remove MCP server on a Desktop apps card. The route
+     writes the app's own file and answers what it did; the stub flips that
+     card's media state in the list the GET serves. */
+  const desktopMcpWrite = String(url)
+    .split("?")[0]
+    .match(/^\/admin\/api\/desktop-apps\/([^/]+)\/mcp$/);
+  if (desktopMcpWrite && (options.method || "GET").toUpperCase() === "POST") {
+    const sent = JSON.parse(options.body);
+    const listing = ROUTES["/admin/api/desktop-apps"];
+    const card = listing.apps.find((app) => app.id === desktopMcpWrite[1]);
+    if (card && card.mcp) {
+      card.mcp = {
+        ...card.mcp,
+        state: sent.add ? "added" : "absent",
+        backup_path: `${card.mcp.document_path}.mcc-backup`,
+      };
+    }
+    body = {
+      changed: true,
+      add: Boolean(sent.add),
+      document_path: card && card.mcp ? card.mcp.document_path : "",
+      backup_path: card && card.mcp ? card.mcp.backup_path : "",
+      created_file: false,
+      removed_file: false,
+      mcp: card ? card.mcp : null,
+    };
   }
   /* The feed routes, emulated against the same document the page reads back,
      because that is the whole point of the pair: the save writes `enabled` on
@@ -10412,6 +10478,82 @@ if (codingAgentsLink) {
       hidden: preview.hidden,
       text: preview.textContent,
     };
+  }
+
+  /* 7.100.0: MCC's media server in each app's own file. One press of Add
+     MCP server shows the plan and writes nothing; Write it is the write. */
+  const fileControl = (id) =>
+    desktopList.querySelector(`.desktop-mcp-control[data-desktop-mcp="${id}"]`);
+  const captureFile = (id) => {
+    const host = fileControl(id);
+    if (!host) return null;
+    const pill = host.querySelector(".status-pill");
+    const one = (selector) =>
+      host.querySelector(selector) ? flatten(host.querySelector(selector)) : null;
+    return {
+      inCard: Boolean(host.closest(`.desktop-app-card[data-desktop-app="${id}"]`)),
+      pill: pill ? pill.textContent : null,
+      pillState: pill ? pill.dataset.mcpState : null,
+      state: one(".mcp-media-state"),
+      buttons: Array.from(
+        host.querySelectorAll('[data-role="mcp-add"], [data-role="mcp-remove"]'),
+      ).map((button) => ({
+        label: button.textContent,
+        action: button.dataset.mcpAction,
+        disabled: button.disabled,
+      })),
+      metaTerms: Array.from(host.querySelectorAll(".desktop-mcp-meta dt")).map(
+        (dt) => dt.textContent,
+      ),
+      metaValues: Array.from(host.querySelectorAll(".desktop-mcp-meta dd")).map(
+        (dd) => dd.textContent,
+      ),
+      notes: Array.from(host.querySelectorAll(".mcp-media-note")).map(flatten),
+      pending: one(".mcp-media-pending"),
+    };
+  };
+  desktopApps.mcpFiles = Object.fromEntries(
+    [
+      "codex_desktop",
+      "opencode_desktop",
+      "claude_desktop",
+      "codex_removed",
+      "roo_code",
+      "goose_desktop",
+    ].map((id) => [id, captureFile(id)]),
+  );
+  const mcpAdd = fileControl("codex_desktop")
+    ? fileControl("codex_desktop").querySelector('[data-role="mcp-add"]')
+    : null;
+  if (mcpAdd) {
+    const mcpBefore = fetchBodies.length;
+    const since = () => fetchBodies.slice(mcpBefore);
+    mcpAdd.click();
+    await settle();
+    const host = fileControl("codex_desktop");
+    const preview = host.querySelector('[data-role="mcp-preview"]');
+    const write = host.querySelector('[data-role="mcp-write"]');
+    desktopApps.mcpFlow = {
+      planPosts: since()
+        .filter((entry) => entry.path === "/admin/api/desktop-apps/codex_desktop/mcp/plan")
+        .map((entry) => ({ method: entry.method, body: entry.body })),
+      writesBeforeConfirm: since().filter(
+        (entry) => entry.path === "/admin/api/desktop-apps/codex_desktop/mcp",
+      ).length,
+      previewHidden: preview.hidden,
+      previewText: preview.textContent,
+      confirmHidden: write.closest(".desktop-action-row").hidden,
+      confirmLabel: write.textContent,
+    };
+    write.click();
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    desktopApps.mcpFlow.writes = since()
+      .filter((entry) => entry.path === "/admin/api/desktop-apps/codex_desktop/mcp")
+      .map((entry) => ({ method: entry.method, body: entry.body }));
+    desktopApps.mcpFlow.after = captureFile("codex_desktop");
+    const status = fileControl("codex_desktop").querySelector(".desktop-app-status");
+    desktopApps.mcpFlow.status = status ? flatten(status) : null;
   }
 
   /* ------------------------------------------------------------- tiers

@@ -1,11 +1,18 @@
 """Admin API for the Desktop apps group on the Coding agents page.
 
-Five routes, matching how the cards work:
+Six routes, matching how the cards work:
 
 ``GET  /admin/api/desktop-apps``                every spec plus its probe state
 ``POST /admin/api/desktop-apps/{id}/plan``      what Configure would write
 ``POST /admin/api/desktop-apps/{id}/configure`` write it
 ``POST /admin/api/desktop-apps/{id}/undo``      take it back out, in one of two modes
+``POST /admin/api/desktop-apps/{id}/mcp/plan``  what *Add* / *Remove MCP server*
+                                                would write (7.100.0)
+``POST /admin/api/desktop-apps/{id}/mcp``       write it: ``{"add": bool}``
+
+The last two are the second key a card owns: MCC's media MCP server entry in
+the user's own file (decision 11 of 2026-10-18). Undo takes it out with the
+rest of MCC's keys.
 
 Plan and configure are separate so a card can show a real diff of a real
 document before anything is written, and configure re-plans server-side rather
@@ -45,8 +52,13 @@ from my_claude_code.application.desktop_documents import (
 )
 from my_claude_code.config.desktop_apply import (
     DesktopApplyError,
+    DesktopMcpPlan,
+    DesktopMcpProbe,
     DesktopPlan,
     DesktopProbe,
+    apply_mcp,
+    plan_mcp,
+    probe_mcp,
     sidecar_path_for,
 )
 from my_claude_code.config.desktop_apply import (
@@ -68,7 +80,13 @@ from my_claude_code.config.desktop_apps import (
     desktop_app,
 )
 from my_claude_code.config.harness_tiers import current_harness_tiers
-from my_claude_code.config.mcp_media import desktop_mcp_server, mcp_media_on
+from my_claude_code.config.mcp_media import (
+    desktop_file_entry,
+    desktop_mcp_server,
+    mcp_media_command,
+    mcp_media_on,
+)
+from my_claude_code.config.paths import mcp_media_output_dir
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.restore_record import UndoMode
 from my_claude_code.config.server_urls import local_proxy_root_url
@@ -85,6 +103,12 @@ class DesktopUndoPayload(BaseModel):
     """Which of the two undo modes the card's picker asked for."""
 
     mode: str = Field(default=UndoMode.KEYS_ONLY.value, pattern="^(keys_only|restore)$")
+
+
+class DesktopMcpPayload(BaseModel):
+    """The card's *Add MCP server* (``add: true``) or *Remove MCP server*."""
+
+    add: bool
 
 
 class DesktopConfigurePayload(BaseModel):
@@ -194,6 +218,74 @@ def _documents(
     )
 
 
+def _mcp_entry(spec: DesktopAppSpec) -> dict[str, Any] | None:
+    """What *Add MCP server* writes for this app, or None without ``mcc-mcp``.
+
+    No token and no address: ``mcc-mcp`` reads both from MCC's own settings
+    when the app starts it (decision 1). ``MCC_CONFIG_DIR`` is passed on only
+    when this server itself runs with one, so a scratch MCC's entry names the
+    scratch folder and a user's names nothing.
+    """
+
+    if spec.mcp is None:
+        return None
+    command = mcp_media_command()
+    if not command:
+        return None
+    return desktop_file_entry(
+        spec.mcp.shape,
+        spec.id,
+        command,
+        os.environ,
+        out_dir=str(mcp_media_output_dir()) if spec.mcp.needs_out_dir else None,
+    )
+
+
+def _mcp_probe_payload(spec: DesktopAppSpec, probe: DesktopMcpProbe) -> dict[str, Any]:
+    assert spec.mcp is not None
+    return {
+        "state": probe.state.value,
+        "key": probe.key_label,
+        "display_path": spec.mcp.display_path,
+        "document_path": probe.document_path,
+        "document_exists": probe.document_exists,
+        "backup_path": probe.backup_path,
+        "error": probe.error,
+        "managed_by": probe.managed_by,
+        "fallback": spec.mcp.fallback,
+        "installed": mcp_media_command() is not None,
+        "asks": spec.mcp.asks,
+        "note": spec.mcp.note,
+        "ask_map": ".".join(spec.mcp.ask_map_key),
+    }
+
+
+def _mcp_plan_payload(plan: DesktopMcpPlan) -> dict[str, Any]:
+    return {
+        "add": plan.add,
+        "document_path": plan.document_path,
+        "diff": plan.diff,
+        "no_op": plan.no_op,
+        "creates_file": plan.creates_file,
+        "removes_file": plan.removes_file,
+        "backup_path": plan.backup_path,
+        "backup_exists": plan.backup_exists,
+        "ask_keys": list(plan.ask_keys),
+    }
+
+
+def _mcp_state(spec: DesktopAppSpec) -> dict[str, Any] | None:
+    """The card's media server block, probed now; None for an app without one."""
+
+    if spec.mcp is None:
+        return None
+    try:
+        probe = probe_mcp(spec, env=os.environ, expected_entry=_mcp_entry(spec))
+    except DesktopApplyError:
+        return None
+    return _mcp_probe_payload(spec, probe)
+
+
 def _probe_payload(probe: DesktopProbe) -> dict[str, Any]:
     return {
         "state": probe.state.value,
@@ -291,6 +383,15 @@ def _spec_payload(
     }
     if probe is not None:
         payload["probe"] = _probe_payload(probe)
+    # 7.100.0: MCC's media server in this app's own file -- its own state,
+    # apart from the inference badge above -- or the dated reason there is
+    # no button for it yet.
+    if spec.status is DesktopAppStatus.SERVABLE:
+        mcp = _mcp_state(spec)
+        if mcp is not None:
+            payload["mcp"] = mcp
+    if spec.mcp_note:
+        payload["mcp_note"] = spec.mcp_note
     return payload
 
 
@@ -477,7 +578,94 @@ async def undo_desktop_app(
             "document_path": result.document_path,
             "removed_sidecar": result.removed_sidecar,
             "restored_keys": list(result.restored_keys),
+            # 7.100.0: Undo also takes MCC's media server entry out.
+            "removed_mcp_server": result.removed_mcp_server,
             "probe": _probe_payload(probe),
+        }
+
+    try:
+        return await asyncio.to_thread(run)
+    except DesktopApplyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _require_mcp(spec: DesktopAppSpec) -> None:
+    if spec.status is not DesktopAppStatus.SERVABLE or spec.mcp is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"MCC does not add its media server to {spec.display_name}'s "
+                "own files." + (f" {spec.mcp_note}" if spec.mcp_note else "")
+            ),
+        )
+
+
+@router.post("/admin/api/desktop-apps/{app_id}/mcp/plan")
+async def plan_desktop_app_mcp(
+    app_id: str,
+    payload: DesktopMcpPayload,
+    request: Request,
+):
+    """Return the diff *Add* or *Remove MCP server* would write. Touches no disk.
+
+    A file that already carries an ``mcc_media`` server MCC did not write is
+    answered 409 with the reason, which the card shows in place of a diff.
+    """
+
+    require_loopback_admin(request)
+    spec = _resolve(app_id)
+    _require_mcp(spec)
+
+    def run() -> dict[str, Any]:
+        entry = _mcp_entry(spec) if payload.add else None
+        if payload.add and entry is None:
+            raise DesktopApplyError(_MCC_MCP_MISSING)
+        plan = plan_mcp(spec, env=os.environ, add=payload.add, entry=entry)
+        return _mcp_plan_payload(plan)
+
+    try:
+        return await asyncio.to_thread(run)
+    except DesktopApplyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+#: Said when Add is pressed on an install without ``mcc-mcp`` beside it.
+_MCC_MCP_MISSING = (
+    "mcc-mcp is not installed beside this MCC, so there is nothing to add. "
+    "Reinstall or update MCC, then try again."
+)
+
+
+@router.post("/admin/api/desktop-apps/{app_id}/mcp")
+async def set_desktop_app_mcp(
+    app_id: str,
+    payload: DesktopMcpPayload,
+    request: Request,
+):
+    """Add MCC's media server to the app's own file, or take it out again.
+
+    Re-planned here rather than taken from the browser, as Configure is: the
+    file may have changed while the plan was on screen. The first write
+    takes the one-time backup beside the file.
+    """
+
+    require_loopback_admin(request)
+    spec = _resolve(app_id)
+    _require_mcp(spec)
+
+    def run() -> dict[str, Any]:
+        entry = _mcp_entry(spec) if payload.add else None
+        if payload.add and entry is None:
+            raise DesktopApplyError(_MCC_MCP_MISSING)
+        result = apply_mcp(spec, env=os.environ, add=payload.add, entry=entry)
+        return {
+            "changed": result.changed,
+            "add": result.added,
+            "document_path": result.document_path,
+            "backup_path": result.backup_path,
+            "created_file": result.created_file,
+            "removed_file": result.removed_file,
+            "mcp": _mcp_state(spec),
         }
 
     try:
