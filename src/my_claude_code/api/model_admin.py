@@ -218,11 +218,20 @@ FACT_KIND_LABELS: dict[str, str] = {
     "responses_tool_schema_keyword": "tool-schema keyword refused",
     # Labelled in the commit that introduces it, by the same rule.
     "responses_tools_max_count": "tools-count limit",
-    # 7.98.0, labelled in the commit that introduces them: what a media
-    # model's host said about one request field. Shown only.
+    # 7.98.0, labelled in the commit that introduces them, by the same rule:
+    # what a media model's host said about one request field. Shown only.
     "media_param_required": "media field required",
     "media_param_refused": "media field refused",
 }
+
+#: Kinds whose label the Models page payload's ``fact_labels`` table does not
+#: list. That table is served whole and pinned byte for byte by
+#: ``tests/contracts/test_metadata_ladder_equality.py`` (the page must not move
+#: while no such fact exists), and nothing on the page reads it: a learned row
+#: carries its own ``fact_label`` from the full table above.
+PAGE_TABLE_UNLISTED_FACT_KINDS: frozenset[str] = frozenset(
+    {"media_param_required", "media_param_refused"}
+)
 
 # Where a resolved wire surface came from, in the operator's words. A separate
 # table from ``SOURCE_LABELS`` on purpose: that one names rungs of the
@@ -2668,7 +2677,11 @@ def build_models_page_payload(
         "source_labels": dict(SOURCE_LABELS),
         "provenance_labels": dict(PROVENANCE_LABELS),
         "measured_days": measured_days,
-        "fact_labels": dict(FACT_KIND_LABELS),
+        "fact_labels": {
+            kind: label
+            for kind, label in FACT_KIND_LABELS.items()
+            if kind not in PAGE_TABLE_UNLISTED_FACT_KINDS
+        },
         "learned_source_labels": dict(LEARNED_SOURCE_LABELS),
         "kind_labels": dict(KIND_LABELS),
         # When the background sweep last ran and when it is next due, so the
