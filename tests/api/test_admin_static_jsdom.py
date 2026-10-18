@@ -8133,6 +8133,120 @@ def test_an_install_with_no_media_rail_says_so(rendered) -> None:
     assert media["emptyProvidersText"] == "No provider declares a media endpoint."
 
 
+# ------------------------------------------------- 7.98.0 media request fields
+
+
+def test_a_row_without_a_request_schema_renders_as_before(rendered) -> None:
+    """Equality: a payload from before 7.98.0 draws no request-fields row."""
+    assert rendered["mediaDashboard"]["fieldsRowsWithoutSchema"] == 0
+
+
+def test_each_media_row_gets_its_request_fields_block(rendered) -> None:
+    fields = rendered["mediaDashboard"]["requestFields"]
+
+    assert fields["rowCount"] == 2
+    assert fields["followsItsModel"] is True
+    assert fields["colSpan"] == 6
+    assert fields["startsClosed"] is True
+    assert fields["summary"] == "Request fields · custom_agnes/agnes-video-2.5"
+    # One chip per state, in the ladder's own order of states.
+    assert fields["summaryChips"] == [
+        "1 stated",
+        "1 required (stated)",
+        "1 required (learned)",
+        "1 not forwarded by MCC",
+        "2 forwarded, not known",
+    ]
+    assert fields["head"] == "video create — required: prompt, mode"
+
+
+def test_request_fields_show_each_state_and_who_said_it(rendered) -> None:
+    fields = rendered["mediaDashboard"]["requestFields"]
+
+    header, *rows = fields["table"]
+    assert header == ["Field", "State", "From", "Values", "Since", ""]
+    assert rows == [
+        [
+            "prompt",
+            "required (stated)",
+            "the endpoint's own contract",
+            "string",
+            "—",
+            "",
+        ],
+        ["quality", "stated", "your statement", "std, pro", "2026-10-18", "Remove"],
+        [
+            "speed",
+            "not forwarded by MCC",
+            "MCC's adapter for this host",
+            "number",
+            "—",
+            "",
+        ],
+        [
+            "mode",
+            "required (learned)",
+            "learned from this host's refusal",
+            "—",
+            "2026-10-12",
+            "Forget",
+        ],
+    ]
+    # The host's own words ride in the learned state's tooltip.
+    assert "mode is required" in fields["stateTitles"][3]
+    # Nobody spoke about these: forwarded, not known -- never "unsupported".
+    assert fields["unknown"].startswith(
+        "Forwarded, not known (no source says whether this model takes them): seconds, size."
+    )
+    assert "unsupported" not in fields["unknown"]
+    assert (fields["forgetButtons"], fields["removeButtons"]) == (1, 1)
+    assert fields["emptyText"].endswith(
+        "Its provider serves none of this rail's operations, so no request is ever sent to it."
+    )
+
+
+def test_forget_on_a_learned_field_names_that_field_only(rendered) -> None:
+    fields = rendered["mediaDashboard"]["requestFields"]
+
+    (post,) = fields["forgetPosts"]
+    assert post["path"] == "/admin/api/model-admin/learned/forget"
+    assert post["method"] == "POST"
+    assert post["body"] == {
+        "providerId": "custom_agnes",
+        "modelId": "agnes-video-2.5",
+        "factKind": "media_param_required",
+        "detail": "video_create:mode",
+    }
+
+
+def test_the_operator_editor_saves_one_statement(rendered) -> None:
+    fields = rendered["mediaDashboard"]["requestFields"]
+
+    assert fields["editorControls"] == [
+        "Operation",
+        "Field",
+        "State",
+        "Values",
+        "Type",
+        "Save",
+    ]
+    assert fields["operationOptions"] == ["video_create"]
+    # Nothing is sent for a statement with no field.
+    assert fields["emptySavePosts"] == 0
+    (post,) = fields["savePosts"]
+    assert post["path"] == "/admin/api/media/request-fields"
+    assert post["body"] == {
+        "modelRef": "custom_agnes/agnes-video-2.5",
+        "operation": "video_create",
+        "field": "mode",
+        "state": "required",
+        "values": ["std", "pro"],
+        "type": "string",
+    }
+    # A save reloads the section and keeps the block the operator was in open.
+    assert fields["reopenedAfterSave"] is True
+
+
 def test_the_analytics_media_card_is_sent_the_window_only(rendered) -> None:
     media = rendered["mediaDashboard"]
 

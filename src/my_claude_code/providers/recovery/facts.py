@@ -130,6 +130,23 @@ FACT_RESPONSES_TOOL_SCHEMA_KEYWORD = "responses_tool_schema_keyword"
 #: Value: ``int``.
 FACT_RESPONSES_TOOLS_MAX_COUNT = "responses_tools_max_count"
 
+#: A media request field this model's host said it needs, in a 4xx that named
+#: the field (Agnes video: ``{"message": "mode is required", "data":
+#: {"param": "mode"}}``) on a request that did not carry it. ``detail`` is
+#: ``"<operation>:<field>"`` (``"video_create:mode"``); value: ``True``.
+#:
+#: **Shown, never acted on** (user decision 6 of 2026-10-16): no reader of a
+#: :class:`RecoveryMemory` is handed one, so nothing about a request, a route,
+#: a retry or a charge changes because one was learned. It is published in the
+#: model's request schema (``application/media/schemas.py``) and on the Models
+#: page, with Forget.
+FACT_MEDIA_PARAM_REQUIRED = "media_param_required"
+#: A media request field this model's host refused, in a 4xx that named the
+#: field (Agnes image: ``image_config is not supported by text image queue``)
+#: on a request that carried it. ``detail`` and value as
+#: :data:`FACT_MEDIA_PARAM_REQUIRED`; shown only, by the same decision.
+FACT_MEDIA_PARAM_REFUSED = "media_param_refused"
+
 #: The allow-list. Whatever lands in this document is read back into live
 #: request-shaping state, so an unknown kind is dropped with one log line
 #: rather than carried -- the rule ``config/model_overrides.py`` already
@@ -151,6 +168,8 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
         FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
         FACT_RESPONSES_TOOLS_MAX_COUNT,
+        FACT_MEDIA_PARAM_REQUIRED,
+        FACT_MEDIA_PARAM_REFUSED,
     }
 )
 
@@ -195,6 +214,13 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD: STATED_FACT_TTL_SECONDS,
     # A number the host stated, like the tool-name ceiling beside it.
     FACT_RESPONSES_TOOLS_MAX_COUNT: STATED_FACT_TTL_SECONDS,
+    # The host named the field in its own sentence, about a request MCC
+    # actually sent -- stated evidence, like a ceiling it named. Shown only,
+    # so the clock decides how long the Models page says it, never how long a
+    # request is shaped by it; a gateway that later accepts the field is
+    # re-taught by its next refusal or forgotten from the page.
+    FACT_MEDIA_PARAM_REQUIRED: STATED_FACT_TTL_SECONDS,
+    FACT_MEDIA_PARAM_REFUSED: STATED_FACT_TTL_SECONDS,
     # Stated in words but *proven* by the retry, which is the weaker of the
     # two and decides the clock: the host said "only auto", and what MCC
     # wrote down is "the request worked once the field was gone".

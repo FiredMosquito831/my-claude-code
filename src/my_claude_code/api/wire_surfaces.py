@@ -40,6 +40,11 @@ AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
 AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
 AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
 VIDEOS_ENDPOINT = "/v1/videos"
+#: 7.98.0: every media rail model and the request fields each one takes, for
+#: a client (and O's MCP tools) to build a request from. A list, like
+#: ``/v1/models``, and answered the way ``/v1/models`` is; deliberately not a
+#: member of the media paths above, whose refusals are OpenAI-shaped.
+MEDIA_MODELS_ENDPOINT = "/v1/media/models"
 
 WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 

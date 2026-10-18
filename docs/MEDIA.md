@@ -15,6 +15,7 @@ its base URL at the proxy and keeps its own code.
 | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | 7.63.0 | Transcription | `MODEL_ASR`, `MODEL_ASR_FALLBACKS`, `MODEL_ASR_PAUSED` |
 | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content`, `GET /v1/videos`, `DELETE /v1/videos/{id}` | 7.64.0 | Video | `MODEL_VIDEO`, `MODEL_VIDEO_FALLBACKS`, `MODEL_VIDEO_PAUSED` |
 | Gemini `:generateContent` / `:streamGenerateContent` with image or audio output, `:predictLongRunning`, `GET /v1beta/operations/{id}` | 7.65.0 | Image, Speech, Video | the same rails |
+| `GET /v1/media/models`: every media rail model and the request fields it takes ([Request fields per model](#request-fields-per-model-798)) | 7.98.0 | every rail | none (read only) |
 
 ```python
 from openai import OpenAI
@@ -442,6 +443,98 @@ proxy address benched by a media request is benched for media only; the chat eng
 sees it, and the other way round. A non-streaming request is answered only once a model has
 produced the whole answer, so a failure before that falls back without the client noticing.
 
+## Request fields per model (7.98.0)
+
+A media model's host can refuse a request for a field no catalogue mentions. On this
+install's own log, 50 of 54 Agnes video creates came back
+`400 {"code":"invalid_request","message":"mode is required ...","data":{"param":"mode"}}`
+and six image requests `400 image_config is not supported by text image queue`. models.dev
+lists no request field for any of its 369 media models, so nothing MCC read could have told a
+client either thing.
+
+Since 7.98.0 every model on a media rail publishes, per operation it serves, a **JSON Schema
+(2020-12) of its request**, with an `x-mcc` record on every field saying what is known about
+it and who said so:
+
+| `x-mcc.state` | meaning |
+|---|---|
+| `stated` | a source says this model takes the field |
+| `required (stated)` / `refused (stated)` | you said so on the Models page -- or, for required, MCC's own door will not take the request without it (`prompt`, `input`, `file`) |
+| `required (learned)` / `refused (learned)` | this host said so in a refusal (below) |
+| `not forwarded by MCC` | MCC does not send it to this host (a native Gemini body has no field for it; a stream flag to a host that documents no stream) |
+| `forwarded, not known` | MCC sends it and nobody has said whether this model takes it. **Not known is never "unsupported".** |
+
+`x-mcc.source` names the rung that answered, highest first -- the same provider-first,
+gap-filling ladder every other model field is read from, never a model's name:
+
+1. `operator` -- your own statement, typed on the Models page (`~/.mcc/media_request_fields.json`);
+2. `learned` -- a refusal this host gave for this model and operation;
+3. `provider_declared` / `mcc_adapter` -- the provider's declared endpoint (formats, voices,
+   stream, renamed fields, JSON-only bodies) and what MCC's own adapter sends;
+4. `provider_list` -- the provider's own `/models` row (`supported_parameters`; a name it leaves
+   out stays *not known*);
+5. OpenRouter's live list and LiteLLM's map -- declared and **inert**: the recorded copy of
+   OpenRouter's list gives its media models only chat sampling names, and no LiteLLM entry MCC
+   has recorded carries a media request field. Each is wired only after a measurement shows it
+   does. models.dev is not a rung (measured empty).
+
+Below them is the endpoint's own contract (`door`): every field of the OpenAI request type for
+that operation, plus the fields the Gemini door maps a Veo body onto. `x-mcc.since` is the day a
+source said it (none for declared data); `x-mcc.values` is the list a source gave, also the
+field's `enum`; `x-mcc.also` lists what lower rungs said about the same field. A refused field
+is `{"not": {}}` -- JSON Schema for "leave it out".
+
+**Learned refusals.** When a host answers a media request with a 4xx that names a field --
+OpenAI's `error.param`, a top-level `param`, Agnes' `data.param`, a validator's `detail[].loc`,
+or a message that starts with the field (`image_config is not supported ...`) -- MCC writes it
+down as `required (learned)` (a field the request did not carry) or `refused (learned)` (one it
+did), per provider, model and operation, in `~/.mcc/learned_facts.json`. Only on hosts whose
+body is the client's own fields (the OpenAI shapes); never `model`; never a 401, 403, 404, 429 or
+5xx. It is kept for `STATED_FACT_TTL_SECONDS` (30 days) and then shown as stale and not used;
+**Forget** on its row removes that one field's fact. Recording is all it does: **nothing MCC
+sends changes** -- the request is routed, retried, charged, logged and answered exactly as
+before, MCC skips no model and drops no field because of it (user decision 6 of 2026-10-16:
+publish first).
+
+**Where to read it.**
+
+- **Models page -> Media models**: *Request fields* under each row -- the known fields with
+  their state, source, values and date, the rest summarised as *forwarded, not known*, **Forget**
+  on a learned row, **Remove** on yours, and a small editor to state a field yourself
+  (operation, field, accepted / required / refused, optional values and type).
+- **Models page -> a model's *Everything known***: a *media request fields* row for a model on a
+  media rail, with what your statement, the host's refusals and the provider's list each said.
+- **`GET /v1/media/models`** (same proxy token as every other route): every media rail model,
+  its schema per operation and the endpoint to send it to, and, per rail and operation, which
+  models accept, require, refuse, do not receive, or say nothing about each field -- every model,
+  never only the primary and never only what they share.
+
+```bash
+curl http://127.0.0.1:8082/v1/media/models -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN"
+```
+
+Run on a scratch server whose fake Agnes had answered the two refusals above (abridged):
+
+```json
+{"object": "list",
+ "data": [{"id": "custom_agnes/agnes-video-2.5", "object": "media.model",
+           "rails": [{"rail": "video", "position": "primary", "paused": false}],
+           "operations": {"video_create": {"endpoint": "/v1/videos",
+             "request_schema": {"$schema": "https://json-schema.org/draft/2020-12/schema",
+               "type": "object", "required": ["prompt", "mode"],
+               "properties": {"mode": {"x-mcc": {"state": "required (learned)", "source": "learned",
+                 "since": "2026-10-18", "evidence": "mode is required (request id: ...)"}}, "...": {}}}}}},
+          "..."],
+ "rails": [{"rail": "video", "models": ["custom_agnes/agnes-video-2.5", "custom_agnes/agnes-video-lite"],
+            "operations": {"video_create": {"endpoint": "/v1/videos",
+              "fields": {"mode": {"accepted_by": ["custom_agnes/agnes-video-2.5"],
+                                  "required_by": ["custom_agnes/agnes-video-2.5"], "refused_by": [],
+                                  "not_forwarded_by": [],
+                                  "not_known_for": ["custom_agnes/agnes-video-lite"]}}}}}]}
+```
+
+A media model still never appears in `/v1/models` or a coding agent's catalogue.
+
 ## Where to see it on the dashboard (7.67.0)
 
 - **Models page -> Media models.** One row per model on a media rail: which rail(s), its place
@@ -449,7 +542,9 @@ produced the whole answer, so a failure before that falls back without the clien
   when the provider declares nothing for that rail (such a model is skipped, uncharged), the output
   modalities models.dev lists for it (advisory; "unknown" when models.dev has no entry), whether the
   media engine has benched it (media's own records, never chat's) and whether its provider has a
-  key. A second table lists every provider -- built-in or custom -- that declares media endpoints.
+  key. Under each row, *Request fields* (7.98.0) lists what its request takes and who said so
+  ([above](#request-fields-per-model-798)). A second table lists every provider -- built-in or
+  custom -- that declares media endpoints.
 - **Analytics -> Media.** A card of its own for the selected time window, per rail and then per
   provider and model: requests, succeeded, failed, cancelled, images out, audio seconds in and out,
   video jobs and video seconds, bytes out and durations, plus the video jobs' current states. A total
@@ -603,7 +698,7 @@ Gemini routes answer in Google's shape as before.
 ## Known limits today
 
 What the current release does, stated so nobody has to find it by trial (checked
-on 7.95.0):
+on 7.95.0; the last item on 7.98.0):
 
 - **A deleted video job still counts** in the Media card's video jobs.
 - **Gemini `candidateCount: 2`** comes back as one candidate holding two images.
@@ -612,9 +707,15 @@ on 7.95.0):
   MCC knows documents either stream.
 - **Images returned by a Codex tool** (`view_image`) reach the model as text (above).
 - **Codex's own image tool** never reaches MCC (above).
-- **Which request fields each media model accepts** (Agnes video's `mode`, image
-  `image_config`, ...) is not published yet; a provider's refusal is passed back
-  as it said it.
+- **Request fields are published, not acted on.** Since 7.98.0 each media model's
+  fields are published ([Request fields per model](#request-fields-per-model-798)),
+  including what a host's refusal taught MCC (Agnes video's `mode`, image
+  `image_config`). MCC still sends every request exactly as the client wrote it and
+  passes a refusal back as the provider said it: it neither skips a model that would
+  refuse nor drops a refused field (user decision 6, "publish first"). Whether
+  Agnes' own model list carries any fields has not been measured; a `supported_parameters`
+  list on any provider's row is read when present. OpenRouter's and LiteLLM's lists
+  are not read for fields until a measurement shows they carry any.
 
 ## Not yet
 

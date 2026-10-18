@@ -1083,6 +1083,12 @@
                 for a rail is skipped on it without being charged a failure. The
                 models.dev output list is advisory, and the bench shown is the media
                 one, which is kept apart from the chat bench.
+                Under each row, <em>Request fields</em> lists what that model's request
+                takes and who said so: your own statement, a refusal its host gave
+                (with <em>Forget</em>), its provider's declared endpoint, MCC's adapter,
+                or its provider's model list; every other field is
+                <em>forwarded, not known</em>. Shown only &mdash; nothing a request sends
+                changes. Clients read the same list at <code>/v1/media/models</code>.
               </p>
               <p id="mediaModelsStatus" class="models-status" role="status"
                 aria-live="polite" hidden></p>
@@ -4481,6 +4487,25 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   endpoint, with one runnable example each, is in the <em>API
                   reference</em> of <em>Clients</em> (<code>docs/CLIENTS.md</code>).
                 </p>
+                <p id="guide-media-request-fields">
+                  <strong>Request fields per model (since 7.98.0).</strong> A media model's
+                  host can refuse a request for a field no catalogue mentions &mdash; Agnes
+                  answers a video without <code>mode</code> with <em>mode is required</em>,
+                  and an image carrying <code>image_config</code> with <em>not
+                  supported</em>. Each media model now publishes the fields its request
+                  takes, as a JSON Schema per operation: open <em>Request fields</em> under
+                  its row on the <strong>Models</strong> page. Each field says who said so
+                  &mdash; your own statement (type it in the small editor there), a refusal
+                  this host gave (with <em>Forget</em>), the provider's declared endpoint,
+                  MCC's own adapter, or the provider's model list &mdash; and a field nobody
+                  spoke about is <em>forwarded, not known</em>, never "unsupported". A
+                  refusal is written down the moment it happens and changes nothing a
+                  request sends: MCC does not skip a model or drop a field because of it.
+                  A client or an agent reads the same list, with which models on each rail
+                  accept, need or refuse every field:
+                </p>
+                <pre><code>curl http://127.0.0.1:8082/v1/media/models \
+  -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN"</code></pre>
                 <p>
                   Each picker offers only its own kind of model: a chat route chat models, the
                   Image rail image models, and so on. The kind comes from the provider's own

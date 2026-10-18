@@ -319,8 +319,19 @@ class LearnedFactStore:
             self.schedule_flush()
         return retired
 
-    def forget(self, provider_id: str, model_id: str, fact_kind: str = "") -> int:
-        """Forget one row, or every row about one model."""
+    def forget(
+        self,
+        provider_id: str,
+        model_id: str,
+        fact_kind: str = "",
+        detail: str | None = None,
+    ) -> int:
+        """Forget one row, or every row about one model.
+
+        ``detail`` (7.98.0) narrows a kind to one subject -- one media request
+        field among several a model's host named. ``None``, the default,
+        forgets every row of the kind, exactly as before it existed.
+        """
 
         removed = [
             key
@@ -328,6 +339,7 @@ class LearnedFactStore:
             if fact.provider_id == provider_id
             and fact.model_id == model_id
             and (not fact_kind or fact.fact_kind == fact_kind)
+            and (detail is None or fact.detail == detail)
         ]
         for key in removed:
             del self._facts[key]

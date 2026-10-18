@@ -1136,15 +1136,29 @@ class ApplicationRuntime:
         return grouped
 
     def forget_learned_facts(
-        self, provider_id: str, model_id: str = "", fact_kind: str = ""
+        self,
+        provider_id: str,
+        model_id: str = "",
+        fact_kind: str = "",
+        detail: str = "",
     ) -> int:
-        """Forget one row, one model, one provider, or everything."""
+        """Forget one row, one model, one provider, or everything.
+
+        ``detail`` (7.98.0) is honoured only beside a ``fact_kind``: one media
+        request field's row among the several a kind can hold for a model.
+        Empty forgets every row of the kind, as before.
+        """
 
         if not provider_id:
             return self._learned_facts.forget_all()
         if not model_id:
             return self._learned_facts.forget_provider(provider_id)
-        return self._learned_facts.forget(provider_id, model_id, fact_kind)
+        return self._learned_facts.forget(
+            provider_id,
+            model_id,
+            fact_kind,
+            detail if fact_kind and detail else None,
+        )
 
     def catalogue_refresh_status(self) -> dict[str, Any]:
         """When the background sweep last ran, and when it is next due."""

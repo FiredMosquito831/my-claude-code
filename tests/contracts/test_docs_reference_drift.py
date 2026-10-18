@@ -622,6 +622,17 @@ _MUST_BE_DOCUMENTED: tuple[tuple[str, str], ...] = (
         "with 413 is told the setting's name, so the docs must say what it is",
     ),
     (
+        "/v1/media/models",
+        "the client-facing list of media models and the request fields each "
+        "takes (7.98.0, user decision 1); a client or an agent's MCP tool can "
+        "only read a route it can find",
+    ),
+    (
+        "media_request_fields.json",
+        "where the operator's own media request-field statements live (7.98.0, "
+        "user decision 5); a user backing up or editing them needs the name",
+    ),
+    (
         "PROXY_CONNECT_TIMEOUT_SECONDS",
         "the one setting the VPN, WARP and Tor tutorial tells a Tor user to "
         "raise (decision 11 of 2026-10-06: document only)",

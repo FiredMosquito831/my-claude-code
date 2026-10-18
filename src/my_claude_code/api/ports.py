@@ -49,7 +49,11 @@ class AdminRuntimePort(Protocol):
     def learned_facts_by_model(self) -> dict[str, list[dict[str, Any]]]: ...
 
     def forget_learned_facts(
-        self, provider_id: str, model_id: str = "", fact_kind: str = ""
+        self,
+        provider_id: str,
+        model_id: str = "",
+        fact_kind: str = "",
+        detail: str = "",
     ) -> int: ...
 
     def catalogue_refresh_status(self) -> dict[str, Any]: ...

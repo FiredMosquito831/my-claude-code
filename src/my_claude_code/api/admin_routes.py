@@ -72,6 +72,12 @@ from my_claude_code.application.derived_payloads import (
     latency_by_model_cache_key,
     recent_analytics,
 )
+from my_claude_code.application.media.rails import rail_refs
+from my_claude_code.application.media.request import MediaRail
+from my_claude_code.application.media.schemas import (
+    rail_model_schemas,
+    schema_inputs,
+)
 from my_claude_code.application.model_kinds import (
     KIND_LABELS,
     MODEL_KINDS,
@@ -147,6 +153,7 @@ from my_claude_code.config.harnesses import (
     harness_display_name,
     rtk_capable_ids,
 )
+from my_claude_code.config.media_request_fields import load_media_request_fields
 from my_claude_code.config.model_overrides import (
     current_model_overrides,
     normalize_override_key,
@@ -186,6 +193,7 @@ from my_claude_code.config.paths import (
     retired_config_dir_path,
 )
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.proxy_chains import proxy_chains_problem
 from my_claude_code.config.rtk import (
@@ -1832,6 +1840,7 @@ def _model_knowledge(services: ApiServices, model_ref: str) -> dict[str, Any] | 
     placements = media_rail_placements(settings)
     live = services.requests.openrouter_live_catalogue()
     litellm = services.requests.litellm_model_catalogue()
+    learned = services.admin.learned_facts_by_model()
     entry = knowledge_entry(
         model_ref,
         info,
@@ -1844,12 +1853,29 @@ def _model_knowledge(services: ApiServices, model_ref: str) -> dict[str, Any] | 
         kind_words=services.requests.model_kind_words_lookup(),
         live=live,
         litellm=litellm,
-        learned=services.admin.learned_facts_by_model(),
+        learned=learned,
     )
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref)
     answer = None if live is None else live(provider_id, model_id)
     refresh = services.admin.catalogue_refresh_status()
+    # 7.98.0: a model on a media rail gets a "media request fields" row --
+    # the same schemas the media row and /v1/media/models publish.
+    media_rails = [rail for rail in MediaRail if model_ref in rail_refs(settings, rail)]
+    media_schemas: dict[str, dict[str, Any]] | None = None
+    if media_rails:
+        descriptor = get_provider_registry().all_descriptors().get(provider_id)
+        media_schemas = rail_model_schemas(
+            model_ref,
+            None if descriptor is None else descriptor.media_surfaces,
+            media_rails,
+            schema_inputs(
+                learned,
+                catalogue,
+                operator=load_media_request_fields(),
+                refreshed_at=refresh.get("last_refreshed_at"),
+            ),
+        )
     return model_knowledge_payload(
         entry,
         info,
@@ -1871,6 +1897,7 @@ def _model_knowledge(services: ApiServices, model_ref: str) -> dict[str, Any] | 
             for item in catalogue
             for name in (item.model_id, parse_model_name(item.model_id))
         ),
+        media_request_schemas=media_schemas,
     )
 
 
@@ -1907,6 +1934,9 @@ class LearnedFactForgetPayload(BaseModel):
     provider_id: str = Field(default="", alias="providerId")
     model_id: str = Field(default="", alias="modelId")
     fact_kind: str = Field(default="", alias="factKind")
+    #: 7.98.0: one row's subject within a kind (a media request field's
+    #: ``"<operation>:<field>"``). Empty = every row of the kind, as before.
+    detail: str = Field(default="", alias="detail")
 
 
 class CapabilityProbePayload(BaseModel):
@@ -1934,17 +1964,31 @@ async def forget_learned_facts(
     """
 
     require_loopback_admin(request)
-    forgotten = services.admin.forget_learned_facts(
-        payload.provider_id.strip(),
-        payload.model_id.strip(),
-        payload.fact_kind.strip(),
-    )
-    return {
+    detail = payload.detail.strip()
+    if detail:
+        # Only a press that named one row's subject passes it on, so every
+        # caller from before 7.98.0 reaches the port exactly as it did.
+        forgotten = services.admin.forget_learned_facts(
+            payload.provider_id.strip(),
+            payload.model_id.strip(),
+            payload.fact_kind.strip(),
+            detail,
+        )
+    else:
+        forgotten = services.admin.forget_learned_facts(
+            payload.provider_id.strip(),
+            payload.model_id.strip(),
+            payload.fact_kind.strip(),
+        )
+    answer: dict[str, Any] = {
         "forgotten": forgotten,
         "provider_id": payload.provider_id,
         "model_id": payload.model_id,
         "fact_kind": payload.fact_kind,
     }
+    if detail:
+        answer["detail"] = detail
+    return answer
 
 
 @router.post("/admin/api/providers/{provider_id}/probe")

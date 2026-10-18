@@ -28099,7 +28099,9 @@ function setModelsVisibilityStatus(text, kind = "") {
    and where, what its provider DECLARES it serves, the media bench (kept apart
    from the chat bench) and whether its provider has a key. models.dev's
    output list is shown as advice; the router never reads it. */
-const mediaModelsState = { data: null, loading: false };
+// ``openFields``: the rows whose request fields are open, kept across a
+// reload so a save does not fold the block the operator is working in.
+const mediaModelsState = { data: null, loading: false, openFields: new Set() };
 
 async function loadMediaModels(force = false) {
   if (mediaModelsState.loading) return;
@@ -28292,6 +28294,344 @@ function mediaEmpty(text) {
   return empty;
 }
 
+/* ------------------------------------------- media request fields (7.98.0)
+   What each media model's request takes, field by field, and who said so:
+   your own statement, a refusal this host gave (with Forget), the provider's
+   declared endpoint, MCC's own adapter, the provider's model list -- and,
+   for everything nobody spoke about, "forwarded, not known", never
+   "unsupported". Shown only: nothing a request sends changes (user decision
+   6 of 2026-10-16). The same schemas are on GET /v1/media/models. */
+const MEDIA_FIELD_STATE_VARIANTS = {
+  stated: "ok",
+  "required (stated)": "rail",
+  "required (learned)": "rail",
+  "refused (stated)": "warn",
+  "refused (learned)": "warn",
+  "not forwarded by MCC": "muted",
+  "forwarded, not known": "",
+};
+const MEDIA_FIELD_SOURCE_LABELS = {
+  operator: "your statement",
+  learned: "learned from this host's refusal",
+  provider_declared: "the provider's declared endpoint",
+  mcc_adapter: "MCC's adapter for this host",
+  provider_list: "the provider's own model list",
+  door: "the endpoint's own contract",
+  rail: "the media rail",
+};
+const MEDIA_FIELD_NOT_KNOWN = "forwarded, not known";
+const MEDIA_FIELD_OPERATOR_STATES = ["accepted", "required", "refused"];
+const MEDIA_FIELD_TYPES = ["string", "integer", "number", "boolean", "array", "object"];
+
+function mediaOperationWords(operation) {
+  return String(operation || "").replace(/_/g, " ");
+}
+
+function mediaFieldRecord(prop) {
+  return (prop && prop["x-mcc"]) || {};
+}
+
+/* The summary's chips: how many fields are in each state, across every
+   operation the model serves. */
+function mediaFieldCountChips(schemas) {
+  const counts = new Map();
+  Object.values(schemas).forEach((schema) => {
+    Object.entries((schema && schema.properties) || {}).forEach(([name, prop]) => {
+      if (name === "model") return;
+      const state = mediaFieldRecord(prop).state || MEDIA_FIELD_NOT_KNOWN;
+      counts.set(state, (counts.get(state) || 0) + 1);
+    });
+  });
+  return Object.keys(MEDIA_FIELD_STATE_VARIANTS)
+    .filter((state) => counts.has(state))
+    .map((state) =>
+      mediaChip(`${counts.get(state)} ${state}`, MEDIA_FIELD_STATE_VARIANTS[state]),
+    );
+}
+
+function mediaRequestFieldsRow(row, columns) {
+  const schemas = row && row.request_schema;
+  if (!schemas || typeof schemas !== "object") return null;
+  const tr = document.createElement("tr");
+  tr.className = "media-request-fields-row";
+  const td = document.createElement("td");
+  td.colSpan = columns;
+  td.appendChild(mediaRequestFieldsBlock(row, schemas));
+  tr.appendChild(td);
+  return tr;
+}
+
+function mediaRequestFieldsBlock(row, schemas) {
+  const details = document.createElement("details");
+  details.className = "media-request-fields";
+  details.dataset.modelRef = row.model_ref;
+  details.open = mediaModelsState.openFields.has(row.model_ref);
+  details.addEventListener("toggle", () => {
+    if (details.open) mediaModelsState.openFields.add(row.model_ref);
+    else mediaModelsState.openFields.delete(row.model_ref);
+  });
+  const summary = document.createElement("summary");
+  summary.className = "media-request-fields-summary";
+  const title = document.createElement("span");
+  title.textContent = `Request fields · ${row.model_ref}`;
+  summary.append(title, mediaChipRow(mediaFieldCountChips(schemas)));
+  details.appendChild(summary);
+  const operations = Object.keys(schemas);
+  if (!operations.length) {
+    details.appendChild(
+      mediaEmpty(
+        "Its provider serves none of this rail's operations, so no request is ever sent to it.",
+      ),
+    );
+    return details;
+  }
+  operations.forEach((operation) =>
+    details.appendChild(mediaRequestFieldsOperation(row, operation, schemas[operation])),
+  );
+  details.appendChild(mediaRequestFieldsEditor(row, operations));
+  return details;
+}
+
+function mediaRequestFieldsOperation(row, operation, schema) {
+  const wrap = document.createElement("div");
+  wrap.className = "media-request-fields-op";
+  const head = document.createElement("p");
+  head.className = "media-request-fields-op-head";
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  head.textContent = `${mediaOperationWords(operation)} — required: ${
+    required.length ? required.join(", ") : "nothing"
+  }`;
+  wrap.appendChild(head);
+
+  const properties = (schema && schema.properties) || {};
+  const known = [];
+  const unknown = [];
+  Object.entries(properties).forEach(([name, prop]) => {
+    if (name === "model") return;
+    const record = mediaFieldRecord(prop);
+    if ((record.state || MEDIA_FIELD_NOT_KNOWN) === MEDIA_FIELD_NOT_KNOWN) {
+      unknown.push(name);
+    } else {
+      known.push([name, prop, record]);
+    }
+  });
+
+  if (known.length) {
+    const table = document.createElement("table");
+    table.className = "media-request-fields-table";
+    const headRow = document.createElement("tr");
+    ["Field", "State", "From", "Values", "Since", ""].forEach((label) => {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+    table.appendChild(headRow);
+    known.forEach(([name, prop, record]) => {
+      table.appendChild(mediaRequestFieldRow(row, operation, name, prop, record));
+    });
+    wrap.appendChild(table);
+  }
+
+  const rest = document.createElement("p");
+  rest.className = "media-request-fields-unknown";
+  const others = mediaFieldRecord(schema.additionalProperties);
+  const sentence =
+    others.state === "not forwarded by MCC"
+      ? "Any other field is not sent: this host's native API takes only the fields above."
+      : "Any other field you send is forwarded unchanged.";
+  rest.textContent = unknown.length
+    ? `Forwarded, not known (no source says whether this model takes them): ${unknown.join(", ")}. ${sentence}`
+    : sentence;
+  wrap.appendChild(rest);
+  const encoding = mediaFieldRecord(schema).encoding;
+  if (encoding) {
+    const note = document.createElement("p");
+    note.className = "media-request-fields-unknown";
+    note.textContent = `Body: ${encoding}.`;
+    wrap.appendChild(note);
+  }
+  return wrap;
+}
+
+function mediaRequestFieldRow(row, operation, name, prop, record) {
+  const tr = document.createElement("tr");
+  const field = document.createElement("td");
+  const code = document.createElement("code");
+  code.textContent = name;
+  field.appendChild(code);
+  if (record.sent_as) field.appendChild(document.createTextNode(` → sent as ${record.sent_as}`));
+  const state = document.createElement("td");
+  const tip = [record.note, record.evidence].filter(Boolean).join(" · ");
+  state.appendChild(mediaChip(record.state, MEDIA_FIELD_STATE_VARIANTS[record.state] || "", tip));
+  const from = document.createElement("td");
+  from.textContent = MEDIA_FIELD_SOURCE_LABELS[record.source] || record.source || "";
+  const also = Array.isArray(record.also) ? record.also : [];
+  if (also.length) {
+    from.title = `Also said: ${also
+      .map((entry) => `${entry.state} (${MEDIA_FIELD_SOURCE_LABELS[entry.source] || entry.source})`)
+      .join("; ")}`;
+  }
+  const values = document.createElement("td");
+  const listed = Array.isArray(record.values) ? record.values : null;
+  values.textContent = listed
+    ? listed.length > 12
+      ? `${listed.slice(0, 12).join(", ")} … (${listed.length})`
+      : listed.join(", ")
+    : (prop && prop.type) || "—";
+  const since = document.createElement("td");
+  since.textContent = record.since || "—";
+  const action = document.createElement("td");
+  if (record.source === "learned" && record.fact_kind) {
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "ghost-button media-request-fields-forget";
+    forget.textContent = "Forget";
+    forget.title = "Forget what this host's refusal taught MCC about this field";
+    forget.addEventListener("click", () =>
+      forgetMediaFieldFact(
+        {
+          providerId: row.provider_id,
+          modelId: row.model_id,
+          factKind: record.fact_kind,
+          detail: record.detail,
+        },
+        forget,
+      ),
+    );
+    action.appendChild(forget);
+  } else if (record.source === "operator") {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost-button media-request-fields-remove";
+    remove.textContent = "Remove";
+    remove.title = "Remove your statement; the sources below answer again";
+    remove.addEventListener("click", () =>
+      removeMediaFieldStatement(
+        { modelRef: row.model_ref, operation, field: name },
+        remove,
+      ),
+    );
+    action.appendChild(remove);
+  }
+  tr.append(field, state, from, values, since, action);
+  return tr;
+}
+
+/* The small editor (user decision 5): say what one field of this model
+   takes. Saved to media_request_fields.json and shown above; never sent. */
+function mediaRequestFieldsEditor(row, operations) {
+  const form = document.createElement("div");
+  form.className = "media-request-fields-editor";
+  const lead = document.createElement("p");
+  lead.className = "media-request-fields-op-head";
+  lead.textContent = "State a field yourself (shown only — nothing sent changes)";
+  form.appendChild(lead);
+  const select = (label, options) => {
+    const element = document.createElement("select");
+    element.setAttribute("aria-label", label);
+    options.forEach(([value, text]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      element.appendChild(option);
+    });
+    return element;
+  };
+  const operation = select(
+    "Operation",
+    operations.map((op) => [op, mediaOperationWords(op)]),
+  );
+  const field = document.createElement("input");
+  field.type = "text";
+  field.placeholder = "field (e.g. mode)";
+  field.setAttribute("aria-label", "Field");
+  const state = select(
+    "State",
+    MEDIA_FIELD_OPERATOR_STATES.map((value) => [value, value]),
+  );
+  const values = document.createElement("input");
+  values.type = "text";
+  values.placeholder = "values, comma-separated (optional)";
+  values.setAttribute("aria-label", "Values");
+  const type = select("Type", [["", "any type"], ...MEDIA_FIELD_TYPES.map((t) => [t, t])]);
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "ghost-button media-request-fields-save";
+  save.textContent = "Save";
+  save.addEventListener("click", () =>
+    saveMediaFieldStatement(
+      {
+        modelRef: row.model_ref,
+        operation: operation.value,
+        field: field.value.trim(),
+        state: state.value,
+        values: mediaFieldValues(values.value, type.value),
+        type: type.value || null,
+      },
+      save,
+    ),
+  );
+  const controls = document.createElement("div");
+  controls.className = "media-request-fields-controls";
+  controls.append(operation, field, state, values, type, save);
+  form.appendChild(controls);
+  return form;
+}
+
+/* "std, pro" -> ["std", "pro"]; numbers and true/false when the type says
+   so. Empty -> null ("no values stated"). */
+function mediaFieldValues(text, type) {
+  const parts = String(text || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+  if (!parts.length) return null;
+  if (type === "integer" || type === "number") {
+    return parts.map((part) => (Number.isFinite(Number(part)) ? Number(part) : part));
+  }
+  if (type === "boolean") {
+    return parts.map((part) =>
+      part.toLowerCase() === "true" ? true : part.toLowerCase() === "false" ? false : part,
+    );
+  }
+  return parts;
+}
+
+async function mediaFieldsWrite(path, payload, button, done) {
+  if (button) button.disabled = true;
+  try {
+    const result = await api(path, { method: "POST", body: JSON.stringify(payload) });
+    showMessage(done(result), "ok");
+    await loadMediaModels(true);
+  } catch (error) {
+    showMessage(`Could not save: ${error.message}`, "error");
+    if (button) button.disabled = false;
+  }
+}
+
+function saveMediaFieldStatement(payload, button) {
+  if (!payload.field) {
+    showMessage("Name the field first (for example mode).", "error");
+    return Promise.resolve();
+  }
+  return mediaFieldsWrite("/admin/api/media/request-fields", payload, button, () =>
+    `Saved: ${payload.field} ${payload.state} for ${payload.modelRef}.`,
+  );
+}
+
+function removeMediaFieldStatement(payload, button) {
+  return mediaFieldsWrite("/admin/api/media/request-fields/remove", payload, button, () =>
+    `Removed your statement about ${payload.field}.`,
+  );
+}
+
+function forgetMediaFieldFact(payload, button) {
+  return mediaFieldsWrite("/admin/api/model-admin/learned/forget", payload, button, (result) =>
+    `Forgot ${result.forgotten} learned fact(s).`,
+  );
+}
+
 function renderMediaModels(data) {
   const modelsHost = byId("mediaModelsTable");
   const providersHost = byId("mediaProvidersTable");
@@ -28306,19 +28646,26 @@ function renderMediaModels(data) {
       ),
     );
   } else {
-    modelsHost.appendChild(
-      mediaTable(
-        ["Model", "Rails", "Provider declares", "models.dev output", "Health", "Key"],
-        rows.map((row) => [
-          mediaModelRefCell(row),
-          mediaChipRow(mediaPlacementChips(row)),
-          mediaChipRow(mediaDeclaredChips(row.declared)),
-          mediaChipRow(mediaModalityChips(row.modalities)),
-          mediaChipRow(mediaHealthChips(row)),
-          mediaChipRow([mediaKeyChip(row.key)]),
-        ]),
-      ),
+    const headers = ["Model", "Rails", "Provider declares", "models.dev output", "Health", "Key"];
+    const scroll = mediaTable(
+      headers,
+      rows.map((row) => [
+        mediaModelRefCell(row),
+        mediaChipRow(mediaPlacementChips(row)),
+        mediaChipRow(mediaDeclaredChips(row.declared)),
+        mediaChipRow(mediaModalityChips(row.modalities)),
+        mediaChipRow(mediaHealthChips(row)),
+        mediaChipRow([mediaKeyChip(row.key)]),
+      ]),
     );
+    // 7.98.0: each row's request fields, drawn full width under it. A row
+    // from a server that publishes none gets nothing, exactly as before.
+    const bodyRows = Array.from(scroll.querySelectorAll("tbody > tr"));
+    rows.forEach((row, index) => {
+      const fieldsRow = mediaRequestFieldsRow(row, headers.length);
+      if (fieldsRow && bodyRows[index]) bodyRows[index].after(fieldsRow);
+    });
+    modelsHost.appendChild(scroll);
   }
   const providers = Array.isArray(data && data.providers) ? data.providers : [];
   if (!providers.length) {

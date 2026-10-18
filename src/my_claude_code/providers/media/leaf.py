@@ -77,6 +77,7 @@ from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .adapters import WireBody, build_wire_body
+from .param_refusal import note_param_refusal
 
 #: Upstream response headers carried onto a buffered media response. Only what
 #: the client or the log can use; never anything that could carry a secret.
@@ -340,6 +341,17 @@ class MediaLeaf:
                     self._send, url, body, stream, surface.auth_header
                 )
             except Exception as error:
+                # 7.98.0: a refusal that names a request field is written
+                # down for the model's published request schema -- recorded
+                # only, and total, so this failure is classified, charged and
+                # routed exactly as it was (user decision 6 of 2026-10-16).
+                note_param_refusal(
+                    error,
+                    provider_id=self._provider_id,
+                    model_id=attempt.resolved.provider_model,
+                    surface=surface,
+                    request=attempt.request,
+                )
                 raise classify_provider_failure(
                     error,
                     provider_name=self._provider_id.upper(),

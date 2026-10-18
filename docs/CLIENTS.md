@@ -220,6 +220,7 @@ rail by endpoint; a `provider/model` sent there must be one of that rail's model
 | `GET /v1/models` | OpenAI/Anthropic model list | [below](#models-and-health) |
 | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens`; `GET /v1beta/models` | Google Gemini | [below](#gemini) |
 | `POST /v1/images/generations`, `/v1/images/edits`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/videos` (+ `GET`/`DELETE /v1/videos/{id}`, `GET /v1/videos/{id}/content`) | OpenAI media | [Media routing](MEDIA.md#every-rail-with-curl) |
+| `GET /v1/media/models` | the media rails' models and the request fields each takes (7.98.0) | [below](#media-models-and-their-request-fields) |
 | `GET /health` | liveness | [below](#models-and-health) |
 
 #### Messages
@@ -294,6 +295,26 @@ curl -i http://127.0.0.1:8082/health
 `/health` needs no token and answers `{"status": "healthy"}`, with an
 `x-mcc-pid` header naming the server's process; while the server is starting
 it answers `503` with `"status": "starting"`.
+
+#### Media models and their request fields
+
+```sh
+curl http://127.0.0.1:8082/v1/media/models -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN"
+```
+
+Since 7.98.0. One entry per model on a media rail (`"object": "media.model"`), with
+its rails and, per operation it serves, the endpoint to send it to and a JSON Schema of
+the request it takes; and per rail and operation, which of the rail's models accept,
+require, refuse or say nothing about each field. Every field carries an `x-mcc` record
+(`state`, `source`, `since`, `values`): a field nobody has spoken about is
+`forwarded, not known`, never "unsupported". Run on a scratch server (fake Agnes, fake
+key): `200`, 12,829 bytes, `data` = the Image rail's model and the two Video rail models;
+the video rail's `fields.mode` answered
+`{"accepted_by": ["custom_agnes/agnes-video-2.5"], "required_by": ["custom_agnes/agnes-video-2.5"], "refused_by": [], "not_forwarded_by": [], "not_known_for": ["custom_agnes/agnes-video-lite"]}`
+after that model's host had refused a request with *mode is required*. Without a token it
+answers `401` with `{"detail": ...}`, as `/v1/models` does. Read only: nothing a request
+sends changes. Fields, states and sources:
+[Request fields per model](MEDIA.md#request-fields-per-model-798).
 
 ### Errors
 
