@@ -48,6 +48,9 @@ def test_probe_never_sends_data(monkeypatch) -> None:
         def settimeout(self, _t):
             pass
 
+        def setsockopt(self, *_a):
+            pass
+
         def bind(self, _addr):
             raise OSError
 
@@ -208,3 +211,19 @@ def test_wait_for_port_free_true_after_a_real_release() -> None:
 
     threading.Thread(target=_release_later, daemon=True).start()
     assert wait_for_port_free("127.0.0.1", port, timeout=2.0, interval=0.02) is True
+
+
+@pytest.mark.local_serial
+def test_probe_reports_a_port_in_time_wait_as_available() -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    served, _ = listener.accept()
+    served.close()
+    client.close()
+    listener.close()
+
+    assert probe_port_available("127.0.0.1", port) is True

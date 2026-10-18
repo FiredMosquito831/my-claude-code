@@ -145,6 +145,8 @@ def probe_port_available(host: str, port: int, *, timeout: float = 2.0) -> bool:
     sock = socket.socket(_family_for(host), socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
+        if sys.platform != "win32":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, port))
         return True
     except OSError:
