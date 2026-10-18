@@ -109,6 +109,9 @@ def serve(argv: Sequence[str] | None = None) -> None:
     if _print_version_if_requested(argv):
         return
 
+    if _print_help_if_requested(argv):
+        return
+
     if _answer_installer_question(argv):
         return
 
@@ -195,6 +198,14 @@ def _print_version_if_requested(argv: Sequence[str] | None) -> bool:
         return False
     owner = owner_for_invocation()
     print(f"{owner.distribution} {package_version()}")
+    return True
+
+
+def _print_help_if_requested(argv: Sequence[str] | None) -> bool:
+    args = sys.argv[1:] if argv is None else argv
+    if "--help" not in args and "-h" not in args:
+        return False
+    print(_help_text())
     return True
 
 

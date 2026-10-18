@@ -292,6 +292,19 @@ def test_fcc_owned_entrypoints_report_version_without_side_effects(
     assert capsys.readouterr() == ("free-claude-code 9.8.7\n", "")
 
 
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_serve_prints_help_instead_of_starting_the_server(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from my_claude_code.cli import entrypoints
+
+    with patch("my_claude_code.cli.commands.serve") as run_server:
+        entrypoints.serve([flag])
+
+    run_server.assert_not_called()
+    assert "mcc-server" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("entrypoint_name", ["serve", "init"])
 @pytest.mark.local_serial
 def test_version_entrypoints_do_not_import_command_runtime(
