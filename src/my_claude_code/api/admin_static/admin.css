@@ -7670,24 +7670,6 @@ audio.req-media-preview {
   gap: var(--space-2);
 }
 
-.models-override-row {
-  display: grid;
-  grid-template-columns: minmax(140px, 200px) 130px minmax(120px, 220px);
-  gap: var(--space-2);
-  align-items: center;
-}
-
-/* "temperature | Inherit | [ ]" with nothing above it does not say which of
-   the two controls is the answer. */
-.models-override-head {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--line);
-}
-
 .models-override-name {
   cursor: pointer;
 }
@@ -7706,17 +7688,6 @@ audio.req-media-preview {
   opacity: 0.4;
 }
 
-/* A preference's third column is a control plus the sentence that makes it
-   usable -- which rungs this model actually spells, what its limit is and
-   where that number came from. The grid's row alignment is kept by putting
-   the note INSIDE the third cell rather than on a row of its own. */
-.models-preference-value {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
 .models-preference-note {
   margin: 0;
   font-size: 11px;
@@ -7724,34 +7695,181 @@ audio.req-media-preview {
   color: var(--muted);
 }
 
-.models-preference-value .models-override-value {
-  width: 100%;
+/* One table per model (7.101.0): every field -- the value MCC uses, where it
+   came from, and on a row you can override, the control with the default it
+   replaces written under it. Every grid and flex box lives on a <div> inside
+   a cell, never on the <td>: a table cell given display:flex or grid leaves
+   the table's columns and the rows fall apart. */
+.models-fields-editor > .models-subhead {
+  margin: var(--space-3) 0 0;
 }
 
-.models-table {
+.models-fields {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
 }
 
-.models-table th {
-  text-align: left;
-  font-weight: 500;
-  color: var(--muted);
-  padding: var(--space-1) var(--space-2) var(--space-1) 0;
-  vertical-align: top;
-  width: 34%;
+.models-fields-col-field {
+  width: 20%;
 }
 
-.models-table td {
-  padding: var(--space-1) var(--space-2) var(--space-1) 0;
+.models-fields-col-value {
+  width: 13%;
+}
+
+.models-fields-col-source {
+  width: 30%;
+}
+
+.models-fields-col-control {
+  width: 37%;
+}
+
+.models-fields thead th {
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.models-fields-group {
+  border: 0;
+}
+
+.models-fields-grouphead th {
+  padding: var(--space-4) var(--space-2) var(--space-1);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-strong, var(--text));
+  border-bottom: 1px solid var(--line);
+}
+
+.models-fields-row > th,
+.models-fields-row > td {
+  padding: var(--space-2);
+  text-align: left;
   vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.models-fields-row > th {
+  font-weight: 500;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* A row you can override reads as a label for its control. */
+.models-fields-row.is-overridable > th {
+  color: var(--text);
+}
+
+/* Something you set reaches this model: the same accent as the operator
+   badge, and nothing else changes colour. */
+.models-fields-row.is-forced > th,
+.models-fields-row.is-forced > td {
+  background: var(--accent-muted);
+}
+
+.models-fields-readonly > td.models-fields-control {
+  color: var(--muted);
+}
+
+.models-fields .models-override-name {
+  font-family: inherit;
+  font-size: 12px;
+  color: inherit;
+}
+
+/* The overrides file's own word for the row, under its friendlier name. */
+.models-fields-key {
+  display: block;
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* "not reported" used to wrap onto two lines; a long value still wraps. */
+.models-fields-value {
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.models-fields-value-long {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .models-cell-source {
+  vertical-align: top;
+}
+
+.models-fields-source {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 2px;
+  min-width: 0;
+}
+
+.models-fields-control-grid {
+  display: grid;
+  grid-template-columns: minmax(96px, 128px) minmax(0, 1fr);
+  gap: 4px var(--space-2);
+  align-items: center;
+}
+
+.models-fields-control-grid .models-override-value {
+  width: 100%;
+  min-width: 0;
+}
+
+.models-fields-defaults,
+.models-fields-control-grid > .models-preference-note {
+  grid-column: 1 / -1;
+}
+
+.models-fields-defaults {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.models-fields-default {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.models-fields-default b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.models-fields-default-source .models-source {
+  display: inline-block;
+}
+
+.models-fields-control .models-surface-override {
+  margin-top: 0;
+}
+
+.models-fields-control .models-surface-select {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .models-source {
@@ -7816,15 +7934,47 @@ audio.req-media-preview {
   color: var(--muted);
 }
 
+/* Below 720 px every row stacks: field, value, source, control. The column
+   heads are kept for a screen reader and taken off the screen. */
 @media (max-width: 720px) {
-  .models-override-row {
-    grid-template-columns: 1fr;
+  .models-fields,
+  .models-fields tbody,
+  .models-fields tr,
+  .models-fields-row > th,
+  .models-fields-row > td,
+  .models-fields td.models-cell-source,
+  .models-fields-grouphead th {
+    display: block;
+    width: auto;
   }
-}
 
-.models-effective,
-.models-capabilities {
-  margin-top: var(--space-3);
+  .models-fields colgroup {
+    display: none;
+  }
+
+  .models-fields thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .models-fields-row {
+    padding: var(--space-1) 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .models-fields-row > th,
+  .models-fields-row > td {
+    padding: 2px var(--space-2);
+    border-bottom: 0;
+  }
+
+  .models-fields-value {
+    white-space: normal;
+  }
 }
 
 /* "Everything known" (7.86.0): every source's statement of every field,

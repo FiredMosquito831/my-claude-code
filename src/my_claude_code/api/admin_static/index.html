@@ -1089,7 +1089,9 @@
                   <strong>Force unset</strong> (remove the key even if the provider added
                   it), or <strong>Force value</strong> (send exactly what you type). A
                   model row beats its provider row per parameter, so one parameter can be
-                  forced off while the rest inherit.
+                  forced off while the rest inherit. Each model's fields are one table,
+                  and the default MCC would use is always shown under each control,
+                  with where it came from.
                 </p>
                 <div id="modelsOwnedElsewhere" class="models-owned" hidden></div>
               </details>
@@ -2851,7 +2853,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <strong>The provider's own words are kept.</strong> Where a
                   provider's model list says what a model accepts and produces, what
                   type of model it is, or which endpoints serve it, the model's
-                  capability panel shows it in the provider's own words &mdash; the
+                  table shows it in the provider's own words &mdash; the
                   <em>accepts &rarr; produces</em>, <em>model type</em> and
                   <em>endpoints</em> rows &mdash; with the source and rung beside it,
                   like every other row. Where the list is silent, the pair comes from
@@ -2865,7 +2867,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   provider's model list publishes a model's context window, output
                   limit, listed input and output price, or says it reasons or takes
                   tool calls, that is the answer MCC uses &mdash; models.dev only
-                  fills what the list left out. The capability panel says which:
+                  fills what the list left out. The model's table says which:
                   <em>provider /models</em> with the rung it matched at, or
                   <em>provider /models or models.dev</em> where the value came from the
                   catalogue. A provider's own output limit is also the one MCC clamps
@@ -2942,15 +2944,52 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   that one model, and it is shown only: nothing routes, lists or
                   prices on it.
                 </p>
+                <h4 id="guide-model-fields">Read a model's fields and override one</h4>
+                <p>
+                  Open a model on the <strong>Models</strong> page and everything about
+                  it is one table, in groups: <em>Limits</em> (context length and output
+                  limit), <em>Reasoning</em>, <em>Request parameters</em> (the nine
+                  sampling fields sent in the body), then the rows you read but do not
+                  set &mdash; <em>Wire surface</em> where the provider serves more than
+                  one endpoint, <em>What the model is</em>, <em>Prices</em>,
+                  <em>Dates</em> and <em>Gateway lists</em>. Every row reads the same
+                  way: the field, the value MCC uses, and where it came from &mdash; a
+                  badge for the source and the rung of the ladder that stated it.
+                </p>
+                <p>
+                  A row you can override has its control in the last column:
+                  <em>Inherit</em>, <em>Force unset</em> or <em>Force value</em>, and the
+                  box for your value. Under the control, whatever you pick, is the
+                  <em>default</em> &mdash; what MCC would use without you, and where it
+                  came from: the context window and the output limit from the
+                  provider's own list or models.dev, with the rung; the reasoning word
+                  from the route itself, with the model's published effort words and
+                  what the host parses; each sampling parameter from the provider's
+                  own <code>default_parameters</code>. Only OpenRouter-style lists
+                  (OpenRouter, Kilo, Nous Portal) publish those, so most of those rows
+                  honestly say <em>default not reported</em> and name what was asked.
+                  A row something forces is tinted, and its value cell shows the
+                  forced value with an <em>operator override</em> badge and the row it
+                  came from &mdash; the model's or the provider's; the default stays
+                  under the control. <strong>Save overrides</strong> writes the same
+                  file it always did, in the same order, and nothing a request sends
+                  changes until you save. <em>Pin endpoint</em> on the Wire surface row
+                  keeps its own save. The <em>override(s) active</em> chip beside a
+                  model's name counts every key you set that reaches it &mdash; the
+                  output cap, the context window and the reasoning word included.
+                </p>
                 <p id="guide-context-window">
-                  <strong>Your own context window for one model.</strong> Each model
-                  row's override editor on the <strong>Models</strong> page has a
-                  <code>context_length</code> row beside <code>max_output_tokens</code>:
-                  <em>Force value</em> replaces the window MCC extracted &mdash; for the
-                  output-budget headroom routing keeps and for every generated agent
-                  catalogue &mdash; <em>Force unset</em> makes it unknown, and the
-                  extracted number stays visible beside yours as <em>also stated</em>
-                  with the rung it came from.
+                  <strong>Your own context window for one model.</strong> Each model's
+                  table on the <strong>Models</strong> page has a
+                  <em>context length</em> row (<code>context_length</code>) beside the
+                  output limit (<code>max_output_tokens</code>): <em>Force value</em>
+                  replaces the window MCC extracted &mdash; for the output-budget
+                  headroom routing keeps and for every generated agent catalogue
+                  &mdash; <em>Force unset</em> makes it unknown, and the extracted
+                  number stays visible beside yours as <em>also stated</em>, and under
+                  the control as its <em>default</em>, with the rung it came from
+                  (<a href="#guide-model-fields">Read a model's fields and override
+                  one</a>).
                 </p>
                 <p>
                   <strong>Catalogues re-read themselves.</strong> Every usable

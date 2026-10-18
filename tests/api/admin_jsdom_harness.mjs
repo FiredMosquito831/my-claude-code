@@ -4575,6 +4575,14 @@ if (process.env.MCC_JSDOM_SCENARIO === "search_page") {
   const { prepareSearchPageScenario } = await import("./admin_jsdom_search_page.mjs");
   scenario = prepareSearchPageScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=models_fields (7.101.0): the Models page's one table per
+   model -- every field with its value, its source and, under each override
+   control, the default it replaces -- on a payload of its own, plus the Save
+   body byte for byte (admin_jsdom_models_fields.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "models_fields") {
+  const { prepareModelsFieldsScenario } = await import("./admin_jsdom_models_fields.mjs");
+  scenario = prepareModelsFieldsScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
@@ -8462,20 +8470,39 @@ if (modelsLink) {
   /* --- the two preference controls, drawn per capability shape.
      Built directly rather than by opening six rows: the editor is a pure
      function of (scope, key, row, editable, preferences), and what is under
-     test is the drawing rule, not the disclosure. */
-  const describeEditor = (scope, key, row, preferences) => {
+     test is the drawing rule, not the disclosure. Since 7.101.0 each one is a
+     row of the model's one table, its default under its control. */
+  const describeEditor = (scope, key, row, preferences, editable = []) => {
     const form = window.eval("buildOverrideEditor")(
       scope,
       key,
       row,
-      [],
+      editable,
       preferences,
     );
-    const wraps = Array.from(form.querySelectorAll(".models-preference-value"));
-    const select = wraps.length ? wraps[0].querySelector("select") : null;
-    const number = wraps.length > 1 ? wraps[1].querySelector("input") : null;
+    const rowFor = (field) => form.querySelector(`tr[data-field="${field}"]`);
+    const reasoningRow = rowFor("reasoning_preference");
+    const outputRow = rowFor("max_output_tokens");
+    const select = reasoningRow
+      ? reasoningRow.querySelector("select.models-override-value")
+      : null;
+    const number = outputRow ? outputRow.querySelector("input.models-override-value") : null;
+    const notesOf = (tr) =>
+      tr
+        ? Array.from(tr.querySelectorAll(".models-preference-note")).map(flat).join(" ")
+        : "";
+    const defaultsOf = (tr) =>
+      tr ? Array.from(tr.querySelectorAll(".models-fields-default")).map(flat) : [];
     return {
-      heads: Array.from(form.querySelectorAll(".models-override-head")).map(flat),
+      heads: Array.from(form.querySelectorAll("thead th")).map(flat),
+      groups: Array.from(form.querySelectorAll("tbody.models-fields-group")).map(
+        (tbody) => tbody.dataset.group,
+      ),
+      groupHeads: Array.from(form.querySelectorAll(".models-fields-grouphead th")).map(flat),
+      fields: Array.from(form.querySelectorAll("tr[data-field]")).map(
+        (tr) => tr.dataset.field,
+      ),
+      defaults: { reasoning: defaultsOf(reasoningRow), output: defaultsOf(outputRow) },
       options: select
         ? Array.from(select.options).map((option) => [
             option.value,
@@ -8485,10 +8512,7 @@ if (modelsLink) {
         : [],
       selectValue: select ? select.value : "",
       selectDisabled: select ? select.disabled : null,
-      notes: wraps.map((wrap) => {
-        const note = wrap.querySelector(".models-preference-note");
-        return note ? flat(note) : "";
-      }),
+      notes: [notesOf(reasoningRow), notesOf(outputRow)],
       numberMax: number ? number.getAttribute("max") : null,
       numberType: number ? number.type : "",
       modes: Array.from(form.querySelectorAll("select.models-override-mode")).map(
@@ -8498,18 +8522,31 @@ if (modelsLink) {
     };
   };
   const alpha = MODEL_ADMIN_PAGE.providers[0];
+  /* A model's one table (7.101.0) for a given capability record: what 7.100.0
+     drew as the separate "What MCC knows about this model" panel is its
+     read-only rows, drawn by the same row builder. */
+  const fieldsTable = (capabilities, model) =>
+    window.eval("buildOverrideEditor")(
+      "model",
+      model.model_ref,
+      {},
+      [],
+      model.preferences,
+      capabilities,
+      model,
+    );
+  // The 7.100.0 call shape, (capabilities, labels, model), kept for the
+  // captures below; the labels are the page's own, read by the table.
+  const capabilityPanel = (capabilities, _labels, model) =>
+    fieldsTable(capabilities, model);
 
   /* --- the wire surface row (6.74.0) and its override control (7.33.0).
      Built directly for the same reason the preference editors above are: the
-     panel is a pure function of (capabilities, labels, model), and what is
-     under test is which surfaces it offers -- only the ones the host declares
-     -- not the disclosure that reveals it. */
+     table is a pure function of its inputs, and what is under test is which
+     surfaces it offers -- only the ones the host declares -- not the
+     disclosure that reveals it. */
   const describeSurfacePanel = (model) => {
-    const panel = window.eval("buildCapabilityPanel")(
-      model.capabilities,
-      MODEL_ADMIN_PAGE.source_labels || {},
-      model,
-    );
+    const panel = fieldsTable(model.capabilities, model);
     const editor = panel.querySelector(".models-surface-override");
     const select = panel.querySelector("select.models-surface-select");
     return {
@@ -8528,7 +8565,7 @@ if (modelsLink) {
   /* --- what the provider's own list says the model is (7.79.0): three rows
      drawn by the panel's one row builder, each with its badge and rung. Built
      from a capability record directly, as the surface rows above are. */
-  const declaredPanel = window.eval("buildCapabilityPanel")(
+  const declaredPanel = capabilityPanel(
     {
       declared_modalities: {
         value: "image, text → text",
@@ -8568,7 +8605,7 @@ if (modelsLink) {
      from the row's `kind` by the same row builder, with the rung as its note
      and the badge class of the source that stated it. */
   const kindRow = (kind) => {
-    const panel = window.eval("buildCapabilityPanel")(
+    const panel = capabilityPanel(
       alpha.models[0].capabilities,
       MODEL_ADMIN_PAGE.source_labels || {},
       { ...alpha.models[0], kind },
@@ -8620,7 +8657,7 @@ if (modelsLink) {
 
   /* --- OpenRouter's live list (7.84.0): its badge, its three rows, and a
      second statement drawn beside an answer it does not override. */
-  const livePanel = window.eval("buildCapabilityPanel")(
+  const livePanel = capabilityPanel(
     {
       supports_vision: {
         value: true,
@@ -8700,7 +8737,7 @@ if (modelsLink) {
 
   /* --- publication, retirement, cutoff and description (7.85.0), each
      badged with its rung, and LiteLLM's map as a kind and endpoints source. */
-  const datesPanel = window.eval("buildCapabilityPanel")(
+  const datesPanel = capabilityPanel(
     {
       declared_endpoints: {
         value: ["/v1/chat/completions"],
@@ -8925,6 +8962,14 @@ if (modelsLink) {
     alpha.override,
     alpha.preferences,
   );
+  // With a body parameter, so the three override groups are all drawn.
+  models.preferencesWithGrid = describeEditor(
+    "model",
+    alpha.models[0].model_ref,
+    alpha.models[0].override,
+    alpha.models[0].preferences,
+    ["temperature"],
+  );
 
   /* --- the context-window row (7.87.0): model rows only, three states, no
      upper bound, and the extracted window with its rung beside the box. */
@@ -8956,19 +9001,29 @@ if (modelsLink) {
       capabilities,
     );
     const box = form.querySelector('input[aria-label="context window"]');
-    const line = box ? box.closest(".models-override-row") : null;
+    const line = box ? box.closest("tr") : null;
     const save = form.querySelector(".models-actions button");
     const status = form.querySelector(".models-actions .models-status");
     const described = {
       present: Boolean(box),
+      field: line ? line.dataset.field : "",
+      group: line ? line.closest("tbody").dataset.group : "",
       label: line ? flat(line.querySelector(".models-override-name")) : "",
+      fileKey: line ? flat(line.querySelector(".models-fields-key")) : "",
       mode: line ? line.querySelector("select.models-override-mode").value : "",
       value: box ? box.value : "",
       max: box ? box.getAttribute("max") : null,
+      cells: line ? Array.from(line.children).slice(0, 3).map(flat) : [],
+      forced: line ? line.classList.contains("is-forced") : null,
+      defaults: line
+        ? Array.from(line.querySelectorAll(".models-fields-default")).map(flat)
+        : [],
       note: line ? flat(line.querySelector(".models-preference-note")) : "",
-      under:
-        line && line.previousElementSibling
-          ? flat(line.previousElementSibling.querySelector(".models-override-name") || line.previousElementSibling)
+      // The two numbers that bound a model share the Limits group: the
+      // window first, the output limit straight after it.
+      next:
+        line && line.nextElementSibling
+          ? line.nextElementSibling.dataset.field || ""
           : "",
       refused: "",
     };
@@ -8998,14 +9053,12 @@ if (modelsLink) {
     }),
     provider: describeContextRow("provider", {}, undefined),
   };
-  const contextPanel = window.eval("buildCapabilityPanel")(
+  const contextPanel = capabilityPanel(
     { context_length: OPERATOR_WINDOW(1000000) },
     MODEL_ADMIN_PAGE.source_labels || {},
     alpha.models[0],
   );
-  const contextRow = Array.from(contextPanel.querySelectorAll("tr")).find(
-    (row) => flat(row.querySelector("th") || row) === "context length",
-  );
+  const contextRow = contextPanel.querySelector('tr[data-field="context_length"]');
   models.contextWindowPanel = contextRow
     ? {
         cells: Array.from(contextRow.children).map(flat),

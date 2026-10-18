@@ -4077,6 +4077,40 @@ What moves: the provider's own output limit is the one MCC clamps `max_tokens` t
 
 It is read when you open it, for that one model, by `GET /admin/api/models/knowledge?ref=<provider/model>` (local admin only, computed off the server's event loop); it is never part of the Models page's payload or its cache, and nothing routes, lists or prices on it. Each provider's own list row is kept on the catalogue record and stored beside the catalogue in `cache/derived/provider-rows.json` (scrubbed of anything credential-shaped), so it survives a restart; `provider-catalogue.json` itself is unchanged.
 
+### One table per model: value, source, override, default
+
+**New in 7.101.0.** Open a model on the **Models** page and everything about it is one table with four columns -- *Field*, *Value MCC uses*, *Where it came from*, *Your override · default* -- in groups:
+
+| Group | Rows | You can override |
+|---|---|---|
+| Limits | context length, output limit | yes (`context_length`, `max_output_tokens`) |
+| Reasoning | the reasoning word, then the seven reasoning facts (can reason, supports effort / toggle / budget control, supported efforts, mandatory, default enabled) | the word (`reasoning_preference`) |
+| Request parameters (sent in the body) | `frequency_penalty`, `min_p`, `presence_penalty`, `repetition_penalty`, `seed`, `stop`, `temperature`, `top_k`, `top_p` | yes |
+| Wire surface | which endpoint the model is posted to, only on a provider that serves more than one | its own *Pin endpoint* |
+| What the model is | kind, accepts → produces, model type, endpoints, reads images | no |
+| Prices | input, output, cache read, cache write, reasoning (USD per million tokens) | no |
+| Dates | description, knowledge cutoff, published, listed on OpenRouter, retires | no |
+| Gateway lists | supported parameters, gateway default parameters | no |
+
+These are the rows the earlier override editor, *What this forces onto the request* and *What MCC knows about this model (read-only)* drew one under another, merged: every row the read-only panel drew is still drawn, with the same value, badge, rung line, guessed warning and second statement. Under the table: what the host parses, *Everything known*, why the model is listed, and learned facts, as before.
+
+**Every row reads the same way.** The value MCC uses, then where it came from: a badge for the source (*provider /models*, *models.dev*, *OpenRouter live*, *approximate cross-provider -- guessed*, and so on) and the rung of the ladder that stated it. Something you forced -- on the model's own row or on its provider's -- shows your value with an *operator override* badge, says which row it came from, and tints the row; nothing else changes colour. A request parameter nothing forces reads *provider decides*; the reasoning word reads *route decides*.
+
+**The default is always shown under the control**, in every mode, with where it came from -- so an override never hides the number it replaces:
+
+- **Context length:** the window the ladder extracted and its rung (*default 524,288 -- provider /models, exact id*). Where nothing states one: *default not reported -- asked: provider /models, models.dev (own bucket, reference, vote), OpenRouter live*.
+- **Output limit:** the number routing bounds requests by -- the provider's list, then models.dev, with the rung -- or *default not reported* with the same list of rungs asked. Where OpenRouter's live list states a different number, a second line says so (*OpenRouter live also states 131,072 (shown, never acted on)*): the page shows it, routing never uses it. While you cap the output, the row's value is your cap and the badge and rung the row showed before move under the default. The sentence about a cap not being a request stays under the control.
+- **Reasoning:** *default the route's own answer*, then the model's published effort words with their rung (or *not reported*), then what the host parses. The options you cannot pick are still listed, disabled, with the reason.
+- **Each of the nine:** the provider's own `default_parameters` value for that name (*default 0.7 -- provider /models (default_parameters)*). Only OpenRouter-style lists publish those -- OpenRouter, Kilo and Nous Portal -- so for most providers the row honestly says *default not reported -- only the provider's /models states one*; a list that names no value for that parameter says it pins none. Where the provider publishes its `supported_parameters`, a second line says whether that parameter is on it (shown, never acted on).
+
+A provider's own table (*Parameter overrides for every <provider> model*) has the same rows except the context window, which is set per model; its value column is that provider row's own setting, and the default reads *per model -- open a model to see its default*, because a provider has no single capability record.
+
+**Saving is unchanged.** *Save overrides* sends the same body to the same route, key for key, and writes `model_overrides.json` exactly as before; a value the page refuses (a fraction for a window, an output cap above the published limit, *Force value* with an empty box) is refused with the same message. After a save the value columns and the default lines repaint in place and *Saved* stays on screen. *Pin endpoint* on the Wire surface row keeps its own save, checked against what the host serves.
+
+**The *override(s) active* chip** beside a model's name counts every key you set that reaches that model -- the output cap, the context window, the reasoning word and a pinned endpoint as well as the nine request parameters, from the model's own row and from its provider's. Before 7.101.0 it counted only the nine.
+
+Display only: nothing a request sends, routes or lists changes, and no new source of defaults is read.
+
 ### Per-model reasoning and output preferences
 
 **New in 7.25.0.** The same `model_overrides.json` row carries two keys that

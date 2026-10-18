@@ -301,9 +301,13 @@ def test_saving_an_override_does_not_destroy_its_own_status_element() -> None:
     )
     assert "refreshProviderRow(key)" in save_body
     assert "refreshModelRows([key])" in save_body
-    # The refresh repaints the read-only panels, never the editor around them.
+    # The refresh repaints the read-only panels and, since 7.101.0, the
+    # table's value columns and default lines in place -- never the controls
+    # or the status element around them.
     assert "function fillModelReadouts(" in section
-    assert "if (readouts) fillModelReadouts(readouts, model);" in section
+    assert "if (readouts && paint) {" in section
+    assert "paint(modelFieldsInput(model));" in section
+    assert "fillModelReadouts(readouts, model);" in section
 
 
 def test_force_value_refuses_an_empty_box() -> None:
@@ -322,8 +326,12 @@ def test_the_override_grid_names_its_columns() -> None:
     section = _models_section()
     styles = ADMIN_CSS.read_text(encoding="utf-8")
 
-    assert '["Parameter", "What to send", "Value"]' in section
-    assert ".models-override-head" in styles
+    # 7.101.0: one table per model, its four columns named in its <thead>.
+    assert '"Field",' in section
+    assert 'isModel ? "Value MCC uses" : "Set on this provider",' in section
+    assert '"Where it came from",' in section
+    assert '"Your override · default",' in section
+    assert ".models-fields thead th" in styles
 
 
 def test_the_page_has_no_heading_without_controls_under_it() -> None:
@@ -665,11 +673,14 @@ def test_the_capability_panel_renders_the_wire_surface_row() -> None:
     """
 
     script = _script()
-    assert 'rows.push(["wire surface", capabilities.response_surface]);' in script
+    assert (
+        'add("surface", "response_surface", "wire surface", '
+        "capabilities.response_surface);" in script
+    )
     # The resolver's sentence about *this* answer -- the npm package that chose
     # the surface, or why one cannot be reached -- has to reach the page, or
     # "unservable" would be a verdict with no reason attached.
-    assert "if (field.note)" in script
+    assert "if (parts.note && field.note)" in script
     assert 'note.className = "models-approx-note";' in script
 
 
