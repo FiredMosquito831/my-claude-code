@@ -1,0 +1,884 @@
+{
+  "_recorded": "MCC_JSDOM_SCENARIO=models_fields run against the 7.100.0 page (fork/main 5553a92e): the three blocks the Models page drew before 7.101.0 merged them into one table. Recorded once, on the old page; the tests replay the same payload and gestures on the new one.",
+  "capability_rows": {
+    "custom_agnes/agnes-3.0-flash": [
+      {
+        "label": "wire surface",
+        "value": "chat_completions",
+        "badgeClass": "models-source models-source-default",
+        "badgeText": "this provider's first surface",
+        "notes": []
+      },
+      {
+        "label": "output limit",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "context length",
+        "value": "524,288",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "reads images",
+        "value": "yes",
+        "badgeClass": "models-source models-source-provider_or_models_dev",
+        "badgeText": "provider /models or models.dev",
+        "notes": []
+      },
+      {
+        "label": "kind",
+        "value": "Chat",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "the provider's model type or endpoints",
+        "notes": [
+          "provider /models, exact id"
+        ]
+      },
+      {
+        "label": "accepts → produces",
+        "value": "text → text",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "model type (provider's word)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "endpoints",
+        "value": "openai",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "description",
+        "value": "OpenRouter's words.",
+        "badgeClass": "models-source models-source-openrouter_live",
+        "badgeText": "OpenRouter live",
+        "notes": [
+          "also stated: The provider's own words. (provider /models, provider /models, exact id)"
+        ]
+      },
+      {
+        "label": "knowledge cutoff",
+        "value": "2025-06",
+        "badgeClass": "models-source models-source-models_dev",
+        "badgeText": "models.dev",
+        "notes": [
+          "matched at tier 3 of 11 — models.dev bucket, exact id"
+        ]
+      },
+      {
+        "label": "published",
+        "value": "2026-08-26",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "The day the provider's own model list says it published this model.",
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "listed on OpenRouter",
+        "value": "2026-02-11",
+        "badgeClass": "models-source models-source-openrouter_live",
+        "badgeText": "OpenRouter live",
+        "notes": [
+          "The day OpenRouter added it to its list -- not the model's release date."
+        ]
+      },
+      {
+        "label": "retires",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "input price (USD / 1M)",
+        "value": "$0.05",
+        "badgeClass": "models-source models-source-provider_or_models_dev",
+        "badgeText": "provider /models or models.dev",
+        "notes": []
+      },
+      {
+        "label": "output price (USD / 1M)",
+        "value": "$0.15",
+        "badgeClass": "models-source models-source-provider_or_models_dev",
+        "badgeText": "provider /models or models.dev",
+        "notes": []
+      },
+      {
+        "label": "cache read price (USD / 1M)",
+        "value": "$0.01",
+        "badgeClass": "models-source models-source-models_dev",
+        "badgeText": "models.dev",
+        "notes": [
+          "matched at tier 3 of 11 — models.dev bucket, exact id"
+        ]
+      },
+      {
+        "label": "cache write price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "reasoning price (USD / 1M)",
+        "value": "$0.20",
+        "badgeClass": "models-source models-source-approximate",
+        "badgeText": "approximate cross-provider — guessed",
+        "notes": [
+          "matched at tier 8 of 11 — cross-provider, exact id",
+          "guessed from 3 same-named row(s) in other providers, 67% agreement across 2 that published one"
+        ]
+      },
+      {
+        "label": "gateway default parameters",
+        "value": "temperature=0.7, top_p=0.95",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": []
+      },
+      {
+        "label": "supported parameters",
+        "value": "max_tokens, reasoning_effort, temperature, tools, top_p",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": []
+      },
+      {
+        "label": "can reason",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "supports effort control",
+        "value": "yes",
+        "badgeClass": "models-source models-source-models_dev",
+        "badgeText": "models.dev",
+        "notes": [
+          "matched at tier 3 of 11 — models.dev bucket, exact id"
+        ]
+      },
+      {
+        "label": "supports toggle control",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "supports budget control",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "supported efforts",
+        "value": "high, low, medium",
+        "badgeClass": "models-source models-source-models_dev",
+        "badgeText": "models.dev",
+        "notes": [
+          "matched at tier 3 of 11 — models.dev bucket, exact id"
+        ]
+      },
+      {
+        "label": "mandatory",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "default enabled",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      }
+    ],
+    "custom_agnes/agnes-2.5-flash": [
+      {
+        "label": "output limit",
+        "value": "40,960",
+        "badgeClass": "models-source models-source-models_dev",
+        "badgeText": "models.dev",
+        "notes": [
+          "matched at tier 3 of 11 — models.dev bucket, exact id"
+        ]
+      },
+      {
+        "label": "context length",
+        "value": "1,000,000",
+        "badgeClass": "models-source models-source-operator",
+        "badgeText": "operator override",
+        "notes": [
+          "Your number from this model's override row. It is the window routing keeps the output budget within and the one every generated agent catalogue publishes.",
+          "also stated: 1,048,576 (provider /models, provider /models, exact id)"
+        ]
+      },
+      {
+        "label": "reads images",
+        "value": "yes",
+        "badgeClass": "models-source models-source-approximate",
+        "badgeText": "approximate cross-provider — guessed",
+        "notes": [
+          "matched at tier 8 of 11 — cross-provider, exact id",
+          "guessed from 4 same-named row(s) in other providers, 100% agreement across 4 that published one"
+        ]
+      },
+      {
+        "label": "kind",
+        "value": "Chat",
+        "badgeClass": "models-source models-source-approximate",
+        "badgeText": "models.dev modalities — guessed",
+        "notes": [
+          "cross-provider, exact id"
+        ]
+      },
+      {
+        "label": "accepts → produces",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "model type (provider's word)",
+        "value": "chat",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "endpoints",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "description",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "knowledge cutoff",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "published",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "retires",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "input price (USD / 1M)",
+        "value": "$0.00 (free)",
+        "badgeClass": "models-source models-source-provider_or_models_dev",
+        "badgeText": "provider /models or models.dev",
+        "notes": []
+      },
+      {
+        "label": "output price (USD / 1M)",
+        "value": "$0.00 (free)",
+        "badgeClass": "models-source models-source-provider_or_models_dev",
+        "badgeText": "provider /models or models.dev",
+        "notes": []
+      },
+      {
+        "label": "cache read price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "cache write price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "reasoning price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "gateway default parameters",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "supported parameters",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "can reason",
+        "value": "yes",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "supports effort control",
+        "value": "yes",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "supports toggle control",
+        "value": "no",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "supports budget control",
+        "value": "no",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "supported efforts",
+        "value": "high, low, medium",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "mandatory",
+        "value": "no",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "default enabled",
+        "value": "yes",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      }
+    ],
+    "custom_agnes/agnes-1.5-pro": [
+      {
+        "label": "output limit",
+        "value": "131,072",
+        "badgeClass": "models-source models-source-openrouter_live",
+        "badgeText": "OpenRouter live",
+        "notes": [
+          "OpenRouter live, exact id (agnes/agnes-1.5-pro). From OpenRouter's own live model list."
+        ]
+      },
+      {
+        "label": "context length",
+        "value": "262,144",
+        "badgeClass": "models-source models-source-models_dev",
+        "badgeText": "models.dev",
+        "notes": [
+          "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+          "matched at tier 3 of 11 — models.dev bucket, exact id"
+        ]
+      },
+      {
+        "label": "reads images",
+        "value": "no",
+        "badgeClass": "models-source models-source-provider_or_models_dev",
+        "badgeText": "provider /models or models.dev",
+        "notes": []
+      },
+      {
+        "label": "kind",
+        "value": "not known",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "no source states it — offered in every list",
+        "notes": []
+      },
+      {
+        "label": "input price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "output price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "cache read price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "cache write price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "reasoning price (USD / 1M)",
+        "value": "not reported",
+        "badgeClass": "models-source models-source-unknown",
+        "badgeText": "unknown",
+        "notes": []
+      },
+      {
+        "label": "gateway default parameters",
+        "value": "none published",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": []
+      },
+      {
+        "label": "supported parameters",
+        "value": "none published",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": []
+      },
+      {
+        "label": "can reason",
+        "value": "yes",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "supports effort control",
+        "value": "yes",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "supports toggle control",
+        "value": "no",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "supports budget control",
+        "value": "no",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "supported efforts",
+        "value": "high, low, medium",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "mandatory",
+        "value": "no",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      },
+      {
+        "label": "default enabled",
+        "value": "yes",
+        "badgeClass": "models-source models-source-provider",
+        "badgeText": "provider /models",
+        "notes": [
+          "matched at tier 1 of 11 — provider /models, exact id"
+        ]
+      }
+    ]
+  },
+  "effective_rows": {
+    "custom_agnes/agnes-3.0-flash": [
+      [
+        "temperature",
+        "0.6",
+        "from the model row"
+      ],
+      [
+        "top_k",
+        "40",
+        "from the provider row"
+      ]
+    ],
+    "custom_agnes/agnes-2.5-flash": [
+      [
+        "top_k",
+        "40",
+        "from the provider row"
+      ],
+      [
+        "top_p",
+        "removed from the body",
+        "from the model row"
+      ]
+    ],
+    "custom_agnes/agnes-1.5-pro": [
+      [
+        "top_k",
+        "40",
+        "from the provider row"
+      ]
+    ]
+  },
+  "editor_controls": {
+    "custom_agnes/agnes-3.0-flash": [
+      {
+        "label": "max_output_tokens",
+        "modeId": "pref-model-custom_agnes-agnes-3-0-flash-max_output_tokens-mode",
+        "mode": "value"
+      },
+      {
+        "label": "context_length",
+        "modeId": "pref-model-custom_agnes-agnes-3-0-flash-context_length-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "reasoning",
+        "modeId": "pref-model-custom_agnes-agnes-3-0-flash-reasoning_preference-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "frequency_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-frequency_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "min_p",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-min_p-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "presence_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-presence_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "repetition_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-repetition_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "seed",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-seed-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "stop",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-stop-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "temperature",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-temperature-mode",
+        "mode": "value"
+      },
+      {
+        "label": "top_k",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-top_k-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "top_p",
+        "modeId": "ov-model-custom_agnes-agnes-3-0-flash-top_p-mode",
+        "mode": "inherit"
+      }
+    ],
+    "custom_agnes/agnes-2.5-flash": [
+      {
+        "label": "max_output_tokens",
+        "modeId": "pref-model-custom_agnes-agnes-2-5-flash-max_output_tokens-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "context_length",
+        "modeId": "pref-model-custom_agnes-agnes-2-5-flash-context_length-mode",
+        "mode": "value"
+      },
+      {
+        "label": "reasoning",
+        "modeId": "pref-model-custom_agnes-agnes-2-5-flash-reasoning_preference-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "frequency_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-frequency_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "min_p",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-min_p-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "presence_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-presence_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "repetition_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-repetition_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "seed",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-seed-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "stop",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-stop-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "temperature",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-temperature-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "top_k",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-top_k-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "top_p",
+        "modeId": "ov-model-custom_agnes-agnes-2-5-flash-top_p-mode",
+        "mode": "unset"
+      }
+    ],
+    "custom_agnes/agnes-1.5-pro": [
+      {
+        "label": "max_output_tokens",
+        "modeId": "pref-model-custom_agnes-agnes-1-5-pro-max_output_tokens-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "context_length",
+        "modeId": "pref-model-custom_agnes-agnes-1-5-pro-context_length-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "reasoning",
+        "modeId": "pref-model-custom_agnes-agnes-1-5-pro-reasoning_preference-mode",
+        "mode": "value"
+      },
+      {
+        "label": "frequency_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-frequency_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "min_p",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-min_p-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "presence_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-presence_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "repetition_penalty",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-repetition_penalty-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "seed",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-seed-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "stop",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-stop-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "temperature",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-temperature-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "top_k",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-top_k-mode",
+        "mode": "inherit"
+      },
+      {
+        "label": "top_p",
+        "modeId": "ov-model-custom_agnes-agnes-1-5-pro-top_p-mode",
+        "mode": "inherit"
+      }
+    ]
+  },
+  "provider_editor_controls": [
+    {
+      "label": "max_output_tokens",
+      "modeId": "pref-provider-custom_agnes-max_output_tokens-mode",
+      "mode": "value"
+    },
+    {
+      "label": "reasoning",
+      "modeId": "pref-provider-custom_agnes-reasoning_preference-mode",
+      "mode": "inherit"
+    },
+    {
+      "label": "frequency_penalty",
+      "modeId": "ov-provider-custom_agnes-frequency_penalty-mode",
+      "mode": "inherit"
+    },
+    {
+      "label": "min_p",
+      "modeId": "ov-provider-custom_agnes-min_p-mode",
+      "mode": "inherit"
+    },
+    {
+      "label": "presence_penalty",
+      "modeId": "ov-provider-custom_agnes-presence_penalty-mode",
+      "mode": "inherit"
+    },
+    {
+      "label": "repetition_penalty",
+      "modeId": "ov-provider-custom_agnes-repetition_penalty-mode",
+      "mode": "inherit"
+    },
+    {
+      "label": "seed",
+      "modeId": "ov-provider-custom_agnes-seed-mode",
+      "mode": "inherit"
+    },
+    {
+      "label": "stop",
+      "modeId": "ov-provider-custom_agnes-stop-mode",
+      "mode": "inherit"
+    },
+    {
+      "label": "temperature",
+      "modeId": "ov-provider-custom_agnes-temperature-mode",
+      "mode": "inherit"
+    },
+    {
+      "label": "top_k",
+      "modeId": "ov-provider-custom_agnes-top_k-mode",
+      "mode": "value"
+    },
+    {
+      "label": "top_p",
+      "modeId": "ov-provider-custom_agnes-top_p-mode",
+      "mode": "inherit"
+    }
+  ],
+  "chips": {
+    "custom_agnes/agnes-3.0-flash": "2 override(s) active",
+    "custom_agnes/agnes-2.5-flash": "2 override(s) active",
+    "custom_agnes/agnes-1.5-pro": "1 override(s) active"
+  },
+  "posts": [
+    {
+      "path": "/admin/api/model-admin/overrides",
+      "body": "{\"scope\":\"model\",\"key\":\"custom_agnes/agnes-2.5-flash\",\"updates\":{\"max_output_tokens\":\"inherit\",\"reasoning_preference\":\"inherit\",\"context_length\":1000000,\"frequency_penalty\":\"inherit\",\"min_p\":\"inherit\",\"presence_penalty\":\"inherit\",\"repetition_penalty\":\"inherit\",\"seed\":\"inherit\",\"stop\":\"inherit\",\"temperature\":\"inherit\",\"top_k\":\"inherit\",\"top_p\":null}}"
+    },
+    {
+      "path": "/admin/api/model-admin/overrides",
+      "body": "{\"scope\":\"model\",\"key\":\"custom_agnes/agnes-3.0-flash\",\"updates\":{\"max_output_tokens\":65000,\"reasoning_preference\":\"high\",\"context_length\":200000,\"frequency_penalty\":\"inherit\",\"min_p\":\"inherit\",\"presence_penalty\":\"inherit\",\"repetition_penalty\":\"inherit\",\"seed\":\"inherit\",\"stop\":\"inherit\",\"temperature\":0.8,\"top_k\":\"inherit\",\"top_p\":null}}"
+    },
+    {
+      "path": "/admin/api/model-admin/overrides",
+      "body": "{\"scope\":\"provider\",\"key\":\"custom_agnes\",\"updates\":{\"max_output_tokens\":null,\"reasoning_preference\":\"inherit\",\"frequency_penalty\":\"inherit\",\"min_p\":\"inherit\",\"presence_penalty\":\"inherit\",\"repetition_penalty\":\"inherit\",\"seed\":\"inherit\",\"stop\":\"inherit\",\"temperature\":0.5,\"top_k\":40,\"top_p\":\"inherit\"}}"
+    },
+    {
+      "path": "/admin/api/model-admin/surface",
+      "body": "{\"key\":\"custom_agnes/agnes-3.0-flash\",\"surface\":\"responses\"}"
+    }
+  ],
+  "refused": {
+    "fraction": "context_length must be a whole number of tokens greater than zero.",
+    "overCap": "This model reports a lower limit than that: max_output_tokens (limit 32,768).",
+    "blank": "Give max_output_tokens a value, or set it back to Inherit or Force unset."
+  },
+  "media_section_sha256": "90cccedd57d796950b4562a9abd9847c51c4fd56d5eb97076fdcd557e654f379",
+  "mcp_notes": {
+    "count": 4,
+    "sha256": "23b1e7da075ba552d2c5f29eee8ce6e6458c30905f1ed6bb75d7d26283d00f9a"
+  }
+}

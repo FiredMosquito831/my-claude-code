@@ -30213,13 +30213,12 @@ function buildModelSummary(model) {
   // entry sourced from the vendor's own catalogue and one sourced from a list
   // somebody typed used to look identical.
   appendListingChips(summary, model.listing);
-  const forced = (model.effective || []).filter(
-    (row) => row.action !== "inherit",
-  );
-  if (forced.length) {
-    summary.appendChild(
-      buildModelsChip("forced", `${forced.length} override(s) active`),
-    );
+  // Every key you set that reaches this model (7.101.0), not only the nine
+  // body parameters: the output cap, the context window and the reasoning
+  // word used to go uncounted.
+  const forced = modelOverrideKeyCount(model);
+  if (forced) {
+    summary.appendChild(buildModelsChip("forced", `${forced} override(s) active`));
   }
   // Measured, not declared: what the log saw leave and come back. Absent when
   // the model served no succeeded attempt in the window -- never measured is
@@ -30388,6 +30387,7 @@ function fillModelBody(body, model, editable) {
       editable,
       model.preferences,
       model.capabilities,
+      model,
     ),
   );
   const readouts = document.createElement("div");
@@ -30396,22 +30396,36 @@ function fillModelBody(body, model, editable) {
   fillModelReadouts(readouts, model);
 }
 
-/* The two read-only panels, refreshed on their own. Rebuilding the whole body
-   after a save also rebuilt the Save button's status element, so the "Saved"
-   confirmation landed in a node that was no longer on the page and the user
-   saw nothing at all. The editor already shows what was saved; only these
-   two need repainting. */
+// What a model's table is painted from; the same shape on a repaint.
+function modelFieldsInput(model) {
+  return {
+    row: model.override || {},
+    preferences: model.preferences,
+    capabilities: model.capabilities,
+    model,
+  };
+}
+
+/* The panels under the table, refreshed on their own. Rebuilding the whole
+   body after a save also rebuilt the Save button's status element, so the
+   "Saved" confirmation landed in a node that was no longer on the page and
+   the user saw nothing at all. The table repaints its own value columns and
+   default lines (7.101.0); only these need drawing again. */
 function fillModelReadouts(readouts, model) {
-  const data = modelsState.data;
   readouts.textContent = "";
-  readouts.appendChild(buildEffectiveTable(model.effective || []));
-  readouts.appendChild(
-    buildCapabilityPanel(
-      model.capabilities,
-      (data && data.source_labels) || {},
-      model,
-    ),
-  );
+  const capabilities = model.capabilities;
+  if (!modelFieldsWritten(capabilities, model)) {
+    const note = document.createElement("p");
+    note.className = "models-empty-note";
+    note.textContent =
+      "Nothing discovered for this model, so MCC falls back to its defaults.";
+    readouts.appendChild(note);
+  } else {
+    /* The host half of the two-fact rule, under the table whose reasoning
+       rows are the model half. */
+    const dialect = buildDialectPanel(capabilities && capabilities.reasoning_dialect);
+    if (dialect) readouts.appendChild(dialect);
+  }
   /* Everything every source says about this model (7.86.0), loaded only when
      opened: it is never part of the page payload or its cache. */
   readouts.appendChild(buildKnowledgeDisclosure(model));
@@ -30888,195 +30902,69 @@ function buildModelsChip(kind, text) {
   return chip;
 }
 
-/* The three-state control. A single text box cannot say "force unset": empty
-   and "send null" would look identical, and the difference between them is
-   the entire point of the override file. So every parameter is a mode select
-   -- inherit / force unset / force value -- and the text box beside it is
-   only that third mode's argument, disabled in the other two.
+/* ----------------------------------------------- one table per model (7.101.0)
+   Every field of a model in ONE table: the value MCC uses, where that came
+   from, and -- on a row you can override -- the Inherit / Force unset / Force
+   value control with the DEFAULT it replaces written under it, whatever the
+   mode (the user, 2026-10-10: "so I also know the default values from the
+   provider ... we only see the override option"). It replaces the three
+   blocks 7.100.0 drew one under another -- the override editor, "What this
+   forces onto the request" and "What MCC knows about this model" -- and every
+   row the last one drew is still drawn by its own row builder, with the same
+   value text, badge, rung line, guessed warning and second statement.
 
-   The grid carries column headers, because "temperature | Inherit | [ ]" with
-   nothing above it does not say which of the two controls is the answer. */
-/* The two preference controls, drawn above the nine sampling rows and under
-   their own heading.
+   Display only. The Save body is 7.100.0's, key for key and in the same
+   order: the overrides file keeps the order a body names NEW keys in
+   (`merged_override_row`), so whatever order the rows are drawn in, the body
+   is built in the old one -- the preferences in the server's order, then the
+   context window (model rows), then the nine body parameters. A save
+   repaints the value columns and the default lines in place; the controls
+   and the status line are the same elements, so "Saved" stays on screen.
 
-   They are three-state like everything else in this editor -- Inherit /
-   Force unset / Force value -- because the file's three states are the whole
-   point of it and a second idiom on the same form would be a second thing to
-   learn. What differs is only the third mode's argument: a select whose
-   options the ROW published (derived from this model's own resolved
-   capability and its host's dialect, never a fixed list), and a number input
-   bounded by the limit the same ladder resolved.
+   The three states are kept from the old editor: a single text box cannot
+   say "force unset" -- empty and "send null" would look identical, and the
+   difference between them is the entire point of the override file. */
+const MODELS_FIELD_GROUPS = [
+  ["limits", "Limits"],
+  ["reasoning", "Reasoning"],
+  ["request", "Request parameters (sent in the body)"],
+  ["surface", "Wire surface"],
+  ["model", "What the model is"],
+  ["prices", "Prices"],
+  ["dates", "Dates"],
+  ["lists", "Gateway lists"],
+];
 
-   An option the model cannot take is rendered disabled with the reason as its
-   text, rather than omitted: "Off is not available here, and here is why" is
-   a different message from "Off does not exist", and the second one reads as
-   a defect. A stored value that is no longer on offer is kept, marked, and
-   never silently rewritten -- the catalogue may move back, and editing a
-   user's file behind their back is worse than telling them. */
-function buildPreferenceRows(form, scope, key, preferences, inputs) {
-  if (!preferences) return;
-  const names =
-    (modelsState.data &&
-      modelsState.data.overrides &&
-      modelsState.data.overrides.preference_parameters) ||
-    {};
-  const ordered = Object.keys(names).filter((name) => preferences[name]);
-  if (!ordered.length) return;
+/* "not reported" names the rungs that were asked, so it never reads as
+   "unsupported": the output limit's ladder (the routed provider's own list,
+   then models.dev's own bucket, its reference rows and the cross-provider
+   vote) and the context window's, which OpenRouter's live list also fills. */
+const OUTPUT_LIMIT_ASKED =
+  "asked: provider /models, models.dev (own bucket, reference, vote)";
+const CONTEXT_WINDOW_ASKED =
+  "asked: provider /models, models.dev (own bucket, reference, vote), " +
+  "OpenRouter live";
+const REASONING_VOCABULARY_ASKED = "asked: provider /models, models.dev";
 
-  const head = document.createElement("div");
-  head.className = "models-override-row models-override-head";
-  ["Preference", "What to decide", "Value"].forEach((text) => {
-    const cell = document.createElement("span");
-    cell.textContent = text;
-    head.appendChild(cell);
-  });
-  form.appendChild(head);
+const MODELS_FIELD_LABELS = {
+  context_length: "context length",
+  max_output_tokens: "output limit",
+  reasoning_preference: "reasoning",
+};
 
-  ordered.forEach((name) => {
-    const spec = preferences[name];
-    const field = document.createElement("div");
-    field.className = "models-override-row";
-    const boxId = `pref-${scope}-${key}-${name}`.replace(/[^A-Za-z0-9_-]/g, "-");
+const OVERRIDE_ROW_WORDS = {
+  model: "this model's override row",
+  provider: "this provider's override row",
+};
 
-    const label = document.createElement("label");
-    label.className = "models-override-name";
-    label.textContent = name === "reasoning_preference" ? "reasoning" : name;
-    label.htmlFor = `${boxId}-mode`;
-    field.appendChild(label);
+// Each table's painter, so a save repaints it in place (see above).
+const MODELS_FIELD_PAINTERS = new WeakMap();
 
-    const mode = document.createElement("select");
-    mode.className = "models-override-mode";
-    mode.id = `${boxId}-mode`;
-    [
-      ["inherit", "Inherit"],
-      ["unset", "Force unset"],
-      ["value", "Force value"],
-    ].forEach(([value, text]) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = text;
-      mode.appendChild(option);
-    });
-    mode.value = spec.state === "value" || spec.state === "unset" ? spec.state : "inherit";
-    field.appendChild(mode);
-
-    const control =
-      names[name] === "integer"
-        ? buildOutputPreferenceInput(boxId, spec)
-        : buildReasoningPreferenceSelect(boxId, spec);
-    control.box.disabled = mode.value !== "value";
-    mode.addEventListener("change", () => {
-      control.box.disabled = mode.value !== "value";
-      if (!control.box.disabled) control.box.focus();
-    });
-    field.appendChild(control.wrap);
-    inputs.set(name, { mode: mode, box: control.box, max: control.max });
-    form.appendChild(field);
-  });
-}
-
-function buildReasoningPreferenceSelect(boxId, spec) {
-  const wrap = document.createElement("div");
-  wrap.className = "models-preference-value";
-  const box = document.createElement("select");
-  box.className = "models-override-value";
-  box.id = `${boxId}-value`;
-  box.setAttribute("aria-label", "reasoning preference");
-  const options = Array.isArray(spec.options) ? spec.options : [];
-  const stored = spec.state === "value" ? String(spec.value) : "";
-  let storedIsOffered = false;
-  options.forEach((entry) => {
-    const option = document.createElement("option");
-    option.value = entry.value;
-    option.textContent = entry.label;
-    if (entry.available === false) {
-      option.disabled = true;
-      option.textContent = `${entry.label} -- unavailable`;
-    }
-    if (entry.reason) option.title = entry.reason;
-    if (entry.value === stored) storedIsOffered = true;
-    box.appendChild(option);
-  });
-  /* A value the catalogue no longer offers is kept on the list so the select
-     can still show what is stored; the note below says it is being clamped. */
-  if (stored && !storedIsOffered) {
-    const option = document.createElement("option");
-    option.value = stored;
-    option.textContent = `${stored} -- no longer offered`;
-    box.appendChild(option);
-  }
-  if (stored) box.value = stored;
-  wrap.appendChild(box);
-
-  const note = document.createElement("p");
-  note.className = "models-preference-note";
-  const parts = [];
-  if (spec.note) parts.push(spec.note);
-  if (spec.can_reason === false) {
-    box.disabled = true;
-  }
-  if (spec.capability_known === false && spec.can_reason !== false) {
-    parts.push(
-      "Nothing published this model's effort vocabulary, so every rung is " +
-        "offered and whatever you pick is clamped to what it accepts.",
-    );
-  }
-  if (stored && !storedIsOffered) {
-    parts.push(
-      `Your setting "${stored}" is no longer in this model's vocabulary; ` +
-        "the nearest rung it does spell is being sent. Nothing was rewritten " +
-        "on disk.",
-    );
-  }
-  const chosen = options.find((entry) => entry.value === stored);
-  if (chosen && chosen.reason) parts.push(chosen.reason);
-  note.textContent = parts.join(" ");
-  if (note.textContent) wrap.appendChild(note);
-  return { wrap: wrap, box: box, max: null };
-}
-
-function buildOutputPreferenceInput(boxId, spec) {
-  const wrap = document.createElement("div");
-  wrap.className = "models-preference-value";
-  const box = document.createElement("input");
-  box.type = "number";
-  box.min = "1";
-  box.step = "1";
-  box.className = "models-override-value";
-  box.id = `${boxId}-value`;
-  box.setAttribute("aria-label", "max output tokens");
-  const limit = typeof spec.limit === "number" ? spec.limit : null;
-  if (limit != null) box.max = String(limit);
-  box.value = spec.state === "value" && spec.value != null ? String(spec.value) : "";
-  wrap.appendChild(box);
-
-  const note = document.createElement("p");
-  note.className = "models-preference-note";
-  const parts = [];
-  if (limit != null) {
-    const where = [spec.limit_source_label, spec.limit_tier_label]
-      .filter(Boolean)
-      .join(", ");
-    parts.push(
-      `This model reports ${limit.toLocaleString()}` +
-        (where ? ` (${where})` : "") +
-        ".",
-    );
-  }
-  if (spec.note) parts.push(spec.note);
-  note.textContent = parts.join(" ");
-  if (note.textContent) wrap.appendChild(note);
-  return { wrap: wrap, box: box, max: limit };
-}
-
-/* The operator's context window (7.87.0): one more row under the
-   preferences, model rows only, with the same three states. Its number has
-   no upper bound -- unlike the output cap it states the model's window, and
-   a provider's API may accept more than any catalogue extracted -- so the
-   extracted value and the rung that gave it are shown beside the box
-   instead, and the default is never out of sight. Derived from the row's own
-   `capabilities.context_length` and `override`, so nothing new is sent to
-   the page while nobody has set one. */
+/* The operator's context window (7.87.0): model rows only, the same three
+   states, and no upper bound -- unlike the output cap it states the model's
+   window, and a provider's API may accept more than any catalogue extracted.
+   Derived from the row's own `capabilities.context_length` and `override`,
+   so nothing new is sent to the page while nobody has set one. */
 const CONTEXT_WINDOW_OVERRIDE = "context_length";
 
 function contextWindowExtracted(field) {
@@ -31085,22 +30973,132 @@ function contextWindowExtracted(field) {
   return field.value === null || field.value === undefined ? null : field;
 }
 
-function buildContextWindowRow(form, key, row, capabilities, inputs) {
-  const name = CONTEXT_WINDOW_OVERRIDE;
-  const current = (row || {})[name];
-  const field = document.createElement("div");
-  field.className = "models-override-row";
-  const boxId = `pref-model-${key}-${name}`.replace(/[^A-Za-z0-9_-]/g, "-");
+/* The rung a second statement or a default came from, said once. A tier
+   label that already names its source ("provider /models, exact id") used
+   to be printed after that source again: "(provider /models, provider
+   /models, exact id)". OpenRouter's rung line names it in its own words. */
+function statementRung(statement) {
+  if (!statement) return "";
+  const sourceLabel = statement.source_label || "";
+  const tierLabel = statement.tier_label || "";
+  if (statement.source === "openrouter_live") return tierLabel || sourceLabel;
+  if (sourceLabel && tierLabel && tierLabel.includes(sourceLabel)) return tierLabel;
+  return [sourceLabel, tierLabel].filter(Boolean).join(", ");
+}
 
-  const label = document.createElement("label");
-  label.className = "models-override-name";
-  label.textContent = name;
-  label.htmlFor = `${boxId}-mode`;
-  field.appendChild(label);
+function modelProviderId(model) {
+  const ref = String((model && model.model_ref) || "");
+  const slash = ref.indexOf("/");
+  return slash > 0 ? ref.slice(0, slash) : "";
+}
 
+function modelsProviderEntry(providerId) {
+  const data = modelsState.data;
+  if (!data || !providerId) return null;
+  return (
+    (data.providers || []).find((entry) => entry.provider_id === providerId) || null
+  );
+}
+
+/* One key's override as it reaches this model: the model's own row wins,
+   then the provider's -- the server's per-key merge. The context window is
+   read off model rows only, so a provider row never answers for it. */
+function resolvedOverride(modelRow, providerRow, name) {
+  const own = modelRow && modelRow[name];
+  if (own && typeof own === "object") return { ...own, from: "model" };
+  if (name === CONTEXT_WINDOW_OVERRIDE) return null;
+  const inherited = providerRow && providerRow[name];
+  if (inherited && typeof inherited === "object") {
+    return { ...inherited, from: "provider" };
+  }
+  return null;
+}
+
+/* How many keys you set reach this model: every one, not only the nine body
+   parameters (the user, 2026-10-18) -- the output cap, the context window,
+   the reasoning word and a pinned endpoint count too, from the model's row
+   and the provider's. A label: nothing it counts changes. */
+function modelOverrideKeyCount(model) {
+  const names = new Set();
+  (model.effective || []).forEach((row) => {
+    if (row.action !== "inherit") names.add(row.name || row.parameter || "");
+  });
+  Object.keys(model.override || {}).forEach((name) => names.add(name));
+  const provider = modelsProviderEntry(modelProviderId(model));
+  Object.keys((provider && provider.override) || {}).forEach((name) => {
+    if (name !== CONTEXT_WINDOW_OVERRIDE) names.add(name);
+  });
+  return names.size;
+}
+
+function fieldsLabels() {
+  return (modelsState.data && modelsState.data.source_labels) || {};
+}
+
+function fieldsProviderRow(ctx) {
+  if (ctx.scope !== "model") return null;
+  const key = String(ctx.key || "");
+  const slash = key.indexOf("/");
+  const provider = slash > 0 ? modelsProviderEntry(key.slice(0, slash)) : null;
+  return (provider && provider.override) || null;
+}
+
+function fieldsBoxId(prefix, scope, key, name) {
+  return `${prefix}-${scope}-${key}-${name}`.replace(/[^A-Za-z0-9_-]/g, "-");
+}
+
+function unknownField() {
+  return {
+    value: null,
+    source: "unknown",
+    source_label: "unknown",
+    approximate: false,
+    tier: null,
+    tier_label: null,
+  };
+}
+
+// Your own value on a row, badged like the context window's (7.87.0).
+function operatorField(value, note) {
+  return {
+    value,
+    source: "operator",
+    source_label: "operator override",
+    approximate: false,
+    tier: null,
+    tier_label: null,
+    note: note || null,
+  };
+}
+
+// Nothing forced anywhere: the request and the provider decide.
+function inheritedField(value, note) {
+  return {
+    value,
+    source: "inherit",
+    source_label: "inherited",
+    approximate: false,
+    tier: null,
+    tier_label: null,
+    note: note || null,
+  };
+}
+
+/* What a provider-wide row states (C5): its own value, nothing about any
+   one model, because a provider has no single capability record. */
+function providerStateField(own, unsetText, shown) {
+  if (!own || typeof own !== "object") {
+    return inheritedField("not set", "Each model decides.");
+  }
+  const note = "On this provider's override row; a model's own row wins.";
+  if (own.state === "unset") return operatorField(unsetText, note);
+  return operatorField(shown(own.value), note);
+}
+
+function buildFieldModeSelect(id, state) {
   const mode = document.createElement("select");
   mode.className = "models-override-mode";
-  mode.id = `${boxId}-mode`;
+  mode.id = id;
   [
     ["inherit", "Inherit"],
     ["unset", "Force unset"],
@@ -31111,11 +31109,116 @@ function buildContextWindowRow(form, key, row, capabilities, inputs) {
     option.textContent = text;
     mode.appendChild(option);
   });
-  mode.value = current ? current.state : "inherit";
-  field.appendChild(mode);
+  mode.value = state === "value" || state === "unset" ? state : "inherit";
+  return mode;
+}
 
-  const wrap = document.createElement("div");
-  wrap.className = "models-preference-value";
+/* The row's own name is the label of its mode select, so the field column
+   is also what a screen reader announces for the control. The overrides
+   file's key is shown under a friendlier name, because that is the word the
+   file and the docs use. */
+function fieldsLabelCell(text, forId, fileKey) {
+  const th = document.createElement("th");
+  th.scope = "row";
+  const label = document.createElement("label");
+  label.className = "models-override-name";
+  label.htmlFor = forId;
+  label.textContent = text;
+  th.appendChild(label);
+  if (fileKey && fileKey !== text) {
+    th.appendChild(document.createTextNode(" "));
+    const key = document.createElement("span");
+    key.className = "models-fields-key";
+    key.textContent = fileKey;
+    th.appendChild(key);
+  }
+  return th;
+}
+
+/* "default <value> — <where it came from>". Always written, in every mode:
+   an override never hides the number it replaces. */
+function fieldsDefaultLine(value, rest) {
+  const line = document.createElement("p");
+  line.className = "models-fields-default";
+  line.appendChild(document.createTextNode("default "));
+  const strong = document.createElement("b");
+  strong.textContent = value;
+  line.appendChild(strong);
+  if (rest) line.appendChild(document.createTextNode(` — ${rest}`));
+  return line;
+}
+
+function fieldsNoteLine(text) {
+  const line = document.createElement("p");
+  line.className = "models-fields-default";
+  line.textContent = text;
+  return line;
+}
+
+/* While your cap fills the output row's value cells, everything the row
+   showed before -- the badge, the resolver's sentence, the rung, a guessed
+   warning, a second statement -- stays on screen here, under the default it
+   belongs to. */
+function fieldsSourceLine(field, labels) {
+  const line = document.createElement("p");
+  line.className = "models-fields-default models-fields-default-source";
+  appendFieldProvenance(line, field, labels, null, { note: true, also: true });
+  return line;
+}
+
+// Real spaces between the lines: textContent and a screen reader read them
+// as separate phrases, not "...exact iddefault...".
+function writeDefaultLines(container, lines) {
+  container.textContent = "";
+  lines.filter(Boolean).forEach((line, index) => {
+    if (index) container.appendChild(document.createTextNode(" "));
+    container.appendChild(line);
+  });
+}
+
+/* One overridable row: field, value, source, and the control cell -- mode,
+   value box, the default line(s) and any note. The grid sits on a <div>
+   inside the cell, never on the <td>, or the table falls apart. */
+function buildOverrideFieldRow(name, label, fileKey, boxId, mode, box, notes) {
+  const tr = document.createElement("tr");
+  tr.className = "models-fields-row is-overridable";
+  tr.dataset.field = name;
+  tr.appendChild(fieldsLabelCell(label, mode.id, fileKey));
+  const value = document.createElement("td");
+  tr.appendChild(value);
+  const source = document.createElement("td");
+  tr.appendChild(source);
+  const control = document.createElement("td");
+  control.className = "models-fields-control";
+  const grid = document.createElement("div");
+  grid.className = "models-fields-control-grid";
+  grid.appendChild(mode);
+  grid.appendChild(box);
+  const defaults = document.createElement("div");
+  defaults.className = "models-fields-defaults";
+  defaults.id = `${boxId}-default`;
+  grid.appendChild(defaults);
+  (notes || []).filter(Boolean).forEach((note) => {
+    grid.appendChild(document.createTextNode(" "));
+    grid.appendChild(note);
+  });
+  control.appendChild(grid);
+  tr.appendChild(control);
+  mode.setAttribute("aria-describedby", defaults.id);
+  box.setAttribute("aria-describedby", defaults.id);
+  box.disabled = mode.value !== "value";
+  mode.addEventListener("change", () => {
+    box.disabled = mode.value !== "value";
+    if (!box.disabled) box.focus();
+  });
+  return { tr, value, source, defaults };
+}
+
+function buildContextWindowField(ctx) {
+  const name = CONTEXT_WINDOW_OVERRIDE;
+  const boxId = fieldsBoxId("pref", "model", ctx.key, name);
+  const current = ctx.row[name];
+  const mode = buildFieldModeSelect(`${boxId}-mode`, current ? current.state : "inherit");
   const box = document.createElement("input");
   box.type = "number";
   box.min = "1";
@@ -31127,109 +31230,438 @@ function buildContextWindowRow(form, key, row, capabilities, inputs) {
     current && current.state === "value" && current.value != null
       ? String(current.value)
       : "";
-  wrap.appendChild(box);
-
   const note = document.createElement("p");
   note.className = "models-preference-note";
-  const extracted = contextWindowExtracted(
-    capabilities && capabilities.context_length,
-  );
-  const where = !extracted
-    ? ""
-    : extracted.source === "openrouter_live"
-      ? extracted.tier_label || extracted.source_label || ""
-      : [extracted.source_label, extracted.tier_label].filter(Boolean).join(", ");
   note.textContent =
-    (extracted
-      ? `Also stated: ${formatCapabilityValue(extracted.value)}` +
-        (where ? ` (${where}).` : ".")
-      : "Nothing else states a window for this model.") +
-    " Force value replaces it for routing and every agent catalogue; " +
+    "Force value replaces it for routing and every agent catalogue; " +
     "Force unset makes it unknown.";
-  wrap.appendChild(note);
-
-  box.disabled = mode.value !== "value";
-  mode.addEventListener("change", () => {
-    box.disabled = mode.value !== "value";
-    if (!box.disabled) box.focus();
-  });
-  field.appendChild(wrap);
-  inputs.set(name, { mode: mode, box: box, max: null, integer: true });
-  // Directly under max_output_tokens: the two numbers that bound a model.
-  const output = inputs.get("max_output_tokens");
-  const anchor = output && output.mode ? output.mode.closest(".models-override-row") : null;
-  if (anchor) anchor.after(field);
-  else form.appendChild(field);
+  const shell = buildOverrideFieldRow(
+    name,
+    MODELS_FIELD_LABELS[name],
+    name,
+    boxId,
+    mode,
+    box,
+    [note],
+  );
+  return {
+    group: "limits",
+    tr: shell.tr,
+    input: { mode: mode, box: box, max: null, integer: true },
+    paint(next) {
+      const stated = next.capabilities && next.capabilities.context_length;
+      fillFieldCells(shell.value, shell.source, stated || unknownField(), fieldsLabels());
+      shell.tr.classList.toggle("is-forced", Boolean(next.row[name]));
+      const extracted = contextWindowExtracted(stated);
+      writeDefaultLines(shell.defaults, [
+        extracted
+          ? fieldsDefaultLine(formatCapabilityValue(extracted.value), statementRung(extracted))
+          : fieldsDefaultLine("not reported", CONTEXT_WINDOW_ASKED),
+      ]);
+    },
+  };
 }
 
-function buildOverrideEditor(scope, key, row, editable, preferences, capabilities) {
+function buildOutputLimitField(ctx, name) {
+  const spec = ctx.preferences[name];
+  const boxId = fieldsBoxId("pref", ctx.scope, ctx.key, name);
+  const mode = buildFieldModeSelect(`${boxId}-mode`, spec.state);
+  const control = buildOutputPreferenceInput(boxId, spec);
+  const shell = buildOverrideFieldRow(
+    name,
+    MODELS_FIELD_LABELS[name] || name,
+    name,
+    boxId,
+    mode,
+    control.box,
+    [control.note],
+  );
+  return {
+    group: "limits",
+    tr: shell.tr,
+    input: { mode: mode, box: control.box, max: control.max },
+    paint(next) {
+      const labels = fieldsLabels();
+      if (next.scope !== "model") {
+        const own = next.row[name];
+        fillFieldCells(
+          shell.value,
+          shell.source,
+          providerStateField(own, "forced unset", (value) => value),
+          labels,
+        );
+        shell.tr.classList.toggle("is-forced", Boolean(own));
+        writeDefaultLines(shell.defaults, [
+          fieldsDefaultLine("per model", "open a model to see its default"),
+        ]);
+        return;
+      }
+      const nextSpec = (next.preferences && next.preferences[name]) || spec;
+      const shown = next.capabilities && next.capabilities.max_output_tokens;
+      const resolved = resolvedOverride(next.row, fieldsProviderRow(next), name);
+      const capped = Boolean(resolved && resolved.state === "value");
+      /* Your cap is what bounds a request, so it is the value shown; the
+         number the ladder published moves to the default line under the
+         control, with its rung. */
+      fillFieldCells(
+        shell.value,
+        shell.source,
+        capped
+          ? operatorField(
+              resolved.value,
+              `Your cap, from ${OVERRIDE_ROW_WORDS[resolved.from]}: MCC bounds ` +
+                "every request by the lower of it and the published limit.",
+            )
+          : shown || unknownField(),
+        labels,
+      );
+      shell.tr.classList.toggle("is-forced", Boolean(resolved));
+      // The number routing bounds by: the ladder's, before OpenRouter's live
+      // list is placed (7.84.0).
+      const limit = typeof nextSpec.limit === "number" ? nextSpec.limit : null;
+      const lines = [
+        limit != null
+          ? fieldsDefaultLine(
+              limit.toLocaleString(),
+              statementRung({
+                source_label: nextSpec.limit_source_label,
+                tier_label: nextSpec.limit_tier_label,
+              }),
+            )
+          : fieldsDefaultLine("not reported", OUTPUT_LIMIT_ASKED),
+      ];
+      if (shown && shown.value != null && shown.value !== limit) {
+        const who =
+          shown.source === "openrouter_live"
+            ? "OpenRouter live"
+            : shown.source_label || "another source";
+        lines.push(
+          fieldsNoteLine(
+            `${who} also states ${formatCapabilityValue(shown.value)} ` +
+              "(shown, never acted on)",
+          ),
+        );
+      }
+      if (capped) lines.push(fieldsSourceLine(shown || unknownField(), labels));
+      writeDefaultLines(shell.defaults, lines);
+    },
+  };
+}
+
+function reasoningWordLabel(spec, word) {
+  const options = Array.isArray(spec && spec.options) ? spec.options : [];
+  const option = options.find((entry) => entry.value === String(word));
+  return option ? option.label : String(word);
+}
+
+function buildReasoningField(ctx, name) {
+  const spec = ctx.preferences[name];
+  const boxId = fieldsBoxId("pref", ctx.scope, ctx.key, name);
+  const mode = buildFieldModeSelect(`${boxId}-mode`, spec.state);
+  const control = buildReasoningPreferenceSelect(boxId, spec);
+  const shell = buildOverrideFieldRow(
+    name,
+    MODELS_FIELD_LABELS[name] || name,
+    name,
+    boxId,
+    mode,
+    control.box,
+    [control.note],
+  );
+  return {
+    group: "reasoning",
+    tr: shell.tr,
+    input: { mode: mode, box: control.box, max: control.max },
+    paint(next) {
+      const labels = fieldsLabels();
+      const nextSpec = (next.preferences && next.preferences[name]) || spec;
+      if (next.scope !== "model") {
+        const own = next.row[name];
+        fillFieldCells(
+          shell.value,
+          shell.source,
+          providerStateField(own, "forced unset", (value) =>
+            reasoningWordLabel(nextSpec, value),
+          ),
+          labels,
+        );
+        shell.tr.classList.toggle("is-forced", Boolean(own));
+        writeDefaultLines(shell.defaults, [
+          fieldsDefaultLine("per model", "open a model to see its default"),
+        ]);
+        return;
+      }
+      const resolved = resolvedOverride(next.row, fieldsProviderRow(next), name);
+      let field = inheritedField("route decides");
+      if (resolved && resolved.state === "value") {
+        field = operatorField(
+          reasoningWordLabel(nextSpec, resolved.value),
+          `From ${OVERRIDE_ROW_WORDS[resolved.from]}.`,
+        );
+      } else if (resolved) {
+        field = operatorField(
+          "route decides",
+          `Forced unset on ${OVERRIDE_ROW_WORDS[resolved.from]}, so the route's ` +
+            "own answer is used.",
+        );
+      }
+      fillFieldCells(shell.value, shell.source, field, labels);
+      shell.tr.classList.toggle("is-forced", Boolean(resolved));
+      /* The default is the route's own answer; what bounds it is the model's
+         published vocabulary (with its rung) and what the host parses. */
+      const capabilities = next.capabilities || {};
+      const efforts = (capabilities.reasoning || {}).supported_efforts;
+      const rung = statementRung(efforts);
+      const vocabulary =
+        efforts && efforts.value != null
+          ? `vocabulary: ${formatCapabilityValue(efforts.value)}${rung ? ` — ${rung}` : ""}`
+          : `vocabulary: not reported — ${REASONING_VOCABULARY_ASKED}`;
+      const dialect = capabilities.reasoning_dialect;
+      const host =
+        !dialect || !dialect.known
+          ? "host dialect: not declared"
+          : Array.isArray(dialect.effort_values)
+            ? `host dialect: ${dialect.effort_field || "an effort field"} ` +
+              dialect.effort_values.join(", ")
+            : "host dialect: no effort field";
+      writeDefaultLines(shell.defaults, [
+        fieldsDefaultLine("the route's own answer"),
+        fieldsNoteLine(vocabulary),
+        fieldsNoteLine(host),
+      ]);
+    },
+  };
+}
+
+/* A sampling default is stated only by a provider's own model list -- the
+   OpenRouter-dialect `default_parameters` pairs. A list with no pair for this
+   name pins no value for it; no list at all is "not reported". */
+function sampleDefaultLine(capabilities, name) {
+  const declared = capabilities && capabilities.default_parameters;
+  const pairs = declared && Array.isArray(declared.value) ? declared.value : null;
+  const where = `${(declared && declared.source_label) || "provider /models"} (default_parameters)`;
+  const pair = pairs
+    ? pairs.find((entry) => Array.isArray(entry) && entry[0] === name)
+    : null;
+  if (pair) return fieldsDefaultLine(formatOverrideValue(pair[1]), where);
+  if (pairs) return fieldsDefaultLine("not reported", `${where} pins no value for it`);
+  return fieldsDefaultLine("not reported", "only the provider's /models states one");
+}
+
+// What reaches the body for one of the nine: the server's own per-key merge
+// (`effective`), or this row alone where the caller has no model record.
+function fieldsEffectiveRow(next, name) {
+  if (next.model && Array.isArray(next.model.effective)) {
+    return (
+      next.model.effective.find((row) => (row.name || row.parameter) === name) || null
+    );
+  }
+  const own = next.row[name];
+  if (!own || typeof own !== "object") return null;
+  return {
+    action: own.state === "unset" ? "unset" : "force",
+    value: own.value,
+    from: "model",
+  };
+}
+
+function buildRequestParameterField(ctx, name) {
+  const boxId = fieldsBoxId("ov", ctx.scope, ctx.key, name);
+  const current = ctx.row[name];
+  const mode = buildFieldModeSelect(`${boxId}-mode`, current ? current.state : "inherit");
+  const box = document.createElement("input");
+  box.type = "text";
+  box.className = "models-override-value";
+  box.id = `${boxId}-value`;
+  box.setAttribute("aria-label", `${name} value`);
+  box.placeholder = name === "stop" ? "comma-separated" : "";
+  box.value =
+    current && current.state === "value" ? formatOverrideValue(current.value) : "";
+  const shell = buildOverrideFieldRow(name, name, null, boxId, mode, box, []);
+  return {
+    group: "request",
+    tr: shell.tr,
+    input: { mode, box },
+    paint(next) {
+      const labels = fieldsLabels();
+      if (next.scope !== "model") {
+        const own = next.row[name];
+        fillFieldCells(
+          shell.value,
+          shell.source,
+          providerStateField(own, "removed from the body", formatOverrideValue),
+          labels,
+        );
+        shell.tr.classList.toggle("is-forced", Boolean(own));
+        writeDefaultLines(shell.defaults, [
+          fieldsDefaultLine("per model", "open a model to see its default"),
+        ]);
+        return;
+      }
+      // "What this forces onto the request" (7.100.0), now on its own row.
+      const effective = fieldsEffectiveRow(next, name);
+      const action = effective ? effective.action : "inherit";
+      fillFieldCells(
+        shell.value,
+        shell.source,
+        action === "inherit"
+          ? inheritedField("provider decides")
+          : operatorField(
+              action === "unset"
+                ? "removed from the body"
+                : formatOverrideValue(effective.value),
+              effective.from ? `from the ${effective.from} row` : null,
+            ),
+        labels,
+      );
+      shell.tr.classList.toggle("is-forced", action !== "inherit");
+      const lines = [sampleDefaultLine(next.capabilities, name)];
+      const supported = next.capabilities && next.capabilities.supported_parameters;
+      if (supported && Array.isArray(supported.value)) {
+        lines.push(
+          fieldsNoteLine(
+            supported.value.includes(name)
+              ? "this provider lists it as accepted (shown, never acted on)"
+              : "this provider does not list it (shown, never acted on)",
+          ),
+        );
+      }
+      writeDefaultLines(shell.defaults, lines);
+    },
+  };
+}
+
+function buildModelFieldsColumns() {
+  const group = document.createElement("colgroup");
+  ["field", "value", "source", "control"].forEach((name) => {
+    const col = document.createElement("col");
+    col.className = `models-fields-col-${name}`;
+    group.appendChild(col);
+  });
+  return group;
+}
+
+function buildModelFieldsHead(isModel) {
+  const head = document.createElement("thead");
+  const tr = document.createElement("tr");
+  [
+    "Field",
+    isModel ? "Value MCC uses" : "Set on this provider",
+    "Where it came from",
+    "Your override · default",
+  ].forEach((text) => {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = text;
+    tr.appendChild(th);
+  });
+  head.appendChild(tr);
+  return head;
+}
+
+/* One <tbody> per group, in MODELS_FIELD_GROUPS order, made on first use. A
+   group header names the rows under it, so it is a row-group header. */
+function fieldsGroupBody(table, group) {
+  const existing = Array.from(table.tBodies).find((tbody) => tbody.dataset.group === group);
+  if (existing) return existing;
+  const order = MODELS_FIELD_GROUPS.map((entry) => entry[0]);
+  const tbody = document.createElement("tbody");
+  tbody.className = "models-fields-group";
+  tbody.dataset.group = group;
+  const head = document.createElement("tr");
+  head.className = "models-fields-grouphead";
+  const th = document.createElement("th");
+  th.scope = "rowgroup";
+  th.colSpan = 4;
+  const named = MODELS_FIELD_GROUPS.find((entry) => entry[0] === group);
+  th.textContent = named ? named[1] : group;
+  head.appendChild(th);
+  tbody.appendChild(head);
+  const after = Array.from(table.tBodies).find(
+    (other) => order.indexOf(other.dataset.group) > order.indexOf(group),
+  );
+  table.insertBefore(tbody, after || null);
+  return tbody;
+}
+
+function buildOverrideEditor(scope, key, row, editable, preferences, capabilities, model) {
+  const isModel = scope === "model";
   const form = document.createElement("div");
-  form.className = "models-override-editor";
+  form.className = "models-override-editor models-fields-editor";
+  if (isModel) {
+    const head = document.createElement("p");
+    head.className = "models-subhead";
+    head.textContent =
+      "Everything about this model — its value, where it came from, and your override";
+    form.appendChild(head);
+  }
+  const table = document.createElement("table");
+  table.className = "models-fields";
+  table.setAttribute(
+    "aria-label",
+    isModel ? `Everything about ${key}` : `Parameter overrides for every ${key} model`,
+  );
+  table.appendChild(buildModelFieldsColumns());
+  table.appendChild(buildModelFieldsHead(isModel));
+  form.appendChild(table);
+
+  const ctx = { scope, key, row: row || {}, preferences, capabilities, model };
+  const kinds =
+    (modelsState.data &&
+      modelsState.data.overrides &&
+      modelsState.data.overrides.preference_parameters) ||
+    {};
+  const preferenceNames = Object.keys(kinds).filter(
+    (name) => preferences && preferences[name],
+  );
+  const fields = new Map();
+  if (isModel) fields.set(CONTEXT_WINDOW_OVERRIDE, buildContextWindowField(ctx));
+  preferenceNames.forEach((name) => {
+    fields.set(
+      name,
+      kinds[name] === "integer"
+        ? buildOutputLimitField(ctx, name)
+        : buildReasoningField(ctx, name),
+    );
+  });
+  (editable || []).forEach((name) => fields.set(name, buildRequestParameterField(ctx, name)));
+
+  // Drawn: the limits, then the reasoning word, then the nine.
+  [
+    CONTEXT_WINDOW_OVERRIDE,
+    ...preferenceNames.filter((name) => kinds[name] === "integer"),
+    ...preferenceNames.filter((name) => kinds[name] !== "integer"),
+    ...(editable || []),
+  ].forEach((name) => {
+    const field = fields.get(name);
+    if (field) fieldsGroupBody(table, field.group).appendChild(field.tr);
+  });
+
+  // Sent: 7.100.0's order, whatever the drawing order (see above).
   const inputs = new Map();
-
-  /* Preferences first, and under their own heading: the nine rows below
-     are fields of a request BODY, and these two are statements about a
-     DECISION MCC makes before any body exists. Drawing them in one
-     undifferentiated grid would say they are the same kind of thing. */
-  buildPreferenceRows(form, scope, key, preferences, inputs);
-  if (scope === "model") buildContextWindowRow(form, key, row, capabilities, inputs);
-
-  const header = document.createElement("div");
-  header.className = "models-override-row models-override-head";
-  ["Parameter", "What to send", "Value"].forEach((text) => {
-    const cell = document.createElement("span");
-    cell.textContent = text;
-    header.appendChild(cell);
+  [
+    ...preferenceNames,
+    ...(isModel ? [CONTEXT_WINDOW_OVERRIDE] : []),
+    ...(editable || []),
+  ].forEach((name) => {
+    const field = fields.get(name);
+    if (field) inputs.set(name, field.input);
   });
-  form.appendChild(header);
 
-  editable.forEach((name) => {
-    const current = (row || {})[name];
-    const field = document.createElement("div");
-    field.className = "models-override-row";
-    const boxId = `ov-${scope}-${key}-${name}`.replace(/[^A-Za-z0-9_-]/g, "-");
-
-    const label = document.createElement("label");
-    label.className = "models-override-name";
-    label.textContent = name;
-    label.htmlFor = `${boxId}-mode`;
-    field.appendChild(label);
-
-    const mode = document.createElement("select");
-    mode.className = "models-override-mode";
-    mode.id = `${boxId}-mode`;
-    [
-      ["inherit", "Inherit"],
-      ["unset", "Force unset"],
-      ["value", "Force value"],
-    ].forEach(([value, text]) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = text;
-      mode.appendChild(option);
-    });
-    mode.value = current ? current.state : "inherit";
-    field.appendChild(mode);
-
-    const box = document.createElement("input");
-    box.type = "text";
-    box.className = "models-override-value";
-    box.id = `${boxId}-value`;
-    box.setAttribute("aria-label", `${name} value`);
-    box.placeholder = name === "stop" ? "comma-separated" : "";
-    box.value =
-      current && current.state === "value"
-        ? formatOverrideValue(current.value)
-        : "";
-    box.disabled = mode.value !== "value";
-    mode.addEventListener("change", () => {
-      box.disabled = mode.value !== "value";
-      if (!box.disabled) box.focus();
-    });
-    field.appendChild(box);
-    inputs.set(name, { mode, box });
-    form.appendChild(field);
-  });
+  const paint = (next) => {
+    Object.assign(ctx, next);
+    ctx.row = ctx.row || {};
+    fields.forEach((field) => field.paint(ctx));
+    if (isModel) {
+      placeReadonlyFieldRows(
+        table,
+        modelReadonlyFieldEntries(ctx.capabilities, ctx.model),
+        ctx.model,
+      );
+    }
+  };
+  paint({});
+  MODELS_FIELD_PAINTERS.set(form, paint);
 
   const actions = document.createElement("div");
   actions.className = "models-actions";
@@ -31300,9 +31732,9 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
     status.textContent = "Saving...";
     saveModelOverrides(scope, key, updates)
       .then(() => {
-        // The tree is not rebuilt on save, so this element is still on the
-        // page and the confirmation is actually visible. It used to be
-        // written into a node renderModelsPage() had already discarded.
+        // The table is repainted in place on save, so this element is still
+        // on the page and the confirmation is actually visible. It used to
+        // be written into a node renderModelsPage() had already discarded.
         status.textContent = "Saved";
         status.className = "models-status ok";
       })
@@ -31319,6 +31751,92 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
   actions.appendChild(status);
   form.appendChild(actions);
   return form;
+}
+
+/* The reasoning word's control: a select whose options the ROW published
+   (derived from this model's own resolved capability and its host's dialect,
+   never a fixed list). An option the model cannot take is rendered disabled
+   with the reason as its text, rather than omitted: "Off is not available
+   here, and here is why" is a different message from "Off does not exist".
+   A stored value that is no longer on offer is kept, marked, and never
+   silently rewritten -- the catalogue may move back. */
+function buildReasoningPreferenceSelect(boxId, spec) {
+  const box = document.createElement("select");
+  box.className = "models-override-value";
+  box.id = `${boxId}-value`;
+  box.setAttribute("aria-label", "reasoning preference");
+  const options = Array.isArray(spec.options) ? spec.options : [];
+  const stored = spec.state === "value" ? String(spec.value) : "";
+  let storedIsOffered = false;
+  options.forEach((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.value;
+    option.textContent = entry.label;
+    if (entry.available === false) {
+      option.disabled = true;
+      option.textContent = `${entry.label} -- unavailable`;
+    }
+    if (entry.reason) option.title = entry.reason;
+    if (entry.value === stored) storedIsOffered = true;
+    box.appendChild(option);
+  });
+  /* A value the catalogue no longer offers is kept on the list so the select
+     can still show what is stored; the note below says it is being clamped. */
+  if (stored && !storedIsOffered) {
+    const option = document.createElement("option");
+    option.value = stored;
+    option.textContent = `${stored} -- no longer offered`;
+    box.appendChild(option);
+  }
+  if (stored) box.value = stored;
+
+  const note = document.createElement("p");
+  note.className = "models-preference-note";
+  const parts = [];
+  if (spec.note) parts.push(spec.note);
+  if (spec.can_reason === false) {
+    box.disabled = true;
+  }
+  if (spec.capability_known === false && spec.can_reason !== false) {
+    parts.push(
+      "Nothing published this model's effort vocabulary, so every rung is " +
+        "offered and whatever you pick is clamped to what it accepts.",
+    );
+  }
+  if (stored && !storedIsOffered) {
+    parts.push(
+      `Your setting "${stored}" is no longer in this model's vocabulary; ` +
+        "the nearest rung it does spell is being sent. Nothing was rewritten " +
+        "on disk.",
+    );
+  }
+  const chosen = options.find((entry) => entry.value === stored);
+  if (chosen && chosen.reason) parts.push(chosen.reason);
+  note.textContent = parts.join(" ");
+  return { box: box, note: note.textContent ? note : null, max: null };
+}
+
+/* The output cap's control: a number bounded by the limit the same ladder
+   resolved. The limit and its rung are the row's default line; the sentence
+   that makes the control usable -- a cap, not a request -- stays under it. */
+function buildOutputPreferenceInput(boxId, spec) {
+  const box = document.createElement("input");
+  box.type = "number";
+  box.min = "1";
+  box.step = "1";
+  box.className = "models-override-value";
+  box.id = `${boxId}-value`;
+  box.setAttribute("aria-label", "max output tokens");
+  const limit = typeof spec.limit === "number" ? spec.limit : null;
+  if (limit != null) box.max = String(limit);
+  box.value = spec.state === "value" && spec.value != null ? String(spec.value) : "";
+  let note = null;
+  if (spec.note) {
+    note = document.createElement("p");
+    note.className = "models-preference-note";
+    note.textContent = spec.note;
+  }
+  return { box: box, note: note, max: limit };
 }
 
 function formatOverrideValue(value) {
@@ -31342,148 +31860,130 @@ function parseOverrideValue(name, raw) {
   return text;
 }
 
-/* Only the parameters that are actually forced. Nine rows of "not sent" under
-   a heading called "Effective request parameters" was the same information as
-   nine "Inherit" selects directly above it, restated. */
-function buildEffectiveTable(rows) {
-  const wrap = document.createElement("div");
-  wrap.className = "models-effective";
-  const head = document.createElement("p");
-  head.className = "models-subhead";
-  head.textContent = "What this forces onto the request";
-  wrap.appendChild(head);
-  const forced = rows.filter((row) => row.action !== "inherit");
-  if (!forced.length) {
-    const note = document.createElement("p");
-    note.className = "models-empty-note";
-    note.textContent =
-      "Nothing. Every editable parameter is left to the provider.";
-    wrap.appendChild(note);
-    return wrap;
-  }
-  const table = document.createElement("table");
-  table.className = "models-table";
-  forced.forEach((row) => {
-    const tr = document.createElement("tr");
-    const name = document.createElement("th");
-    name.scope = "row";
-    name.textContent = row.name;
-    tr.appendChild(name);
-    const value = document.createElement("td");
-    if (row.action === "unset") value.textContent = "removed from the body";
-    else value.textContent = formatOverrideValue(row.value);
-    tr.appendChild(value);
-    const from = document.createElement("td");
-    from.className = "models-cell-source";
-    from.textContent = row.from ? `from the ${row.from} row` : "";
-    tr.appendChild(from);
-    table.appendChild(tr);
-  });
-  wrap.appendChild(table);
-  return wrap;
-}
-
-/* Read-only. The point of this panel is that a number here can come from the
+/* The read-only rows of the table: everything MCC knows about the model that
+   no override changes, grouped below the override rows (the user's decision
+   4, 2026-10-18). The point of them is that a number can come from the
    provider's own /models, from models.dev, or from a vote across same-named
    rows in *other* providers' buckets -- and the third is regularly wrong. So
-   the exact ladder rung (1-8) is rendered beside every field, and an
-   approximate one additionally says how many rows voted and how far they
-   agreed (1-4 authoritative, 5-6 the OpenRouter reference catalogue, 7-10 the
-   vote).
+   the exact ladder rung (1-11) is drawn beside every field, and an
+   approximate one also says how many rows voted and how far they agreed.
 
-   Below the table sits the other half of the answer: what the HOST parses.
-   "This model can reason" is a vote about a model; "this host reads
-   reasoning_effort" is a declaration about a gateway. MCC sends a control only
-   when both say yes, so a model that sends nothing needs both halves visible
-   to explain which one said no. */
-function buildCapabilityPanel(capabilities, labels, model) {
-  const wrap = document.createElement("div");
-  wrap.className = "models-capabilities";
-  const head = document.createElement("p");
-  head.className = "models-subhead";
-  head.textContent = "What MCC knows about this model (read-only)";
-  wrap.appendChild(head);
-  const table = document.createElement("table");
-  table.className = "models-table";
-  const rows = [];
-  if (capabilities) {
-    /* Which of a multi-surface gateway's endpoints this model is actually
-       posted to, and where that came from. Absent for every provider that has
-       one endpoint, which is why this row appears only on OpenCode rows. A
-       model whose surface this provider cannot speak reads "unservable" here
-       WITH the reason beside it -- it keeps its row on purpose, because a
-       catalogue that silently drops a model the vendor is giving away is
-       exactly the failure this row exists to make visible. */
-    rows.push(["wire surface", capabilities.response_surface]);
-    rows.push(["output limit", capabilities.max_output_tokens]);
-    rows.push(["context length", capabilities.context_length]);
-    rows.push(["reads images", capabilities.supports_vision]);
-    /* What kind of model this is -- which lists offer it -- and the rung of
-       the ladder that stated it (7.80.0): the provider's own model list, then
-       models.dev, then the provider's model type or endpoint words, then the
-       media rail you saved it on. Drawn from the row's `kind`. */
-    rows.push(["kind", kindCapabilityField(model && model.kind)]);
-    /* What the provider's own model list says this model is (7.79.0): what it
-       accepts and produces, its type word and the endpoints that serve it,
-       kept in the provider's own words. The first walks the ladder (the
-       provider's row, then models.dev); the other two only a provider
-       publishes. Shown, never acted on: no kind, list or route reads them. */
-    rows.push(["accepts → produces", capabilities.declared_modalities]);
-    rows.push(["model type (provider's word)", capabilities.declared_type]);
-    /* The provider's own endpoint words; with LiteLLM pricing on, LiteLLM's
-       where the provider names none (7.85.0) -- the badge says whose. */
-    rows.push(["endpoints", capabilities.declared_endpoints]);
-    /* What the model is and when (7.84.0, 7.85.0): a description and a
-       knowledge cutoff (the provider's own list, then OpenRouter's live list,
-       then models.dev), the day it was published (the provider's list, then
-       models.dev's release date), the day OpenRouter LISTED it (present only
-       while that rung is on -- never its release date), and a retirement
-       (the vendor's client, the provider's list, LiteLLM, models.dev's
-       flag). Each badged with the rung that said it; shown, never acted on. */
-    rows.push(["description", capabilities.description]);
-    rows.push(["knowledge cutoff", capabilities.knowledge_cutoff]);
-    rows.push(["published", capabilities.published_at]);
-    rows.push(["listed on OpenRouter", capabilities.listed_on_openrouter]);
-    rows.push(["retires", capabilities.retires_at]);
-    /* The prices resolved long before anything read them: the ladder has
-       returned a rate and a tier for every (provider, model) since 6.35.0 and
-       no surface showed either. They carry the same provenance badge as every
-       other field here, which is the point -- a rate voted across strangers'
-       catalogues and a rate this provider published are the same shape of
-       number and must not look the same. */
-    PRICE_FIELD_LABELS.forEach((entry) => {
-      rows.push([entry[1], capabilities[entry[0]], formatPriceValue]);
-    });
-    rows.push(["gateway default parameters", capabilities.default_parameters]);
-    rows.push(["supported parameters", capabilities.supported_parameters]);
-    const reasoning = capabilities.reasoning || {};
-    Object.keys(reasoning).forEach((name) => {
-      rows.push([name.replace(/_/g, " "), reasoning[name]]);
-    });
-  }
-  let written = 0;
-  rows.forEach((entry) => {
-    if (!entry[1]) return;
-    written += 1;
-    table.appendChild(buildCapabilityRow(entry[0], entry[1], labels, entry[2]));
+   Every row 7.100.0's "What MCC knows about this model" drew, in its words:
+   the wire surface (only on a provider with more than one door), what kind
+   of model this is and who said so (7.80.0), what the provider's own list
+   says it is (7.79.0, 7.85.0), the prices the ladder resolved (6.35.0), the
+   description, cutoff, publication, OpenRouter listing and retirement days
+   (7.84.0, 7.85.0), the gateway's two parameter lists, and the seven
+   reasoning facts. The output limit and the context window are override
+   rows above. A field nothing states is not drawn, as before. */
+function modelReadonlyFieldEntries(capabilities, model) {
+  if (!capabilities) return [];
+  const entries = [];
+  const add = (group, key, label, field, format) => {
+    if (field) entries.push({ group, key, label, field, format });
+  };
+  const reasoning = capabilities.reasoning || {};
+  Object.keys(reasoning).forEach((name) => {
+    add("reasoning", `reasoning.${name}`, name.replace(/_/g, " "), reasoning[name]);
   });
-  if (!written) {
-    const note = document.createElement("p");
-    note.className = "models-empty-note";
-    note.textContent =
-      "Nothing discovered for this model, so MCC falls back to its defaults.";
-    wrap.appendChild(note);
-    return wrap;
-  }
-  wrap.appendChild(table);
-  const surfaceEditor = buildSurfaceOverrideEditor(
-    capabilities && capabilities.response_surface,
-    model,
+  add("surface", "response_surface", "wire surface", capabilities.response_surface);
+  add("model", "kind", "kind", kindCapabilityField(model && model.kind));
+  add("model", "declared_modalities", "accepts → produces", capabilities.declared_modalities);
+  add("model", "declared_type", "model type (provider's word)", capabilities.declared_type);
+  /* The provider's own endpoint words; with LiteLLM pricing on, LiteLLM's
+     where the provider names none (7.85.0) -- the badge says whose. */
+  add("model", "declared_endpoints", "endpoints", capabilities.declared_endpoints);
+  add("model", "supports_vision", "reads images", capabilities.supports_vision);
+  /* A rate voted across strangers' catalogues and a rate this provider
+     published are the same shape of number and must not look the same. */
+  PRICE_FIELD_LABELS.forEach((entry) => {
+    add("prices", entry[0], entry[1], capabilities[entry[0]], formatPriceValue);
+  });
+  add("dates", "description", "description", capabilities.description);
+  add("dates", "knowledge_cutoff", "knowledge cutoff", capabilities.knowledge_cutoff);
+  add("dates", "published_at", "published", capabilities.published_at);
+  add("dates", "listed_on_openrouter", "listed on OpenRouter", capabilities.listed_on_openrouter);
+  add("dates", "retires_at", "retires", capabilities.retires_at);
+  add("lists", "supported_parameters", "supported parameters", capabilities.supported_parameters);
+  add("lists", "default_parameters", "gateway default parameters", capabilities.default_parameters);
+  return entries;
+}
+
+/* Whether ANY field was discovered for this model -- the rows above plus the
+   two limits -- which is what 7.100.0's panel counted before it said
+   "Nothing discovered for this model". */
+function modelFieldsWritten(capabilities, model) {
+  if (!capabilities) return false;
+  return (
+    Boolean(capabilities.max_output_tokens) ||
+    Boolean(capabilities.context_length) ||
+    modelReadonlyFieldEntries(capabilities, model).length > 0
   );
-  if (surfaceEditor) wrap.appendChild(surfaceEditor);
-  const dialect = buildDialectPanel(capabilities && capabilities.reasoning_dialect);
-  if (dialect) wrap.appendChild(dialect);
-  return wrap;
+}
+
+function surfaceEditorOffered(field, model) {
+  return Boolean(
+    field &&
+      model &&
+      model.model_ref &&
+      Array.isArray(field.offered) &&
+      field.offered.length >= 2,
+  );
+}
+
+/* A read-only row: the shared row builder's three cells, and a fourth that
+   says "read-only" to a screen reader -- except the wire surface, whose
+   "Which endpoint to use" pin keeps its own control and its own button here
+   (the user's decision 1). */
+function buildReadonlyFieldRow(entry, labels, model, keptControl) {
+  const tr = buildCapabilityRow(entry.label, entry.field, labels, entry.format);
+  tr.classList.add("models-fields-row", "models-fields-readonly");
+  tr.dataset.field = entry.key;
+  let control = keptControl;
+  if (!control) {
+    control = document.createElement("td");
+    control.className = "models-fields-control";
+    const editor =
+      entry.key === "response_surface"
+        ? buildSurfaceOverrideEditor(entry.field, model)
+        : null;
+    if (editor) {
+      control.appendChild(editor);
+    } else {
+      const words = document.createElement("span");
+      words.className = "sr-only";
+      words.textContent = "read-only";
+      control.appendChild(words);
+    }
+  }
+  tr.appendChild(control);
+  return tr;
+}
+
+/* Drawn again on every repaint: nothing here has a control except the pin,
+   whose cell -- select, button and status line -- is carried over, so its
+   "Saved" lands on screen rather than in a discarded node. */
+function placeReadonlyFieldRows(table, entries, model) {
+  const labels = fieldsLabels();
+  const pinned = table.querySelector(
+    'tr[data-field="response_surface"] > td.models-fields-control',
+  );
+  table.querySelectorAll("tr.models-fields-readonly").forEach((tr) => tr.remove());
+  Array.from(table.tBodies).forEach((tbody) => {
+    if (!tbody.querySelector("tr[data-field]")) tbody.remove();
+  });
+  entries.forEach((entry) => {
+    const kept =
+      entry.key === "response_surface" &&
+      pinned &&
+      pinned.querySelector(".models-surface-override") &&
+      surfaceEditorOffered(entry.field, model)
+        ? pinned
+        : null;
+    fieldsGroupBody(table, entry.group).appendChild(
+      buildReadonlyFieldRow(entry, labels, model, kept),
+    );
+  });
 }
 
 /* The one writable thing in a read-only panel, and it sits here rather than in
@@ -31681,40 +32181,66 @@ function buildCapabilityRow(label, field, labels, format) {
   name.scope = "row";
   name.textContent = label;
   tr.appendChild(name);
-
   const value = document.createElement("td");
-  value.textContent = (format || formatCapabilityValue)(field.value);
   tr.appendChild(value);
-
   const source = document.createElement("td");
-  source.className = "models-cell-source";
+  tr.appendChild(source);
+  fillFieldCells(value, source, field, labels, format);
+  return tr;
+}
+
+/* The value and source cells of one field, written the same way for a
+   read-only row and for an override row, so the two can never drift apart.
+   The source cell's stack sits on a <div>: a flex box on the <td> itself
+   would take it out of the table's columns. */
+function fillFieldCells(valueCell, sourceCell, field, labels, format) {
+  const text = (format || formatCapabilityValue)(field.value);
+  // Short values stay on one line ("not reported" used to wrap onto two);
+  // anything longer -- "removed from the body", a description, a parameter
+  // list -- wraps inside its column rather than running into the next one.
+  valueCell.className =
+    text.length > 12 ? "models-fields-value models-fields-value-long" : "models-fields-value";
+  valueCell.textContent = text;
+  sourceCell.className = "models-cell-source";
+  sourceCell.textContent = "";
+  const stack = document.createElement("div");
+  stack.className = "models-fields-source";
+  appendFieldProvenance(stack, field, labels, format, { note: true, also: true });
+  sourceCell.appendChild(stack);
+}
+
+/* Badge, the resolver's own sentence, the rung, the guessed warning and a
+   second statement, with real spaces between them: a flex gap is invisible
+   to textContent and to a screen reader. */
+function appendFieldProvenance(container, field, labels, format, parts) {
+  const pieces = [];
   const badge = document.createElement("span");
   badge.className = `models-source models-source-${field.source}`;
   const sourceText =
-    field.source_label || labels[field.source] || field.source || "unknown";
+    field.source_label || (labels || {})[field.source] || field.source || "unknown";
   // A guessed number and a published one used to wear the same shape of
   // badge. The guessed one now says so on the badge itself.
   badge.textContent = field.approximate ? `${sourceText} — guessed` : sourceText;
-  source.appendChild(badge);
-  // The exact rung of the resolution ladder, not just the coarse badge: a
-  // "provider /models" answer that matched the id exactly reads very
-  // differently from one that only matched after the pricing tag came off.
+  pieces.push(badge);
   /* A sentence the resolver wrote about this particular answer -- the npm
-     package that selected a wire surface, or why one cannot be reached. Only
-     the surface row carries one today; every other field's provenance is
-     fully said by the badge and the tier. */
-  if (field.note) {
+     package that selected a wire surface, why one cannot be reached, whose
+     number an override row holds. Rendered once, beside the badge it
+     explains. */
+  if (parts.note && field.note) {
     const note = document.createElement("span");
     note.className = "models-approx-note";
     note.textContent = field.note;
-    source.appendChild(note);
+    pieces.push(note);
   }
+  // The exact rung of the resolution ladder, not just the coarse badge: a
+  // "provider /models" answer that matched the id exactly reads very
+  // differently from one that only matched after the pricing tag came off.
   if (field.tier) {
     const tier = document.createElement("span");
     tier.className = "models-approx-note";
     tier.textContent =
       `matched at tier ${field.tier} of 11 — ${field.tier_label || ""}`.trim();
-    source.appendChild(tier);
+    pieces.push(tier);
   }
   if (field.approximate) {
     const warn = document.createElement("span");
@@ -31734,30 +32260,26 @@ function buildCapabilityRow(label, field, labels, format) {
         ? ""
         : ` across ${field.reporters} that published one`;
     warn.textContent = `guessed from ${matches} same-named row(s) in other providers, ${agreement}${reporters}`;
-    source.appendChild(warn);
+    pieces.push(warn);
   }
   /* A second source that says something different (7.84.0): OpenRouter's
      live list beside a provider's or a models.dev bucket's answer it never
-     overrides, or the answer it replaced. Both statements stay visible. */
-  if (field.also_stated) {
+     overrides, or the answer an override replaced. Both statements stay
+     visible, and the rung is named once (statementRung). */
+  if (parts.also && field.also_stated) {
     const other = field.also_stated;
     const also = document.createElement("span");
     also.className = "models-approx-note";
-    // OpenRouter's rung line already names it ("OpenRouter live, exact id").
-    const where =
-      other.source === "openrouter_live"
-        ? other.tier_label || other.source_label || ""
-        : [other.source_label, other.tier_label].filter(Boolean).join(", ");
+    const where = statementRung(other);
     also.textContent =
       `also stated: ${(format || formatCapabilityValue)(other.value)}` +
       (where ? ` (${where})` : "");
-    source.appendChild(also);
+    pieces.push(also);
   }
-  // `field.note` is rendered once, above, beside the badge it explains. A
-  // second copy used to be appended here, so every row carrying a note read
-  // its sentence twice.
-  tr.appendChild(source);
-  return tr;
+  pieces.forEach((piece, index) => {
+    if (index) container.appendChild(document.createTextNode(" "));
+    container.appendChild(piece);
+  });
 }
 
 /* models.dev publishes these per million tokens, which is how every price
@@ -31841,6 +32363,11 @@ function refreshProviderRow(providerId) {
     if (providerHasOverrides(provider)) {
       toggle.appendChild(buildModelsChip("forced", "provider override"));
     }
+    // The provider's own table states its row (7.101.0): repainted in place,
+    // its controls and its "Saved" kept.
+    const editor = node.querySelector(".models-provider-settings .models-fields-editor");
+    const paint = editor ? MODELS_FIELD_PAINTERS.get(editor) : null;
+    if (paint) paint({ row: provider.override || {}, preferences: provider.preferences });
   });
   // A provider override changes what every model under it sends, so the open
   // model bodies below it have to be repainted too.
@@ -31870,8 +32397,14 @@ function refreshModelRows(modelRefs) {
     const body = node.querySelector(".models-model-body");
     if (!body || body.dataset.filled !== "1") return;
     const readouts = body.querySelector(".models-readouts");
-    if (readouts) fillModelReadouts(readouts, model);
-    else fillModelBody(body, model, editable);
+    const editor = body.querySelector(".models-fields-editor");
+    const paint = editor ? MODELS_FIELD_PAINTERS.get(editor) : null;
+    if (readouts && paint) {
+      paint(modelFieldsInput(model));
+      fillModelReadouts(readouts, model);
+    } else {
+      fillModelBody(body, model, editable);
+    }
   });
 }
 

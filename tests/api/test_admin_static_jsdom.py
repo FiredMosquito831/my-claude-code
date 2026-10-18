@@ -5361,16 +5361,38 @@ def test_jsdom_chain_entries_are_removed_in_bulk_from_the_card(rendered) -> None
 def test_jsdom_the_preference_controls_are_drawn_above_the_parameter_grid(
     rendered,
 ) -> None:
-    """Two headed sections, preferences first: they are statements about a
-    decision, and the nine below them are fields of a request body."""
+    """Headed groups, decisions first: the limits and the reasoning word are
+    statements about a decision, and the nine below them are fields of a
+    request body (7.101.0: groups of one table, under its four column heads).
+    """
 
-    editor = rendered["models"]["preferences"]["0"]
+    editor = rendered["models"]["preferencesWithGrid"]
 
-    assert editor["heads"][0] == "PreferenceWhat to decideValue"
-    assert editor["heads"][1] == "ParameterWhat to sendValue"
-    # Three-state, the same idiom as every other row on the form -- the third
-    # is the context window (7.87.0), on model rows only.
-    assert editor["modes"] == ["inherit", "inherit", "inherit"]
+    assert editor["heads"] == [
+        "Field",
+        "Value MCC uses",
+        "Where it came from",
+        "Your override · default",
+    ]
+    assert editor["groups"] == ["limits", "reasoning", "request"]
+    assert editor["groupHeads"] == [
+        "Limits",
+        "Reasoning",
+        "Request parameters (sent in the body)",
+    ]
+    assert editor["fields"] == [
+        "context_length",
+        "max_output_tokens",
+        "reasoning_preference",
+        "temperature",
+    ]
+    # Three-state, the same idiom as every other row on the form -- the
+    # context window (7.87.0) is on model rows only.
+    assert rendered["models"]["preferences"]["0"]["modes"] == [
+        "inherit",
+        "inherit",
+        "inherit",
+    ]
     assert rendered["models"]["providerPreferences"]["modes"] == [
         "inherit",
         "inherit",
@@ -5445,8 +5467,10 @@ def test_jsdom_the_output_control_is_bounded_by_the_published_limit(
 
     assert editor["numberType"] == "number"
     assert editor["numberMax"] == "40960"
-    assert "40,960" in editor["notes"][1]
-    assert "models.dev bucket, exact id" in editor["notes"][1]
+    # 7.101.0: the limit and its rung are the row's default line.
+    assert editor["defaults"]["output"][0] == (
+        "default 40,960 — models.dev bucket, exact id"
+    )
 
 
 def test_jsdom_a_model_with_no_published_limit_still_offers_the_control(
@@ -5508,11 +5532,18 @@ def test_jsdom_the_context_row_shows_the_extracted_window_and_its_rung(
     ladder = rendered["models"]["contextWindow"]["ladder"]
 
     assert ladder["present"] is True
-    assert ladder["label"] == "context_length"
-    assert ladder["under"] == "max_output_tokens"
+    assert ladder["field"] == "context_length"
+    assert ladder["group"] == "limits"
+    assert ladder["label"] == "context length"
+    assert ladder["fileKey"] == "context_length"
+    # The two numbers that bound a model, side by side in Limits.
+    assert ladder["next"] == "max_output_tokens"
     assert ladder["mode"] == "inherit"
     assert ladder["max"] is None  # no upper bound, unlike the output cap
-    assert "Also stated: 524,288 (provider /models or models.dev)." in ladder["note"]
+    # 7.101.0: "Also stated" is the default line, under the control.
+    assert ladder["defaults"] == ["default 524,288 — provider /models or models.dev"]
+    assert ladder["cells"][1] == "524,288"
+    assert "Force value replaces it for routing" in ladder["note"]
 
 
 def test_jsdom_a_forced_window_keeps_the_extracted_one_beside_it(rendered) -> None:
@@ -5522,10 +5553,15 @@ def test_jsdom_a_forced_window_keeps_the_extracted_one_beside_it(rendered) -> No
 
     assert forced["mode"] == "value"
     assert forced["value"] == "1000000"
-    assert "Also stated: 524,288" in forced["note"]
+    assert forced["forced"] is True
+    assert forced["cells"][1] == "1,000,000"
+    assert forced["defaults"] == ["default 524,288 — provider /models or models.dev"]
     assert unknown["mode"] == "unset"
-    assert "Also stated: 524,288" in unknown["note"]
-    assert "Nothing else states a window" in nothing["note"]
+    assert unknown["defaults"] == ["default 524,288 — provider /models or models.dev"]
+    assert nothing["defaults"] == [
+        "default not reported — asked: provider /models, models.dev "
+        "(own bucket, reference, vote), OpenRouter live"
+    ]
 
 
 def test_jsdom_the_context_row_is_on_model_rows_only(rendered) -> None:
@@ -5548,6 +5584,527 @@ def test_jsdom_the_panel_badges_the_operator_and_shows_the_extracted_window(
     assert "models-source-operator" in panel["badge"]
     assert "operator override" in panel["cells"][2]
     assert "also stated: 524,288 (provider /models or models.dev)" in panel["cells"][2]
+
+
+# --------------------------------------------------------------------------- #
+# One table per model (7.101.0, X2)
+#
+# The user, 2026-10-10: every field, the overridable ones included, looks like
+# the read-only "What MCC knows about this model" table -- field, value, rung
+# badge, provenance -- with the override control inline and the provider's or
+# the ladder's DEFAULT always visible beside it. One run of
+# admin_jsdom_models_fields.mjs (MCC_JSDOM_SCENARIO=models_fields) drives it on
+# a payload in the server's own shapes. The same file was run once against the
+# 7.100.0 page; what that page drew and sent is
+# tests/fixtures/models_fields_7_100_0.json, and the new page must still draw
+# every row of it and send every body of it byte for byte.
+# --------------------------------------------------------------------------- #
+
+MODELS_FIELDS_BEFORE = json.loads(
+    (
+        Path(__file__).resolve().parents[1] / "fixtures" / "models_fields_7_100_0.json"
+    ).read_text(encoding="utf-8")
+)
+REF_A = "custom_agnes/agnes-3.0-flash"
+REF_B = "custom_agnes/agnes-2.5-flash"
+REF_C = "custom_agnes/agnes-1.5-pro"
+NINE = [
+    "frequency_penalty",
+    "min_p",
+    "presence_penalty",
+    "repetition_penalty",
+    "seed",
+    "stop",
+    "temperature",
+    "top_k",
+    "top_p",
+]
+OVERRIDABLE = ["context_length", "max_output_tokens", "reasoning_preference", *NINE]
+
+
+@pytest.fixture(scope="module")
+def models_fields() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="models_fields")
+
+
+def _field_rows(models_fields: dict, ref: str) -> dict[str, dict]:
+    table = models_fields["models"][ref]["table"]
+    assert table is not None, f"{ref}: no models-fields table drawn"
+    return {row["field"]: row for row in table["rows"]}
+
+
+def _rung_once(note: str) -> str:
+    """F3: "(provider /models, provider /models, exact id)" names its rung once."""
+
+    return re.sub(r"\(([^,()]+), (\1[^()]*)\)", r"(\2)", note)
+
+
+def test_jsdom_the_models_fields_scenario_runs_clean(models_fields) -> None:
+    assert models_fields["fatal"] is None
+    assert models_fields["scenarioFatal"] is None
+    assert models_fields["scriptErrors"] == []
+    assert models_fields["consoleErrors"] == []
+
+
+def test_jsdom_every_capability_row_is_still_drawn_in_the_fields_table(
+    models_fields,
+) -> None:
+    """C1/C8.4: every row 7.100.0's "What MCC knows" panel drew is still drawn,
+    with the same value text, badge class and text, rung line, guessed warning,
+    resolver sentence and second statement (that one naming its rung once).
+
+    The one row whose value cells now hold something else is an output limit
+    you capped: the cells say your cap (C2), and the row the panel drew moves,
+    whole, under the default line of its control.
+    """
+
+    compared = moved = 0
+    for ref, old_rows in MODELS_FIELDS_BEFORE["capability_rows"].items():
+        assert old_rows, f"{ref}: vacuous golden"
+        new_rows = models_fields["models"][ref]["table"]["rows"]
+        by_label = {row["label"]: row for row in new_rows}
+        for old in old_rows:
+            new = by_label.get(old["label"])
+            assert new is not None, f"{ref}: {old['label']!r} is no longer drawn"
+            if (
+                new["field"] == "max_output_tokens"
+                and new["badgeClass"] != old["badgeClass"]
+            ):
+                assert "models-source-operator" in new["badgeClass"], (ref, new)
+                assert any(old["value"] in line for line in new["defaults"]), (ref, new)
+                assert {
+                    "className": old["badgeClass"],
+                    "text": old["badgeText"],
+                } in new["defaultSources"], (ref, new)
+                for note in old["notes"]:
+                    assert _rung_once(note) in new["defaultNotes"], (ref, note, new)
+                moved += 1
+                continue
+            assert new["value"] == old["value"], (ref, old, new)
+            assert new["badgeClass"] == old["badgeClass"], (ref, old, new)
+            assert new["badgeText"] == old["badgeText"], (ref, old, new)
+            assert new["notes"] == [_rung_once(note) for note in old["notes"]], (
+                ref,
+                old,
+                new,
+            )
+            compared += 1
+    # Neither branch of the comparison may be vacuous: the fixture caps the
+    # output limit on all three models (A on its own row, B and C through the
+    # provider row) and draws 67 other rows.
+    assert moved == 3
+    assert compared == 67
+
+
+def test_jsdom_what_the_effective_table_said_is_on_each_row(models_fields) -> None:
+    """7.100.0's "What this forces onto the request", row for row: the value
+    (or "removed from the body") and which row forced it."""
+
+    for ref, old_rows in MODELS_FIELDS_BEFORE["effective_rows"].items():
+        rows = _field_rows(models_fields, ref)
+        assert old_rows, f"{ref}: vacuous golden"
+        for name, value, origin in old_rows:
+            assert rows[name]["value"] == value, (ref, name)
+            assert rows[name]["notes"] == [origin], (ref, name)
+            assert rows[name]["forced"] is True, (ref, name)
+
+
+def test_jsdom_each_overridable_row_shows_its_default_in_every_mode(
+    models_fields,
+) -> None:
+    """C2: the default line is drawn whatever the mode select says, for the
+    context window, the output limit, the reasoning word and each of the nine
+    -- on a model with the provider's default pairs, one whose provider
+    published none and one whose list pins nothing -- and an override never
+    hides it."""
+
+    sweep = models_fields["modeSweep"]
+    seen = {(entry["ref"], entry["field"], entry["mode"]) for entry in sweep}
+    for ref in (REF_A, REF_B, REF_C):
+        for field in OVERRIDABLE:
+            for mode in ("inherit", "unset", "value"):
+                assert (ref, field, mode) in seen, (ref, field, mode)
+    for entry in sweep:
+        assert entry["defaults"], entry
+        assert entry["defaults"][0].startswith("default "), entry
+        assert entry["allShown"] is True, entry
+        assert entry["boxDisabled"] is (entry["mode"] != "value"), entry
+    # The line does not depend on the mode: one text per row.
+    by_row: dict[tuple[str, str], set[tuple[str, ...]]] = {}
+    for entry in sweep:
+        by_row.setdefault((entry["ref"], entry["field"]), set()).add(
+            tuple(entry["defaults"])
+        )
+    assert all(len(texts) == 1 for texts in by_row.values()), by_row
+
+
+def test_jsdom_a_sampling_default_comes_from_the_gateway_pairs(models_fields) -> None:
+    rows = _field_rows(models_fields, REF_A)
+
+    assert rows["temperature"]["defaults"][0] == (
+        "default 0.7 — provider /models (default_parameters)"
+    )
+    assert rows["top_p"]["defaults"][0] == (
+        "default 0.95 — provider /models (default_parameters)"
+    )
+    # Your 0.6 is what MCC sends; the provider's 0.7 is still beside it.
+    assert rows["temperature"]["value"] == "0.6"
+
+
+def test_jsdom_a_sampling_row_with_no_pair_says_not_reported_and_where_it_asked(
+    models_fields,
+) -> None:
+    no_list = _field_rows(models_fields, REF_B)
+    empty_list = _field_rows(models_fields, REF_C)
+    unpaired = _field_rows(models_fields, REF_A)
+
+    for name in NINE:
+        assert no_list[name]["defaults"][0] == (
+            "default not reported — only the provider's /models states one"
+        )
+        assert empty_list[name]["defaults"][0] == (
+            "default not reported — provider /models (default_parameters) "
+            "pins no value for it"
+        )
+    assert unpaired["seed"]["defaults"][0] == empty_list["seed"]["defaults"][0]
+
+
+def test_jsdom_supported_parameters_annotate_the_sampling_rows(models_fields) -> None:
+    listed = _field_rows(models_fields, REF_A)
+    no_list = _field_rows(models_fields, REF_B)
+
+    assert listed["temperature"]["defaults"][1] == (
+        "this provider lists it as accepted (shown, never acted on)"
+    )
+    assert listed["seed"]["defaults"][1] == (
+        "this provider does not list it (shown, never acted on)"
+    )
+    # No list, no sentence.
+    assert all(len(no_list[name]["defaults"]) == 1 for name in NINE)
+
+
+def test_jsdom_the_output_default_is_the_routing_limit_and_openrouter_live_is_a_second_line(
+    models_fields,
+) -> None:
+    capped = _field_rows(models_fields, REF_A)["max_output_tokens"]
+    bucket = _field_rows(models_fields, REF_B)["max_output_tokens"]
+    live = _field_rows(models_fields, REF_C)["max_output_tokens"]
+
+    assert capped["defaults"][0] == (
+        "default not reported — asked: provider /models, models.dev "
+        "(own bucket, reference, vote)"
+    )
+    assert bucket["defaults"][0] == "default 40,960 — models.dev bucket, exact id"
+    # The number routing bounds by, then OpenRouter's, which is only shown.
+    assert live["defaults"][0] == "default 32,768 — provider /models, exact id"
+    assert live["defaults"][1] == (
+        "OpenRouter live also states 131,072 (shown, never acted on)"
+    )
+    # The cap sentence is kept under the control.
+    assert capped["controlNotes"] == [
+        "Nothing publishes an output limit for this model, so your number "
+        "becomes the limit."
+    ]
+    assert bucket["controlNotes"][0].startswith("A cap, not a request")
+
+
+def test_jsdom_save_posts_the_same_body_in_the_same_key_order(models_fields) -> None:
+    """F1/C4/C8.1: the overrides file keeps the order a body names NEW keys
+    in, so the body must be 7.100.0's byte for byte -- the preferences, the
+    context window (model rows), then the nine -- whatever the drawing order.
+    """
+
+    assert models_fields["posts"] == MODELS_FIELDS_BEFORE["posts"]
+    body = json.loads(models_fields["posts"][1]["body"])
+    assert body["scope"] == "model"
+    assert body["key"] == REF_A
+    assert list(body["updates"]) == [
+        "max_output_tokens",
+        "reasoning_preference",
+        "context_length",
+        *NINE,
+    ]
+    assert body["updates"]["temperature"] == 0.8
+    assert body["updates"]["top_p"] is None
+    assert body["updates"]["context_length"] == 200000
+    assert body["updates"]["reasoning_preference"] == "high"
+    provider = json.loads(models_fields["posts"][2]["body"])
+    assert list(provider["updates"]) == [
+        "max_output_tokens",
+        "reasoning_preference",
+        *NINE,
+    ]
+
+
+def test_jsdom_refused_saves_say_what_they_said_before(models_fields) -> None:
+    refused = models_fields["refused"]
+
+    assert {name: answer["status"] for name, answer in refused.items()} == (
+        MODELS_FIELDS_BEFORE["refused"]
+    )
+    assert models_fields["postsAfterRefusals"] == 0
+
+
+def test_jsdom_forced_rows_are_marked_and_keep_their_default(models_fields) -> None:
+    a = _field_rows(models_fields, REF_A)
+    b = _field_rows(models_fields, REF_B)
+
+    forced = [
+        a["temperature"],
+        a["max_output_tokens"],
+        a["top_k"],
+        b["context_length"],
+        b["top_p"],
+    ]
+    for row in forced:
+        assert row["forced"] is True, row
+        assert "models-source-operator" in row["badgeClass"], row
+        assert row["defaults"] and row["defaults"][0].startswith("default "), row
+    assert a["top_p"]["forced"] is False
+    assert a["context_length"]["forced"] is False
+    assert b["top_p"]["value"] == "removed from the body"
+    assert b["context_length"]["value"] == "1,000,000"
+    assert b["context_length"]["defaults"] == [
+        "default 1,048,576 — provider /models, exact id"
+    ]
+    # The cap came from the provider's row, and says so.
+    assert b["max_output_tokens"]["value"] == "8,000"
+    assert "this provider's override row" in b["max_output_tokens"]["notes"][0]
+
+
+def test_jsdom_the_provider_table_has_no_context_row_and_says_per_model(
+    models_fields,
+) -> None:
+    provider = models_fields["provider"]
+    table = provider["table"]
+    rows = {row["field"]: row for row in table["rows"]}
+
+    assert provider["summary"] == "Parameter overrides for every custom_agnes model"
+    assert table["head"][1] == "Set on this provider"
+    assert list(rows) == ["max_output_tokens", "reasoning_preference", *NINE]
+    assert "context_length" not in rows
+    for row in rows.values():
+        assert row["defaults"] == [
+            "default per model — open a model to see its default"
+        ]
+        assert row["overridable"] is True
+    assert rows["top_k"]["value"] == "40"
+    assert rows["max_output_tokens"]["value"] == "8,000"
+    assert rows["temperature"]["value"] == "not set"
+    # The provider's own controls, under 7.100.0's ids and modes.
+    assert [
+        {"label": row["label"], "modeId": row["modeId"], "mode": row["mode"]}
+        for row in table["rows"]
+    ] == [
+        {
+            **old,
+            "label": old["label"]
+            if old["label"] != "max_output_tokens"
+            else "output limit",
+        }
+        for old in MODELS_FIELDS_BEFORE["provider_editor_controls"]
+    ]
+    # A save repaints the provider's own column from the server's answer.
+    after = {
+        row["field"]: row for row in models_fields["afterSaveProvider"]["table"]["rows"]
+    }
+    assert after["temperature"]["value"] == "0.5"
+    assert after["max_output_tokens"]["value"] == "forced unset"
+    assert models_fields["saveProvider"]["status"] == "Saved"
+
+
+def test_jsdom_labels_ids_and_aria_are_kept(models_fields) -> None:
+    """C6: each mode select keeps 7.100.0's id and is labelled by its row's
+    header; each value box keeps its aria-label; the default line describes
+    both; mode comes before value in the tab order; Force value focuses the
+    box; group headers head their row group."""
+
+    labels = {
+        "context_length": "context window",
+        "max_output_tokens": "max output tokens",
+        "reasoning_preference": "reasoning preference",
+    }
+    for ref in (REF_A, REF_B, REF_C):
+        table = models_fields["models"][ref]["table"]
+        rows = [row for row in table["rows"] if row["overridable"]]
+        assert [row["field"] for row in rows] == OVERRIDABLE
+        old_ids = {
+            row["modeId"] for row in MODELS_FIELDS_BEFORE["editor_controls"][ref]
+        }
+        assert {row["modeId"] for row in rows} == old_ids
+        old_modes = {
+            row["modeId"]: row["mode"]
+            for row in MODELS_FIELDS_BEFORE["editor_controls"][ref]
+        }
+        for row in rows:
+            assert row["thScope"] == "row", row
+            assert row["labelFor"] == row["modeId"], row
+            assert row["labelForResolves"] is True, row
+            assert row["mode"] == old_modes[row["modeId"]], row
+            assert row["boxAria"] == labels.get(
+                row["field"], f"{row['field']} value"
+            ), row
+            assert row["boxId"] == re.sub(r"-mode$", "-value", row["modeId"]), row
+            assert row["tabOrder"][:2] == [row["modeId"], row["boxId"]], row
+            described = " ".join(row["defaults"])
+            assert row["boxDescribedBy"] == [described], row
+            assert row["modeDescribedBy"] == [described], row
+        assert table["headScopes"] == ["col", "col", "col", "col"]
+        assert {group["headScope"] for group in table["groups"]} == {"rowgroup"}
+    assert (
+        models_fields["focusAfterForceValue"]
+        == "ov-model-custom_agnes-agnes-1-5-pro-seed-value"
+    )
+    assert models_fields["focusBoxDisabled"] is False
+    assert models_fields["focusBoxDisabledAgain"] is True
+
+
+def test_jsdom_read_only_rows_are_grouped_below_and_say_so(models_fields) -> None:
+    """C3 and the user's decision 4: prices, dates and what the model is sit
+    in the same table, grouped below the override rows, each with a "read-only"
+    a screen reader hears; only the endpoint pin has a control of its own."""
+
+    table = models_fields["models"][REF_A]["table"]
+    assert [group["group"] for group in table["groups"]] == [
+        "limits",
+        "reasoning",
+        "request",
+        "surface",
+        "model",
+        "prices",
+        "dates",
+        "lists",
+    ]
+    assert [group["head"] for group in table["groups"]][3:] == [
+        "Wire surface",
+        "What the model is",
+        "Prices",
+        "Dates",
+        "Gateway lists",
+    ]
+    for row in table["rows"]:
+        if row["overridable"]:
+            assert row["srOnly"] == [], row
+        elif row["field"] == "response_surface":
+            assert row["surfaceEditor"] is True
+        else:
+            assert row["readonly"] is True, row
+            assert row["srOnly"] == ["read-only"], row
+            assert row["defaults"] == [], row
+
+
+def test_jsdom_a_collapsed_provider_renders_no_field_tables(models_fields) -> None:
+    """C7, the 186,290-node lesson: nothing is built for a provider or a model
+    nobody opened."""
+
+    collapsed = models_fields["collapsed"]
+    assert collapsed["providers"] == ["custom_agnes", "zeta"]
+    assert collapsed["selects"] == 0
+    assert collapsed["fieldTables"] == 0
+    opened = models_fields["openProvider"]
+    assert opened["modelRows"] == 3
+    assert opened["filledBodies"] == 0
+    assert opened["modelSelects"] == 0
+    assert opened["modelFieldTables"] == 0
+    assert opened["zetaSelects"] == 0
+    assert opened["zetaTables"] == 0
+
+
+def test_jsdom_also_stated_names_its_rung_once(models_fields) -> None:
+    """F3: 7.100.0 wrote "(provider /models, provider /models, exact id)"."""
+
+    a = _field_rows(models_fields, REF_A)
+    b = _field_rows(models_fields, REF_B)
+
+    assert (
+        "also stated: The provider's own words. (provider /models, exact id)"
+        in (a["description"]["notes"])
+    )
+    assert (
+        "also stated: 1,048,576 (provider /models, exact id)"
+        in b["context_length"]["notes"]
+    )
+    for ref in (REF_A, REF_B, REF_C):
+        for row in models_fields["models"][ref]["table"]["rows"]:
+            for text in [*row["notes"], *row["defaults"]]:
+                assert not re.search(r"\(([^,()]+), \1", text), (ref, text)
+
+
+def test_jsdom_the_override_chip_counts_every_forced_key(models_fields) -> None:
+    """The user's decision 2 (2026-10-18): the chip counts every key you set
+    that reaches the model -- the output cap, the context window and the
+    reasoning word too, from the model's row and the provider's. 7.100.0
+    counted the nine body parameters only."""
+
+    assert MODELS_FIELDS_BEFORE["chips"] == {
+        REF_A: "2 override(s) active",
+        REF_B: "2 override(s) active",
+        REF_C: "1 override(s) active",
+    }
+    chips = {ref: entry["chip"] for ref, entry in models_fields["models"].items()}
+    assert chips == {
+        # temperature, top_k (provider row), max_output_tokens
+        REF_A: "3 override(s) active",
+        # top_p, top_k (provider row), context_length, max_output_tokens (provider row)
+        REF_B: "4 override(s) active",
+        # top_k (provider row), reasoning_preference, max_output_tokens (provider row)
+        REF_C: "3 override(s) active",
+    }
+    # After model A's save: max_output_tokens, temperature, reasoning_preference,
+    # context_length, top_p, and the provider's top_k.
+    assert models_fields["afterSaveA"]["model"]["chip"] == "6 override(s) active"
+
+
+def test_jsdom_a_save_repaints_the_values_and_keeps_the_controls(models_fields) -> None:
+    after = models_fields["afterSaveA"]
+    rows = {row["field"]: row for row in after["model"]["table"]["rows"]}
+
+    assert models_fields["saveA"]["status"] == "Saved"
+    assert models_fields["saveA"]["statusConnected"] is True
+    assert after["sameBody"] is True
+    assert after["sameModeControl"] is True
+    assert rows["temperature"]["value"] == "0.8"
+    assert rows["top_p"]["value"] == "removed from the body"
+    assert rows["context_length"]["value"] == "200,000"
+    assert rows["context_length"]["defaults"] == [
+        "default 524,288 — provider /models, exact id"
+    ]
+    assert rows["reasoning_preference"]["value"] == "High"
+
+
+def test_jsdom_the_surface_pin_keeps_its_own_button_and_write(models_fields) -> None:
+    """The user's decision 1: "Which endpoint to use" keeps its own button,
+    inside the Wire surface row, and writes through its own route."""
+
+    surface = models_fields["surface"]
+    assert surface["present"] is True
+    assert surface["inFieldRow"] is True
+    assert surface["button"] == {
+        "text": "Pin endpoint",
+        "className": "ghost-button models-surface-save",
+    }
+    assert surface["options"] == ["", "chat_completions", "responses"]
+    assert models_fields["posts"][-1] == {
+        "path": "/admin/api/model-admin/surface",
+        "body": '{"key":"custom_agnes/agnes-3.0-flash","surface":"responses"}',
+    }
+    # Its cell survives the repaint, so its "Saved" is on screen (7.100.0
+    # wrote it into a node the repaint had discarded).
+    assert surface["status"] == "Saved"
+    assert surface["statusConnected"] is True
+
+
+def test_jsdom_the_media_block_and_the_mcp_notes_are_untouched(models_fields) -> None:
+    """7.98.0's media request fields block and 7.99.0/7.100.0's MCP notes are
+    drawn by code this change never touches: byte for byte what 7.100.0 drew
+    for the same payload."""
+
+    assert (
+        models_fields["mediaSection"]["sha256"]
+        == (MODELS_FIELDS_BEFORE["media_section_sha256"])
+    )
+    assert models_fields["mcpNotes"] == MODELS_FIELDS_BEFORE["mcp_notes"]
+    assert models_fields["mcpNotes"]["count"] == 4
 
 
 # ------------------------------------------------------------- key pool rail

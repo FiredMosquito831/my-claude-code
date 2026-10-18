@@ -60,6 +60,10 @@ DOCUMENTED_CONTROLS: tuple[str, ...] = (
     "Forget exit memory",
     "Keep trying exits until one answers",
     "Add proxy",
+    # Models: the Guide's "Read a model's fields and override one" and USAGE
+    # name the two saves a model's table has (7.101.0).
+    "Save overrides",
+    "Pin endpoint",
 )
 
 
