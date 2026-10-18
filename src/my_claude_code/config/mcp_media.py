@@ -13,8 +13,12 @@ request: the server never injects a tool (decision 1 of 2026-10-04), and the
 entries below only tell an app where the program is. Every entry is written
 into something MCC already owns -- a launch line (Claude Code, Codex), a config
 layer under ``~/.mcc`` (OpenCode, OpenCode 2, Kilo, Crush, Qwen Code, Gemini
-CLI) or MCC's own Claude Desktop document. The user's own files are a second
-release (decision 11).
+CLI) or MCC's own Claude Desktop document. The user's own files came in the
+second release (decision 11, 7.100.0): Codex's ``config.toml``, OpenCode's
+``opencode.json``, Command Code's ``mcp.json`` and, as a fallback, Claude
+Desktop's ``claude_desktop_config.json`` -- each through its card under
+Desktop apps, with the plan diff first, a one-time backup and Undo
+(``config/desktop_apply.py``). :func:`desktop_file_entry` builds those entries.
 
 What is never written: the proxy token (``mcc-mcp`` reads it from MCC's own
 settings at run time), a timeout or limit of MCC's choosing (IV.1), a
@@ -100,6 +104,10 @@ class McpMediaSupport(StrEnum):
     #: The app reads MCP servers only from the user's own file, which MCC
     #: does not write in this release (Configure + backup + Undo, next).
     OWN_FILE_LATER = "own_file_later"
+    #: The app reads MCP servers from the user's own file, and MCC adds its
+    #: entry there from the app's card under Desktop apps -- with the plan
+    #: diff first, a one-time backup and Undo (7.100.0).
+    DESKTOP_CARD = "desktop_card"
 
 
 class McpMediaShape(StrEnum):
@@ -118,6 +126,10 @@ class McpMediaShape(StrEnum):
     #: ``managedMcpServers: [{name, transport: "stdio", ...}]`` in MCC's own
     #: Claude Desktop document.
     CLAUDE_DESKTOP_MANAGED = "claude_desktop_managed"
+    #: ``mcpServers.<name> = {transport: "stdio", enabled, command, args}``
+    #: in Command Code's ``~/.commandcode/mcp.json`` (its bundled 1.65.0
+    #: documentation, ``reference/mcp.md``, "Config schema").
+    COMMANDCODE_MCP = "commandcode_mcp"
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,11 +260,12 @@ MCP_MEDIA_APP_TABLE: tuple[McpMediaApp, ...] = (
     McpMediaApp(
         "commandcode_cli",
         "Command Code",
-        McpMediaSupport.OWN_FILE_LATER,
+        McpMediaSupport.DESKTOP_CARD,
         note=(
-            "Command Code reads MCP servers only from your own "
-            "~/.commandcode/mcp.json, which MCC does not write in this "
-            "release. The line on the MCC media server card works there."
+            "Command Code reads MCP servers from your own "
+            "~/.commandcode/mcp.json. Press Add MCP server on the Command Code "
+            "card under Desktop apps: it shows what it will write first, takes "
+            "a one-time backup, and Undo takes it back out."
         ),
     ),
     McpMediaApp(
@@ -485,6 +498,48 @@ def desktop_mcp_server(
         return None
     folder = out_dir if out_dir is not None else str(mcp_media_output_dir())
     return claude_desktop_managed_server(resolved, folder, environ)
+
+
+def desktop_file_entry(
+    shape: McpMediaShape,
+    app_id: str,
+    command: str,
+    environ: Mapping[str, str],
+    *,
+    out_dir: str | None = None,
+) -> dict[str, Any]:
+    """MCC's server entry for an app's *own* file (7.100.0, decision 11).
+
+    The same shapes the launcher layers use, built by the same helpers --
+    never through a catalogue serialiser (risk R13): the OpenCode desktop
+    entry is ``_opencode_entry`` exactly as MCC's own layer has it, with this
+    card's ``--app`` id. No token, no timeout, no trust switch (decisions 1
+    and 8, IV.1): ``mcc-mcp`` reads MCC's address and token at run time.
+    """
+
+    match shape:
+        case McpMediaShape.OPENCODE_MCP:
+            return _opencode_entry(app_id, command, environ)
+        case McpMediaShape.COMMANDCODE_MCP:
+            entry: dict[str, Any] = {
+                "transport": "stdio",
+                "enabled": True,
+                "command": command,
+                "args": server_arguments(app_id, out_dir=out_dir),
+            }
+            env = server_environment(environ)
+            if env:
+                entry["env"] = env
+            return entry
+        case _:
+            entry = {
+                "command": command,
+                "args": server_arguments(app_id, out_dir=out_dir),
+            }
+            env = server_environment(environ)
+            if env:
+                entry["env"] = env
+            return entry
 
 
 def _opencode_entry(

@@ -51,6 +51,20 @@ server but its model does not see the tools yet, and OpenCode 2's first `run` af
 service starts can begin before the server connects ([Known limits](MEDIA.md#known-limits-today)). Details:
 [Coding agents: the media server](MEDIA.md#coding-agents-the-media-server-mcp-7990).
 
+**In your own app files (7.100.0).** The **Desktop apps** cards for Codex desktop,
+OpenCode desktop and Command Code have the same **Add MCP server** / **Remove MCP server**
+button, for the app's own file: `~/.codex/config.toml` (`[mcp_servers.mcc_media]`),
+`~/.config/opencode/opencode.json` (`mcp.mcc_media`, plus OpenCode's own `ask` for the
+tools that spend money) and `~/.commandcode/mcp.json` (`mcpServers.mcc_media`) -- so the
+apps started from their own icons, and plain `codex` and `opencode`, get the tools too.
+The first press shows the change and a **Write it** button; the first write takes a
+one-time backup beside the file; **Remove MCP server** or the card's **Undo** gives the
+file back byte for byte. An `mcc_media` entry MCC did not add is left alone, and no token
+is written. The Claude Desktop card has it as a **fallback** for
+`claude_desktop_config.json` -- 60 seconds per tool call there -- for use only if MCC's own
+document did not bring the tools after a relaunch. VS Code and Roo Code: not measured yet.
+Details: [In your own app files](MEDIA.md#in-your-own-app-files-71000).
+
 <details>
 <summary><strong>Claude Code in VS Code</strong></summary>
 

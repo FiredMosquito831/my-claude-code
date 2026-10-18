@@ -54,6 +54,7 @@ from enum import StrEnum
 
 from my_claude_code.config.document_codecs import DocumentFormat
 from my_claude_code.config.harnesses import COMMANDCODE_API_KEY_ENV, HarnessProtocol
+from my_claude_code.config.mcp_media import MCP_MEDIA_SERVER_NAME, McpMediaShape
 
 
 class DesktopAppStatus(StrEnum):
@@ -147,6 +148,35 @@ class DesktopAppState(StrEnum):
     #: card names the source and offers no button, because a button that wrote
     #: a file with no effect would be worse than none.
     MANAGED = "managed"
+
+
+class DesktopMcpState(StrEnum):
+    """What a probe found for MCC's media server entry in an app's own file.
+
+    The second key a card may own (7.100.0), reported apart from the card's
+    inference state: a user may want MCC's media tools in an app that talks to
+    some other provider, or MCC's models without the tools, so neither badge
+    says anything about the other.
+    """
+
+    #: The program is not on this machine: no button, as for Configure.
+    NOT_INSTALLED = "not_installed"
+    #: A managed profile outranks the file: no button.
+    MANAGED = "managed"
+    #: The file does not parse; MCC writes nothing into it.
+    UNREADABLE = "unreadable"
+    #: No ``mcc_media`` entry in the file (or no file): *Add MCP server*.
+    ABSENT = "absent"
+    #: MCC's own entry, exactly what an Add would write now.
+    ADDED = "added"
+    #: MCC's own entry, written by an earlier install (``mcc-mcp`` has moved,
+    #: or MCC's config folder has): *Add MCP server* again brings it up to
+    #: date, and *Remove MCP server* takes it out.
+    OUTDATED = "outdated"
+    #: An ``mcc_media`` entry MCC did not write, or one changed since MCC
+    #: wrote it. Nothing to press: Add would overwrite something of the
+    #: user's, and Remove would delete it.
+    FOREIGN = "foreign"
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +354,67 @@ class DesktopSidecar:
     #: (``MCP_MEDIA_APPS``), so a file written with it off is the same file
     #: as before 7.99.0; Undo deletes the file and the server with it.
     mcp_servers_key: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopMcpDocument:
+    """Where an app reads its MCP servers, and the entry MCC's media server takes.
+
+    7.100.0, decision 11 of 2026-10-18: the user's *own* files, through the
+    card's *Add MCP server* / *Remove MCP server* button with the plan diff
+    first, a one-time backup and Undo. The entry is a second key MCC owns,
+    beside the inference key the card owns today -- in the **same** document
+    for Codex desktop (``config.toml``) and OpenCode desktop
+    (``opencode.json``), in a document of its own for Command Code
+    (``mcp.json``, not the ``providers.json`` Configure writes) and for Claude
+    Desktop's fallback (``claude_desktop_config.json``).
+
+    Declared as data for the same reason as everything else in this module:
+    the engine in ``config/desktop_apply.py`` asks no question about which
+    app it is looking at.
+    """
+
+    #: Where the file is, per platform, in the app's own lookup order.
+    paths: tuple[DesktopPath, ...]
+    #: How it is spelled to a human.
+    display_path: str
+    #: The document's shape: TOML or JSON.
+    document_format: DocumentFormat
+    #: The map of servers, outermost first. MCC's entry is
+    #: ``MCP_MEDIA_SERVER_NAME`` inside it.
+    servers_key: tuple[str, ...]
+    #: The entry's form (``config/mcp_media.desktop_file_entry``).
+    shape: McpMediaShape
+    #: For an app that runs a tool without asking by default (OpenCode): the
+    #: app's own per-tool permission map. MCC sets ``ask`` there for each tool
+    #: that spends money, only where the user has set nothing for it, and
+    #: never into a permission that is one word for every tool (decision 8).
+    ask_map_key: tuple[str, ...] = ()
+    #: The fallback behind a document MCC owns (Claude Desktop): pressed only
+    #: if the user wants it, and labelled so on the card.
+    fallback: bool = False
+    #: Whether the app gives a server no working folder, so ``mcc-mcp`` is
+    #: told where results go (``--out``).
+    needs_out_dir: bool = False
+    #: How the app gates a tool that spends money, in the card's words.
+    asks: str = ""
+    #: Anything else the reader needs before pressing the button.
+    note: str = ""
+    #: Suffix of the one-time copy taken before MCC's first edit -- the same
+    #: copy Configure takes, when the file is the same file.
+    backup_suffix: str = ".mcc-backup"
+
+    @property
+    def entry_key_path(self) -> tuple[str, ...]:
+        """The key MCC's entry sits at, e.g. ``("mcp_servers", "mcc_media")``."""
+
+        return (*self.servers_key, MCP_MEDIA_SERVER_NAME)
+
+    @property
+    def entry_key_label(self) -> str:
+        """The entry's key as a reader writes it, e.g. ``mcp_servers.mcc_media``."""
+
+        return ".".join(self.entry_key_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -517,6 +608,12 @@ class DesktopAppSpec:
     notes: tuple[str, ...] = ()
     #: For INSTRUCTIONS_ONLY: the field/value pairs a human types, in order.
     instruction_fields: tuple[tuple[str, str], ...] = ()
+    #: Where this app reads MCP servers, for MCC's media server entry
+    #: (7.100.0). ``None`` for an app MCC does not register it in.
+    mcp: DesktopMcpDocument | None = None
+    #: One line the card shows where MCC does not offer the media server for
+    #: this app yet, dated, e.g. "not measured yet". Empty otherwise.
+    mcp_note: str = ""
 
     @property
     def owned_key_label(self) -> str:
@@ -790,6 +887,74 @@ def _home(
     )
 
 
+#: Codex's ``config.toml``: ``CODEX_HOME`` first, then ``~/.codex``. Spelled
+#: once because two keys MCC owns live in it -- the provider table Configure
+#: writes and, since 7.100.0, the media server entry -- and two copies of the
+#: same paths are two places for them to drift apart.
+_CODEX_CONFIG_PATHS: tuple[DesktopPath, ...] = (
+    DesktopPath(env_vars=("CODEX_HOME",), relative_parts=("config.toml",)),
+    _home(".codex", "config.toml"),
+)
+
+#: OpenCode's global ``opencode.json``, shared the same way.
+_OPENCODE_CONFIG_PATHS: tuple[DesktopPath, ...] = (
+    DesktopPath(
+        env_vars=("OPENCODE_CONFIG_DIR",),
+        relative_parts=("opencode.json",),
+    ),
+    # ~/.config, on every platform including Windows. OpenCode's
+    # own documentation states exactly one global location --
+    # "Place your global OpenCode config in
+    # ~/.config/opencode/opencode.json" (https://opencode.ai/docs/config)
+    # -- and names no %APPDATA% form at all. MCC used to declare
+    # the %APPDATA% path first, so on Windows Configure created a
+    # brand-new file OpenCode never reads and reported success:
+    # the invisible failure this module exists to prevent.
+    _home(".config", "opencode", "opencode.json"),
+)
+
+
+def _claude_user_data_file(filename: str) -> tuple[DesktopPath, ...]:
+    """Return one file of Claude Desktop's third-party *user data* folder.
+
+    Read out of the installed 2.31226.0.0 bundle (``app.asar``, read only,
+    2026-10-18): in third-party mode the app sets ``userData`` to
+    ``%LOCALAPPDATA%\\Claude-3p`` on Windows and to its usual folder plus
+    ``-3p`` elsewhere, unless ``CLAUDE_USER_DATA_DIR`` names one -- and it
+    reads ``claude_desktop_config.json`` from ``userData``. The configuration
+    library MCC writes is a folder inside the same one.
+    """
+
+    return (
+        DesktopPath(env_vars=("CLAUDE_USER_DATA_DIR",), relative_parts=(filename,)),
+        DesktopPath(
+            env_vars=("LOCALAPPDATA",),
+            relative_parts=("Claude-3p", filename),
+            platforms=("win32",),
+        ),
+        DesktopPath(
+            env_vars=("HOME", "USERPROFILE"),
+            relative_parts=("Library", "Application Support", "Claude-3p", filename),
+            platforms=("darwin",),
+        ),
+        DesktopPath(
+            env_vars=("HOME", "USERPROFILE"),
+            relative_parts=(".config", "Claude-3p", filename),
+            platforms=("linux",),
+        ),
+    )
+
+
+#: What the VS Code and Roo Code cards say about the media server: the
+#: extensions speak MCP, and where each keeps its MCP servers was not measured
+#: on an installed copy in a scratch profile for 7.100.0.
+MCP_NOT_MEASURED_NOTE = (
+    "MCP server: not measured yet. This app speaks MCP, but where it keeps its "
+    "MCP servers has not been measured on an installed copy (2026-10-18), so "
+    "MCC does not write it. The line on the MCC media server card works there."
+)
+
+
 DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
     DesktopAppSpec(
         id="codex_desktop",
@@ -817,10 +982,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             ),
         ),
         document=DesktopDocument(
-            paths=(
-                DesktopPath(env_vars=("CODEX_HOME",), relative_parts=("config.toml",)),
-                _home(".codex", "config.toml"),
-            ),
+            paths=_CODEX_CONFIG_PATHS,
             display_path="~/.codex/config.toml",
             document_format=DocumentFormat.TOML,
             owned_key_path=("model_providers", DESKTOP_PROVIDER_ID),
@@ -887,6 +1049,33 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             "degrade with any custom provider (openai/codex#29156): the "
             "session runs on MCC, but switching models from the picker may "
             "not work. Not measured here.",
+        ),
+        # The media server, in the same file (7.100.0): an
+        # ``[mcp_servers.mcc_media]`` table with ``command``, ``args`` and,
+        # only when MCC runs with its own config folder, ``env`` -- the fields
+        # the 7.99.0 launcher already passes Codex as ``-c`` settings, measured
+        # with ``codex mcp list``. Appended as a table of its own, so not a
+        # byte of the user's tables or comments is re-rendered.
+        mcp=DesktopMcpDocument(
+            paths=_CODEX_CONFIG_PATHS,
+            display_path="~/.codex/config.toml",
+            document_format=DocumentFormat.TOML,
+            servers_key=("mcp_servers",),
+            shape=McpMediaShape.MCP_SERVERS,
+            asks=(
+                "Codex asks before each media tool that spends money: none of "
+                "them is marked read-only."
+            ),
+            note=(
+                "The Codex CLI reads this file too, so plain codex gets the "
+                "server as well; mcc-codex adds its own for one launch from "
+                "the Codex CLI card. Measured 2026-10-18 with Codex on MCC's "
+                "models: Codex lists the server, but offers MCP tools to its "
+                "model only through its tool search, which MCC does not "
+                "carry, and gives a server about one second to start -- so a "
+                "model served by MCC may not see the tools yet. With Codex's "
+                "own models: not measured."
+            ),
         ),
     ),
     DesktopAppSpec(
@@ -1018,21 +1207,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             ),
         ),
         document=DesktopDocument(
-            paths=(
-                DesktopPath(
-                    env_vars=("OPENCODE_CONFIG_DIR",),
-                    relative_parts=("opencode.json",),
-                ),
-                # ~/.config, on every platform including Windows. OpenCode's
-                # own documentation states exactly one global location --
-                # "Place your global OpenCode config in
-                # ~/.config/opencode/opencode.json" (https://opencode.ai/docs/config)
-                # -- and names no %APPDATA% form at all. MCC used to declare
-                # the %APPDATA% path first, so on Windows Configure created a
-                # brand-new file OpenCode never reads and reported success:
-                # the invisible failure this module exists to prevent.
-                _home(".config", "opencode", "opencode.json"),
-            ),
+            paths=_OPENCODE_CONFIG_PATHS,
             display_path="~/.config/opencode/opencode.json",
             document_format=DocumentFormat.JSON,
             owned_key_path=("provider", DESKTOP_PROVIDER_ID),
@@ -1081,6 +1256,30 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             "MCC's proxy token is written into opencode.json as "
             "options.apiKey, and the file is tightened to 0600 where the OS "
             "allows it. Undo removes it.",
+        ),
+        # The media server, in the same file (7.100.0): ``mcp.mcc_media`` in
+        # OpenCode's ``McpLocalConfig`` shape (vendored schema,
+        # ``tests/fixtures/schemas/opencode-config.schema.json``), built by
+        # ``config/mcp_media`` exactly as MCC's own launcher layer builds it
+        # -- never through the shared catalogue serialiser (risk R13).
+        mcp=DesktopMcpDocument(
+            paths=_OPENCODE_CONFIG_PATHS,
+            display_path="~/.config/opencode/opencode.json",
+            document_format=DocumentFormat.JSON,
+            servers_key=("mcp",),
+            shape=McpMediaShape.OPENCODE_MCP,
+            ask_map_key=("permission",),
+            asks=(
+                "OpenCode does not ask before a tool by default, so MCC also "
+                "sets OpenCode's own ask for the media tools that spend money, "
+                "in the same file. A permission you already set for one of "
+                "them, or one permission for every tool, is left as it is."
+            ),
+            note=(
+                "The OpenCode CLI reads this file too, so plain opencode gets "
+                "the server as well; mcc-opencode keeps its own from the "
+                "OpenCode card above."
+            ),
         ),
     ),
     DesktopAppSpec(
@@ -1161,6 +1360,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         restart_required=False,
         open_command="code",
+        mcp_note=MCP_NOT_MEASURED_NOTE,
         notes=(
             "VS Code appends the method path itself according to apiType, so "
             "this one takes the proxy root rather than a /v1 suffix.",
@@ -1453,6 +1653,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         catalogue_format_id="",
         sidecar_path_key="roo-cline.autoImportSettingsPath",
         open_command="code",
+        mcp_note=MCP_NOT_MEASURED_NOTE,
         notes=(
             "Roo Code's export format carries the key in plaintext and "
             "resolves no reference, so MCC keeps it in a file of its own at "
@@ -1540,6 +1741,28 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             "message is that raw secrets do not belong there -- and accepts a "
             '"$ENV_VAR", "{env:VAR}" or "!command" reference. MCC writes '
             "$MCC_COMMANDCODE_API_KEY, and mcc-commandcode is what sets it.",
+        ),
+        # The media server, in a file of its own (7.100.0): Command Code
+        # reads user-scope MCP servers from ``~/.commandcode/mcp.json``, not
+        # from the ``providers.json`` Configure writes -- its bundled 1.65.0
+        # documentation, ``reference/mcp.md`` "Configuration & scopes" and
+        # "Config schema" (stdio: ``transport``, ``enabled``, ``command``,
+        # ``args``, ``env``).
+        mcp=DesktopMcpDocument(
+            paths=(_home(".commandcode", "mcp.json"),),
+            display_path="~/.commandcode/mcp.json",
+            document_format=DocumentFormat.JSON,
+            servers_key=("mcpServers",),
+            shape=McpMediaShape.COMMANDCODE_MCP,
+            asks=(
+                "Command Code asks before an MCP tool unless you run it in "
+                "yolo mode or have allowed that tool (its own permission rules)."
+            ),
+            note=(
+                "Command Code reads this file for every project; a server of "
+                "the same name in a project's .mcp.json or its local scope "
+                "takes precedence over it."
+            ),
         ),
     ),
     DesktopAppSpec(
@@ -1747,6 +1970,35 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         # the user has authored.
         provider=DesktopProvider(constants={"name": CLAUDE_DESKTOP_CONFIG_NAME}),
         open_command="",
+        # The FALLBACK for the media server (decision 9 keeps MCC's own
+        # document -- ``managedMcpServers`` in the sidecar above -- as the
+        # primary): Claude Desktop's own ``claude_desktop_config.json``, where
+        # Developer settings add local servers. The path is the app's
+        # third-party ``userData`` folder and the entry is the app's own
+        # ``{command, args, env}`` schema, both read out of the installed
+        # 2.31226.0.0 bundle. Claude Desktop stops waiting for a tool of a
+        # server added there after 60 seconds unless ``mcpToolTimeoutSec`` is
+        # set (claude.com/docs/third-party/claude-desktop/configuration); MCC
+        # writes no timeout (IV.1) and the card says so.
+        mcp=DesktopMcpDocument(
+            paths=_claude_user_data_file("claude_desktop_config.json"),
+            display_path="%LOCALAPPDATA%\\Claude-3p\\claude_desktop_config.json",
+            document_format=DocumentFormat.JSON,
+            servers_key=("mcpServers",),
+            shape=McpMediaShape.MCP_SERVERS,
+            fallback=True,
+            needs_out_dir=True,
+            asks="Claude Desktop asks before each tool: MCC writes no tool policy.",
+            note=(
+                "Fallback, 60 s tool limit there. Use it only if, after a "
+                "relaunch, the media tools from MCC's own document did not "
+                "show up. Claude Desktop gives a server added in this file 60 "
+                "seconds per tool call unless mcpToolTimeoutSec is set (MCC "
+                "sets no timeout), so a slow picture can be cut short there; "
+                "a video is a job id either way. Results go to the mcp-media "
+                "folder of MCC's configuration folder."
+            ),
+        ),
         notes=(
             "Configure writes MCC's own document into Claude Desktop's local "
             "configuration library and points the library's appliedId at it. "

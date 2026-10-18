@@ -22,6 +22,7 @@ from .model_refs import parse_provider_type
 from .paths import onboarding_state_path
 from .provider_catalog import PROVIDER_CATALOG
 from .provider_registry import get_provider_registry
+from .restore_record import read_mcp_record
 from .websearch_catalog import WEBSEARCH_CATALOG
 
 
@@ -220,11 +221,18 @@ def _media_server_added() -> bool:
     """Return True once any app has MCC's media MCP server (7.99.0).
 
     The same setting the Coding agents buttons write; derived, never a visit.
+    Since 7.100.0 also an entry MCC added to an app's own file from its
+    Desktop apps card, which writes that file rather than the setting -- the
+    record MCC keeps of it is what says so, and Remove forgets it.
     """
 
     state = load_value_state()
-    return bool(
-        parse_mcp_media_apps(str(state.get("MCP_MEDIA_APPS", {}).get("value", "")))
+    if parse_mcp_media_apps(str(state.get("MCP_MEDIA_APPS", {}).get("value", ""))):
+        return True
+    return any(
+        read_mcp_record(spec.id) is not None
+        for spec in DESKTOP_APPS
+        if spec.mcp is not None
     )
 
 
@@ -415,6 +423,11 @@ def build_state(
                 "Start a new session of that agent. It lists media_status and "
                 "one tool per filled rail, and asks you before any tool that "
                 "spends money.",
+                "For an app you start from its own icon - Codex desktop, "
+                "OpenCode desktop, Command Code - press Add MCP server on its "
+                "card under Desktop apps instead: it shows the change to that "
+                "app's own file first, keeps a one-time backup, and Undo takes "
+                "it back out.",
             ),
             target="#mcpMediaServerCard",
             guide_anchors=("guide-media-mcp",),

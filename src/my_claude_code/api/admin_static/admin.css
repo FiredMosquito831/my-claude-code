@@ -11007,6 +11007,24 @@ audio.req-media-preview {
   border-top: 1px solid var(--line);
 }
 
+/* 7.100.0: the same row on a Desktop apps card, for MCC's media server in
+   the app's own file (or, for Claude Desktop, the fallback below MCC's own
+   document). Its own class so it never reads as one of the agent buttons. */
+.desktop-mcp-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.desktop-mcp-meta {
+  margin: 0;
+  width: 100%;
+}
+
 .mcp-media-state {
   display: flex;
   flex-wrap: wrap;

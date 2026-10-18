@@ -16,7 +16,7 @@ its base URL at the proxy and keeps its own code.
 | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content`, `GET /v1/videos`, `DELETE /v1/videos/{id}` | 7.64.0 | Video | `MODEL_VIDEO`, `MODEL_VIDEO_FALLBACKS`, `MODEL_VIDEO_PAUSED` |
 | Gemini `:generateContent` / `:streamGenerateContent` with image or audio output, `:predictLongRunning`, `GET /v1beta/operations/{id}` | 7.65.0 | Image, Speech, Video | the same rails |
 | `GET /v1/media/models`: every media rail model and the request fields it takes ([Request fields per model](#request-fields-per-model-7980)) | 7.98.0 | every rail | none (read only) |
-| `mcc-mcp`: the rails as tools for a coding agent, over MCP, added per agent ([Coding agents: the media server](#coding-agents-the-media-server-mcp-7990)) | 7.99.0 | every rail | `MCP_MEDIA_APPS` (the Add / Remove MCP server buttons) |
+| `mcc-mcp`: the rails as tools for a coding agent, over MCP, added per agent ([Coding agents: the media server](#coding-agents-the-media-server-mcp-7990)); since 7.100.0 also into your own app files from the Desktop apps cards ([In your own app files](#in-your-own-app-files-71000)) | 7.99.0 | every rail | `MCP_MEDIA_APPS` (the Add / Remove MCP server buttons); the Desktop apps cards write your file, not a setting |
 
 ```python
 from openai import OpenAI
@@ -559,15 +559,54 @@ already owns:
 | Qwen Code, Gemini CLI | MCC's system settings file under `mcpServers` (never `trust`) | yes; Gemini CLI starts MCP servers only in a folder you trusted |
 | Claude Desktop | MCC's own Claude Desktop document as `managedMcpServers` (absolute command; no tool policy) when that card is configured; relaunch once | yes, Claude Desktop's own prompt |
 
-Your own files -- `~/.claude.json`, Codex's `config.toml`, `opencode.json`, Command Code's
-`mcp.json` -- are never written. Kimi Code, Goose, Cline and Droid speak MCP but have not
-been measured on an installed copy yet; Pi has no MCP client (MCC's Pi extension will offer
-the tools later); Aider has none at all. For any other MCP app, the **MCC media server**
-card on that page has the line to add as a local (stdio) server:
+These buttons never write your own files -- `~/.claude.json`, Codex's `config.toml`,
+`opencode.json`, Command Code's `mcp.json`. Since 7.100.0 the **Desktop apps** cards on the
+same page can add the server to the last three (and to Claude Desktop's own file, as a
+fallback), each with the change shown first, a one-time backup and Undo: see
+[In your own app files](#in-your-own-app-files-71000). Kimi Code, Goose, Cline and Droid
+speak MCP but have not been measured on an installed copy yet; Pi has no MCP client (MCC's
+Pi extension will offer the tools later); Aider has none at all. For any other MCP app, the
+**MCC media server** card on that page has the line to add as a local (stdio) server:
 
 ```text
 "<the mcc-mcp path the card shows>" --app <your-app>
 ```
+
+### In your own app files (7.100.0)
+
+An app started from its own icon -- Codex desktop, OpenCode desktop, plain `codex`,
+`opencode` or Command Code (`commandcode`) -- reads its MCP servers from **your** configuration
+file, which MCC's launchers never touch. Each of these has a card under **Desktop apps**
+on the Coding agents page with the same **Add MCP server** / **Remove MCP server** button,
+writing one entry, `mcc_media`, into that file:
+
+| Desktop apps card | File, and what MCC adds | Asks before a tool that spends money |
+|---|---|---|
+| Codex desktop (and plain `codex`) | `~/.codex/config.toml`: a `[mcp_servers.mcc_media]` table (`command`, `args`, and `env` only when MCC runs with a config folder of its own), appended after your tables -- no table or comment of yours is re-written | yes: no tool that spends is marked read-only (see [Known limits](#known-limits-today) for Codex on MCC's models) |
+| OpenCode desktop (and plain `opencode`) | `~/.config/opencode/opencode.json`: `mcp.mcc_media` (`type: "local"`), plus `permission.mcc_media_<tool>: "ask"` for the six tools that spend money where you have set nothing for that tool; a `permission` that is one word for every tool is left as it is | yes, through OpenCode's own `ask` |
+| Command Code | `~/.commandcode/mcp.json` (not the `providers.json` Configure writes): `mcpServers.mcc_media` (`transport: "stdio"`) | yes, unless you run it in yolo mode or allowed the tool |
+| Claude Desktop, **fallback** | `%LOCALAPPDATA%\Claude-3p\claude_desktop_config.json` (macOS and Linux: `Claude-3p` beside the app's usual folder): `mcpServers.mcc_media`, with `--out` for results | yes; but Claude Desktop gives a server added here **60 seconds** per tool call unless `mcpToolTimeoutSec` is set (MCC sets no timeout), so use it only if, after a relaunch, the tools from MCC's own document (above) did not show up |
+
+How the button behaves:
+
+- **Nothing is written until you press it twice.** The first press shows the change as a
+  diff -- only the entry, and OpenCode's asks -- and a **Write it** button; **Cancel**
+  writes nothing.
+- **A one-time backup.** The first write copies the file to `<file>.mcc-backup` beside it
+  (the same copy Configure takes, never overwritten). A file that did not exist is created
+  with only the entry, and Remove deletes it again, with any folder MCC created for it.
+- **Remove MCP server**, and **Undo** on the same card (either mode, which also takes out
+  Configure's keys), give the file back byte for byte: MCC records the exact text it
+  inserted and takes that out, then checks the result is your file minus MCC's keys. A file
+  you edited around the entry since comes back with your edits and without MCC's keys.
+  Line endings are the file's own (a CRLF file stays CRLF).
+- **An `mcc_media` entry MCC did not add** -- one you pasted from the MCC media server card,
+  or another program under the same name -- is yours: the card says so and offers neither
+  button. So is MCC's own entry once you have changed it.
+- **No token** goes into any of these files: `mcc-mcp` reads it from MCC's settings when the
+  app starts it. Restart the app after adding or removing it.
+- **VS Code and Roo Code** speak MCP, but where each keeps its MCP servers has not been
+  measured on an installed copy, so their cards say "not measured yet" and write nothing.
 
 **What the agent sees.** `media_status` (free: what is configured, where MCC is, and this
 session's results) and one tool per job whose rail has a model: `generate_image`,
@@ -795,8 +834,12 @@ on 7.95.0; the last item on 7.98.0):
   [above](#coding-agents-the-media-server-mcp-7990). Whether Claude Desktop's local
   configuration library honours `managedMcpServers` is confirmed by one relaunch of the
   app with the button on; MCC cannot run Claude Desktop itself. The agents' own files
-  (Codex `config.toml`, `opencode.json`, Command Code `mcp.json`) are a later release,
-  through the Desktop apps Configure / Undo with a backup.
+  (Codex `config.toml`, `opencode.json`, Command Code `mcp.json`, and Claude Desktop's
+  `claude_desktop_config.json` as the fallback) came in 7.100.0, from the Desktop apps
+  cards ([In your own app files](#in-your-own-app-files-71000)). Whether Claude Desktop
+  shows a server from that file in third-party mode is the same one relaunch; Command
+  Code's and the two desktop apps' own reading of the entry is checked with each app's
+  `mcp list` against a scratch home, not in the running apps.
 - **Codex lists the media server but its model does not see the tools yet** (measured
   2026-10-18 with the Codex CLI on this machine). `mcc-codex mcp list` shows `mcc_media`
   enabled, but MCC's Codex catalogue tells Codex its models support tool search, so Codex
