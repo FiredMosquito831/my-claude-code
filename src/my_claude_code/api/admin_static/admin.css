@@ -10887,6 +10887,82 @@ audio.req-media-preview {
   color: var(--muted);
 }
 
+/* 7.98.0: a media row's request fields, full width under the row. */
+.media-request-fields-row > td {
+  padding-top: 0;
+  background: var(--neutral-bg);
+}
+
+.media-request-fields {
+  min-width: 0;
+}
+
+.media-request-fields-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-strong);
+}
+
+.media-request-fields-op {
+  margin-top: var(--space-2);
+}
+
+.media-request-fields-op-head {
+  margin: var(--space-2) 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.media-request-fields-table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.media-request-fields-table th,
+.media-request-fields-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.media-request-fields-unknown {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Compact, so a row with a Forget or Remove button lines up with its text. */
+.media-request-fields-forget,
+.media-request-fields-remove,
+.media-request-fields-save {
+  min-height: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.media-request-fields-editor {
+  margin-top: var(--space-3);
+}
+
+.media-request-fields-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.media-request-fields-controls input {
+  min-width: 0;
+  flex: 1 1 140px;
+}
+
 .media-analytics-panel {
   margin-bottom: 16px;
 }

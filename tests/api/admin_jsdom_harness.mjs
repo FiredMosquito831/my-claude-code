@@ -13539,6 +13539,122 @@ const mediaDashboard = {};
   ROUTES["/admin/api/media/models"] = savedModels;
   await window.eval("loadMediaModels(true)");
   await new Promise((resolve) => setTimeout(resolve, 50));
+  // 7.98.0: the fixture above carries no request_schema, so no row grew a
+  // request-fields row -- the payload from before 7.98.0 renders as it did.
+  mediaDashboard.fieldsRowsWithoutSchema = doc.querySelectorAll(
+    "#mediaModelsTable .media-request-fields-row",
+  ).length;
+
+  // --- 7.98.0: a row's request fields, the editor and Forget
+  const xmcc = (state, source, extra = {}) => ({ state, source, since: null, ...extra });
+  const AGNES = "custom_agnes/agnes-video-2.5";
+  ROUTES["/admin/api/media/models"] = {
+    ...savedModels,
+    models: [
+      {
+        ...savedModels.models[0],
+        model_ref: AGNES,
+        provider_id: "custom_agnes",
+        provider_name: "Agnes",
+        model_id: "agnes-video-2.5",
+        custom: true,
+        request_schema: {
+          video_create: {
+            type: "object",
+            required: ["prompt", "mode"],
+            properties: {
+              model: { type: "string", const: AGNES, "x-mcc": xmcc("stated", "rail") },
+              prompt: { type: "string", "x-mcc": xmcc("required (stated)", "door") },
+              seconds: { type: "string", "x-mcc": xmcc("forwarded, not known", "door") },
+              size: { type: "string", "x-mcc": xmcc("forwarded, not known", "door") },
+              quality: {
+                enum: ["std", "pro"],
+                "x-mcc": xmcc("stated", "operator", {
+                  since: "2026-10-18",
+                  values: ["std", "pro"],
+                }),
+              },
+              speed: { type: "number", "x-mcc": xmcc("not forwarded by MCC", "mcc_adapter") },
+              mode: {
+                "x-mcc": xmcc("required (learned)", "learned", {
+                  since: "2026-10-12",
+                  evidence: "mode is required (request id: 2026)",
+                  fact_kind: "media_param_required",
+                  detail: "video_create:mode",
+                }),
+              },
+            },
+            additionalProperties: { "x-mcc": xmcc("forwarded, not known", "door") },
+            "x-mcc": { model: AGNES, operation: "video_create", encoding: null },
+          },
+        },
+      },
+      { ...savedModels.models[1], request_schema: {} },
+    ],
+  };
+  ROUTES["/admin/api/model-admin/learned/forget"] = { forgotten: 1 };
+  ROUTES["/admin/api/media/request-fields"] = { saved: true };
+  await window.eval("loadMediaModels(true)");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const fieldsRows = Array.from(
+    doc.querySelectorAll("#mediaModelsTable .media-request-fields-row"),
+  );
+  const fields = {};
+  fields.rowCount = fieldsRows.length;
+  fields.followsItsModel =
+    fieldsRows[0] &&
+    flat(fieldsRows[0].previousElementSibling.querySelector(".media-ref")) === AGNES;
+  fields.colSpan = fieldsRows[0] ? fieldsRows[0].firstElementChild.colSpan : null;
+  const block = fieldsRows[0] && fieldsRows[0].querySelector("details.media-request-fields");
+  fields.startsClosed = block ? !block.open : null;
+  block.open = true;
+  fields.summary = flat(block.querySelector("summary > span"));
+  fields.summaryChips = Array.from(block.querySelectorAll("summary .media-chip")).map(flat);
+  fields.head = flat(block.querySelector(".media-request-fields-op-head"));
+  fields.table = Array.from(
+    block.querySelectorAll(".media-request-fields-table tr"),
+  ).map((tr) => Array.from(tr.children).map((cell) => flat(cell)));
+  fields.stateTitles = Array.from(
+    block.querySelectorAll(".media-request-fields-table .media-chip"),
+  ).map((chip) => chip.title);
+  fields.unknown = flat(block.querySelector(".media-request-fields-unknown"));
+  fields.forgetButtons = block.querySelectorAll(".media-request-fields-forget").length;
+  fields.removeButtons = block.querySelectorAll(".media-request-fields-remove").length;
+  fields.emptyText = flat(fieldsRows[1]);
+  // Forget sends the field's own row, through the existing loopback route.
+  let posted = fetchBodies.length;
+  block.querySelector(".media-request-fields-forget").click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  fields.forgetPosts = fetchBodies.slice(posted);
+  // The editor: an empty field name sends nothing; a full one is saved.
+  const editorBlock = doc.querySelector(
+    "#mediaModelsTable details.media-request-fields .media-request-fields-editor",
+  );
+  const controls = editorBlock.querySelectorAll(".media-request-fields-controls > *");
+  fields.editorControls = Array.from(controls).map(
+    (el) => el.getAttribute("aria-label") || flat(el),
+  );
+  posted = fetchBodies.length;
+  editorBlock.querySelector(".media-request-fields-save").click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  fields.emptySavePosts = fetchBodies.length - posted;
+  const [operationSelect, fieldInput, stateSelect, valuesInput, typeSelect] = controls;
+  fields.operationOptions = Array.from(operationSelect.options).map((o) => o.value);
+  fieldInput.value = "mode";
+  stateSelect.value = "required";
+  valuesInput.value = "std, pro, ";
+  typeSelect.value = "string";
+  posted = fetchBodies.length;
+  editorBlock.querySelector(".media-request-fields-save").click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  fields.savePosts = fetchBodies.slice(posted);
+  fields.reopenedAfterSave = Boolean(
+    doc.querySelector("#mediaModelsTable details.media-request-fields")?.open,
+  );
+  mediaDashboard.requestFields = fields;
+  ROUTES["/admin/api/media/models"] = savedModels;
+  await window.eval("loadMediaModels(true)");
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
   // --- the Analytics Media card, with a provider filter set on the page: the
   // card is sent the window only, and its caption does not claim a filter

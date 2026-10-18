@@ -5,15 +5,24 @@ provider declares, what models.dev says it produces, the MEDIA bench (never
 the chat one) and whether its provider has a key. Every key and ref is fake.
 """
 
+import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from my_claude_code.application.execution import route_health_registry
 from my_claude_code.application.media.executor import media_route_health_registry
 from my_claude_code.application.media.rails import configured_media_model_refs
+from my_claude_code.config.media_request_fields import (
+    EMPTY_STATEMENTS,
+    OperatorFieldStatement,
+    save_media_request_fields,
+    with_statement,
+)
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
+from my_claude_code.providers.recovery import learned_fact_store
 from my_claude_code.providers.runtime.models_dev import write_models_dev_cache
 from tests.api.support import create_test_app
 
@@ -328,3 +337,229 @@ def test_the_route_is_local_only(monkeypatch, tmp_path):
     )
 
     assert client.get("/admin/api/media/models").status_code == 403
+
+
+# -- 7.98.0: each row's request fields ---------------------------------------
+
+#: Every key a row carried before 7.98.0, in its order.
+_ROW_KEYS_BEFORE_7_98 = [
+    "model_ref",
+    "provider_id",
+    "provider_name",
+    "model_id",
+    "custom",
+    "provider_state",
+    "placements",
+    "declared",
+    "modalities",
+    "kind",
+    "health",
+    "key",
+]
+
+
+def test_request_schema_is_additive(monkeypatch, tmp_path):
+    """One key after every key a row had; with a learned fact and an operator
+    statement present, every pre-existing key is exactly what it is without.
+    """
+
+    settings = _settings(monkeypatch, tmp_path)
+    plain = _payload(settings)
+    for row in plain["models"]:
+        assert list(row) == [*_ROW_KEYS_BEFORE_7_98, "request_schema"]
+
+    learned_fact_store().record(
+        "open_router",
+        "google/veo-3.1",
+        "media_param_required",
+        True,
+        detail="video_create:mode",
+        evidence="mode is required",
+    )
+    save_media_request_fields(
+        with_statement(
+            EMPTY_STATEMENTS,
+            TOGETHER_IMAGE,
+            "image_generate",
+            "steps",
+            OperatorFieldStatement(state="accepted", type="integer"),
+        )
+    )
+    taught = _payload(settings)
+
+    def without_schema(payload: dict) -> dict:
+        return {
+            **payload,
+            "models": [
+                {k: v for k, v in row.items() if k != "request_schema"}
+                for row in payload["models"]
+            ],
+        }
+
+    assert json.dumps(without_schema(taught), sort_keys=False) == json.dumps(
+        without_schema(plain), sort_keys=False
+    )
+    video = _row(taught, OPENROUTER_VIDEO)["request_schema"]["video_create"]
+    assert video["properties"]["mode"]["x-mcc"]["state"] == "required (learned)"
+    image = _row(taught, TOGETHER_IMAGE)["request_schema"]["image_generate"]
+    assert image["properties"]["steps"]["x-mcc"]["source"] == "operator"
+    assert image["properties"]["steps"]["type"] == "integer"
+
+
+def test_a_row_has_a_schema_only_for_operations_its_provider_serves(
+    monkeypatch, tmp_path
+):
+    payload = _payload(_settings(monkeypatch, tmp_path))
+
+    # Together declares image generation and no edits: one schema, not two.
+    assert list(_row(payload, TOGETHER_IMAGE)["request_schema"]) == ["image_generate"]
+    # Groq declares nothing for the Image rail: it is skipped, so no schema.
+    assert _row(payload, GROQ_IMAGE)["request_schema"] == {}
+    assert list(_row(payload, GROQ_TTS)["request_schema"]) == ["speech"]
+    asr = _row(payload, DEEPINFRA_ASR)["request_schema"]
+    assert list(asr) == ["transcribe", "translate"]
+
+
+def _admin(settings: Settings) -> TestClient:
+    return TestClient(create_test_app(settings), client=("127.0.0.1", 50000))
+
+
+def test_the_operator_editor_saves_and_removes_a_statement(monkeypatch, tmp_path):
+    settings = _settings(monkeypatch, tmp_path)
+    client = _admin(settings)
+
+    saved = client.post(
+        "/admin/api/media/request-fields",
+        json={
+            "modelRef": OPENROUTER_VIDEO,
+            "operation": "video_create",
+            "field": "mode",
+            "state": "required",
+            "values": ["std", " pro ", ""],
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["statement"]["values"] == ["std", "pro"]
+    mode = _row(_payload(settings), OPENROUTER_VIDEO)["request_schema"]["video_create"][
+        "properties"
+    ]["mode"]
+    assert mode["x-mcc"]["state"] == "required (stated)"
+    assert mode["enum"] == ["std", "pro"]
+    on_disk = json.loads((tmp_path / "media_request_fields.json").read_text("utf-8"))
+    assert list(on_disk["models"]) == [OPENROUTER_VIDEO]
+
+    removed = client.post(
+        "/admin/api/media/request-fields/remove",
+        json={
+            "modelRef": OPENROUTER_VIDEO,
+            "operation": "video_create",
+            "field": "mode",
+        },
+    )
+    assert removed.json()["removed"] is True
+    schema = _row(_payload(settings), OPENROUTER_VIDEO)["request_schema"]
+    assert "mode" not in schema["video_create"]["properties"]
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        ({"operation": "video_create", "field": "mode", "state": "maybe"}, 400),
+        ({"operation": "video_delete", "field": "mode", "state": "required"}, 400),
+        ({"operation": "video_create", "field": "a.b", "state": "required"}, 400),
+        (
+            {
+                "operation": "video_create",
+                "field": "mode",
+                "state": "required",
+                "type": "uuid",
+            },
+            400,
+        ),
+    ],
+)
+def test_the_editor_refuses_what_it_cannot_store(monkeypatch, tmp_path, body, status):
+    client = _admin(_settings(monkeypatch, tmp_path))
+
+    response = client.post(
+        "/admin/api/media/request-fields", json={"modelRef": OPENROUTER_VIDEO, **body}
+    )
+
+    assert response.status_code == status
+    assert not (tmp_path / "media_request_fields.json").exists()
+
+
+def test_the_editor_is_only_for_a_rail_model_and_only_local(monkeypatch, tmp_path):
+    settings = _settings(monkeypatch, tmp_path)
+    body = {
+        "modelRef": "deepseek/deepseek-chat",
+        "operation": "image_generate",
+        "field": "size",
+        "state": "accepted",
+    }
+    assert (
+        _admin(settings).post("/admin/api/media/request-fields", json=body).status_code
+        == 404
+    )
+    remote = TestClient(create_test_app(settings), client=("203.0.113.9", 50000))
+    assert (
+        remote.post(
+            "/admin/api/media/request-fields",
+            json={**body, "modelRef": OPENROUTER_VIDEO, "operation": "video_create"},
+        ).status_code
+        == 403
+    )
+
+
+def test_forget_with_a_detail_retires_one_field_and_no_other(monkeypatch, tmp_path):
+    """Forget on a media row names its field; without one, every row of the
+    kind goes, exactly as before 7.98.0."""
+
+    settings = _settings(monkeypatch, tmp_path)
+    store = learned_fact_store()
+    for field in ("mode", "quality"):
+        store.record(
+            "open_router",
+            "google/veo-3.1",
+            "media_param_required",
+            True,
+            detail=f"video_create:{field}",
+        )
+    client = _admin(settings)
+
+    one = client.post(
+        "/admin/api/model-admin/learned/forget",
+        json={
+            "providerId": "open_router",
+            "modelId": "google/veo-3.1",
+            "factKind": "media_param_required",
+            "detail": "video_create:mode",
+        },
+    )
+    assert one.json()["forgotten"] == 1
+    assert [fact.detail for fact in store.all_facts()] == ["video_create:quality"]
+    schema = _row(_payload(settings), OPENROUTER_VIDEO)["request_schema"]
+    assert "mode" not in schema["video_create"]["properties"]
+    assert "quality" in schema["video_create"]["required"]
+
+    store.record(
+        "open_router",
+        "google/veo-3.1",
+        "media_param_required",
+        True,
+        detail="video_create:mode",
+    )
+    every = client.post(
+        "/admin/api/model-admin/learned/forget",
+        json={
+            "providerId": "open_router",
+            "modelId": "google/veo-3.1",
+            "factKind": "media_param_required",
+        },
+    )
+    assert every.json() == {
+        "forgotten": 2,
+        "provider_id": "open_router",
+        "model_id": "google/veo-3.1",
+        "fact_kind": "media_param_required",
+    }

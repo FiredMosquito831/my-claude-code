@@ -4155,6 +4155,10 @@ Everything is visible and everything can be forgotten. The Models page has a **L
 
 One more fact was added in the same release: a host that answers `stream_options.include_usage` with a 400 is now remembered. Before 6.52.0 nothing recorded that at all, so such a host cost a failed try and a retry on **every single request**, not once per process.
 
+##### Media request fields (7.98.0)
+
+Two more kinds, `media_param_required` and `media_param_refused`, record what a media host's 4xx said about one request field of one model and operation -- Agnes' `mode is required` on a video create, `image_config is not supported` on an image. They are **shown only**: no request reads them, so nothing MCC sends, routes, retries or charges changes (user decision 6 of 2026-10-16). They are stated evidence (30 days, `STATED_FACT_TTL_SECONDS`), appear in the model's published request schema -- *Request fields* under its row in **Models -> Media models**, the *media request fields* row of *Everything known*, and `GET /v1/media/models` -- and each has its own *Forget*, which sends the field's `detail` (`video_create:mode`) to the same forget route so only that field's row goes. Beside them, the operator's own statements of a media model's fields are kept in `~/.mcc/media_request_fields.json` (the small editor on the same block writes it; never sent anywhere). The whole ladder, its states and the route: [Request fields per model](MEDIA.md#request-fields-per-model-7980).
+
 ##### Probing what a host actually does
 
 *Probe capabilities* on a provider card measures the deployment instead of reading its catalogue. Each probe is one small request that sends a value no correct host can accept and reads the answer out of the 400: an absurd output budget (which generates no output tokens at all on the 400 path), and a 1×1 image block. `max_tokens` is 16, and at most **25 models** are covered per press — the button states the request count before it runs.

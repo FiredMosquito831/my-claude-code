@@ -25,12 +25,14 @@ models.dev is read from its disk cache through ``api.model_admin``.
 
 import asyncio
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from my_claude_code.api.model_admin import (
     declared_modalities_lookup,
@@ -47,6 +49,12 @@ from my_claude_code.application.media.request import (
     RAIL_SETTINGS,
     MediaRail,
 )
+from my_claude_code.application.media.schemas import (
+    MediaSchemaInputs,
+    field_acceptance,
+    rail_model_schemas,
+    schema_inputs,
+)
 from my_claude_code.application.model_kinds import (
     KindWordsLookup,
     ModalitiesLookup,
@@ -56,6 +64,14 @@ from my_claude_code.application.model_kinds import (
 from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.route_health import RouteHealthRegistry
 from my_claude_code.config.admin.status import provider_config_status
+from my_claude_code.config.media_request_fields import (
+    OperatorFieldStatement,
+    load_media_request_fields,
+    save_media_request_fields,
+    statement_problem,
+    with_statement,
+    without_statement,
+)
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
@@ -229,6 +245,45 @@ def _all_descriptors() -> tuple[dict[str, ProviderDescriptor], set[str]]:
     return descriptors, disabled
 
 
+def request_schema_inputs(
+    services: ApiServices,
+    learned: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> MediaSchemaInputs:
+    """Bind a rail model's schema inputs from the runtime (7.98.0).
+
+    ``learned`` is taken by the caller ON the event loop (the facts' store is
+    written there); the catalogue snapshot and the operator's file are read
+    here, so call this on a worker.
+    """
+
+    return schema_inputs(
+        learned,
+        services.requests.cached_prefixed_model_infos(),
+        operator=load_media_request_fields(),
+        refreshed_at=services.admin.catalogue_refresh_status().get("last_refreshed_at"),
+    )
+
+
+def ref_request_schemas(
+    model_ref: str,
+    descriptor: ProviderDescriptor | None,
+    rails: Iterable[MediaRail],
+    inputs: MediaSchemaInputs,
+) -> dict[str, dict[str, Any]]:
+    """One rail model's request schemas, for the operations its rails route.
+
+    Only the operations its provider declares an endpoint for: the rail steps
+    over it uncharged for the rest, so there is no request to describe.
+    """
+
+    return rail_model_schemas(
+        model_ref,
+        None if descriptor is None else descriptor.media_surfaces,
+        rails,
+        inputs,
+    )
+
+
 def media_models_payload(
     settings: Settings,
     bench: MediaBenchReadout | None = None,
@@ -237,6 +292,7 @@ def media_models_payload(
     kind_words: KindWordsLookup | None = None,
     live: LiveCatalogue | None = None,
     litellm: LiteLLMCatalogue | None = None,
+    schema: MediaSchemaInputs | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page's media section renders. Synchronous.
 
@@ -255,10 +311,18 @@ def media_models_payload(
     once on the loop; its index is built once and never mutated. ``litellm``
     is LiteLLM's map (7.85.0), present only while LiteLLM pricing is on: the
     same two kind rungs every model list reads.
+
+    ``schema`` (7.98.0) is what each row's ``request_schema`` -- its request
+    fields by operation -- is assembled from; without one, nothing learned
+    and no catalogue record are known, and the operator's file is read here.
+    The key is added after every key a row had before, so each of those is
+    exactly what it was.
     """
 
     if bench is None:
         bench = media_bench_readout(settings)
+    if schema is None:
+        schema = schema_inputs({}, (), operator=load_media_request_fields())
     descriptors, disabled = _all_descriptors()
     custom_ids = {
         provider_id
@@ -352,6 +416,18 @@ def media_models_payload(
                 }
             )
 
+    # 7.98.0: each row's request fields, by operation -- one more key after
+    # every key the row already had. Shown only; nothing routes on it.
+    for ref, row in rows.items():
+        placed: list[MediaRail] = []
+        for placement in placements[ref]:
+            rail = MediaRail(placement["rail"])
+            if rail not in placed:
+                placed.append(rail)
+        row["request_schema"] = ref_request_schemas(
+            ref, descriptors.get(row["provider_id"]), placed, schema
+        )
+
     providers: list[dict[str, Any]] = []
     for provider_id, descriptor in descriptors.items():
         if not descriptor.media_surfaces:
@@ -379,6 +455,107 @@ def media_models_payload(
     }
 
 
+def media_request_catalogue(
+    settings: Settings,
+    schema: MediaSchemaInputs,
+    endpoints: Mapping[str, str],
+) -> dict[str, Any]:
+    """``GET /v1/media/models``: every rail model and the fields it takes.
+
+    User decisions 1 and 2 of 2026-10-16: one entry per model on any media
+    rail, each with its request schema per operation and the endpoint that
+    operation is sent to; and, per rail and operation, which of the rail's
+    models accept, need, refuse or say nothing about each field -- never only
+    the primary, never only what they all share. ``endpoints`` maps an
+    operation to its client path (``api.wire_surfaces``). Synchronous; run it
+    on a worker.
+    """
+
+    descriptors, disabled = _all_descriptors()
+    entries: dict[str, dict[str, Any]] = {}
+    rails_placed: dict[str, list[MediaRail]] = {}
+    rail_orders: list[tuple[MediaRail, list[str]]] = []
+    for rail in MediaRail:
+        names = RAIL_SETTINGS[rail]
+        primary = str(getattr(settings, names.model_attr, "") or "").strip()
+        paused = frozenset(
+            parse_model_ref_list(str(getattr(settings, names.paused_attr, "") or ""))
+        )
+        order: list[str] = []
+        fallback = 0
+        for index, ref in enumerate(rail_refs(settings, rail)):
+            if index == 0 and ref == primary:
+                position = "primary"
+            else:
+                fallback += 1
+                position = f"fallback {fallback}"
+            provider_id = parse_provider_type(ref)
+            if ref not in entries:
+                descriptor = descriptors.get(provider_id)
+                entries[ref] = {
+                    "id": ref,
+                    "object": "media.model",
+                    "provider": provider_id,
+                    "provider_state": (
+                        "unknown"
+                        if descriptor is None
+                        else "disabled"
+                        if provider_id in disabled
+                        else "known"
+                    ),
+                    "rails": [],
+                }
+                rails_placed[ref] = []
+            entries[ref]["rails"].append(
+                {
+                    "rail": rail.value,
+                    "position": position,
+                    "paused": ref in paused,
+                }
+            )
+            if rail not in rails_placed[ref]:
+                rails_placed[ref].append(rail)
+            if ref not in order:
+                order.append(ref)
+        rail_orders.append((rail, order))
+
+    schemas: dict[str, dict[str, dict[str, Any]]] = {}
+    for ref, entry in entries.items():
+        schemas[ref] = ref_request_schemas(
+            ref,
+            descriptors.get(entry["provider"]),
+            rails_placed[ref],
+            schema,
+        )
+        entry["operations"] = {
+            operation: {
+                "endpoint": endpoints.get(operation),
+                "request_schema": request,
+            }
+            for operation, request in schemas[ref].items()
+        }
+
+    rails: list[dict[str, Any]] = []
+    for rail, order in rail_orders:
+        on_rail = [(ref, schemas[ref]) for ref in order]
+        rails.append(
+            {
+                "rail": rail.value,
+                "label": RAIL_SETTINGS[rail].label,
+                "model_env": RAIL_SETTINGS[rail].model_env,
+                "models": order,
+                "operations": {
+                    operation: {
+                        "endpoint": endpoints.get(operation),
+                        **field_acceptance(operation, on_rail),
+                    }
+                    for operation in RAIL_OPERATIONS[rail]
+                },
+            }
+        )
+    return {"object": "list", "data": list(entries.values()), "rails": rails}
+
+
 @router.get("/admin/api/media/models")
 async def media_models(
     request: Request,
@@ -391,15 +568,131 @@ async def media_models(
     # The bench here, on the loop; the rest on a worker. See
     # ``media_bench_readout`` for why the split is where it is.
     bench = media_bench_readout(settings)
-    return await asyncio.to_thread(
-        media_models_payload,
-        settings,
-        bench,
-        kind_modalities=services.requests.model_modalities_lookup(),
-        kind_words=services.requests.model_kind_words_lookup(),
-        live=services.requests.openrouter_live_catalogue(),
-        litellm=services.requests.litellm_model_catalogue(),
+    # The learned facts are the loop's too (their store is written on it),
+    # so they are copied here and only the copy goes to the worker.
+    learned = services.admin.learned_facts_by_model()
+    kind_modalities = services.requests.model_modalities_lookup()
+    kind_words = services.requests.model_kind_words_lookup()
+    live = services.requests.openrouter_live_catalogue()
+    litellm = services.requests.litellm_model_catalogue()
+
+    def build() -> dict[str, Any]:
+        return media_models_payload(
+            settings,
+            bench,
+            kind_modalities=kind_modalities,
+            kind_words=kind_words,
+            live=live,
+            litellm=litellm,
+            schema=request_schema_inputs(services, learned),
+        )
+
+    return await asyncio.to_thread(build)
+
+
+class MediaRequestFieldPayload(BaseModel):
+    """One statement the operator types on a media row (7.98.0, decision 5)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_ref: str = Field(alias="modelRef")
+    operation: str
+    field: str
+    #: ``accepted`` / ``required`` / ``refused``; ignored by ``remove``.
+    state: str = ""
+    values: list[str | int | float | bool] | None = None
+    type: str | None = None
+
+
+def _rail_ref_or_404(settings: Settings, model_ref: str) -> str:
+    """The ref as a rail names it; a statement is only about a rail model."""
+
+    wanted = model_ref.strip()
+    for rail in MediaRail:
+        if wanted in rail_refs(settings, rail):
+            return wanted
+    raise HTTPException(
+        status_code=404, detail=f"{wanted or 'That model'} is on no media rail"
     )
+
+
+@router.post("/admin/api/media/request-fields")
+async def set_media_request_field(
+    payload: MediaRequestFieldPayload,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Save what the operator says about one field of one rail model.
+
+    Shown in that model's request schema and on ``GET /v1/media/models``;
+    never sent, never checked against a request (user decision 6).
+    """
+
+    require_loopback_admin(request)
+    model_ref = _rail_ref_or_404(settings, payload.model_ref)
+    operation = payload.operation.strip()
+    field_name = payload.field.strip()
+    state = payload.state.strip()
+    field_type = (payload.type or "").strip() or None
+    values = payload.values
+    if values is not None:
+        values = [
+            value.strip() if isinstance(value, str) else value for value in values
+        ]
+        values = [value for value in values if value != ""] or None
+    problem = statement_problem(operation, field_name, state, values, field_type)
+    if problem is not None:
+        raise HTTPException(status_code=400, detail=problem)
+    statement = OperatorFieldStatement(
+        state=state,
+        values=None if values is None else tuple(values),
+        type=field_type,
+        since=date.today().isoformat(),
+    )
+
+    def save() -> None:
+        updated = with_statement(
+            load_media_request_fields(), model_ref, operation, field_name, statement
+        )
+        save_media_request_fields(updated)
+
+    await asyncio.to_thread(save)
+    return {
+        "saved": True,
+        "model_ref": model_ref,
+        "operation": operation,
+        "field": field_name,
+        "statement": statement.as_row(),
+    }
+
+
+@router.post("/admin/api/media/request-fields/remove")
+async def remove_media_request_field(
+    payload: MediaRequestFieldPayload,
+    request: Request,
+):
+    """Remove one of the operator's statements; the rungs below answer again."""
+
+    require_loopback_admin(request)
+    model_ref = payload.model_ref.strip()
+    operation = payload.operation.strip()
+    field_name = payload.field.strip()
+
+    def remove() -> bool:
+        updated, removed = without_statement(
+            load_media_request_fields(), model_ref, operation, field_name
+        )
+        if removed:
+            save_media_request_fields(updated)
+        return removed
+
+    removed = await asyncio.to_thread(remove)
+    return {
+        "removed": removed,
+        "model_ref": model_ref,
+        "operation": operation,
+        "field": field_name,
+    }
 
 
 def _empty_group(group: str) -> dict[str, Any]:

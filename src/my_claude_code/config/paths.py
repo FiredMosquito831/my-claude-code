@@ -56,6 +56,7 @@ MODEL_OVERRIDES_FILENAME = "model_overrides.json"
 # every process on the machine on every tick.
 OTHER_SERVERS_FILENAME = "other-servers.json"
 LEARNED_FACTS_FILENAME = "learned_facts.json"
+MEDIA_REQUEST_FIELDS_FILENAME = "media_request_fields.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
 PROXY_CHAINS_FILENAME = "proxy_chains.json"
 CREDENTIAL_NAMES_FILENAME = "credential_names.json"
@@ -552,6 +553,18 @@ def learned_facts_path() -> Path:
     """
 
     return config_dir_path() / LEARNED_FACTS_FILENAME
+
+
+def media_request_fields_path() -> Path:
+    """Return the operator's own statements of media models' request fields.
+
+    7.98.0. Its own document beside ``model_overrides.json`` rather than rows
+    in it: that file's parameters are written into request bodies and its
+    allow-list is a body-injection boundary, while these are statements shown
+    in a model's published request schema and never sent anywhere.
+    """
+
+    return config_dir_path() / MEDIA_REQUEST_FIELDS_FILENAME
 
 
 def harness_tiers_path() -> Path:

@@ -35,6 +35,18 @@ from my_claude_code.application.litellm_model_map import (
     LiteLLMModel,
     LiteLLMStatement,
 )
+from my_claude_code.application.media.schemas import (
+    SOURCE_LEARNED as MEDIA_SOURCE_LEARNED,
+)
+from my_claude_code.application.media.schemas import (
+    SOURCE_OPERATOR as MEDIA_SOURCE_OPERATOR,
+)
+from my_claude_code.application.media.schemas import (
+    SOURCE_PROVIDER_LIST as MEDIA_SOURCE_PROVIDER_LIST,
+)
+from my_claude_code.application.media.schemas import (
+    known_field_lines,
+)
 from my_claude_code.application.model_kinds import (
     KIND_LABELS,
     KIND_SOURCE_LABELS,
@@ -206,7 +218,20 @@ FACT_KIND_LABELS: dict[str, str] = {
     "responses_tool_schema_keyword": "tool-schema keyword refused",
     # Labelled in the commit that introduces it, by the same rule.
     "responses_tools_max_count": "tools-count limit",
+    # 7.98.0, labelled in the commit that introduces them, by the same rule:
+    # what a media model's host said about one request field. Shown only.
+    "media_param_required": "media field required",
+    "media_param_refused": "media field refused",
 }
+
+#: Kinds whose label the Models page payload's ``fact_labels`` table does not
+#: list. That table is served whole and pinned byte for byte by
+#: ``tests/contracts/test_metadata_ladder_equality.py`` (the page must not move
+#: while no such fact exists), and nothing on the page reads it: a learned row
+#: carries its own ``fact_label`` from the full table above.
+PAGE_TABLE_UNLISTED_FACT_KINDS: frozenset[str] = frozenset(
+    {"media_param_required", "media_param_refused"}
+)
 
 # Where a resolved wire surface came from, in the operator's words. A separate
 # table from ``SOURCE_LABELS`` on purpose: that one names rungs of the
@@ -2652,7 +2677,11 @@ def build_models_page_payload(
         "source_labels": dict(SOURCE_LABELS),
         "provenance_labels": dict(PROVENANCE_LABELS),
         "measured_days": measured_days,
-        "fact_labels": dict(FACT_KIND_LABELS),
+        "fact_labels": {
+            kind: label
+            for kind, label in FACT_KIND_LABELS.items()
+            if kind not in PAGE_TABLE_UNLISTED_FACT_KINDS
+        },
         "learned_source_labels": dict(LEARNED_SOURCE_LABELS),
         "kind_labels": dict(KIND_LABELS),
         # When the background sweep last ran and when it is next due, so the
@@ -2862,6 +2891,9 @@ _MODELS_DEV_RUNG_SOURCES: dict[str, str] = {
     MODELS_DEV_RUNG_VOTE: KNOWLEDGE_SOURCE_VOTE,
 }
 
+#: 7.98.0: the view's row for a media model's request fields, by operation.
+MEDIA_REQUEST_FIELDS_KEY = "media_request_fields"
+
 #: Every field the view lists, ``(key, label)``, in the page's own order. A
 #: ``reasoning.`` key names one field of the page's reasoning record.
 KNOWLEDGE_FIELDS: tuple[tuple[str, str], ...] = (
@@ -2886,8 +2918,46 @@ KNOWLEDGE_FIELDS: tuple[tuple[str, str], ...] = (
     ("reasoning_price", "reasoning price (USD / 1M)"),
     ("default_parameters", "gateway default parameters"),
     ("supported_parameters", "supported parameters"),
+    # 7.98.0: listed only for a model on a media rail, so every other model's
+    # view is exactly what it was.
+    (MEDIA_REQUEST_FIELDS_KEY, "media request fields"),
     *((f"reasoning.{name}", name.replace("_", " ")) for name in REASONING_FIELDS),
 )
+
+#: The columns a media request field's rung is shown under: the operator's
+#: statement, the host's refusal, and the provider's own ``/models`` row. The
+#: catalogue declaration and MCC's adapter have no column of their own; what
+#: they said is in the "MCC uses" cell, with its source on each field.
+_MEDIA_FIELD_COLUMNS: tuple[tuple[str, str], ...] = (
+    (MEDIA_SOURCE_OPERATOR, KNOWLEDGE_SOURCE_OPERATOR),
+    (MEDIA_SOURCE_LEARNED, KNOWLEDGE_SOURCE_LEARNED),
+    (MEDIA_SOURCE_PROVIDER_LIST, KNOWLEDGE_SOURCE_PROVIDER),
+)
+_MEDIA_FIELDS_NOTHING_KNOWN = "nothing known beyond the endpoint's own contract"
+
+
+def _media_fields_cell(schemas: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """The "MCC uses" cell of a media model's request-fields row."""
+
+    lines = known_field_lines(schemas)
+    return {
+        "value": lines or [_MEDIA_FIELDS_NOTHING_KNOWN],
+        "source": MEDIA_REQUEST_FIELDS_KEY,
+        "source_label": "the request-field ladder",
+        "schemas": dict(schemas),
+    }
+
+
+def _media_fields_said(schemas: Mapping[str, Mapping[str, Any]]) -> list[_Said]:
+    """What each column's rung said, outranked or not."""
+
+    said: list[_Said] = []
+    for rung, column in _MEDIA_FIELD_COLUMNS:
+        lines = known_field_lines(schemas, source=rung)
+        if lines:
+            said.append(_Said(MEDIA_REQUEST_FIELDS_KEY, column, lines, rung))
+    return said
+
 
 #: Which columns can have answered a page cell, by the cell's ``source``.
 _USED_SOURCE_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -3468,8 +3538,14 @@ def model_knowledge_payload(
     media_placements: Mapping[str, frozenset[str]] | None,
     catalogue_as_of: str | None,
     catalogue_ids: frozenset[str] = frozenset(),
+    media_request_schemas: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Everything known about one model, beside what the ladder used.
+
+    ``media_request_schemas`` (7.98.0) is the model's request schemas by
+    operation when it sits on a media rail; it adds the "media request fields"
+    row and nothing else. ``None`` -- every other model -- leaves the view
+    exactly as it was.
 
     ``entry`` is :func:`knowledge_entry`'s row -- the page's own row -- so each
     field's ``used`` cell is the page's cell, verbatim, and ``used_source``
@@ -3500,6 +3576,10 @@ def model_knowledge_payload(
         *_operator_said(model_ref, model_row, media_placements),
         *_vendor_said(info, vendor_row),
     ]
+    media_cell: dict[str, Any] | None = None
+    if media_request_schemas is not None:
+        media_cell = _media_fields_cell(media_request_schemas)
+        said.extend(_media_fields_said(media_request_schemas))
     provider_label = _provider_column_label(info)
     as_of: dict[str, str | None] = {
         KNOWLEDGE_SOURCE_PROVIDER: catalogue_as_of,
@@ -3514,7 +3594,7 @@ def model_knowledge_payload(
     order = {source: index for index, source in enumerate(KNOWLEDGE_SOURCES)}
     fields_out: list[dict[str, Any]] = []
     for key, label in KNOWLEDGE_FIELDS:
-        cell = page_cell(entry, key)
+        cell = media_cell if key == MEDIA_REQUEST_FIELDS_KEY else page_cell(entry, key)
         if cell is None:
             continue
         statements: list[dict[str, Any]] = [
@@ -3535,6 +3615,11 @@ def model_knowledge_payload(
         used_value = knowledge_used_value(key, cell)
         used_source = _used_column(key, cell, statements)
         wanted = None if used_value is None else _comparable(used_value)
+        if key == MEDIA_REQUEST_FIELDS_KEY:
+            # The used cell is every rung's answer field by field, so no one
+            # column's list is "the same value" or "a different one": each is
+            # shown as what that rung said, never flagged as disagreeing.
+            wanted = None
         marked = False
         for statement in statements:
             agrees = (
