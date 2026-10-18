@@ -4607,7 +4607,11 @@ if (scenario) {
   const result = await scenario.run({ scriptErrors, consoleErrors });
   result.fatal = null;
   result.harnessWallMs = Date.now() - startedAt;
-  console.log(JSON.stringify(result));
+  /* Exit only once the answer has left the process. A pipe to the test is
+     asynchronous on Linux: `console.log` then `process.exit` cut the
+     models_fields scenario's ~190 KB answer at the 64 KB pipe buffer on CI,
+     while Windows, whose pipes are synchronous, printed it whole. */
+  await new Promise((resolve) => process.stdout.write(`${JSON.stringify(result)}\n`, resolve));
   process.exit(0);
 }
 
