@@ -314,7 +314,7 @@ the video rail's `fields.mode` answered
 after that model's host had refused a request with *mode is required*. Without a token it
 answers `401` with `{"detail": ...}`, as `/v1/models` does. Read only: nothing a request
 sends changes. Fields, states and sources:
-[Request fields per model](MEDIA.md#request-fields-per-model-798).
+[Request fields per model](MEDIA.md#request-fields-per-model-7980).
 
 ### Errors
 

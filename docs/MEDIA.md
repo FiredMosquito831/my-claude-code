@@ -15,7 +15,7 @@ its base URL at the proxy and keeps its own code.
 | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | 7.63.0 | Transcription | `MODEL_ASR`, `MODEL_ASR_FALLBACKS`, `MODEL_ASR_PAUSED` |
 | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content`, `GET /v1/videos`, `DELETE /v1/videos/{id}` | 7.64.0 | Video | `MODEL_VIDEO`, `MODEL_VIDEO_FALLBACKS`, `MODEL_VIDEO_PAUSED` |
 | Gemini `:generateContent` / `:streamGenerateContent` with image or audio output, `:predictLongRunning`, `GET /v1beta/operations/{id}` | 7.65.0 | Image, Speech, Video | the same rails |
-| `GET /v1/media/models`: every media rail model and the request fields it takes ([Request fields per model](#request-fields-per-model-798)) | 7.98.0 | every rail | none (read only) |
+| `GET /v1/media/models`: every media rail model and the request fields it takes ([Request fields per model](#request-fields-per-model-7980)) | 7.98.0 | every rail | none (read only) |
 
 ```python
 from openai import OpenAI
@@ -543,7 +543,7 @@ A media model still never appears in `/v1/models` or a coding agent's catalogue.
   modalities models.dev lists for it (advisory; "unknown" when models.dev has no entry), whether the
   media engine has benched it (media's own records, never chat's) and whether its provider has a
   key. Under each row, *Request fields* (7.98.0) lists what its request takes and who said so
-  ([above](#request-fields-per-model-798)). A second table lists every provider -- built-in or
+  ([above](#request-fields-per-model-7980)). A second table lists every provider -- built-in or
   custom -- that declares media endpoints.
 - **Analytics -> Media.** A card of its own for the selected time window, per rail and then per
   provider and model: requests, succeeded, failed, cancelled, images out, audio seconds in and out,
@@ -708,7 +708,7 @@ on 7.95.0; the last item on 7.98.0):
 - **Images returned by a Codex tool** (`view_image`) reach the model as text (above).
 - **Codex's own image tool** never reaches MCC (above).
 - **Request fields are published, not acted on.** Since 7.98.0 each media model's
-  fields are published ([Request fields per model](#request-fields-per-model-798)),
+  fields are published ([Request fields per model](#request-fields-per-model-7980)),
   including what a host's refusal taught MCC (Agnes video's `mode`, image
   `image_config`). MCC still sends every request exactly as the client wrote it and
   passes a refusal back as the provider said it: it neither skips a model that would
