@@ -11,6 +11,7 @@ import datetime as dt
 import ipaddress
 import json
 import os
+import shutil
 import ssl
 import subprocess
 import sys
@@ -868,10 +869,15 @@ def test_a_vendor_script_is_downloaded_over_https_and_run_by_path(
         )
         path = "/install.ps1"
     else:
+        # The run inherits a PATH holding only the test's bin, so the script
+        # names chmod by its absolute path (a real vendor script runs with
+        # the user's own PATH).
+        chmod = shutil.which("chmod") or "/bin/chmod"
         body = (
+            "set -e\n"
             "echo 'fake vendor: installing claude'\n"
             f"printf '%s\\n' '#!/bin/sh' '{launcher.splitlines()[1]}' > '{destination}'\n"
-            f"chmod +x '{destination}'\n"
+            f"'{chmod}' +x '{destination}'\n"
             "echo 'fake vendor: done'\n"
         )
         path = "/install.sh"
