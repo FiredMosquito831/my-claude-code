@@ -11,7 +11,9 @@ For terminal use, start `mcc-server`, then run `mcc-claude`, `mcc-codex`, or `mc
 
 The **Coding agents** page is the same list with the detail behind it: whether the
 CLI is installed on this machine, which protocol MCC answers it on, the catalogue
-file MCC generates for it and when that file was last written.
+file MCC generates for it and when that file was last written. A card that is not
+installed has an **Install** button that shows its plan before anything runs
+([Install an agent from the dashboard](USAGE.md#install-an-agent-from-the-dashboard)).
 
 <div align="center">
   <img src="../assets/admin-coding-agents.png" alt="A grid of agent cards, each showing whether the CLI is installed and the commands that launch it through the proxy" width="860">

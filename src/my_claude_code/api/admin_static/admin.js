@@ -876,6 +876,9 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "coding_agents") {
     loadHarnesses().catch((error) => showMessage(error.message, "error"));
     loadDesktopApps().catch((error) => showMessage(error.message, "error"));
+    // 7.102.0: the Install buttons. Its own request: it runs each installed
+    // CLI's --version once (cached), so it is asked only on this page.
+    loadAgentInstalls().catch((error) => showMessage(error.message, "error"));
   }
 
   if (activeView.id === "docs") {
@@ -17387,9 +17390,12 @@ function renderHarnesses(errorMessage) {
   (state.harnesses || []).forEach((harness) => {
     const card = harnessCard(harness);
     card.append(mcpMediaControlHost(harness.id));
+    // 7.102.0: the Install button, filled from /admin/api/agent-installs.
+    card.append(agentInstallHost(harness.id));
     list.append(card);
   });
   renderMcpMediaControls();
+  renderAgentInstallControls();
   syncRoutePauseUi();
 }
 
@@ -17452,8 +17458,10 @@ function harnessCard(harness) {
   if (!harness.installed && harness.install_hint) {
     const hint = document.createElement("p");
     hint.className = "agent-install-hint";
-    // MCC installs no coding agent: the card repeats the vendor's own line
-    // and offers no button that would run it.
+    // The installer installs MCC and its prerequisites, nothing else; agents
+    // are installed only by the dashboard button you press. The vendor's own
+    // line stays here (it is what the launcher prints); the Install button
+    // below it runs only after its plan is shown and confirmed (7.102.0).
     hint.textContent = harness.install_hint;
     card.append(hint);
   }
@@ -17530,9 +17538,557 @@ function renderDesktopApps(errorMessage) {
     // the fallback below MCC's own document), or why there is none yet.
     const fileControl = desktopMcpSection(app);
     if (fileControl) card.append(fileControl);
+    card.append(agentInstallHost(app.id));
     list.append(card);
   });
   renderMcpMediaControls();
+  renderAgentInstallControls();
+}
+
+/* --------------------------------------------------------------------- */
+/* Install buttons (7.102.0)                                               */
+/* --------------------------------------------------------------------- */
+/* The user's words (2026-10-06): buttons on the Coding agents tab for each
+   agent, CLI and desktop, to download and install it, and Node.js and npm too
+   if they are missing. The boundary stays: the installer installs MCC and its
+   prerequisites, nothing else; agents are installed only by the dashboard
+   button you press.
+
+   A card that is not installed gets Install (plus a method picker when this
+   OS has more than one) and a Copy button with the vendor's own line. An
+   installed one shows its path and version and no button. Install shows the
+   server's plan first -- every download, every command, the permission
+   prompts and the files touched, in words -- and runs nothing until the plan
+   is confirmed. What runs, what is refused and why is the server's table
+   (config/install_methods.py), never a list in this file. */
+
+const AGENT_INSTALL_POLL_MS = 1000;
+// The progress box keeps the newest lines; the log file keeps them all.
+const AGENT_INSTALL_VISIBLE_LINES = 200;
+
+async function loadAgentInstalls() {
+  try {
+    state.agentInstalls = await api("/admin/api/agent-installs");
+  } catch (error) {
+    // An older server has no such route: the cards keep their vendor line.
+    state.agentInstalls = { error: error.message, agents: [] };
+  }
+  const running = state.agentInstalls && state.agentInstalls.job;
+  if (running && !state.agentInstallJob) {
+    state.agentInstallJob = {
+      targetId: running.target,
+      jobId: running.job_id,
+      cursor: 0,
+      lines: [],
+      stage: running.stage,
+      result: null,
+    };
+    pollAgentInstallJob();
+  }
+  renderAgentInstallControls();
+}
+
+function agentInstallHost(targetId) {
+  const host = document.createElement("div");
+  host.className = "agent-install-control";
+  host.dataset.installTarget = targetId;
+  host.hidden = true;
+  return host;
+}
+
+function agentInstallEntry(targetId) {
+  const agents = (state.agentInstalls && state.agentInstalls.agents) || [];
+  return agents.find((entry) => entry.id === targetId) || null;
+}
+
+function renderAgentInstallControls() {
+  document.querySelectorAll(".agent-install-control").forEach((host) => {
+    fillAgentInstallControl(host, agentInstallEntry(host.dataset.installTarget));
+  });
+}
+
+function agentInstallParagraph(className, text) {
+  const paragraph = document.createElement("p");
+  paragraph.className = className;
+  paragraph.textContent = text;
+  return paragraph;
+}
+
+function agentInstallLink(url, text) {
+  const link = document.createElement("a");
+  // Vendor pages are https by the registry's own guard; anything else is
+  // drawn as text, never as a link.
+  if (/^https:\/\//i.test(String(url || ""))) link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = text;
+  return link;
+}
+
+function agentInstallSelectedMethod(entry, host) {
+  const picker = host.querySelector(".agent-install-method");
+  const wanted = picker ? picker.value : entry.recommended;
+  return (
+    (entry.methods || []).find((method) => method.id === wanted) ||
+    (entry.methods || [])[0] ||
+    null
+  );
+}
+
+function fillAgentInstallControl(host, entry) {
+  host.textContent = "";
+  host.hidden = !entry;
+  if (!entry) return;
+  const job = state.agentInstallJob;
+  const ownJob = job && job.targetId === entry.id ? job : null;
+  const lastResult = (state.agentInstallResults || {})[entry.id];
+
+  if (entry.hidden_reason) {
+    host.append(agentInstallParagraph("agent-install-note", entry.hidden_reason));
+    return;
+  }
+  if (entry.same_as) {
+    const twin = (state.harnesses || []).find((h) => h.id === entry.same_as);
+    host.append(
+      agentInstallParagraph(
+        "agent-install-note",
+        `Install: this is the same program as the ${
+          twin ? twin.display_name : entry.same_as
+        } card under CLI agents -- its Install button installs it once for both.`,
+      ),
+    );
+    return;
+  }
+  if (lastResult && !ownJob) host.append(agentInstallResultPanel(lastResult));
+  if (entry.installed && !ownJob) {
+    const line = document.createElement("p");
+    line.className = "agent-install-state";
+    const pill = document.createElement("span");
+    pill.className = "status-pill ok";
+    pill.textContent = "Installed";
+    const where = [entry.path, entry.version].filter(Boolean).join(" · ");
+    line.append(pill, document.createTextNode(where ? ` ${where}` : ""));
+    host.append(line);
+    if (entry.path && entry.on_server_path === false) {
+      host.append(
+        agentInstallParagraph(
+          "agent-install-note",
+          "Not on this server's PATH yet: open a new terminal to use it.",
+        ),
+      );
+    }
+    return;
+  }
+
+  if (ownJob) {
+    host.append(agentInstallProgressPanel(ownJob));
+    return;
+  }
+
+  const methods = entry.methods || [];
+  if (!entry.offer_install) {
+    if (entry.unavailable_reason) {
+      host.append(agentInstallParagraph("agent-install-note", entry.unavailable_reason));
+    }
+    if (entry.link) {
+      const line = document.createElement("p");
+      line.className = "agent-install-note";
+      const method = methods.find((row) => row.url === entry.link);
+      line.append(
+        document.createTextNode("No direct download MCC can open here: "),
+        agentInstallLink(entry.link, method ? method.label : "the vendor's page"),
+        document.createTextNode("."),
+      );
+      host.append(line);
+      return;
+    }
+    // Why each method cannot run here, so nothing is a silent dead end.
+    methods.forEach((method) => {
+      if (method.refused) {
+        host.append(
+          agentInstallParagraph("agent-install-refused", `${method.label}: ${method.refused}`),
+        );
+      }
+    });
+    const first = methods.find((method) => method.copy_command);
+    if (first) host.append(agentInstallCopyRow(first));
+    return;
+  }
+
+  const row = document.createElement("div");
+  row.className = "agent-install-row";
+  const runnable = methods.filter((method) => method.kind !== "link");
+  if (runnable.length > 1) {
+    const picker = document.createElement("select");
+    picker.className = "agent-install-method";
+    picker.setAttribute("aria-label", `How to install ${entry.display_name}`);
+    runnable.forEach((method) => {
+      const option = document.createElement("option");
+      option.value = method.id;
+      option.textContent = method.runnable
+        ? method.label
+        : `${method.label} (not here: ${method.refused})`;
+      option.disabled = !method.runnable;
+      if (method.id === entry.recommended) option.selected = true;
+      picker.append(option);
+    });
+    picker.addEventListener("change", () => {
+      const details = host.querySelector(".agent-install-details");
+      if (details) details.replaceWith(agentInstallDetails(entry, host));
+      const copy = host.querySelector(".agent-install-copy");
+      const chosen = agentInstallSelectedMethod(entry, host);
+      if (copy && chosen) copy.dataset.copy = chosen.copy_command;
+    });
+    row.append(picker);
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "primary-button agent-install-button";
+  button.dataset.installTarget = entry.id;
+  button.textContent = "Install";
+  button.addEventListener("click", () => openAgentInstallPlan(entry, host));
+  row.append(button);
+  const chosen = agentInstallSelectedMethod(entry, host) ||
+    methods.find((method) => method.id === entry.recommended);
+  row.append(agentInstallCopyButton(chosen ? chosen.copy_command : ""));
+  host.append(row);
+  host.append(agentInstallDetails(entry, host));
+  const panel = document.createElement("div");
+  panel.className = "agent-install-panel";
+  host.append(panel);
+}
+
+/** The line under the button: the vendor's page, the date it was checked,
+ * and the Node.js the method needs. */
+function agentInstallDetails(entry, host) {
+  const method = agentInstallSelectedMethod(entry, host);
+  const details = document.createElement("p");
+  details.className = "agent-install-details";
+  if (!method) return details;
+  details.append(
+    agentInstallLink(method.doc_url, "Vendor's instructions"),
+    document.createTextNode(` (checked ${method.checked_on}).`),
+  );
+  if (method.needs_node) {
+    const node = (state.agentInstalls && state.agentInstalls.node) || {};
+    const bound =
+      method.needs_node.minimum === "0"
+        ? "any Node.js"
+        : `Node.js ${method.needs_node.minimum} or newer`;
+    const have =
+      node.state === "missing"
+        ? "Node.js is not installed, so the plan installs it first."
+        : `You have Node.js ${node.node_version || "(unknown)"}.`;
+    details.append(document.createTextNode(` Needs ${bound}. ${have}`));
+  }
+  return details;
+}
+
+function agentInstallCopyButton(text) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary-button agent-install-copy";
+  button.dataset.copy = text || "";
+  button.textContent = "Copy command";
+  button.title = "The vendor's own line, for your own terminal";
+  if (!navigator.clipboard || !navigator.clipboard.writeText) {
+    button.disabled = true;
+    return button;
+  }
+  button.addEventListener("click", () => {
+    navigator.clipboard
+      .writeText(button.dataset.copy)
+      .then(() => {
+        button.textContent = "Copied";
+        window.setTimeout(() => {
+          button.textContent = "Copy command";
+        }, 1500);
+      })
+      .catch(() => {});
+  });
+  return button;
+}
+
+function agentInstallCopyRow(method) {
+  const row = document.createElement("div");
+  row.className = "agent-install-row";
+  const code = document.createElement("code");
+  code.className = "agent-install-command";
+  code.textContent = method.copy_command;
+  row.append(code, agentInstallCopyButton(method.copy_command));
+  return row;
+}
+
+async function openAgentInstallPlan(entry, host) {
+  const method = agentInstallSelectedMethod(entry, host);
+  const panel = host.querySelector(".agent-install-panel");
+  if (!method || !panel) return;
+  panel.textContent = "";
+  panel.append(agentInstallParagraph("agent-install-note", "Reading the plan…"));
+  let plan;
+  try {
+    plan = await api(`/admin/api/agent-installs/${encodeURIComponent(entry.id)}/plan`, {
+      method: "POST",
+      body: JSON.stringify({ method: method.id }),
+    });
+  } catch (error) {
+    panel.textContent = "";
+    panel.append(agentInstallParagraph("agent-install-refused", error.message));
+    return;
+  }
+  panel.textContent = "";
+  panel.append(agentInstallPlanView(entry, plan, panel));
+}
+
+/** The plan, in words, before anything runs (spec N4). */
+function agentInstallPlanView(entry, plan, panel) {
+  const view = document.createElement("div");
+  view.className = "agent-install-plan";
+  view.setAttribute("role", "dialog");
+  view.setAttribute("aria-label", `Install ${entry.display_name}`);
+  const heading = document.createElement("h5");
+  heading.textContent = `Install ${entry.display_name} with ${plan.method.label}`;
+  view.append(heading);
+
+  if (!plan.runnable) {
+    view.append(agentInstallParagraph("agent-install-refused", plan.refused));
+    view.append(agentInstallCopyRow({ copy_command: plan.copy_command }));
+    return view;
+  }
+  if (plan.node && plan.node.text) {
+    view.append(agentInstallParagraph("agent-install-node", plan.node.text));
+  }
+  (plan.elevation || []).forEach((line) => {
+    view.append(agentInstallParagraph("agent-install-elevation", `${line}.`));
+  });
+  const steps = document.createElement("ol");
+  steps.className = "agent-install-steps";
+  (plan.steps || []).forEach((step) => {
+    const item = document.createElement("li");
+    item.append(document.createTextNode(step.text));
+    const exact = step.command && step.command.length ? step.command.join(" ") : "";
+    if (exact) {
+      const code = document.createElement("code");
+      code.className = "agent-install-command";
+      code.textContent = exact;
+      item.append(document.createTextNode(": "), code);
+    }
+    const env = Object.entries(step.env || {});
+    if (env.length) {
+      item.append(
+        document.createTextNode(
+          ` (with ${env.map(([key, value]) => `${key}=${value}`).join(", ")} for this step)`,
+        ),
+      );
+    }
+    steps.append(item);
+  });
+  view.append(steps);
+  const changes = plan.changes || [];
+  if (changes.length) {
+    view.append(agentInstallParagraph("agent-install-subhead", "What it changes on this machine:"));
+    const list = document.createElement("ul");
+    list.className = "agent-install-changes";
+    changes.forEach((change) => {
+      const item = document.createElement("li");
+      item.textContent = change;
+      list.append(item);
+    });
+    view.append(list);
+  }
+  if ((plan.bins || []).length) {
+    view.append(
+      agentInstallParagraph(
+        "agent-install-note",
+        `Commands it adds: ${plan.bins.join(", ")}.`,
+      ),
+    );
+  }
+  view.append(
+    agentInstallParagraph(
+      "agent-install-note",
+      "MCC never runs sudo or runas and never elevates itself; any permission " +
+        "prompt is the operating system's own. Nothing is retried on its own.",
+    ),
+  );
+  const actions = document.createElement("div");
+  actions.className = "agent-install-row";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "primary-button agent-install-confirm";
+  confirm.textContent = "Install now";
+  confirm.addEventListener("click", () => startAgentInstall(entry, plan, panel, confirm));
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "secondary-button agent-install-back";
+  back.textContent = "Not now";
+  back.addEventListener("click", () => {
+    panel.textContent = "";
+  });
+  actions.append(confirm, back);
+  view.append(actions);
+  return view;
+}
+
+async function startAgentInstall(entry, plan, panel, confirm) {
+  confirm.disabled = true;
+  try {
+    const started = await api(
+      `/admin/api/agent-installs/${encodeURIComponent(entry.id)}/run?confirm=${encodeURIComponent(plan.confirm)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          method: plan.method.id,
+          plan_token: plan.plan_token,
+          dry_run: false,
+        }),
+      },
+    );
+    state.agentInstallJob = {
+      targetId: entry.id,
+      jobId: started.job_id,
+      cursor: 0,
+      lines: [],
+      stage: "running",
+      result: null,
+      logPath: started.log_path,
+    };
+    renderAgentInstallControls();
+    pollAgentInstallJob();
+  } catch (error) {
+    confirm.disabled = false;
+    panel.append(agentInstallParagraph("agent-install-refused", error.message));
+  }
+}
+
+async function pollAgentInstallJob() {
+  const job = state.agentInstallJob;
+  if (!job) return;
+  let answer;
+  try {
+    answer = await api(
+      `/admin/api/agent-installs/jobs/${encodeURIComponent(job.jobId)}?cursor=${job.cursor}`,
+    );
+  } catch (error) {
+    job.lines.push(`(could not read the job: ${error.message})`);
+    window.setTimeout(pollAgentInstallJob, AGENT_INSTALL_POLL_MS * 3);
+    renderAgentInstallControls();
+    return;
+  }
+  job.lines.push(...(answer.lines || []));
+  if (job.lines.length > AGENT_INSTALL_VISIBLE_LINES) {
+    job.lines.splice(0, job.lines.length - AGENT_INSTALL_VISIBLE_LINES);
+  }
+  job.cursor = answer.cursor;
+  job.stage = answer.stage;
+  job.logPath = answer.log_path;
+  if (answer.running) {
+    renderAgentInstallControls();
+    window.setTimeout(pollAgentInstallJob, AGENT_INSTALL_POLL_MS);
+    return;
+  }
+  state.agentInstallResults = state.agentInstallResults || {};
+  state.agentInstallResults[job.targetId] = {
+    ...(answer.result || {}),
+    stage: answer.stage,
+  };
+  state.agentInstallJob = null;
+  // The cards follow the machine: an installed agent now shows its path and
+  // version and no button.
+  await Promise.allSettled([loadHarnesses(), loadDesktopApps()]);
+  await loadAgentInstalls();
+}
+
+function agentInstallProgressPanel(job) {
+  const panel = document.createElement("div");
+  panel.className = "agent-install-progress";
+  panel.setAttribute("role", "status");
+  panel.append(
+    agentInstallParagraph(
+      "agent-install-note",
+      `Installing… (${job.stage}). Any permission prompt is your operating system's own.`,
+    ),
+  );
+  const log = document.createElement("pre");
+  log.className = "agent-install-log";
+  log.textContent = job.lines.join("\n");
+  panel.append(log);
+  if (job.logPath) {
+    panel.append(agentInstallParagraph("agent-install-note", `Log: ${job.logPath}`));
+  }
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary-button agent-install-cancel";
+  cancel.textContent = "Cancel install";
+  cancel.addEventListener("click", async () => {
+    cancel.disabled = true;
+    try {
+      await api(`/admin/api/agent-installs/jobs/${encodeURIComponent(job.jobId)}/cancel`, {
+        method: "POST",
+        body: "{}",
+      });
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  });
+  panel.append(cancel);
+  return panel;
+}
+
+/** The outcome of the last run on this card: the honest sentence, or the
+ * failure panel (spec N5): exit code, the last 40 lines, the log path, the
+ * classification, the exact command to run yourself and the vendor's page. */
+function agentInstallResultPanel(result) {
+  const failed = result.status === "failed" || result.status === "cancelled";
+  const panel = document.createElement("div");
+  panel.className = failed ? "agent-install-failure" : "agent-install-result";
+  panel.append(
+    agentInstallParagraph(
+      failed ? "agent-install-refused" : "agent-install-ok",
+      result.message || "",
+    ),
+  );
+  if (!failed) {
+    if (result.log_path) {
+      panel.append(agentInstallParagraph("agent-install-note", `Log: ${result.log_path}`));
+    }
+    return panel;
+  }
+  const facts = document.createElement("ul");
+  facts.className = "agent-install-facts";
+  [
+    ["What went wrong", result.classification_label || result.classification || "unknown"],
+    ["Exit code", result.exit_code === null || result.exit_code === undefined ? "none" : String(result.exit_code)],
+    ["Log", result.log_path || ""],
+  ].forEach(([label, value]) => {
+    const item = document.createElement("li");
+    item.textContent = `${label}: ${value}`;
+    facts.append(item);
+  });
+  panel.append(facts);
+  if ((result.last_lines || []).length) {
+    const tail = document.createElement("pre");
+    tail.className = "agent-install-log";
+    tail.textContent = result.last_lines.join("\n");
+    panel.append(tail);
+  }
+  if (result.command) {
+    panel.append(agentInstallParagraph("agent-install-note", `The command that failed: ${result.command}`));
+  }
+  if (result.copy_command) {
+    panel.append(agentInstallParagraph("agent-install-subhead", "To run it yourself:"));
+    panel.append(agentInstallCopyRow({ copy_command: result.copy_command }));
+  }
+  if (result.doc_url) {
+    const line = document.createElement("p");
+    line.className = "agent-install-note";
+    line.append(agentInstallLink(result.doc_url, "Vendor's instructions"));
+    panel.append(line);
+  }
+  panel.append(
+    agentInstallParagraph("agent-install-note", "Nothing is retried on its own."),
+  );
+  return panel;
 }
 
 /* --------------------------------------------------------------------- */

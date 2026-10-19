@@ -655,6 +655,23 @@ def server_log_path() -> Path:
     return config_dir_path() / LOGS_DIRNAME / SERVER_LOG_FILENAME
 
 
+#: 7.102.0: one log per Install-button run, and the one-job-at-a-time lock.
+AGENT_INSTALL_LOGS_DIRNAME = "agent-installs"
+AGENT_INSTALL_LOCK_FILENAME = "agent-install.lock"
+
+
+def agent_install_logs_dir() -> Path:
+    """Return the folder the Install button's runs log into."""
+
+    return config_dir_path() / LOGS_DIRNAME / AGENT_INSTALL_LOGS_DIRNAME
+
+
+def agent_install_lock_path() -> Path:
+    """Return the lock file that keeps Install-button runs one at a time."""
+
+    return config_dir_path() / AGENT_INSTALL_LOCK_FILENAME
+
+
 def codex_model_catalog_path() -> Path:
     """Return the generated Codex model catalog path."""
 

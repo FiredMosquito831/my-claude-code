@@ -28,6 +28,7 @@ from my_claude_code.core.trace import (
 )
 from my_claude_code.core.version import package_version
 
+from .admin_agent_install_routes import router as admin_agent_install_router
 from .admin_cache import AdminNoStoreMiddleware, attach_admin_no_store
 from .admin_claude_config_routes import router as admin_claude_config_router
 from .admin_custom_routes import router as admin_custom_router
@@ -85,6 +86,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_proxy_router)
     app.include_router(admin_proxy_source_router)
     app.include_router(admin_desktop_app_router)
+    app.include_router(admin_agent_install_router)
     app.include_router(admin_server_router)
     app.include_router(admin_websearch_router)
     app.include_router(admin_export_router)

@@ -5,9 +5,10 @@ Two loopback-only routes.
 ``GET /admin/api/harnesses`` backs the Coding agents dashboard page: one card
 per registered harness with an installed / not-installed probe, the command to
 copy, the protocol it will speak, the catalogue MCC generates for it and the
-RTK toggle. It is deliberately a probe and nothing more -- MCC never installs a
-third-party CLI, so a "not installed" card offers the vendor's own install line
-and stops there.
+RTK toggle. It is deliberately a probe and nothing more. Installing is a
+separate, explicit action (7.102.0, ``admin_agent_install_routes``): the
+installer installs MCC and its prerequisites, nothing else; agents are
+installed only by the dashboard button you press.
 
 ``GET`` and ``POST /admin/api/harness-tiers`` back the Tiers section of each
 Coding agents card: which of the five tier aliases this agent overrides, what
@@ -32,6 +33,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 import threading
 import tomllib
 from collections.abc import Mapping
@@ -324,15 +326,32 @@ def _resolved_binary_path(binary: str) -> str | None:
     return os.path.abspath(found) if found else None
 
 
+def _installed_binary_path(spec: HarnessSpec) -> str | None:
+    """Return the first of the binary and its aliases on PATH, or None.
+
+    The launcher accepts any alias -- a Windows install of Command Code may
+    put only ``cmdc`` on PATH -- so the card must too, or it reads "not
+    installed" for an install that is there (7.102.0, spec §1 item 3).
+    """
+
+    for name in (spec.binary, *spec.binary_aliases):
+        found = _resolved_binary_path(name)
+        if found is not None:
+            return found
+    return None
+
+
 def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
-    binary_path = _resolved_binary_path(spec.binary)
+    binary_path = _installed_binary_path(spec)
     return {
         "id": spec.id,
         "display_name": spec.display_name,
         "binary": spec.binary,
         "installed": binary_path is not None,
         "binary_path": binary_path,
-        "install_hint": spec.install_hint,
+        # The line for THIS operating system: Windows users were shown the
+        # POSIX ``curl … | sh`` line for Pi, Goose and Droid (spec §1 item 3).
+        "install_hint": spec.install_hint_for(sys.platform),
         "command": spec.command,
         "commands": [entry.command for entry in spec.commands],
         # Every command line a user can type for this agent, generated from

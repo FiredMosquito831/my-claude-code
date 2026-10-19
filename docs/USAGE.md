@@ -370,7 +370,7 @@ mcc-server --version
 2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset**. A mismatch aborts rather than running unverified code.
 3. Installs the package and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex` and `mcc-pi` on your `PATH` (the legacy `fcc-*` spellings were retired in 7.0.0 and now only say what replaced them).
 
-**It does not install Claude Code, Codex, or Pi.** Those are separate third-party tools and the proxy doesn't need any of them to run. Install whichever you actually use, yourself — the `mcc-*` launchers simply point an agent you already have at the proxy.
+**It does not install Claude Code, Codex, or Pi.** Those are separate third-party tools and the proxy doesn't need any of them to run. The installer installs MCC and its prerequisites, nothing else; agents are installed only by the dashboard button you press — the **Install** button on the **Coding agents** page ([Install an agent from the dashboard](#install-an-agent-from-the-dashboard)) — or by you, with the vendor's own line. The `mcc-*` launchers simply point an agent you already have at the proxy, and never install one.
 
 Pin a specific version instead of the newest:
 
@@ -1899,6 +1899,12 @@ If a card says *Not installed* for something you have, it is on `PATH` that
 MCC looks first — start the app once from a terminal where `crush`, `goose`,
 `codex`, `opencode`, `agy` or `commandcode` runs, and the card follows.
 
+The same rule decides the **Install** button (7.102.0): a CLI found under its
+name or any alias — `cmdc` for Command Code, `kimi-cli` for Kimi Code — on the
+server's `PATH` or in the folder its vendor installs into shows its path and
+version and no button, so MCC never installs a second copy. A desktop card with
+this page's *installed* badge gets no button either.
+
 ### MCC does not reformat the JSON it does not change
 
 Since 6.83.0 JSON documents are edited as **text**, the way Codex's TOML and
@@ -2078,8 +2084,11 @@ catalogue MCC generates for it (with the file's path, when it was last written,
 and how many models carry a value the CLI supplied rather than a provider), and
 its RTK toggle.
 
-MCC never installs a coding agent. When one is missing, its launcher prints that
-agent's own install command and exits 127.
+The installer installs MCC and its prerequisites, nothing else; agents are
+installed only by the dashboard button you press
+([Install an agent from the dashboard](#install-an-agent-from-the-dashboard)).
+When one is missing, its launcher prints that agent's own install command and
+exits 127 — a launcher never installs anything.
 
 ### Codex and Pi
 
@@ -2230,7 +2239,9 @@ mcc-kimi
 Kimi Code is Moonshot's `kimi` CLI. It is a **Python tool on PyPI**, not an npm
 package: install it with `uv tool install kimi-cli` or `pipx install kimi-cli`.
 MCC never installs it — a missing binary prints Moonshot's own line and exits
-127. The version everything below was read against is **1.50.0**, and it was
+127, and the Coding agents page has no Install button for it yet: Moonshot now
+ships a new Kimi Code (`@moonshot-ai/kimi-code`), and MCC has not checked that
+`mcc-kimi` works with it. The version everything below was read against is **1.50.0**, and it was
 read out of the installed package's source rather than its docs, because four
 things the docs would have told you are no longer true:
 
@@ -2336,7 +2347,8 @@ mcc-crush
 ```
 
 Crush is Charm's `crush` CLI: `npm install -g @charmland/crush`, or the Go
-binary from its GitHub releases. MCC never installs it. The version everything
+binary from its GitHub releases. Its launcher never installs it (the Coding
+agents page's Install button does, when you press it). The version everything
 below was read against is **v0.92.0**, from its own published JSON schema
 (`crush schema` — an undocumented command, not in `--help`) and then measured
 on the wire, because the survey's picture of it was out of date:
@@ -2394,7 +2406,8 @@ last should report the directory this launch actually uses.
 mcc-cline
 ```
 
-Cline is the `cline` CLI: `npm install -g cline`. MCC never installs it.
+Cline is the `cline` CLI: `npm install -g cline`. Its launcher never installs it
+(the Coding agents page's Install button does, when you press it).
 Everything below was read against **3.0.61** and then measured on the wire,
 because the survey's picture of it was wrong in two ways:
 
@@ -2440,8 +2453,9 @@ untouched and do not need a running proxy.
 mcc-goose
 ```
 
-Goose is Block's `goose` binary, from its GitHub releases. MCC never installs
-it. Read against **1.48.0**.
+Goose is Block's `goose` binary, from its GitHub releases. Its launcher never
+installs it (the Coding agents page's Install button does, when you press it).
+Read against **1.48.0**.
 
 **Goose is the one agent MCC configures without writing a file anywhere.** That
 is a decision, not a gap. Goose 1.48.0 does have a declared-model mechanism —
@@ -2490,7 +2504,9 @@ mcc-aider
 ```
 
 Aider is the `aider` command from the `aider-chat` PyPI package:
-`uv tool install aider-chat`. MCC never installs it. Read against **0.86.2**.
+`uv tool install aider-chat`. Its launcher never installs it (the Coding agents
+page's Install button runs Aider's own installer, when you press it). Read
+against **0.86.2**.
 
 **Aider reads two model documents, and looks for each of them in the working
 directory, the git root *and* your home directory** — so simply writing them
@@ -2796,6 +2812,63 @@ to turn. Results are saved in the agent's working folder, never over an existing
 Gemini CLI starts MCP servers only in a folder you trusted. Codex lists the server but
 its model does not see the tools yet ([Known limits](MEDIA.md#known-limits-today)). The
 full reference: [docs/MEDIA.md](MEDIA.md#coding-agents-the-media-server-mcp-7990).
+
+### Install an agent from the dashboard
+
+Since 7.102.0 a card on the **Coding agents** page whose program is not on this
+machine has an **Install** button, for a CLI and for a desktop app. The installer
+installs MCC and its prerequisites, nothing else; agents are installed only by the
+dashboard button you press. Nothing installs an agent on first start, on an update,
+from a `mcc-*` launcher or in the background.
+
+1. Open **Coding agents**. An installed agent shows its path and version and no
+   button. One that is not installed shows **Install**, a method picker when your
+   system has more than one way, and **Copy command** with the vendor's own line for
+   your own terminal.
+2. Press **Install**. MCC shows the plan before anything runs: every file it
+   downloads (https only, from that vendor's own hosts), every command, the
+   permission prompt your system will show, and what changes — "adds that folder to
+   your PATH", "adds one line to ~/.bashrc", "Node.js LTS will be installed
+   first". Nothing has run yet.
+3. Press **Install now**. The lines the installer prints appear under the card;
+   **Cancel install** stops the installer MCC started and its children, nothing
+   else. The run is logged to `~/.mcc/logs/agent-installs/<agent>-<time>.log`.
+4. The card then says what is true: *Installed and verified: claude 2.1.301 at …*,
+   or *installed, not on PATH in this server yet — open a new terminal*, or a
+   failure panel with the exit code, the last 40 lines, the log path, what went
+   wrong (network, permission, disk, antivirus, Node.js too old, cancelled), the
+   exact command to run yourself and the vendor's page. Nothing is retried on its
+   own.
+
+What each method is, per system:
+
+| Kind of agent | Windows | macOS | Linux / WSL |
+| --- | --- | --- | --- |
+| Vendors with their own installer (Claude Code, Codex, Pi, Qwen Code, Goose, Aider, Droid; OpenCode and Kilo on macOS/Linux) | the vendor's PowerShell script, downloaded to a file and run with `powershell -NoProfile -ExecutionPolicy Bypass -File <file>` | the vendor's `sh`/`bash` script, downloaded and run by path | the same |
+| npm-only CLIs (Gemini CLI, Command Code, Cline, OpenCode 2; Kilo and OpenCode on Windows) | `npm.cmd install -g <package>` | `npm install -g <package>` | the same |
+| Package managers, as alternatives in the picker | winget (Claude Code, Crush) | Homebrew | — |
+| Desktop apps | the vendor's setup `.exe`, opened by path; Goose's `.zip` unpacked into `%LOCALAPPDATA%\Programs\Goose` | the `.dmg` copied into `~/Applications` | a `.deb` needs sudo: the line is shown for you to copy |
+
+**Node.js and npm** are installed only when an npm method needs them and they are
+missing: the official Node.js LTS installer on Windows (checked against the
+release's `SHASUMS256.txt`; Windows asks for administrator permission) and macOS
+(macOS Installer asks for your password), and fnm per user on Linux and WSL (no
+sudo; it adds one loader line to your shell's file). An older Node.js is never
+upgraded: the card says it is too old and offers the agent's own installer. A
+global npm folder you cannot write is reported, and MCC never runs `sudo` — use the
+agent's own installer, or fix npm's folder and run the line yourself.
+
+**What MCC never does here:** run `sudo` or `runas`, add `--unsafe-perm`, elevate
+itself (a permission prompt is always your system's own), run a script from a
+string (`iex`, `curl | sh`), install a second copy of an agent it finds under any of
+its names, install into WSL from Windows, upgrade, update or uninstall anything.
+Kimi Code has no button yet: MCC has not checked that `mcc-kimi` works with
+Moonshot's new Kimi Code. Apps MCC cannot route through get a button only where the
+vendor publishes a direct download (LM Studio on Windows) and a link otherwise
+(Warp, Kimi and Qwen desktop). Codex desktop is now part of the ChatGPT desktop app,
+so its card links to OpenAI's page. A server with no desktop (a Windows service, an
+SSH session, WSL) hides the desktop installs and refuses a method that needs a
+permission prompt, and says why.
 
 ---
 

@@ -49,6 +49,26 @@ binary probes -- stays in ``cli/launchers`` and is bound to a spec by
 from dataclasses import dataclass
 from enum import StrEnum
 
+from my_claude_code.config.install_methods import (
+    AIDER_METHODS,
+    ANTIGRAVITY_NO_BUTTON_REASON,
+    CLAUDE_METHODS,
+    CLINE_METHODS,
+    CODEX_METHODS,
+    COMMANDCODE_METHODS,
+    CRUSH_METHODS,
+    DROID_METHODS,
+    GEMINI_METHODS,
+    GOOSE_METHODS,
+    KILO_METHODS,
+    KIMI_NO_BUTTON_REASON,
+    OPENCODE2_METHODS,
+    OPENCODE_METHODS,
+    PI_METHODS,
+    QWEN_METHODS,
+    InstallMethod,
+)
+
 
 class HarnessProtocol(StrEnum):
     """The inbound MCC route a harness talks to."""
@@ -540,7 +560,9 @@ class HarnessSpec:
 
     id: str
     display_name: str
-    #: Executable looked up with ``shutil.which``. MCC never installs it.
+    #: Executable looked up with ``shutil.which``. The installer installs MCC
+    #: and its prerequisites, nothing else; an agent is installed only by the
+    #: Coding agents page's Install button you press (``install_methods``).
     binary: str
     protocol: HarnessProtocol
     #: Printed verbatim when the binary is missing, right before exit 127.
@@ -583,6 +605,13 @@ class HarnessSpec:
     #: Why not, stated so a reader can check it. Rendered verbatim on the
     #: Coding agents card. Required when ``available`` is False.
     unavailable_reason: str = ""
+    #: How the Coding agents page's Install button installs this CLI, per OS
+    #: (7.102.0; ``config/install_methods.py``). The ``install_hint`` lines
+    #: above stay what the launchers print; these are what the button runs,
+    #: after a plan the user reads and confirms. Empty means no button, and
+    #: :attr:`install_unavailable_reason` says why.
+    install_methods: tuple[InstallMethod, ...] = ()
+    install_unavailable_reason: str = ""
 
     @property
     def command(self) -> str:
@@ -610,6 +639,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         install_hint=(
             "Install Claude Code with: npm install -g @anthropic-ai/claude-code"
         ),
+        install_methods=CLAUDE_METHODS,
         commands=(
             HarnessCommand(
                 suffix="claude",
@@ -654,6 +684,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary="codex",
         protocol=HarnessProtocol.OPENAI_RESPONSES,
         install_hint="Install Codex with: npm install -g @openai/codex",
+        install_methods=CODEX_METHODS,
         commands=(
             HarnessCommand(
                 suffix="codex",
@@ -693,6 +724,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         install_hint_windows=(
             'Install Pi with: powershell -c "irm https://pi.dev/install.ps1 | iex"'
         ),
+        install_methods=PI_METHODS,
         commands=(
             HarnessCommand(
                 suffix="pi",
@@ -730,6 +762,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary="opencode",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         install_hint="Install OpenCode with: npm install -g opencode-ai",
+        install_methods=OPENCODE_METHODS,
         commands=(
             HarnessCommand(
                 suffix="opencode",
@@ -774,6 +807,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary="opencode2",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         install_hint=("Install OpenCode 2 with: npm install -g @opencode-ai/cli@beta"),
+        install_methods=OPENCODE2_METHODS,
         commands=(
             HarnessCommand(
                 suffix="opencode2",
@@ -815,6 +849,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary="kilo",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         install_hint="Install Kilo CLI with: npm install -g @kilocode/cli",
+        install_methods=KILO_METHODS,
         commands=(
             HarnessCommand(
                 suffix="kilo",
@@ -859,6 +894,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary_aliases=("cmdc",),
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         install_hint="Install Command Code with: npm install -g command-code",
+        install_methods=COMMANDCODE_METHODS,
         commands=(
             HarnessCommand(
                 suffix="commandcode",
@@ -961,6 +997,9 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "Install Kimi Code with: uv tool install kimi-cli "
             "(or: pipx install kimi-cli)"
         ),
+        # User decision 6 (2026-10-18): no Install button until a check that
+        # mcc-kimi works with Moonshot's new Kimi Code has passed.
+        install_unavailable_reason=KIMI_NO_BUTTON_REASON,
         commands=(
             HarnessCommand(
                 suffix="kimi",
@@ -1032,6 +1071,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary="qwen",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         install_hint=("Install Qwen Code with: npm install -g @qwen-code/qwen-code"),
+        install_methods=QWEN_METHODS,
         commands=(
             HarnessCommand(
                 suffix="qwen",
@@ -1103,6 +1143,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "Install Crush with: npm install -g @charmland/crush "
             "(or: brew install charmbracelet/tap/crush)"
         ),
+        install_methods=CRUSH_METHODS,
         commands=(
             HarnessCommand(
                 suffix="crush",
@@ -1176,6 +1217,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary="cline",
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         install_hint="Install Cline with: npm install -g cline",
+        install_methods=CLINE_METHODS,
         commands=(
             HarnessCommand(
                 suffix="cline",
@@ -1268,6 +1310,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "Install Goose from https://github.com/block/goose/releases "
             "(goose-x86_64-pc-windows-msvc.zip)"
         ),
+        install_methods=GOOSE_METHODS,
         commands=(
             HarnessCommand(
                 suffix="goose",
@@ -1345,6 +1388,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "Install Aider with: uv tool install aider-chat "
             "(or: python -m pip install aider-chat)"
         ),
+        install_methods=AIDER_METHODS,
         commands=(
             HarnessCommand(
                 suffix="aider",
@@ -1422,6 +1466,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         install_hint_windows=(
             'Install Droid with: powershell -c "irm https://app.factory.ai/cli/windows | iex"'
         ),
+        install_methods=DROID_METHODS,
         commands=(
             HarnessCommand(
                 suffix="droid",
@@ -1495,6 +1540,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary="gemini",
         protocol=HarnessProtocol.GEMINI,
         install_hint=("Install Gemini CLI with: npm install -g @google/gemini-cli"),
+        install_methods=GEMINI_METHODS,
         commands=(
             HarnessCommand(
                 suffix="gemini",
@@ -1564,6 +1610,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         binary="agy",
         protocol=HarnessProtocol.GEMINI,
         install_hint="Install Antigravity from https://antigravity.google",
+        install_unavailable_reason=ANTIGRAVITY_NO_BUTTON_REASON,
         available=False,
         unavailable_reason=ANTIGRAVITY_UNAVAILABLE_REASON,
         summary=(

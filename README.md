@@ -178,6 +178,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | Capability | What it gives you | Where it lives | More |
 | --- | --- | --- | --- |
 | 15 CLI launchers | One `mcc-*` command per agent that points it here and starts it | terminal | [below](#coding-agents) |
+| Install an agent from the dashboard | An **Install** button on each card that is not installed (CLI and desktop): the vendor's own installer first, npm only where it is the only way, Node.js installed first only when it is missing; the plan — every download, command, permission prompt and PATH or profile change — is shown before anything runs; never `sudo`, never an upgrade of your Node.js | **Coding agents** page | [Guide](docs/USAGE.md#install-an-agent-from-the-dashboard) |
 | Desktop app **Configure** | MCC writes its keys into the one file each app reads, carrying every other byte through | **Coding agents** page | [Guide](docs/USAGE.md#6-point-a-desktop-app-here) |
 | Undo, two ways | Remove MCC's keys, or restore the exact values MCC replaced | **Coding agents** page | [Guide](docs/USAGE.md#6-point-a-desktop-app-here) |
 | Backups and diffs | A `.mcc-backup` before the first edit, a diff preview before every write, a drift badge after a hand-edit | **Coding agents** page | [Guide](docs/USAGE.md#6-point-a-desktop-app-here) |
@@ -233,6 +234,8 @@ Your agent talks to MCC in whichever protocol it already speaks — `POST /v1/me
 ## Coding agents
 
 Every agent MCC can launch is declared in one registry, and the **Coding agents** page shows each one's installed state, its commands and flags with a copy button, its protocol and its generated catalogue. Applications MCC does not launch get a **Configure** button on the same page instead, which edits the one file each of them reads.
+
+An agent that is not installed gets an **Install** button on its card (since 7.102.0), with the vendor's own line beside it to copy instead. The installer installs MCC and its prerequisites, nothing else; agents are installed only by the dashboard button you press, after the plan it shows — see [Install an agent from the dashboard](docs/USAGE.md#install-an-agent-from-the-dashboard).
 
 | Agent | How to connect | Protocol |
 | --- | --- | --- |
@@ -341,7 +344,7 @@ The Admin UI at `http://127.0.0.1:8082/admin` is local-only and is where everyth
 | **Get Started** | The first-run checklist: provider, tiers, an agent, optionally web search and analytics. |
 | **Providers** | One searchable card per provider — keys and key pools you can reorder and name, per-key health and usage, rotation policy, live **Refresh models**. |
 | **Configure Claude Code** | Pointing Claude Code at this proxy, per session or permanently. |
-| **Coding agents** | Every launcher's installed state and flags, and the **Configure**/**Undo** buttons for the apps MCC does not launch. |
+| **Coding agents** | Every launcher's installed state and flags, the **Install** button for an agent that is not installed, and the **Configure**/**Undo** buttons for the apps MCC does not launch. |
 | **Model Config** | `MODEL`, the tier map, fallback chains, the vision adapter and reasoning control. |
 | **Models** | Every model every configured provider publishes, with bulk visibility, capability probes and learned facts. |
 | **Web Search** | Route policy, provider cards, key health, advanced options and search analytics. |
