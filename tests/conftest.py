@@ -203,6 +203,23 @@ def _reset_rejected_client_tracker():
 
 
 @pytest.fixture(autouse=True)
+def _reset_agent_install_jobs():
+    """7.102.0: the Install button's runner keeps one job and two caches.
+
+    One install at a time is process-wide on purpose, so a test that starts a
+    job must not leave it "running" for the next one, and a cached
+    ``--version`` or Node.js reading from one test's fake PATH must not answer
+    for another's.
+    """
+
+    from my_claude_code.application import agent_installer
+
+    agent_installer.reset_for_tests()
+    yield
+    agent_installer.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_opencode_client_version():
     """No test may inherit another test's reading of the machine.
 

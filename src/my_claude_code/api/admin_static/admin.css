@@ -11157,6 +11157,150 @@ audio.req-media-preview {
   border-top: 1px solid var(--line);
 }
 
+/* 7.102.0: the Install button on each Coding agents card -- the method
+   picker, Install, Copy command, then the plan, the progress and the result
+   in the panel under them. */
+.agent-install-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+  min-width: 0;
+  width: 100%;
+}
+
+.agent-install-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+}
+
+.agent-install-method {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.agent-install-button,
+.agent-install-confirm {
+  white-space: nowrap;
+}
+
+.agent-install-copy,
+.agent-install-back,
+.agent-install-cancel {
+  white-space: nowrap;
+}
+
+.agent-install-state,
+.agent-install-details,
+.agent-install-note,
+.agent-install-subhead,
+.agent-install-node {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.agent-install-subhead {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.agent-install-node {
+  color: var(--text);
+}
+
+.agent-install-ok {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--ok-border);
+  border-radius: var(--radius-sm);
+  background: var(--ok-bg);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-install-refused,
+.agent-install-elevation {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-install-command {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agent-install-panel,
+.agent-install-plan,
+.agent-install-progress,
+.agent-install-result,
+.agent-install-failure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.agent-install-plan,
+.agent-install-failure {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.agent-install-failure {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.agent-install-plan h5 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-strong);
+}
+
+.agent-install-steps,
+.agent-install-changes,
+.agent-install-facts {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-install-log {
+  margin: 0;
+  max-height: 220px;
+  width: 100%;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* 7.100.0: the same row on a Desktop apps card, for MCC's media server in
    the app's own file (or, for Claude Desktop, the fallback below MCC's own
    document). Its own class so it never reads as one of the agent buttons. */

@@ -927,8 +927,13 @@
                 while the same-named upstream provider is switched off.
               </div>
               <p class="field-description">
-                MCC never installs a coding agent. When one is missing, its launcher
-                prints the vendor's own install command and stops.
+                The installer installs MCC and its prerequisites, nothing else; agents
+                are installed only by the dashboard button you press. A card that is not
+                installed has <strong>Install</strong>: it shows the plan &mdash; every
+                download, command, permission prompt and PATH change &mdash; before
+                anything runs, and never uses sudo. When an agent is missing, its
+                launcher still prints the vendor's own install command and stops.
+                <a href="#guide-install-agents">How Install works</a>.
               </p>
               <div id="codingAgentsList" class="coding-agents-list"></div>
             </section>
@@ -2115,6 +2120,7 @@
                 <a href="#guide-desktop">Claude Desktop</a>
                 <a href="#guide-desktop-apps">Point a desktop app here</a>
                 <a href="#guide-other">Point another CLI here</a>
+                <a href="#guide-install-agents">Install a coding agent</a>
                 <a href="#guide-openai-clients">Connect any OpenAI-compatible client</a>
                 <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
@@ -3484,8 +3490,9 @@ mcc-gemini</code></pre>
                   launch: whether its binary is on your <code>PATH</code>,
                   <strong>every command and flag it answers to</strong> with a copy
                   button each, the protocol it will speak, and the catalogue this proxy
-                  generates for it. Nothing here installs a coding agent &mdash; a
-                  missing one is reported with that agent's own install command.
+                  generates for it. A missing one is reported with that agent's own
+                  install command, and its card has an <strong>Install</strong> button
+                  (<a href="#guide-install-agents">Install a coding agent</a>).
                 </p>
                 <p>
                   <strong>OpenCode, OpenCode 2 and Kilo read a config file</strong>
@@ -3702,6 +3709,55 @@ mcc-gemini</code></pre>
                   stopped, because logging in or printing a version has nothing to do
                   with which provider serves a request. Anything that actually runs the
                   agent is configured normally.
+                </p>
+
+                <h3 id="guide-install-agents">Install a coding agent</h3>
+                <p>
+                  The installer installs MCC and its prerequisites, nothing else; agents
+                  are installed only by the dashboard button you press. On the
+                  <strong>Coding agents</strong> page a card whose program is not on this
+                  machine &mdash; a CLI or a desktop app &mdash; has
+                  <strong>Install</strong>, a picker when your system has more than one
+                  way, and <strong>Copy command</strong> with the vendor's own line for
+                  your own terminal. A card that is installed shows its path and version
+                  and no button: MCC never installs a second copy.
+                </p>
+                <ol>
+                  <li>
+                    Press <strong>Install</strong>. The plan comes first: each file it
+                    downloads (https only, from that vendor's own hosts), each command,
+                    the permission prompt your system will show (&ldquo;Windows will ask
+                    for administrator permission&rdquo;), and what changes (&ldquo;adds
+                    that folder to your PATH&rdquo;, &ldquo;adds one line to
+                    ~/.bashrc&rdquo;). Nothing has run yet.
+                  </li>
+                  <li>
+                    Press <strong>Install now</strong>. The installer's lines appear
+                    under the card; <strong>Cancel install</strong> stops the installer
+                    MCC started and its children, nothing else.
+                  </li>
+                  <li>
+                    Read the result: <em>Installed and verified</em> with the version
+                    and the path, or <em>not on PATH in this server yet &mdash; open a
+                    new terminal</em>, or a failure panel with the exit code, the last
+                    lines, the log path, what went wrong, the command to run yourself and
+                    the vendor's page. Nothing is retried on its own.
+                  </li>
+                </ol>
+                <p>
+                  The vendor's own installer comes first; npm only where it is the only
+                  way. <strong>Node.js and npm</strong> are installed only when an npm
+                  method needs them and they are missing: the official installer on
+                  Windows and macOS (your system asks for permission itself), fnm per user
+                  on Linux and WSL. An older Node.js is never upgraded &mdash; the card
+                  says it is too old and offers the agent's own installer. MCC never runs
+                  <code>sudo</code> or <code>runas</code>, never elevates itself, never
+                  runs a script from a string, never installs into WSL from Windows, and
+                  offers no Update or Uninstall. Kimi Code has no button until MCC has
+                  checked <code>mcc-kimi</code> against Moonshot's new Kimi Code; Warp,
+                  Kimi and Qwen desktop and Codex desktop are links to the vendor's page.
+                  Every run is logged under
+                  <code>~/.mcc/logs/agent-installs/</code>.
                 </p>
 
                 <h3 id="guide-openai-clients">Connect any OpenAI-compatible client</h3>

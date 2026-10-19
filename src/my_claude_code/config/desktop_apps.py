@@ -54,6 +54,19 @@ from enum import StrEnum
 
 from my_claude_code.config.document_codecs import DocumentFormat
 from my_claude_code.config.harnesses import COMMANDCODE_API_KEY_ENV, HarnessProtocol
+from my_claude_code.config.install_methods import (
+    CLAUDE_DESKTOP_METHODS,
+    CODEX_DESKTOP_METHODS,
+    GOOSE_DESKTOP_METHODS,
+    KIMI_DESKTOP_METHODS,
+    LM_STUDIO_METHODS,
+    OPENCODE_DESKTOP_METHODS,
+    QWEN_DESKTOP_METHODS,
+    ROO_CODE_METHODS,
+    VSCODE_COPILOT_METHODS,
+    WARP_METHODS,
+    InstallMethod,
+)
 from my_claude_code.config.mcp_media import MCP_MEDIA_SERVER_NAME, McpMediaShape
 
 
@@ -614,6 +627,10 @@ class DesktopAppSpec:
     #: One line the card shows where MCC does not offer the media server for
     #: this app yet, dated, e.g. "not measured yet". Empty otherwise.
     mcp_note: str = ""
+    #: How the Coding agents page's Install button installs this app, per OS
+    #: (7.102.0; ``config/install_methods.py``). A LINK row is the vendor's
+    #: page where no direct download is published. Empty means no button.
+    install_methods: tuple[InstallMethod, ...] = ()
 
     @property
     def owned_key_label(self) -> str:
@@ -965,6 +982,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://github.com/openai/codex/blob/main/docs/config.md",
+        install_methods=CODEX_DESKTOP_METHODS,
         # The program, not its data directory. ``%LOCALAPPDATA%\\OpenAI\\Codex``
         # and ``~/.codex`` are both written by the *first run* of anything that
         # speaks Codex, MCC's own ``mcc-codex`` launcher included, so neither
@@ -1088,6 +1106,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://block.github.io/goose/docs/getting-started/providers",
+        install_methods=GOOSE_DESKTOP_METHODS,
         # ``%APPDATA%\\Block\\goose`` used to be the marker, and on the machine
         # this was written for it contained one directory of empty log files
         # written by MCC's own ``mcc-goose.exe`` launcher on 2026-09-02 -- no
@@ -1104,6 +1123,10 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
                 ),
                 _home("Applications", "Goose.app", platforms=("darwin",)),
                 _home(".local", "bin", "goose", platforms=("darwin", "linux")),
+                # 7.102.0: where the Install button unpacks Goose's Windows
+                # .zip (user decision 5). The program itself, never a data
+                # directory -- nothing else creates this file.
+                _windows_localappdata("Programs", "Goose", "Goose.exe"),
             ),
         ),
         document=DesktopDocument(
@@ -1187,6 +1210,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://opencode.ai/docs/config",
+        install_methods=OPENCODE_DESKTOP_METHODS,
         # The desktop build's own executable, or the CLI on PATH -- the two
         # programs that read this file. ``%APPDATA%\\ai.opencode.desktop`` and
         # ``~/.config/opencode`` are state and configuration directories, and
@@ -1309,6 +1333,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             "and extracting the rule from its bundle."
         ),
         doc_url="https://code.visualstudio.com/docs/copilot/customization/language-models",
+        install_methods=VSCODE_COPILOT_METHODS,
         # The *extension* directory, not %APPDATA%\Code\User. That directory
         # proves VS Code is installed and says nothing about Copilot, so the
         # card read "Installed, not configured" and offered Configure on a
@@ -1561,6 +1586,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://docs.roocode.com/features/settings-management",
+        install_methods=ROO_CODE_METHODS,
         # Same correction as vscode_copilot: the marker has to be the
         # extension, not the editor that could host it.
         detect=DesktopDetect(
@@ -1775,6 +1801,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://claude.com/docs/third-party/claude-desktop/mdm",
+        install_methods=CLAUDE_DESKTOP_METHODS,
         detect=DesktopDetect(
             # Anthropic ships Windows and macOS builds; the community Linux
             # packages install a ``claude-desktop`` executable. Deliberately
@@ -2072,6 +2099,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         summary="Account-login Electron app with no endpoint field.",
         status=DesktopAppStatus.NOT_ROUTABLE,
         doc_url="https://www.kimi.com/",
+        install_methods=KIMI_DESKTOP_METHODS,
         unavailable_reason=(
             "Kimi's desktop app signs in to a Moonshot account and exposes no "
             "base-URL or API-key field anywhere in its UI -- verified "
@@ -2086,6 +2114,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         summary="Account-login Electron app with no endpoint field.",
         status=DesktopAppStatus.NOT_ROUTABLE,
         doc_url="https://chat.qwen.ai/",
+        install_methods=QWEN_DESKTOP_METHODS,
         unavailable_reason=(
             "Qwen's desktop app signs in to an Alibaba account and publishes "
             "no custom-endpoint setting -- verified 2026-09-07 against the "
@@ -2100,12 +2129,23 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         summary="A server, not a client.",
         status=DesktopAppStatus.NOT_ROUTABLE,
         doc_url="https://lmstudio.ai/docs",
+        install_methods=LM_STUDIO_METHODS,
         unavailable_reason=(
             "LM Studio serves models; it does not consume a remote endpoint. "
             "There is nothing to point at MCC, and there never will be -- it "
             "is on the other side of the same wire. Verified 2026-09-07."
         ),
-        detect=DesktopDetect(markers=(_home(".lmstudio"),)),
+        # The probe answers NOT_ROUTABLE before it reads any of these; they
+        # decide only whether the Install button (7.102.0) is offered. The
+        # second is where LM Studio's per-user Windows installer puts it, so
+        # a fresh install reads as installed before its first start creates
+        # ~/.lmstudio.
+        detect=DesktopDetect(
+            markers=(
+                _home(".lmstudio"),
+                _windows_localappdata("Programs", "LM Studio", "LM Studio.exe"),
+            )
+        ),
     ),
     DesktopAppSpec(
         id="warp",
@@ -2113,6 +2153,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         summary="Rejects loopback and private addresses.",
         status=DesktopAppStatus.NOT_ROUTABLE,
         doc_url="https://docs.warp.dev/",
+        install_methods=WARP_METHODS,
         unavailable_reason=(
             "Warp's custom-model endpoint validator rejects 127.0.0.1 and "
             "private IP ranges outright, so a local proxy cannot be named at "

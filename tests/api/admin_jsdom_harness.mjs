@@ -4583,6 +4583,14 @@ if (process.env.MCC_JSDOM_SCENARIO === "models_fields") {
   const { prepareModelsFieldsScenario } = await import("./admin_jsdom_models_fields.mjs");
   scenario = prepareModelsFieldsScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=agent_installs (7.102.0): the Coding agents page's
+   Install buttons -- which cards get one, the copy button beside it, the plan
+   in words, the progress lines and the failure panel
+   (admin_jsdom_agent_installs.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "agent_installs") {
+  const { prepareAgentInstallsScenario } = await import("./admin_jsdom_agent_installs.mjs");
+  scenario = prepareAgentInstallsScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));

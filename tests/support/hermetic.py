@@ -532,6 +532,15 @@ _DENIED_EXECUTABLES = frozenset(
         "pi",
         "qwen",
         # installers, package managers and machine-state tools
+        # 7.102.0: what the Install button can run on the real machine --
+        # Windows Installer, winget, Homebrew, fnm, macOS disk images and
+        # VS Code's extension command -- stubbed, never launched.
+        "brew",
+        "code",
+        "fnm",
+        "hdiutil",
+        "msiexec",
+        "winget",
         "defaults",
         "explorer",
         "launchctl",

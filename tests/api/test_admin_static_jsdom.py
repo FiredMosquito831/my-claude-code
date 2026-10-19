@@ -10275,3 +10275,166 @@ def test_add_mcp_server_on_a_desktop_card_shows_the_plan_before_writing(
         "is at /home/u/.codex/config.toml.mcc-backup. Restart Codex desktop to "
         "load it."
     )
+
+
+# ------------------------------------------------- Install buttons (7.102.0)
+# The user's words (2026-10-06): buttons on the Coding agents tab for each
+# agent, CLI and desktop, to download and install it, and Node.js and npm too
+# when they are missing. One run of admin_jsdom_agent_installs.mjs
+# (MCC_JSDOM_SCENARIO=agent_installs) on payloads in the routes' own shapes.
+
+
+@pytest.fixture(scope="module")
+def agent_installs() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="agent_installs")
+
+
+def test_jsdom_the_agent_installs_scenario_runs_clean(agent_installs) -> None:
+    assert agent_installs["fatal"] is None
+    assert agent_installs["scenarioFatal"] is None
+    assert agent_installs["scriptErrors"] == []
+    assert agent_installs["consoleErrors"] == []
+
+
+def test_jsdom_install_button_only_when_not_installed(agent_installs) -> None:
+    cards = agent_installs["cards"]
+
+    claude = cards["claude"]
+    assert claude["hidden"] is False
+    assert claude["inCard"] is True
+    assert claude["button"] == "Install"
+    # A picker where this OS has more than one method; the vendor's own
+    # installer is the one selected.
+    assert [o["value"] for o in claude["picker"]] == ["native", "winget", "npm"]
+    assert [o["value"] for o in claude["picker"] if o["selected"]] == ["native"]
+
+    # Installed: the path and the version, and no button of any kind.
+    codex = cards["codex"]
+    assert codex["button"] is None
+    assert codex["picker"] is None
+    assert codex["copy"] is None
+    assert codex["state"] == (
+        "Installed C:\\Users\\u\\.local\\bin\\codex.exe · codex-cli 0.163.0"
+    )
+
+    # One method: no picker, still a button.
+    gemini = cards["gemini_cli"]
+    assert gemini["button"] == "Install"
+    assert gemini["picker"] is None
+
+    # Kimi waits for its check (decision 6) and says so; no button.
+    kimi = cards["kimi_code"]
+    assert kimi["button"] is None
+    assert "has not yet checked that mcc-kimi works" in kimi["text"]
+
+    # No direct download (decision 8): the vendor's page, never a button.
+    warp = cards["warp"]
+    assert warp["button"] is None
+    assert warp["link"] == {
+        "href": "https://www.warp.dev/download",
+        "text": "Warp's download page",
+    }
+    # A desktop card that is a CLI: installed from that card, once.
+    crush = cards["crush_desktop"]
+    assert crush["button"] is None
+    assert "same program as the Crush card" in crush["text"]
+
+
+def test_jsdom_copy_command_beside_the_button(agent_installs) -> None:
+    claude = agent_installs["cards"]["claude"]
+    assert claude["copyBesideButton"] is True
+    assert claude["copy"] == {
+        "text": "Copy command",
+        "data": "irm https://claude.ai/install.ps1 | iex",
+        "disabled": False,
+    }
+    # The copy line follows the picker, and so does the line under it.
+    assert agent_installs["copyAfterPick"]["data"] == (
+        "npm install -g @anthropic-ai/claude-code"
+    )
+    assert "Needs Node.js 22 or newer" in agent_installs["detailsAfterPick"]
+    assert "installs it first" in agent_installs["detailsAfterPick"]
+    assert agent_installs["copied"] == [
+        "irm https://claude.ai/install.ps1 | iex",
+        "npm install -g @anthropic-ai/claude-code",
+    ]
+
+
+def test_jsdom_plan_dialog_states_elevation_and_profile_changes(agent_installs) -> None:
+    claude = agent_installs["claudePlan"]
+    assert claude["role"] == "dialog"
+    assert claude["heading"] == (
+        "Install Claude Code with Anthropic's installer (recommended)"
+    )
+    assert claude["changes"] == [
+        "puts claude in ~/.local/bin and adds that folder to your PATH",
+        "Claude Code then updates itself in the background",
+    ]
+    assert any(
+        "-ExecutionPolicy Bypass -File <downloaded file>" in step
+        for step in claude["steps"]
+    )
+    assert claude["confirm"] == "Install now"
+    assert claude["back"] == "Not now"
+    assert any("never runs sudo or runas" in note for note in claude["notes"])
+    # Asking for the plan ran nothing: one plan request, no run, no job.
+    assert [r["url"] for r in agent_installs["requestsAfterClaudePlan"]] == [
+        "/admin/api/agent-installs",
+        "/admin/api/agent-installs/claude/plan",
+    ]
+
+    gemini = agent_installs["geminiPlan"]
+    assert gemini["node"] == [
+        "Node.js LTS will be installed first (the newest LTS nodejs.org lists "
+        "when you press Install), then @google/gemini-cli."
+    ]
+    assert gemini["elevation"] == [
+        "Windows will ask for administrator permission (the Node.js installer)."
+    ]
+    assert (
+        "adds that folder and your npm folder (%APPDATA%\\npm) to PATH"
+        in (gemini["changes"])
+    )
+    assert gemini["steps"][1].endswith(
+        "msiexec.exe /i <downloaded file> /passive /norestart"
+    )
+
+
+def test_jsdom_progress_and_failure_panel(agent_installs) -> None:
+    runs = [r for r in agent_installs["requests"] if "/run" in r["url"]]
+    assert runs == [
+        {
+            "url": "/admin/api/agent-installs/gemini_cli/run?confirm=install-gemini_cli",
+            "method": "POST",
+            "body": {"method": "npm", "plan_token": "b" * 64, "dry_run": False},
+        }
+    ]
+
+    progress = agent_installs["progress"]
+    assert progress["role"] == "status"
+    assert progress["log"] == (
+        "Node.js is missing: installing it first.\n"
+        "download https://nodejs.org/dist/index.json"
+    )
+    assert progress["cancel"] == "Cancel install"
+
+    failure = agent_installs["failure"]
+    assert failure["message"] == "npm.cmd exited 243."
+    assert failure["facts"] == [
+        "What went wrong: Permission: the system refused a write "
+        "(EACCES / EPERM / access denied)",
+        "Exit code: 243",
+        "Log: C:\\Users\\u\\.mcc\\logs\\agent-installs\\"
+        "gemini_cli-20261019-010203-abc123.log",
+    ]
+    assert "npm ERR! code EACCES" in failure["tail"]
+    assert failure["command"] == "npm install -g @google/gemini-cli"
+    assert failure["copy"] == "npm install -g @google/gemini-cli"
+    assert (
+        failure["link"] == "https://github.com/google-gemini/gemini-cli#-installation"
+    )
+    assert "Nothing is retried on its own." in failure["notes"]
+    assert any(note.startswith("The command that failed:") for note in failure["notes"])
+    # The card is still not installed, so Install is offered again.
+    assert agent_installs["geminiAfter"]["button"] == "Install"
+    assert agent_installs["polls"] == 2
