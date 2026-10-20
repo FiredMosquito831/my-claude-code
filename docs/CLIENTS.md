@@ -374,11 +374,22 @@ header an answer is exactly what it was.
 
 A routing or provider failure answers in the door's own vendor shape (OpenAI
 `{"error": {...}}`, Anthropic `{"type": "error", "error": {...}}`, Google
-`{"error": {"code", "status", ...}}`). Two answers do not: the `401` above on the
-chat doors (the OpenAI media routes answer it in OpenAI's envelope since 7.95.0),
-and a body that does not parse as the door's request (a `messages` that is not a
-list, say), which on the Anthropic and OpenAI doors answers `422` with a
-`{"detail": [...]}` list naming the field.
+`{"error": {"code", "status", ...}}`). One answer does not: the `401` above on the
+chat doors (the OpenAI media routes answer it in OpenAI's envelope since 7.95.0).
+A body that does not parse as the door's request (a `messages` that is not a
+list, say, or a content block type MCC does not know) answers `400` on
+`/v1/messages`, `/v1/messages/count_tokens`, `/v1/chat/completions` and
+`/v1/responses` since 7.102.4, in the door's own envelope with
+`invalid_request_error`: the message names each failing field and the reason,
+for example `messages.0.content.1: Input tag 'compaction' found using 'type'
+does not match any of the expected tags: ...` (at most three fields, then
+"and N more"; on the OpenAI doors `param` is the first field). It never repeats
+any part of the request; before 7.102.4 it was a `422` whose `{"detail": [...]}`
+list carried the input, which for a conversation was the whole conversation.
+Each refusal also leaves a `REJECTED REQUEST` line in `server.log` (the first
+per client per minute, then a summary) with the door, the field, the reason,
+the client and the body's size, never its content. The dashboard routes keep
+FastAPI's `422`.
 A model whose provider has no key answers `503` naming the missing setting. A
 request every model of its chain refused ends with
 the last failure, its status and the sentence MCC wrote about it; the request

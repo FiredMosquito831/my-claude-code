@@ -18,8 +18,21 @@ each other.
 from typing import Literal
 
 MESSAGES_ENDPOINT = "/v1/messages"
+COUNT_TOKENS_ENDPOINT = "/v1/messages/count_tokens"
 RESPONSES_ENDPOINT = "/v1/responses"
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+
+#: The doors a model request comes through (RESUMED-SESSION-422 PR 2): a body
+#: one of these cannot accept is answered with a short 400 in the door's own
+#: error envelope, never FastAPI's ``{"detail": [...]}`` echo of the input.
+MODEL_DOOR_PATHS: frozenset[str] = frozenset(
+    {
+        MESSAGES_ENDPOINT,
+        COUNT_TOKENS_ENDPOINT,
+        RESPONSES_ENDPOINT,
+        CHAT_COMPLETIONS_ENDPOINT,
+    }
+)
 
 #: The Gemini surface is a *prefix* rather than one path: the model id sits in
 #: the path and carries slashes -- ``/v1beta/models/anthropic/openrouter/gpt-5
@@ -85,6 +98,11 @@ def wire_api_for_path(path: str) -> WireApi:
         # OpenAI-shaped like the create; their clients parse OpenAI errors.
         return "chat_completions"
     return _WIRE_API_BY_PATH.get(path, "messages")
+
+
+def is_model_door(path: str) -> bool:
+    """Whether ``path`` is one of :data:`MODEL_DOOR_PATHS` (exact match)."""
+    return path in MODEL_DOOR_PATHS
 
 
 def is_openai_shaped(wire_api: WireApi) -> bool:

@@ -47,7 +47,13 @@ from .gemini_routes import gemini_router
 from .media_catalog_routes import router as media_catalog_router
 from .media_routes import router as media_router
 from .media_video_routes import router as media_video_router
+from .model_door_errors import (
+    MODEL_DOOR_VALIDATION_STATUS,
+    describe_validation_errors,
+    model_door_validation_payload,
+)
 from .ports import ApiServices
+from .rejected_request_log import describe_rejected_request, rejected_request_tracker
 from .request_errors import ordinary_application_error_response
 from .request_ids import (
     RequestCorrelationMiddleware,
@@ -59,6 +65,7 @@ from .validation_log import summarize_request_validation_body
 from .wire_surfaces import (
     is_gemini_shaped,
     is_media_path,
+    is_model_door,
     is_openai_shaped,
     wire_api_for_path,
 )
@@ -70,6 +77,38 @@ _OPENAI_HTTP_ERROR_TYPES: dict[int, str] = {
     403: "permission_error",
     404: "not_found_error",
 }
+
+
+async def _model_door_validation_response(
+    request: Request, exc: RequestValidationError, body: Any
+) -> JSONResponse:
+    """A model door's short 400 for a body it cannot accept, and its log line.
+
+    RESUMED-SESSION-422 PR 2 (:mod:`.model_door_errors`): the door's own
+    envelope naming each failing field and pydantic's reason, never the input,
+    and one ``REJECTED REQUEST`` WARNING per client per window
+    (:mod:`.rejected_request_log`). Total: it is already on a failure path.
+    """
+    reasons = describe_validation_errors(exc.errors())
+    try:
+        body_bytes = len(await request.body())
+    except Exception:
+        body_bytes = 0
+    rejected_request_tracker().note_rejection(
+        describe_rejected_request(
+            request,
+            status=MODEL_DOOR_VALIDATION_STATUS,
+            reasons=reasons,
+            body=body,
+            body_bytes=body_bytes,
+        )
+    )
+    return JSONResponse(
+        status_code=MODEL_DOOR_VALIDATION_STATUS,
+        content=model_door_validation_payload(
+            request.url.path, reasons, request_id=get_request_id(request)
+        ),
+    )
 
 
 def create_app(services: ApiServices) -> FastAPI:
@@ -163,7 +202,11 @@ def create_app(services: ApiServices) -> FastAPI:
             message_summary=message_summary,
             tool_names=tool_names,
         )
-        return await request_validation_exception_handler(request, exc)
+        path = request.url.path
+        if not is_model_door(path):
+            # Admin and every other route keep FastAPI's answer byte for byte.
+            return await request_validation_exception_handler(request, exc)
+        return await _model_door_validation_response(request, exc, body)
 
     @app.exception_handler(SettingsFileBusyError)
     async def settings_file_busy_handler(request: Request, exc: SettingsFileBusyError):

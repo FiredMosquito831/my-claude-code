@@ -210,9 +210,19 @@ def test_create_message_schema_validation_has_request_id_without_terminal_header
         json={"model": "test", "messages": "not-a-list"},
     )
 
-    assert response.status_code == 422
+    # RESUMED-SESSION-422 PR 2: a model door answers a body it cannot accept
+    # with Anthropic's own 400, not FastAPI's 422 echo of the input.
+    assert response.status_code == 400
     assert response.headers["request-id"].startswith("req_")
     assert "x-should-retry" not in response.headers
+    assert response.json() == {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "messages: Input should be a valid list",
+        },
+        "request_id": response.headers["request-id"],
+    }
 
 
 def test_create_message_pre_start_provider_error_returns_terminal_json(

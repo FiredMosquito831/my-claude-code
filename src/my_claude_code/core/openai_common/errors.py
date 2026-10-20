@@ -52,14 +52,21 @@ def openai_error_type_for_failure(
     return _FAILURE_ERROR_TYPES[kind]
 
 
-def openai_error_payload(*, message: str, error_type: str) -> dict[str, Any]:
-    """Return an OpenAI-compatible error envelope."""
+def openai_error_payload(
+    *, message: str, error_type: str, param: str | None = None
+) -> dict[str, Any]:
+    """Return an OpenAI-compatible error envelope.
+
+    ``param`` names the request field the error is about, as OpenAI's own
+    ``invalid_request_error`` does; left out, it is ``null`` as it has always
+    been.
+    """
 
     return {
         "error": {
             "message": redact_sensitive_error_text(message),
             "type": error_type,
-            "param": None,
+            "param": param,
             "code": None,
         }
     }
