@@ -6,8 +6,8 @@ access line on a console nobody reads -- while the client showed a 190 KB
 error. Decision Q4(a): one WARNING line in ``server.log``, modelled on
 ``REJECTED CLIENT`` (:mod:`.rejected_client_log`), with the same two shapes:
 
-* the **first** refusal from a client not seen in the current window gets its
-  own line: the door, the status, the first failing field and pydantic's
+* the **first** refusal from a client not seen at that door in the current
+  window gets its own line: the door, the status, the first failing field and pydantic's
   reason for it, how many fields failed, the client's address and user agent,
   the harness the request says it came from, how many messages the body held
   and how large it was. Never a value from the body.
@@ -134,7 +134,8 @@ class RejectedRequestTracker:
             total, distinct = summary
             logger.warning(
                 "REJECTED REQUEST SUMMARY: {} model-door request(s) refused as "
-                "not valid from {} distinct client(s) in the last {:.0f}s.",
+                "not valid from {} distinct client and door pair(s) in the last "
+                "{:.0f}s.",
                 total,
                 distinct,
                 SUMMARY_WINDOW_SECONDS,
