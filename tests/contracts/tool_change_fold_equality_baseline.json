@@ -1,6 +1,6 @@
 {
  "_what": "RESUMED-SESSION-422 equality baseline; see the test module.",
- "_written_on": "0390fffd feat(agents): Install buttons on the Coding agents page, with the plan shown first (7.102.0) (#285)",
+ "_written_on": "7dd33b78 fix(anthropic): drop thinking another model wrote before sending to an Anthropic-protocol host (7.102.1) (#286)",
  "cases": {
   "claude_code_2_1_258_recorded": {
    "parsed": "sha256:2f78b30a39bc56c3433c185c96acc6857e6fa99f5cb26cc897b8ce86202d6ccc bytes:19535",
