@@ -216,6 +216,10 @@ def test_reasoning_by_model_answers_the_same_before_and_after_the_backfill(
             "requested": 2,
             "returned": 1,
             "unmeasured": 0,
+            # 7.103.0: the host-reported split of "not returned"; this fixture
+            # reports no reasoning tokens, so both stay 0.
+            "withheld": 0,
+            "no_thinking": 0,
         }
     ]
 
