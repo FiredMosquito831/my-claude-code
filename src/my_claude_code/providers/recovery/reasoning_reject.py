@@ -128,6 +128,40 @@ def rejected_reasoning_field(error: Exception, body: Mapping[str, Any]) -> str |
     return None
 
 
+#: A location inside the conversation history, spelled the way Anthropic's
+#: validator names one (``messages.3.content.0``).
+_HISTORY_LOCATION = re.compile(r"\bmessages\.\d+\.")
+
+
+def complaint_is_about_the_body(complaint: str, field: str) -> bool:
+    """Whether a 400 that names ``field`` faults the body, not the model.
+
+    :func:`rejected_reasoning_field` matches the field's *word*, which is the
+    right test for whether stripping the field may help this one request --
+    and the wrong one for whether the model refuses the field. Two shapes of
+    400 name the word and say nothing about the model at all:
+
+    * the fault is located in the history -- ``messages.1.content.0: Invalid
+      `signature` in `thinking` block``, or ``messages.1.content.0.type:
+      Expected `thinking` ... When `thinking` is enabled, a final `assistant`
+      message must start with a thinking block``. A block of the conversation
+      is wrong; the field was accepted;
+    * an extra key *inside* the field -- ``thinking.adaptive.enabled: Extra
+      inputs are not permitted``. The object carried a key it should not
+      have; the field itself was accepted.
+
+    The answer decides only what is *remembered*. The retry without the field
+    goes out exactly as before either way. Reads lowercased text, so it serves
+    a stored fact's evidence excerpt as well as a live complaint.
+    """
+
+    text = complaint.lower()
+    if _HISTORY_LOCATION.search(text):
+        return True
+    nested_extra = rf"\b{re.escape(field.lower())}\.[\w.\[\]]+:\s*extra\b"
+    return re.search(nested_extra, text) is not None
+
+
 def clone_body_without_reasoning_field(
     body: dict[str, Any], field: str
 ) -> dict[str, Any] | None:

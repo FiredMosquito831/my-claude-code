@@ -59,17 +59,9 @@ def build_anthropic_messages_body(
     body = request.model_dump(exclude_none=True)
     for field in _INTERNAL_FIELDS:
         body.pop(field, None)
-    messages, dropped_blocks, dropped_chars = drop_foreign_thinking(
-        [_native_message(message) for message in request.messages]
-    )
+    native = [_native_message(message) for message in request.messages]
+    messages, dropped_blocks, dropped_chars = drop_foreign_thinking(native)
     body["messages"] = messages
-    if dropped_blocks and wire_notes is not None:
-        noun = "block" if dropped_blocks == 1 else "blocks"
-        wire_notes[FOREIGN_THINKING_DROPPED] = (
-            f"dropped {dropped_blocks} thinking {noun} ({dropped_chars:,} chars) "
-            "made by other models from earlier turns; Anthropic accepts only its "
-            "own signed thinking"
-        )
     body["stream"] = True
     if body.get("max_tokens") is None:
         # The operator's last resort, reached only when routing never bound
@@ -81,6 +73,33 @@ def build_anthropic_messages_body(
         else:
             body["max_tokens"] = configured
     _apply_reasoning(body, request, reasoning)
+    # Manual thinking makes Anthropic require its own thinking at the start of
+    # the final assistant turn of a tool loop. When that turn's thinking was
+    # another model's and has just been dropped, no such block can exist, so
+    # this one request goes without the ``thinking`` field -- the answer the
+    # DeepSeek builder gives a tool follow-up whose thinking it cannot replay
+    # (``providers/deepseek/compat.py``). Adaptive thinking has no such rule.
+    unsigned_tool_turn = bool(dropped_blocks) and _final_tool_turn_lost_its_thinking(
+        native
+    )
+    if unsigned_tool_turn and _is_manual_thinking(body.get("thinking")):
+        _apply_reasoning(body, request, ReasoningPolicy.off())
+    else:
+        unsigned_tool_turn = False
+    if dropped_blocks and wire_notes is not None:
+        noun = "block" if dropped_blocks == 1 else "blocks"
+        wire_notes[FOREIGN_THINKING_DROPPED] = (
+            f"dropped {dropped_blocks} thinking {noun} ({dropped_chars:,} chars) "
+            "made by other models from earlier turns; Anthropic accepts only its "
+            "own signed thinking"
+            + (
+                "; this tool follow-up was sent without the thinking field, "
+                "because manual thinking needs Anthropic's own thinking ahead "
+                "of a tool call and another model made this one"
+                if unsigned_tool_turn
+                else ""
+            )
+        )
     _merge_extra_body(body, request.extra_body)
     return body
 
@@ -189,6 +208,59 @@ def _thinking_chars(block: dict[str, Any]) -> int:
     return len(text) if isinstance(text, str) else 0
 
 
+def _final_tool_turn_lost_its_thinking(messages: list[dict[str, Any]]) -> bool:
+    """Whether the final assistant turn is a tool call left without its thinking.
+
+    Read on the history as the client sent it. A turn of nothing but foreign
+    thinking is omitted from the body, so it is skipped and the turn before it
+    is the final one. True only when that turn lost a foreign block, still
+    holds a ``tool_use``, and no longer begins with a thinking block --
+    exactly the turn Anthropic's manual mode refuses.
+    """
+
+    for message in reversed(messages):
+        content = message.get("content")
+        if message.get("role") != "assistant":
+            continue
+        if not isinstance(content, list):
+            return False
+        kept = [block for block in content if not _is_foreign_thinking(block)]
+        if content and not kept:
+            continue
+        if len(kept) == len(content):
+            return False
+        first = kept[0] if isinstance(kept[0], dict) else {}
+        return first.get("type") not in {"thinking", "redacted_thinking"} and any(
+            isinstance(block, dict) and block.get("type") == "tool_use"
+            for block in kept
+        )
+    return False
+
+
+def _is_manual_thinking(thinking: Any) -> bool:
+    return isinstance(thinking, dict) and thinking.get("type") == "enabled"
+
+
+def _drop_mcc_enabled_default(body: dict[str, Any]) -> None:
+    """Take MCC's own ``enabled`` key out of a passed-through ``thinking``.
+
+    ``core.anthropic.models.ThinkingConfig`` defaults ``enabled`` to ``True``
+    and other dialects read it, so the client's object is dumped carrying a
+    key the client never sent. No variant of Anthropic's ``thinking`` --
+    ``enabled``, ``disabled``, ``adaptive`` -- has that key, and from
+    2026-10-08 on Anthropic answered every such body ``thinking.<type>.enabled:
+    Extra inputs are not permitted``. Only an object with a ``type`` is
+    touched, and only that key; the rest of the object goes out exactly as it
+    did before.
+    """
+
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict) and "type" in thinking and "enabled" in thinking:
+        body["thinking"] = {
+            key: value for key, value in thinking.items() if key != "enabled"
+        }
+
+
 def _apply_reasoning(
     body: dict[str, Any],
     request: MessagesRequest,
@@ -202,6 +274,8 @@ def _apply_reasoning(
         body["thinking"] = {"type": "adaptive"}
         return
     if not policy.requests_reasoning:
+        # The client's own object passes through.
+        _drop_mcc_enabled_default(body)
         return
 
     budget = policy.numeric_budget_tokens
@@ -218,6 +292,8 @@ def _apply_reasoning(
 
     requested = request.thinking
     if requested is not None and requested.type in {"adaptive", "enabled"}:
+        # The client's own object passes through.
+        _drop_mcc_enabled_default(body)
         return
     body["thinking"] = {"type": "adaptive"}
 

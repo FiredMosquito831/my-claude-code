@@ -50,7 +50,9 @@ from my_claude_code.providers.recovery import (
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryMemory,
+    complaint_is_about_the_body,
     learned_fact_store,
+    upstream_complaint,
 )
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 from my_claude_code.providers.stream_recovery import (
@@ -490,6 +492,10 @@ class AnthropicMessagesProvider(BaseProvider):
         stripped_evidence = ""
         # The effort words that same 400 proved refused, if it proved any.
         stripped_values: frozenset[str] = frozenset()
+        # Whether that 400 faulted the body rather than the model: a block of
+        # the history, or a key nested inside the field. The retry is the same
+        # either way; only the durable "this model refuses it" is withheld.
+        stripped_about_the_body = False
 
         async with self._rate_limiter.concurrency_slot():
             while True:
@@ -509,7 +515,16 @@ class AnthropicMessagesProvider(BaseProvider):
                         provider_failure_override=self._failure_override,
                     )
                     stream_opened = True
-                    if stripped_reasoning is not None:
+                    if stripped_reasoning is not None and stripped_about_the_body:
+                        logger.info(
+                            "{}_STREAM: retried without {!r} and it was accepted; "
+                            "not remembered as a refusal, because the 400 faulted "
+                            "the request body rather than the model: {}",
+                            tag,
+                            stripped_reasoning,
+                            stripped_evidence,
+                        )
+                    elif stripped_reasoning is not None:
                         self._remember_reasoning_rejection(
                             body,
                             stripped_reasoning,
@@ -547,6 +562,9 @@ class AnthropicMessagesProvider(BaseProvider):
                                 stripped_reasoning = recovered.stripped_reasoning_field
                                 stripped_evidence = recovered.evidence
                                 stripped_values = recovered.rejected_effort_values
+                                stripped_about_the_body = complaint_is_about_the_body(
+                                    upstream_complaint(error), stripped_reasoning
+                                )
                             body = recovered.body
                             continue
                     decision = recovery.advance_failure(

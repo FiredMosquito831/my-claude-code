@@ -25,8 +25,9 @@ mismatch means the equality contract is broken.
 
 ``wire_without_thinking_enabled`` is the same digest with MCC's own
 ``thinking.enabled`` default removed, recorded at the same commit for the
-bodies where that key was on the wire -- the one difference the next PATCH
-(bug B) is allowed to make.
+bodies where that key was on the wire -- the one difference 7.102.2 (bug B)
+is allowed to make, and makes: those 90 bodies now equal it, every other body
+still equals ``wire``.
 """
 
 import copy
@@ -324,13 +325,32 @@ def test_the_baseline_covers_exactly_this_corpus() -> None:
     assert sorted(_baseline()["wire"]) == sorted(corpus())
 
 
-def test_no_body_without_foreign_thinking_moves_by_a_byte() -> None:
-    baseline = _baseline()["wire"]
+def test_no_body_without_foreign_thinking_moves_but_for_the_enabled_key() -> None:
+    """7.102.2 removes MCC's own ``thinking.enabled`` and nothing else.
+
+    Every body is byte-identical to v7.102.0 -- except the ones that carried
+    that key, which are byte-identical to v7.102.0's body with the key taken
+    out (``wire_without_thinking_enabled``, recorded at the same commit).
+    Anthropic refused every one of those since 2026-10-08.
+    """
+
+    baseline = _baseline()
+    expected = {**baseline["wire"], **baseline["wire_without_thinking_enabled"]}
     moved = [
-        key for key, body in sorted(bodies().items()) if digest(body) != baseline[key]
+        key for key, body in sorted(bodies().items()) if digest(body) != expected[key]
     ]
 
     assert moved == []
+
+
+def test_the_bodies_that_changed_are_exactly_the_ones_that_leaked() -> None:
+    baseline = _baseline()
+    changed = sorted(
+        key for key, body in bodies().items() if digest(body) != baseline["wire"][key]
+    )
+
+    assert changed == sorted(baseline["wire_without_thinking_enabled"])
+    assert len(changed) == 90
 
 
 def test_the_corpus_holds_nothing_foreign_and_records_no_note() -> None:

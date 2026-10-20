@@ -26,6 +26,13 @@ text-only system messages, and the per-message fields Claude Code 2.1.304 adds
 To refresh: copy this file and ``tests/providers/opencode_family_bodies.py``
 to a base checkout and run it there with
 ``MCC_TOOL_FOLD_BASELINE_WRITE=<path to the baseline>``.
+
+Four entries were re-baselined in 7.102.4, with the user's approval of the
+change they record: ``native_anthropic`` and ``opencode_messages`` of
+``claude_code_2_1_258_recorded`` and of ``every_block``. Each body lost the
+``"enabled": true`` that MCC's own ``ThinkingConfig`` default leaked into the
+client's passed-through ``thinking`` object (15 bytes); putting that one key
+back reproduces the old digest exactly. No other entry moved.
 """
 
 import hashlib

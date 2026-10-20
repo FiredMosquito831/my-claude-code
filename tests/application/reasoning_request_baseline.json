@@ -109,7 +109,6 @@
   "anthropic_messages|client_thinking_adaptive|client": {
     "max_tokens": 4096,
     "thinking": {
-      "enabled": true,
       "type": "adaptive"
     }
   },
