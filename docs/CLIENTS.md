@@ -379,12 +379,12 @@ chat doors (the OpenAI media routes answer it in OpenAI's envelope since 7.95.0)
 A body that does not parse as the door's request (a `messages` that is not a
 list, say, or a content block type MCC does not know) answers `400` on
 `/v1/messages`, `/v1/messages/count_tokens`, `/v1/chat/completions` and
-`/v1/responses` since 7.102.4, in the door's own envelope with
+`/v1/responses` since 7.102.3, in the door's own envelope with
 `invalid_request_error`: the message names each failing field and the reason,
 for example `messages.0.content.1: Input tag 'compaction' found using 'type'
 does not match any of the expected tags: ...` (at most three fields, then
 "and N more"; on the OpenAI doors `param` is the first field). It never repeats
-any part of the request; before 7.102.4 it was a `422` whose `{"detail": [...]}`
+any part of the request; before 7.102.3 it was a `422` whose `{"detail": [...]}`
 list carried the input, which for a conversation was the whole conversation.
 Each refusal also leaves a `REJECTED REQUEST` line in `server.log` (the first
 per client per minute, then a summary) with the door, the field, the reason,
