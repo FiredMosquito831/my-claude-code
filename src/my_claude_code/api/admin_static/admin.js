@@ -22124,7 +22124,12 @@ function renderRequestStatsCards(stats) {
     ["Tokens out", formatAnalyticsNumber(stats.tokens_out || 0)],
     ["Tool calls", formatAnalyticsNumber(stats.tool_calls || 0)],
     ["Turns using tools", formatTurnShare(stats.turns_with_tools, stats.total)],
-    ["Turns with reasoning", formatTurnShare(stats.turns_with_reasoning, stats.total)],
+    // "Visible" since 7.103.0: the counter is the turns whose client saw
+    // thinking text, and a model can think with its text withheld (Claude 5's
+    // default display, a Responses host's encrypted-only reasoning). The
+    // request detail and the Models page tell those apart; this tile counts
+    // only what was shown, exactly as it always did.
+    ["Turns with visible reasoning", formatTurnShare(stats.turns_with_reasoning, stats.total)],
     ["Avg duration", stats.avg_duration_ms != null ? `${stats.avg_duration_ms} ms` : "—"],
     ["p50 duration", stats.p50_duration_ms != null ? `${stats.p50_duration_ms} ms` : "—"],
     ["p95 duration", stats.p95_duration_ms != null ? `${stats.p95_duration_ms} ms` : "—"],

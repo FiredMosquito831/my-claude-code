@@ -792,6 +792,16 @@ class ResponseShape:
     usage_keys: tuple[str, ...] = ()
     first_chunk_ms: int | None = None
     chunks: int = 0
+    #: What the reply said about reasoning beyond its visible text (7.103.0):
+    #: thinking blocks and how many came back with their text withheld,
+    #: redacted blocks, reasoning items and their summary parts, and the
+    #: reasoning tokens the host reported. Counts only. Absent from the
+    #: payload when nothing was counted, so a reply without any of it is
+    #: recorded exactly as before.
+    reasoning: dict[str, int] = field(default_factory=dict)
+    #: Per open thinking block: ``[thinking chars, signature chars]``, keyed by
+    #: the block's index, until its ``content_block_stop``. Never stored.
+    open_thinking: dict[int, list[int]] = field(default_factory=dict)
 
     def note_chunk(self, now: float) -> None:
         """Record that a chunk arrived, timing the first one."""
@@ -807,6 +817,15 @@ class ResponseShape:
     def note_finish(self, reason: object) -> None:
         if isinstance(reason, str) and reason:
             self.finish_reason = reason[:64]
+
+    def count_reasoning(self, name: str, amount: int = 1) -> None:
+        """Count one reasoning structure the reply carried (no text)."""
+        self.reasoning[name] = self.reasoning.get(name, 0) + max(0, amount)
+
+    def note_reasoning_tokens(self, tokens: object) -> None:
+        """Record the reasoning tokens the host reported for this reply."""
+        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
+            self.reasoning["reported_tokens"] = tokens
 
     def note_usage(self, usage: object) -> None:
         """Record which usage keys arrived, never their values."""
@@ -836,6 +855,10 @@ class ResponseShape:
             "usage_keys": list(self.usage_keys),
             "first_chunk_ms": self.first_chunk_ms,
         }
+        if self.reasoning:
+            out["reasoning"] = {
+                name: self.reasoning[name] for name in sorted(self.reasoning)
+            }
         if len(json.dumps(out, default=str)) > RESPONSE_SHAPE_MAX_CHARS:
             out["usage_keys"] = []
             out["_degraded"] = True
