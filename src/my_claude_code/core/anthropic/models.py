@@ -1,6 +1,6 @@
 """Pydantic models for the Anthropic Messages protocol."""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,7 +38,11 @@ class ContentBlockToolUse(_AnthropicBlockBase):
 class ContentBlockToolResult(_AnthropicBlockBase):
     type: Literal["tool_result"]
     tool_use_id: str
-    content: str | list[Any] | dict[str, Any]
+    # Anthropic documents ``content`` as optional: a tool that returned nothing
+    # is answered with no content at all. Absent stays absent -- every dump
+    # that reaches a wire leaves ``None`` out, and every reader of this field
+    # already treats a missing value as the empty result.
+    content: str | list[Any] | dict[str, Any] | None = None
 
 
 class ContentBlockThinking(_AnthropicBlockBase):
@@ -73,28 +77,61 @@ class ContentBlockWebFetchToolResult(_AnthropicBlockBase):
     content: Any
 
 
+class ContentBlockToolAddition(_AnthropicBlockBase):
+    """A tool offered from this point of the conversation onward.
+
+    Anthropic's ``mid-conversation-tool-changes`` beta, which Claude Code
+    2.1.304 sends inside a ``role: "system"`` message whenever its tool set
+    changes (an MCP server connecting late, a resumed session launched with
+    other tools). ``tool`` is a ``tool_reference`` naming a tool, a
+    ``tool_definition`` carrying one by value, or an MCP reference; it is kept
+    as the client sent it, and :mod:`.tool_changes` folds it into ``tools``
+    before any provider sees the request.
+    """
+
+    type: Literal["tool_addition"]
+    tool: dict[str, Any]
+
+
+class ContentBlockToolRemoval(_AnthropicBlockBase):
+    """A tool no longer offered from this point of the conversation onward."""
+
+    type: Literal["tool_removal"]
+    tool: dict[str, Any]
+
+
 class SystemContent(_AnthropicBlockBase):
     type: Literal["text"]
     text: str
 
 
+#: One block of a message's content, chosen by its ``type``. Tagged rather
+#: than tried member by member: every member already declares a distinct
+#: ``Literal`` type, so an accepted block parses into exactly the model it
+#: always did, and an unknown one is ONE error that names the tag
+#: (``Input tag 'x' found using 'type' does not match any of the expected
+#: tags``) instead of one error per member. That sentence is also the one
+#: Claude Code reads to fall back by itself when a block type is refused.
+ContentBlock = Annotated[
+    ContentBlockText
+    | ContentBlockImage
+    | ContentBlockDocument
+    | ContentBlockToolUse
+    | ContentBlockToolResult
+    | ContentBlockThinking
+    | ContentBlockRedactedThinking
+    | ContentBlockServerToolUse
+    | ContentBlockWebSearchToolResult
+    | ContentBlockWebFetchToolResult
+    | ContentBlockToolAddition
+    | ContentBlockToolRemoval,
+    Field(discriminator="type"),
+]
+
+
 class Message(BaseModel):
     role: Literal["user", "assistant", "system"]
-    content: (
-        str
-        | list[
-            ContentBlockText
-            | ContentBlockImage
-            | ContentBlockDocument
-            | ContentBlockToolUse
-            | ContentBlockToolResult
-            | ContentBlockThinking
-            | ContentBlockRedactedThinking
-            | ContentBlockServerToolUse
-            | ContentBlockWebSearchToolResult
-            | ContentBlockWebFetchToolResult
-        ]
-    )
+    content: str | list[ContentBlock]
     reasoning_content: str | None = None
 
 

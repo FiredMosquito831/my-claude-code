@@ -15,12 +15,15 @@ from .errors import (
     anthropic_status_for_error_type,
 )
 from .models import (
+    ContentBlock,
     ContentBlockDocument,
     ContentBlockImage,
     ContentBlockRedactedThinking,
     ContentBlockServerToolUse,
     ContentBlockText,
     ContentBlockThinking,
+    ContentBlockToolAddition,
+    ContentBlockToolRemoval,
     ContentBlockToolResult,
     ContentBlockToolUse,
     ContentBlockWebFetchToolResult,
@@ -53,6 +56,12 @@ from .streaming import (
 )
 from .thinking import ContentChunk, ContentType, ThinkTagParser
 from .tokens import count_text_tokens, get_token_count
+from .tool_changes import (
+    TOOL_CHANGE_BLOCK_TYPES,
+    ToolChangeFold,
+    carries_tool_changes,
+    fold_tool_changes,
+)
 from .tool_result_trimming import (
     TRIM_MARKER_OPEN,
     TRIM_MODE_NAMES,
@@ -67,17 +76,21 @@ from .utils import set_if_not_none
 
 __all__ = [
     "EMPTY_TOOL_CATALOGUE",
+    "TOOL_CHANGE_BLOCK_TYPES",
     "TRIMMABLE_TOOL_NAMES",
     "TRIM_MARKER_OPEN",
     "TRIM_MODE_NAMES",
     "AnthropicStreamLedger",
     "AnthropicToOpenAIConverter",
+    "ContentBlock",
     "ContentBlockDocument",
     "ContentBlockImage",
     "ContentBlockRedactedThinking",
     "ContentBlockServerToolUse",
     "ContentBlockText",
     "ContentBlockThinking",
+    "ContentBlockToolAddition",
+    "ContentBlockToolRemoval",
     "ContentBlockToolResult",
     "ContentBlockToolUse",
     "ContentBlockWebFetchToolResult",
@@ -101,6 +114,7 @@ __all__ = [
     "TokenCountResponse",
     "Tool",
     "ToolBlockState",
+    "ToolChangeFold",
     "ToolResultTrimPolicy",
     "ToolResultTrimReport",
     "TrimMode",
@@ -112,9 +126,11 @@ __all__ = [
     "anthropic_request_snapshot",
     "anthropic_status_for_error_type",
     "build_base_request_body",
+    "carries_tool_changes",
     "count_text_tokens",
     "dump_messages_request",
     "extract_text_from_content",
+    "fold_tool_changes",
     "format_sse_event",
     "get_block_attr",
     "get_block_type",

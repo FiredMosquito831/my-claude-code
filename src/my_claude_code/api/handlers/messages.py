@@ -23,6 +23,7 @@ from my_claude_code.api.request_errors import (
     unexpected_http_exception,
 )
 from my_claude_code.api.request_ids import new_request_id
+from my_claude_code.api.request_tool_changes import fold_request_tool_changes
 from my_claude_code.api.response_streams import (
     EmptyStreamError,
     StreamKeepalive,
@@ -204,6 +205,11 @@ class MessagesHandler:
     ) -> object:
         """Create an Anthropic-compatible message response."""
         request_id = request_id or new_request_id()
+        # First, before anything reads the request: every later step -- the
+        # capture, describe mode, the plan, every attempt of the chain -- sees
+        # the one tool list the conversation's tool changes add up to. A
+        # request without such changes is the same object as before.
+        request_data = fold_request_tool_changes(request_data, request_id=request_id)
         self._trim_tool_results(request_data, request_id=request_id)
         capture = build_capture(
             self._settings,

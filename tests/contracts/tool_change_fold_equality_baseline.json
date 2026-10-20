@@ -1,0 +1,169 @@
+{
+ "_what": "RESUMED-SESSION-422 equality baseline; see the test module.",
+ "_written_on": "0390fffd feat(agents): Install buttons on the Coding agents page, with the plan shown first (7.102.0) (#285)",
+ "cases": {
+  "claude_code_2_1_258_recorded": {
+   "parsed": "sha256:2f78b30a39bc56c3433c185c96acc6857e6fa99f5cb26cc897b8ce86202d6ccc bytes:19535",
+   "parsed_count_tokens": "sha256:39d91c5ea4959825258a94f8eb759e03de1e9efe1f9b8cf492783b2997604e2f bytes:19434",
+   "tokens": "sha256:4dca6e902ba3d8cae51d1bb7746494ac21eee2580bba42e082cf16cb15da3951 bytes:4",
+   "native_anthropic": "sha256:21a273599ae709f37fafa7a6bc907edcc9a7a1b8ca0a8f03d8c6a65b3bbea9fa bytes:19302",
+   "nvidia_nim": "sha256:bf091778ff51a3333d74377546cd3eb913632b342b4ddb9a07a3dea8f85ca327 bytes:19181",
+   "chatgpt_oauth": "sha256:3fd0cb882f275fe4e2f10ba6d7101a75528bd72bfdff9270a8161c9e33e3c9ea bytes:19250",
+   "opencode_chat": "sha256:90d95a8b59953a03fc1fa303653305741dfd880e961f555ec0b671d29682ec97 bytes:19142",
+   "opencode_responses": "sha256:5f375a374abb227dfd225f0b02f0bf85885659b6763b24bb067bb1dfcc44b9e2 bytes:19319",
+   "opencode_messages": "sha256:21a273599ae709f37fafa7a6bc907edcc9a7a1b8ca0a8f03d8c6a65b3bbea9fa bytes:19302"
+  },
+  "zen_claude_code_free": {
+   "parsed": "sha256:3a0195c8aab5d2d4eec0e86572bcdadbeb3e6226376b39c9b0e7d7c5dfa1540b bytes:19074",
+   "parsed_count_tokens": "sha256:3fe8952943b7d7efe1f2979d3777bf6b8b71f160d69c51496982f2fea87e9e62 bytes:18973",
+   "tokens": "sha256:8d7842dbbaa5ece37d719d311ac1feafc1d7347f4baa8b2b813d251f1fd1aa58 bytes:4",
+   "native_anthropic": "sha256:ce9466239b7239bc226ebee1b422a207847fa9bbba01ad2d7a89d70c1c677862 bytes:17468",
+   "nvidia_nim": "sha256:2eef3a794053ba14ba7a9d9cfd390d4e69013cae01565869f3bb792f79f5b1c4 bytes:20566",
+   "chatgpt_oauth": "sha256:d30dba09574b75e7d04472efc63cb00ccc9f2a0e2ceea60920f6e71c17d4c626 bytes:19177",
+   "opencode_chat": "sha256:3f4bd39c124919199edf2b6b019c9be457d6ac0057788dd7d2a02103b646fffa bytes:20487",
+   "opencode_responses": "sha256:fcdfcfa409fdd2d5fbdadfedcc2bc7c0fb337ed6e71ceadaa938404148ef54b5 bytes:19228",
+   "opencode_messages": "sha256:4708b8494aa6c8bd2e35f518efa172ca6e7362f2d883fefa922ba7ee30a0081b bytes:17450"
+  },
+  "zen_sub_request_free": {
+   "parsed": "sha256:a63659dce412367cdefee3f0f9c50e5db8490a92ea3db58ed14a7a2fafcdcb9c bytes:569",
+   "parsed_count_tokens": "sha256:ac07a4ac70ca4f69791dff8a5714db6e05057269fdcf9c813932e52ea5527cad bytes:468",
+   "tokens": "sha256:2858dcd1057d3eae7f7d5f782167e24b61153c01551450a628cee722509f6529 bytes:2",
+   "native_anthropic": "sha256:ecf765f69ffbedb3dc375b2c9f991250ec936de0dc8cb8c2ff4fc7484e76204b bytes:361",
+   "nvidia_nim": "sha256:a857e581c7a90c4a40b8ec35332505f36aa7290970e6e47dfc3329f21f752fe0 bytes:443",
+   "chatgpt_oauth": "sha256:8c12abcdd9127d0867de62dd35da1c05e27237aebae2afa5cac8b6888d1b976b bytes:514",
+   "opencode_chat": "sha256:89bb46c7c2fb9d23b531163affd7fa9dc50db5b107f8e5458e30c94c52ef0689 bytes:364",
+   "opencode_responses": "sha256:b54afc529c58fb1fa69ef74ba8e0b0a547a833c3579a0d2b25f7dc088ee95b3e bytes:583",
+   "opencode_messages": "sha256:b78210159afde7db1ab6b80488af37712c6b292f9df4888e26bd511b504ad311 bytes:361"
+  },
+  "zen_tool_less_free": {
+   "parsed": "sha256:9fd3f721d4bbf53db3e3ffe97b41e4416cbb3b555aee3bba9e1e4e3b4a93c7c3 bytes:438",
+   "parsed_count_tokens": "sha256:6db02acd22bd532568ea8f1f1b4370d0b307b1622d9e2f42ed7de4acaf504164 bytes:337",
+   "tokens": "sha256:c2356069e9d1e79ca924378153cfbbfb4d4416b1f99d41a2940bfdb66c5319db bytes:2",
+   "native_anthropic": "sha256:96adbaafabc6470c132459b782d02194bb1603802e6332b22f4950088085dabf bytes:229",
+   "nvidia_nim": "sha256:5b38c89296a77bc342ae3f141f01b430241877898ef5333d6040008c3a36c22a bytes:282",
+   "chatgpt_oauth": "sha256:57aef95efca821027fba3360f9b66efc74329ca798636f5569ec7ff7ab03c1f0 bytes:366",
+   "opencode_chat": "sha256:a3ee0049abc60ae562aeec826bf23c5be8e6e564bc9b7841c5c23bc8c2daa9a8 bytes:1258",
+   "opencode_responses": "sha256:58c6547b4cc96a53c4fc7cdfbe06bb0d15c0dc96a1f7bc94375189be00341698 bytes:1425",
+   "opencode_messages": "sha256:b904334b31fcffc503973b1de7b7cb6c4044300eaca9cd0c54486c19bf0facff bytes:1139"
+  },
+  "zen_opencode_native": {
+   "parsed": "sha256:3558db8210bf86c0dab1e82d1ca608fb8556adabc6eda2a4757e6dab4e9209d3 bytes:2193",
+   "parsed_count_tokens": "sha256:95bfc2f5cd9bb5f86f5f766d7b4b63f93fcfe1754b27c78fc4c6bc3b6c2a0b7c bytes:2092",
+   "tokens": "sha256:b98880883fd8d975260f1807fa46a5156fcc4cc82bf6d657a417d8bb4e42cd55 bytes:3",
+   "native_anthropic": "sha256:a111c8877606a99dcd7ffa275206f26563bf8bf56704cd2c976e077bb9f18578 bytes:1815",
+   "nvidia_nim": "sha256:7c76ffe043b0cd97c44051f51449a15a466cfc1e2c220bbbab0b5fc904292135 bytes:2193",
+   "chatgpt_oauth": "sha256:83db0a5102983aa514927d0516e97699ea7718e2fdb1ac34c23bef4690af2197 bytes:2092",
+   "opencode_chat": "sha256:7220508cd07c13532564fa281bf4e6bc89b82c68d2bb0df9ddef5a559a986c7c bytes:2114",
+   "opencode_responses": "sha256:afd64331b2668c48309664514d13baf5b2a286e2f5e6308e2796b46df6708312 bytes:2161",
+   "opencode_messages": "sha256:a111c8877606a99dcd7ffa275206f26563bf8bf56704cd2c976e077bb9f18578 bytes:1815"
+  },
+  "catalogue_claude_code": {
+   "parsed": "sha256:42298bd46099b2128a6426d8ed9e8bc499b7d0a122fd5ad9c6623ab9d5f1f178 bytes:76949",
+   "parsed_count_tokens": "sha256:114c8a0cd62777da165aa093965ca88aa51a078e00610c9eb173d1154bd87247 bytes:76848",
+   "tokens": "sha256:942b81c594873467194d95bb4a5d77924a8acf2ba80086a4f1be8ec01ad2781a bytes:5",
+   "native_anthropic": "sha256:06978247c60d92f7687c1f5d3bc2637e6ba3fdc5ea85ecd944fd1a51b000c355 bytes:76261",
+   "nvidia_nim": "sha256:962aee41d0c852bf965bff43376083953235a6490b71c10455db4ec9a9a0ad3d bytes:76049",
+   "chatgpt_oauth": "sha256:c962168690b8131492a16c056c27994d8b983d53c7e11f85a95a64f201dce256 bytes:76318",
+   "opencode_chat": "sha256:fff3e017f0fcec0ee54f368f423e3f82cdbfa344b0cdebbd056a7b75e074c070 bytes:77402",
+   "opencode_responses": "sha256:6ed08187a1127a9ada55c6af4e3790987b75533286635847e4e6b6374dee507f bytes:76365",
+   "opencode_messages": "sha256:d753da74ed36248de56f4f5d2d40110c57e237db908fef07386d59e322588c06 bytes:76239"
+  },
+  "catalogue_codex": {
+   "parsed": "sha256:8a0d63a65540b25672464e97207cc1e77017faa64db97c2a96c6ce4204d2d79f bytes:7679",
+   "parsed_count_tokens": "sha256:0965cd5b793af8df63f6a422ba9c90b43e0e2159e86af8f7b9ce2e4b04497423 bytes:7578",
+   "tokens": "sha256:39fb5bd005525dbf048273aa7453557b0b84c4e99250e6ed8ce5c3370825725f bytes:4",
+   "native_anthropic": "sha256:eb7f8c5dc67e2301106b0e1822a3d259d20efc23f32296fe5777fb6575c42f0e bytes:7387",
+   "nvidia_nim": "sha256:4abd2d0304de14839ea394c57fd364b8d2aa6fc110289ee2139066fccd7a07b0 bytes:7411",
+   "chatgpt_oauth": "sha256:97e149ff0d0dd3616cb8eab2d7612bd98d313a91b4bcfbec629457d787c4a5e4 bytes:7652",
+   "opencode_chat": "sha256:fa73d1553004ef4f6ebc96cbdad300ec45107e060177d741e2cd38737ea01d08 bytes:8353",
+   "opencode_responses": "sha256:90639b29f3c63ba4f4ab01259dd860ba95d6a9e0beb65adcf452c1ea0806b15e bytes:8442",
+   "opencode_messages": "sha256:523bc14256b73c3138d2e89207bd71b1315a756128db03c8bd98479e9d77539e bytes:8060"
+  },
+  "catalogue_gemini_cli": {
+   "parsed": "sha256:4b732c653daed240d3f1d88380854f5f269076e6341f04a787e51e444ec5d85d bytes:7302",
+   "parsed_count_tokens": "sha256:b3a4038510b751ed2a07af4bb4ac412f194783f3f13ff602ce0842531d30e429 bytes:7201",
+   "tokens": "sha256:3ef4ba73834a4409affdc4f09899d57af3f9c201946d624705e5753bd88d3e89 bytes:4",
+   "native_anthropic": "sha256:5b94085ef52d71b2164518f6511ea46019cfa959f2cc55d05a640201775f03ba bytes:7010",
+   "nvidia_nim": "sha256:c74727775c31b82c1efcdb700de4cd80cb262b0749f3174721341bd43a509e81 bytes:7295",
+   "chatgpt_oauth": "sha256:d26c60e0401e9225264c40b345a7cfd2fa2bb802983ec1eff774db53230898af bytes:7275",
+   "opencode_chat": "sha256:77594da2cf1bda68fc87e9616c5647a7d43cf6e09a32ad3bfd9306aaafc78f5c bytes:7870",
+   "opencode_responses": "sha256:b2ece545f1c1daefdcc1827d7f9769b8b1361a6c8afae8a011840bfc324ae9bf bytes:7972",
+   "opencode_messages": "sha256:5b05c43ea2e32239e481723938111f8284ecdbd746b93c102e6d528edc38efd7 bytes:7606"
+  },
+  "catalogue_opencode": {
+   "parsed": "sha256:b67a0575eda6c4a4de66bf2d221f48d2786cc63e3cc8a2efc0d27e8375a53a8e bytes:9699",
+   "parsed_count_tokens": "sha256:a816a1d4c4000a38f435626ee65738433c2ca290e2be3a58e5fa95c95d16ef43 bytes:9598",
+   "tokens": "sha256:05c8bd5d4dcdb18b690e160fd7a5c5190ee9ce7eb565d88f8e7b1f81b5f25bf6 bytes:4",
+   "native_anthropic": "sha256:e5217e4049c1b32897300a315b519ef22e93be3027df34690c5c8ea4eed426df bytes:9383",
+   "nvidia_nim": "sha256:be58144d0a92f09a12dedb902429e718cfc7f66ed0f0ad8a6e3411deb13d750d bytes:9726",
+   "chatgpt_oauth": "sha256:899796dfa10f40d22c0b4b4ac65912ea96ccdba295ce2995f952d0a1245cb4dd bytes:9680",
+   "opencode_chat": "sha256:0121398fea55eeb8509f8a099c0d1bfffca1de2820330cc5590bcce9daa2d37f bytes:9647",
+   "opencode_responses": "sha256:a3b0968b421fc965e97f0b83244e9142d60b119b44d724ae7f693d3cc399c140 bytes:9749",
+   "opencode_messages": "sha256:e5217e4049c1b32897300a315b519ef22e93be3027df34690c5c8ea4eed426df bytes:9383"
+  },
+  "catalogue_opencode2": {
+   "parsed": "sha256:c78979bf14ba5c081d30e2cc4708f0197272ff046043ec40fd0bb5116f8d2573 bytes:10358",
+   "parsed_count_tokens": "sha256:dd4b6963a407ade61f18dd24eeee66c9648d30055b4082ab13785a1107cdb948 bytes:10257",
+   "tokens": "sha256:899b9a314067a23557b5db9b87d3e599e2f3200bd69b6cdc6dcf08f8b8e40e2e bytes:4",
+   "native_anthropic": "sha256:3532d2aaa669ec911430c7701134c35c5dfd142beddf74e6d99eaf92ccdb9e5b bytes:10018",
+   "nvidia_nim": "sha256:140c5dd72c0cff0179d707f5452c88bb8cfef1fc6afa44a89fd714d2b8c29737 bytes:10013",
+   "chatgpt_oauth": "sha256:15fd2a1ef28d2136050cff6e373d17de76cdd01b915468d023911401a663613c bytes:10347",
+   "opencode_chat": "sha256:fe26a1bb7d51ffa23462ff53e86b703aaea5c82c5fa691e5c1b790a6a6ebc1f7 bytes:10339",
+   "opencode_responses": "sha256:cea511fccf2a6b95c26566266e76252b84234c7c6f1b880412c3a214af28d1ba bytes:10415",
+   "opencode_messages": "sha256:d0eb5c27cf04146d2c98bab9f076a21a19afdbd0936454ded22a3af29f427bb9 bytes:10017"
+  },
+  "catalogue_pi": {
+   "parsed": "sha256:cc237b97bd167c23de366591d330c3de84f7624b3130cb1624a2e163cbee26d3 bytes:3174",
+   "parsed_count_tokens": "sha256:fbb3cd12c585022c15b36d751d0d7123355f254c66223ab92926c66351d49987 bytes:3073",
+   "tokens": "sha256:5f128c8385e577cd1539a0e5a758e4004f4b97e5986b00fb17d393a5ee5ed85d bytes:3",
+   "native_anthropic": "sha256:f9a15c219affc947a5c72afbd72d9cc20569b13ee8858423e1fe4bb3014243f6 bytes:2930",
+   "nvidia_nim": "sha256:3a2cd17f36a5dff7b5149f88c4f1529c385810800a3a2f8e8101af38bb4ff795 bytes:3099",
+   "chatgpt_oauth": "sha256:d32da6b3ed4a5a2368cb52413f87cf53dc704792640b3247233f4d7084f8c74e bytes:3131",
+   "opencode_chat": "sha256:902bcc5ab718a1c5c06caf2b1d75205357c9490ed850f12db2a8542a15e35736 bytes:3020",
+   "opencode_responses": "sha256:469cfe004fcb4f255a448844eb0504dffc4fabe7f586b48d7468b5f2151e1ecc bytes:3200",
+   "opencode_messages": "sha256:f9a15c219affc947a5c72afbd72d9cc20569b13ee8858423e1fe4bb3014243f6 bytes:2930"
+  },
+  "catalogue_qwen_code": {
+   "parsed": "sha256:18055ab8778291a0c84215426af4d944ff9fab94b4bea04edc5bd44dc99f4f97 bytes:10829",
+   "parsed_count_tokens": "sha256:ea3cb45bd863cd1413a7f1cbfb3eef6bf1a69138c8de52ff368b3c1d1e8f6d0e bytes:10728",
+   "tokens": "sha256:f40ddf6742b7761b0f7df1f65a639c4fccc23479c5c4c984885ff588f1dfeb0e bytes:4",
+   "native_anthropic": "sha256:90a4627accbf1711ca6f532c1fd5bcdd956596b09ec809fd54afa2c96ea20962 bytes:10525",
+   "nvidia_nim": "sha256:a17d5a81d98a0684f5ae5b8ed9412a217718ad3fb07db6ad087d52c5a6c52955 bytes:10607",
+   "chatgpt_oauth": "sha256:555786b27051c27d1923e494758aa6fab5ddb8caf2fa619cd198b040ebc40a9c bytes:10806",
+   "opencode_chat": "sha256:4a69c6603aa0dd06778ae1f734f9b5002600e666922feb6738aeaec0a0ae5b93 bytes:11414",
+   "opencode_responses": "sha256:6d767ebc98f4c59b5926918c014498bd644d7fd63b1fbd4b1c96fe9614b61dbf bytes:11503",
+   "opencode_messages": "sha256:d5d2d063d7988722733027c5f27ec9eab6d5a4c376c30e07ba27502347bfa6ca bytes:11121"
+  },
+  "every_block": {
+   "parsed": "sha256:fb8e469f17eeab010c5c983c58be1424ffcac78759856e892f4d2e98f048a192 bytes:2591",
+   "parsed_count_tokens": "sha256:07d38d93ba7ec5f8999cd0187e92d76109a82b159c20d12cadefa5963dbbe628 bytes:2506",
+   "tokens": "sha256:5d8f6cce532a7aeb57196be62344095936793400b3aeb3580d248b17d5518a86 bytes:3",
+   "native_anthropic": "sha256:d6031925d8558fba38bc454a09dfcf8986e975db9612d79d78c7d8086817989a bytes:2258",
+   "nvidia_nim": "sha256:3b29936b09c50f2075f09c87eb0c2eaa5a5e845976717c6bc4631da534bf8339 bytes:1900",
+   "chatgpt_oauth": "sha256:67aa2734991ffc94b265380d93b7c4c606f2d278b7ef99fcd5f230539488ce5e bytes:1941",
+   "opencode_chat": "sha256:582fb52aad1a39fc110d6bf68814d7c65569bde17fb9e1c659961f36f93c238e bytes:1821",
+   "opencode_responses": "sha256:d416a15782393e329d817435463d4c6186515a76231ea232c495ab4207a449f5 bytes:2010",
+   "opencode_messages": "sha256:26df75e8d4a4019618dbc9d5df0d131743da6776af4e2cb65bfd1db18678df06 bytes:2258"
+  },
+  "server_tool_blocks": {
+   "parsed": "sha256:bfcd90dca1731b5b2d04244b3efa7615aa3d4d01674af362f891e4480bf3e8b8 bytes:1033",
+   "parsed_count_tokens": "sha256:5c6a8e33d8ca23fdd8121dabfa5af9df88c57d717a2e9eec6c7acf695ec11603 bytes:932",
+   "tokens": "sha256:f8809aff4d69bece79dabe35be0c708b890d7eafb841f121330667b77d2e2590 bytes:3",
+   "native_anthropic": "sha256:36d959c30b884f00187d03701e5647f5acc782c5995f5757575b2d39b4225a37 bytes:761",
+   "nvidia_nim": "sha256:c51eae363e8154d5a392a0b1f80409b9f2f4f1c7808630ac57b01c415426d7a6 bytes:189",
+   "chatgpt_oauth": "sha256:c51eae363e8154d5a392a0b1f80409b9f2f4f1c7808630ac57b01c415426d7a6 bytes:189",
+   "opencode": "sha256:c51eae363e8154d5a392a0b1f80409b9f2f4f1c7808630ac57b01c415426d7a6 bytes:189"
+  },
+  "resumed_without_tool_changes": {
+   "parsed": "sha256:54c4fc3106ebd4491b059f11a8675610f0bface1f6e4c9c46e849c08c22835b2 bytes:1665",
+   "parsed_count_tokens": "sha256:35ef813d233461dd46838095c7941f8913288d9434c5b2694438d8c0f37c6d10 bytes:1564",
+   "tokens": "sha256:9b871512327c09ce91dd649b3f96a63b7408ef267c8cc5710114e629730cb61f bytes:3",
+   "native_anthropic": "sha256:97e2e61e61fb419fc5b17f35110256fa582ce68bfe0c0e374fbedf4f1b4601e0 bytes:1292",
+   "nvidia_nim": "sha256:8ecc2e9b2bd67489f56eccd9b98efc7d42c29b1ed17bece9d74aaad9f94dfe40 bytes:1288",
+   "chatgpt_oauth": "sha256:2f31e3f980d06cc4a36d403a5c04b9d4f41e6e5a2eeb88526c1ac54416df79a2 bytes:1288",
+   "opencode_chat": "sha256:f351c55d46593b5fd1e239406eab655e83318c604b52c9519bd285ebd012ea72 bytes:1209",
+   "opencode_responses": "sha256:6f2d935c167a92bd18f498cdadeb629215c41fdf19b037ded34f9442c68ed681 bytes:1357",
+   "opencode_messages": "sha256:8f37533ed6d7019bb40561c5f4938af24f61febcea45f81501ed180c02b2340d bytes:1292"
+  }
+ }
+}
