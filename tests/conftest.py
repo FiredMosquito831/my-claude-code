@@ -203,6 +203,23 @@ def _reset_rejected_client_tracker():
 
 
 @pytest.fixture(autouse=True)
+def _reset_rejected_request_tracker():
+    """No test may inherit another test's refused-body client memory.
+
+    ``RejectedRequestTracker`` (RESUMED-SESSION-422) is process-wide like the
+    401 tracker above: a test whose refusal must log a WARNING must not find
+    its client already "seen" because an earlier test in the same worker sent
+    a bad body from the same test client.
+    """
+
+    from my_claude_code.api.rejected_request_log import rejected_request_tracker
+
+    rejected_request_tracker().reset()
+    yield
+    rejected_request_tracker().reset()
+
+
+@pytest.fixture(autouse=True)
 def _reset_agent_install_jobs():
     """7.102.0: the Install button's runner keeps one job and two caches.
 
