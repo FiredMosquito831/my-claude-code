@@ -244,6 +244,13 @@ def test_every_pre_adaptive_preference_is_byte_identical(
     request path the gate still decides whether that field is sent at all --
     which is what ``tests/application/test_reasoning_wire_table.py`` covers.
     The other 315 cells, every other provider included, did not move.
+
+    One ``anthropic_messages`` cell was re-baselined in 7.102.4, with the
+    user's approval: ``client_thinking_adaptive|client`` lost the
+    ``"enabled": true`` that MCC's own ``ThinkingConfig`` default leaked into
+    the client's passed-through ``thinking`` object. Anthropic's ``thinking``
+    has no such key and refused every such body from 2026-10-08 on. Only that
+    key moved; every other cell is as it was.
     """
 
     overrides = CLIENT_REQUESTS[shape]

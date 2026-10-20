@@ -18,6 +18,14 @@ here even though no preference was set.
 
 A diff in this file means the equality contract is broken and the PR must be
 re-cut. It is not a file to regenerate.
+
+One cell was deliberately re-baselined in 7.102.4, with the user's approval:
+``anthropic_messages/client_thinking_ask/client_default`` lost the
+``"enabled": true`` that MCC's own ``ThinkingConfig`` default leaked into a
+passed-through ``thinking`` object. No variant of Anthropic's ``thinking``
+has that key and Anthropic refused every such body from 2026-10-08 on
+(``Extra inputs are not permitted``). Nothing else in that cell, and no other
+cell, moved.
 """
 
 import json

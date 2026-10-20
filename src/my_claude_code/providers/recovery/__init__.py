@@ -79,6 +79,7 @@ from .output_cap import (
 )
 from .reasoning_reject import (
     clone_body_without_reasoning_field,
+    complaint_is_about_the_body,
     rejected_reasoning_field,
 )
 from .responses_refusals import (
@@ -206,6 +207,7 @@ __all__ = [
     "clone_body_without_reasoning_field",
     "clone_body_without_tool_choice",
     "complaint_evidence_snippet",
+    "complaint_is_about_the_body",
     "describe_removals",
     "effective_tools_max_count",
     "forced_tool_names",

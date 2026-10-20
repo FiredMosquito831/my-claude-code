@@ -6,12 +6,12 @@
    "parsed": "sha256:2f78b30a39bc56c3433c185c96acc6857e6fa99f5cb26cc897b8ce86202d6ccc bytes:19535",
    "parsed_count_tokens": "sha256:39d91c5ea4959825258a94f8eb759e03de1e9efe1f9b8cf492783b2997604e2f bytes:19434",
    "tokens": "sha256:4dca6e902ba3d8cae51d1bb7746494ac21eee2580bba42e082cf16cb15da3951 bytes:4",
-   "native_anthropic": "sha256:21a273599ae709f37fafa7a6bc907edcc9a7a1b8ca0a8f03d8c6a65b3bbea9fa bytes:19302",
+   "native_anthropic": "sha256:18e589ce89788a3859a631e93716aaa147b882d218129c3255ead514f7e68fba bytes:19287",
    "nvidia_nim": "sha256:bf091778ff51a3333d74377546cd3eb913632b342b4ddb9a07a3dea8f85ca327 bytes:19181",
    "chatgpt_oauth": "sha256:3fd0cb882f275fe4e2f10ba6d7101a75528bd72bfdff9270a8161c9e33e3c9ea bytes:19250",
    "opencode_chat": "sha256:90d95a8b59953a03fc1fa303653305741dfd880e961f555ec0b671d29682ec97 bytes:19142",
    "opencode_responses": "sha256:5f375a374abb227dfd225f0b02f0bf85885659b6763b24bb067bb1dfcc44b9e2 bytes:19319",
-   "opencode_messages": "sha256:21a273599ae709f37fafa7a6bc907edcc9a7a1b8ca0a8f03d8c6a65b3bbea9fa bytes:19302"
+   "opencode_messages": "sha256:18e589ce89788a3859a631e93716aaa147b882d218129c3255ead514f7e68fba bytes:19287"
   },
   "zen_claude_code_free": {
    "parsed": "sha256:3a0195c8aab5d2d4eec0e86572bcdadbeb3e6226376b39c9b0e7d7c5dfa1540b bytes:19074",
@@ -138,12 +138,12 @@
    "parsed": "sha256:fb8e469f17eeab010c5c983c58be1424ffcac78759856e892f4d2e98f048a192 bytes:2591",
    "parsed_count_tokens": "sha256:07d38d93ba7ec5f8999cd0187e92d76109a82b159c20d12cadefa5963dbbe628 bytes:2506",
    "tokens": "sha256:5d8f6cce532a7aeb57196be62344095936793400b3aeb3580d248b17d5518a86 bytes:3",
-   "native_anthropic": "sha256:d6031925d8558fba38bc454a09dfcf8986e975db9612d79d78c7d8086817989a bytes:2258",
+   "native_anthropic": "sha256:2f9e566205848dc9df4fdcc2f5496be11ca696eb2fe8eb8a0cc95af89021a7c0 bytes:2243",
    "nvidia_nim": "sha256:3b29936b09c50f2075f09c87eb0c2eaa5a5e845976717c6bc4631da534bf8339 bytes:1900",
    "chatgpt_oauth": "sha256:67aa2734991ffc94b265380d93b7c4c606f2d278b7ef99fcd5f230539488ce5e bytes:1941",
    "opencode_chat": "sha256:582fb52aad1a39fc110d6bf68814d7c65569bde17fb9e1c659961f36f93c238e bytes:1821",
    "opencode_responses": "sha256:d416a15782393e329d817435463d4c6186515a76231ea232c495ab4207a449f5 bytes:2010",
-   "opencode_messages": "sha256:26df75e8d4a4019618dbc9d5df0d131743da6776af4e2cb65bfd1db18678df06 bytes:2258"
+   "opencode_messages": "sha256:ac79f31b326bba23fcd2e4daf8cda8a13333e1919c5e558d15683bf970fbd032 bytes:2243"
   },
   "server_tool_blocks": {
    "parsed": "sha256:bfcd90dca1731b5b2d04244b3efa7615aa3d4d01674af362f891e4480bf3e8b8 bytes:1033",

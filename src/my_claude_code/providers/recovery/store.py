@@ -66,6 +66,11 @@ from .facts import (
     utc_now_iso,
 )
 from .memory import RecoveryMemory
+from .reasoning_reject import complaint_is_about_the_body
+
+#: The reasoning field of the Anthropic Messages dialect, as its learner
+#: records it in a fact's ``detail``.
+_ANTHROPIC_THINKING_FIELD = "thinking"
 
 #: How long a burst of newly learned facts is allowed to coalesce before the
 #: document is rewritten. A learned fact must never make a request wait on a
@@ -154,6 +159,7 @@ class LearnedFactStore:
         dropped = 0
         superseded_rows = 0
         unknown_kinds: set[str] = set()
+        about_the_body: list[str] = []
         for row in rows:
             fact = fact_from_row(row)
             if fact is None:
@@ -166,7 +172,21 @@ class LearnedFactStore:
             if fact.fact_kind in superseded:
                 superseded_rows += 1
                 continue
+            if _learned_from_the_body(fact):
+                about_the_body.append(f"{fact.provider_id}/{fact.model_id}")
+                continue
             self._facts[fact.key] = fact
+        if about_the_body:
+            # Rewritten without them at the next flush -- at the latest the
+            # one ``close`` runs -- like any other change to the store.
+            self._dirty = True
+            logger.info(
+                "LEARNED FACTS: forgot {} reasoning refusal(s) learned from a 400 "
+                "that faulted the request body, not the model ({}); the model "
+                "never refused it",
+                len(about_the_body),
+                ", ".join(sorted(about_the_body)),
+            )
         if superseded_rows:
             logger.info(
                 "LEARNED FACTS: document is version {} (this build writes {}); "
@@ -623,6 +643,29 @@ class LearnedFactStore:
             memory.responses_tool_choice_auto_only.clear()
             memory.responses_tool_schema_keywords.clear()
             self._populate_memory(provider_id, memory)
+
+
+def _learned_from_the_body(fact: LearnedFact) -> bool:
+    """A reasoning refusal whose own evidence shows the 400 faulted the body.
+
+    Before 7.102.2 the strip rung's acceptance remembered any 400 that named
+    the field's word. ``anthropic_oauth / claude-haiku-5-5`` "rejects
+    ``thinking``" was learned that way, from ``thinking.adaptive.enabled:
+    Extra inputs are not permitted`` -- a key MCC itself put in the object.
+    The learner no longer writes such a fact, and this forgets the ones it
+    already wrote, keyed on the reason the row itself records: no user step,
+    and a refusal learned from the model's own words is kept.
+
+    Scoped to :data:`_ANTHROPIC_THINKING_FIELD`, the one field the tightened
+    learner (the Anthropic Messages family's) owns: a fact another family's
+    learner wrote is never touched here.
+    """
+
+    return (
+        fact.fact_kind == FACT_REASONING_FIELD_REJECTED
+        and fact.detail == _ANTHROPIC_THINKING_FIELD
+        and complaint_is_about_the_body(fact.evidence, fact.detail)
+    )
 
 
 def _document_of(facts: tuple[LearnedFact, ...]) -> dict[str, Any]:

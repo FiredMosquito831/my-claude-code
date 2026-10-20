@@ -145,7 +145,6 @@
     "stream": true,
     "thinking": {
       "budget_tokens": 8192,
-      "enabled": true,
       "type": "enabled"
     },
     "tools": [
