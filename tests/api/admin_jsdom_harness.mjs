@@ -2998,6 +2998,129 @@ const ROUTES = {
     thinking_chars: 18800,
     tool_call_count: null,
   },
+  /* 7.103.0: the four answers to "did it think". Anthropic thinking with its
+     text withheld (Claude 5's default display): no visible chars, a signed
+     empty block, the host's reported thinking tokens. */
+  "/admin/api/requests/req-withheld": {
+    id: "req-withheld",
+    harness: "claude",
+    headers: {},
+    ts_iso: "2026-10-20T13:20:24Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "anthropic_oauth",
+    requested_model: "claude-haiku-5-5",
+    resolved_model: "claude-haiku-5-5",
+    status: "success",
+    tokens_in: 12,
+    tokens_out: 600,
+    output_chars: 17,
+    thinking_chars: 0,
+    reasoning_tokens: 511,
+    route_attempts: [
+      {
+        attempt: 0,
+        model_ref: "anthropic_oauth/claude-haiku-5-5",
+        outcome: "succeeded",
+        params: {
+          response_shape: {
+            fields: {
+              thinking: { deltas: 1, chars: 0 },
+              signature: { deltas: 1, chars: 2872 },
+              content: { deltas: 1, chars: 17 },
+            },
+            chunks: 9,
+            finish_reason: "end_turn",
+            usage: true,
+            usage_keys: ["output_tokens", "output_tokens_details"],
+            first_chunk_ms: 900,
+            reasoning: {
+              reported_tokens: 511,
+              thinking_blocks: 1,
+              withheld_thinking_blocks: 1,
+            },
+          },
+        },
+      },
+    ],
+  },
+  /* A Responses host that reasoned and returned only encrypted content. */
+  "/admin/api/requests/req-encrypted": {
+    id: "req-encrypted",
+    harness: "claude",
+    headers: {},
+    ts_iso: "2026-10-20T13:21:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "opencode",
+    requested_model: "claude-sonnet-5",
+    resolved_model: "muse-spark-1.3-contributor-free",
+    status: "success",
+    tokens_in: 12,
+    tokens_out: 80,
+    output_chars: 40,
+    thinking_chars: 0,
+    reasoning_tokens: null,
+    route_attempts: [
+      {
+        attempt: 0,
+        model_ref: "opencode/muse-spark-1.3-contributor-free",
+        outcome: "succeeded",
+        params: {
+          response_shape: {
+            fields: { content: { deltas: 3, chars: 40 } },
+            chunks: 12,
+            finish_reason: "completed",
+            usage: true,
+            usage_keys: ["input_tokens", "output_tokens"],
+            first_chunk_ms: 400,
+            reasoning: {
+              encrypted_only_items: 1,
+              reasoning_items: 1,
+              summary_parts: 0,
+              summary_parts_with_text: 0,
+            },
+          },
+        },
+      },
+    ],
+  },
+  /* The host reported 0 reasoning tokens. */
+  "/admin/api/requests/req-did-not-think": {
+    id: "req-did-not-think",
+    harness: "claude",
+    headers: {},
+    ts_iso: "2026-10-20T13:22:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "anthropic_oauth",
+    requested_model: "claude-haiku-5-5",
+    resolved_model: "claude-haiku-5-5",
+    status: "success",
+    tokens_in: 12,
+    tokens_out: 30,
+    output_chars: 60,
+    thinking_chars: 0,
+    reasoning_tokens: 0,
+  },
+  /* Nothing measured: no shape, no reported count. */
+  "/admin/api/requests/req-unmeasured": {
+    id: "req-unmeasured",
+    harness: "claude",
+    headers: {},
+    ts_iso: "2026-10-20T13:23:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "custom_agnes",
+    requested_model: "claude-sonnet-5",
+    resolved_model: "custom_agnes/agnes-3.0-flash",
+    status: "success",
+    tokens_in: 12,
+    tokens_out: 30,
+    output_chars: 60,
+    thinking_chars: 0,
+    reasoning_tokens: null,
+  },
   "/admin/api/requests/req-cancelled": {
     id: "req-cancelled",
     harness: "claude",
@@ -11798,6 +11921,40 @@ const successViews = {};
     doc.querySelectorAll("#reqDetailMeta dt"),
   ).map((el) => el.textContent);
   window.eval("closeRequestDetail()");
+
+  // --- 7.103.0: the "Thinking" line's four answers, through the real loader
+  const thinkingLine = () => {
+    const dts = Array.from(doc.querySelectorAll("#reqDetailMeta dt"));
+    const dt = dts.find((el) => el.textContent === "Thinking");
+    return dt && dt.nextElementSibling ? dt.nextElementSibling.textContent : null;
+  };
+  successViews.thinking = {};
+  for (const id of [
+    "req-thought",
+    "req-withheld",
+    "req-encrypted",
+    "req-did-not-think",
+    "req-unmeasured",
+    "req-cancelled",
+  ]) {
+    await window.eval(`openRequestDetail(${JSON.stringify(id)})`);
+    await settle();
+    successViews.thinking[id] = thinkingLine();
+    if (id === "req-withheld") {
+      successViews.withheldShape = Array.from(
+        doc.querySelectorAll("#reqDetailWire .req-shape-grid dt"),
+      ).map((dt) => [dt.textContent, dt.nextElementSibling.textContent]);
+    }
+    window.eval("closeRequestDetail()");
+  }
+  successViews.outcomeTails = [
+    window.eval(
+      'reasoningOutcomeTail({attempts: 12, requested: 12, returned: 12, withheld: 0, no_thinking: 0})',
+    ),
+    window.eval(
+      'reasoningOutcomeTail({attempts: 10, requested: 10, returned: 2, withheld: 6, no_thinking: 1})',
+    ),
+  ];
 
   // --- the panel and the card note, through the page's own load
   const readPanel = () => ({

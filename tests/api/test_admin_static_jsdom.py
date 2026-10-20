@@ -7063,6 +7063,53 @@ def test_jsdom_the_modal_names_it_in_a_line_and_a_sentence(rendered) -> None:
     assert "No answer" not in views["cancelledModalLabels"]
 
 
+def test_jsdom_the_thinking_line_tells_withheld_from_absent(rendered) -> None:
+    """7.103.0: "no thinking text" is four different answers, never one."""
+
+    thinking = rendered["successViews"]["thinking"]
+
+    assert thinking["req-thought"] == "thinking shown (18,800 chars)"
+    assert thinking["req-withheld"] == (
+        "thought — text withheld by the provider (≈511 reasoning tokens reported)"
+    )
+    assert thinking["req-encrypted"] == (
+        "thought — no summary sent; text withheld by the provider"
+    )
+    assert thinking["req-did-not-think"] == (
+        "did not think (the provider reported 0 reasoning tokens)"
+    )
+    assert thinking["req-unmeasured"] == "not measured"
+    # Only an answered request has a line at all.
+    assert thinking["req-cancelled"] is None
+
+
+def test_jsdom_the_shape_pane_lists_what_the_reply_said_about_reasoning(
+    rendered,
+) -> None:
+    rows = dict(rendered["successViews"]["withheldShape"])
+
+    assert rows["thinking blocks"] == "1"
+    assert rows["thinking blocks, text withheld"] == "1"
+    assert rows["reasoning tokens (reported)"] == "511"
+    assert rows["signature"] == "1 deltas, 2,872 chars"
+
+
+def test_jsdom_the_models_chip_adds_the_split_only_when_it_is_known(rendered) -> None:
+    unchanged, split = rendered["successViews"]["outcomeTails"]
+
+    assert unchanged == ""
+    assert split == (
+        ", thought with text withheld 6/10, did not think 1/10, not measured 1/10"
+    )
+
+
+def test_jsdom_the_reasoning_tile_counts_visible_reasoning(rendered) -> None:
+    labels = [row[1] for row in rendered["requestCards"]]
+
+    assert "Turns with visible reasoning" in labels
+    assert "Turns with reasoning" not in labels
+
+
 def test_jsdom_the_page_load_asks_for_the_breakdown_with_its_filters(
     rendered,
 ) -> None:
