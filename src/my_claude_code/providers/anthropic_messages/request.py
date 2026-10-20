@@ -1,5 +1,6 @@
 """Native Anthropic Messages request serialization for upstream providers."""
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -33,17 +34,42 @@ _CANONICAL_FIELDS = frozenset(
     }
 )
 
+#: The ``params.wire`` key recording that thinking another model wrote was
+#: left out of the body sent to an Anthropic-protocol host. Counts only, never
+#: text -- the rule ``history_thinking_omitted`` keeps on the Responses
+#: surface. Deliberately not spelled ``thinking_*``: the wire recorder reads
+#: any key with that prefix as a reasoning *instruction* (``is_reasoning_key``),
+#: and a note about the history would then count as reasoning sent.
+FOREIGN_THINKING_DROPPED = "foreign_thinking_dropped"
+
 
 def build_anthropic_messages_body(
     request: MessagesRequest,
     *,
     reasoning: ReasoningPolicy,
+    wire_notes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build one native Messages request without exposing FCC-only fields."""
+    """Build one native Messages request without exposing FCC-only fields.
+
+    ``wire_notes`` is a caller's mapping to receive what this build took out
+    of the client's history -- ``foreign_thinking_dropped``, counts only -- so
+    the sender records it beside the body it describes. Left untouched when
+    nothing was removed.
+    """
     body = request.model_dump(exclude_none=True)
     for field in _INTERNAL_FIELDS:
         body.pop(field, None)
-    body["messages"] = [_native_message(message) for message in request.messages]
+    messages, dropped_blocks, dropped_chars = drop_foreign_thinking(
+        [_native_message(message) for message in request.messages]
+    )
+    body["messages"] = messages
+    if dropped_blocks and wire_notes is not None:
+        noun = "block" if dropped_blocks == 1 else "blocks"
+        wire_notes[FOREIGN_THINKING_DROPPED] = (
+            f"dropped {dropped_blocks} thinking {noun} ({dropped_chars:,} chars) "
+            "made by other models from earlier turns; Anthropic accepts only its "
+            "own signed thinking"
+        )
     body["stream"] = True
     if body.get("max_tokens") is None:
         # The operator's last resort, reached only when routing never bound
@@ -78,6 +104,89 @@ def _native_content(content: Any) -> Any:
         }
         for block in content
     ]
+
+
+def drop_foreign_thinking(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Drop, from assistant turns, the thinking Anthropic did not write.
+
+    Returns ``(messages, dropped_blocks, dropped_chars)``. Two kinds of block
+    are provably not Anthropic's, and Anthropic answers a 400 for either:
+
+    * a ``thinking`` block whose ``signature`` is absent, not a string, or
+      blank. Anthropic signs every thinking block it mints; MCC opens the
+      thinking of every other model with no signature at all, and Claude Code
+      replays that as ``signature: ""``. A stream cut before its
+      ``signature_delta`` lands here too, and is refused just the same;
+    * a ``redacted_thinking`` block whose ``data`` is a JSON object or array.
+      That is MCC's own wrapper for an OpenRouter-dialect reasoning detail;
+      Anthropic's ``data`` is opaque ciphertext and never parses as one.
+
+    Everything else is kept in its order, every non-blank signature included:
+    a signature that is not Anthropic's cannot be told from one that is, and
+    an unclassifiable block is kept. User turns are never read. An assistant
+    turn left with no blocks is omitted -- it held only thinking, so no
+    ``tool_result`` can reference it, and the Messages API combines the two
+    turns either side of it into one.
+
+    A pure function of the history, so the trimmed prefix is the same on every
+    later turn and the prompt cache stays byte-stable. When nothing matches,
+    the very list it was given comes back, so the body is byte-identical.
+    """
+
+    kept: list[dict[str, Any]] | None = None
+    dropped_blocks = 0
+    dropped_chars = 0
+    for index, message in enumerate(messages):
+        content = message.get("content")
+        foreign: list[Any] = []
+        remaining: list[Any] = []
+        if message.get("role") == "assistant" and isinstance(content, list):
+            for block in content:
+                (foreign if _is_foreign_thinking(block) else remaining).append(block)
+        if not foreign:
+            if kept is not None:
+                kept.append(message)
+            continue
+        if kept is None:
+            kept = list(messages[:index])
+        dropped_blocks += len(foreign)
+        dropped_chars += sum(_thinking_chars(block) for block in foreign)
+        if remaining:
+            kept.append({**message, "content": remaining})
+    if kept is None:
+        return messages, 0, 0
+    return kept, dropped_blocks, dropped_chars
+
+
+def _is_foreign_thinking(block: Any) -> bool:
+    if not isinstance(block, dict):
+        return False
+    kind = block.get("type")
+    if kind == "thinking":
+        signature = block.get("signature")
+        return not isinstance(signature, str) or not signature.strip()
+    if kind == "redacted_thinking":
+        return _is_json_container(block.get("data"))
+    return False
+
+
+def _is_json_container(data: Any) -> bool:
+    """Whether ``data`` is a JSON object or array -- never Anthropic ciphertext."""
+
+    if not isinstance(data, str) or data.lstrip()[:1] not in {"{", "["}:
+        return False
+    try:
+        parsed = json.loads(data)
+    except ValueError, RecursionError:
+        return False
+    return isinstance(parsed, dict | list)
+
+
+def _thinking_chars(block: dict[str, Any]) -> int:
+    text = block.get("thinking" if block.get("type") == "thinking" else "data")
+    return len(text) if isinstance(text, str) else 0
 
 
 def _apply_reasoning(

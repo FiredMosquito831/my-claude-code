@@ -441,7 +441,12 @@ class AnthropicMessagesProvider(BaseProvider):
     ) -> AsyncIterator[str]:
         tag = self._provider_name
         req_tag = f" request_id={request_id}" if request_id else ""
-        body = build_anthropic_messages_body(request, reasoning=reasoning)
+        # What the build took out of the client's history, recorded beside
+        # every try's body: a retry never changes what the history left out.
+        wire_notes: dict[str, str] = {}
+        body = build_anthropic_messages_body(
+            request, reasoning=reasoning, wire_notes=wire_notes
+        )
         if tool_names is not None:
             # Before the wire capture and before every recovery rung, so what
             # is recorded and what is retried are both what actually went out.
@@ -496,6 +501,7 @@ class AnthropicMessagesProvider(BaseProvider):
                     record_wire_request(
                         body,
                         **({"surface": wire_surface} if wire_surface else {}),
+                        **wire_notes,
                     )
                     response = await self._rate_limiter.execute_with_retry(
                         self._send_stream_request,
