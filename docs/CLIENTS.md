@@ -269,7 +269,7 @@ curl http://127.0.0.1:8082/v1/messages \
 
 Answers an Anthropic `message` (`"stream": true` gives Anthropic's event stream).
 
-**Tool changes in the middle of a conversation (7.102.3).** Claude Code 2.1.304
+**Tool changes in the middle of a conversation (7.102.2).** Claude Code 2.1.304
 tells the model that its tools changed with a `role: "system"` message holding
 `tool_addition` and `tool_removal` blocks; a resumed session always carries
 them. MCC accepts both blocks on `/v1/messages` and `/v1/messages/count_tokens`
