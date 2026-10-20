@@ -146,6 +146,16 @@ class ThinkingConfig(BaseModel):
     enabled: bool | None = True
     type: str | None = None
     budget_tokens: int | None = None
+    #: How the client asked Anthropic to show the thinking it does --
+    #: ``"summarized"``, ``"omitted"`` or ``"updates"`` (Claude Code picks one
+    #: from its own ``showThinkingSummaries``). Until 7.102.5 it was not
+    #: declared, so it was dropped at parse time and never reached Anthropic.
+    #: Excluded from every dump: the request log, the other dialects and every
+    #: body that dumps this object stay byte-identical. Read explicitly, on the
+    #: one path that forwards it (``build_anthropic_messages_body``). ``Any``,
+    #: not ``str``: a value the client got wrong is ignored there, as it was
+    #: before, rather than refused here.
+    display: Any = Field(default=None, exclude=True)
 
 
 class MessagesRequest(BaseModel):

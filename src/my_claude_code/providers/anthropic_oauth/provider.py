@@ -126,6 +126,11 @@ class AnthropicOAuthProvider(AnthropicProvider):
             auth=resolved,
             provider_name=PROVIDER_NAME,
             provider_id=provider_id,
+            # Claude Code's own choice of how thinking is shown
+            # (``showThinkingSummaries``) reaches Anthropic on this path only:
+            # it is the one that also forwards the client's betas, and
+            # ``display: "updates"`` needs its beta. MCC never picks one.
+            forward_thinking_display=True,
         )
         self._oauth = resolved
         self._require_claude_code_cli = require_claude_code_cli

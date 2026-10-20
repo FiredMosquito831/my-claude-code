@@ -2568,6 +2568,13 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     <strong>Docs</strong> tab &mdash; before switching it on. The
                     supported alternative is the Claude API card above.
                   </p>
+                  <p>
+                    Readable thinking through MCC follows Claude Code&rsquo;s own
+                    <code>showThinkingSummaries</code> setting: with it off, Claude
+                    Code asks Anthropic to withhold the thinking text (the model
+                    still thinks), and MCC passes that choice on unchanged and never
+                    picks one of its own.
+                  </p>
                 </div>
                 <p>
                   Claude models also arrive through <code>bedrock</code>,

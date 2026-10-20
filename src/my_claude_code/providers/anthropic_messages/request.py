@@ -48,6 +48,7 @@ def build_anthropic_messages_body(
     *,
     reasoning: ReasoningPolicy,
     wire_notes: dict[str, str] | None = None,
+    forward_thinking_display: bool = False,
 ) -> dict[str, Any]:
     """Build one native Messages request without exposing FCC-only fields.
 
@@ -55,6 +56,12 @@ def build_anthropic_messages_body(
     of the client's history -- ``foreign_thinking_dropped``, counts only -- so
     the sender records it beside the body it describes. Left untouched when
     nothing was removed.
+
+    ``forward_thinking_display`` puts the client's own ``thinking.display``
+    choice on the outgoing ``thinking``. Only the Claude-subscription provider
+    asks for it: it is the one path that also forwards the client's betas,
+    which ``display: "updates"`` needs. ``False`` -- every other caller --
+    builds exactly what it always did.
     """
     body = request.model_dump(exclude_none=True)
     for field in _INTERNAL_FIELDS:
@@ -86,6 +93,8 @@ def build_anthropic_messages_body(
         _apply_reasoning(body, request, ReasoningPolicy.off())
     else:
         unsigned_tool_turn = False
+    if forward_thinking_display:
+        _carry_client_display(body, request)
     if dropped_blocks and wire_notes is not None:
         noun = "block" if dropped_blocks == 1 else "blocks"
         wire_notes[FOREIGN_THINKING_DROPPED] = (
@@ -239,6 +248,30 @@ def _final_tool_turn_lost_its_thinking(messages: list[dict[str, Any]]) -> bool:
 
 def _is_manual_thinking(thinking: Any) -> bool:
     return isinstance(thinking, dict) and thinking.get("type") == "enabled"
+
+
+def _carry_client_display(body: dict[str, Any], request: MessagesRequest) -> None:
+    """Put the client's own ``display`` choice on the outgoing ``thinking``.
+
+    Whatever object goes out -- the client's, passed through, or one MCC
+    built from a reasoning tier -- as long as it asks Anthropic to think
+    (``adaptive`` or ``enabled``); ``display`` means nothing on ``disabled``
+    and there is no ``thinking`` to put it on when the field was dropped.
+    MCC never picks a display of its own: no client choice, no key. A value
+    that is not a non-empty string is ignored, as every value was before.
+    """
+
+    requested = request.thinking
+    display = requested.display if requested is not None else None
+    thinking = body.get("thinking")
+    if (
+        not isinstance(display, str)
+        or not display.strip()
+        or not isinstance(thinking, dict)
+        or thinking.get("type") not in {"adaptive", "enabled"}
+    ):
+        return
+    body["thinking"] = {**thinking, "display": display}
 
 
 def _drop_mcc_enabled_default(body: dict[str, Any]) -> None:
