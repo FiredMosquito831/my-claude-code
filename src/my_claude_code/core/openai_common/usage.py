@@ -1,11 +1,14 @@
 """Best-effort token estimation for OpenAI-compatible usage details.
 
-Anthropic reports one ``output_tokens`` for a turn and never says how many of
-them were thinking. Both OpenAI surfaces have a field for exactly that
-(``output_tokens_details.reasoning_tokens`` on Responses,
-``completion_tokens_details.reasoning_tokens`` on Chat Completions), and a
-client that reads it to price a request is better served by a bounded estimate
-of the reasoning text it actually received than by a zero.
+Anthropic's Messages stream MCC hands its clients carries one
+``output_tokens`` for a turn (Anthropic itself also reports
+``output_tokens_details.thinking_tokens`` on its final ``message_delta``
+since 2026-05-27, which MCC records from 7.103.0 on). Both OpenAI surfaces
+have a field for exactly that (``output_tokens_details.reasoning_tokens`` on
+Responses, ``completion_tokens_details.reasoning_tokens`` on Chat
+Completions), and a client that reads it to price a request is better served
+by a bounded estimate of the reasoning text it actually received than by a
+zero.
 
 The estimate is capped by the real ``output_tokens`` at the point of use, so it
 can never make a response look like it produced more than the provider billed.
