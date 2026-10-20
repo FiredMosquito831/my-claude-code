@@ -4949,6 +4949,16 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   back shows as one search and several attempts.
                 </p>
                 <p>
+                  A model can think without the text reaching you, so the dialog&rsquo;s
+                  <em>Thinking</em> line has four answers: <em>thinking shown</em>;
+                  <em>thought &mdash; text withheld by the provider</em> (the provider
+                  reported reasoning tokens or sent signed, redacted or encrypted-only
+                  reasoning, as Claude 5 does by default and as Claude Code asks unless
+                  <code>showThinkingSummaries</code> is on); <em>did not think</em>; and
+                  <em>not measured</em>. The Models page counts the same split, and the
+                  <em>Turns with visible reasoning</em> tile counts only the first.
+                </p>
+                <p>
                   <strong>Export</strong> opens the export window for Model requests,
                   Route attempts or Web Search &mdash; JSON, CSV, XLSX or TXT, over a
                   period of your choice, with selectable fields and optional grouping by

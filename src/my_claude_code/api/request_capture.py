@@ -291,9 +291,14 @@ class RequestCapture:
         # so it cannot travel with the stream, and putting a proprietary
         # number in front of the client to move it two layers would be worse
         # than a collector.
-        self._reported_cost = (
-            install_reported_cost() if self.enabled and cost_enabled else None
-        )
+        #
+        # Installed for every logged request since 7.103.0, not only with
+        # cost tracking on: the same collector carries the reasoning tokens a
+        # host reports (Chat Completions, Responses, and Anthropic's
+        # ``thinking_tokens``), which is a measurement, not a price -- the
+        # only way to tell "thought, text withheld" from "did not think".
+        # Pricing still reads it only when cost tracking is on.
+        self._reported_cost = install_reported_cost() if self.enabled else None
         # The outbound body arrives the same way, from the one statement in
         # each provider that hands a body to its SDK. Reading ``max_tokens``
         # and the tool count off the *inbound* request here -- which is what

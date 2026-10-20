@@ -2356,6 +2356,40 @@ def test_reasoning_by_model_counts_unmeasured_attempts_separately(
     assert row["unmeasured"] == 1
 
 
+def test_reasoning_by_model_splits_no_thinking_text_by_what_the_host_reported(
+    store: RequestLogStore,
+) -> None:
+    """7.103.0: no visible text is "thought, text withheld", "did not think" or
+    unknown -- decided by the host's own reasoning-token count, never guessed."""
+    store.enqueue(_reasoning_record("shown", emitted=True, thinking_chars=40))
+    store.enqueue(
+        _reasoning_record(
+            "withheld", emitted=True, thinking_chars=0, reasoning_tokens=511
+        )
+    )
+    store.enqueue(
+        _reasoning_record("none", emitted=True, thinking_chars=0, reasoning_tokens=0)
+    )
+    store.enqueue(_reasoning_record("unknown", emitted=True, thinking_chars=0))
+    store.close()
+
+    (row,) = store.reasoning_by_model()
+    assert row["attempts"] == 4
+    assert row["returned"] == 1
+    assert row["withheld"] == 1
+    assert row["no_thinking"] == 1
+
+
+def test_visible_thinking_is_never_counted_as_withheld(store: RequestLogStore) -> None:
+    store.enqueue(
+        _reasoning_record("both", emitted=True, thinking_chars=40, reasoning_tokens=900)
+    )
+    store.close()
+
+    (row,) = store.reasoning_by_model()
+    assert (row["returned"], row["withheld"], row["no_thinking"]) == (1, 0, 0)
+
+
 def test_reasoning_by_model_honours_the_since_window(store: RequestLogStore) -> None:
     now = time.time()
     store.enqueue(

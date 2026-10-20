@@ -11035,6 +11035,12 @@ class RequestLogStore:
         ``unmeasured`` is the attempts whose ``reasoning_emitted`` is NULL,
         kept apart from a measured zero so the caller never reports "asked 0
         times" for a provider with no instrumented commit boundary.
+
+        ``withheld`` and ``no_thinking`` (7.103.0) split the rest of "not
+        returned" by what the host itself reported: no thinking text, but
+        ``reasoning_tokens > 0`` (the model thought; the provider kept the
+        text), or a reported ``0`` (it did not think). A NULL there was never
+        measured and is in neither -- unknown is not "did not think".
         """
 
         cache_key = ("reasoning_by_model", since, limit)
@@ -11070,7 +11076,11 @@ class RequestLogStore:
                 " SUM(CASE WHEN a.reasoning_emitted IS NULL THEN 1 ELSE 0 END)"
                 " AS unmeasured,"
                 " SUM(CASE WHEN COALESCE(r.thinking_chars, 0) > 0 THEN 1 ELSE 0 END)"
-                " AS returned"
+                " AS returned,"
+                " SUM(CASE WHEN COALESCE(r.thinking_chars, 0) = 0"
+                " AND r.reasoning_tokens > 0 THEN 1 ELSE 0 END) AS withheld,"
+                " SUM(CASE WHEN COALESCE(r.thinking_chars, 0) = 0"
+                " AND r.reasoning_tokens = 0 THEN 1 ELSE 0 END) AS no_thinking"
                 " FROM request_attempts a"
                 " JOIN requests r ON r.id = a.request_id"
                 " WHERE a.outcome = 'succeeded' AND a.model_ref IS NOT NULL"
@@ -11087,6 +11097,8 @@ class RequestLogStore:
                 "requested": int(row["requested"] or 0),
                 "returned": int(row["returned"] or 0),
                 "unmeasured": int(row["unmeasured"] or 0),
+                "withheld": int(row["withheld"] or 0),
+                "no_thinking": int(row["no_thinking"] or 0),
             }
             for row in rows
         ]

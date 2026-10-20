@@ -46,6 +46,11 @@ UPSTREAM_COST_KEY = "upstream_inference_cost"
 IS_BYOK_KEY = "is_byok"
 COMPLETION_DETAILS_KEY = "completion_tokens_details"
 REASONING_TOKENS_KEY = "reasoning_tokens"
+#: Where the Responses API (``reasoning_tokens``) and Anthropic's Messages API
+#: (``thinking_tokens``, since 2026-05-27, on the final ``message_delta``)
+#: report how many of the output tokens were reasoning.
+OUTPUT_DETAILS_KEY = "output_tokens_details"
+THINKING_TOKENS_KEY = "thinking_tokens"
 
 
 @dataclass(slots=True)
@@ -170,6 +175,46 @@ def record_reported_usage(usage_info: Any) -> None:
     _fold_usage(slot, usage_info)
 
 
+def reported_reasoning_tokens(usage_info: Any) -> int | None:
+    """The reasoning tokens one usage block reports, under any protocol's name.
+
+    Chat Completions: ``completion_tokens_details.reasoning_tokens``.
+    Responses: ``output_tokens_details.reasoning_tokens``. Anthropic Messages:
+    ``output_tokens_details.thinking_tokens``. ``None`` when the block names
+    none of them -- not measured, never a zero standing in for silence.
+    """
+    if usage_info is None:
+        return None
+    completion = _lookup(usage_info, COMPLETION_DETAILS_KEY)
+    output = _lookup(usage_info, OUTPUT_DETAILS_KEY)
+    for value in (
+        _lookup(completion, REASONING_TOKENS_KEY),
+        _lookup(output, REASONING_TOKENS_KEY),
+        _lookup(output, THINKING_TOKENS_KEY),
+    ):
+        tokens = _as_int(value)
+        if tokens is not None:
+            return tokens
+    return None
+
+
+def record_reported_reasoning(usage_info: Any) -> None:
+    """Record the reasoning tokens a host reported, and nothing else.
+
+    The reasoning-only sibling of :func:`record_reported_usage`, for the hosts
+    whose usage block MCC reads for this alone (Anthropic Messages, the
+    Responses API): it never touches a cost field, so a host that also
+    reported a ``cost`` cannot start pricing a request through this door.
+    A no-op outside a tracked request and on a block that reports nothing.
+    """
+    slot = _REPORTED_COST.get()
+    if slot is None:
+        return
+    tokens = reported_reasoning_tokens(usage_info)
+    if tokens is not None:
+        slot.reasoning_tokens = tokens
+
+
 def reported_cost_from_usage(usage_info: Any) -> ReportedCost:
     """What one usage block says its request cost, read without a collector.
 
@@ -214,7 +259,9 @@ __all__ = [
     "ReportedCost",
     "install_reported_cost",
     "paused_reported_cost",
+    "record_reported_reasoning",
     "record_reported_usage",
     "reported_cost",
     "reported_cost_from_usage",
+    "reported_reasoning_tokens",
 ]

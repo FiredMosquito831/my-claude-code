@@ -19,6 +19,10 @@ from my_claude_code.core.anthropic.thinking import (
     ContentType,
     ThinkTagParser,
 )
+from my_claude_code.core.reported_cost import (
+    record_reported_reasoning,
+    reported_reasoning_tokens,
+)
 from my_claude_code.core.wire_capture import ResponseShape
 
 
@@ -400,7 +404,13 @@ class ResponsesStreamConverter:
 
         A usage block with no details reports nothing rather than a zero, so
         "not measured" survives all the way to the column.
+
+        ``output_tokens_details.reasoning_tokens`` -- how many of the output
+        tokens were reasoning, reported even when no summary text came back --
+        goes to the request's reported-usage collector (7.103.0). Nothing the
+        client receives changes.
         """
+        record_reported_reasoning(usage)
         provider_input = _usage_int(usage, "input_tokens") or 0
         self._usage["output_tokens"] = _usage_int(usage, "output_tokens") or 0
         details = usage.get("input_tokens_details")
@@ -478,7 +488,15 @@ def note_responses_event_shape(shape: ResponseShape | None, event: Any) -> None:
 
     The Responses API spells its channels as event types rather than delta
     fields, so the mapping is named here rather than guessed downstream. Only
-    the four that carry model output are counted; the rest are lifecycle.
+    the four that carry model output are counted as fields; the rest are
+    lifecycle.
+
+    Since 7.103.0 the reasoning items are counted too, because a host that
+    reasons and returns only ``encrypted_content`` sends no summary text and
+    used to leave no trace: ``reasoning_items``, ``encrypted_only_items``
+    (encrypted content, no summary or reasoning text), ``summary_parts`` and
+    ``summary_parts_with_text``, and the ``reasoning_tokens`` the final usage
+    reports. Counts only.
     """
     if shape is None or not isinstance(event, Mapping):
         return
@@ -489,11 +507,48 @@ def note_responses_event_shape(shape: ResponseShape | None, event: Any) -> None:
         delta = event.get("delta")
         shape.note_field(name, len(delta) if isinstance(delta, str) else 0)
         return
+    if kind == "response.output_item.added":
+        item = event.get("item")
+        if isinstance(item, Mapping) and item.get("type") == "reasoning":
+            shape.count_reasoning("reasoning_items")
+        return
+    if kind == "response.output_item.done":
+        item = event.get("item")
+        if isinstance(item, Mapping) and item.get("type") == "reasoning":
+            _note_reasoning_item(shape, item)
+        return
     if kind in ("response.completed", "response.incomplete", "response.failed"):
         response = event.get("response")
         if isinstance(response, Mapping):
-            shape.note_usage(response.get("usage"))
+            usage = response.get("usage")
+            shape.note_usage(usage)
+            tokens = reported_reasoning_tokens(usage)
+            if tokens is not None:
+                shape.note_reasoning_tokens(tokens)
             status = response.get("status")
             shape.note_finish(status if isinstance(status, str) else kind)
         else:
             shape.note_finish(kind)
+
+
+def _part_texts(parts: Any) -> list[str]:
+    if not isinstance(parts, list):
+        return []
+    return [
+        part.get("text") if isinstance(part.get("text"), str) else ""
+        for part in parts
+        if isinstance(part, Mapping)
+    ]
+
+
+def _note_reasoning_item(shape: ResponseShape, item: Mapping[str, Any]) -> None:
+    """Count one finished reasoning item's summary parts, and whether it was
+    nothing but encrypted content."""
+    summary = _part_texts(item.get("summary"))
+    content = _part_texts(item.get("content"))
+    with_text = sum(1 for text in summary if text)
+    shape.count_reasoning("summary_parts", len(summary))
+    shape.count_reasoning("summary_parts_with_text", with_text)
+    encrypted = item.get("encrypted_content")
+    if isinstance(encrypted, str) and encrypted and not with_text and not any(content):
+        shape.count_reasoning("encrypted_only_items")
