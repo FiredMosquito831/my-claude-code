@@ -132,6 +132,12 @@ Tool names go upstream verbatim. Releases before 6.36.0 renamed every tool to
 `cc_<name>`; no such prefix exists anywhere in Claude Code, and the rename is
 gone.
 
+Since 7.102.5 readable thinking through MCC follows Claude Code's own
+`showThinkingSummaries` setting: Claude Code's `thinking.display` choice goes
+upstream unchanged on this provider (before, MCC dropped it), so with the
+setting off Anthropic still thinks but withholds the text, and MCC never picks
+a display of its own.
+
 Mirroring is not the same as asserting: every mirrored value is one the client
 itself sent. The fallback constants are used only when a request arrived
 without them, and the gate refuses those requests anyway.

@@ -50,6 +50,7 @@ class AnthropicProvider(BaseProvider):
         extra_headers: dict[str, str] | None = None,
         body_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         provider_id: str = "",
+        forward_thinking_display: bool = False,
     ) -> None:
         super().__init__(config)
         self._provider_name = provider_name
@@ -66,6 +67,7 @@ class AnthropicProvider(BaseProvider):
             extra_headers=self._extra_headers,
             body_transform=body_transform,
             provider_id=provider_id,
+            forward_thinking_display=forward_thinking_display,
         )
         self._client = bound_socks_handshake(
             httpx.AsyncClient(

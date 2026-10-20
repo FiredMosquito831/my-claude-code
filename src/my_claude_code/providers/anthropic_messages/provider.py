@@ -115,12 +115,17 @@ class AnthropicMessagesProvider(BaseProvider):
         header_provider: Callable[[Mapping[str, Any]], Mapping[str, str]] | None = None,
         body_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         provider_id: str = "",
+        forward_thinking_display: bool = False,
     ) -> None:
         super().__init__(config)
         self._provider_name = provider_name
         # The catalogue id, which is what the learned-facts store keys on.
         # ``provider_name`` is the log label and several providers share one.
         self._provider_id = provider_id
+        # Whether the client's ``thinking.display`` goes upstream. Off for
+        # every host in this family but the one that opts in (the Claude
+        # subscription), so every other body is built exactly as before.
+        self._forward_thinking_display = forward_thinking_display
         self._base_url = config.base_url.rstrip("/")
         # Default preserves the bearer-token shape every existing caller uses;
         # upstreams with a different credential contract inject their own.
@@ -230,7 +235,11 @@ class AnthropicMessagesProvider(BaseProvider):
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> None:
-        build_anthropic_messages_body(request, reasoning=reasoning)
+        build_anthropic_messages_body(
+            request,
+            reasoning=reasoning,
+            forward_thinking_display=self._forward_thinking_display,
+        )
 
     async def probe(self, model_id: str) -> None:
         """Ask this endpoint whether it serves one model, as cheaply as possible.
@@ -447,7 +456,10 @@ class AnthropicMessagesProvider(BaseProvider):
         # every try's body: a retry never changes what the history left out.
         wire_notes: dict[str, str] = {}
         body = build_anthropic_messages_body(
-            request, reasoning=reasoning, wire_notes=wire_notes
+            request,
+            reasoning=reasoning,
+            wire_notes=wire_notes,
+            forward_thinking_display=self._forward_thinking_display,
         )
         if tool_names is not None:
             # Before the wire capture and before every recovery rung, so what
