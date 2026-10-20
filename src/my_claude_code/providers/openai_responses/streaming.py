@@ -550,10 +550,5 @@ def _note_reasoning_item(shape: ResponseShape, item: Mapping[str, Any]) -> None:
     shape.count_reasoning("summary_parts", len(summary))
     shape.count_reasoning("summary_parts_with_text", with_text)
     encrypted = item.get("encrypted_content")
-    if (
-        isinstance(encrypted, str)
-        and encrypted
-        and not with_text
-        and not any(content)
-    ):
+    if isinstance(encrypted, str) and encrypted and not with_text and not any(content):
         shape.count_reasoning("encrypted_only_items")

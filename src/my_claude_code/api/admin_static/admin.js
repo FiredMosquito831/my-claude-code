@@ -24441,6 +24441,7 @@ async function openRequestDetail(requestId) {
     ["Reasoning adaptation", formatReasoningAdaptation(row)],
     ["Reasoning sent", formatRequestReasoningEmitted(row)],
     ["Reasoning wire", formatWireVerdict(row)],
+    ["Thinking", formatThinkingState(row)],
     ["Params", row.params ? JSON.stringify(row.params) : ""],
     ["Input SHA-256", row.input_sha256],
     ["Output SHA-256", row.output_sha256],
@@ -24811,6 +24812,73 @@ function formatWireVerdict(row) {
   const answered = answeringAttempt(row);
   if (!answered || answered.reasoning_emitted == null) return NOT_MEASURED;
   return answered.reasoning_emitted ? "sent" : "not sent";
+}
+
+/* What the model's thinking came to (7.103.0). "No thinking text" is two
+   different facts, and the dashboard used to report both as "no thinking":
+   a model that did not think, and one that thought while the provider kept
+   the text -- Claude 5's default display, the redact/updates display Claude
+   Code asks for, a Responses host that returns only encrypted reasoning.
+   Four states, in the order the evidence is read:
+     shown     -- thinking text reached the client (thinking_chars > 0);
+     withheld  -- no text, but the host reported reasoning tokens, or the
+                  reply carried signed-empty / redacted thinking blocks or
+                  encrypted-only reasoning items;
+     none      -- the host reported 0 reasoning tokens, or a measured reply
+                  carried no thinking of any kind;
+     unknown   -- nothing was measured (a dash elsewhere; "not measured" here).
+   Only an answered request has one. thinking_chars keeps meaning visible text. */
+function thinkingState(row) {
+  if (!row || row.status !== "success") return null;
+  const chars = Number(row.thinking_chars || 0);
+  if (chars > 0) return { state: "shown", chars };
+  const tokens = row.reasoning_tokens == null ? null : Number(row.reasoning_tokens);
+  const answered = answeringAttempt(row);
+  const shape = (answered && answered.params && answered.params.response_shape) || null;
+  const counted = (shape && shape.reasoning) || {};
+  const fields = (shape && shape.fields) || {};
+  const signed = Number((fields.signature && fields.signature.chars) || 0) > 0;
+  const blocks =
+    Number(counted.withheld_thinking_blocks || 0) +
+    Number(counted.redacted_thinking_blocks || 0);
+  const encryptedOnly = Number(counted.encrypted_only_items || 0) > 0;
+  if ((tokens != null && tokens > 0) || blocks > 0 || encryptedOnly || signed) {
+    return {
+      state: "withheld",
+      tokens: tokens != null && tokens > 0 ? tokens : null,
+      noSummary: encryptedOnly && blocks === 0 && !signed,
+    };
+  }
+  if (tokens === 0) return { state: "none", reported: true };
+  const thoughtFields = ["thinking", "signature", "reasoning", "reasoning_content"];
+  const anyThinking =
+    thoughtFields.some((name) => fields[name]) ||
+    Number(counted.thinking_blocks || 0) > 0 ||
+    Number(counted.reasoning_items || 0) > 0;
+  if (shape && !anyThinking) return { state: "none", reported: false };
+  return { state: "unknown" };
+}
+
+function formatThinkingState(row) {
+  const verdict = thinkingState(row);
+  if (!verdict) return null;
+  if (verdict.state === "shown") {
+    return `thinking shown (${verdict.chars.toLocaleString()} chars)`;
+  }
+  if (verdict.state === "withheld") {
+    const what = verdict.noSummary
+      ? "thought — no summary sent; text withheld by the provider"
+      : "thought — text withheld by the provider";
+    return verdict.tokens == null
+      ? what
+      : `${what} (≈${verdict.tokens.toLocaleString()} reasoning tokens reported)`;
+  }
+  if (verdict.state === "none") {
+    return verdict.reported
+      ? "did not think (the provider reported 0 reasoning tokens)"
+      : "did not think (the reply carried no thinking)";
+  }
+  return "not measured";
 }
 
 function formatChars(count) {
@@ -26056,9 +26124,30 @@ function buildResponseShape(attempt) {
     appendShapeRow(grid, "first chunk", `${shape.first_chunk_ms} ms`);
   }
   appendShapeRow(grid, "chunks", Number(shape.chunks || 0).toLocaleString());
+  // 7.103.0: what the reply said about reasoning beyond its visible text --
+  // counts only, present only when the reply carried any of it.
+  const reasoning = shape.reasoning || {};
+  Object.keys(reasoning).forEach((name) => {
+    appendShapeRow(
+      grid,
+      SHAPE_REASONING_LABELS[name] || name,
+      Number(reasoning[name] || 0).toLocaleString(),
+    );
+  });
   wrap.appendChild(grid);
   return wrap;
 }
+
+const SHAPE_REASONING_LABELS = {
+  thinking_blocks: "thinking blocks",
+  withheld_thinking_blocks: "thinking blocks, text withheld",
+  redacted_thinking_blocks: "redacted thinking blocks",
+  reasoning_items: "reasoning items",
+  encrypted_only_items: "reasoning items, encrypted only",
+  summary_parts: "summary parts",
+  summary_parts_with_text: "summary parts with text",
+  reported_tokens: "reasoning tokens (reported)",
+};
 
 function appendShapeRow(grid, term, value) {
   const dt = document.createElement("dt");
@@ -30792,11 +30881,18 @@ function buildModelSummary(model) {
     const chip = buildModelsChip(
       "measured",
       `last ${days}d: reasoning requested ${measured.requested}/${measured.attempts}, ` +
-        `returned ${measured.returned}/${measured.attempts}`,
+        `returned ${measured.returned}/${measured.attempts}` +
+        reasoningOutcomeTail(measured),
     );
     chip.title =
       "Requested is what the outbound body carried; returned is whether the " +
       "reply contained thinking text. Succeeded attempts only.";
+    if (Number(measured.withheld || 0) || Number(measured.no_thinking || 0)) {
+      chip.title +=
+        " Thought, text withheld: no thinking text, but the provider reported " +
+        "reasoning tokens. Did not think: the provider reported 0. Not " +
+        "measured: the provider reported nothing either way.";
+    }
     second.appendChild(chip);
   }
   appendLatencyChip(second, model.model_ref);
@@ -30847,6 +30943,23 @@ function headlineLatencyOutcome(entry) {
       Number(row.ttft_measured || 0) > Number(best.ttft_measured || 0) ? row : best,
     )
   );
+}
+
+/* The rest of "not returned", split by what the provider itself reported
+   (7.103.0): thought with the text withheld, did not think, and -- only once
+   either is known -- the attempts nothing was reported for. Empty when the
+   provider reported nothing, so the chip reads exactly as it always did. */
+function reasoningOutcomeTail(measured) {
+  const total = Number(measured.attempts || 0);
+  const withheld = Number(measured.withheld || 0);
+  const none = Number(measured.no_thinking || 0);
+  if (!withheld && !none) return "";
+  let tail = "";
+  if (withheld) tail += `, thought with text withheld ${withheld}/${total}`;
+  if (none) tail += `, did not think ${none}/${total}`;
+  const unknown = total - Number(measured.returned || 0) - withheld - none;
+  if (unknown > 0) tail += `, not measured ${unknown}/${total}`;
+  return tail;
 }
 
 /* Measured, not declared, and absent rather than zeroed: a model that served

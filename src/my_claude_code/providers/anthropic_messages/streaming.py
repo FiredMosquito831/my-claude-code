@@ -4,6 +4,7 @@ import codecs
 import json
 import time
 from collections.abc import AsyncIterator, Mapping
+from typing import Any
 
 from my_claude_code.core.anthropic.upstream_errors import anthropic_stream_failure
 from my_claude_code.core.reported_cost import (
@@ -162,12 +163,12 @@ def _note_frame_shape(
             block[0 if name == "thinking" else 1] += size
 
 
-def _block_index(payload: Mapping[str, object]) -> int:
+def _block_index(payload: Mapping[Any, Any]) -> int:
     index = payload.get("index")
     return index if isinstance(index, int) and not isinstance(index, bool) else -1
 
 
-def _note_block_start(shape: ResponseShape, payload: Mapping[str, object]) -> None:
+def _note_block_start(shape: ResponseShape, payload: Mapping[Any, Any]) -> None:
     block = payload.get("content_block")
     if not isinstance(block, Mapping):
         return
@@ -184,7 +185,7 @@ def _note_block_start(shape: ResponseShape, payload: Mapping[str, object]) -> No
         shape.count_reasoning("redacted_thinking_blocks")
 
 
-def _note_block_stop(shape: ResponseShape, payload: Mapping[str, object]) -> None:
+def _note_block_stop(shape: ResponseShape, payload: Mapping[Any, Any]) -> None:
     block = shape.open_thinking.pop(_block_index(payload), None)
     if block is None:
         return
