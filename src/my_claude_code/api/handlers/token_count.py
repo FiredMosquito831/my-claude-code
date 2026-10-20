@@ -9,6 +9,7 @@ from my_claude_code.api.request_errors import (
     require_non_empty_messages,
 )
 from my_claude_code.api.request_ids import new_request_id
+from my_claude_code.api.request_tool_changes import fold_request_tool_changes
 from my_claude_code.application.errors import ApplicationError
 from my_claude_code.application.execution import TokenCounter
 from my_claude_code.application.routing import ModelRouter
@@ -44,6 +45,11 @@ class TokenCountHandler:
         request_id = request_id or new_request_id()
         with logger.contextualize(request_id=request_id):
             try:
+                # The same fold the Messages door applies, so a count and the
+                # message it predicts agree on the tool list.
+                request_data = fold_request_tool_changes(
+                    request_data, request_id=request_id
+                )
                 require_non_empty_messages(request_data.messages)
                 routed = self._model_router.resolve_token_count_request(request_data)
                 tokens = self._token_counter(
