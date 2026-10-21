@@ -9,6 +9,11 @@ import httpx
 from loguru import logger
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.prompt_cache import (
+    PromptCacheLifetimeChoice,
+    choose_prompt_cache_lifetime,
+)
+from my_claude_code.config.prompt_cache_lifetimes import PromptCacheLifetimeFamily
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
     OpenAIToolNameCodec,
@@ -65,7 +70,8 @@ from .probe import (
     MESSAGES_PROBE_MAX_OUTPUT_TOKENS,
     MESSAGES_PROBE_PROMPT,
 )
-from .request import build_anthropic_messages_body
+from .prompt_cache import note_prompt_cache_refusal, refused_prompt_cache_lifetimes
+from .request import PROMPT_CACHE_TTL_NOTE, build_anthropic_messages_body
 from .streaming import iter_anthropic_sse_frames
 
 ANTHROPIC_REASONING_DIALECT = ReasoningDialect(
@@ -116,6 +122,7 @@ class AnthropicMessagesProvider(BaseProvider):
         body_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         provider_id: str = "",
         forward_thinking_display: bool = False,
+        prompt_cache_family: PromptCacheLifetimeFamily | None = None,
     ) -> None:
         super().__init__(config)
         self._provider_name = provider_name
@@ -126,6 +133,12 @@ class AnthropicMessagesProvider(BaseProvider):
         # every host in this family but the one that opts in (the Claude
         # subscription), so every other body is built exactly as before.
         self._forward_thinking_display = forward_thinking_display
+        # The prompt-cache lifetimes this host is declared to accept
+        # (``config/prompt_cache_lifetimes.py``, 7.104.0). ``None`` -- every
+        # host in this family but the two first-party Anthropic providers:
+        # Command Code, the OpenCode and custom Messages doors -- means an
+        # operator's lifetime setting never reaches this body at all.
+        self._prompt_cache_family = prompt_cache_family
         self._base_url = config.base_url.rstrip("/")
         # Default preserves the bearer-token shape every existing caller uses;
         # upstreams with a different credential contract inject their own.
@@ -228,6 +241,29 @@ class AnthropicMessagesProvider(BaseProvider):
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         return model_infos_from_ids(await self.list_model_ids())
+
+    def _prompt_cache_choice(
+        self, request: MessagesRequest
+    ) -> PromptCacheLifetimeChoice | None:
+        """The lifetime this attempt sends, or ``None`` to leave the body alone.
+
+        Cheapest test first: a host with no declared lifetimes, or a request
+        that carries no ask (nothing is set), is ``None`` before anything is
+        looked up. Otherwise the ask is adapted to the declared lifetimes,
+        less the ones this model's host refused (learned, still fresh).
+        """
+
+        family = self._prompt_cache_family
+        if family is None:
+            return None
+        ask = request.prompt_cache_ask
+        if ask is None:
+            return None
+        return choose_prompt_cache_lifetime(
+            ask,
+            family,
+            refused=refused_prompt_cache_lifetimes(self._provider_id, request.model),
+        )
 
     def preflight_stream(
         self,
@@ -454,12 +490,14 @@ class AnthropicMessagesProvider(BaseProvider):
         req_tag = f" request_id={request_id}" if request_id else ""
         # What the build took out of the client's history, recorded beside
         # every try's body: a retry never changes what the history left out.
-        wire_notes: dict[str, str] = {}
+        wire_notes: dict[str, Any] = {}
+        prompt_cache = self._prompt_cache_choice(request)
         body = build_anthropic_messages_body(
             request,
             reasoning=reasoning,
             wire_notes=wire_notes,
             forward_thinking_display=self._forward_thinking_display,
+            prompt_cache=prompt_cache,
         )
         if tool_names is not None:
             # Before the wire capture and before every recovery rung, so what
@@ -565,6 +603,17 @@ class AnthropicMessagesProvider(BaseProvider):
                 except asyncio.CancelledError, GeneratorExit:
                     raise
                 except Exception as error:
+                    if prompt_cache is not None and not stream_opened:
+                        # Recording only: the error below is handled exactly
+                        # as it would be with no lifetime chosen.
+                        note_prompt_cache_refusal(
+                            error,
+                            provider_id=self._provider_id,
+                            model_id=request.model,
+                            body=body,
+                            choice=prompt_cache,
+                            note=wire_notes.get(PROMPT_CACHE_TTL_NOTE),
+                        )
                     if not stream_opened:
                         recovered = self._recovery_ladder.next_body(
                             error, body, used_retry_kinds

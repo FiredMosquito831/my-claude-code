@@ -24,6 +24,7 @@ from my_claude_code.application.execution import (
     route_health_registry,
 )
 from my_claude_code.application.ports import ProviderResolver
+from my_claude_code.application.prompt_cache import stamp_prompt_cache_ask
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import MessagesRequest
@@ -102,6 +103,7 @@ class ResponsesHandler:
                 request_data
             )
             response_request = MessagesRequest(**anthropic_payload)
+            stamp_prompt_cache_ask(self._settings, response_request)
             capture = build_capture(
                 self._settings,
                 response_request,

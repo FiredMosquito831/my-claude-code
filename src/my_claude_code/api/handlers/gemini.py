@@ -25,6 +25,7 @@ from my_claude_code.application.execution import (
     route_health_registry,
 )
 from my_claude_code.application.ports import ProviderResolver
+from my_claude_code.application.prompt_cache import stamp_prompt_cache_ask
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
@@ -116,6 +117,7 @@ class GeminiHandler:
             conversion = self._gemini_adapter.to_anthropic_payload(request_data)
             self._trace_dropped(conversion.dropped, model=request_data.model)
             gemini_request = MessagesRequest(**conversion.payload)
+            stamp_prompt_cache_ask(self._settings, gemini_request)
             capture = build_capture(
                 self._settings,
                 gemini_request,

@@ -146,6 +146,16 @@ FACT_MEDIA_PARAM_REQUIRED = "media_param_required"
 #: on a request that carried it. ``detail`` and value as
 #: :data:`FACT_MEDIA_PARAM_REQUIRED`; shown only, by the same decision.
 FACT_MEDIA_PARAM_REFUSED = "media_param_refused"
+#: A prompt-cache lifetime this model's host refused (7.104.0), in a 400 whose
+#: own words named the lifetime field of a marker carrying the lifetime MCC had
+#: chosen -- or the top-level marker MCC had added. ``detail`` is the lifetime
+#: in the host's spelling (``"1h"``); value: ``True``.
+#:
+#: Read only by the choice of lifetime: while it is fresh that lifetime is
+#: never sent to this model again, and the operator's minutes are adapted to
+#: the lifetimes that remain. Nothing about the refused request changes -- no
+#: retry is added and it fails over exactly as any 400 does (IV.8).
+FACT_PROMPT_CACHE_LIFETIME_REFUSED = "prompt_cache_lifetime_refused"
 
 #: The allow-list. Whatever lands in this document is read back into live
 #: request-shaping state, so an unknown kind is dropped with one log line
@@ -170,6 +180,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_RESPONSES_TOOLS_MAX_COUNT,
         FACT_MEDIA_PARAM_REQUIRED,
         FACT_MEDIA_PARAM_REFUSED,
+        FACT_PROMPT_CACHE_LIFETIME_REFUSED,
     }
 )
 
@@ -221,6 +232,10 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # re-taught by its next refusal or forgotten from the page.
     FACT_MEDIA_PARAM_REQUIRED: STATED_FACT_TTL_SECONDS,
     FACT_MEDIA_PARAM_REFUSED: STATED_FACT_TTL_SECONDS,
+    # The host named the lifetime field of a marker MCC wrote, in its own
+    # sentence about a request MCC actually sent: stated, like the media
+    # refusals beside it. Forget on the Models page re-opens it at once.
+    FACT_PROMPT_CACHE_LIFETIME_REFUSED: STATED_FACT_TTL_SECONDS,
     # Stated in words but *proven* by the retry, which is the weaker of the
     # two and decides the clock: the host said "only auto", and what MCC
     # wrote down is "the request worked once the field was gone".

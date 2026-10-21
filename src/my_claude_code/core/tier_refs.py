@@ -215,6 +215,19 @@ TIER_REASONING_SETTINGS: dict[ModelTier, str] = {
     ModelTier.CHEAP: "reasoning_haiku",
 }
 
+#: Which per-route prompt-cache lifetime setting a tier reads (7.104.0): the
+#: sibling of :data:`TIER_REASONING_SETTINGS`, tier for tier, so a lifetime is
+#: chosen by exactly the route that chooses the thinking level. Vision has
+#: none and falls through to the global ``PROMPT_CACHE_TTL``, as it does for
+#: reasoning. Pinned to the reasoning table both ways by a contract test.
+TIER_PROMPT_CACHE_TTL_SETTINGS: dict[ModelTier, str] = {
+    ModelTier.CYBER: "prompt_cache_ttl_mythos",
+    ModelTier.BEST: "prompt_cache_ttl_fable",
+    ModelTier.GOOD: "prompt_cache_ttl_opus",
+    ModelTier.MEDIUM: "prompt_cache_ttl_sonnet",
+    ModelTier.CHEAP: "prompt_cache_ttl_haiku",
+}
+
 
 #: The Claude family tier each ``mcc/*`` alias is advertised as on
 #: ``GET /v1/models``, and whether it is that family's default entry.
@@ -382,6 +395,7 @@ __all__ = [
     "TIER_LABELS",
     "TIER_NAMESPACE",
     "TIER_ORDER",
+    "TIER_PROMPT_CACHE_TTL_SETTINGS",
     "TIER_REASONING_SETTINGS",
     "ClaudeDesktopModel",
     "GlobalTierSettings",

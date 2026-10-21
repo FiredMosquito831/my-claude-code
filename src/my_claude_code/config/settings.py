@@ -97,6 +97,8 @@ from .constants import (
     OPENCODE_CLIENT_VERSION_DEFAULT,
     OPENCODE_FREE_TIER_CREDENTIAL_DEFAULT,
     OPENCODE_FREE_TIER_MODELS_DEFAULT,
+    PROMPT_CACHE_TTL_DEFAULT,
+    PROMPT_CACHE_TTL_TIER_DEFAULT,
     PROVIDER_RATE_LIMIT_DEFAULT,
     PROVIDER_RATE_WINDOW_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
@@ -241,6 +243,7 @@ from .model_refs import (
 )
 from .nim import NimSettings
 from .paths import anthropic_oauth_managed_store_path, chatgpt_oauth_auth_path
+from .prompt_cache_lifetimes import normalize_prompt_cache_ttl
 from .provider_registry import get_provider_registry
 from .reasoning import ReasoningPreference
 from .websearch_catalog import SUPPORTED_WEBSEARCH_PROVIDER_IDS
@@ -1655,6 +1658,34 @@ class Settings(BaseSettings):
         default=ReasoningPreference.INHERIT,
         validation_alias="REASONING_HAIKU",
     )
+    # How long a host should keep the prompt cache when MCC chooses (7.104.0):
+    # ``client`` (the global default) chooses nothing, ``inherit`` (each
+    # tier's default) defers to the global, minutes 1-60 are adapted to the
+    # destination host's own lifetimes. Same tiers as ``REASONING_<TIER>``.
+    prompt_cache_ttl: str = Field(
+        default=PROMPT_CACHE_TTL_DEFAULT,
+        validation_alias="PROMPT_CACHE_TTL",
+    )
+    prompt_cache_ttl_mythos: str = Field(
+        default=PROMPT_CACHE_TTL_TIER_DEFAULT,
+        validation_alias="PROMPT_CACHE_TTL_MYTHOS",
+    )
+    prompt_cache_ttl_fable: str = Field(
+        default=PROMPT_CACHE_TTL_TIER_DEFAULT,
+        validation_alias="PROMPT_CACHE_TTL_FABLE",
+    )
+    prompt_cache_ttl_opus: str = Field(
+        default=PROMPT_CACHE_TTL_TIER_DEFAULT,
+        validation_alias="PROMPT_CACHE_TTL_OPUS",
+    )
+    prompt_cache_ttl_sonnet: str = Field(
+        default=PROMPT_CACHE_TTL_TIER_DEFAULT,
+        validation_alias="PROMPT_CACHE_TTL_SONNET",
+    )
+    prompt_cache_ttl_haiku: str = Field(
+        default=PROMPT_CACHE_TTL_TIER_DEFAULT,
+        validation_alias="PROMPT_CACHE_TTL_HAIKU",
+    )
 
     # ==================== HTTP Client Timeouts ====================
     http_read_timeout: float = Field(
@@ -2354,6 +2385,25 @@ class Settings(BaseSettings):
         if value is ReasoningPreference.INHERIT:
             raise ValueError("REASONING_POLICY cannot inherit")
         return value
+
+    @field_validator("prompt_cache_ttl", mode="before")
+    @classmethod
+    def validate_prompt_cache_ttl(cls, value: object) -> str:
+        """``client`` or whole minutes 1-60; blank is ``client``."""
+        return normalize_prompt_cache_ttl(value, tier=False)
+
+    @field_validator(
+        "prompt_cache_ttl_mythos",
+        "prompt_cache_ttl_fable",
+        "prompt_cache_ttl_opus",
+        "prompt_cache_ttl_sonnet",
+        "prompt_cache_ttl_haiku",
+        mode="before",
+    )
+    @classmethod
+    def validate_tier_prompt_cache_ttl(cls, value: object) -> str:
+        """``inherit``, ``client`` or whole minutes 1-60; blank is ``inherit``."""
+        return normalize_prompt_cache_ttl(value, tier=True)
 
     @field_validator("server_port_takeover")
     @classmethod

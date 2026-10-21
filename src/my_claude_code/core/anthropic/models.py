@@ -1,8 +1,9 @@
 """Pydantic models for the Anthropic Messages protocol."""
 
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 
 class _AnthropicBlockBase(BaseModel):
@@ -158,8 +159,30 @@ class ThinkingConfig(BaseModel):
     display: Any = Field(default=None, exclude=True)
 
 
+@dataclass(frozen=True, slots=True)
+class PromptCacheAsk:
+    """The prompt-cache lifetime the operator asked for on one request (7.104.0).
+
+    ``minutes`` is what was asked (1-60), before any host's list is consulted;
+    ``source`` names the setting that decided it (``PROMPT_CACHE_TTL_OPUS``,
+    ``PROMPT_CACHE_TTL``). Resolved by the door from the route, because the
+    route decides the tier, and adapted per attempt by the provider, because
+    the host decides the lifetimes.
+    """
+
+    minutes: int
+    source: str
+
+
 class MessagesRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+    #: The operator's prompt-cache lifetime for this request (7.104.0), or
+    #: ``None`` -- the state of every request while nothing is set, which
+    #: leaves every body exactly as before. A private attribute, not a field:
+    #: no client body can set it, no dump ever carries it, and routing's
+    #: per-rung ``model_copy(deep=True)`` copies it to every attempt.
+    _prompt_cache_ask: PromptCacheAsk | None = PrivateAttr(default=None)
 
     model: str
     original_model: str | None = Field(default=None, exclude=True)
@@ -181,6 +204,15 @@ class MessagesRequest(BaseModel):
     mcp_servers: list[dict[str, Any]] | None = None
     extra_body: dict[str, Any] | None = None
     betas: list[str] | None = Field(default=None, exclude=True)
+
+    @property
+    def prompt_cache_ask(self) -> PromptCacheAsk | None:
+        """What the operator asked a host to keep this prompt cached for."""
+        return self._prompt_cache_ask
+
+    def set_prompt_cache_ask(self, ask: PromptCacheAsk | None) -> None:
+        """Stamp (or clear) the operator's lifetime; see ``_prompt_cache_ask``."""
+        self._prompt_cache_ask = ask
 
 
 class TokenCountRequest(BaseModel):

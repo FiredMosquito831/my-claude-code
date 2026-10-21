@@ -26,6 +26,7 @@ from my_claude_code.application.execution import (
     route_health_registry,
 )
 from my_claude_code.application.ports import ProviderResolver
+from my_claude_code.application.prompt_cache import stamp_prompt_cache_ask
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
@@ -111,6 +112,7 @@ class ChatCompletionsHandler:
         try:
             anthropic_payload = self._chat_adapter.to_anthropic_payload(request_data)
             chat_request = MessagesRequest(**anthropic_payload)
+            stamp_prompt_cache_ask(self._settings, chat_request)
             capture = build_capture(
                 self._settings,
                 chat_request,
