@@ -88,8 +88,9 @@ def _sentences(document: object) -> list[str]:
         return []
     said: list[str] = []
     error = document.get("error")
-    if isinstance(error, Mapping) and isinstance(error.get("message"), str):
-        said.append(error["message"])
+    error_message = error.get("message") if isinstance(error, Mapping) else None
+    if isinstance(error_message, str):
+        said.append(error_message)
     elif isinstance(error, str):
         said.append(error)
     message = document.get("message")
