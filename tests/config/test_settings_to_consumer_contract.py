@@ -1088,3 +1088,65 @@ def test_the_openrouter_live_switch_reaches_the_runtime_rung(
     values = {} if value is None else {"MODEL_METADATA_OPENROUTER_LIVE": value}
     manager = ProviderRuntimeManager(Settings.model_validate(values))
     assert (manager.openrouter_live_catalogue() is not None) is bound
+
+
+@pytest.mark.parametrize(("value", "ttl"), [(None, None), ("30", "1h"), ("3", "5m")])
+def test_the_prompt_cache_lifetime_reaches_the_anthropic_body(
+    value: str | None, ttl: str | None
+) -> None:
+    """7.104.0's PROMPT_CACHE_TTL_OPUS: Settings -> the door's stamp -> the body.
+
+    The door stamps the route's ask (``stamp_prompt_cache_ask``, called by all
+    four doors), the first-party Anthropic provider adapts it to the host's
+    lifetimes, and the builder writes it. Nothing set writes nothing.
+    """
+
+    from my_claude_code.application.prompt_cache import stamp_prompt_cache_ask
+    from my_claude_code.config.prompt_cache_lifetimes import prompt_cache_family_for
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+    from my_claude_code.providers.anthropic_messages.provider import (
+        AnthropicMessagesProvider,
+    )
+    from my_claude_code.providers.anthropic_messages.request import (
+        build_anthropic_messages_body,
+    )
+    from my_claude_code.providers.base import ProviderConfig
+    from tests.providers.support import passthrough_rate_limiter
+
+    values = {} if value is None else {"PROMPT_CACHE_TTL_OPUS": value}
+    request = MessagesRequest.model_validate(
+        {
+            "model": "claude-opus-5-5",
+            "max_tokens": 100,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "hi",
+                            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    stamp_prompt_cache_ask(Settings.model_validate(values), request)
+    provider = AnthropicMessagesProvider(
+        ProviderConfig(api_key="sk-ant-api03-test", base_url="https://x.invalid/v1"),
+        provider_name="ANTHROPIC",
+        rate_limiter=passthrough_rate_limiter(),
+        provider_id="anthropic",
+        prompt_cache_family=prompt_cache_family_for("anthropic"),
+    )
+    body = build_anthropic_messages_body(
+        request,
+        reasoning=DEFAULT_REASONING_POLICY,
+        prompt_cache=provider._prompt_cache_choice(request),
+    )
+
+    marker = body["messages"][0]["content"][0]["cache_control"]
+    assert marker["ttl"] == (ttl or "1h")
+    assert (request.prompt_cache_ask is None) is (value is None)
