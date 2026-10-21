@@ -114,6 +114,10 @@ from my_claude_code.config.model_refs import (
     parse_model_name,
     parse_provider_type,
 )
+from my_claude_code.config.prompt_cache_lifetimes import (
+    PROMPT_CACHE_LIFETIME_FAMILIES,
+    PROVIDER_PROMPT_CACHE_FAMILY,
+)
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.core.model_ids import ResolutionTier
@@ -222,6 +226,9 @@ FACT_KIND_LABELS: dict[str, str] = {
     # what a media model's host said about one request field. Shown only.
     "media_param_required": "media field required",
     "media_param_refused": "media field refused",
+    # 7.104.0, labelled in the commit that introduces it, by the same rule: a
+    # prompt-cache lifetime this model's host refused; ``detail`` names it.
+    "prompt_cache_lifetime_refused": "cache lifetime refused",
 }
 
 #: Kinds whose label the Models page payload's ``fact_labels`` table does not
@@ -230,8 +237,60 @@ FACT_KIND_LABELS: dict[str, str] = {
 #: while no such fact exists), and nothing on the page reads it: a learned row
 #: carries its own ``fact_label`` from the full table above.
 PAGE_TABLE_UNLISTED_FACT_KINDS: frozenset[str] = frozenset(
-    {"media_param_required", "media_param_refused"}
+    {"media_param_required", "media_param_refused", "prompt_cache_lifetime_refused"}
 )
+
+#: What the Models page says for a provider with no declared lifetime list.
+#: Unknown, never "unsupported" (IV.16): nothing MCC reads lists one.
+PROMPT_CACHE_LIFETIMES_UNKNOWN = "lifetime control not known for this host"
+PROMPT_CACHE_LIFETIMES_UNKNOWN_NOTE = (
+    "No lifetime list is declared for this host, so a prompt cache lifetime "
+    "set on Model Config changes nothing on its requests: the client's own "
+    "cache markers go exactly as sent."
+)
+PROMPT_CACHE_LIFETIMES_NOTE = (
+    "A lifetime set on Model Config is adapted to these: the shortest that is "
+    "at least the minutes asked for, else the longest. With none set, the "
+    "client's own cache markers go exactly as sent."
+)
+
+
+def prompt_cache_lifetimes_payload() -> dict[str, Any]:
+    """The declared lifetime table, for the Models page's read-only row (7.104.0).
+
+    Served beside the page's capability half rather than inside it: the table
+    is a fact about providers, not about any one model, and nothing in the
+    capability ladder (or its pinned snapshot) moves for it. The page joins it
+    to a model by the model's provider id, and narrows it by that model's own
+    learned refusals, which it already carries.
+    """
+
+    return {
+        "families": {
+            family_id: {
+                "label": family.label,
+                "wire_field": family.wire_field,
+                "lifetimes": [
+                    {
+                        "wire": lifetime.wire,
+                        "label": lifetime.label,
+                        "minutes": lifetime.minutes,
+                        "write_price": lifetime.write_price,
+                    }
+                    for lifetime in family.lifetimes
+                ],
+                "automatic_marker": family.automatic_marker,
+                "source": family.source,
+            }
+            for family_id, family in PROMPT_CACHE_LIFETIME_FAMILIES.items()
+        },
+        "providers": dict(PROVIDER_PROMPT_CACHE_FAMILY),
+        "refused_fact_kind": "prompt_cache_lifetime_refused",
+        "note": PROMPT_CACHE_LIFETIMES_NOTE,
+        "unknown_label": PROMPT_CACHE_LIFETIMES_UNKNOWN,
+        "unknown_note": PROMPT_CACHE_LIFETIMES_UNKNOWN_NOTE,
+    }
+
 
 # Where a resolved wire surface came from, in the operator's words. A separate
 # table from ``SOURCE_LABELS`` on purpose: that one names rungs of the

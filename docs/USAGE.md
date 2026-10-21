@@ -4316,6 +4316,33 @@ This setting has nothing to do with `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`
 
 A 400 that names a **sampling** parameter — `top_p`, `temperature`, `seed` — is never treated as a reasoning rejection: dropping thinking would not have fixed it, so the error is raised. So is a 400 that names nothing recognisable at all; Command Code's Anthropic endpoint answers a malformed `thinking` value with a bare `Invalid input`, and a gateway that vague gets a visible failure rather than a guess.
 
+### Prompt cache lifetime
+
+**New in 7.104.0.** A host keeps a prompt cache for a lifetime it picks from a short, fixed list. Anthropic — the Claude API and the Claude subscription — keeps one for **5 minutes** (its default) or **1 hour**, and nothing in between. Claude Code's terminal app already asks for 1 hour on its own `cache_control` markers; Claude Desktop and the SDKs leave Anthropic's 5 minutes. **By default MCC forwards whatever the client sends, byte for byte** — no marker is touched, added or removed.
+
+To choose instead, use **Model Config → Reasoning → Prompt cache lifetime**: one default and one per tier, the same tiers as the thinking level above them.
+
+| Setting | Default | Values |
+| --- | --- | --- |
+| `PROMPT_CACHE_TTL` | `client` | `client` — MCC sets nothing — or whole minutes `1`–`60` |
+| `PROMPT_CACHE_TTL_MYTHOS`, `PROMPT_CACHE_TTL_FABLE`, `PROMPT_CACHE_TTL_OPUS`, `PROMPT_CACHE_TTL_SONNET`, `PROMPT_CACHE_TTL_HAIKU` | `inherit` | `inherit` (use `PROMPT_CACHE_TTL`), `client`, or whole minutes `1`–`60` |
+
+A tier's value wins over the default, and `client` at any level stops there: MCC sets nothing for that tier even if the default asks. The tier is the one the thinking level uses — the `mcc/<tier>` alias, else the Claude name's keyword (`opus`, `haiku`, …); an explicit `provider/model` ref and the vision tier read only `PROMPT_CACHE_TTL`. A save applies to the next request, with no restart.
+
+**Minutes are adapted, never sent as a number.** MCC sends **the shortest lifetime the host accepts that is at least the minutes you asked for, else the host's longest**. On Anthropic, 1–5 sends `5m` and 6–60 sends `1h`. With a lifetime chosen:
+
+- every marker the client wrote — on a tool, a system block, a message block, a block inside a `tool_result`, or the top-level one — carries `ttl` set to that lifetime, with every other key of the marker (`scope`, `evict_on_complete`) kept, so a client's `1h` becomes `5m` when you ask for 3 minutes. A marker that has no `ttl` already means 5 minutes and is left exactly as written when 5 minutes is the choice;
+- a request that carries **no marker at all** gets Anthropic's single top-level `cache_control: {"type": "ephemeral", "ttl": …}`, which Anthropic places on the last cacheable block;
+- no beta header is added: `ttl` is a field of Anthropic's generally available `cache_control` object.
+
+**Which hosts.** In this release only the two first-party Anthropic providers, `anthropic` and `anthropic_oauth`, have a declared lifetime list (a table kept as data in `config/prompt_cache_lifetimes.py`). Every other host — ChatGPT, OpenRouter, Command Code, OpenCode's Messages door, custom providers — receives the client's bytes as before, and its model rows on the **Models** page say *lifetime control not known for this host*. A model of a declared host shows a read-only **prompt cache lifetimes** row with the lifetimes it takes and what each costs to write.
+
+**Price.** Anthropic bills a cache write at **1.25×** the input price for 5 minutes and **2×** for 1 hour; a cache read is the same either way. A 1-hour lifetime pays off only when the cache is read again more than about 5 minutes after it was written. MCC's cost figures still price every cache write at the 5-minute rate for now.
+
+**A host that refuses a lifetime.** If the host answers **400** naming the lifetime field of a marker that carried the lifetime MCC chose (`messages.2.content.1.text.cache_control.ttl: …`), or the top-level marker MCC added, that lifetime is recorded as refused for that model (*cache lifetime refused* on the Models page, 30 days, with Forget), and later requests are adapted to the lifetimes that remain — a refused `1h` means `5m` next time. The refused request itself is not retried by this: it fails over exactly as any 400 does. A 400 that mentions `cache_control` for another reason (too many markers, a marker on a block that cannot carry one) records nothing.
+
+Each attempt's request detail records `prompt_cache_ttl` beside the body whenever a setting applied: the minutes asked and which setting asked them, the lifetime sent, the lifetimes the host takes, how many markers there were and how many were changed, whether one was added, and any lifetime the host refused. With nothing set the key is absent and every stored row is exactly what it was.
+
 ---
 
 ## 10. Web search

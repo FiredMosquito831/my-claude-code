@@ -3,6 +3,12 @@
 from collections.abc import Iterable
 from dataclasses import replace
 
+from my_claude_code.config.constants import (
+    PROMPT_CACHE_TTL_CLIENT,
+    PROMPT_CACHE_TTL_INHERIT,
+    PROMPT_CACHE_TTL_MAX_MINUTES,
+    PROMPT_CACHE_TTL_MIN_MINUTES,
+)
 from my_claude_code.config.limits import describe_range, range_for
 from my_claude_code.config.reasoning import (
     ROOT_REASONING_PREFERENCES,
@@ -24,6 +30,43 @@ __all__ = [
     "ConfigSectionSpec",
     "FieldType",
 ]
+
+
+def _prompt_cache_ttl_options(*, tier: bool) -> tuple[ConfigOptionSpec, ...]:
+    """``client`` (and ``inherit`` on a tier), then every whole minute 1-60."""
+
+    words = (
+        (ConfigOptionSpec(PROMPT_CACHE_TTL_INHERIT, "Inherit"),) if tier else ()
+    ) + (ConfigOptionSpec(PROMPT_CACHE_TTL_CLIENT, "From client"),)
+    minutes = tuple(
+        ConfigOptionSpec(str(value), f"{value} min")
+        for value in range(
+            PROMPT_CACHE_TTL_MIN_MINUTES, PROMPT_CACHE_TTL_MAX_MINUTES + 1
+        )
+    )
+    return words + minutes
+
+
+#: What every prompt-cache lifetime field says about the rule it follows. The
+#: per-host lifetimes are the declared table's (``config/prompt_cache_lifetimes``).
+_PROMPT_CACHE_TTL_RULE = (
+    "A number is never sent as a number: it is adapted to the lifetimes the "
+    "destination host accepts -- the shortest that is at least the minutes "
+    "asked for, else the host's longest. Anthropic (the Claude API and the "
+    "Claude subscription) keeps a cache for 5 min or 1 h, so 1-5 sends 5 min "
+    "and 6-60 sends 1 h; a cache write costs 1.25x input at 5 min and 2x at "
+    "1 h. Every other host gets nothing from this setting yet, and a host "
+    "that refuses a lifetime is remembered on the Models page."
+)
+
+
+def _tier_prompt_cache_ttl_help(tier_label: str) -> str:
+    return (
+        f"Prompt cache lifetime MCC asks for on the {tier_label} tier. Inherit "
+        "keeps the Default Prompt Cache Lifetime, From client forwards the "
+        "client's own cache_control lifetimes untouched, and 1-60 minutes "
+        f"replaces them. {_PROMPT_CACHE_TTL_RULE}"
+    )
 
 
 def _reasoning_options(
@@ -1270,6 +1313,82 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "only the levels its own API supports, so a pinned level can arrive rounded "
             "rather than refused."
         ),
+    ),
+    # The "Prompt cache lifetime" subheading of the Reasoning section
+    # (7.104.0): one global value and one per tier, the tiers REASONING_<TIER>
+    # has, read per request by the door. Nothing set -- the shipped state --
+    # leaves every body exactly as the client sent it.
+    ConfigFieldSpec(
+        "PROMPT_CACHE_TTL",
+        "Default Prompt Cache Lifetime",
+        "reasoning",
+        "select",
+        settings_attr="prompt_cache_ttl",
+        default=PROMPT_CACHE_TTL_CLIENT,
+        options=_prompt_cache_ttl_options(tier=False),
+        affects_providers=False,
+        description=(
+            "How long a host should keep the prompt cache, for every tier that "
+            "inherits. From client (the default) forwards the client's own "
+            "cache_control lifetimes byte for byte, so Claude Code keeps asking "
+            "for whatever it asks for; 1-60 minutes replaces them. "
+            f"{_PROMPT_CACHE_TTL_RULE}"
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROMPT_CACHE_TTL_MYTHOS",
+        "Mythos Prompt Cache Lifetime",
+        "reasoning",
+        "select",
+        settings_attr="prompt_cache_ttl_mythos",
+        default=PROMPT_CACHE_TTL_INHERIT,
+        options=_prompt_cache_ttl_options(tier=True),
+        affects_providers=False,
+        description=_tier_prompt_cache_ttl_help("Mythos"),
+    ),
+    ConfigFieldSpec(
+        "PROMPT_CACHE_TTL_FABLE",
+        "Fable Prompt Cache Lifetime",
+        "reasoning",
+        "select",
+        settings_attr="prompt_cache_ttl_fable",
+        default=PROMPT_CACHE_TTL_INHERIT,
+        options=_prompt_cache_ttl_options(tier=True),
+        affects_providers=False,
+        description=_tier_prompt_cache_ttl_help("Fable"),
+    ),
+    ConfigFieldSpec(
+        "PROMPT_CACHE_TTL_OPUS",
+        "Opus Prompt Cache Lifetime",
+        "reasoning",
+        "select",
+        settings_attr="prompt_cache_ttl_opus",
+        default=PROMPT_CACHE_TTL_INHERIT,
+        options=_prompt_cache_ttl_options(tier=True),
+        affects_providers=False,
+        description=_tier_prompt_cache_ttl_help("Opus"),
+    ),
+    ConfigFieldSpec(
+        "PROMPT_CACHE_TTL_SONNET",
+        "Sonnet Prompt Cache Lifetime",
+        "reasoning",
+        "select",
+        settings_attr="prompt_cache_ttl_sonnet",
+        default=PROMPT_CACHE_TTL_INHERIT,
+        options=_prompt_cache_ttl_options(tier=True),
+        affects_providers=False,
+        description=_tier_prompt_cache_ttl_help("Sonnet"),
+    ),
+    ConfigFieldSpec(
+        "PROMPT_CACHE_TTL_HAIKU",
+        "Haiku Prompt Cache Lifetime",
+        "reasoning",
+        "select",
+        settings_attr="prompt_cache_ttl_haiku",
+        default=PROMPT_CACHE_TTL_INHERIT,
+        options=_prompt_cache_ttl_options(tier=True),
+        affects_providers=False,
+        description=_tier_prompt_cache_ttl_help("Haiku"),
     ),
     ConfigFieldSpec(
         "ANTHROPIC_AUTH_TOKEN",

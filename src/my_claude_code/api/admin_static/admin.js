@@ -10130,8 +10130,48 @@ function renderMessagingAuthNotice(openPlatforms) {
    flat grid, which stopped scaling past 30 providers to scan; each provider's
    own advanced fields (proxy, etc.) move into that provider's card instead of
    floating in the same grid. */
+/* The Reasoning section of Model Config: the thinking levels in the grid
+   exactly as before, then (7.104.0) a "Prompt cache lifetime" subheading
+   holding PROMPT_CACHE_TTL and one lifetime per tier, in the same tier order
+   as the thinking levels above it. Generic fields, saved like every other. */
+const PROMPT_CACHE_TTL_FIELD_PREFIX = "PROMPT_CACHE_TTL";
+
+function renderReasoningSection(fields) {
+  const wrap = document.createElement("div");
+  const lifetimes = fields.filter((field) =>
+    field.key.startsWith(PROMPT_CACHE_TTL_FIELD_PREFIX),
+  );
+  const grid = document.createElement("div");
+  grid.className = "field-grid";
+  fields
+    .filter((field) => !field.key.startsWith(PROMPT_CACHE_TTL_FIELD_PREFIX))
+    .forEach((field) => grid.appendChild(renderField(field)));
+  wrap.appendChild(grid);
+  if (lifetimes.length === 0) return wrap;
+  const group = document.createElement("div");
+  group.className = "settings-subsection";
+  group.id = "subsection-prompt-cache-lifetime";
+  const heading = document.createElement("h4");
+  heading.className = "settings-subheading";
+  heading.textContent = "Prompt cache lifetime";
+  const lead = document.createElement("p");
+  lead.className = "settings-subheading-lead";
+  lead.textContent =
+    "How long a host keeps the prompt cache, chosen by MCC instead of the " +
+    "client. From client changes nothing. Minutes are adapted to what the " +
+    "host accepts: Anthropic and the Claude subscription keep 5 min or 1 h; " +
+    "other hosts are not changed by this setting yet.";
+  const lifetimeGrid = document.createElement("div");
+  lifetimeGrid.className = "field-grid";
+  lifetimes.forEach((field) => lifetimeGrid.appendChild(renderField(field)));
+  group.append(heading, lead, lifetimeGrid);
+  wrap.appendChild(group);
+  return wrap;
+}
+
 const SECTION_RENDERERS = {
   models: renderModelRouting,
+  reasoning: renderReasoningSection,
   optimizer: renderOptimizerSettings,
   providers: renderProviderGroups,
   deadlines: renderDeadlines,
@@ -32329,7 +32369,10 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
     if (isModel) {
       placeReadonlyFieldRows(
         table,
-        modelReadonlyFieldEntries(ctx.capabilities, ctx.model),
+        [
+          ...modelReadonlyFieldEntries(ctx.capabilities, ctx.model),
+          ...promptCacheLifetimeEntries(ctx.model),
+        ],
         ctx.model,
       );
     }
@@ -32581,6 +32624,55 @@ function modelReadonlyFieldEntries(capabilities, model) {
   add("lists", "supported_parameters", "supported parameters", capabilities.supported_parameters);
   add("lists", "default_parameters", "gateway default parameters", capabilities.default_parameters);
   return entries;
+}
+
+/* 7.104.0: which prompt-cache lifetimes this model's host takes -- the
+   declared table the server sends beside the page (`prompt_cache_lifetimes`),
+   joined by provider id and narrowed by this model's own learned refusals,
+   each named "refused by this host" while the fact is fresh. A provider the
+   table does not list says "lifetime control not known for this host":
+   unknown, never "unsupported". A payload without the table (an older
+   server) draws no row at all. Read-only in this release; it is a fact about
+   the host, not something the model discovered, so it never counts towards
+   "Nothing discovered for this model". */
+function promptCacheLifetimeEntries(model) {
+  const table = modelsState.data && modelsState.data.prompt_cache_lifetimes;
+  if (!table || !model) return [];
+  const familyId = (table.providers || {})[modelProviderId(model)];
+  const family = familyId ? (table.families || {})[familyId] : null;
+  const entry = (field) => [
+    {
+      group: "request",
+      key: "prompt_cache_lifetimes",
+      label: "prompt cache lifetimes",
+      field,
+    },
+  ];
+  if (!family) {
+    return entry({
+      value: table.unknown_label,
+      source: "unknown",
+      source_label: "not declared",
+      note: table.unknown_note,
+    });
+  }
+  const refused = new Set(
+    (model.learned || [])
+      .filter((fact) => fact.fact_kind === table.refused_fact_kind && !fact.stale)
+      .map((fact) => String(fact.detail || "")),
+  );
+  const words = (family.lifetimes || []).map((lifetime) => {
+    const price = lifetime.write_price ? ` (writes ${lifetime.write_price})` : "";
+    return refused.has(lifetime.wire)
+      ? `${lifetime.label} — refused by this host`
+      : `${lifetime.label}${price}`;
+  });
+  return entry({
+    value: words.join(", "),
+    source: "declared",
+    source_label: `declared for the ${family.label} family`,
+    note: table.note,
+  });
 }
 
 /* Whether ANY field was discovered for this model -- the rows above plus the

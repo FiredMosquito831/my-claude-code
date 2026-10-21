@@ -4714,6 +4714,13 @@ if (process.env.MCC_JSDOM_SCENARIO === "agent_installs") {
   const { prepareAgentInstallsScenario } = await import("./admin_jsdom_agent_installs.mjs");
   scenario = prepareAgentInstallsScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=prompt_cache (7.104.0): Model Config's "Prompt cache
+   lifetime" subheading under Reasoning, its Save, and the Models page's
+   read-only "prompt cache lifetimes" row (admin_jsdom_prompt_cache.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "prompt_cache") {
+  const { preparePromptCacheScenario } = await import("./admin_jsdom_prompt_cache.mjs");
+  scenario = preparePromptCacheScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));

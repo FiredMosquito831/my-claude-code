@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.config.prompt_cache_lifetimes import prompt_cache_family_for
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
@@ -68,6 +69,11 @@ class AnthropicProvider(BaseProvider):
             body_transform=body_transform,
             provider_id=provider_id,
             forward_thinking_display=forward_thinking_display,
+            # The lifetimes the declared table gives this provider id: the
+            # Anthropic Messages pair for ``anthropic`` and
+            # ``anthropic_oauth``, the only two ids that build this class.
+            # Any other id finds no row and gets no lifetime control.
+            prompt_cache_family=prompt_cache_family_for(provider_id),
         )
         self._client = bound_socks_handshake(
             httpx.AsyncClient(

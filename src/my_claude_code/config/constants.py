@@ -1053,6 +1053,21 @@ TOOL_RESULT_IMAGE_DELIVERY_DEFAULT = "auto"
 IMAGE_DETAIL_NAMES: frozenset[str] = frozenset({"auto", "low", "high"})
 IMAGE_DETAIL_DEFAULT = "auto"
 
+# How long a host should keep this request's prompt cache, in minutes, when MCC
+# is the one choosing (7.104.0). `client` -- the shipped default of the global
+# `PROMPT_CACHE_TTL` -- means MCC chooses nothing: the client's own
+# `cache_control` markers, and the lifetimes on them, go exactly as sent.
+# `inherit` -- the shipped default of each `PROMPT_CACHE_TTL_<TIER>` -- means
+# "the global setting decides". A number asks for that many minutes, which the
+# provider layer adapts to the lifetimes the destination host accepts
+# (`config/prompt_cache_lifetimes.py`); it is never sent as a number.
+PROMPT_CACHE_TTL_CLIENT = "client"
+PROMPT_CACHE_TTL_INHERIT = "inherit"
+PROMPT_CACHE_TTL_DEFAULT = PROMPT_CACHE_TTL_CLIENT
+PROMPT_CACHE_TTL_TIER_DEFAULT = PROMPT_CACHE_TTL_INHERIT
+PROMPT_CACHE_TTL_MIN_MINUTES = 1
+PROMPT_CACHE_TTL_MAX_MINUTES = 60
+
 # The longest edge, in pixels, an outbound image may have. The default is the
 # number Anthropic itself resizes to and the number Claude Code ships
 # (`maxTargetPx: 1568`, `maxTargetTokens: 1568`); combined with the destination

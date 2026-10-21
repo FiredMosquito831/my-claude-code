@@ -48,6 +48,7 @@ from my_claude_code.application.execution import (
     route_health_registry,
 )
 from my_claude_code.application.ports import ProviderResolver
+from my_claude_code.application.prompt_cache import stamp_prompt_cache_ask
 from my_claude_code.application.routing import (
     ModelRouter,
     RouteDiversion,
@@ -210,6 +211,9 @@ class MessagesHandler:
         # the one tool list the conversation's tool changes add up to. A
         # request without such changes is the same object as before.
         request_data = fold_request_tool_changes(request_data, request_id=request_id)
+        # The operator's prompt-cache lifetime for this route, if one is set
+        # (7.104.0). Nothing set stamps nothing.
+        stamp_prompt_cache_ask(self._settings, request_data)
         self._trim_tool_results(request_data, request_id=request_id)
         capture = build_capture(
             self._settings,

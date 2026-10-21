@@ -137,6 +137,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | --- | --- | --- | --- |
 | Reasoning control | One effort setting translated into each provider's own reasoning dialect | **Model Config** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
 | Learned rejections | A reasoning field a model refused is remembered and not sent again | **Models** page | [Guide](docs/USAGE.md#9-model-tiers-and-routing) |
+| Prompt cache lifetime | Off by default (the client's own lifetimes go untouched); set minutes per tier and MCC sends the host's nearest lifetime at least that long — 5 min or 1 h on Anthropic | **Model Config** page | [Guide](docs/USAGE.md#prompt-cache-lifetime) |
 | Output token budgets | A ceiling per route, with a stated cost and an enforced range | **Limits & Resilience** page | [Guide](docs/USAGE.md#13-limits-and-resilience) |
 | Minimum output allowance | A floor that stops a long prompt squeezing the reply to nothing | **Limits & Resilience** page | [Guide](docs/USAGE.md#13-limits-and-resilience) |
 | Deadlines | A first-token deadline and a total deadline per route, so a silent model is a failure rather than a hang | **Limits & Resilience** page | [Guide](docs/USAGE.md#13-limits-and-resilience) |

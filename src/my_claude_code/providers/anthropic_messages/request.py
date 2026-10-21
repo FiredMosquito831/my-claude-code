@@ -7,6 +7,7 @@ from typing import Any
 from loguru import logger
 
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.application.prompt_cache import PromptCacheLifetimeChoice
 from my_claude_code.config.settings import configured_default_max_output_tokens
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.reasoning import (
@@ -42,13 +43,19 @@ _CANONICAL_FIELDS = frozenset(
 #: and a note about the history would then count as reasoning sent.
 FOREIGN_THINKING_DROPPED = "foreign_thinking_dropped"
 
+#: The ``params.wire`` key recording the prompt-cache lifetime MCC chose for an
+#: attempt (7.104.0): what was asked, what was sent, what the host takes.
+#: Present only when a lifetime setting applied to the request.
+PROMPT_CACHE_TTL_NOTE = "prompt_cache_ttl"
+
 
 def build_anthropic_messages_body(
     request: MessagesRequest,
     *,
     reasoning: ReasoningPolicy,
-    wire_notes: dict[str, str] | None = None,
+    wire_notes: dict[str, Any] | None = None,
     forward_thinking_display: bool = False,
+    prompt_cache: PromptCacheLifetimeChoice | None = None,
 ) -> dict[str, Any]:
     """Build one native Messages request without exposing FCC-only fields.
 
@@ -62,6 +69,12 @@ def build_anthropic_messages_body(
     asks for it: it is the one path that also forwards the client's betas,
     which ``display: "updates"`` needs. ``False`` -- every other caller --
     builds exactly what it always did.
+
+    ``prompt_cache`` is the lifetime an operator's setting chose for this host
+    (7.104.0); see :func:`apply_prompt_cache_lifetime`. ``None`` -- every
+    request while nothing is set, and every caller but the two first-party
+    Anthropic providers -- never reaches that step, so the body is the one
+    this function always built.
     """
     body = request.model_dump(exclude_none=True)
     for field in _INTERNAL_FIELDS:
@@ -110,7 +123,97 @@ def build_anthropic_messages_body(
             )
         )
     _merge_extra_body(body, request.extra_body)
+    if prompt_cache is not None:
+        body = apply_prompt_cache_lifetime(body, prompt_cache, wire_notes)
     return body
+
+
+def apply_prompt_cache_lifetime(
+    body: dict[str, Any],
+    choice: PromptCacheLifetimeChoice | None,
+    wire_notes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Put the chosen lifetime on the body's cache markers; the same body back.
+
+    ``None`` returns ``body`` itself, untouched: the identity is the contract.
+    With a lifetime chosen (Q2 "replace", Q3, user decisions 2026-10-20):
+
+    * every ``cache_control`` marker the client wrote -- on a tool, a system
+      block, a message block or a block nested in a ``tool_result``, or the
+      top-level one -- carries that lifetime. Every other key of a marker
+      (``scope``, ``evict_on_complete``) is kept, and no marker is added or
+      removed, so the four-breakpoint limit holds and, with one lifetime on
+      every marker, so does Anthropic's "longer lifetimes first" rule. A
+      marker with no lifetime field already has the host's default one, so
+      when that is the lifetime chosen it is left exactly as written;
+    * a request with no marker at all, on a host that documents automatic
+      caching, gets that single top-level marker with the lifetime -- placed
+      by the host on the last cacheable block;
+    * a choice with nothing to send (the host refused every lifetime it was
+      declared to take) changes no byte; the note says so.
+
+    The body is the builder's own: every container in it was dumped or
+    deep-copied for this attempt, so a marker is replaced in place and the
+    client's request object is never touched.
+    """
+
+    if choice is None:
+        return body
+    note = choice.note()
+    lifetime = choice.sent
+    if lifetime is not None:
+        owners = _cache_marker_owners(body)
+        retimed = 0
+        for owner in owners:
+            marker = owner["cache_control"]
+            current = marker.get("ttl")
+            if current == lifetime.wire:
+                continue
+            if current is None and lifetime.wire == choice.family.default_wire:
+                continue
+            owner["cache_control"] = {**marker, "ttl": lifetime.wire}
+            retimed += 1
+        added = not owners and choice.family.automatic_marker
+        if added:
+            body["cache_control"] = {"type": "ephemeral", "ttl": lifetime.wire}
+        note["markers"] = len(owners)
+        note["retimed"] = retimed
+        note["marker_added"] = added
+    if wire_notes is not None:
+        wire_notes[PROMPT_CACHE_TTL_NOTE] = note
+    return body
+
+
+def _cache_marker_owners(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every object in the body that carries a ``cache_control`` marker."""
+
+    owners: list[dict[str, Any]] = []
+    if isinstance(body.get("cache_control"), dict):
+        owners.append(body)
+    for key in ("tools", "system"):
+        items = body.get(key)
+        if isinstance(items, list):
+            for item in items:
+                _collect_marker_owners(item, owners)
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list):
+                for block in content:
+                    _collect_marker_owners(block, owners)
+    return owners
+
+
+def _collect_marker_owners(block: Any, owners: list[dict[str, Any]]) -> None:
+    if not isinstance(block, dict):
+        return
+    if isinstance(block.get("cache_control"), dict):
+        owners.append(block)
+    nested = block.get("content")
+    if isinstance(nested, list):
+        for inner in nested:
+            _collect_marker_owners(inner, owners)
 
 
 def _native_message(message: Message) -> dict[str, Any]:
