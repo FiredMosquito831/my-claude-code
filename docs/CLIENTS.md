@@ -282,6 +282,13 @@ it. A request without these blocks is sent exactly as before. MCP references
 MCP connector can reach, so they are dropped. A `tool_result` with no `content`
 is accepted too, as Anthropic documents it.
 
+**Empty system messages (7.103.2).** After a compaction, a resume or an effort
+change Claude Code sends a `role: "system"` message with `content: []` whose
+only payload is the per-turn effort (`output_config`); on OpenAI-format models
+MCC leaves that message out instead of refusing the request (Request detail
+then says `empty_system_messages_dropped`), and Anthropic-format routes receive
+it exactly as before.
+
 #### Count tokens
 
 ```sh

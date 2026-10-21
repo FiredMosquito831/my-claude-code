@@ -20,6 +20,7 @@ from my_claude_code.application.model_metadata import (
     ResponseSurfaceSource,
 )
 from my_claude_code.config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
+from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.credential_refresh_scope import (
@@ -897,6 +898,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                             **schema_marker,
                             **count_marker,
                             **history_thinking_marker(declared_marker),
+                            **empty_system_messages_marker(declared_marker),
                         )
                         try:
                             response = await self._rate_limiter.execute_with_retry(

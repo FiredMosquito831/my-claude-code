@@ -2,10 +2,13 @@
 
 from .content import extract_text_from_content, get_block_attr, get_block_type
 from .conversion import (
+    EMPTY_SYSTEM_MESSAGES_DROPPED,
     AnthropicToOpenAIConverter,
     OpenAIConversionError,
     ReasoningReplayMode,
     build_base_request_body,
+    empty_system_messages_marker,
+    empty_system_messages_note,
     is_synthetic_openai_tool_turn_boundary,
 )
 from .errors import (
@@ -75,6 +78,7 @@ from .tools import FunctionTagToolParser, HeuristicToolParser
 from .utils import set_if_not_none
 
 __all__ = [
+    "EMPTY_SYSTEM_MESSAGES_DROPPED",
     "EMPTY_TOOL_CATALOGUE",
     "TOOL_CHANGE_BLOCK_TYPES",
     "TRIMMABLE_TOOL_NAMES",
@@ -129,6 +133,8 @@ __all__ = [
     "carries_tool_changes",
     "count_text_tokens",
     "dump_messages_request",
+    "empty_system_messages_marker",
+    "empty_system_messages_note",
     "extract_text_from_content",
     "fold_tool_changes",
     "format_sse_event",

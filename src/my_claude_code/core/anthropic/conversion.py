@@ -1,6 +1,7 @@
 """Message and tool format converters."""
 
 import json
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -22,6 +23,77 @@ from .utils import set_if_not_none
 
 class OpenAIConversionError(Exception):
     """Raised when Anthropic content cannot be converted to OpenAI chat without data loss."""
+
+
+#: The refusal for a request whose only inline system messages had no content,
+#: so nothing at all was left to send. Worded exactly as the refusal every such
+#: message got before 7.103.2, when one empty message refused the whole request.
+_EMPTY_INLINE_SYSTEM_MESSAGE = (
+    "OpenAI chat conversion requires an inline Anthropic system message to "
+    "contain text."
+)
+
+#: The ``params.wire`` key recording that the OpenAI-format converter left out
+#: inline system messages with no content at all (``content: []``). Counts
+#: only, never text -- the rule ``history_thinking_omitted`` and
+#: ``foreign_thinking_dropped`` keep. Not spelled ``reasoning_*``/``thinking_*``,
+#: so the wire recorder never reads it as a reasoning instruction
+#: (``is_reasoning_key``).
+EMPTY_SYSTEM_MESSAGES_DROPPED = "empty_system_messages_dropped"
+
+
+def _is_empty_inline_system_message(message: Any) -> bool:
+    """Whether one message is an inline system message with no content at all.
+
+    Claude Code (2.1.296 onward) sends exactly this after a compaction, a
+    resume or an effort change: ``{"role": "system", "content": [],
+    "output_config": {"effort": ...}}``, a carrier whose only payload is the
+    per-turn effort. MCC does not use per-turn effort (decision of
+    2026-10-20), and the message has nothing an OpenAI-format model could
+    read, so the converter leaves it out. Only an empty *list* qualifies: a
+    string (even ``""``) and a list of text blocks (even empty ones) are text,
+    and convert exactly as they always have.
+    """
+    if getattr(message, "role", None) != "system":
+        return False
+    content = getattr(message, "content", None)
+    return isinstance(content, list) and not content
+
+
+def empty_system_messages_note(messages: Iterable[Any]) -> dict[str, str]:
+    """The ``empty_system_messages_dropped`` record for one history, or ``{}``.
+
+    Counted with the very predicate :meth:`AnthropicToOpenAIConverter.
+    convert_messages` leaves them out by, so the line and the body cannot
+    disagree. ``{}`` when there were none, which keeps every other request's
+    recorded params exactly as they were.
+    """
+    count = sum(1 for message in messages if _is_empty_inline_system_message(message))
+    if not count:
+        return {}
+    noun = "message" if count == 1 else "messages"
+    return {
+        EMPTY_SYSTEM_MESSAGES_DROPPED: (
+            f"left out {count} empty system {noun} "
+            "(Claude Code's per-turn effort marker)"
+        )
+    }
+
+
+def empty_system_messages_marker(
+    wire_notes: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """The empty-system-message record out of one build's ``wire_notes``, or ``{}``.
+
+    For the senders that pick their record's keys out of a shared notes
+    mapping one by one (the Responses transport, ChatGPT OAuth), beside
+    ``history_thinking_marker``. A retry never changes what the history left
+    out, so every attempt row of one request carries the same line.
+    """
+    if not wire_notes:
+        return {}
+    note = wire_notes.get(EMPTY_SYSTEM_MESSAGES_DROPPED)
+    return {EMPTY_SYSTEM_MESSAGES_DROPPED: note} if note else {}
 
 
 class ReasoningReplayMode(StrEnum):
@@ -599,8 +671,17 @@ class AnthropicToOpenAIConverter:
         image_detail: str | None = None,
     ) -> list[dict[str, Any]]:
         ledger = _OpenAIChatHistoryLedger(image_detail)
+        left_out = 0
 
         for msg in messages:
+            if _is_empty_inline_system_message(msg):
+                # Left out rather than refused: the transcript is then exactly
+                # the conversation without the marker, so tool-turn boundaries
+                # and user-turn coalescing follow their usual rules. Counted
+                # for the guard below; the wire note is counted from the
+                # request by ``empty_system_messages_note``.
+                left_out += 1
+                continue
             role = msg.role
             content = msg.content
             reasoning_content = _clean_reasoning_content(
@@ -625,6 +706,10 @@ class AnthropicToOpenAIConverter:
                     ledger.add_tool_turn(segment)
 
         ordered_messages = ledger.finish()
+        if left_out and not ordered_messages:
+            # Nothing else was in the request, so there is nothing to send:
+            # the refusal every such request has always had.
+            raise OpenAIConversionError(_EMPTY_INLINE_SYSTEM_MESSAGE)
         closed_messages = _close_openai_tool_result_turns(ordered_messages)
         return _coalesce_openai_user_messages(closed_messages)
 
@@ -643,10 +728,10 @@ class AnthropicToOpenAIConverter:
                 context="an inline Anthropic system message",
             )
             if system_text is None:
-                raise OpenAIConversionError(
-                    "OpenAI chat conversion requires an inline Anthropic system "
-                    "message to contain text."
-                )
+                # Unreachable from ``convert_messages``, which leaves an empty
+                # system message out before it gets here; kept so a direct
+                # caller still gets the refusal rather than an empty user turn.
+                raise OpenAIConversionError(_EMPTY_INLINE_SYSTEM_MESSAGE)
             # Reserve the downstream system role for request.system at index zero.
             return [_PlainSegment([{"role": "user", "content": system_text}])]
         if role == "assistant" and isinstance(content, list):

@@ -32,6 +32,7 @@ from my_claude_code.core.anthropic import (
     ContentType,
     HeuristicToolParser,
     ThinkTagParser,
+    empty_system_messages_note,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest, Tool
 from my_claude_code.core.anthropic.openai_tool_names import (
@@ -732,7 +733,11 @@ class OpenAIChatProvider(BaseProvider):
         return fields
 
     async def _create_stream(
-        self, body: dict, *, surface_label: str = ""
+        self,
+        body: dict,
+        *,
+        surface_label: str = "",
+        wire_notes: Mapping[str, str] | None = None,
     ) -> tuple[Any, dict]:
         """Create a streaming chat completion with bounded request fallbacks.
 
@@ -740,6 +745,11 @@ class OpenAIChatProvider(BaseProvider):
         say which of a multi-surface gateway's endpoints served the attempt and
         where that decision came from. Empty for every provider that has one
         surface, which leaves their recorded params byte-identical.
+
+        ``wire_notes`` is what building ``body`` left out of the client's
+        request (``empty_system_messages_dropped``, counts only), recorded
+        beside it. ``None`` or empty -- every request with nothing left out --
+        records exactly the params it always did.
         """
         body = self._output_cap_recovery.apply_learned(body)
         body = self._apply_learned_stream_usage(body)
@@ -786,6 +796,7 @@ class OpenAIChatProvider(BaseProvider):
                         if identity
                         else {}
                     ),
+                    **(wire_notes or {}),
                 )
                 stream = adopt_chat_stream(
                     await self._rate_limiter.execute_with_retry(
@@ -1332,6 +1343,11 @@ class _OpenAIChatStreamRunner:
         self._provider = provider
         self._surface_label = surface_label
         self._request = request
+        # What the body build leaves out of this request, recorded on every
+        # send of it -- the first, each create-level retry and each recovery
+        # continuation -- because none of them puts it back. Empty, and so
+        # recording nothing, for every request with nothing left out.
+        self._wire_notes = empty_system_messages_note(request.messages)
         self._input_tokens = input_tokens
         self._request_id = request_id
         self._reasoning = reasoning
@@ -1402,7 +1418,9 @@ class _OpenAIChatStreamRunner:
                 shape: ResponseShape | None = None
                 try:
                     stream, body = await self._provider._create_stream(
-                        body, surface_label=self._surface_label
+                        body,
+                        surface_label=self._surface_label,
+                        wire_notes=self._wire_notes,
                     )
                     stream_opened = True
                     # Opposite the wire body recorded at the commit boundary:
@@ -1759,7 +1777,9 @@ class _OpenAIChatStreamRunner:
             stream: Any | None = None
             try:
                 stream, _ = await self._provider._create_stream(
-                    body, surface_label=self._surface_label
+                    body,
+                    surface_label=self._surface_label,
+                    wire_notes=self._wire_notes,
                 )
                 text_parts: list[str] = []
                 thinking_parts: list[str] = []

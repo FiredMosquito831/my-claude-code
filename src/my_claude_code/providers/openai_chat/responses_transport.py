@@ -35,6 +35,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import EMPTY_TOOL_CATALOGUE
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
@@ -668,6 +669,7 @@ class ResponsesTransport:
                 **schema_marker,
                 **count_marker,
                 **history_thinking_marker(wire_notes),
+                **empty_system_messages_marker(wire_notes),
             )
             try:
                 response = await self._rate_limiter.execute_with_retry(
