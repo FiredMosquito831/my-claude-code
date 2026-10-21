@@ -32,6 +32,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -552,6 +553,21 @@ static class FakeLauncher
             Console.WriteLine("my-claude-code " + version);
             return 0;
         }
+        // 7.103.1: a port-holder report and a stop that LIE (FAKE_STOP_LIES=1):
+        // the report names the server holding the port, the stop says the
+        // port is free and stops nothing -- what `--stop-holder` answered on a
+        // loaded machine when its own port lookup timed out.
+        if (args.Length > 0 && args[0] == "--report-holder" && Env("FAKE_STOP_LIES") == "1")
+        {
+            string holderPid = LastStartedPid();
+            Console.WriteLine("{\"holder\":{\"pid\":" + holderPid + ",\"is_mcc_server\":true},\"holder_description\":\"mcc-server (pid " + holderPid + ")\",\"other_servers\":[]}");
+            return 0;
+        }
+        if (args.Length > 0 && args[0] == "--stop-holder" && Env("FAKE_STOP_LIES") == "1")
+        {
+            Console.WriteLine("{\"stopped\":false,\"port_free\":true,\"message\":\"Nothing was listening on that port.\"}");
+            return 0;
+        }
         if (args.Length > 0 && args[0].StartsWith("--"))
         {
             return 2;
@@ -561,35 +577,100 @@ static class FakeLauncher
             int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
             File.AppendAllText(Env("FAKE_STARTED"), version + " " + pid + Environment.NewLine);
             int port = int.Parse(Env("FAKE_PORT"));
+            // 7.103.1: FAKE_START_MODE="<version>=<mode>" -- die (exit at
+            // once), hang (never listen), slow:<s> (listen after s seconds),
+            // noserve (/health 200, the version route 500).
+            string mode = ModeFor(version);
+            if (mode == "die")
+            {
+                Console.Error.WriteLine("simulated crash during start");
+                return 3;
+            }
+            if (mode == "hang")
+            {
+                DateTime hangUntil = DateTime.UtcNow.AddSeconds(120);
+                while (DateTime.UtcNow < hangUntil && !File.Exists(Env("FAKE_SENTINEL"))) Thread.Sleep(100);
+                return 0;
+            }
+            if (mode.StartsWith("slow:"))
+            {
+                Thread.Sleep(int.Parse(mode.Substring(5)) * 1000);
+            }
             TcpListener listener = new TcpListener(IPAddress.Loopback, port);
             listener.ExclusiveAddressUse = true;
             listener.Start();
-            DateTime deadline = DateTime.UtcNow.AddSeconds(45);
+            // Serves until the test says stop (or a bound): the installer now
+            // asks /health, then who answered, then the version route.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(90);
             try
             {
-                while (DateTime.UtcNow < deadline)
+                while (DateTime.UtcNow < deadline && !File.Exists(Env("FAKE_SENTINEL")))
                 {
                     if (!listener.Pending()) { Thread.Sleep(50); continue; }
+                    // A client that connects and goes away (a port probe, a
+                    // request that timed out) must not take the server down
+                    // with it, as it would a real one.
+                    try
+                    {
                     using (TcpClient client = listener.AcceptTcpClient())
                     {
                         NetworkStream stream = client.GetStream();
                         byte[] buffer = new byte[4096];
                         int read = stream.Read(buffer, 0, buffer.Length);
+                        if (read <= 0) continue;
                         string request = Encoding.ASCII.GetString(buffer, 0, read);
-                        byte[] body = Encoding.ASCII.GetBytes("{\"status\":\"ok\",\"version\":\"" + version + "\"}");
-                        string head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n";
+                        string status = "200 OK";
+                        string text = "{\"status\":\"ok\",\"version\":\"" + version + "\"}";
+                        if (request.Contains("/admin/api/version"))
+                        {
+                            text = "{\"current\":\"" + version + "\"}";
+                            if (mode == "noserve")
+                            {
+                                status = "500 Internal Server Error";
+                                text = "{\"error\":{\"type\":\"api_error\",\"message\":\"[Errno 2] No such file or directory\"}}";
+                            }
+                        }
+                        byte[] body = Encoding.ASCII.GetBytes(text);
+                        string head = "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + body.Length + "\r\nx-mcc-pid: " + pid + "\r\nConnection: close\r\n\r\n";
                         byte[] headBytes = Encoding.ASCII.GetBytes(head);
                         stream.Write(headBytes, 0, headBytes.Length);
                         stream.Write(body, 0, body.Length);
                         stream.Flush();
-                        if (request.Contains("/health")) { Thread.Sleep(200); return 0; }
                     }
+                    }
+                    catch (IOException) { }
+                    catch (SocketException) { }
                 }
             }
             finally { listener.Stop(); }
             return 0;
         }
         return 0;
+    }
+
+    static string ModeFor(string version)
+    {
+        foreach (string item in Env("FAKE_START_MODE").Split(','))
+        {
+            int split = item.IndexOf('=');
+            if (split > 0 && item.Substring(0, split) == version) return item.Substring(split + 1);
+        }
+        return "";
+    }
+
+    static string LastStartedPid()
+    {
+        string started = Env("FAKE_STARTED");
+        string last = "0";
+        if (File.Exists(started))
+        {
+            foreach (string line in File.ReadAllLines(started))
+            {
+                string[] parts = line.Trim().Split(' ');
+                if (parts.Length == 2) last = parts[1];
+            }
+        }
+        return last;
     }
 }
 """
@@ -858,6 +939,39 @@ class FullRun:
             check=False,
             env=self.env | extra,
         )
+
+    def with_stubs(self, extra: str, *, text: str = "") -> None:
+        """Re-write the script under test with more seams replaced (a short
+        ceiling, a refused stop) -- still the published script otherwise.
+        ``text`` swaps in a mutated script, for a control."""
+        text = text or _installer_text()
+        marker = "\nif ($Help) {"
+        assert text.count(marker) == 1
+        self.script.write_text(
+            text.replace(marker, "\n" + INJECTED_STUBS + extra + "\n" + marker[1:]),
+            encoding="utf-8",
+        )
+
+    def start_old_server(self) -> int:
+        """The server an update finds running: the installed launcher, started
+        the way a user starts it, answering on the configured port."""
+        process = subprocess.Popen(
+            [str(self.bin_dir / "mcc-server.exe")],
+            env=self.env,
+            cwd=str(self.root),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000,
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.settimeout(0.5)
+                if probe.connect_ex(("127.0.0.1", self.port)) == 0:
+                    return process.pid
+            time.sleep(0.2)
+        raise AssertionError("the old fake server never listened")
 
     def started_versions(self) -> list[str]:
         if not self.started.exists():
@@ -1203,3 +1317,274 @@ def test_a_failed_in_place_finish_puts_the_previous_version_back(
     assert (canonical / "VERSION").read_text(encoding="utf-8") == OLD_VERSION
     assert sorted(p.name for p in full_run.tools.iterdir()) == ["my-claude-code"]
     assert "The previous environment is back at the canonical path." in transcript
+
+
+# ----------------------------------- 7.103.1: the liveness gate, full runs
+#
+# The 2026-10-19 02:08 incident, by its parts: a start budget (35 s) below a
+# cold start (49 s), a rollback that moved the environment while the server
+# just started out of it was still running, a rollback that failed half way
+# and was reported with exit 0, and a /health answer that stayed green while
+# nothing could be served. Each case below RUNS the published script (the
+# scriptblock form) against the fake uv and the fake trampoline, whose
+# mcc-server can now be slow, die, hang, or answer /health while its version
+# route fails (FAKE_START_MODE).
+
+SHORT_CEILING = "function Get-ServerStartCeilingSeconds { return 8.0 }\n"
+REFUSED_STOP = (
+    "function Stop-ProcessByExactId {\n"
+    "    param([Parameter(Mandatory = $true)][int] $ProcessId)\n"
+    "    Write-InstallLog ('(test) the stop of pid ' + $ProcessId + ' was refused')\n"
+    "    return $false\n"
+    "}\n"
+)
+
+
+def _clock(stamp: str) -> int:
+    hours, minutes, seconds = (int(part) for part in stamp.split(":"))
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _when(transcript: str, needle: str) -> int:
+    """The transcript second of the first line containing ``needle``."""
+    for line in transcript.splitlines():
+        match = re.match(r"^\[(\d\d:\d\d:\d\d)\] (.*)$", line)
+        if match and needle in match.group(2):
+            return _clock(match.group(1))
+    raise AssertionError(f"{needle!r} is not in the transcript")
+
+
+def _started_pids(run: FullRun) -> list[int]:
+    if not run.started.exists():
+        return []
+    return [
+        int(line.split()[1])
+        for line in run.started.read_text(encoding="utf-8").splitlines()
+        if len(line.split()) == 2
+    ]
+
+
+def _pid_alive(pid: int) -> bool:
+    probe = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return f'"{pid}"' in probe.stdout
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_a_server_slower_than_the_old_budget_is_waited_for_not_rolled_back(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """Decision A1. The start budget is 30 s (its floor); the new server takes
+    36 s to bind. Until 7.103.1 the run rolled back at 30 s -- with the server
+    still starting. Now it waits while the server is alive, says so every 15 s,
+    and the update succeeds with nothing moved."""
+
+    _require(executable)
+    full_run.install(OLD_VERSION)
+    completed = full_run.run(
+        executable,
+        FAKE_START_MODE=f"{NEW_VERSION}=slow:36",
+        DESKTOP_SERVER_START_TIMEOUT="30",
+        DESKTOP_SERVER_START_RETRIES="1",
+    )
+    out = completed.stdout
+    transcript = full_run.transcript_text()
+
+    assert completed.returncode == 0, out + completed.stderr
+    assert (
+        f"My Claude Code {NEW_VERSION} is installed and answering on port {full_run.port}."
+        in out
+    )
+    # Every 15 s of waiting; a slow loop iteration on a loaded machine may
+    # land a report a second or two late, never early.
+    reports = re.findall(
+        rf"My Claude Code {re.escape(NEW_VERSION)} is still starting, (\d+) s \(pid \d+\)\.",
+        transcript,
+    )
+    assert len(reports) >= 2, transcript
+    assert 15 <= int(reports[0]) <= 21 and 30 <= int(reports[1]) <= 36, reports
+    assert f"/admin/api/version answered: version {NEW_VERSION}." in transcript
+    assert "put back" not in out
+    assert full_run.started_versions() == [NEW_VERSION]
+    assert (full_run.canonical() / "VERSION").read_text(encoding="utf-8") == NEW_VERSION
+    receipt = (full_run.config / "updates" / "progress.json").read_text(
+        encoding="utf-8"
+    )
+    # The same records reach the receipt a desktop window reads.
+    assert f"My Claude Code {NEW_VERSION} is still starting, {reports[0]} s" in receipt
+    assert f"My Claude Code {NEW_VERSION} is still starting, {reports[1]} s" in receipt
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_a_server_that_dies_ends_the_wait_at_once_and_the_previous_version_comes_back(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """A crash is not a reason to wait out a budget: the process is gone, so
+    the gate ends within seconds and the rollback runs."""
+
+    _require(executable)
+    full_run.install(OLD_VERSION)
+    completed = full_run.run(executable, FAKE_START_MODE=f"{NEW_VERSION}=die")
+    out = completed.stdout
+    transcript = full_run.transcript_text()
+
+    assert completed.returncode == 0, out + completed.stderr
+    assert "Exit code: the process exited (see its output below)." in out
+    assert "still starting" not in transcript
+    waited = _when(transcript, "Waiting for http://127.0.0.1:")
+    ended = _when(transcript, "The new server did not answer")
+    assert ended - waited <= 6, (waited, ended)
+    assert (
+        f"The new version was installed but never answered, so the previous version was put back and is answering on port {full_run.port}."
+        in out
+    )
+    assert full_run.started_versions() == [NEW_VERSION, OLD_VERSION]
+    assert (full_run.canonical() / "VERSION").read_text(encoding="utf-8") == OLD_VERSION
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_a_hung_server_is_stopped_by_pid_at_the_ceiling_before_anything_moves(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """Decisions A1 + A2. Alive and never answering is hung: at the ceiling
+    (8 s here; max(600, 10 x budget) in production) the server this run
+    started is stopped by its exact pid, THEN the directories move, and the
+    move is checked."""
+
+    _require(executable)
+    full_run.install(OLD_VERSION)
+    full_run.with_stubs(SHORT_CEILING)
+    completed = full_run.run(executable, FAKE_START_MODE=f"{NEW_VERSION}=hang")
+    out = completed.stdout
+    transcript = full_run.transcript_text()
+
+    assert completed.returncode == 0, out + completed.stderr
+    assert "within the 8 s ceiling, although it kept running (pid " in out
+    assert "Stopped the server this install started (pid " in out
+    stopped_at = transcript.index("Stopped the server this install started")
+    moved_at = transcript.index(
+        "The previous environment is back at the canonical path."
+    )
+    assert stopped_at < moved_at
+    assert "and uv does not call it malformed." in transcript
+    assert (
+        f"The new version was installed but never answered, so the previous version was put back and is answering on port {full_run.port}."
+        in out
+    )
+    hung = _started_pids(full_run)[0]
+    assert not _pid_alive(hung), f"the hung server (pid {hung}) is still running"
+    assert full_run.started_versions() == [NEW_VERSION, OLD_VERSION]
+    assert (full_run.canonical() / "VERSION").read_text(encoding="utf-8") == OLD_VERSION
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_health_alone_is_not_success_the_version_route_must_answer(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """Decision A4, the 2026-10-19 shape: /health 200, every real request a
+    500. That is a failed gate -- stopped, rolled back -- never "installed and
+    answering"."""
+
+    _require(executable)
+    full_run.install(OLD_VERSION)
+    completed = full_run.run(executable, FAKE_START_MODE=f"{NEW_VERSION}=noserve")
+    out = completed.stdout
+
+    assert completed.returncode == 0, out + completed.stderr
+    assert (
+        f"My Claude Code {NEW_VERSION} answers http://127.0.0.1:{full_run.port}/health but cannot serve requests"
+        in out
+    )
+    assert "it answered HTTP 500" in out
+    assert f"My Claude Code {NEW_VERSION} is installed and answering" not in out
+    assert (
+        "could not serve requests (only /health answered), so the previous version was put back and is answering on port"
+        in out
+    )
+    assert full_run.started_versions() == [NEW_VERSION, OLD_VERSION]
+    assert (full_run.canonical() / "VERSION").read_text(encoding="utf-8") == OLD_VERSION
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_a_server_that_cannot_be_stopped_means_nothing_is_moved(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """Decision A2's refusal: the stop is refused (a pid guard), so NOTHING is
+    moved -- the new version stays where it is, the previous one stays aside --
+    and the run exits non-zero naming the pid."""
+
+    _require(executable)
+    full_run.install(OLD_VERSION)
+    full_run.with_stubs(SHORT_CEILING + REFUSED_STOP)
+    completed = full_run.run(executable, FAKE_START_MODE=f"{NEW_VERSION}=hang")
+    out = completed.stdout
+    transcript = full_run.transcript_text()
+
+    assert completed.returncode == 1, out + completed.stderr
+    assert "could not be stopped, so nothing was moved" in out
+    assert "(test) the stop of pid " in transcript
+    assert "The previous environment is back" not in transcript
+    assert (full_run.canonical() / "VERSION").read_text(encoding="utf-8") == NEW_VERSION
+    asides = list(full_run.previous_root().glob("*/my-claude-code/VERSION"))
+    assert [path.read_text(encoding="utf-8") for path in asides] == [OLD_VERSION]
+    assert not any(
+        path.name.endswith("-failed") for path in full_run.staging_root().iterdir()
+    )
+    receipt = (full_run.config / "updates" / "progress.json").read_text(
+        encoding="utf-8"
+    )
+    assert '"stage":"failed"' in receipt.splitlines()[-1]
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_a_stop_that_reports_the_port_free_while_it_is_held_swaps_nothing(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """Measured 2026-10-21 on a loaded machine: `--stop-holder` answered
+    "Nothing was listening on that port" while the old server kept listening
+    (its own port lookup timed out), and the swap then moved the environment
+    out from under that server. The operating system's listener table now
+    has the last word before the swap."""
+
+    _require(executable)
+    full_run.install(OLD_VERSION)
+    full_run.start_old_server()
+    completed = full_run.run(executable, FAKE_STOP_LIES="1")
+    out = completed.stdout
+
+    assert completed.returncode == 1, out + completed.stderr
+    assert (
+        f"The server on port {full_run.port} is still listening although the stop reported it free. Nothing was replaced and nothing was started."
+        in out
+    )
+    assert "Swapped in " not in full_run.transcript_text()
+    assert (full_run.canonical() / "VERSION").read_text(encoding="utf-8") == OLD_VERSION
+    assert full_run.started_versions() == [OLD_VERSION]
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS[:1], ids=lambda v: v)
+def test_the_control_without_the_listener_check_the_swap_runs_under_a_live_server(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """The control for the case above, on one edition: with the listener
+    check taken out, the same lying stop leads to a swap while the old server
+    is still listening -- its environment moved out from under it."""
+
+    _require(executable)
+    text = _installer_text()
+    guard = '        if (($StopOutcome -in @("stopped", "nothing-listening")) -and (-not (Test-ServerPortFree -Address $Address))) {'
+    assert text.count(guard) == 1
+    full_run.install(OLD_VERSION)
+    full_run.start_old_server()
+    full_run.with_stubs("", text=text.replace(guard, "        if ($false) {"))
+    completed = full_run.run(executable, FAKE_STOP_LIES="1")
+
+    assert "Swapped in " in full_run.transcript_text(), completed.stdout
+    assert (
+        "is still listening although the stop reported it free" not in completed.stdout
+    )

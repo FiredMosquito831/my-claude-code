@@ -183,6 +183,17 @@ $script:UpdateLockUnavailable = $false
 # not start (Confirm-RestartedServer). The install may have happened; the run
 # still ends with exit 1, because the server it is for is not the one serving.
 $script:PortHeldByAnother = $false
+# 7.103.1: the server this run started (Start-RestartedServer), what the
+# liveness gate ended on (Confirm-RestartedServer: answered, not-serving,
+# exited, ceiling, port-taken), the interpreter pid it saw answering, and why
+# a rollback did not run or did not finish (Restore-PreviousEnvironment).
+# A rollback moves nothing while that server -- or anything it started -- is
+# alive, or while the port is held (decisions A2/A3, 2026-10-20 14:37).
+$script:StartedServerChild = $null
+$script:StartGateOutcome = ""
+$script:StartGateServerPid = 0
+$script:RollbackRefused = $false
+$script:RollbackState = ""
 # What the caller asked for about the server. MCC_INSTALL_NO_START is the env
 # form of -NoStart, for a caller that cannot add a switch -- the npm wrapper
 # and install.cmd both pass arguments through a layer that has its own opinions
@@ -2034,36 +2045,133 @@ function Restore-PreviousEnvironment {
         looked at; the previous environment's own Scripts trampolines carry the
         canonical path already -- they were never rewritten -- so nothing else
         is needed.
+
+        7.103.1, three rules, all inside this function so that no caller can
+        skip them (decisions A2/A3, 2026-10-20 14:37):
+
+        1. NOTHING IS MOVED WHILE A PROCESS THIS RUN STARTED IS ALIVE, or
+           while the port is held after this run started a server. On
+           2026-10-19 02:08 this function moved the tool directory while the
+           server just started out of it was still importing: CPython re-creates
+           a missing directory to write a .pyc, so a stub reappeared at the
+           canonical path and the second move failed ("Cannot create a file
+           when that file already exists"); the server then reached readiness,
+           its own sweep removed the staging copy it was running from, and it
+           served nothing with /health green. Refused, nothing is touched and
+           $script:RollbackRefused says why. A previous environment that could
+           not run (no Scripts\python.exe or pyvenv.cfg) is refused the same
+           way: moving the live one away for it would gain nothing.
+        2. A STEP THAT FAILS STOPS THE ROLLBACK where it is. Each move is its
+           own step; nothing is moved back to "repair" a half-done rollback --
+           that is the next run's self-heal (7.78.9), which treats a gutted
+           environment as not installed. $script:RollbackState and the
+           transcript say what is where.
+        3. A ROLLBACK IS CHECKED: the canonical path must hold Scripts\python.exe
+           and pyvenv.cfg, and uv must not call the tool malformed.
     #>
     param(
         [Parameter(Mandatory = $true)] [string] $ToolDir,
         [Parameter(Mandatory = $true)] [string] $AsideEnv,
         [Parameter(Mandatory = $true)] [string] $StagingRoot,
         [Parameter(Mandatory = $true)] [string] $Stamp,
-        [string] $PreviousDir = ""
+        [string] $PreviousDir = "",
+        [string] $UvPath = ""
     )
 
+    $script:RollbackRefused = $false
+    $script:RollbackState = ""
+    $failedDir = Join-Path $StagingRoot ($Stamp + "-failed")
+    $failedEnv = Join-Path $failedDir $PackageEnvDirName
+
+    # ---- rule 1: refuse while anything this run started could be running here
+    $refusal = ""
+    if ($null -ne $script:StartedServerChild) {
+        $alive = @()
+        try {
+            $alive = @(Get-StartedProcessTree -Child $script:StartedServerChild -ServerPid $script:StartGateServerPid)
+        }
+        catch {
+            $alive = @([pscustomobject]@{ Id = $script:StartedServerChild.Id })
+        }
+        if ($alive.Count -gt 0) {
+            $refusal = "the server this install started has not exited (pid " + (@($alive | ForEach-Object { $_.Id }) -join ", ") + ")"
+        }
+        else {
+            $address = Get-MccServerAddress
+            if (-not (Test-ServerPortFree -Address $address)) {
+                $refusal = "port $($address.Port) is still held"
+            }
+        }
+    }
+    if ((-not $refusal) -and (-not ((Test-Path -LiteralPath (Join-Path $AsideEnv "Scripts\python.exe") -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $AsideEnv "pyvenv.cfg") -PathType Leaf)))) {
+        $refusal = "the previous environment at $AsideEnv has no Scripts\python.exe or pyvenv.cfg to run"
+    }
+    if ($refusal) {
+        $script:RollbackRefused = $true
+        $script:RollbackState = "The rollback was not attempted: $refusal. Nothing was moved. " + (Get-EnvironmentStateLine -Label "Canonical path" -Path $ToolDir) + " " + (Get-EnvironmentStateLine -Label "Previous version" -Path $AsideEnv)
+        Write-InstallLog $script:RollbackState
+        return $false
+    }
+
+    # ---- step 1 of 2: the failed version out of the canonical path
     try {
-        $failedDir = Join-Path $StagingRoot ($Stamp + "-failed")
         New-Item -ItemType Directory -Path $failedDir -Force | Out-Null
         if (Test-Path -LiteralPath $ToolDir -PathType Container) {
-            [System.IO.Directory]::Move($ToolDir, (Join-Path $failedDir $PackageEnvDirName))
+            [System.IO.Directory]::Move($ToolDir, $failedEnv)
         }
-        [System.IO.Directory]::Move($AsideEnv, $ToolDir)
-        Write-InstallLog "The previous environment is back at the canonical path."
-        if ($PreviousDir) {
-            # The stamp directory it came out of is now empty, and an empty one
-            # would be kept as "the rollback" by the next sweep while holding
-            # nothing to roll back to.
-            Remove-Item -LiteralPath $PreviousDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        $script:StagedRolledBack = $true
-        return $true
     }
     catch {
         Write-InstallLog ("The rollback failed: " + $_.Exception.Message)
+        $script:RollbackState = "The rollback stopped at step 1 of 2 (moving $ToolDir to $failedEnv): $($_.Exception.Message) Nothing else was moved. " + (Get-EnvironmentStateLine -Label "Canonical path" -Path $ToolDir) + " " + (Get-EnvironmentStateLine -Label "Failed version" -Path $failedEnv) + " " + (Get-EnvironmentStateLine -Label "Previous version" -Path $AsideEnv)
+        Write-InstallLog $script:RollbackState
         return $false
     }
+    if (Test-Path -LiteralPath $ToolDir) {
+        # Something wrote into the canonical path between the two moves --
+        # the 2026-10-19 stub. The second move would fail; do not try it.
+        $script:RollbackState = "The rollback stopped after step 1 of 2: $ToolDir was moved to $failedEnv, but $ToolDir exists again (something wrote into it), so the previous version was not moved. " + (Get-EnvironmentStateLine -Label "Canonical path" -Path $ToolDir) + " " + (Get-EnvironmentStateLine -Label "Failed version" -Path $failedEnv) + " " + (Get-EnvironmentStateLine -Label "Previous version" -Path $AsideEnv)
+        Write-InstallLog $script:RollbackState
+        return $false
+    }
+
+    # ---- step 2 of 2: the previous version back
+    try {
+        [System.IO.Directory]::Move($AsideEnv, $ToolDir)
+    }
+    catch {
+        Write-InstallLog ("The rollback failed: " + $_.Exception.Message)
+        $script:RollbackState = "The rollback stopped at step 2 of 2 (moving $AsideEnv to $ToolDir): $($_.Exception.Message) Step 1 had moved the failed version to $failedEnv. " + (Get-EnvironmentStateLine -Label "Canonical path" -Path $ToolDir) + " " + (Get-EnvironmentStateLine -Label "Failed version" -Path $failedEnv) + " " + (Get-EnvironmentStateLine -Label "Previous version" -Path $AsideEnv)
+        Write-InstallLog $script:RollbackState
+        return $false
+    }
+    Write-InstallLog "The previous environment is back at the canonical path."
+    if ($PreviousDir) {
+        # The stamp directory it came out of is now empty, and an empty one
+        # would be kept as "the rollback" by the next sweep while holding
+        # nothing to roll back to.
+        Remove-Item -LiteralPath $PreviousDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # ---- rule 3: the environment that came back must be one uv can run
+    $checkUv = $UvPath
+    if (-not $checkUv) {
+        try { $checkUv = Resolve-UvPath "the rollback check" } catch { $checkUv = "" }
+    }
+    $problems = @()
+    if (-not (Test-Path -LiteralPath (Join-Path $ToolDir "Scripts\python.exe") -PathType Leaf)) { $problems += "it has no Scripts\python.exe" }
+    if (-not (Test-Path -LiteralPath (Join-Path $ToolDir "pyvenv.cfg") -PathType Leaf)) { $problems += "it has no pyvenv.cfg" }
+    if ($problems.Count -eq 0) {
+        $problem = Get-ToolEnvironmentProblem -ToolDir $ToolDir -UvPath $checkUv
+        if ($problem) { $problems += $problem }
+    }
+    if ($problems.Count -gt 0) {
+        $script:RollbackState = "The previous environment is back at $ToolDir, but it cannot be used: " + ($problems -join "; ") + ". " + (Get-EnvironmentStateLine -Label "Canonical path" -Path $ToolDir) + " " + (Get-EnvironmentStateLine -Label "Failed version" -Path $failedEnv)
+        Write-InstallLog $script:RollbackState
+        return $false
+    }
+    Write-InstallLog ("Checked " + $ToolDir + ": Scripts\python.exe and pyvenv.cfg are there and uv does not call it malformed.")
+    $script:StagedRolledBack = $true
+    return $true
 }
 
 function Undo-InPlaceFinish {
@@ -2130,7 +2238,13 @@ function Undo-InPlaceFinish {
             $child = Start-MccServerDetached -Launcher $ServerLauncher -StdOutPath $startOut -StdErrPath $startErr
             Write-Host "Started the previous version's mcc-server (pid $($child.Id))."
             Write-InstallLog ("Started the previous version's mcc-server, pid " + $child.Id + ".")
-            $restartedPrevious = Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)
+            # 7.103.1: the liveness gate, not a fixed budget (decision A1).
+            $previousGate = Wait-ForStartedServer -Url $HealthUrl -Child $child -Port $Port -Label "The previous version"
+            $restartedPrevious = ($previousGate.Outcome -eq 'answered')
+            if ($previousGate.Outcome -eq 'ceiling') {
+                $previousStop = Stop-StartedServer -Child $child -Address ([pscustomobject]@{ ReachableHost = ([Uri] $HealthUrl).Host; Port = $Port }) -ServerPid $previousGate.ServerPid
+                if ($previousStop.Message) { Write-InstallLog $previousStop.Message }
+            }
         }
         catch {
             Write-InstallLog ("The previous version could not be started: " + $_.Exception.Message)
@@ -3128,6 +3242,36 @@ function Get-ServerStartTimeoutSeconds {
     return $budget
 }
 
+function Get-ServerStartCeilingSeconds {
+    <#
+        .SYNOPSIS
+        7.103.1: the HARD CEILING of the wait for a server this run started.
+        max(600, 10 x Get-ServerStartTimeoutSeconds).
+
+        .DESCRIPTION
+        Until 7.103.1 the budget above WAS the give-up point, and on
+        2026-10-19 02:08 it gave up on a server that was alive, bound and
+        still opening a 3.3 GB request log: 35 s of budget against a 49 s cold
+        start. The rollback that followed moved the environment out from under
+        that server and left the machine serving nothing.
+
+        The wait is now a LIVENESS gate (Wait-ForStartedServer): it keeps
+        waiting while the process this run started is alive, ends the moment
+        that process dies or answers, and gives up only here. The old budget
+        is the floor of this ceiling, never the give-up point.
+
+        Derived rather than a new setting: ten times the start budget the user
+        already configures, and never under ten minutes. A server that has
+        not answered in ten minutes is hung, not slow; a user who has raised
+        DESKTOP_SERVER_START_TIMEOUT for a slow machine raises this with it.
+    #>
+
+    $budget = Get-ServerStartTimeoutSeconds
+    $ceiling = 10.0 * $budget
+    if ($ceiling -lt 600.0) { $ceiling = 600.0 }
+    return $ceiling
+}
+
 function Test-VersionAtLeast {
     <#
         .SYNOPSIS
@@ -3205,6 +3349,54 @@ function Test-PortIsOccupied {
     }
     finally {
         if ($null -ne $listener) { try { $listener.Stop() } catch { } }
+    }
+}
+
+function Test-PortHasListener {
+    <#
+        .SYNOPSIS
+        7.103.1: whether ANY socket is listening on this port, read from the
+        operating system's TCP table. $true, $false, or $null for "could not
+        tell". Binds nothing, connects to nothing, stops nothing.
+
+        .DESCRIPTION
+        Test-PortIsOccupied above answers the same question by BINDING the
+        port for an instant, which is right before a start and wrong while one
+        is in progress: a bind that lands on the moment the server being
+        waited for binds would make THAT server fail to start. This asks the
+        table instead (IPGlobalProperties.GetActiveTcpListeners, every IPv4
+        and IPv6 listener; measured 1-3 ms on Windows PowerShell 5.1 and
+        PowerShell 7, against 600-850 ms for the NetTCPIP module's cmdlet).
+
+        `-BindHost` narrows it to the listeners a server binding that address
+        would collide with: the same address, or a wildcard (0.0.0.0, ::).
+        Without it, or for a wildcard bind host, any listener on the port
+        counts.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][int] $Port,
+        [string] $BindHost = ""
+    )
+
+    try {
+        $bindAddress = $null
+        if ($BindHost -and ($BindHost -ne '0.0.0.0') -and ($BindHost -ne '::')) {
+            $parsed = $null
+            if ([System.Net.IPAddress]::TryParse($BindHost, [ref] $parsed)) { $bindAddress = $parsed }
+        }
+        $properties = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
+        foreach ($endpoint in $properties.GetActiveTcpListeners()) {
+            if ($endpoint.Port -ne $Port) { continue }
+            if ($null -eq $bindAddress) { return $true }
+            $address = $endpoint.Address
+            if ($address.Equals([System.Net.IPAddress]::Any) -or $address.Equals([System.Net.IPAddress]::IPv6Any) -or $address.Equals($bindAddress)) {
+                return $true
+            }
+        }
+        return $false
+    }
+    catch {
+        return $null
     }
 }
 
@@ -3318,7 +3510,11 @@ function Start-MccServerDetached {
         -WorkingDirectory ([System.IO.Path]::GetTempPath()) `
         -WindowStyle Hidden `
         -PassThru
-    return [pscustomobject]@{ Id = [int] $process.Id }
+    # 7.103.1: the start time pins the pid's identity for the liveness gate
+    # and the stop (Windows recycles pids quickly). 0 = could not be read.
+    $startTime = [long] 0
+    try { $startTime = $process.StartTime.ToFileTimeUtc() } catch { $startTime = [long] 0 }
+    return [pscustomobject]@{ Id = [int] $process.Id; StartTime = $startTime }
 }
 
 function Get-ChildFailureDetail {
@@ -3949,11 +4145,16 @@ function Start-RestartedServer {
     }
     Write-Host "Started mcc-server (pid $($child.Id))."
     Write-InstallLog ("Started mcc-server, pid " + $child.Id + ".")
-    return [pscustomobject]@{
-        Id      = $child.Id
-        StdOut  = $startOut
-        StdErr  = $startErr
+    $started = [pscustomobject]@{
+        Id        = $child.Id
+        StdOut    = $startOut
+        StdErr    = $startErr
+        StartTime = (Get-StartedProcessStartTime -Child $child)
     }
+    # 7.103.1: Restore-PreviousEnvironment refuses to move anything while
+    # this process (or anything it started) is alive, whoever calls it.
+    $script:StartedServerChild = $started
+    return $started
 }
 
 function Get-HealthAnswerPid {
@@ -4030,6 +4231,589 @@ function Test-AnswerIsFromStartedServer {
     return 1
 }
 
+function Get-StartedProcessStartTime {
+    <#
+        .SYNOPSIS
+        7.103.1: the start time (FILETIME, UTC) a start descriptor recorded
+        for its pid, or 0 when it recorded none. Never throws.
+    #>
+    param([object] $Child)
+
+    if ($null -eq $Child) { return [long] 0 }
+    $property = $Child.PSObject.Properties['StartTime']
+    if ($null -eq $property) { return [long] 0 }
+    try { return [long] $property.Value } catch { return [long] 0 }
+}
+
+function Test-StartedProcessAlive {
+    <#
+        .SYNOPSIS
+        7.103.1: whether the process this run started is alive.
+
+        .DESCRIPTION
+        By pid AND start time, as the update helper pins its parent: Windows
+        recycles pids quickly, and a recycled pid must never read as "our
+        server is still starting". A start time that cannot be read is read as
+        alive -- for a WAIT, "unknown" must mean "keep waiting", which the
+        ceiling bounds.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][int] $ProcessId,
+        [long] $StartTime = 0
+    )
+
+    if ($ProcessId -le 0) { return $false }
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $process) { return $false }
+    if ($StartTime -eq 0) { return $true }
+    try {
+        $difference = [math]::Abs($process.StartTime.ToFileTimeUtc() - $StartTime)
+        # One second of slack: the two clocks are read by different APIs.
+        return ($difference -lt 10000000)
+    }
+    catch {
+        return $true
+    }
+}
+
+function Get-HeaderPid {
+    <#
+        .SYNOPSIS
+        7.103.1: the pid an answer's `x-mcc-pid` header names, or 0. Reads the
+        header collections of both editions -- a dictionary on success, an
+        HttpWebResponse (5.1) or HttpResponseMessage (7) on an error status.
+    #>
+    param([object] $Headers)
+
+    if ($null -eq $Headers) { return 0 }
+    $value = $null
+    try { $value = $Headers['x-mcc-pid'] } catch { $value = $null }
+    if ($null -eq $value) {
+        try {
+            $values = $null
+            if ($Headers.TryGetValues('x-mcc-pid', [ref] $values)) { $value = @($values)[0] }
+        }
+        catch { $value = $null }
+    }
+    if ($value -is [array]) { $value = $value[0] }
+    $parsed = 0
+    if ([int]::TryParse([string] $value, [ref] $parsed) -and $parsed -gt 0) {
+        return $parsed
+    }
+    return 0
+}
+
+function Get-HealthProbe {
+    <#
+        .SYNOPSIS
+        7.103.1: ONE GET of /health, and what it said: the status (0 when
+        nothing answered) and the pid the answer named (0 when none).
+
+        .DESCRIPTION
+        A starting server answers 503 with `x-mcc-starting: 1` and its pid
+        (6.59.0, 7.70.0), and both editions throw on a 503 -- so the status
+        and the header are read from the error's response as well. Never
+        throws.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Url,
+        [int] $TimeoutSeconds = 5
+    )
+
+    $probe = [pscustomobject]@{ Status = 0; Pid = 0 }
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSeconds -ErrorAction Stop
+        $probe.Status = [int] $response.StatusCode
+        $probe.Pid = Get-HeaderPid -Headers $response.Headers
+    }
+    catch {
+        $errorResponse = $null
+        try { $errorResponse = $_.Exception.Response } catch { $errorResponse = $null }
+        if ($null -ne $errorResponse) {
+            try { $probe.Status = [int] $errorResponse.StatusCode } catch { $probe.Status = 0 }
+            try { $probe.Pid = Get-HeaderPid -Headers $errorResponse.Headers } catch { $probe.Pid = 0 }
+            try { if ($errorResponse -is [System.IDisposable]) { $errorResponse.Dispose() } } catch { }
+        }
+    }
+    return $probe
+}
+
+function Wait-ForStartedServer {
+    <#
+        .SYNOPSIS
+        7.103.1: the LIVENESS gate. Wait for the server this run started to
+        answer /health with 200, for as long as it is alive and the port is
+        its own (or nobody's), up to the ceiling. Returns a descriptor whose
+        Outcome is one of:
+
+          answered    /health answered 200
+          exited      the process this run started is gone
+          port-taken  the port is answered by a server this run did not start
+          ceiling     still alive and still not answering at the ceiling
+
+        .DESCRIPTION
+        Until 7.103.1 the wait was a fixed budget (Get-ServerStartTimeoutSeconds),
+        and on 2026-10-19 02:08 it gave up on a server that was alive, bound
+        and still starting: 35 s of budget, a 49 s cold start. What followed
+        moved the environment out from under that server. A server that is
+        alive and holding its own port is STARTING; the questions that end the
+        wait are "did it die" and "did it answer", and they are asked every
+        second, so a crash ends the wait within about two seconds rather than
+        at a budget.
+
+        The pid and its children (the .cmd -> mcc-server trampoline ->
+        python.exe chain) are watched; an answer naming a pid is attributed by
+        Test-AnswerIsFromStartedServer, and a pid seen once is not walked
+        again. "Cannot tell" is read as ours, as in 7.79.1. Two answers in a
+        row naming a server that is positively NOT ours end the wait as
+        `port-taken`, which no caller treats as a reason to roll back.
+
+        The HTTP timeout is 1 s while the operating system lists no listener
+        on the port and 5 s (as before) otherwise: a GET to a port nobody
+        listens on returns nothing to wait for, and on a machine that drops
+        SYNs to closed loopback ports (Test-PortIsOccupied) a 5 s timeout
+        would hide a crash for five seconds.
+
+        Every -ReportEverySeconds the receipt says the server is still
+        starting, so a window watching the update shows progress, not a hang.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Url,
+        [Parameter(Mandatory = $true)][object] $Child,
+        [int] $Port = 0,
+        [double] $CeilingSeconds = 0,
+        [double] $ReportEverySeconds = 15,
+        [string] $Label = ""
+    )
+
+    if ($CeilingSeconds -le 0) { $CeilingSeconds = Get-ServerStartCeilingSeconds }
+    if ([string]::IsNullOrWhiteSpace($Label)) { $Label = "The server" }
+    $startedPid = 0
+    try { $startedPid = [int] $Child.Id } catch { $startedPid = 0 }
+    $startTime = Get-StartedProcessStartTime -Child $Child
+    $result = [pscustomobject]@{
+        Outcome      = "ceiling"
+        Seconds      = 0.0
+        HolderPid    = 0
+        HolderStatus = 0
+        ServerPid    = 0
+        Ceiling      = $CeilingSeconds
+    }
+    $relation = @{}
+    $serverPid = 0
+    $serverStart = [long] 0
+    $foreign = 0
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $nextReport = $ReportEverySeconds
+    while ($clock.Elapsed.TotalSeconds -lt $CeilingSeconds) {
+        $timeout = 5
+        if ($Port -gt 0) {
+            $listening = Test-PortHasListener -Port $Port
+            if ($listening -eq $false) { $timeout = 1 }
+        }
+        $probe = Get-HealthProbe -Url $Url -TimeoutSeconds $timeout
+        if ($probe.Status -eq 200) {
+            # Whose answer this is, the caller decides (7.79.1).
+            $result.Outcome = "answered"
+            $result.ServerPid = $serverPid
+            $result.Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1)
+            return $result
+        }
+        $alive = Test-StartedProcessAlive -ProcessId $startedPid -StartTime $startTime
+        if ((-not $alive) -and ($serverPid -gt 0)) {
+            # The .cmd this run started is gone, but the interpreter it
+            # started may not be: that is still our server starting.
+            $alive = Test-StartedProcessAlive -ProcessId $serverPid -StartTime $serverStart
+        }
+        if (-not $alive) {
+            # Gone. One fresh look at the port: an answer naming a pid now
+            # comes from someone else -- a server that took the port -- unless
+            # its parents lead back here (an interpreter of ours that outlived
+            # its launcher), in which case it is still our server starting.
+            $last = Get-HealthProbe -Url $Url -TimeoutSeconds 2
+            if (($last.Pid -gt 0) -and ($startedPid -gt 0) -and ((Test-AnswerIsFromStartedServer -AnswerPid $last.Pid -StartedPid $startedPid) -ne 1)) {
+                $serverPid = $last.Pid
+                $serverStart = [long] 0
+                try { $serverStart = (Get-Process -Id $serverPid -ErrorAction Stop).StartTime.ToFileTimeUtc() } catch { $serverStart = [long] 0 }
+                Start-Sleep -Milliseconds 750
+                continue
+            }
+            if ($last.Pid -gt 0) {
+                $result.Outcome = "port-taken"
+                $result.HolderPid = $last.Pid
+                $result.HolderStatus = $last.Status
+            }
+            else {
+                $result.Outcome = "exited"
+            }
+            $result.ServerPid = $serverPid
+            $result.Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1)
+            return $result
+        }
+        if (($probe.Pid -gt 0) -and ($startedPid -gt 0)) {
+            if (-not $relation.ContainsKey($probe.Pid)) {
+                $relation[$probe.Pid] = Test-AnswerIsFromStartedServer -AnswerPid $probe.Pid -StartedPid $startedPid
+            }
+            if ($relation[$probe.Pid] -eq 1) {
+                $foreign = $foreign + 1
+                if ($foreign -ge 2) {
+                    $result.Outcome = "port-taken"
+                    $result.HolderPid = $probe.Pid
+                    $result.HolderStatus = $probe.Status
+                    $result.ServerPid = $serverPid
+                    $result.Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1)
+                    return $result
+                }
+            }
+            else {
+                $foreign = 0
+                if (($relation[$probe.Pid] -eq 0) -and ($serverPid -ne $probe.Pid)) {
+                    $serverPid = $probe.Pid
+                    $serverStart = [long] 0
+                    try { $serverStart = (Get-Process -Id $serverPid -ErrorAction Stop).StartTime.ToFileTimeUtc() } catch { $serverStart = [long] 0 }
+                }
+            }
+        }
+        if ($clock.Elapsed.TotalSeconds -ge $nextReport) {
+            $waited = [int] [math]::Floor($clock.Elapsed.TotalSeconds)
+            $note = $Label + " is still starting, " + $waited + " s (pid " + $startedPid + ")."
+            Write-InstallLog $note
+            Write-InstallProgress -Stage 'starting' -Message $note
+            $nextReport = $nextReport + $ReportEverySeconds
+        }
+        Start-Sleep -Milliseconds 750
+    }
+    # The ceiling. Alive here means hung, not slow.
+    $stillAlive = Test-StartedProcessAlive -ProcessId $startedPid -StartTime $startTime
+    if ((-not $stillAlive) -and ($serverPid -gt 0)) {
+        $stillAlive = Test-StartedProcessAlive -ProcessId $serverPid -StartTime $serverStart
+    }
+    if (-not $stillAlive) { $result.Outcome = "exited" }
+    $result.ServerPid = $serverPid
+    $result.Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1)
+    return $result
+}
+
+function Get-StartedProcessTree {
+    <#
+        .SYNOPSIS
+        7.103.1: every LIVE process that this run started -- the started pid
+        and everything under it by parent id -- deepest last in the list's
+        Depth. Empty when none is alive. Throws when the process table cannot
+        be read (the caller must not read that as "nothing to stop").
+
+        .DESCRIPTION
+        Windows does not re-parent an orphan, so a child whose parent has
+        exited still names that parent: walking by parent id finds the whole
+        launch even when the .cmd at its root is already gone. A recycled pid
+        is excluded by creation time -- a child is never older than its
+        parent, so anything created before this run's start is not ours.
+        Nothing here is matched by image name or command line.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object] $Child,
+        [int] $ServerPid = 0
+    )
+
+    $startedPid = 0
+    try { $startedPid = [int] $Child.Id } catch { $startedPid = 0 }
+    if ($startedPid -le 0) { return }
+    $startTime = Get-StartedProcessStartTime -Child $Child
+    $processes = $null
+    try {
+        $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    }
+    catch {
+        $processes = @(Get-WmiObject -Class Win32_Process -ErrorAction Stop)
+    }
+    $byId = @{}
+    $children = @{}
+    foreach ($process in $processes) {
+        $id = 0
+        $parentId = 0
+        try { $id = [int] $process.ProcessId; $parentId = [int] $process.ParentProcessId } catch { continue }
+        $created = [long] 0
+        try {
+            $stamp = $process.CreationDate
+            if ($stamp -is [string]) { $stamp = [Management.ManagementDateTimeConverter]::ToDateTime($stamp) }
+            if ($null -ne $stamp) { $created = ([datetime] $stamp).ToFileTimeUtc() }
+        }
+        catch { $created = [long] 0 }
+        $byId[$id] = [pscustomobject]@{ Id = $id; ParentId = $parentId; Created = $created; Path = [string] $process.ExecutablePath }
+        if (-not $children.ContainsKey($parentId)) { $children[$parentId] = New-Object System.Collections.ArrayList }
+        $null = $children[$parentId].Add($id)
+    }
+    # One second of slack, as in Test-StartedProcessAlive.
+    $floor = if ($startTime -ne 0) { $startTime - 10000000 } else { [long] 0 }
+    $members = @()
+    $seen = @{}
+    $queue = New-Object System.Collections.Queue
+    if ($byId.ContainsKey($startedPid)) {
+        $root = $byId[$startedPid]
+        if (($startTime -eq 0) -or ($root.Created -eq 0) -or ([math]::Abs($root.Created - $startTime) -lt 10000000)) {
+            $members += [pscustomobject]@{ Id = $root.Id; Depth = 0; Path = $root.Path; Created = $root.Created }
+        }
+    }
+    $seen[$startedPid] = $true
+    $queue.Enqueue(@($startedPid, 0))
+    while ($queue.Count -gt 0) {
+        $item = $queue.Dequeue()
+        $parentPid = [int] $item[0]
+        $depth = [int] $item[1]
+        if (-not $children.ContainsKey($parentPid)) { continue }
+        foreach ($childPid in $children[$parentPid]) {
+            if ($seen.ContainsKey($childPid)) { continue }
+            $seen[$childPid] = $true
+            $entry = $byId[$childPid]
+            if (($floor -ne 0) -and ($entry.Created -ne 0) -and ($entry.Created -lt $floor)) { continue }
+            $members += [pscustomobject]@{ Id = $entry.Id; Depth = ($depth + 1); Path = $entry.Path; Created = $entry.Created }
+            $queue.Enqueue(@($childPid, ($depth + 1)))
+        }
+    }
+    # The answering interpreter, if it is ours but was not found under the
+    # root (its chain broke somewhere the table could not show).
+    if (($ServerPid -gt 0) -and (-not $seen.ContainsKey($ServerPid)) -and $byId.ContainsKey($ServerPid)) {
+        if ((Test-AnswerIsFromStartedServer -AnswerPid $ServerPid -StartedPid $startedPid) -eq 0) {
+            $entry = $byId[$ServerPid]
+            $members += [pscustomobject]@{ Id = $entry.Id; Depth = 32; Path = $entry.Path; Created = $entry.Created }
+        }
+    }
+    foreach ($member in $members) { $member }
+}
+
+function Stop-ProcessByExactId {
+    <#
+        .SYNOPSIS
+        7.103.1: stop ONE process by its exact pid. Returns whether it is gone
+        afterwards. Never by name: an image-name kill took the user's own
+        server and app down more than once (WORKING-NOTES IX.3).
+    #>
+    param([Parameter(Mandatory = $true)][int] $ProcessId)
+
+    try {
+        Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+    }
+    catch {
+    }
+    return (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue))
+}
+
+function Test-StartedMemberAlive {
+    <# .SYNOPSIS 7.103.1: whether one member of Get-StartedProcessTree is alive. #>
+    param([Parameter(Mandatory = $true)][object] $Member)
+
+    $process = Get-Process -Id ([int] $Member.Id) -ErrorAction SilentlyContinue
+    if (-not $process) { return $false }
+    if ([long] $Member.Created -eq 0) { return $true }
+    try {
+        return ([math]::Abs($process.StartTime.ToFileTimeUtc() - [long] $Member.Created) -lt 10000000)
+    }
+    catch {
+        return $true
+    }
+}
+
+function Test-ServerPortFree {
+    <#
+        .SYNOPSIS
+        7.103.1: whether nothing LISTENS on this port any more. The TCP table
+        first (a closed server leaves TIME_WAIT entries that are not a
+        listener); the bind test only when the table cannot be read.
+    #>
+    param([Parameter(Mandatory = $true)][object] $Address)
+
+    $bindHost = ""
+    if ($null -ne $Address.PSObject.Properties['BindHost']) { $bindHost = [string] $Address.BindHost }
+    $listening = Test-PortHasListener -Port ([int] $Address.Port) -BindHost $bindHost
+    if ($null -eq $listening) {
+        return (-not (Test-PortIsOccupied -ReachableHost $Address.ReachableHost -Port ([int] $Address.Port)))
+    }
+    return (-not $listening)
+}
+
+function Stop-StartedServer {
+    <#
+        .SYNOPSIS
+        7.103.1: stop the server THIS RUN started -- its exact pid and its
+        children by parent id, innermost first -- and wait until every one
+        of them has exited AND the port is free. Returns `Stopped`,
+        `PortFree`, `Remaining` (pids still alive) and `Message`.
+
+        .DESCRIPTION
+        Decision A2 (2026-10-20 14:37): before any directory is moved, the
+        server that was started out of it must be gone. Nothing else is ever
+        stopped here: the tree is built from the one pid Start-MccServerDetached
+        returned, so another server -- the user's, another port's, another
+        user's -- cannot be in it.
+
+        Innermost first, because every outer member (the .cmd, the uv
+        trampoline, the venv launcher) only waits on the one below it.
+        `Stop-Process -Force` is TerminateProcess: on Windows there is no
+        polite signal to send a console process from outside it, which is
+        also what `mcc-server --stop-holder` does after its own grace.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object] $Child,
+        [object] $Address = $null,
+        [int] $ServerPid = 0,
+        [double] $ExitSeconds = 30,
+        [double] $PortSeconds = 10
+    )
+
+    $startedPid = 0
+    try { $startedPid = [int] $Child.Id } catch { $startedPid = 0 }
+    $result = [pscustomobject]@{ Stopped = $false; PortFree = $false; Remaining = @(); Members = @(); Message = "" }
+    $members = @()
+    try {
+        $members = @(Get-StartedProcessTree -Child $Child -ServerPid $ServerPid)
+    }
+    catch {
+        $result.Message = "The process table could not be read, so the server this install started (pid $startedPid) could not be stopped: $($_.Exception.Message)"
+        return $result
+    }
+    $result.Members = @($members | ForEach-Object { [int] $_.Id })
+    foreach ($member in @($members | Sort-Object -Property Depth -Descending)) {
+        Write-InstallLog ("Stopping pid " + $member.Id + " (" + $member.Path + "), which this install started.")
+        $null = Stop-ProcessByExactId -ProcessId ([int] $member.Id)
+    }
+    $remaining = @()
+    $deadline = (Get-Date).AddSeconds($ExitSeconds)
+    while ($true) {
+        $remaining = @($members | Where-Object { Test-StartedMemberAlive -Member $_ })
+        if ($remaining.Count -eq 0) { break }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    $result.Remaining = @($remaining | ForEach-Object { [int] $_.Id })
+    $result.Stopped = ($remaining.Count -eq 0)
+    if (-not $result.Stopped) {
+        $result.Message = "The server this install started (pid $startedPid) could not be stopped: pid(s) " + ($result.Remaining -join ", ") + " have not exited."
+        return $result
+    }
+    if ($null -eq $Address) {
+        $result.PortFree = $true
+    }
+    else {
+        $portDeadline = (Get-Date).AddSeconds($PortSeconds)
+        while ($true) {
+            if (Test-ServerPortFree -Address $Address) { $result.PortFree = $true; break }
+            if ((Get-Date) -ge $portDeadline) { break }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    if ($members.Count -eq 0) {
+        $result.Message = "The server this install started (pid $startedPid) is no longer running."
+    }
+    else {
+        $result.Message = "Stopped the server this install started (pid $startedPid; " + $members.Count + " process(es))."
+    }
+    if (-not $result.PortFree) {
+        $result.Message = $result.Message + " Port $($Address.Port) is still held."
+    }
+    return $result
+}
+
+function Test-ServerCanServe {
+    <#
+        .SYNOPSIS
+        7.103.1: whether a server that answers /health can also SERVE --
+        `GET /admin/api/version` must answer the version document. Returns
+        `Ok`, `Checked` and `Message`.
+
+        .DESCRIPTION
+        Decision A4. /health is answered by the ASGI gate before any work is
+        done, so it stays green while everything behind it fails. On
+        2026-10-19 the environment was moved out from under a running server:
+        /health was 200 all night while every model call and this route failed
+        with FileNotFoundError (the CA bundle was gone). This route builds a
+        TLS context for the release feed and reads the settings, so it fails
+        exactly that way -- a 5xx, or no JSON, means "cannot serve".
+
+        Three tries two seconds apart, so one slow first request is not read
+        as a failure. A 403 or 404 means the route cannot be asked from here
+        (a HOST bound to a LAN address is not loopback to the admin guard),
+        which is "not checked", never "failed": the /health answer stands, as
+        it did before 7.103.1.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $HealthUrl,
+        [int] $Attempts = 3,
+        [int] $TimeoutSeconds = 45
+    )
+
+    $url = $HealthUrl -replace '/health$', '/admin/api/version'
+    $verdict = [pscustomobject]@{ Ok = $false; Checked = $true; Url = $url; Message = ""; Version = "" }
+    $problem = "it did not answer"
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        $status = 0
+        $content = ""
+        try {
+            $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec $TimeoutSeconds -ErrorAction Stop
+            $status = [int] $response.StatusCode
+            $content = [string] $response.Content
+        }
+        catch {
+            $failure = $_
+            $errorResponse = $null
+            try { $errorResponse = $failure.Exception.Response } catch { $errorResponse = $null }
+            if ($null -ne $errorResponse) {
+                try { $status = [int] $errorResponse.StatusCode } catch { $status = 0 }
+                try { if ($errorResponse -is [System.IDisposable]) { $errorResponse.Dispose() } } catch { }
+            }
+            $detail = ""
+            try { if ($failure.ErrorDetails -and $failure.ErrorDetails.Message) { $detail = [string] $failure.ErrorDetails.Message } } catch { $detail = "" }
+            if (-not $detail) { $detail = [string] $failure.Exception.Message }
+            $detail = ($detail -replace '\s+', ' ').Trim()
+            if ($detail.Length -gt 240) { $detail = $detail.Substring(0, 240) + "..." }
+            $problem = if ($status -gt 0) { "it answered HTTP $status ($detail)" } else { "it did not answer ($detail)" }
+        }
+        if ($status -eq 200) {
+            $current = ""
+            try {
+                $document = $content | ConvertFrom-Json -ErrorAction Stop
+                $current = [string] $document.current
+            }
+            catch {
+                $current = ""
+            }
+            if ($current) {
+                $verdict.Ok = $true
+                $verdict.Version = $current
+                $verdict.Message = "GET $url answered: version $current."
+                return $verdict
+            }
+            $problem = "it answered 200 without the version document"
+        }
+        elseif (($status -eq 403) -or ($status -eq 404)) {
+            $verdict.Ok = $true
+            $verdict.Checked = $false
+            $verdict.Message = "GET $url answered $status from here, so whether the server can serve was not checked; the /health answer stands."
+            return $verdict
+        }
+        if ($attempt -lt $Attempts) { Start-Sleep -Seconds 2 }
+    }
+    $verdict.Message = "GET $url failed: $problem."
+    return $verdict
+}
+
+function Get-EnvironmentStateLine {
+    <#
+        .SYNOPSIS
+        7.103.1: one line saying what is at a path -- for the transcript of a
+        rollback that did not finish, so the next reader knows what is where.
+    #>
+    param([string] $Label, [string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return "${Label}: (no path)" }
+    if (-not (Test-Path -LiteralPath $Path)) { return "${Label}: $Path does not exist." }
+    $python = Test-Path -LiteralPath (Join-Path $Path "Scripts\python.exe") -PathType Leaf
+    $config = Test-Path -LiteralPath (Join-Path $Path "pyvenv.cfg") -PathType Leaf
+    $receipt = Test-Path -LiteralPath (Join-Path $Path "uv-receipt.toml") -PathType Leaf
+    $files = 0
+    try { $files = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue).Count } catch { $files = 0 }
+    return "${Label}: $Path exists ($files files; Scripts\python.exe " + $(if ($python) { "present" } else { "missing" }) + ", pyvenv.cfg " + $(if ($config) { "present" } else { "missing" }) + ", uv-receipt.toml " + $(if ($receipt) { "present" } else { "missing" }) + ")."
+}
+
 function Confirm-RestartedServer {
     <#
         .SYNOPSIS
@@ -4045,6 +4829,13 @@ function Confirm-RestartedServer {
         disk, so the honest sentence is "the previous one is being put back",
         not "run the installer again" -- and the terminal record belongs to the
         ROLLBACK, which the caller writes.
+
+        7.103.1: the wait is Wait-ForStartedServer's liveness gate, not a
+        fixed budget (decision A1), and an answer is success only when the
+        server can also SERVE -- `GET /admin/api/version` (decision A4). What
+        the gate ended on is left in $script:StartGateOutcome for the caller:
+        a rollback must stop a server that is alive before it moves
+        anything (decision A2).
     #>
     param(
         [Parameter(Mandatory = $true)][object] $Child,
@@ -4056,7 +4847,10 @@ function Confirm-RestartedServer {
 
     Write-Host "Waiting for it to answer $HealthUrl."
     Write-InstallLog ("Waiting for " + $HealthUrl + ".")
-    if (Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)) {
+    $gate = Wait-ForStartedServer -Url $HealthUrl -Child $Child -Port $Port -Label ("My Claude Code " + $InstalledVersion)
+    $script:StartGateOutcome = [string] $gate.Outcome
+    $script:StartGateServerPid = [int] $gate.ServerPid
+    if ($gate.Outcome -eq 'answered') {
         # 7.79.1: an answer is success only when it comes from the server this
         # run started. Another server on the same port -- one started by
         # another user, which this account cannot identify or stop -- answers
@@ -4087,6 +4881,31 @@ function Confirm-RestartedServer {
             Write-InstallProgress -Stage 'failed' -Message $message
             return $false
         }
+        # 7.103.1 (decision A4): /health is answered before any work is done,
+        # so it is green on a server that cannot serve -- on 2026-10-19 it was
+        # green all night over an environment with no CA bundle. Ask a route
+        # that does real work. Failing it is the failed gate, never "installed
+        # and answering".
+        $serve = Test-ServerCanServe -HealthUrl $HealthUrl
+        if (-not $serve.Ok) {
+            $script:StartGateOutcome = 'not-serving'
+            $script:InstallProgressRestarted = $false
+            $message = "My Claude Code $InstalledVersion answers $HealthUrl but cannot serve requests: $($serve.Message)"
+            if ($RollbackAvailable) {
+                $message = $message + " It is stopped first; then the previous version is put back."
+            }
+            else {
+                $message = $message + " The previous version is no longer installed, so this one is left running (pid $startedPid) for its dashboard to show the error; run the installer again."
+            }
+            Write-Host ""
+            Write-Host $message
+            Write-InstallLog $message
+            if (-not $RollbackAvailable) {
+                Write-InstallProgress -Stage 'failed' -Message $message
+            }
+            return $false
+        }
+        Write-InstallLog $serve.Message
         $script:InstallProgressRestarted = $true
         $message = "My Claude Code $InstalledVersion is installed and answering on port $Port."
         Write-Host $message
@@ -4099,6 +4918,49 @@ function Confirm-RestartedServer {
         $null = Start-DesktopAppIfWanted
         Write-InstallProgress -Stage 'done' -Message $message
         return $true
+    }
+
+    if ($gate.Outcome -eq 'port-taken') {
+        # 7.103.1: the port is answered by a server this run did not start
+        # (named in the answer, attributed by its parents) -- the same verdict
+        # as 7.79.1's, reached while ours was still starting or after it gave
+        # up the port. Not a rollback: the new version is not the problem.
+        $startedPid = 0
+        try { $startedPid = [int] $Child.Id } catch { $startedPid = 0 }
+        $script:PortHeldByAnother = $true
+        $script:InstallProgressRestarted = $false
+        $holder = "a My Claude Code server, pid $($gate.HolderPid)"
+        if (($gate.HolderStatus -gt 0) -and ($gate.HolderStatus -ne 200)) {
+            $holder = $holder + " (it answered $($gate.HolderStatus))"
+        }
+        $script:InstallProgressHolder = $holder
+        $message = "Port $Port is answered by $holder, not by the server this install started (pid $startedPid). My Claude Code $InstalledVersion is installed, but it is not what serves that port. Nothing was stopped. Stop that server (Stop-Process -Id $($gate.HolderPid)), then start yours with: mcc-server"
+        Write-Host ""
+        Write-Host $message
+        $detail = Get-ChildFailureDetail -Path $Child.StdErr
+        if (-not $detail) { $detail = Get-ChildFailureDetail -Path $Child.StdOut }
+        if ($detail) {
+            Write-Host "The server this install started wrote ($($Child.StdErr)):"
+            Write-Host $detail
+        }
+        Write-InstallLog $message
+        Write-InstallProgress -Stage 'failed' -Message $message
+        return $false
+    }
+
+    $ceilingNote = ""
+    $hungStopped = ""
+    if ($gate.Outcome -eq 'ceiling') {
+        # Alive at the ceiling: hung, not slow (decision A1). On the staged
+        # path the caller stops it before it moves anything (decision A2);
+        # here, with nothing to put back, it is stopped now -- by exact pid.
+        $ceilingNote = " within the " + [int] $gate.Ceiling + " s ceiling, although it kept running (pid " + $Child.Id + ")"
+        if (-not $RollbackAvailable) {
+            $address = [pscustomobject]@{ ReachableHost = ([Uri] $HealthUrl).Host; Port = $Port }
+            $stop = Stop-StartedServer -Child $Child -Address $address -ServerPid $gate.ServerPid
+            if ($stop.Message) { Write-InstallLog $stop.Message }
+            $hungStopped = if ($stop.Stopped) { " It was stopped." } else { " It could not be stopped: " + $stop.Message }
+        }
     }
 
     # The child is detached and this process is not its parent, so there is no
@@ -4119,7 +4981,10 @@ function Confirm-RestartedServer {
     else {
         " The previous version is no longer installed; run the installer again."
     }
-    $message = "The new server did not answer $HealthUrl. Exit code: $exitCode.$noWayBack"
+    if ($ceilingNote -and $RollbackAvailable) {
+        $noWayBack = " It is stopped first; then the previous version is put back."
+    }
+    $message = "The new server did not answer $HealthUrl$ceilingNote. Exit code: $exitCode.$hungStopped$noWayBack"
     Write-Host ""
     Write-Host $message
     Write-Host "Its output is in: $($Child.StdErr)"
@@ -5349,6 +6214,19 @@ if ($null -ne $Staged) {
         }
         $StopOutcome = $stopVerdict.Outcome
         $StopMessage = $stopVerdict.Message
+        if (($StopOutcome -in @("stopped", "nothing-listening")) -and (-not (Test-ServerPortFree -Address $Address))) {
+            # 7.103.1: the verdict says nothing is serving on the port, but the
+            # operating system still lists a listener there. The swap below
+            # moves the live environment aside, and doing that under a server
+            # that runs out of it is the 2026-10-19 failure in
+            # another place. Measured on a loaded machine (2026-10-21, 2 of 5
+            # scratch runs): `--stop-holder` answered "Nothing was listening
+            # on that port" while the old server kept listening, because its
+            # own port lookup timed out. Treated as a stop that failed.
+            Write-InstallLog ("The stop reported the port free (" + $StopMessage + "), but a process is still listening on port " + $Address.Port + ".")
+            $StopOutcome = "failed"
+            $StopMessage = "The server on port $($Address.Port) is still listening although the stop reported it free."
+        }
         if ($StopOutcome -eq "failed") {
             # The old server is still serving and still owns its environment.
             # Swapping underneath it would leave the machine running one
@@ -5612,39 +6490,93 @@ elseif ($script:StagedSwapped) {
         # the one that did back and start THAT. This is the reason the old
         # environment was renamed rather than deleted.
         # =====================================================================
-        Write-InstallProgress -Stage 'rolling-back' -Message 'The new version did not answer, so the previous one is being put back.'
+        $didNot = "never answered"
+        $rollingMessage = 'The new version did not answer, so the previous one is being put back.'
+        if ($script:StartGateOutcome -eq 'not-serving') {
+            $didNot = "could not serve requests (only /health answered)"
+            $rollingMessage = 'The new version answered /health but could not serve, so the previous one is being put back.'
+        }
+        Write-InstallProgress -Stage 'rolling-back' -Message $rollingMessage
+        # ---- 7.103.1 (decision A2): nothing moves while the new server runs.
+        # The server this run started -- still starting at the ceiling, or
+        # answering /health over an environment that cannot serve -- is
+        # stopped by its exact pid and its children, and the port must be
+        # free, BEFORE a directory is touched. Moving the environment out from
+        # under a live server is what gutted the user's install on 2026-10-19.
+        if ($null -ne $StartedServer) {
+            $stop = Stop-StartedServer -Child $StartedServer -Address $Address -ServerPid $script:StartGateServerPid
+            if ($stop.Message) {
+                Write-Host $stop.Message
+                Write-InstallLog $stop.Message
+            }
+            if (-not ($stop.Stopped -and $stop.PortFree)) {
+                $heldBy = if (-not $stop.Stopped) { "pid(s) " + ($stop.Remaining -join ", ") + " of the server this install started (pid $($StartedServer.Id)) could not be stopped" } else { "port $($Address.Port) is still held after the server this install started (pid $($StartedServer.Id)) was stopped" }
+                $message = "The new version $didNot, and $heldBy, so nothing was moved: the new version is still at $StagedToolDir and the previous version is still at $($script:StagedPreviousEnv). Stop pid $($StartedServer.Id) (and anything holding port $($Address.Port)) yourself, then run the install command again."
+                Write-Host ""
+                Write-Host $message
+                Write-InstallLog $message
+                Write-InstallLog (Get-EnvironmentStateLine -Label "Canonical path" -Path $StagedToolDir)
+                Write-InstallLog (Get-EnvironmentStateLine -Label "Previous version" -Path $script:StagedPreviousEnv)
+                $script:InstallProgressRestarted = $false
+                Write-InstallProgress -Stage 'failed' -Message $message
+                exit 1
+            }
+        }
         $restored = Restore-PreviousEnvironment `
             -ToolDir $StagedToolDir `
             -AsideEnv $script:StagedPreviousEnv `
             -StagingRoot $script:StagedStagingRoot `
             -Stamp $script:StagedStamp `
-            -PreviousDir $script:StagedPreviousDir
+            -PreviousDir $script:StagedPreviousDir `
+            -UvPath $StagedUvPath
         $restartedPrevious = $false
         if ($restored) {
             $startOut = Join-Path (Join-Path (Get-MccConfigDir) "updates") ("server-start-rollback-" + $script:StagedStamp + ".log")
             $startErr = Join-Path (Join-Path (Get-MccConfigDir) "updates") ("server-start-rollback-" + $script:StagedStamp + ".err.log")
             try {
-                $null = Start-MccServerDetached -Launcher $ServerLauncher -StdOutPath $startOut -StdErrPath $startErr
-                $restartedPrevious = Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)
+                $previousChild = Start-MccServerDetached -Launcher $ServerLauncher -StdOutPath $startOut -StdErrPath $startErr
+                Write-InstallLog ("Started the previous version's mcc-server, pid " + $previousChild.Id + ".")
+                # The same liveness gate as the new server's: a previous
+                # version that also takes 49 s to open its log is starting,
+                # not failed.
+                $previousGate = Wait-ForStartedServer -Url $HealthUrl -Child $previousChild -Port $Address.Port -Label "The previous version"
+                $restartedPrevious = ($previousGate.Outcome -eq 'answered')
+                if ($previousGate.Outcome -eq 'ceiling') {
+                    $previousStop = Stop-StartedServer -Child $previousChild -Address $Address -ServerPid $previousGate.ServerPid
+                    if ($previousStop.Message) { Write-InstallLog $previousStop.Message }
+                }
             }
             catch {
                 Write-InstallLog ("The previous version could not be started: " + $_.Exception.Message)
             }
         }
         $message = if ($restored -and $restartedPrevious) {
-            "The new version was installed but never answered, so the previous version was put back and is answering on port $($Address.Port)."
+            "The new version was installed but $didNot, so the previous version was put back and is answering on port $($Address.Port)."
         }
         elseif ($restored) {
-            "The new version was installed but never answered, so the previous version was put back, but it could not be started either."
+            "The new version was installed but $didNot, so the previous version was put back, but it could not be started either."
+        }
+        elseif ($script:RollbackRefused) {
+            "The new version $didNot. $($script:RollbackState) Run the install command again once nothing runs from $StagedToolDir."
         }
         else {
-            "The new version never answered and the previous version could not be put back. Re-run the install command."
+            "The new version $didNot and the previous version could not be put back. $($script:RollbackState) Run the install command again: it repairs a broken install by itself."
         }
         Write-Host ""
         Write-Host $message
         Write-InstallLog $message
         $script:InstallProgressRestarted = $restartedPrevious
-        Write-InstallProgress -Stage 'recovered' -Message $message
+        if ($restored) {
+            Write-InstallProgress -Stage 'recovered' -Message $message
+        }
+        else {
+            # 7.103.1 (decision A3): a rollback that did not finish is a
+            # failure, and says so with an exit code -- on 2026-10-19 this run
+            # reported "the previous version could not be put back" and exited
+            # 0, so the helper told the dashboard the update had worked.
+            Write-InstallProgress -Stage 'failed' -Message $message
+            exit 1
+        }
     }
 }
 elseif ((-not $DryRun) -and (-not $script:Deferred)) {

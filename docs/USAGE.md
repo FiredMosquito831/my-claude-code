@@ -5637,8 +5637,10 @@ passes it keeps working.
    process ids, within the budget `SERVER_GRACEFUL_SHUTDOWN_SECONDS` sets, and
    the installer waits for the port to come free.
 4. `mcc-server` is started detached, so it outlives the installer.
-5. The installer waits for `/health` to answer on that port. **That** is success.
-   An install that exited 0 is not.
+5. The installer waits for `/health` to answer on that port **and** for
+   `/admin/api/version` to answer with the version document (7.103.1). **That**
+   is success. An install that exited 0 is not, and neither is a green `/health`
+   on its own — see [the start gate](#the-start-gate-waits-for-a-live-server).
 6. Once a listener has answered, the **desktop app** is started too — see below.
 
 <a id="the-installer-starts-the-desktop-app"></a>
@@ -5699,9 +5701,9 @@ restart.
 | `verifying` | The staged version is **run** once — `mcc-server --version`, and an import of the package. A release that installs but cannot import itself is caught here. | No. |
 | `stopping` | Exactly the one server on the configured port is stopped by its exact process ids. | From here. |
 | `swapping` | Two directory renames. Measured at 2.7–20 ms. | Milliseconds. |
-| `starting` | `mcc-server` is started detached and `/health` is polled. | Until it answers. |
-| `done` | A listener answered. Only now is the previous copy swept. | No. |
-| `rolling-back` → `recovered` | It never answered, so the previous version goes back and **it** is started. | Until the old one answers. |
+| `starting` | `mcc-server` is started detached and `/health` is polled for as long as that process is alive (7.103.1). Every 15 s the receipt says *still starting, N s*. | Until it answers. |
+| `done` | A listener answered `/health` and `/admin/api/version`. Only now is the previous copy swept. | No. |
+| `rolling-back` → `recovered` | It died, hung past the ceiling, or answered `/health` without being able to serve: it is **stopped first**, then the previous version goes back and **it** is started. | Until the old one answers. |
 
 The outage is the stop, the rename and the start — not the download, the
 dependency resolve and the environment build, which used to happen with the old
@@ -5713,6 +5715,47 @@ canonical path, so the rename alone cuts the whole machine over and no locked
 **If the new version never answers**, the previous one is put back and started,
 and the receipt ends at `recovered` rather than `failed`. The copy that made the
 rollback possible is deleted only *after* the new server answers.
+
+<a id="the-start-gate-waits-for-a-live-server"></a>
+
+#### The start gate waits for a live server, and nothing moves under one (7.103.1)
+
+On 2026-10-19 an update gave up on the new server after 35 seconds — the
+`DESKTOP_SERVER_START_TIMEOUT` × `DESKTOP_SERVER_START_RETRIES` budget — while
+that server was alive, bound and still opening a 3.3 GB request log (it needed
+about 49 seconds). The rollback then moved the tool environment out from under
+the running server, could not finish, and exited 0; the server kept answering
+`/health` while every real request failed, because its CA bundle had moved with
+the directory. Since 7.103.1:
+
+- **The wait follows the process, not a clock.** The installer keeps waiting
+  while the server it started is alive and the port is its own (or nobody's).
+  It stops waiting the moment that process dies — within a couple of seconds —
+  or answers. The old budget is no longer a give-up point; it sets the floor of
+  a hard **ceiling**: ten times the budget, never less than ten minutes. Every
+  15 seconds the receipt (and the desktop window) says *still starting, N s*.
+- **`/health` is not enough.** `/health` is answered before any work is done.
+  Success also needs `GET /admin/api/version` to answer the version document;
+  a server that cannot (a 5xx, no JSON) is treated as a failed start.
+- **Nothing moves while a server runs out of it.** A server that hung past the
+  ceiling, or answers `/health` without serving, is stopped first — by its exact
+  process id and the processes it started, never by name — and the rollback
+  waits until all of them have exited and the port is free. If it cannot be
+  stopped, or the port stays held, **nothing is moved**: the transcript names the
+  process ids and where each version is, and the install exits 1.
+- **A rollback that fails half-way stops where it is.** Each of its two moves is
+  a step; if one fails, nothing else is tried, the transcript says what is where,
+  and the install exits 1. The next run of the install command finds the broken
+  environment and installs a fresh copy by itself. A rollback that finished is
+  checked: `Scripts\python.exe` (`bin/python`), `pyvenv.cfg`, and `uv tool list`
+  not calling the tool malformed.
+- **The swap trusts the operating system last.** If the stop reports the port
+  free while a server is still listening on it, nothing is swapped and the
+  install exits 1.
+
+> **The update that installs 7.103.1 still runs 7.103.0's gate.** A dashboard
+> update is carried out by the version you are leaving; the new gate applies from
+> the update after it, and to every install you run by hand.
 
 > **The update that installs 6.82.0 still runs today's helper.** The new path
 > applies from the update after it. That is unavoidable: an update is carried
