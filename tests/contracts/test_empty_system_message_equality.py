@@ -211,9 +211,7 @@ def probe_cases() -> Iterator[tuple[str, str, dict[str, Any]]]:
     }
     markers = {
         "marker_after_summary": _body([SUMMARY, MARKER, REPLY, ASK]),
-        "marker_without_output_config": _body(
-            [SUMMARY, _system([]), REPLY, ASK]
-        ),
+        "marker_without_output_config": _body([SUMMARY, _system([]), REPLY, ASK]),
         "marker_trailing": _body([SUMMARY, REPLY, ASK, MARKER]),
         "marker_after_tool_result_run": _body([SUMMARY, *_tool_run(), MARKER, ASK]),
         "marker_twice": _body([SUMMARY, MARKER, REPLY, ASK, MARKER]),
@@ -351,10 +349,8 @@ def _chat_builders() -> dict[str, Callable[[MessagesRequest], Any]]:
     }
     for provider_id in sorted(OPENAI_CHAT_PROFILES):
         provider = create_openai_chat_provider(provider_id, _config(), limiter)
-        builders[f"chat_{provider_id}"] = (
-            lambda request, provider=provider: provider._build_request_body(
-                request, reasoning=REASONING
-            )
+        builders[f"chat_{provider_id}"] = lambda request, provider=provider: (
+            provider._build_request_body(request, reasoning=REASONING)
         )
     named = {
         "deepseek": DeepSeekProvider(_config(), rate_limiter=limiter),
@@ -370,11 +366,13 @@ def _chat_builders() -> dict[str, Callable[[MessagesRequest], Any]]:
             rate_limiter=limiter,
             provider_id="google_openai",
         ),
-        "commandcode_chat": CommandCodeProvider(_config(), rate_limiter=limiter)._openai,
+        "commandcode_chat": CommandCodeProvider(
+            _config(), rate_limiter=limiter
+        )._openai,
     }
     for name, provider in named.items():
-        builders[name] = lambda request, provider=provider: provider._build_request_body(
-            request, reasoning=REASONING
+        builders[name] = lambda request, provider=provider: (
+            provider._build_request_body(request, reasoning=REASONING)
         )
     builders["nvidia_nim"] = lambda request: build_nim_request_body(
         request, NimSettings(), reasoning=REASONING, provider_id="nvidia_nim"

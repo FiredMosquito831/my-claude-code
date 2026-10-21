@@ -374,13 +374,13 @@ def test_the_responses_build_counts_it_into_wire_notes() -> None:
 # --------------------------------------------------------------------------
 
 _CHAT_SSE = (
-    'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m",'
-    '"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},'
-    '"finish_reason":null}]}\n\n'
-    'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m",'
-    '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
-    "data: [DONE]\n\n"
-).encode()
+    b'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},'
+    b'"finish_reason":null}]}\n\n'
+    b'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+    b"data: [DONE]\n\n"
+)
 
 
 def _config() -> ProviderConfig:
@@ -584,7 +584,9 @@ async def test_chatgpt_oauth_records_the_note_beside_the_body() -> None:
     assert _params(trace)[EMPTY_SYSTEM_MESSAGES_DROPPED] == NOTE_ONE
     assert _wire(sent) == _wire(
         build_chatgpt_oauth_request_body(
-            _request(_without_markers(LAYOUTS["after_the_summary"]), model="gpt-5.6-terra"),
+            _request(
+                _without_markers(LAYOUTS["after_the_summary"]), model="gpt-5.6-terra"
+            ),
             reasoning=REASONING,
         )
     )
