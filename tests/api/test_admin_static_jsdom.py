@@ -20,7 +20,13 @@ from typing import NoReturn
 
 import pytest
 
-from my_claude_code.config.admin.manifest import FIELD_BY_KEY
+from my_claude_code.api.model_admin import prompt_cache_lifetimes_payload
+from my_claude_code.config.admin.manifest import (
+    FIELD_BY_KEY,
+    FIELDS,
+    SECTIONS,
+    ConfigOptionSpec,
+)
 from my_claude_code.core.upstream_ladder import _TIMES
 
 HARNESS = Path(__file__).with_name("admin_jsdom_harness.mjs")
@@ -10485,3 +10491,174 @@ def test_jsdom_progress_and_failure_panel(agent_installs) -> None:
     # The card is still not installed, so Install is offered again.
     assert agent_installs["geminiAfter"]["button"] == "Install"
     assert agent_installs["polls"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# The prompt-cache lifetime on the dashboard (7.104.0)
+#
+# One run of admin_jsdom_prompt_cache.mjs (MCC_JSDOM_SCENARIO=prompt_cache) on
+# the REAL manifest's Reasoning section and the real declared lifetime table:
+# Model Config's "Prompt cache lifetime" subheading, a Save, and the Models
+# page's read-only row for a declared provider, a learned refusal and an
+# undeclared provider.
+# --------------------------------------------------------------------------- #
+
+PROMPT_CACHE_KEYS = [
+    "PROMPT_CACHE_TTL",
+    "PROMPT_CACHE_TTL_MYTHOS",
+    "PROMPT_CACHE_TTL_FABLE",
+    "PROMPT_CACHE_TTL_OPUS",
+    "PROMPT_CACHE_TTL_SONNET",
+    "PROMPT_CACHE_TTL_HAIKU",
+]
+
+
+def _served_field(key: str) -> dict:
+    """One manifest field as ``/admin/api/config`` serves it, at its default."""
+
+    field = FIELD_BY_KEY[key]
+    return {
+        "key": field.key,
+        "label": field.label,
+        "section": field.section_id,
+        "provider": None,
+        "type": field.field_type,
+        "value": field.default,
+        "effective": field.default,
+        "default": field.default,
+        "set": False,
+        "configured": bool(field.default),
+        "source": "default",
+        "locked": False,
+        "secret": field.secret,
+        "advanced": field.advanced,
+        "restart_required": field.restart_required,
+        "session_sensitive": field.session_sensitive,
+        "options": [
+            {"value": option.value, "label": option.label}
+            if isinstance(option, ConfigOptionSpec)
+            else {"value": option, "label": option}
+            for option in field.options
+        ],
+        "description": field.description,
+        "minimum": field.minimum,
+        "maximum": field.maximum,
+        "range_hint": field.range_hint,
+    }
+
+
+@pytest.fixture(scope="module")
+def prompt_cache(tmp_path_factory: pytest.TempPathFactory) -> dict:
+    section = next(spec for spec in SECTIONS if spec.section_id == "reasoning")
+    fixture = {
+        "section": {
+            "id": section.section_id,
+            "label": section.label,
+            "description": section.description,
+            "advanced": section.advanced,
+        },
+        "fields": [
+            _served_field(field.key)
+            for field in FIELDS
+            if field.section_id == "reasoning"
+        ],
+        "prompt_cache_lifetimes": prompt_cache_lifetimes_payload(),
+    }
+    path = tmp_path_factory.mktemp("prompt_cache") / "fixture.json"
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+    return _run(
+        MCC_JSDOM_SCENARIO="prompt_cache", MCC_JSDOM_PROMPT_CACHE_FIXTURE=str(path)
+    )
+
+
+def test_jsdom_the_prompt_cache_scenario_runs_clean(prompt_cache) -> None:
+    assert prompt_cache["fatal"] is None
+    assert prompt_cache["scenarioFatal"] is None
+    assert prompt_cache["scriptErrors"] == []
+    assert prompt_cache["consoleErrors"] == []
+
+
+def test_jsdom_the_lifetimes_sit_under_their_own_subheading_in_reasoning(
+    prompt_cache,
+) -> None:
+    section = prompt_cache["section"]
+    assert section["heading"] == "Reasoning"
+    # The thinking levels are drawn first, exactly the fields they always were.
+    assert section["firstGridKeys"] == [
+        "REASONING_POLICY",
+        "REASONING_MYTHOS",
+        "REASONING_FABLE",
+        "REASONING_OPUS",
+        "REASONING_SONNET",
+        "REASONING_HAIKU",
+    ]
+    assert section["subInsideSection"] is True
+    sub = prompt_cache["subsection"]
+    assert sub["heading"] == "Prompt cache lifetime"
+    assert "5 min or 1 h" in sub["lead"]
+    assert "From client changes nothing" in sub["lead"]
+    # Beside the thinking levels: the same tiers, in the same order.
+    assert sub["keys"] == PROMPT_CACHE_KEYS
+
+
+def test_jsdom_each_lifetime_defaults_to_choosing_nothing(prompt_cache) -> None:
+    fields = {field["key"]: field for field in prompt_cache["subsection"]["fields"]}
+    # Every select leads with the page's own "Default (...)" entry.
+    assert fields["PROMPT_CACHE_TTL"]["value"] == "client"
+    assert fields["PROMPT_CACHE_TTL"]["optionCount"] == 62
+    assert fields["PROMPT_CACHE_TTL"]["firstOptions"][:3] == [
+        {"value": "", "text": "Default (From client)"},
+        {"value": "client", "text": "From client"},
+        {"value": "1", "text": "1 min"},
+    ]
+    assert fields["PROMPT_CACHE_TTL"]["lastOption"] == "60 min"
+    for key in PROMPT_CACHE_KEYS[1:]:
+        assert fields[key]["value"] == "inherit", key
+        assert fields[key]["optionCount"] == 63, key
+        assert fields[key]["firstOptions"] == [
+            {"value": "", "text": "Default (Inherit)"},
+            {"value": "inherit", "text": "Inherit"},
+            {"value": "client", "text": "From client"},
+            {"value": "1", "text": "1 min"},
+        ], key
+        assert fields[key]["lastOption"] == "60 min", key
+    assert fields["PROMPT_CACHE_TTL_OPUS"]["label"].startswith(
+        "Opus Prompt Cache Lifetime"
+    )
+
+
+def test_jsdom_a_save_posts_exactly_the_two_lifetimes_edited(prompt_cache) -> None:
+    assert prompt_cache["dirtyBefore"] == "No changes"
+    assert prompt_cache["edited"] == [True, True]
+    assert prompt_cache["dirtyAfter"] == "2 unsaved changes"
+    assert prompt_cache["applyEnabled"] is True
+    assert prompt_cache["applied"] == [
+        {"values": {"PROMPT_CACHE_TTL": "30", "PROMPT_CACHE_TTL_OPUS": "3"}}
+    ]
+
+
+def test_jsdom_a_declared_host_shows_its_lifetimes_read_only(prompt_cache) -> None:
+    plain = prompt_cache["models"]["plain"]["row"]
+    assert plain["label"] == "prompt cache lifetimes"
+    assert plain["value"] == "5 min (writes 1.25x), 1 h (writes 2x)"
+    assert plain["badge"] == "declared for the Anthropic Messages family"
+    assert "models-source-declared" in plain["badgeClass"]
+    assert plain["readonly"] is True
+    assert plain["srOnly"] == ["read-only"]
+    assert plain["group"] == "request"
+    assert any("shortest that is at least" in note for note in plain["notes"])
+
+
+def test_jsdom_a_learned_refusal_names_the_refused_lifetime(prompt_cache) -> None:
+    refused = prompt_cache["models"]["refused"]["row"]
+    assert refused["value"] == "5 min (writes 1.25x), 1 h — refused by this host"
+
+
+def test_jsdom_an_undeclared_host_says_lifetime_control_is_not_known(
+    prompt_cache,
+) -> None:
+    row = prompt_cache["models"]["undeclared"]["row"]
+    assert row["value"] == "lifetime control not known for this host"
+    assert row["badge"] == "not declared"
+    assert row["readonly"] is True
+    assert any("changes nothing on its requests" in note for note in row["notes"])
