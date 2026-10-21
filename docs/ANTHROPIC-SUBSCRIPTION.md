@@ -138,6 +138,13 @@ upstream unchanged on this provider (before, MCC dropped it), so with the
 setting off Anthropic still thinks but withholds the text, and MCC never picks
 a display of its own.
 
+Since 7.104.0 Claude Code's own prompt-cache lifetime (its `ttl: "1h"` markers)
+goes upstream unchanged on this provider unless you set a lifetime on Model
+Config (`PROMPT_CACHE_TTL` or a tier's `PROMPT_CACHE_TTL_<TIER>`); then every
+marker carries `5m` or `1h`, the shortest at least the minutes you set, and a
+1-hour cache write is billed at twice the input price (see
+[USAGE](USAGE.md#prompt-cache-lifetime)).
+
 Mirroring is not the same as asserting: every mirrored value is one the client
 itself sent. The fallback constants are used only when a request arrived
 without them, and the gate refuses those requests anyway.

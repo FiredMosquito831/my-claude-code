@@ -2116,6 +2116,7 @@
                 <a href="#guide-learned">What MCC knows and learned</a>
                 <a href="#guide-agent-tiers">Tiers for every agent</a>
                 <a href="#guide-reasoning">Reasoning</a>
+                <a href="#guide-prompt-cache-lifetime">Prompt cache lifetime</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
                 <a href="#guide-desktop-apps">Point a desktop app here</a>
@@ -3236,6 +3237,51 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   262,144-output model can be rate-limited for tokens it was never going
                   to use. Blank means the default; <code>0</code> is the sentinel for no
                   ceiling at all.
+                </p>
+
+                <h3 id="guide-prompt-cache-lifetime">Prompt cache lifetime</h3>
+                <p>
+                  A host keeps a prompt cache for a lifetime chosen from its own short
+                  list. Anthropic &mdash; the Claude API and the Claude subscription
+                  &mdash; keeps one for <strong>5 min</strong> (its default) or
+                  <strong>1 h</strong>, and nothing in between. Claude Code's terminal
+                  app already asks for 1 h on its own cache markers; Claude Desktop and
+                  the SDKs leave Anthropic's 5 min. <strong>By default MCC forwards
+                  whatever the client sent, byte for byte.</strong>
+                </p>
+                <p>
+                  To choose instead, open <strong>Model Config &rarr; Reasoning &rarr;
+                  Prompt cache lifetime</strong>: one default
+                  (<code>PROMPT_CACHE_TTL</code>, <em>From client</em>) and one per
+                  tier beside its thinking level (<code>PROMPT_CACHE_TTL_OPUS</code>
+                  and the others, <em>Inherit</em>). A tier's own value wins over the
+                  default, and <em>From client</em> at any level means MCC sets
+                  nothing there. Minutes from 1 to 60 are never sent as a number: they
+                  are adapted to what the host accepts &mdash; <strong>the shortest
+                  lifetime that is at least the minutes you asked for, else the host's
+                  longest</strong>. On Anthropic, 1&ndash;5 sends 5 min and 6&ndash;60
+                  sends 1 h. Every marker the client wrote then carries that lifetime
+                  (a marker with none already means 5 min and is left as written when
+                  5 min is the choice), and a request with no marker at all gets
+                  Anthropic's single top-level one. The change applies on the next
+                  request; no restart.
+                </p>
+                <p class="guide-note">
+                  <strong>A longer cache costs more to write.</strong> Anthropic bills
+                  a cache write at 1.25&times; the input price for 5 min and at
+                  2&times; for 1 h; reads are cheap either way. MCC's cost figures
+                  still price every cache write at the 5-minute rate for now. Every
+                  other host &mdash; ChatGPT, OpenRouter, Command Code, OpenCode, custom
+                  providers &mdash; gets nothing from this setting in this release, and
+                  its model rows on the <strong>Models</strong> page say
+                  <em>lifetime control not known for this host</em>; a model of a
+                  declared host shows the lifetimes it takes. If a host answers 400
+                  naming the lifetime field, that lifetime is remembered as refused
+                  (Models page, with Forget, 30 days) and later requests use the
+                  lifetime that remains; the refused request itself fails over exactly
+                  as any 400 does. Each request's detail records
+                  <code>prompt_cache_ttl</code>: the minutes asked, the lifetime sent
+                  and the lifetimes the host takes.
                 </p>
 
                 <h3 id="guide-cli">Point Claude Code here</h3>
