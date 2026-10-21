@@ -109,6 +109,25 @@ server_port=8082
 server_bind_host=127.0.0.1
 server_reachable_host=127.0.0.1
 started_server_pid=0
+# 7.103.1: the server this run started (start_restarted_server), what the
+# liveness gate ended on (answered, not-serving, exited, ceiling, port-taken),
+# the interpreter pid it saw answering, and why a rollback did not run or did
+# not finish. A rollback moves nothing while that server is alive or while the
+# port is held (decisions A2/A3, 2026-10-20 14:37).
+run_started_server_pid=0
+start_gate_outcome=""
+start_gate_seconds=0
+start_gate_holder_pid=""
+start_gate_holder_code=""
+start_gate_server_pid=""
+rollback_refused=0
+rollback_state=""
+serve_message=""
+serve_checked=1
+stop_started_ok=0
+stop_started_port_free=0
+stop_started_remaining=""
+stop_started_message=""
 # Set by the launcher-creation helpers so the closing message reports what
 # actually happened instead of hedging with "(if the platform supports it)".
 desktop_launcher_created=""
@@ -1271,8 +1290,13 @@ undo_in_place_finish() {
         mkdir -p "$(dirname "$undo_log")" 2>/dev/null || true
         start_server_detached "$restart_launcher" "$undo_log"
         printf "Started the previous version's mcc-server (pid %s).\n" "$started_server_pid"
-        if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
+        # 7.103.1: the liveness gate, not a fixed budget (decision A1).
+        wait_for_started_server "$restart_health_url" "$started_server_pid" "The previous version"
+        if [ "$start_gate_outcome" = "answered" ]; then
             undo_started=1
+        elif [ "$start_gate_outcome" = "ceiling" ]; then
+            stop_started_server "$started_server_pid"
+            write_install_log "$stop_started_message"
         fi
     fi
     if [ "$undo_restored" -eq 1 ] && [ "$undo_started" -eq 1 ]; then
@@ -1297,17 +1321,81 @@ undo_in_place_finish() {
 restore_previous_environment() {
     # Put the version that worked back at the canonical path. This is the
     # reason the old environment was renamed rather than deleted.
+    #
+    # 7.103.1, three rules, inside this function so no caller can skip them
+    # (decisions A2/A3, 2026-10-20 14:37):
+    #   1. NOTHING IS MOVED while the server this run started is alive, or
+    #      while the port is held after this run started one -- moving an
+    #      environment out from under a running server is what gutted the
+    #      user's install on 2026-10-19 (the Windows twin of this script). A
+    #      previous environment with no runnable bin/python or no pyvenv.cfg is
+    #      refused too. Refused, nothing is touched; rollback_refused=1.
+    #   2. A STEP THAT FAILS STOPS THE ROLLBACK where it is; the next run's
+    #      self-heal (7.78.9) treats a gutted environment as not installed.
+    #      rollback_state and the transcript say what is where.
+    #   3. A ROLLBACK IS CHECKED: bin/python and pyvenv.cfg at the canonical
+    #      path, and uv must not call the tool malformed.
     restore_tool_dir=$1
     restore_failed_dir="$staging_root/$staged_stamp-failed"
-    mkdir -p "$restore_failed_dir" 2>/dev/null || true
-    [ -d "$restore_tool_dir" ] && mv "$restore_tool_dir" "$restore_failed_dir/$PACKAGE_ENV_DIRNAME" 2>/dev/null
-    if mv "$swap_aside_env" "$restore_tool_dir" 2>/dev/null; then
-        write_install_log "The previous environment is back at the canonical path."
-        rmdir "$swap_previous_dir" 2>/dev/null || true
-        return 0
+    restore_failed_env="$restore_failed_dir/$PACKAGE_ENV_DIRNAME"
+    rollback_refused=0
+    rollback_state=""
+    restore_refusal=""
+    if [ "${run_started_server_pid:-0}" -gt 0 ]; then
+        restore_alive=$(started_process_tree "$run_started_server_pid" | sed 's/^[0-9]*://' | tr '\n' ' ')
+        if [ -n "$start_gate_server_pid" ] && started_process_alive "$start_gate_server_pid"; then
+            restore_alive="$restore_alive $start_gate_server_pid"
+        fi
+        restore_alive=$(printf '%s' "$restore_alive" | tr -s ' ' | sed 's/^ //; s/ $//')
+        if [ -n "$restore_alive" ]; then
+            restore_refusal="the server this install started is still running (pid $restore_alive)"
+        elif port_is_occupied "$server_reachable_host" "$server_port"; then
+            restore_refusal="port $server_port is still held"
+        fi
     fi
-    write_install_log "The rollback failed: the previous environment could not be moved back."
-    return 1
+    if [ -z "$restore_refusal" ] && { [ ! -x "$swap_aside_env/bin/python" ] || [ ! -f "$swap_aside_env/pyvenv.cfg" ]; }; then
+        restore_refusal="the previous environment at $swap_aside_env has no runnable bin/python or pyvenv.cfg"
+    fi
+    if [ -n "$restore_refusal" ]; then
+        rollback_refused=1
+        rollback_state="The rollback was not attempted: $restore_refusal. Nothing was moved. $(environment_state_line "Canonical path" "$restore_tool_dir") $(environment_state_line "Previous version" "$swap_aside_env")"
+        write_install_log "$rollback_state"
+        return 1
+    fi
+    mkdir -p "$restore_failed_dir" 2>/dev/null || true
+    if [ -d "$restore_tool_dir" ] && ! mv "$restore_tool_dir" "$restore_failed_env" 2>/dev/null; then
+        write_install_log "The rollback failed: the failed version could not be moved out of the canonical path."
+        rollback_state="The rollback stopped at step 1 of 2 (moving $restore_tool_dir to $restore_failed_env). Nothing else was moved. $(environment_state_line "Canonical path" "$restore_tool_dir") $(environment_state_line "Failed version" "$restore_failed_env") $(environment_state_line "Previous version" "$swap_aside_env")"
+        write_install_log "$rollback_state"
+        return 1
+    fi
+    if [ -e "$restore_tool_dir" ]; then
+        rollback_state="The rollback stopped after step 1 of 2: $restore_tool_dir was moved to $restore_failed_env, but $restore_tool_dir exists again (something wrote into it), so the previous version was not moved. $(environment_state_line "Canonical path" "$restore_tool_dir") $(environment_state_line "Failed version" "$restore_failed_env") $(environment_state_line "Previous version" "$swap_aside_env")"
+        write_install_log "$rollback_state"
+        return 1
+    fi
+    if ! mv "$swap_aside_env" "$restore_tool_dir" 2>/dev/null; then
+        write_install_log "The rollback failed: the previous environment could not be moved back."
+        rollback_state="The rollback stopped at step 2 of 2 (moving $swap_aside_env to $restore_tool_dir). Step 1 had moved the failed version to $restore_failed_env. $(environment_state_line "Canonical path" "$restore_tool_dir") $(environment_state_line "Failed version" "$restore_failed_env") $(environment_state_line "Previous version" "$swap_aside_env")"
+        write_install_log "$rollback_state"
+        return 1
+    fi
+    write_install_log "The previous environment is back at the canonical path."
+    rmdir "$swap_previous_dir" 2>/dev/null || true
+    restore_problem=""
+    [ -x "$restore_tool_dir/bin/python" ] || restore_problem="it has no runnable bin/python"
+    [ -f "$restore_tool_dir/pyvenv.cfg" ] || restore_problem="${restore_problem:+$restore_problem; }it has no pyvenv.cfg"
+    if [ -z "$restore_problem" ]; then
+        tool_environment_problem "$restore_tool_dir"
+        restore_problem=$tool_problem
+    fi
+    if [ -n "$restore_problem" ]; then
+        rollback_state="The previous environment is back at $restore_tool_dir, but it cannot be used: $restore_problem. $(environment_state_line "Canonical path" "$restore_tool_dir") $(environment_state_line "Failed version" "$restore_failed_env")"
+        write_install_log "$rollback_state"
+        return 1
+    fi
+    write_install_log "Checked $restore_tool_dir: bin/python and pyvenv.cfg are there and uv does not call it malformed."
+    return 0
 }
 
 remove_stale_previous_environment() {
@@ -2103,6 +2191,363 @@ wait_for_server_health() {
     curl -fsS -o /dev/null -m 5 "$health_url" 2>/dev/null
 }
 
+server_start_ceiling_seconds() {
+    # 7.103.1: the HARD CEILING of the wait for a server this run started:
+    # max(600, 10 x server_start_budget_seconds). Until 7.103.1 the budget was
+    # the give-up point, and on 2026-10-19 02:08 (the Windows twin of this
+    # script) it gave up on a server that was alive, bound and still opening a
+    # 3.3 GB request log -- 35 s of budget against a 49 s cold start -- and the
+    # rollback moved the environment out from under it. The wait is now a
+    # liveness gate (wait_for_started_server); the budget is the floor of this
+    # ceiling, never the give-up point. Derived, not a new setting.
+    ceiling_budget=$(server_start_budget_seconds)
+    ceiling_value=$((ceiling_budget * 10))
+    [ "$ceiling_value" -lt 600 ] && ceiling_value=600
+    printf '%s' "$ceiling_value"
+}
+
+now_seconds() {
+    # Seconds since the epoch, or nothing where `date +%s` is not understood.
+    now_value=$(date +%s 2>/dev/null) || now_value=""
+    case "$now_value" in
+        ''|*[!0-9]*) now_value="" ;;
+    esac
+    printf '%s' "$now_value"
+}
+
+started_process_alive() {
+    # 7.103.1: whether pid $1 is still RUNNING. A zombie is not: the server is
+    # this shell's own child, so once it exits it stays a zombie until it is
+    # reaped, and `kill -0` still answers for it.
+    alive_pid=$1
+    case "$alive_pid" in
+        ''|*[!0-9]*|0) return 1 ;;
+    esac
+    kill -0 "$alive_pid" 2>/dev/null || return 1
+    alive_state=""
+    if [ -r "/proc/$alive_pid/stat" ]; then
+        alive_state=$(sed -n 's/^.*) \([A-Za-z]\) .*$/\1/p' "/proc/$alive_pid/stat" 2>/dev/null) || alive_state=""
+    elif command -v ps >/dev/null 2>&1; then
+        alive_state=$(ps -o stat= -p "$alive_pid" 2>/dev/null | tr -d ' ') || alive_state=""
+    fi
+    case "$alive_state" in
+        Z*) return 1 ;;
+    esac
+    return 0
+}
+
+wait_for_started_server() {
+    # 7.103.1: the LIVENESS gate. Wait for the server this run started (pid
+    # $2) to answer $1 with 200, for as long as it is alive and the port is
+    # its own (or nobody's), up to the ceiling ($4, default
+    # server_start_ceiling_seconds). Sets start_gate_outcome to one of
+    #   answered    /health answered 200 (whose answer it is, the caller decides)
+    #   exited      the process this run started is gone
+    #   port-taken  the port is answered by a server this run did not start
+    #   ceiling     still alive and still not answering at the ceiling
+    # and start_gate_seconds, start_gate_holder_pid, start_gate_holder_code,
+    # start_gate_server_pid. A server that is alive and holds its own port is
+    # STARTING: a crash ends the wait within a second or two, an answer at
+    # once. Every 15 s the receipt says it is still starting ($3 names it).
+    gate_url=$1
+    gate_pid=${2:-0}
+    gate_label=${3:-The server}
+    gate_ceiling=${4:-}
+    [ -n "$gate_ceiling" ] || gate_ceiling=$(server_start_ceiling_seconds)
+    start_gate_outcome=ceiling
+    start_gate_seconds=0
+    start_gate_holder_pid=""
+    start_gate_holder_code=""
+    start_gate_server_pid=""
+    gate_ours=" "
+    gate_theirs=" "
+    gate_foreign=0
+    gate_started=$(now_seconds)
+    gate_elapsed=0
+    gate_next_report=15
+    while [ "$gate_elapsed" -lt "$gate_ceiling" ]; do
+        health_answer "$gate_url"
+        if [ "$health_answer_code" = "200" ]; then
+            start_gate_outcome=answered
+            start_gate_seconds=$gate_elapsed
+            return 0
+        fi
+        gate_alive=0
+        started_process_alive "$gate_pid" && gate_alive=1
+        if [ "$gate_alive" -eq 0 ] && [ -n "$start_gate_server_pid" ]; then
+            started_process_alive "$start_gate_server_pid" && gate_alive=1
+        fi
+        if [ "$gate_alive" -eq 0 ]; then
+            # Gone. One fresh look at the port: an answer naming a pid now
+            # comes from someone else -- unless its parents lead back here.
+            health_answer "$gate_url"
+            if [ -n "$health_answer_pid" ]; then
+                gate_relation=0
+                answer_is_from_started_server "$health_answer_pid" "$gate_pid" || gate_relation=$?
+                if [ "$gate_relation" -ne 1 ]; then
+                    start_gate_server_pid=$health_answer_pid
+                    sleep 1
+                    gate_now=$(now_seconds)
+                    if [ -n "$gate_started" ] && [ -n "$gate_now" ]; then
+                        gate_elapsed=$((gate_now - gate_started))
+                    else
+                        gate_elapsed=$((gate_elapsed + 1))
+                    fi
+                    continue
+                fi
+                start_gate_outcome=port-taken
+                start_gate_holder_pid=$health_answer_pid
+                start_gate_holder_code=$health_answer_code
+            else
+                start_gate_outcome=exited
+            fi
+            start_gate_seconds=$gate_elapsed
+            return 0
+        fi
+        if [ -n "$health_answer_pid" ] && [ "$gate_pid" -gt 0 ]; then
+            case "$gate_ours" in
+                *" $health_answer_pid "*) gate_relation=0 ;;
+                *)
+                    case "$gate_theirs" in
+                        *" $health_answer_pid "*) gate_relation=1 ;;
+                        *)
+                            gate_relation=0
+                            answer_is_from_started_server "$health_answer_pid" "$gate_pid" || gate_relation=$?
+                            [ "$gate_relation" -eq 0 ] && gate_ours="$gate_ours$health_answer_pid "
+                            [ "$gate_relation" -eq 1 ] && gate_theirs="$gate_theirs$health_answer_pid "
+                            ;;
+                    esac
+                    ;;
+            esac
+            if [ "$gate_relation" -eq 1 ]; then
+                gate_foreign=$((gate_foreign + 1))
+                if [ "$gate_foreign" -ge 2 ]; then
+                    start_gate_outcome=port-taken
+                    start_gate_holder_pid=$health_answer_pid
+                    start_gate_holder_code=$health_answer_code
+                    start_gate_seconds=$gate_elapsed
+                    return 0
+                fi
+            else
+                gate_foreign=0
+                [ "$gate_relation" -eq 0 ] && start_gate_server_pid=$health_answer_pid
+            fi
+        fi
+        sleep 1
+        gate_now=$(now_seconds)
+        if [ -n "$gate_started" ] && [ -n "$gate_now" ]; then
+            gate_elapsed=$((gate_now - gate_started))
+        else
+            gate_elapsed=$((gate_elapsed + 1))
+        fi
+        if [ "$gate_elapsed" -ge "$gate_next_report" ]; then
+            gate_note="$gate_label is still starting, $gate_elapsed s (pid $gate_pid)."
+            write_install_log "$gate_note"
+            write_install_progress starting "$gate_note"
+            gate_next_report=$((gate_next_report + 15))
+        fi
+    done
+    # The ceiling. Alive here means hung, not slow.
+    gate_alive=0
+    started_process_alive "$gate_pid" && gate_alive=1
+    if [ "$gate_alive" -eq 0 ] && [ -n "$start_gate_server_pid" ]; then
+        started_process_alive "$start_gate_server_pid" && gate_alive=1
+    fi
+    [ "$gate_alive" -eq 1 ] || start_gate_outcome=exited
+    start_gate_seconds=$gate_elapsed
+    return 0
+}
+
+server_can_serve() {
+    # 7.103.1 (decision A4): whether a server that answers /health ($1) can
+    # also SERVE -- GET /admin/api/version must answer the version document.
+    # /health is answered before any work is done, so it stays green while
+    # everything behind it fails; on 2026-10-19 it was green all night over an
+    # environment with no CA bundle. This route builds a TLS context for the
+    # release feed and reads the settings, so it fails exactly that way.
+    # Three tries two seconds apart. A 403 or 404 means the route cannot be
+    # asked from here (a HOST bound to a LAN address is not loopback to the
+    # admin guard): "not checked", never "failed". Sets serve_message,
+    # serve_checked; returns 0 when the server can serve or was not checked.
+    serve_url="${1%/health}/admin/api/version"
+    serve_checked=1
+    serve_message=""
+    serve_problem="it did not answer"
+    serve_attempt=1
+    while [ "$serve_attempt" -le 3 ]; do
+        serve_output=$(curl -s -m 45 -w '\n%{http_code}' "$serve_url" 2>/dev/null) || true
+        serve_code=$(printf '%s\n' "$serve_output" | tail -n 1)
+        serve_body=$(printf '%s\n' "$serve_output" | sed '$d')
+        case "$serve_code" in
+            200)
+                serve_version=$(printf '%s' "$serve_body" | grep -o '"current"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+                if [ -n "$serve_version" ]; then
+                    serve_message="GET $serve_url answered: version $serve_version."
+                    return 0
+                fi
+                serve_problem="it answered 200 without the version document"
+                ;;
+            403|404)
+                serve_checked=0
+                serve_message="GET $serve_url answered $serve_code from here, so whether the server can serve was not checked; the /health answer stands."
+                return 0
+                ;;
+            ''|000)
+                serve_problem="it did not answer"
+                ;;
+            *)
+                serve_detail=$(printf '%s' "$serve_body" | tr -s '[:space:]' ' ' | cut -c1-240)
+                serve_problem="it answered HTTP $serve_code ($serve_detail)"
+                ;;
+        esac
+        serve_attempt=$((serve_attempt + 1))
+        [ "$serve_attempt" -le 3 ] && sleep 2
+    done
+    serve_message="GET $serve_url failed: $serve_problem."
+    return 1
+}
+
+started_process_tree() {
+    # 7.103.1: every LIVE process this run started -- pid $1 and everything
+    # under it by parent id -- one "depth:pid" per line. Nothing is matched by
+    # name or command line.
+    tree_root=$1
+    case "$tree_root" in
+        ''|*[!0-9]*|0) return 0 ;;
+    esac
+    tree_table=""
+    if command -v ps >/dev/null 2>&1; then
+        tree_table=$(ps -A -o pid= -o ppid= 2>/dev/null) || tree_table=""
+    fi
+    if [ -z "$tree_table" ]; then
+        # No ps (a minimal container image): /proc's stat, field 4 after the
+        # ")" that closes the command name.
+        tree_table=$(for tree_stat in /proc/[0-9]*/stat; do
+            [ -r "$tree_stat" ] || continue
+            sed -n 's/^\([0-9][0-9]*\) .*) [A-Za-z] \([0-9][0-9]*\) .*$/\1 \2/p' "$tree_stat" 2>/dev/null || true
+        done)
+    fi
+    started_process_alive "$tree_root" && printf '0:%s\n' "$tree_root"
+    tree_frontier=$tree_root
+    tree_depth=0
+    tree_seen=" $tree_root "
+    while [ -n "$tree_frontier" ] && [ "$tree_depth" -lt 32 ]; do
+        tree_depth=$((tree_depth + 1))
+        tree_next=""
+        for tree_parent in $tree_frontier; do
+            tree_children=$(printf '%s\n' "$tree_table" | awk -v parent="$tree_parent" '$2 == parent { print $1 }')
+            for tree_child in $tree_children; do
+                case "$tree_seen" in
+                    *" $tree_child "*) continue ;;
+                esac
+                tree_seen="$tree_seen$tree_child "
+                started_process_alive "$tree_child" && printf '%s:%s\n' "$tree_depth" "$tree_child"
+                tree_next="$tree_next $tree_child"
+            done
+        done
+        tree_frontier=$tree_next
+    done
+    return 0
+}
+
+stop_started_server() {
+    # 7.103.1 (decision A2): stop the server THIS RUN started -- pid $1 and its
+    # children by parent id, innermost first, TERM then KILL -- and wait until
+    # every one has exited AND the port is free. Before any directory is moved,
+    # the server started out of it must be gone. Nothing else is ever stopped
+    # here: the tree is built from the one pid this run started. Sets
+    # stop_started_ok, stop_started_port_free, stop_started_remaining and
+    # stop_started_message.
+    stop_root=$1
+    stop_started_ok=0
+    stop_started_port_free=0
+    stop_started_remaining=""
+    stop_members=$(started_process_tree "$stop_root" | sort -t: -k1,1nr | sed 's/^[0-9]*://')
+    if [ -n "$start_gate_server_pid" ] && started_process_alive "$start_gate_server_pid"; then
+        case " $stop_members " in
+            *" $start_gate_server_pid "*) ;;
+            *)
+                stop_relation=0
+                answer_is_from_started_server "$start_gate_server_pid" "$stop_root" || stop_relation=$?
+                [ "$stop_relation" -eq 0 ] && stop_members="$start_gate_server_pid $stop_members"
+                ;;
+        esac
+    fi
+    stop_count=0
+    for stop_member in $stop_members; do
+        write_install_log "Stopping pid $stop_member, which this install started."
+        kill -TERM "$stop_member" 2>/dev/null || true
+        stop_count=$((stop_count + 1))
+    done
+    # The server's own graceful budget, then KILL: the same order the
+    # product's --stop-holder uses.
+    stop_waited=0
+    while [ "$stop_waited" -lt 30 ]; do
+        stop_started_remaining=""
+        for stop_member in $stop_members; do
+            started_process_alive "$stop_member" && stop_started_remaining="$stop_started_remaining $stop_member"
+        done
+        [ -z "$stop_started_remaining" ] && break
+        sleep 1
+        stop_waited=$((stop_waited + 1))
+    done
+    if [ -n "$stop_started_remaining" ]; then
+        for stop_member in $stop_started_remaining; do
+            kill -KILL "$stop_member" 2>/dev/null || true
+        done
+        sleep 2
+        stop_still=""
+        for stop_member in $stop_started_remaining; do
+            started_process_alive "$stop_member" && stop_still="$stop_still $stop_member"
+        done
+        stop_started_remaining=$stop_still
+    fi
+    # Reap our own child so it does not linger as a zombie.
+    if ! started_process_alive "$stop_root"; then
+        wait "$stop_root" 2>/dev/null || true
+    fi
+    if [ -n "$stop_started_remaining" ]; then
+        stop_started_message="The server this install started (pid $stop_root) could not be stopped: pid(s)$stop_started_remaining are still running."
+        return 0
+    fi
+    stop_started_ok=1
+    stop_port_waited=0
+    while [ "$stop_port_waited" -lt 10 ]; do
+        if ! port_is_occupied "$server_reachable_host" "$server_port"; then
+            stop_started_port_free=1
+            break
+        fi
+        sleep 1
+        stop_port_waited=$((stop_port_waited + 1))
+    done
+    if [ "$stop_count" -eq 0 ]; then
+        stop_started_message="The server this install started (pid $stop_root) is no longer running."
+    else
+        stop_started_message="Stopped the server this install started (pid $stop_root; $stop_count process(es))."
+    fi
+    [ "$stop_started_port_free" -eq 1 ] || stop_started_message="$stop_started_message Port $server_port is still held."
+    return 0
+}
+
+environment_state_line() {
+    # 7.103.1: one sentence saying what is at a path, for the transcript of a
+    # rollback that did not finish -- so the next reader knows what is where.
+    state_label=$1
+    state_path=$2
+    if [ ! -e "$state_path" ]; then
+        printf '%s: %s does not exist.' "$state_label" "$state_path"
+        return 0
+    fi
+    state_files=$(find "$state_path" -type f 2>/dev/null | wc -l | tr -d ' ')
+    state_python=missing
+    [ -x "$state_path/bin/python" ] && state_python=present
+    state_cfg=missing
+    [ -f "$state_path/pyvenv.cfg" ] && state_cfg=present
+    state_receipt=missing
+    [ -f "$state_path/uv-receipt.toml" ] && state_receipt=present
+    printf '%s: %s exists (%s files; bin/python %s, pyvenv.cfg %s, uv-receipt.toml %s).' "$state_label" "$state_path" "$state_files" "$state_python" "$state_cfg" "$state_receipt"
+}
+
 health_answer() {
     # ONE GET of the /health URL $1, and what it says about who answered
     # (7.79.1):
@@ -2676,6 +3121,9 @@ start_restarted_server() {
     start_server_detached "$restart_launcher" "$restart_start_log"
     printf 'Started mcc-server (pid %s).\n' "$started_server_pid"
     write_install_log "Started mcc-server, pid $started_server_pid."
+    # 7.103.1: restore_previous_environment refuses to move anything while
+    # this process is alive, whoever calls it.
+    run_started_server_pid=$started_server_pid
     return 0
 }
 
@@ -2697,7 +3145,9 @@ confirm_restarted_server() {
     printf 'Waiting for it to answer %s.\n' "$restart_health_url"
     write_install_log "Waiting for $restart_health_url."
 
-    if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
+    # 7.103.1 (decision A1): a liveness gate, not a fixed budget.
+    wait_for_started_server "$restart_health_url" "$started_server_pid" "My Claude Code $MCC_VERSION"
+    if [ "$start_gate_outcome" = "answered" ]; then
         # 7.79.1: an answer is success only when it comes from the server
         # this run started. A server another user started on the same port
         # (through sudo, as root) answers /health too, while the one started
@@ -2724,6 +3174,26 @@ confirm_restarted_server() {
                 return 2
             fi
         fi
+        # 7.103.1 (decision A4): /health is green on a server that cannot
+        # serve. Ask a route that does real work; failing it is the failed
+        # gate, never "installed and answering".
+        if ! server_can_serve "$restart_health_url"; then
+            start_gate_outcome=not-serving
+            install_progress_restarted=false
+            restart_message="My Claude Code $MCC_VERSION answers $restart_health_url but cannot serve requests: $serve_message"
+            if [ "$rollback_available" -eq 1 ]; then
+                restart_message="$restart_message It is stopped first; then the previous version is put back."
+            else
+                restart_message="$restart_message The previous version is no longer installed, so this one is left running (pid $started_server_pid) for its dashboard to show the error; run the installer again."
+            fi
+            printf '\n%s\n' "$restart_message"
+            write_install_log "$restart_message"
+            if [ "$rollback_available" -ne 1 ]; then
+                write_install_progress failed "$restart_message"
+            fi
+            return 1
+        fi
+        write_install_log "$serve_message"
         install_progress_restarted=true
         restart_message="My Claude Code $MCC_VERSION is installed and answering on port $server_port."
         printf '%s\n' "$restart_message"
@@ -2738,11 +3208,57 @@ confirm_restarted_server() {
         return 0
     fi
 
+    if [ "$start_gate_outcome" = "port-taken" ]; then
+        # 7.103.1: the port is answered by a server this run did not start --
+        # 7.79.1's verdict, reached while ours was still starting or after it
+        # gave the port up. Not a rollback: the new version is not the problem.
+        health_answer_pid=$start_gate_holder_pid
+        install_progress_holder=$(port_answerer)
+        if [ -n "$start_gate_holder_code" ] && [ "$start_gate_holder_code" != "200" ] && [ "$start_gate_holder_code" != "000" ]; then
+            install_progress_holder="$install_progress_holder (it answered $start_gate_holder_code)"
+        fi
+        restart_message="Port $server_port is answered by $install_progress_holder, not by the server this install started (pid $started_server_pid). My Claude Code $MCC_VERSION is installed, but it is not what serves that port. Nothing was stopped. $(stop_hint_for_answerer), then start yours with: mcc-server"
+        printf '\n%s\n' "$restart_message"
+        if [ -s "${restart_start_log:-}" ]; then
+            printf 'The server this install started wrote (%s):\n' "$restart_start_log"
+            tail -n 12 "$restart_start_log" 2>/dev/null || true
+        fi
+        write_install_log "$restart_message"
+        install_progress_restarted=false
+        write_install_progress failed "$restart_message"
+        port_held_by_another=1
+        return 2
+    fi
+
+    ceiling_note=""
+    hung_stopped=""
+    if [ "$start_gate_outcome" = "ceiling" ]; then
+        # Alive at the ceiling: hung, not slow. On the staged path the caller
+        # stops it before it moves anything (decision A2); here, with nothing
+        # to put back, it is stopped now -- by exact pid.
+        ceiling_note=" within the $(server_start_ceiling_seconds) s ceiling, although it kept running (pid $started_server_pid)"
+        if [ "$rollback_available" -ne 1 ]; then
+            stop_started_server "$started_server_pid"
+            write_install_log "$stop_started_message"
+            if [ "$stop_started_ok" -eq 1 ]; then
+                hung_stopped=" It was stopped."
+            else
+                hung_stopped=" It could not be stopped: $stop_started_message"
+            fi
+        else
+            no_way_back=" It is stopped first; then the previous version is put back."
+        fi
+    fi
     restart_exit="the process did not exit"
-    if ! kill -0 "$started_server_pid" 2>/dev/null; then
+    # 7.103.1: started_process_alive, not `kill -0`: the server is this
+    # shell's own child, and a child that has exited is a zombie that `kill -0`
+    # still answers for until `wait` reaps it.
+    if [ -n "$hung_stopped" ]; then
+        restart_exit="the process did not exit before the ceiling"
+    elif ! started_process_alive "$started_server_pid"; then
         wait "$started_server_pid" 2>/dev/null && restart_exit=0 || restart_exit=$?
     fi
-    restart_message="The new server did not answer $restart_health_url. Exit code: $restart_exit.$no_way_back"
+    restart_message="The new server did not answer $restart_health_url$ceiling_note. Exit code: $restart_exit.$hung_stopped$no_way_back"
     printf '\n%s\n' "$restart_message"
     printf 'Its output is in: %s\n' "$restart_start_log"
     if [ -f "$restart_start_log" ]; then
@@ -3061,6 +3577,21 @@ if [ "$staged_ok" -eq 1 ]; then
             no_stop_verdict
         fi
         case "$stop_outcome" in
+            stopped|nothing-listening)
+                # 7.103.1: the verdict says nothing serves on the port, but if
+                # a listener is still there the swap below would move the live
+                # environment out from under it -- the 2026-10-19 failure in
+                # another place (measured on Windows: `--stop-holder` answered
+                # "Nothing was listening on that port" while the old server
+                # kept listening, its own port lookup having timed out).
+                if port_is_occupied "$server_reachable_host" "$server_port"; then
+                    write_install_log "The stop reported the port free ($stop_message), but a process is still listening on port $server_port."
+                    stop_outcome=failed
+                    stop_message="The server on port $server_port is still listening although the stop reported it free."
+                fi
+                ;;
+        esac
+        case "$stop_outcome" in
             stopped|nothing-listening) ;;
             failed)
                 # The old server is still serving and still owns its
@@ -3292,15 +3823,53 @@ elif [ "$staged_swapped" -eq 1 ]; then
         # the one that did back and start THAT. This is the reason the old
         # environment was renamed rather than deleted.
         # =====================================================================
-        write_install_progress rolling-back "The new version did not answer, so the previous one is being put back."
+        rollback_did_not="never answered"
+        rollback_rolling="The new version did not answer, so the previous one is being put back."
+        if [ "$start_gate_outcome" = "not-serving" ]; then
+            rollback_did_not="could not serve requests (only /health answered)"
+            rollback_rolling="The new version answered /health but could not serve, so the previous one is being put back."
+        fi
+        write_install_progress rolling-back "$rollback_rolling"
+        # 7.103.1 (decision A2): nothing moves while the new server runs. The
+        # server this run started is stopped by its exact pid and its
+        # children, and the port must be free, BEFORE a directory is touched.
+        if [ "$staged_server_started" -eq 1 ]; then
+            stop_started_server "$started_server_pid"
+            if [ -n "$stop_started_message" ]; then
+                printf '%s\n' "$stop_started_message"
+                write_install_log "$stop_started_message"
+            fi
+            if [ "$stop_started_ok" -ne 1 ] || [ "$stop_started_port_free" -ne 1 ]; then
+                if [ "$stop_started_ok" -ne 1 ]; then
+                    rollback_held_by="pid(s)$stop_started_remaining of the server this install started (pid $started_server_pid) could not be stopped"
+                else
+                    rollback_held_by="port $server_port is still held after the server this install started (pid $started_server_pid) was stopped"
+                fi
+                restart_message="The new version $rollback_did_not, and $rollback_held_by, so nothing was moved: the new version is still at $staged_tool_dir and the previous version is still at $swap_aside_env. Stop pid $started_server_pid (and anything holding port $server_port) yourself, then run the install command again."
+                printf '\n%s\n' "$restart_message"
+                write_install_log "$restart_message"
+                write_install_log "$(environment_state_line "Canonical path" "$staged_tool_dir")"
+                write_install_log "$(environment_state_line "Previous version" "$swap_aside_env")"
+                install_progress_restarted=false
+                write_install_progress failed "$restart_message"
+                exit 1
+            fi
+        fi
         rollback_started=0
         if restore_previous_environment "$staged_tool_dir"; then
             rollback_log="$(mcc_config_dir)/updates/server-start-rollback-$staged_stamp.log"
             start_server_detached "$restart_launcher" "$rollback_log"
-            if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
+            write_install_log "Started the previous version's mcc-server, pid $started_server_pid."
+            # The same liveness gate as the new server's: a previous version
+            # that is slow to open its log is starting, not failed.
+            wait_for_started_server "$restart_health_url" "$started_server_pid" "The previous version"
+            if [ "$start_gate_outcome" = "answered" ]; then
                 rollback_started=1
+            elif [ "$start_gate_outcome" = "ceiling" ]; then
+                stop_started_server "$started_server_pid"
+                write_install_log "$stop_started_message"
             fi
-            restart_message="The new version was installed but never answered, so the previous version was put back"
+            restart_message="The new version was installed but $rollback_did_not, so the previous version was put back"
             if [ "$rollback_started" -eq 1 ]; then
                 restart_message="$restart_message and is answering on port $server_port."
                 install_progress_restarted=true
@@ -3308,13 +3877,23 @@ elif [ "$staged_swapped" -eq 1 ]; then
                 restart_message="$restart_message, but it could not be started either."
                 install_progress_restarted=false
             fi
+            printf '\n%s\n' "$restart_message"
+            write_install_log "$restart_message"
+            write_install_progress recovered "$restart_message"
         else
-            restart_message="The new version never answered and the previous version could not be put back. Re-run the install command."
+            if [ "$rollback_refused" -eq 1 ]; then
+                restart_message="The new version $rollback_did_not. $rollback_state Run the install command again once nothing runs from $staged_tool_dir."
+            else
+                restart_message="The new version $rollback_did_not and the previous version could not be put back. $rollback_state Run the install command again: it repairs a broken install by itself."
+            fi
             install_progress_restarted=false
+            printf '\n%s\n' "$restart_message"
+            write_install_log "$restart_message"
+            # 7.103.1 (decision A3): a rollback that did not finish is a
+            # failure, and says so with an exit code.
+            write_install_progress failed "$restart_message"
+            exit 1
         fi
-        printf '\n%s\n' "$restart_message"
-        write_install_log "$restart_message"
-        write_install_progress recovered "$restart_message"
     fi
 elif [ "$dry_run" -ne 1 ]; then
     # 7.1.0: no `--restart` test any more. Every install that installed

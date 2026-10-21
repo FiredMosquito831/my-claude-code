@@ -3367,13 +3367,31 @@ function Test-PortHasListener {
         table instead (IPGlobalProperties.GetActiveTcpListeners, every IPv4
         and IPv6 listener; measured 1-3 ms on Windows PowerShell 5.1 and
         PowerShell 7, against 600-850 ms for Get-NetTCPConnection).
+
+        `-BindHost` narrows it to the listeners a server binding that address
+        would collide with: the same address, or a wildcard (0.0.0.0, ::).
+        Without it, or for a wildcard bind host, any listener on the port
+        counts.
     #>
-    param([Parameter(Mandatory = $true)][int] $Port)
+    param(
+        [Parameter(Mandatory = $true)][int] $Port,
+        [string] $BindHost = ""
+    )
 
     try {
+        $bindAddress = $null
+        if ($BindHost -and ($BindHost -ne '0.0.0.0') -and ($BindHost -ne '::')) {
+            $parsed = $null
+            if ([System.Net.IPAddress]::TryParse($BindHost, [ref] $parsed)) { $bindAddress = $parsed }
+        }
         $properties = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
         foreach ($endpoint in $properties.GetActiveTcpListeners()) {
-            if ($endpoint.Port -eq $Port) { return $true }
+            if ($endpoint.Port -ne $Port) { continue }
+            if ($null -eq $bindAddress) { return $true }
+            $address = $endpoint.Address
+            if ($address.Equals([System.Net.IPAddress]::Any) -or $address.Equals([System.Net.IPAddress]::IPv6Any) -or $address.Equals($bindAddress)) {
+                return $true
+            }
         }
         return $false
     }
@@ -4388,28 +4406,6 @@ function Wait-ForStartedServer {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $nextReport = $ReportEverySeconds
     while ($clock.Elapsed.TotalSeconds -lt $CeilingSeconds) {
-        $alive = Test-StartedProcessAlive -ProcessId $startedPid -StartTime $startTime
-        if ((-not $alive) -and ($serverPid -gt 0)) {
-            # The .cmd this run started is gone, but the interpreter it
-            # started may not be: that is still our server starting.
-            $alive = Test-StartedProcessAlive -ProcessId $serverPid -StartTime $serverStart
-        }
-        if (-not $alive) {
-            # Gone. One last look at the port: an answer naming a pid now can
-            # only come from someone else -- a server that took the port.
-            $last = Get-HealthProbe -Url $Url -TimeoutSeconds 2
-            if ($last.Pid -gt 0) {
-                $result.Outcome = "port-taken"
-                $result.HolderPid = $last.Pid
-                $result.HolderStatus = $last.Status
-            }
-            else {
-                $result.Outcome = "exited"
-            }
-            $result.ServerPid = $serverPid
-            $result.Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1)
-            return $result
-        }
         $timeout = 5
         if ($Port -gt 0) {
             $listening = Test-PortHasListener -Port $Port
@@ -4419,6 +4415,37 @@ function Wait-ForStartedServer {
         if ($probe.Status -eq 200) {
             # Whose answer this is, the caller decides (7.79.1).
             $result.Outcome = "answered"
+            $result.ServerPid = $serverPid
+            $result.Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1)
+            return $result
+        }
+        $alive = Test-StartedProcessAlive -ProcessId $startedPid -StartTime $startTime
+        if ((-not $alive) -and ($serverPid -gt 0)) {
+            # The .cmd this run started is gone, but the interpreter it
+            # started may not be: that is still our server starting.
+            $alive = Test-StartedProcessAlive -ProcessId $serverPid -StartTime $serverStart
+        }
+        if (-not $alive) {
+            # Gone. One fresh look at the port: an answer naming a pid now
+            # comes from someone else -- a server that took the port -- unless
+            # its parents lead back here (an interpreter of ours that outlived
+            # its launcher), in which case it is still our server starting.
+            $last = Get-HealthProbe -Url $Url -TimeoutSeconds 2
+            if (($last.Pid -gt 0) -and ($startedPid -gt 0) -and ((Test-AnswerIsFromStartedServer -AnswerPid $last.Pid -StartedPid $startedPid) -ne 1)) {
+                $serverPid = $last.Pid
+                $serverStart = [long] 0
+                try { $serverStart = (Get-Process -Id $serverPid -ErrorAction Stop).StartTime.ToFileTimeUtc() } catch { $serverStart = [long] 0 }
+                Start-Sleep -Milliseconds 750
+                continue
+            }
+            if ($last.Pid -gt 0) {
+                $result.Outcome = "port-taken"
+                $result.HolderPid = $last.Pid
+                $result.HolderStatus = $last.Status
+            }
+            else {
+                $result.Outcome = "exited"
+            }
             $result.ServerPid = $serverPid
             $result.Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1)
             return $result
@@ -4595,7 +4622,9 @@ function Test-ServerPortFree {
     #>
     param([Parameter(Mandatory = $true)][object] $Address)
 
-    $listening = Test-PortHasListener -Port ([int] $Address.Port)
+    $bindHost = ""
+    if ($null -ne $Address.PSObject.Properties['BindHost']) { $bindHost = [string] $Address.BindHost }
+    $listening = Test-PortHasListener -Port ([int] $Address.Port) -BindHost $bindHost
     if ($null -eq $listening) {
         return (-not (Test-PortIsOccupied -ReachableHost $Address.ReachableHost -Port ([int] $Address.Port)))
     }
@@ -6185,6 +6214,19 @@ if ($null -ne $Staged) {
         }
         $StopOutcome = $stopVerdict.Outcome
         $StopMessage = $stopVerdict.Message
+        if (($StopOutcome -in @("stopped", "nothing-listening")) -and (-not (Test-ServerPortFree -Address $Address))) {
+            # 7.103.1: the verdict says nothing is serving on the port, but the
+            # operating system still lists a listener there. The swap below
+            # moves the live environment aside, and doing that under a server
+            # that is still running out of it is the 2026-10-19 failure in
+            # another place. Measured on a loaded machine (2026-10-21, 2 of 5
+            # scratch runs): `--stop-holder` answered "Nothing was listening
+            # on that port" while the old server kept listening, because its
+            # own port lookup timed out. Treated as a stop that failed.
+            Write-InstallLog ("The stop reported the port free (" + $StopMessage + "), but a process is still listening on port " + $Address.Port + ".")
+            $StopOutcome = "failed"
+            $StopMessage = "The server on port $($Address.Port) is still listening although the stop reported it free."
+        }
         if ($StopOutcome -eq "failed") {
             # The old server is still serving and still owns its environment.
             # Swapping underneath it would leave the machine running one
@@ -6451,7 +6493,7 @@ elseif ($script:StagedSwapped) {
         $didNot = "never answered"
         $rollingMessage = 'The new version did not answer, so the previous one is being put back.'
         if ($script:StartGateOutcome -eq 'not-serving') {
-            $didNot = "answered /health but could not serve requests"
+            $didNot = "could not serve requests (only /health answered)"
             $rollingMessage = 'The new version answered /health but could not serve, so the previous one is being put back.'
         }
         Write-InstallProgress -Stage 'rolling-back' -Message $rollingMessage

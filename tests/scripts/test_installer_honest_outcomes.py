@@ -197,6 +197,10 @@ def health_server() -> Iterator[HealthServer]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             body = b'{"status":"ok"}'
+            # 7.103.1: success also needs the version route to answer the
+            # version document (decision A4).
+            if self.path.startswith("/admin/api/version"):
+                body = b'{"current":"9.9.9"}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -365,6 +369,13 @@ POST_START_FUNCTIONS = (
     "process_owner",
     "port_answerer",
     "stop_hint_for_answerer",
+    # 7.103.1: the real liveness gate and can-serve check run against the
+    # fixture, which answers /health and the version route.
+    "now_seconds",
+    "started_process_alive",
+    "server_start_ceiling_seconds",
+    "wait_for_started_server",
+    "server_can_serve",
     "confirm_restarted_server",
 )
 
@@ -807,6 +818,15 @@ PS_CONFIRM_FUNCTIONS = (
     "Get-HealthAnswerPid",
     "Test-AnswerIsFromStartedServer",
     "Get-ChildFailureDetail",
+    # 7.103.1: the real liveness gate and can-serve check run against the
+    # fixture, which answers /health and the version route.
+    "Get-StartedProcessStartTime",
+    "Test-StartedProcessAlive",
+    "Get-HeaderPid",
+    "Get-HealthProbe",
+    "Test-PortHasListener",
+    "Wait-ForStartedServer",
+    "Test-ServerCanServe",
     "Confirm-RestartedServer",
 )
 
@@ -815,6 +835,9 @@ def _ps_confirm_body(url: str, port: int, started: str, tmp_path: Path) -> str:
     return f"""
 function Wait-ForServerHealth {{ param([string] $Url, [double] $BudgetSeconds) return $true }}
 function Get-ServerStartTimeoutSeconds {{ return 1 }}
+function Get-ServerStartCeilingSeconds {{ return 30 }}
+$script:StartGateOutcome = ""
+$script:StartGateServerPid = 0
 function Start-DesktopAppIfWanted {{ Write-Host 'DESKTOP'; return $true }}
 $script:PortHeldByAnother = $false
 $script:InstallProgressRestarted = $null
