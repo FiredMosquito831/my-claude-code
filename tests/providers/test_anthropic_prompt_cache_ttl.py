@@ -18,7 +18,7 @@ Pinned here, on the outbound copy only:
 
 import copy
 import json
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import Any
 
 import httpx
@@ -342,31 +342,47 @@ class _FakeHost:
         return httpx.Response(200, content=_SSE)
 
 
+def _as_dict(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items()}
+    return None
+
+
+def _as_list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
 def _marker_paths(body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
     """Each marker with the field path Anthropic names it by (block tags in)."""
 
-    if isinstance(body.get("cache_control"), dict):
-        yield "", body["cache_control"]
+    top = _as_dict(body.get("cache_control"))
+    if top is not None:
+        yield "", top
     for key in ("system", "tools"):
-        for index, item in enumerate(body.get(key) or []):
-            if isinstance(item, dict) and isinstance(item.get("cache_control"), dict):
-                tag = item.get("type", "custom")
-                yield f"{key}.{index}.{tag}", item["cache_control"]
-    for m_index, message in enumerate(body.get("messages") or []):
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for b_index, block in enumerate(content):
+        for index, raw in enumerate(_as_list(body.get(key))):
+            item = _as_dict(raw)
+            marker = None if item is None else _as_dict(item.get("cache_control"))
+            if item is not None and marker is not None:
+                yield f"{key}.{index}.{item.get('type', 'custom')}", marker
+    for m_index, raw_message in enumerate(_as_list(body.get("messages"))):
+        message = _as_dict(raw_message) or {}
+        for b_index, raw_block in enumerate(_as_list(message.get("content"))):
+            block = _as_dict(raw_block)
+            if block is None:
+                continue
             prefix = f"messages.{m_index}.content.{b_index}.{block.get('type')}"
-            if isinstance(block.get("cache_control"), dict):
-                yield prefix, block["cache_control"]
-            for n_index, inner in enumerate(block.get("content") or []):
-                if isinstance(inner, dict) and isinstance(
-                    inner.get("cache_control"), dict
-                ):
+            marker = _as_dict(block.get("cache_control"))
+            if marker is not None:
+                yield prefix, marker
+            for n_index, raw_inner in enumerate(_as_list(block.get("content"))):
+                inner = _as_dict(raw_inner)
+                inner_marker = (
+                    None if inner is None else _as_dict(inner.get("cache_control"))
+                )
+                if inner is not None and inner_marker is not None:
                     yield (
                         f"{prefix}.content.{n_index}.{inner.get('type')}",
-                        inner["cache_control"],
+                        inner_marker,
                     )
 
 
