@@ -7,6 +7,12 @@ lifetime" (``prompt_cache_lifetime_refused``, 30 days, Forget on the Models
 page). While the fact is fresh the lifetime is not sent to that model again
 and the operator's minutes are adapted to the lifetimes that remain.
 
+A gateway that speaks the protocol without publishing lifetimes (7.105.0:
+Command Code, the OpenCode and custom Messages doors) is learned for the whole
+host -- the fact is written under the provider-wide model id -- and since its
+lifetimes were never known, one refusal means it takes none: nothing is sent
+to that host until the refusal is forgotten.
+
 **Recording only, on the failure path.** :func:`note_prompt_cache_refusal`
 runs before the failure is classified, never raises, never awaits and never
 changes the error it is handed: the refused request is retried, classified
@@ -40,6 +46,7 @@ from loguru import logger
 from my_claude_code.application.prompt_cache import PromptCacheLifetimeChoice
 from my_claude_code.providers.recovery import (
     FACT_PROMPT_CACHE_LIFETIME_REFUSED,
+    PROVIDER_WIDE_MODEL_ID,
     SOURCE_REJECTION,
     learned_fact_store,
 )
@@ -66,15 +73,26 @@ _MARKER = "cache_control"
 _LIFETIME_FIELD = "ttl"
 
 
-def refused_prompt_cache_lifetimes(provider_id: str, model_id: str) -> frozenset[str]:
-    """The lifetimes this model's host refused and that are still applied."""
+def refused_prompt_cache_lifetimes(
+    provider_id: str, model_id: str, *, host_wide: bool = False
+) -> frozenset[str]:
+    """The lifetimes this model's host refused and that are still applied.
+
+    ``host_wide`` (7.105.0, a gateway family) also reads the refusals learned
+    for the whole host -- :data:`PROVIDER_WIDE_MODEL_ID` -- which is where a
+    gateway's refusal is written, whichever model answered it.
+    """
 
     if not provider_id or not model_id:
         return frozenset()
     now = datetime.now(UTC)
+    store = learned_fact_store()
+    facts = list(store.facts_for_model(provider_id, model_id))
+    if host_wide and model_id != PROVIDER_WIDE_MODEL_ID:
+        facts.extend(store.facts_for_model(provider_id, PROVIDER_WIDE_MODEL_ID))
     return frozenset(
         fact.detail
-        for fact in learned_fact_store().facts_for_model(provider_id, model_id)
+        for fact in facts
         if fact.fact_kind == FACT_PROMPT_CACHE_LIFETIME_REFUSED
         and fact.detail
         and not fact.is_stale(now)
@@ -214,23 +232,38 @@ def note_prompt_cache_refusal(
         if found is None:
             return None
         refused, sentence = found
+        # A gateway's validator answers for every model behind it (7.105.0),
+        # so its refusal is written once for the whole host.
+        host_wide = choice.family.refusal_per_host
         learned_fact_store().record(
             provider_id,
-            model_id,
+            PROVIDER_WIDE_MODEL_ID if host_wide else model_id,
             FACT_PROMPT_CACHE_LIFETIME_REFUSED,
             True,
             source=SOURCE_REJECTION,
             detail=refused,
             evidence=sentence,
         )
-        logger.warning(
-            "PROMPT CACHE: {}/{} refused the {} lifetime; later requests adapt "
-            "to the lifetimes it takes (shown on the Models page, with Forget). "
-            "This request fails over as any 400 does.",
-            provider_id,
-            model_id,
-            refused,
-        )
+        if choice.family.lifetimes_known:
+            logger.warning(
+                "PROMPT CACHE: {}/{} refused the {} lifetime; later requests adapt "
+                "to the lifetimes it takes (shown on the Models page, with Forget). "
+                "This request fails over as any 400 does.",
+                provider_id,
+                model_id,
+                refused,
+            )
+        else:
+            logger.warning(
+                "PROMPT CACHE: {} refused the {} lifetime on {}; it publishes no "
+                "lifetimes, so later requests send {} none until the refusal is "
+                "forgotten (shown on the Models page, with Forget). This request "
+                "fails over as any 400 does.",
+                provider_id,
+                refused,
+                model_id,
+                "this whole host" if host_wide else "this model",
+            )
         return refused
     except Exception as exc:
         logger.debug(

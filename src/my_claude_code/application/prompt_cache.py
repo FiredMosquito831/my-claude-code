@@ -15,9 +15,13 @@ Two questions, answered in two places on purpose:
   any the host has refused, per attempt.
 
 ``resolve_prompt_cache_ask`` is the precedence between them -- model row, then
-provider row, then the tier, then the global setting, then the client. The two
-override rows have no source yet (they arrive with the Models page controls)
-and are passed as ``None``, which is "not set at this level".
+provider row, then the tier, then the global setting, then the client. The
+tier and the global setting are read at the door, which knows the route; the
+two override rows (``prompt_cache_ttl`` in ``model_overrides.json``, 7.105.0)
+are read per attempt by :func:`prompt_cache_ask_for_attempt`, because only the
+attempt knows which provider and model it is -- a fallback chain's rungs each
+have their own rows. A row that says nothing passes the question down to what
+the door stamped; a row that says ``null`` stops it ("from client" there).
 
 Nothing set anywhere is ``None`` at every step, and ``None`` is what leaves a
 body exactly as the client sent it.
@@ -29,6 +33,12 @@ from dataclasses import dataclass
 from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_CLIENT,
     PROMPT_CACHE_TTL_INHERIT,
+)
+from my_claude_code.config.model_overrides import (
+    ModelParameterOverrides,
+    StatedPromptCacheTtl,
+    current_model_overrides,
+    model_ref_for,
 )
 from my_claude_code.config.prompt_cache_lifetimes import (
     CacheLifetime,
@@ -46,6 +56,11 @@ from my_claude_code.core.tier_refs import (
 
 #: The global setting's name, which is also the source a request records.
 GLOBAL_PROMPT_CACHE_TTL_ENV = "PROMPT_CACHE_TTL"
+
+#: The source a request records when an override row decided (7.105.0), in
+#: the request log's own spelling (``params.wire.prompt_cache_ttl.from``).
+MODEL_OVERRIDE_SOURCE = "model_override"
+PROVIDER_OVERRIDE_SOURCE = "provider_override"
 
 #: The Claude-name keywords routing matches, in routing's order
 #: (``application/routing._ROUTE_SETTINGS``), each with the lifetime setting
@@ -82,8 +97,8 @@ def resolve_prompt_cache_ask(
     """
 
     levels: list[tuple[str, str | None]] = [
-        ("model override", model_row),
-        ("provider override", provider_row),
+        (MODEL_OVERRIDE_SOURCE, model_row),
+        (PROVIDER_OVERRIDE_SOURCE, provider_row),
     ]
     if tier is not None:
         levels.append(tier)
@@ -187,6 +202,52 @@ def stamp_prompt_cache_ask(settings: Settings, request: MessagesRequest) -> None
         request.set_prompt_cache_ask(ask)
 
 
+def _row_ask(stated: StatedPromptCacheTtl, source: str) -> PromptCacheAsk | None:
+    """One override row's word as an ask; ``None`` for its "from client"."""
+
+    if stated.minutes is None:
+        return None
+    return PromptCacheAsk(minutes=stated.minutes, source=source)
+
+
+def prompt_cache_ask_for_attempt(
+    stamped: PromptCacheAsk | None,
+    family: PromptCacheLifetimeFamily,
+    *,
+    provider_id: str,
+    model_id: str,
+    overrides: ModelParameterOverrides | None = None,
+) -> PromptCacheAsk | None:
+    """What one attempt asks for: its override rows over the door's stamp.
+
+    The model's row, then its provider's row, then ``stamped`` -- the tier or
+    global setting the door resolved for the route -- in the user's order
+    (2026-10-20 Q5). A row's minutes decide; a row's ``null`` decides "from
+    client" (``None``) however the levels below it were set; a row that says
+    nothing passes the question down. A family that takes a lifetime only
+    from a row (a gateway whose lifetimes are unknown, Q7) never sees the
+    stamp at all.
+
+    Read per attempt, from the file the rest of the override table is read
+    from (re-read only when it changed), so a save applies to the next request
+    with no restart. With no ``prompt_cache_ttl`` in the file the answer is
+    ``stamped`` itself, or ``None`` for a rows-only family.
+    """
+
+    below = None if family.rows_only else stamped
+    table = overrides if overrides is not None else current_model_overrides()
+    if table.is_empty:
+        return below
+    model_row, provider_row = table.prompt_cache_ttl_rows(
+        provider_id, model_ref_for(provider_id, model_id)
+    )
+    if model_row is not None:
+        return _row_ask(model_row, MODEL_OVERRIDE_SOURCE)
+    if provider_row is not None:
+        return _row_ask(provider_row, PROVIDER_OVERRIDE_SOURCE)
+    return below
+
+
 def adapt_prompt_cache_minutes(
     minutes: int, lifetimes: Iterable[CacheLifetime]
 ) -> CacheLifetime | None:
@@ -234,6 +295,11 @@ class PromptCacheLifetimeChoice:
             "host_lifetimes": list(self.host_lifetimes),
             "declared_for": self.family.label,
         }
+        if not self.family.lifetimes_known:
+            # A gateway (7.105.0): the list above is Anthropic's spelling, not
+            # anything this host published. Absent for a declared host, so
+            # its record is exactly 7.104.0's.
+            record["host_lifetimes_known"] = False
         if self.refused:
             record["refused_by_host"] = list(self.refused)
         return record
@@ -257,6 +323,11 @@ def choose_prompt_cache_lifetime(
         return None
     refused_set = frozenset(str(value) for value in refused)
     usable = [life for life in family.lifetimes if life.wire not in refused_set]
+    if refused_set and not family.lifetimes_known:
+        # A host that published no lifetimes and refused the one it was sent
+        # has said it takes this field in no spelling: nothing is sent until
+        # the refusal is forgotten (Q7, 7.105.0).
+        usable = []
     return PromptCacheLifetimeChoice(
         requested_minutes=ask.minutes,
         source=ask.source,
@@ -270,10 +341,13 @@ def choose_prompt_cache_lifetime(
 
 __all__ = [
     "GLOBAL_PROMPT_CACHE_TTL_ENV",
+    "MODEL_OVERRIDE_SOURCE",
+    "PROVIDER_OVERRIDE_SOURCE",
     "ROUTE_PROMPT_CACHE_TTL_SETTINGS",
     "PromptCacheLifetimeChoice",
     "adapt_prompt_cache_minutes",
     "choose_prompt_cache_lifetime",
+    "prompt_cache_ask_for_attempt",
     "resolve_prompt_cache_ask",
     "route_prompt_cache_ask",
     "route_tier_prompt_cache_setting",

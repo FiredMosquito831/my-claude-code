@@ -68,6 +68,7 @@ from typing import Any
 
 from loguru import logger
 
+from my_claude_code.config.prompt_cache_lifetimes import prompt_cache_gateway_family
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
     EMPTY_TOOL_CATALOGUE,
@@ -301,6 +302,10 @@ class MessagesTransport:
             # host said about a model does not stop being true because the
             # request reached it through a different door.
             provider_id=provider_id,
+            # Anthropic's protocol on a host that is not Anthropic and publishes
+            # no cache lifetime (7.105.0): a lifetime only where this
+            # provider's or model's override row sets one.
+            prompt_cache_family=prompt_cache_gateway_family(),
         )
 
     @property

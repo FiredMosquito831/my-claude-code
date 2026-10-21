@@ -57,6 +57,10 @@ from typing import Any, Self
 from loguru import logger
 
 from my_claude_code.config.atomic_json import write_json_document_atomically
+from my_claude_code.config.constants import (
+    PROMPT_CACHE_TTL_MAX_MINUTES,
+    PROMPT_CACHE_TTL_MIN_MINUTES,
+)
 from my_claude_code.config.paths import model_overrides_path
 
 PROVIDERS_KEY = "providers"
@@ -110,14 +114,31 @@ ALLOWED_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
 #: number would be a statement about models nobody looked at. A positive whole
 #: number forces that window; ``null`` forces it unknown, so no ladder value is
 #: used and every reader sees "unknown"; absent inherits the ladder.
+#:
+#: ``prompt_cache_ttl`` (7.105.0) is how long the operator wants a host to keep
+#: this model's prompt cache, in whole minutes from 1 to 60, on a provider row
+#: or a model row -- a request choice like the reasoning word, not a model
+#: fact, so a provider-wide value is meaningful. A number forces those
+#: minutes, which the provider layer adapts to the lifetimes the host takes
+#: (``config/prompt_cache_lifetimes.py``); ``null`` forces "from client" at
+#: that level, so MCC sets no lifetime for the model even where a Model Config
+#: tier asks for one; absent inherits the next level down. It never reaches a
+#: body as itself: the provider writes the host's own lifetime field instead.
 NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
-    {"response_surface", "reasoning_preference", "max_output_tokens", "context_length"}
+    {
+        "response_surface",
+        "reasoning_preference",
+        "max_output_tokens",
+        "context_length",
+        "prompt_cache_ttl",
+    }
 )
 
 RESPONSE_SURFACE_OVERRIDE = "response_surface"
 REASONING_PREFERENCE_OVERRIDE = "reasoning_preference"
 MAX_OUTPUT_TOKENS_OVERRIDE = "max_output_tokens"
 CONTEXT_LENGTH_OVERRIDE = "context_length"
+PROMPT_CACHE_TTL_OVERRIDE = "prompt_cache_ttl"
 
 #: The two non-body keys the Models page editor may write. A strict subset of
 #: :data:`NON_BODY_OVERRIDE_PARAMETERS`: ``response_surface`` is written by the
@@ -169,6 +190,42 @@ def context_length_problem(value: object) -> str | None:
         return "must be a whole number of tokens"
     if value <= 0:
         return "must be greater than zero"
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class StatedPromptCacheTtl:
+    """One override row's prompt-cache lifetime: minutes, or ``None``.
+
+    ``None`` is the force-unset state -- "from client" at this row: MCC sets
+    no lifetime, whatever the levels below it would have asked for. "Nothing
+    stated" is not this object at all;
+    :meth:`ModelParameterOverrides.prompt_cache_ttl_rows` returns ``None``
+    for it.
+    """
+
+    minutes: int | None
+
+
+def prompt_cache_ttl_problem(value: object) -> str | None:
+    """Why ``value`` cannot be a forced prompt-cache lifetime, or ``None``.
+
+    Whole minutes from 1 to 60, the range Model Config offers. ``bool`` is
+    refused explicitly because it is an ``int`` in Python and ``True`` would
+    otherwise read as one minute; a fraction or a string is refused rather
+    than rounded, exactly as an unknown setting value is.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        return (
+            f"must be whole minutes from {PROMPT_CACHE_TTL_MIN_MINUTES} to "
+            f"{PROMPT_CACHE_TTL_MAX_MINUTES}"
+        )
+    if not PROMPT_CACHE_TTL_MIN_MINUTES <= value <= PROMPT_CACHE_TTL_MAX_MINUTES:
+        return (
+            f"must be from {PROMPT_CACHE_TTL_MIN_MINUTES} to "
+            f"{PROMPT_CACHE_TTL_MAX_MINUTES} minutes"
+        )
     return None
 
 
@@ -328,6 +385,29 @@ class ModelParameterOverrides:
             return None
         return StatedContextLength(row[CONTEXT_LENGTH_OVERRIDE])
 
+    def prompt_cache_ttl_rows(
+        self, provider_id: str, model_ref: str
+    ) -> tuple[StatedPromptCacheTtl | None, StatedPromptCacheTtl | None]:
+        """The model row's and the provider row's prompt-cache lifetime.
+
+        Kept apart rather than merged as :meth:`resolve` merges, because the
+        request records which row decided (``model_override`` or
+        ``provider_override``) and the Models page draws each. ``None`` at a
+        level means that row says nothing; a :class:`StatedPromptCacheTtl`
+        whose ``minutes`` is ``None`` means the row says ``null`` -- "from
+        client" there. An unusable value never got past the parser.
+        """
+
+        def stated(row: Mapping[str, Any]) -> StatedPromptCacheTtl | None:
+            if PROMPT_CACHE_TTL_OVERRIDE not in row:
+                return None
+            return StatedPromptCacheTtl(row[PROMPT_CACHE_TTL_OVERRIDE])
+
+        return (
+            stated(self.models.get(normalize_override_key(model_ref), {})),
+            stated(self.providers.get(normalize_override_key(provider_id), {})),
+        )
+
     def as_document(self) -> dict[str, dict[str, dict[str, Any]]]:
         """Render back to the on-disk shape."""
 
@@ -407,6 +487,18 @@ def _parse_parameters(
             if problem is not None:
                 logger.warning(
                     "MODEL OVERRIDES: '{}.{}' {}; ignoring it", where, name, problem
+                )
+                continue
+        if name == PROMPT_CACHE_TTL_OVERRIDE and value is not None:
+            # ``null`` is the force-"from client" state and always well-formed;
+            # a provider row is as valid as a model row.
+            lifetime_problem = prompt_cache_ttl_problem(value)
+            if lifetime_problem is not None:
+                logger.warning(
+                    "MODEL OVERRIDES: '{}.{}' {}; ignoring it",
+                    where,
+                    name,
+                    lifetime_problem,
                 )
                 continue
         parameters[name] = value
