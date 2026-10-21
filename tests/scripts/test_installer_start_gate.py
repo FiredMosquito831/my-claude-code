@@ -140,10 +140,18 @@ function Write-InstallProgress { param([string] $Stage, [string] $Message) Write
 """
 
 
-def _ps_harness(names: tuple[str, ...], body: str) -> str:
-    text = _ps_text()
-    bodies = "\n\n".join(_extract_ps(text, name) for name in names)
+def _ps_harness(names: tuple[str, ...], body: str, *, text: str = "") -> str:
+    source = text or _ps_text()
+    bodies = "\n\n".join(_extract_ps(source, name) for name in names)
     return f"{PS_PREAMBLE}\n{bodies}\n\n{body}\n"
+
+
+def _ps_without(anchor: str, replacement: str) -> str:
+    """The real script with ONE guard taken out -- the control a guard test
+    needs to show it would have caught the defect."""
+    text = _ps_text()
+    assert text.count(anchor) == 1, anchor
+    return text.replace(anchor, replacement)
 
 
 def _run_ps(
@@ -331,8 +339,9 @@ def _wait_listening(port: int, seconds: float = 20.0) -> None:
 def _ps_child(pid: int) -> str:
     """A start descriptor as Start-RestartedServer builds one."""
     return (
-        f"$child = [pscustomobject]@{{ Id = {pid}; StdOut = ''; StdErr = ''; "
-        f"StartTime = (Get-Process -Id {pid}).StartTime.ToFileTimeUtc() }}\n"
+        f"$startTime = [long] 0\n"
+        f"try {{ $startTime = (Get-Process -Id {pid} -ErrorAction Stop).StartTime.ToFileTimeUtc() }} catch {{ }}\n"
+        f"$child = [pscustomobject]@{{ Id = {pid}; StdOut = ''; StdErr = ''; StartTime = $startTime }}\n"
     )
 
 
@@ -476,6 +485,39 @@ def test_ps_the_gate_ends_within_seconds_when_the_started_process_dies(
     result = _outcome(completed.stdout)
     assert result["outcome"] == "exited"
     assert float(result["seconds"]) < 8, result
+
+
+@windows_only
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_ps_the_control_without_the_liveness_check_a_crash_waits_out_the_ceiling(
+    edition: str, executable: str, tmp_path: Path, spawned: Spawned
+) -> None:
+    """The control for the case above: with the liveness check taken out, the
+    same dead process is waited for until the ceiling -- the case above can
+    tell the two apart."""
+    _require(executable)
+    sleeper = tmp_path / "sleeper.py"
+    sleeper.write_text(SLEEPER, encoding="utf-8")
+    child = spawned.start(sleeper, "1")
+    port = _free_port()
+    reverted = _ps_without(
+        "        if (-not $alive) {\n            # Gone. One fresh look",
+        "        if ($false) {\n            # Gone. One fresh look",
+    )
+    script = tmp_path / "gate.ps1"
+    script.write_text(
+        _ps_harness(
+            GATE_FUNCTIONS,
+            _gate_body(child.pid, f"http://127.0.0.1:{port}/health", port, 6),
+            text=reverted,
+        ),
+        encoding="utf-8",
+    )
+    completed = _run_ps(executable, script)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = _outcome(completed.stdout)
+    assert float(result["seconds"]) >= 6, result
 
 
 @windows_only
@@ -1036,6 +1078,37 @@ def test_ps_the_rollback_refuses_to_move_anything_while_the_started_server_lives
     assert _version(layout.canonical) == "9.9.9"
     assert _version(layout.aside) == "9.9.8"
     assert list(layout.staging.iterdir()) == []
+
+
+@windows_only
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_ps_the_control_without_the_refusal_the_live_environment_is_moved(
+    edition: str, executable: str, tmp_path: Path, spawned: Spawned
+) -> None:
+    """The control for the case above: the same call, with rule 1's refusal
+    taken out, MOVES both directories while the started server lives -- the
+    2026-10-19 rollback, which the case above therefore catches."""
+    _require(executable)
+    layout = _layout(tmp_path)
+    sleeper = tmp_path / "sleeper.py"
+    sleeper.write_text(SLEEPER, encoding="utf-8")
+    child = spawned.start(sleeper, "60")
+    prelude = _ps_child(child.pid) + "$script:StartedServerChild = $child\n"
+    reverted = _ps_without(
+        "    if ($refusal) {\n        $script:RollbackRefused = $true",
+        "    if ($false) {\n        $script:RollbackRefused = $true",
+    )
+    script = tmp_path / "restore.ps1"
+    script.write_text(
+        _ps_harness(RESTORE_FUNCTIONS, _restore_body(layout, prelude), text=reverted),
+        encoding="utf-8",
+    )
+    completed = _run_ps(executable, script)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "RESTORED=True" in completed.stdout, completed.stdout
+    assert _version(layout.canonical) == "9.9.8"
+    assert child.poll() is None
 
 
 @windows_only

@@ -940,10 +940,11 @@ class FullRun:
             env=self.env | extra,
         )
 
-    def with_stubs(self, extra: str) -> None:
+    def with_stubs(self, extra: str, *, text: str = "") -> None:
         """Re-write the script under test with more seams replaced (a short
-        ceiling, a refused stop) -- still the published script otherwise."""
-        text = _installer_text()
+        ceiling, a refused stop) -- still the published script otherwise.
+        ``text`` swaps in a mutated script, for a control."""
+        text = text or _installer_text()
         marker = "\nif ($Help) {"
         assert text.count(marker) == 1
         self.script.write_text(
@@ -1564,3 +1565,26 @@ def test_a_stop_that_reports_the_port_free_while_it_is_held_swaps_nothing(
     assert "Swapped in " not in full_run.transcript_text()
     assert (full_run.canonical() / "VERSION").read_text(encoding="utf-8") == OLD_VERSION
     assert full_run.started_versions() == [OLD_VERSION]
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS[:1], ids=lambda v: v)
+def test_the_control_without_the_listener_check_the_swap_runs_under_a_live_server(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """The control for the case above, on one edition: with the listener
+    check taken out, the same lying stop leads to a swap while the old server
+    is still listening -- its environment moved out from under it."""
+
+    _require(executable)
+    text = _installer_text()
+    guard = '        if (($StopOutcome -in @("stopped", "nothing-listening")) -and (-not (Test-ServerPortFree -Address $Address))) {'
+    assert text.count(guard) == 1
+    full_run.install(OLD_VERSION)
+    full_run.start_old_server()
+    full_run.with_stubs("", text=text.replace(guard, "        if ($false) {"))
+    completed = full_run.run(executable, FAKE_STOP_LIES="1")
+
+    assert "Swapped in " in full_run.transcript_text(), completed.stdout
+    assert (
+        "is still listening although the stop reported it free" not in completed.stdout
+    )
