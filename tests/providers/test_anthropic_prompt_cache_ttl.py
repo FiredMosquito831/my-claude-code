@@ -49,6 +49,7 @@ from my_claude_code.providers.anthropic_messages.request import (
     build_anthropic_messages_body,
 )
 from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.commandcode import CommandCodeProvider
 from my_claude_code.providers.recovery import (
     FACT_PROMPT_CACHE_LIFETIME_REFUSED,
     learned_fact_store,
@@ -453,6 +454,37 @@ async def test_a_gateway_without_declared_lifetimes_sends_the_clients_bytes(
         assert PROMPT_CACHE_TTL_NOTE not in trace.requests[max(trace.requests)].params
         await provider.cleanup()
 
+    assert _wire(stamped.bodies[0]) == _wire(plain.bodies[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [_claude_code_payload(), _bare_payload()])
+async def test_the_real_command_code_provider_sends_the_clients_bytes(
+    payload: dict[str, Any],
+) -> None:
+    """Command Code's ``claude-*`` route, on the shipped provider class.
+
+    Command Code has no base-URL setting, so no scratch server can point it
+    at a fake; this drives its own composed Messages delegate instead.
+    """
+
+    stamped, plain = _FakeHost(), _FakeHost()
+    for host, ask in ((stamped, PromptCacheAsk(30, "PROMPT_CACHE_TTL")), (plain, None)):
+        provider = CommandCodeProvider(
+            ProviderConfig(
+                api_key="user_test", base_url="https://commandcode.invalid/v1"
+            ),
+            rate_limiter=passthrough_rate_limiter(),
+        )
+        provider._anthropic._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(host)
+        )
+        trace = install_wire_trace()
+        await _drain(provider.stream_response(_request(payload, ask)))
+        assert PROMPT_CACHE_TTL_NOTE not in trace.requests[max(trace.requests)].params
+        await provider.cleanup()
+
+    assert len(stamped.bodies) == len(plain.bodies) == 1
     assert _wire(stamped.bodies[0]) == _wire(plain.bodies[0])
 
 
