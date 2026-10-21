@@ -1,5 +1,6 @@
 """Mistral La Plateforme provider implementation (OpenAI-compatible chat completions)."""
 
+from collections.abc import Mapping
 from typing import Any
 
 from loguru import logger
@@ -102,9 +103,13 @@ class MistralProvider(OpenAIChatProvider):
         return retry_body
 
     async def _create_stream(
-        self, body: dict, *, surface_label: str = ""
+        self,
+        body: dict,
+        *,
+        surface_label: str = "",
+        wire_notes: Mapping[str, str] | None = None,
     ) -> tuple[Any, dict]:
         stream, final_body = await super()._create_stream(
-            body, surface_label=surface_label
+            body, surface_label=surface_label, wire_notes=wire_notes
         )
         return normalize_mistral_stream(stream), final_body

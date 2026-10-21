@@ -18,6 +18,7 @@ from my_claude_code.core.anthropic.conversion import (
     AnthropicToOpenAIConverter,
     OpenAIConversionError,
     ReasoningReplayMode,
+    empty_system_messages_note,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
@@ -607,8 +608,9 @@ def build_responses_request_body(
     ``wire_notes``
         a caller's mapping to receive what this build took out of the
         client's request -- ``tool_schema_pruned``, names and paths only, and
-        ``history_thinking_omitted``, counts only -- so the sender records it
-        beside the body it describes. Left untouched when nothing was removed.
+        ``history_thinking_omitted`` and ``empty_system_messages_dropped``,
+        counts only -- so the sender records it beside the body it describes.
+        Left untouched when nothing was removed.
 
     Earlier assistant thinking is never replayed on this surface
     (:data:`RESPONSES_REASONING_REPLAY`); what was left out is counted into
@@ -634,6 +636,7 @@ def build_responses_request_body(
         raise InvalidRequestError(str(exc)) from exc
     if wire_notes is not None:
         wire_notes.update(_history_thinking_note(request.messages))
+        wire_notes.update(empty_system_messages_note(request.messages))
 
     tool_names = responses_tool_name_codec(
         request, tool_name_max_length, tool_catalogue
