@@ -362,7 +362,13 @@ def test_the_sweep_keeps_this_run_and_one_previous_sh(
     assert sorted(p.name for p in previous.iterdir()) == ["20261008-160332"]
 
 
-UNDO_FUNCTIONS = ("undo_in_place_finish", "restore_previous_environment")
+UNDO_FUNCTIONS = (
+    "undo_in_place_finish",
+    "restore_previous_environment",
+    # 7.103.1: the rollback states what is where and checks what came back.
+    "environment_state_line",
+    "tool_environment_problem",
+)
 
 
 @pytest.mark.parametrize(("name", "shell"), SHELLS, ids=lambda v: v)
@@ -384,9 +390,16 @@ def test_a_failed_finish_puts_the_previous_version_back_sh(
     previous_env = previous_dir / "my-claude-code"
     _executable(previous_env / "bin" / "python")
     _touch(previous_env / "VERSION", "9.9.8")
+    # 7.103.1: a previous environment is only moved back when it can run --
+    # an interpreter and the venv's pyvenv.cfg -- and uv can read its receipt.
+    _touch(previous_env / "pyvenv.cfg", "home = /usr/bin\n")
+    _touch(previous_env / "uv-receipt.toml", "[tool]\n")
     body = f"""
 start_server_detached() {{ started_server_pid=4242; printf 'STARTED %s\\n' "$1"; }}
 wait_for_server_health() {{ return 0; }}
+wait_for_started_server() {{ start_gate_outcome=answered; }}
+stop_started_server() {{ printf 'NEVER STOP\\n'; }}
+uv_bin=''
 server_start_budget_seconds() {{ printf '1'; }}
 mcc_config_dir() {{ printf '%s' '{_p(tmp_path / "config")}'; }}
 staged_tool_dir='{_p(canonical)}'

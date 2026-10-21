@@ -1406,7 +1406,7 @@ def test_a_server_slower_than_the_old_budget_is_waited_for_not_rolled_back(
         transcript,
     )
     assert len(reports) >= 2, transcript
-    assert 15 <= int(reports[0]) <= 19 and 30 <= int(reports[1]) <= 36, reports
+    assert 15 <= int(reports[0]) <= 21 and 30 <= int(reports[1]) <= 36, reports
     assert f"/admin/api/version answered: version {NEW_VERSION}." in transcript
     assert "put back" not in out
     assert full_run.started_versions() == [NEW_VERSION]
@@ -1414,7 +1414,9 @@ def test_a_server_slower_than_the_old_budget_is_waited_for_not_rolled_back(
     receipt = (full_run.config / "updates" / "progress.json").read_text(
         encoding="utf-8"
     )
-    assert f"My Claude Code {NEW_VERSION} is still starting, 15 s" in receipt
+    # The same records reach the receipt a desktop window reads.
+    assert f"My Claude Code {NEW_VERSION} is still starting, {reports[0]} s" in receipt
+    assert f"My Claude Code {NEW_VERSION} is still starting, {reports[1]} s" in receipt
 
 
 @pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)

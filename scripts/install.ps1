@@ -2094,7 +2094,7 @@ function Restore-PreviousEnvironment {
             $alive = @([pscustomobject]@{ Id = $script:StartedServerChild.Id })
         }
         if ($alive.Count -gt 0) {
-            $refusal = "the server this install started is still running (pid " + (@($alive | ForEach-Object { $_.Id }) -join ", ") + ")"
+            $refusal = "the server this install started has not exited (pid " + (@($alive | ForEach-Object { $_.Id }) -join ", ") + ")"
         }
         else {
             $address = Get-MccServerAddress
@@ -3366,7 +3366,7 @@ function Test-PortHasListener {
         waited for binds would make THAT server fail to start. This asks the
         table instead (IPGlobalProperties.GetActiveTcpListeners, every IPv4
         and IPv6 listener; measured 1-3 ms on Windows PowerShell 5.1 and
-        PowerShell 7, against 600-850 ms for Get-NetTCPConnection).
+        PowerShell 7, against 600-850 ms for the NetTCPIP module's cmdlet).
 
         `-BindHost` narrows it to the listeners a server binding that address
         would collide with: the same address, or a wildcard (0.0.0.0, ::).
@@ -4248,7 +4248,7 @@ function Get-StartedProcessStartTime {
 function Test-StartedProcessAlive {
     <#
         .SYNOPSIS
-        7.103.1: whether the process this run started is still running.
+        7.103.1: whether the process this run started is alive.
 
         .DESCRIPTION
         By pid AND start time, as the update helper pins its parent: Windows
@@ -4599,7 +4599,7 @@ function Stop-ProcessByExactId {
 }
 
 function Test-StartedMemberAlive {
-    <# .SYNOPSIS 7.103.1: whether one member of Get-StartedProcessTree is still running. #>
+    <# .SYNOPSIS 7.103.1: whether one member of Get-StartedProcessTree is alive. #>
     param([Parameter(Mandatory = $true)][object] $Member)
 
     $process = Get-Process -Id ([int] $Member.Id) -ErrorAction SilentlyContinue
@@ -4687,7 +4687,7 @@ function Stop-StartedServer {
     $result.Remaining = @($remaining | ForEach-Object { [int] $_.Id })
     $result.Stopped = ($remaining.Count -eq 0)
     if (-not $result.Stopped) {
-        $result.Message = "The server this install started (pid $startedPid) could not be stopped: pid(s) " + ($result.Remaining -join ", ") + " are still running."
+        $result.Message = "The server this install started (pid $startedPid) could not be stopped: pid(s) " + ($result.Remaining -join ", ") + " have not exited."
         return $result
     }
     if ($null -eq $Address) {
@@ -4834,7 +4834,7 @@ function Confirm-RestartedServer {
         fixed budget (decision A1), and an answer is success only when the
         server can also SERVE -- `GET /admin/api/version` (decision A4). What
         the gate ended on is left in $script:StartGateOutcome for the caller:
-        a rollback must stop a server that is still running before it moves
+        a rollback must stop a server that is alive before it moves
         anything (decision A2).
     #>
     param(
@@ -6218,7 +6218,7 @@ if ($null -ne $Staged) {
             # 7.103.1: the verdict says nothing is serving on the port, but the
             # operating system still lists a listener there. The swap below
             # moves the live environment aside, and doing that under a server
-            # that is still running out of it is the 2026-10-19 failure in
+            # that runs out of it is the 2026-10-19 failure in
             # another place. Measured on a loaded machine (2026-10-21, 2 of 5
             # scratch runs): `--stop-holder` answered "Nothing was listening
             # on that port" while the old server kept listening, because its

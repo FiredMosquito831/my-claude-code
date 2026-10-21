@@ -1348,7 +1348,7 @@ restore_previous_environment() {
         fi
         restore_alive=$(printf '%s' "$restore_alive" | tr -s ' ' | sed 's/^ //; s/ $//')
         if [ -n "$restore_alive" ]; then
-            restore_refusal="the server this install started is still running (pid $restore_alive)"
+            restore_refusal="the server this install started has not exited (pid $restore_alive)"
         elif port_is_occupied "$server_reachable_host" "$server_port"; then
             restore_refusal="port $server_port is still held"
         fi
@@ -2507,7 +2507,7 @@ stop_started_server() {
         wait "$stop_root" 2>/dev/null || true
     fi
     if [ -n "$stop_started_remaining" ]; then
-        stop_started_message="The server this install started (pid $stop_root) could not be stopped: pid(s)$stop_started_remaining are still running."
+        stop_started_message="The server this install started (pid $stop_root) could not be stopped: pid(s)$stop_started_remaining have not exited."
         return 0
     fi
     stop_started_ok=1

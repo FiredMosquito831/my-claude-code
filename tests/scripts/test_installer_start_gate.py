@@ -1029,7 +1029,7 @@ def test_ps_the_rollback_refuses_to_move_anything_while_the_started_server_lives
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "RESTORED=False REFUSED=True ROLLEDBACK=False" in completed.stdout
     assert (
-        f"The rollback was not attempted: the server this install started is still running (pid {child.pid}"
+        f"The rollback was not attempted: the server this install started has not exited (pid {child.pid}"
         in completed.stdout
     )
     assert "Nothing was moved." in completed.stdout
@@ -1234,7 +1234,7 @@ def test_sh_the_rollback_refuses_to_move_anything_while_the_started_server_lives
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "RESTORED=0 REFUSED=1" in completed.stdout, completed.stdout
-    assert "the server this install started is still running (pid " in completed.stdout
+    assert "the server this install started has not exited (pid " in completed.stdout
     assert "Nothing was moved." in completed.stdout
     assert _version(layout.canonical) == "9.9.9"
     assert _version(layout.aside) == "9.9.8"
