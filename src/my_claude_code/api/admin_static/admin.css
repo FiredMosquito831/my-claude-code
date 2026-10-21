@@ -957,6 +957,27 @@ textarea:focus-visible,
   gap: 20px;
 }
 
+/* A titled group inside one settings section: the Reasoning section's
+   "Prompt cache lifetime" (7.104.0), below the thinking levels it mirrors. */
+.settings-subsection {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-subheading {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--text-strong);
+}
+
+.settings-subheading-lead {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 80ch;
+}
+
 /* Field Grouping */
 .field {
   display: flex;
@@ -7910,6 +7931,15 @@ audio.req-media-preview {
   border-color: var(--warn-border);
   background: var(--warn-bg);
   color: var(--warn);
+}
+
+/* MCC's own declared table (7.104.0, the prompt-cache lifetimes a host
+   family accepts): neither published by the provider nor voted, so it wears
+   neither of those colours. */
+.models-source-declared {
+  border-color: var(--reasoning-border);
+  background: var(--neutral-bg);
+  color: var(--reasoning);
 }
 
 /* Your own number from the model's override row (7.87.0): above every rung,

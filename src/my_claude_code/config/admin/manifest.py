@@ -40,7 +40,9 @@ def _prompt_cache_ttl_options(*, tier: bool) -> tuple[ConfigOptionSpec, ...]:
     ) + (ConfigOptionSpec(PROMPT_CACHE_TTL_CLIENT, "From client"),)
     minutes = tuple(
         ConfigOptionSpec(str(value), f"{value} min")
-        for value in range(PROMPT_CACHE_TTL_MIN_MINUTES, PROMPT_CACHE_TTL_MAX_MINUTES + 1)
+        for value in range(
+            PROMPT_CACHE_TTL_MIN_MINUTES, PROMPT_CACHE_TTL_MAX_MINUTES + 1
+        )
     )
     return words + minutes
 
