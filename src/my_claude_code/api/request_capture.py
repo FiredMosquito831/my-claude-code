@@ -43,6 +43,7 @@ from my_claude_code.core.client_fingerprint import (
 from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
+from my_claude_code.core.gateway_reason import gateway_trace_id
 from my_claude_code.core.image_geometry import image_dimensions
 from my_claude_code.core.keepalive_tally import install_keepalive_tally
 from my_claude_code.core.proxy_attribution import (
@@ -590,6 +591,7 @@ class RequestCapture:
                     attempt.truncated,
                     attempt.continuation,
                     shape,
+                    error_message=attempt.error_message,
                 ),
                 wire_body=None if wire is None else wire.body_json,
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
@@ -663,6 +665,8 @@ class RequestCapture:
         truncated: dict[str, Any] | None = None,
         continuation: dict[str, Any] | None = None,
         shape: dict[str, Any] | None = None,
+        *,
+        error_message: str | None = None,
     ) -> dict[str, Any] | None:
         """Merge what the provider survived with what it actually sent.
 
@@ -718,6 +722,13 @@ class RequestCapture:
         # back" -- an attempt that was skipped has no reply to describe.
         if shape:
             params["response_shape"] = shape
+        # The id a gateway passed on instead of the model's reason (Command
+        # Code's ``invalid request error trace_id: ...``). Parsed out of the
+        # message, which stays recorded verbatim; written only when the body
+        # said nothing else, so every other attempt's params are unchanged.
+        trace_id = gateway_trace_id(error_message)
+        if trace_id is not None:
+            params["gateway_trace_id"] = trace_id
         return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:

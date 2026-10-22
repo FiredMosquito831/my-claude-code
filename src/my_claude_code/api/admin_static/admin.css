@@ -6699,6 +6699,26 @@ audio.req-media-preview {
   overflow-wrap: anywhere;
 }
 
+/* 7.105.2: the id a gateway passed on instead of a reason, under the host's
+   verbatim text, selectable and with its own Copy button. */
+.req-chain-traceid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.req-chain-traceid code {
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .req-chain-kind {
   display: inline-block;
   margin-right: 6px;
