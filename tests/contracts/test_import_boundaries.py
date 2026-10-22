@@ -111,6 +111,18 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "one. Through the package facade, read-only, admin surface only."
     ),
     (
+        "my_claude_code.api.model_admin",
+        "my_claude_code.providers.commandcode",
+    ): (
+        "Owner: admin Models page prompt-cache lifetime row (7.105.0). "
+        "Reason: which of Command Code's models go out in Anthropic's Messages "
+        "protocol -- and so can carry a cache lifetime at all -- is decided by "
+        "the provider's own delegation rule, and the page reads that very "
+        "function, as it reads the surface resolver above. A mirror in the api "
+        "package would be a second answer that could drift from the one the "
+        "request path acts on. Read-only, admin surface only."
+    ),
+    (
         "my_claude_code.api.request_pricing",
         "my_claude_code.providers.runtime.models_dev",
     ): (
