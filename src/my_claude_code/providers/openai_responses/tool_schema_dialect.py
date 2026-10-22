@@ -37,6 +37,14 @@ What it removes is recorded in ``params.wire`` under the same
 ``tool_schema_pruned`` key the rung and the learned sweep write, names and
 paths only.
 
+**Chat Completions too, but only by declaration (7.105.1).** A Chat host has
+no default dialect: a profile that declares none sends every schema exactly
+as the client wrote it, byte for byte as before. A Chat host whose validator
+is *measured* refusing a construct declares it here, from the same table --
+Command Code's DeepSeek back end refuses ``\\0`` in a ``pattern`` -- and the
+Chat builder sweeps ``tools[].function.parameters`` with the same
+:func:`sweep_tool_catalogue` (``openai_chat/request_policy.py``).
+
 **Repair before removal (7.39.0).** A dialect may also declare that a
 ``pattern``'s Unicode property escapes are *translated* rather than left for
 the host to refuse: :mod:`my_claude_code.core.tool_schema_patterns` (ported
@@ -104,8 +112,13 @@ class ToolSchemaDialect:
     tools_max_count: int | None = None
 
 
-def _construct(name: str) -> RegexConstruct:
-    """One row of the rung's construct table, by its stable name."""
+def regex_construct(name: str) -> RegexConstruct:
+    """One row of the rung's construct table, by its stable name.
+
+    Public so a host profile outside this package can declare a dialect from
+    the same table (Command Code's Chat side, 7.105.1) instead of spelling a
+    second one.
+    """
 
     for construct in REGEX_CONSTRUCTS:
         if construct.name == name:
@@ -129,7 +142,9 @@ def _construct(name: str) -> RegexConstruct:
 RESPONSES_TOOL_SCHEMA_DIALECT = ToolSchemaDialect(
     name="responses",
     refused=(
-        SchemaKeywordRefusal(keyword="pattern", construct=_construct("lookaround")),
+        SchemaKeywordRefusal(
+            keyword="pattern", construct=regex_construct("lookaround")
+        ),
     ),
     translate_unicode_properties=True,
 )

@@ -117,7 +117,7 @@ from .messages_transport import MessagesTransport
 from .opencode_catalogue import STAND_IN_INPUT_SCHEMA, model_is_zero_cost
 from .opencode_identity import identity_wire_record
 from .profiles import OpenAIChatProfile
-from .request_policy import build_openai_chat_request_body
+from .request_policy import build_openai_chat_request_body, chat_tool_schema_note
 from .response_surface import (
     alternative_surfaces,
     remember_response_surface,
@@ -662,7 +662,16 @@ class OpenAIChatProvider(BaseProvider):
             postprocessors=self._profile.request_postprocessors,
             provider_id=self._provider_id,
             tool_catalogue=self.tool_catalogue_for_request(request),
+            tool_schema_dialect=self._profile.chat_tool_schema_dialect,
         )
+
+    def tool_schema_wire_note(self, request: MessagesRequest) -> dict[str, str]:
+        """What :meth:`_build_request_body` sweeps out of this request's tools.
+
+        ``{}`` for every profile that declares no Chat schema dialect, which
+        is every profile but Command Code's.
+        """
+        return chat_tool_schema_note(request, self._profile.chat_tool_schema_dialect)
 
     def preflight_stream(
         self,
@@ -1346,8 +1355,13 @@ class _OpenAIChatStreamRunner:
         # What the body build leaves out of this request, recorded on every
         # send of it -- the first, each create-level retry and each recovery
         # continuation -- because none of them puts it back. Empty, and so
-        # recording nothing, for every request with nothing left out.
-        self._wire_notes = empty_system_messages_note(request.messages)
+        # recording nothing, for every request with nothing left out. The
+        # schema note (7.105.1) is ``{}`` on every host without a declared
+        # Chat schema dialect.
+        self._wire_notes = {
+            **empty_system_messages_note(request.messages),
+            **provider.tool_schema_wire_note(request),
+        }
         self._input_tokens = input_tokens
         self._request_id = request_id
         self._reasoning = reasoning

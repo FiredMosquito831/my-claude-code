@@ -20,6 +20,7 @@ from my_claude_code.config.settings import (
 )
 from my_claude_code.core.anthropic import (
     EMPTY_TOOL_CATALOGUE,
+    AnthropicToOpenAIConverter,
     OpenAIToolNameCodec,
     ReasoningReplayMode,
     build_base_request_body,
@@ -27,6 +28,10 @@ from my_claude_code.core.anthropic import (
 from my_claude_code.core.anthropic.conversion import OpenAIConversionError
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.providers.openai_responses import (
+    ToolSchemaDialect,
+    sweep_tool_catalogue,
+)
 
 MaxTokensField = Literal["max_tokens", "max_completion_tokens"]
 OpenAIChatPostprocessor = Callable[
@@ -76,6 +81,7 @@ def build_openai_chat_request_body(
     provider_id: str = "",
     overrides: ModelParameterOverrides | None = None,
     tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
+    tool_schema_dialect: ToolSchemaDialect | None = None,
 ) -> dict[str, Any]:
     """Build an OpenAI-compatible chat request body from an Anthropic request.
 
@@ -91,6 +97,14 @@ def build_openai_chat_request_body(
     that has none -- which is every host this funnel has ever served but
     OpenCode's free tier. Empty leaves the encoding below exactly the encoding
     it has always done: alias what the host could not accept, rename nothing.
+
+    ``tool_schema_dialect`` is what this host's validator is measured to
+    refuse in a tool schema (the profile's ``chat_tool_schema_dialect``).
+    ``None`` -- every host but Command Code -- runs no sweep, so ``tools`` is
+    the converter's own list. A declared dialect sweeps after the provider
+    postprocessors and before the user's overrides, and when nothing offends
+    it hands back that same list of the same objects; what it does remove
+    is described by :func:`chat_tool_schema_note` for the request record.
     """
     logger.debug(
         "{}_REQUEST: conversion start model={} msgs={}",
@@ -129,6 +143,13 @@ def build_openai_chat_request_body(
     for postprocess in postprocessors:
         postprocess(body, request_data, reasoning)
 
+    if tool_schema_dialect is not None:
+        tools = body.get("tools")
+        if isinstance(tools, list) and tools:
+            swept, _marker = sweep_chat_tool_schemas(tools, tool_schema_dialect)
+            if swept is not tools:
+                body["tools"] = swept
+
     # Last, deliberately: the user's own setting has to win over every
     # provider-specific postprocessor above, and a "force unset" can only
     # remove a key once everything that might set it has run.
@@ -154,6 +175,67 @@ def build_openai_chat_request_body(
         len(body.get("tools", [])),
     )
     return body
+
+
+#: Stands in for a tool with no ``function`` object while the shared sweep
+#: walks the functions: it has no ``parameters``, so the sweep passes it back
+#: by identity and the tool beside it is kept exactly as it was.
+_NO_FUNCTION: Mapping[str, Any] = {}
+
+
+def sweep_chat_tool_schemas(
+    tools: list[Any], dialect: ToolSchemaDialect
+) -> tuple[list[Any], dict[str, str]]:
+    """``tools`` without what ``dialect`` refuses, and the ``params.wire`` note.
+
+    A Chat tool is ``{"type": "function", "function": {"name", "parameters",
+    ...}}``, one level deeper than a Responses tool, so the ``function``
+    objects are handed to the Responses route's own
+    :func:`sweep_tool_catalogue` -- the same walker over every nesting level,
+    the same copy-on-write, the same ``tool_schema_pruned`` wording -- and a
+    tool whose function lost a keyword is re-wrapped as a shallow copy.
+
+    Returns ``tools`` itself, holding the very same objects, and ``{}`` when
+    nothing offends, so the serialised bytes and the vendor's cached tools
+    prefix cannot have moved.
+    """
+
+    functions = [
+        tool["function"]
+        if isinstance(tool, Mapping) and isinstance(tool.get("function"), Mapping)
+        else _NO_FUNCTION
+        for tool in tools
+    ]
+    sweep = sweep_tool_catalogue(functions, dialect)
+    if sweep.tools is functions:
+        return tools, {}
+    swept = [
+        tool if new is old else {**tool, "function": new}
+        for tool, new, old in zip(tools, sweep.tools, functions, strict=True)
+    ]
+    return swept, sweep.wire_marker(dialect)
+
+
+def chat_tool_schema_note(
+    request_data: MessagesRequest, dialect: ToolSchemaDialect | None
+) -> dict[str, str]:
+    """What the declared Chat schema dialect takes out of this request's tools.
+
+    The request record's half of the sweep in
+    :func:`build_openai_chat_request_body`, computed from the request the
+    same way ``empty_system_messages_note`` is (7.103.2): the stream runner
+    records it beside every send of the body, the first and each retry,
+    because none of them puts the keyword back. Pure, and the same tools and
+    dialect the builder swept, so the note names exactly what left; ``{}``
+    -- recording nothing -- for every host without a dialect and every
+    request with nothing to remove.
+    """
+
+    if dialect is None or not request_data.tools:
+        return {}
+    converted = AnthropicToOpenAIConverter.convert_tools(request_data.tools)
+    _swept, marker = sweep_chat_tool_schemas(converted, dialect)
+    return marker
 
 
 def _encode_openai_tool_names(body: dict[str, Any], codec: OpenAIToolNameCodec) -> None:

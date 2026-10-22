@@ -22,7 +22,12 @@ from my_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
     validate_extra_body_does_not_override_canonical_fields,
 )
+from my_claude_code.providers.openai_responses import (
+    ToolSchemaDialect,
+    regex_construct,
+)
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.recovery import SchemaKeywordRefusal
 
 from .models import extract_commandcode_model_infos, is_anthropic_messages_model
 
@@ -40,6 +45,34 @@ _EFFORTS = (
     (ReasoningEffort.HIGH, "high"),
     (ReasoningEffort.XHIGH, "xhigh"),
     (ReasoningEffort.MAX, "max"),
+)
+
+#: What Command Code's Chat validator refuses in a tool schema: a ``pattern``
+#: carrying the ``\0`` regex escape, and nothing else that has been measured.
+#: Claude Code's newer built-in ``Artifact`` tool constrains ``file_paths``
+#: items with ``^[^\0]*$``, and the DeepSeek back end refused every request
+#: carrying it -- 445 of 445 refusals on ``deepseek/deepseek-v4.1-flash``,
+#: 2026-10-20/21, against 0 of 3,677 successes. 20 of them said why:
+#: ``Invalid schema for function 'Artifact': "^[^\\0]*$" is not a "regex"``;
+#: the other 425 said only ``invalid request error trace_id: ...``. The user's
+#: probe of 2026-10-21 (``INVESTIGATION-COMMANDCODE-DEEPSEEK-RESUMED-400.md``
+#: §16) settled it on the real 33-tool catalogue: unmodified, HTTP 400 in
+#: 5,668 ms; the same body without only that one pattern, HTTP 200 in 1,220 ms.
+#: The six other patterns that catalogue carries -- the ``Artifact`` contract
+#: version (in 3,536 accepted requests), the Workflow run id (731), ``after``,
+#: ``asset_ids`` and SendMessage's two -- were accepted beside it and stay.
+#:
+#: Data on this profile, never a model branch: the sweep is the Responses
+#: route's own, the tools come back as the same objects when nothing offends,
+#: and every other Chat host declares nothing, so Agnes, LongCat and native
+#: DeepSeek -- which accept the pattern -- keep it.
+COMMANDCODE_CHAT_TOOL_SCHEMA_DIALECT = ToolSchemaDialect(
+    name="commandcode-chat",
+    refused=(
+        SchemaKeywordRefusal(
+            keyword="pattern", construct=regex_construct("nul_escape")
+        ),
+    ),
 )
 
 _PROFILE = OpenAIChatProfile(
@@ -83,6 +116,7 @@ _PROFILE = OpenAIChatProfile(
     # why reasoning that did arrive was dropped before reaching the client.
     reasoning_delta_field="reasoning",
     reasoning_delta_fallback_field="reasoning_content",
+    chat_tool_schema_dialect=COMMANDCODE_CHAT_TOOL_SCHEMA_DIALECT,
 )
 
 

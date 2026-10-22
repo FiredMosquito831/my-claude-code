@@ -232,6 +232,15 @@ class OpenAIChatProfile:
     # tool-name ceiling because it is the same kind of statement about the same
     # tools array. Chat Completions is not governed by this field.
     responses_tool_schema_dialect: ToolSchemaDialect | None = None
+    # What this host's *Chat Completions* validator refuses in a tool schema.
+    # ``None`` -- every profile but Command Code's -- means no sweep at all:
+    # the tools leave as the very objects the converter built, byte for byte
+    # what every release before 7.105.1 sent. Unlike the Responses field
+    # above there is no default, because no Chat host but this one has been
+    # measured refusing a construct, and Agnes, LongCat and the ChatGPT
+    # subscription accept the exact pattern Command Code refuses. A host
+    # declares it only from its own measured refusals.
+    chat_tool_schema_dialect: ToolSchemaDialect | None = None
     # This host classifies the request's *tool catalogue* on one tier, and
     # these are the spellings it wants. ``None`` -- every profile but the two
     # OpenCode ones -- means the tool names the client wrote go on the wire as
