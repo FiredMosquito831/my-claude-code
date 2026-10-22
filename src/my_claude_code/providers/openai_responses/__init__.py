@@ -28,7 +28,6 @@ from .streaming import (
 from .tool_schema_dialect import (
     PERMISSIVE_TOOL_SCHEMA_DIALECT,
     RESPONSES_TOOL_SCHEMA_DIALECT,
-    DialectSweep,
     ToolSchemaDialect,
     regex_construct,
     sweep_tool_catalogue,
@@ -41,7 +40,6 @@ __all__ = [
     "RESPONSES_DEFAULT_REASONING_SUMMARY",
     "RESPONSES_REASONING_REPLAY",
     "RESPONSES_TOOL_SCHEMA_DIALECT",
-    "DialectSweep",
     "ResponsesStreamConverter",
     "ToolSchemaDialect",
     "alias_responses_body_tool_names",
