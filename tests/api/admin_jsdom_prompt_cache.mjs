@@ -108,17 +108,8 @@ export function preparePromptCacheScenario({ window, ROUTES }) {
           { state: row[name] === null ? "unset" : "value", value: row[name] },
         ]),
     );
-  const control = (row, note) => ({
-    ...(Object.prototype.hasOwnProperty.call(row, "prompt_cache_ttl")
-      ? {
-          state: row.prompt_cache_ttl === null ? "unset" : "value",
-          value: row.prompt_cache_ttl,
-        }
-      : { state: "inherit", value: null }),
-    minimum: 1,
-    maximum: 60,
-    note,
-  });
+  // Rows in the server's own shapes; the lifetime's control comes from the
+  // table beside the page, its state from each row's `override`.
   const modelEntry = (ref, row, learned) => ({
     ...clone(alpha.models[1]),
     model_ref: ref,
@@ -127,10 +118,6 @@ export function preparePromptCacheScenario({ window, ROUTES }) {
     override: rowState(row),
     effective: [],
     learned: learned || [],
-    preferences: {
-      ...clone(alpha.models[1].preferences),
-      prompt_cache_ttl: control(row, fixture.model_control_note),
-    },
   });
   const providerEntry = (providerId, row, models) => ({
     ...clone(alpha),
@@ -138,20 +125,8 @@ export function preparePromptCacheScenario({ window, ROUTES }) {
     model_count: models.length,
     hidden_count: 0,
     override: rowState(row),
-    preferences: {
-      ...clone(alpha.preferences),
-      prompt_cache_ttl: control(row, fixture.provider_control_note),
-    },
     models,
   });
-  // The 7.105.0 server's shapes on the harness's own providers too.
-  page.providers.forEach((provider) => {
-    provider.preferences.prompt_cache_ttl = control({}, fixture.provider_control_note);
-    provider.models.forEach((model) => {
-      model.preferences.prompt_cache_ttl = control({}, fixture.model_control_note);
-    });
-  });
-  page.overrides.preference_parameters = fixture.preference_parameters;
   const declaredModels = [
     modelEntry(REFUSED_REF, { prompt_cache_ttl: 10 }, [clone(REFUSAL_FACT)]),
     modelEntry(PLAIN_REF, {}),

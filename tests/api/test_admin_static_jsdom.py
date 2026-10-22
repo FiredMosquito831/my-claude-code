@@ -21,9 +21,6 @@ from typing import NoReturn
 import pytest
 
 from my_claude_code.api.model_admin import (
-    PROMPT_CACHE_TTL_PREFERENCE_NOTE,
-    PROVIDER_PROMPT_CACHE_TTL_NOTE,
-    overrides_payload,
     prompt_cache_gateway_models,
     prompt_cache_lifetimes_payload,
 )
@@ -34,7 +31,6 @@ from my_claude_code.config.admin.manifest import (
     SECTIONS,
     ConfigOptionSpec,
 )
-from my_claude_code.config.model_overrides import EMPTY_MODEL_OVERRIDES
 from my_claude_code.config.model_refs import ConfiguredChatModelRef
 from my_claude_code.config.prompt_cache_lifetimes import (
     ANTHROPIC_MESSAGES_LIFETIMES,
@@ -10637,12 +10633,6 @@ def prompt_cache(tmp_path_factory: pytest.TempPathFactory) -> dict:
             if field.section_id == "reasoning"
         ],
         "prompt_cache_lifetimes": _prompt_cache_table(),
-        # 7.105.0: the 14th override key's shapes, as the server builds them.
-        "preference_parameters": overrides_payload(EMPTY_MODEL_OVERRIDES)[
-            "preference_parameters"
-        ],
-        "model_control_note": PROMPT_CACHE_TTL_PREFERENCE_NOTE,
-        "provider_control_note": PROVIDER_PROMPT_CACHE_TTL_NOTE,
     }
     path = tmp_path_factory.mktemp("prompt_cache") / "fixture.json"
     path.write_text(json.dumps(fixture), encoding="utf-8")
@@ -10909,9 +10899,11 @@ def test_jsdom_a_lifetime_save_is_validated_and_sent_last(prompt_cache) -> None:
         assert saves[name]["status"] == "Saved"
         assert len(posted) == 1
         updates = posted[0]["updates"]
+        # The harness payload names its preferences in this order; the body
+        # keeps the server's order and puts the lifetime after everything.
         assert list(updates) == [
-            "max_output_tokens",
             "reasoning_preference",
+            "max_output_tokens",
             "context_length",
             "temperature",
             "prompt_cache_ttl",
@@ -10971,16 +10963,7 @@ def _without_the_lifetime(node: object) -> object:
 @pytest.fixture(scope="module")
 def models_fields_with_lifetime(tmp_path_factory: pytest.TempPathFactory) -> dict:
     path = tmp_path_factory.mktemp("models_fields_lifetime") / "table.json"
-    path.write_text(
-        json.dumps(
-            {
-                "table": prompt_cache_lifetimes_payload(),
-                "model_control_note": PROMPT_CACHE_TTL_PREFERENCE_NOTE,
-                "provider_control_note": PROVIDER_PROMPT_CACHE_TTL_NOTE,
-            }
-        ),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(prompt_cache_lifetimes_payload()), encoding="utf-8")
     return _run(
         MCC_JSDOM_SCENARIO="models_fields",
         MCC_JSDOM_MODELS_FIELDS_PROMPT_CACHE=str(path),

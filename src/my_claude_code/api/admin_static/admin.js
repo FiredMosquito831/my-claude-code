@@ -32324,14 +32324,28 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
   table.appendChild(buildModelFieldsHead(isModel));
   form.appendChild(table);
 
-  const ctx = { scope, key, row: row || {}, preferences, capabilities, model };
-  const kinds =
-    (modelsState.data &&
+  /* The prompt-cache lifetime's control (7.105.0) is described beside the
+     page, in `prompt_cache_lifetimes`, so the cached half of the payload --
+     `preference_parameters`, every row's `preferences` -- is 7.104.0's byte
+     for byte; it joins the preferences here. Its state is the row's own. */
+  const lifetime = promptCacheControl(scope, row);
+  const ctx = {
+    scope,
+    key,
+    row: row || {},
+    preferences: lifetime ? { ...(preferences || {}), [lifetime.name]: lifetime.spec } : preferences,
+    capabilities,
+    model,
+  };
+  const kinds = {
+    ...((modelsState.data &&
       modelsState.data.overrides &&
       modelsState.data.overrides.preference_parameters) ||
-    {};
+      {}),
+    ...(lifetime ? { [lifetime.name]: PROMPT_CACHE_TTL_KIND } : {}),
+  };
   const preferenceNames = Object.keys(kinds).filter(
-    (name) => preferences && preferences[name],
+    (name) => ctx.preferences && ctx.preferences[name],
   );
   const fields = new Map();
   if (isModel) fields.set(CONTEXT_WINDOW_OVERRIDE, buildContextWindowField(ctx));
@@ -32681,6 +32695,31 @@ function modelReadonlyFieldEntries(capabilities, model) {
    pinned to the server's rule by a jsdom parity test). */
 function promptCacheTable() {
   return (modelsState.data && modelsState.data.prompt_cache_lifetimes) || null;
+}
+
+/* The control's spec for one row, in the preferences' own shape: the row's
+   state, the bounds and the sentence for its scope. `null` -- no row at all
+   -- on a payload without the table (an older server). */
+function promptCacheControl(scope, row) {
+  const table = promptCacheTable();
+  const control = table && table.control;
+  if (!control || !table.override_key) return null;
+  const name = table.override_key;
+  const own = (row || {})[name];
+  const state =
+    own && typeof own === "object" && (own.state === "value" || own.state === "unset")
+      ? own.state
+      : "inherit";
+  return {
+    name,
+    spec: {
+      state,
+      value: state === "value" ? own.value : null,
+      minimum: control.minimum,
+      maximum: control.maximum,
+      note: scope === "model" ? control.model_note : control.provider_note,
+    },
+  };
 }
 
 function promptCacheFamilyFor(table, providerId, modelRef) {

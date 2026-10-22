@@ -20,6 +20,8 @@ from fastapi.testclient import TestClient
 
 from my_claude_code.api.model_admin import (
     PROMPT_CACHE_GATEWAY_LABEL,
+    PROMPT_CACHE_TTL_PREFERENCE_NOTE,
+    PROVIDER_PROMPT_CACHE_TTL_NOTE,
     prompt_cache_gateway_models,
     prompt_cache_lifetimes_payload,
 )
@@ -91,9 +93,8 @@ def test_a_model_row_value_null_and_inherit_round_trip(home):
     assert saved.status_code == 200
     row = _row(saved.json(), REF)
     assert row["override"]["prompt_cache_ttl"] == {"state": "value", "value": 10}
-    assert row["preferences"]["prompt_cache_ttl"]["state"] == "value"
-    assert row["preferences"]["prompt_cache_ttl"]["minimum"] == 1
-    assert row["preferences"]["prompt_cache_ttl"]["maximum"] == 60
+    # The cached half of the row is 7.104.0's shape: no new preference entry.
+    assert "prompt_cache_ttl" not in row["preferences"]
     assert json.loads(_file(home).read_text("utf-8"))["models"][REF] == {
         "prompt_cache_ttl": 10
     }
@@ -114,7 +115,7 @@ def test_a_provider_row_takes_the_lifetime_too(home):
     assert saved.status_code == 200
     provider = _provider(saved.json(), "open_router")
     assert provider["override"]["prompt_cache_ttl"] == {"state": "value", "value": 45}
-    assert provider["preferences"]["prompt_cache_ttl"]["state"] == "value"
+    assert "prompt_cache_ttl" not in provider["preferences"]
     assert json.loads(_file(home).read_text("utf-8"))["providers"]["open_router"] == {
         "prompt_cache_ttl": 45
     }
@@ -172,13 +173,20 @@ def test_an_untouched_lifetime_leaves_the_file_byte_identical(home):
 def test_the_page_names_the_kind_and_the_tables_the_default_line_reads(home):
     page = _client(_app()).get(PAGE).json()
 
+    # The cached, pinned half is 7.104.0's: the control lives beside it.
     assert page["overrides"]["preference_parameters"] == {
         "max_output_tokens": "integer",
-        "prompt_cache_ttl": "minutes",
         "reasoning_preference": "enum",
     }
     table = page["prompt_cache_lifetimes"]
     assert table["override_key"] == "prompt_cache_ttl"
+    assert table["control"] == {
+        "kind": "minutes",
+        "minimum": 1,
+        "maximum": 60,
+        "model_note": PROMPT_CACHE_TTL_PREFERENCE_NOTE,
+        "provider_note": PROVIDER_PROMPT_CACHE_TTL_NOTE,
+    }
     assert table["settings"]["PROMPT_CACHE_TTL"] == "client"
     assert table["settings"]["PROMPT_CACHE_TTL_OPUS"] == "30"
     assert table["routes"]["open_router/extra"] == ["PROMPT_CACHE_TTL_OPUS"]

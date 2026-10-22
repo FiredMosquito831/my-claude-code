@@ -473,38 +473,16 @@ function providerEntry(providerId, models, row) {
 
 /* MCC_JSDOM_MODELS_FIELDS_PROMPT_CACHE names a file holding the server's
    real `prompt_cache_lifetimes` table (7.105.0). When it is set, the payload
-   is the 7.105.0 server's: the 14th key's kind beside the other preferences,
-   its control on every model and provider row -- inherited everywhere, so
-   no row of this scenario sets it -- and the table beside the page. When it
-   is not set, the payload is byte for byte the one 7.104.0 captured, which is
-   how the same file records the old page and replays the new one. */
+   is the 7.105.0 server's: 7.104.0's page -- whose cached half the 14th key
+   does not touch -- with the table beside it, which carries the lifetime
+   control; no row of this scenario sets the key. When it is not set, the
+   payload is byte for byte the one 7.104.0 captured, which is how the same
+   file records the old page and replays the new one. */
 const PROMPT_CACHE_TABLE_PATH = process.env.MCC_JSDOM_MODELS_FIELDS_PROMPT_CACHE || "";
 
 function withPromptCache(payload) {
   if (!PROMPT_CACHE_TABLE_PATH) return payload;
-  const table = JSON.parse(readFileSync(PROMPT_CACHE_TABLE_PATH, "utf-8"));
-  const control = (row, note) => ({
-    ...preferenceState(row, "prompt_cache_ttl"),
-    minimum: 1,
-    maximum: 60,
-    note,
-  });
-  const rows = (entry) =>
-    Object.fromEntries(
-      Object.entries(entry.override || {}).map(([name, state]) => [name, state.value]),
-    );
-  payload.overrides.preference_parameters = {
-    max_output_tokens: "integer",
-    prompt_cache_ttl: "minutes",
-    reasoning_preference: "enum",
-  };
-  payload.providers.forEach((provider) => {
-    provider.preferences.prompt_cache_ttl = control(rows(provider), table.provider_control_note);
-    provider.models.forEach((model) => {
-      model.preferences.prompt_cache_ttl = control(rows(model), table.model_control_note);
-    });
-  });
-  payload.prompt_cache_lifetimes = table.table;
+  payload.prompt_cache_lifetimes = JSON.parse(readFileSync(PROMPT_CACHE_TABLE_PATH, "utf-8"));
   return payload;
 }
 

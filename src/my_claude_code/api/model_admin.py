@@ -418,8 +418,17 @@ def prompt_cache_lifetimes_payload(
         "note": PROMPT_CACHE_LIFETIMES_NOTE,
         "unknown_label": PROMPT_CACHE_LIFETIMES_UNKNOWN,
         "unknown_note": PROMPT_CACHE_LIFETIMES_UNKNOWN_NOTE,
-        # 7.105.0, appended.
+        # 7.105.0, appended. The override row's control: the 14th key, its
+        # kind and bounds, and what it says on a model row and a provider row.
+        # Its state is each row's own ``override`` entry, already on the page.
         "override_key": PROMPT_CACHE_TTL_OVERRIDE,
+        "control": {
+            "kind": PROMPT_CACHE_TTL_KIND,
+            "minimum": PROMPT_CACHE_TTL_MIN_MINUTES,
+            "maximum": PROMPT_CACHE_TTL_MAX_MINUTES,
+            "model_note": PROMPT_CACHE_TTL_PREFERENCE_NOTE,
+            "provider_note": PROVIDER_PROMPT_CACHE_TTL_NOTE,
+        },
         "models": dict(gateway_models or {}),
         "gateway_label": PROMPT_CACHE_GATEWAY_LABEL,
         "gateway_note": PROMPT_CACHE_GATEWAY_NOTE,
@@ -538,16 +547,19 @@ INHERIT_SENTINEL = "inherit"
 PROVIDER_SCOPE = "provider"
 MODEL_SCOPE = "model"
 
-# The non-body preferences the editor may write, and the shape of each, so the
-# page does not hardcode any name. ``enum`` is checked against the option list
-# the row itself publishes; ``integer`` is bounded by the row's own resolved
-# output limit; ``minutes`` (7.105.0, the prompt-cache lifetime) is whole
-# minutes in the row's own ``minimum``-``maximum`` range.
+# The two non-body preferences the editor may write, and the shape of each,
+# so the page does not hardcode either name. ``enum`` is checked against the
+# option list the row itself publishes; ``integer`` is bounded by the row's
+# own resolved output limit. The prompt-cache lifetime (7.105.0) is not here:
+# its control is described beside the page, in ``prompt_cache_lifetimes``,
+# so the cached and pinned half of the page is byte for byte 7.104.0's.
 PREFERENCE_PARAMETER_KINDS: dict[str, str] = {
     REASONING_PREFERENCE_OVERRIDE: "enum",
     MAX_OUTPUT_TOKENS_OVERRIDE: "integer",
-    PROMPT_CACHE_TTL_OVERRIDE: "minutes",
 }
+
+#: The kind the page gives the prompt-cache lifetime's control (7.105.0).
+PROMPT_CACHE_TTL_KIND = "minutes"
 
 # The controls, which are not efforts: they say *how* to decide rather than
 # how hard to think, and every row offers all three regardless of capability
@@ -2559,26 +2571,6 @@ def model_preferences_payload(
             "limit_tier_label": output.get("tier_label"),
             "note": OUTPUT_CAP_NOTE if limit is not None else OUTPUT_NO_LIMIT_NOTE,
         },
-        PROMPT_CACHE_TTL_OVERRIDE: _prompt_cache_ttl_preference(
-            row, PROMPT_CACHE_TTL_PREFERENCE_NOTE
-        ),
-    }
-
-
-def _prompt_cache_ttl_preference(row: Mapping[str, Any], note: str) -> dict[str, Any]:
-    """The lifetime control's state and bounds (7.105.0), for either scope.
-
-    Nothing here depends on the model's capability record: the default it
-    replaces is a Model Config setting and the lifetimes are the host's, both
-    joined on the page from ``prompt_cache_lifetimes`` -- outside the cached
-    half, because a settings save moves them.
-    """
-
-    return {
-        **_preference_state(row, PROMPT_CACHE_TTL_OVERRIDE),
-        "minimum": PROMPT_CACHE_TTL_MIN_MINUTES,
-        "maximum": PROMPT_CACHE_TTL_MAX_MINUTES,
-        "note": note,
     }
 
 
@@ -2613,9 +2605,6 @@ def provider_preferences_payload(row: Mapping[str, Any]) -> dict[str, Any]:
             "limit_tier_label": None,
             "note": PROVIDER_OUTPUT_NOTE,
         },
-        PROMPT_CACHE_TTL_OVERRIDE: _prompt_cache_ttl_preference(
-            row, PROVIDER_PROMPT_CACHE_TTL_NOTE
-        ),
     }
 
 
