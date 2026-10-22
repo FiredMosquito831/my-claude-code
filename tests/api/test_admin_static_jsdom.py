@@ -10926,6 +10926,74 @@ def test_jsdom_the_provider_editor_carries_the_same_row(prompt_cache) -> None:
         )
 
 
+def test_jsdom_claude_on_openrouter_is_declared_by_its_upstream(prompt_cache) -> None:
+    """7.106.0: OpenRouter's Claude models, alias ids too, take 5 min or 1 h."""
+
+    hosts = prompt_cache["hosts"]
+    claude, alias = hosts["orClaude"]["row"], hosts["orAlias"]["row"]
+    for row in (claude, alias):
+        assert row["badge"] == "declared for the OpenRouter, Claude upstream family"
+        assert any(
+            "This host takes: 5 min (writes 1.25x), 1 h (writes 2x)." in note
+            for note in row["notes"]
+        )
+        assert row["defaults"][0] == (
+            "default From client — PROMPT_CACHE_TTL; the client's own markers go as sent"
+        )
+    assert claude["value"] == "1 h (asked 30 min)"
+    assert alias["value"] == "5 min (asked 3 min)"
+
+
+def test_jsdom_azure_shows_its_retention_words(prompt_cache) -> None:
+    hosts = prompt_cache["hosts"]
+    azure, small = hosts["azure"]["row"], hosts["azureSmall"]["row"]
+    for row in (azure, small):
+        assert row["badge"] == "declared for the OpenAI prompt cache retention family"
+        assert any(
+            "This host takes: in memory, about 5-10 min, 24 h." in note
+            for note in row["notes"]
+        )
+    assert azure["value"] == "24 h (asked 30 min)"
+    assert small["value"] == "in memory, about 5-10 min (asked 4 min)"
+
+
+def test_jsdom_an_automatic_host_says_it_caches_automatically(prompt_cache) -> None:
+    """The user's Q11: "caches automatically; no lifetime control", never unknown."""
+
+    hosts = prompt_cache["hosts"]
+    for name in ("orOpen", "gemini", "geminiRow"):
+        row = hosts[name]["row"]
+        assert row["badge"] == "caches automatically; no lifetime control", name
+        assert row["defaults"] == [
+            "default From client — this host caches automatically; no lifetime control"
+        ], name
+        assert any(
+            "caches prompts on its own and takes no cache lifetime" in note
+            for note in row["notes"]
+        ), name
+    assert hosts["gemini"]["row"]["value"] == "From client"
+    assert hosts["orOpen"]["row"]["value"] == "From client (asked 30 min)"
+    assert any(
+        "but this host caches automatically and takes no lifetime" in note
+        for note in hosts["geminiRow"]["row"]["notes"]
+    )
+
+
+def test_jsdom_the_new_hosts_provider_rows_name_their_family(prompt_cache) -> None:
+    providers = prompt_cache["hostProviders"]
+    assert providers["open_router"]["defaults"][1] == (
+        "its anthropic/… models: declared for the OpenRouter, Claude upstream "
+        "family; every other model: caches automatically; no lifetime control"
+    )
+    assert providers["azure_openai"]["defaults"][1] == (
+        "this host: declared for the OpenAI prompt cache retention family"
+    )
+    assert providers["gemini"]["defaults"][1] == (
+        "this host: caches automatically; no lifetime control; a value here "
+        "changes nothing"
+    )
+
+
 def test_jsdom_the_override_chip_counts_the_lifetime_key(prompt_cache) -> None:
     """A provider row's lifetime alone is one key set on its models (X2 7.101.0)."""
 

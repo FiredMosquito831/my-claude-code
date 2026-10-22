@@ -3275,10 +3275,10 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   a cache write at 1.25&times; the input price for 5 min and at
                   2&times; for 1 h; reads are cheap either way. MCC's cost figures
                   still price every cache write at the 5-minute rate for now. Hosts
-                  with no lifetime control known &mdash; ChatGPT, OpenRouter, NIM and
-                  the rest &mdash; get nothing from this setting, and their rows on the
-                  <strong>Models</strong> page say <em>lifetime control not known for
-                  this host</em>. If a host answers 400 naming the lifetime field, that
+                  that cache automatically, and hosts nothing is known about, get
+                  nothing from this setting (see <a
+                  href="#guide-prompt-cache-lifetime-hosts">Other hosts</a>). If a host
+                  answers 400 naming the lifetime field, that
                   lifetime is remembered as refused (Models page, with Forget, 30 days)
                   and later requests use the lifetime that remains; the refused request
                   itself fails over exactly as any 400 does. Each request's detail
@@ -3314,6 +3314,29 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   added. Whether the gateway passes it on is not known: the first
                   refusal stops lifetimes for that whole host until you press
                   <strong>Forget</strong> on any of its rows.
+                </p>
+                <h4 id="guide-prompt-cache-lifetime-hosts">Other hosts</h4>
+                <p>
+                  <strong>Claude models through OpenRouter</strong>
+                  (<code>anthropic/&hellip;</code> and <code>~anthropic/&hellip;</code>)
+                  take Anthropic's two lifetimes. MCC's conversion for OpenRouter keeps
+                  none of the client's cache markers, so with nothing set they are sent
+                  no marker and do not cache there; with a lifetime set, MCC adds the one
+                  top-level <code>cache_control</code> marker OpenRouter documents as
+                  automatic caching, with 5 min (1&ndash;5) or 1 h (6&ndash;60).
+                  <strong>Azure OpenAI</strong> takes its retention word,
+                  <code>prompt_cache_retention</code>: <code>in_memory</code> (cleared
+                  after about 5&ndash;10 idle minutes) for 1&ndash;5 and
+                  <code>24h</code> for 6&ndash;60, priced the same. A deployment that
+                  refuses one word is sent the other next time.
+                </p>
+                <p class="guide-note">
+                  The <strong>ChatGPT subscription</strong>, Gemini, Vertex, DeepSeek,
+                  Nous Portal, OpenCode Zen and Go, NVIDIA NIM, Agnes, B.AI, HyperCharm
+                  and every OpenRouter model that is not Claude cache automatically and
+                  take no lifetime: their rows say <em>caches automatically; no lifetime
+                  control</em> and nothing is ever sent to them. Any other host says
+                  <em>lifetime control not known for this host</em>.
                 </p>
 
                 <h3 id="guide-cli">Point Claude Code here</h3>

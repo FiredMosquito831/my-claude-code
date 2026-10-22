@@ -32769,8 +32769,38 @@ function promptCacheControl(scope, row) {
 function promptCacheFamilyFor(table, providerId, modelRef) {
   if (!table) return null;
   const familyId =
-    (modelRef && (table.models || {})[modelRef]) || (table.providers || {})[providerId];
+    (modelRef && (table.models || {})[modelRef]) ||
+    (table.providers || {})[providerId] ||
+    promptCacheChatFamilyId(table, providerId, modelRef);
   return familyId ? (table.families || {})[familyId] || null : null;
+}
+
+/* 7.106.0: the OpenAI-shaped hosts, joined after the Anthropic ones exactly as
+   the server joins them (config/prompt_cache_lifetimes.chat_prompt_cache_family_id):
+   the upstream a gateway's `<author>/<slug>` model id names (OpenRouter's
+   Claude models; `~` before the author marks an alias), then the provider's
+   own declaration (Azure OpenAI), then "caches automatically". */
+function promptCacheUpstreamAuthor(table, modelId) {
+  let text = String(modelId || "").trim();
+  const alias = (table && table.upstream_alias_prefix) || "";
+  if (alias && text.startsWith(alias)) text = text.slice(alias.length);
+  const slash = text.indexOf("/");
+  if (slash < 0 || slash === text.length - 1) return "";
+  return text.slice(0, slash).trim().toLowerCase();
+}
+
+function promptCacheChatFamilyId(table, providerId, modelRef) {
+  const upstreams = (table.upstreams || {})[providerId];
+  if (upstreams && modelRef && modelRef.startsWith(`${providerId}/`)) {
+    const author = promptCacheUpstreamAuthor(table, modelRef.slice(providerId.length + 1));
+    if (author && upstreams[author]) return upstreams[author];
+  }
+  const own = (table.chat_providers || {})[providerId];
+  if (own) return own;
+  if ((table.automatic_providers || []).includes(providerId)) {
+    return table.automatic_family || null;
+  }
+  return null;
 }
 
 // The fresh refusals this model's host taught MCC (a gateway's are host-wide
@@ -32920,11 +32950,21 @@ function buildPromptCacheLifetimeField(ctx, name) {
         const gatewayModels = Object.keys((table && table.models) || {}).filter(
           (ref) => ref.startsWith(`${providerId}/`),
         );
+        const upstreams = ((table && table.upstreams) || {})[providerId];
         let host;
         if (!table) host = null;
-        else if (family) host = `this host: declared for the ${family.label} family`;
+        else if (upstreams) {
+          const declared = Object.keys(upstreams).map((author) => {
+            const upstream = (table.families || {})[upstreams[author]];
+            return `its ${author}/… models: declared for the ${upstream ? upstream.label : upstreams[author]} family`;
+          });
+          host = `${declared.join("; ")}; every other model: ${table.automatic_label}`;
+        } else if (family && !family.automatic)
+          host = `this host: declared for the ${family.label} family`;
         else if (gatewayModels.length)
           host = `its Anthropic Messages models: ${table.gateway_label}`;
+        else if (family)
+          host = `this host: ${table.automatic_label}; a value here changes nothing`;
         else host = `this host: ${table.unknown_label}; a value here changes nothing`;
         writeDefaultLines(shell.defaults, [
           fieldsDefaultLine("per model", "open a model to see its default"),
@@ -32933,11 +32973,16 @@ function buildPromptCacheLifetimeField(ctx, name) {
         return;
       }
       const model = next.model || {};
-      const family = promptCacheFamilyFor(
+      const found = promptCacheFamilyFor(
         table,
         modelProviderId(model),
         model.model_ref || String(next.key || ""),
       );
+      /* 7.106.0: a host that caches on its own takes no lifetime at all. It
+         is drawn as its own case -- "caches automatically; no lifetime
+         control" -- and never as "not known". */
+      const automatic = Boolean(found && found.automatic);
+      const family = automatic ? null : found;
       const refusals = family ? promptCacheRefusals(table, model) : [];
       const usable = family ? promptCacheUsable(family, refusals) : [];
       const resolved = resolvedOverride(next.row, fieldsProviderRow(next), name);
@@ -32960,7 +33005,9 @@ function buildPromptCacheLifetimeField(ctx, name) {
         decided = `From ${rowWords}: asked ${minutes} min → ${promptCacheSentText(minutes, usable)}.`;
       } else if (resolved && resolved.state === "value") {
         value = `From client (asked ${resolved.value} min)`;
-        decided = `Asked ${resolved.value} min on ${rowWords}, but nothing is known to take a lifetime here.`;
+        decided = automatic
+          ? `Asked ${resolved.value} min on ${rowWords}, but this host caches automatically and takes no lifetime.`
+          : `Asked ${resolved.value} min on ${rowWords}, but nothing is known to take a lifetime here.`;
       } else if (resolved) {
         decided = `Forced unset on ${rowWords}: MCC sets no lifetime for this model.`;
       } else if (asks.length) {
@@ -32979,7 +33026,14 @@ function buildPromptCacheLifetimeField(ctx, name) {
             : "From Model Config (see the default under the control).";
       }
       let field;
-      if (!table || !family) {
+      if (automatic) {
+        field = {
+          value,
+          source: "declared",
+          source_label: table.automatic_label,
+          note: `${decided} ${table.automatic_note}`,
+        };
+      } else if (!table || !family) {
         field = {
           value,
           source: "unknown",
@@ -33001,7 +33055,9 @@ function buildPromptCacheLifetimeField(ctx, name) {
       if (refusals.length) appendPromptCacheForgets(shell.source, model, refusals);
       shell.tr.classList.toggle("is-forced", Boolean(resolved));
       let lines;
-      if (!table || !family) {
+      if (automatic) {
+        lines = [fieldsDefaultLine("From client", `this host ${table.automatic_label}`)];
+      } else if (!table || !family) {
         lines = [fieldsDefaultLine("From client", "no lifetime control known for this host")];
       } else if (family.rows_only) {
         lines = [
