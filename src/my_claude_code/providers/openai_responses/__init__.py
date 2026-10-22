@@ -29,6 +29,8 @@ from .tool_schema_dialect import (
     PERMISSIVE_TOOL_SCHEMA_DIALECT,
     RESPONSES_TOOL_SCHEMA_DIALECT,
     ToolSchemaDialect,
+    regex_construct,
+    sweep_tool_catalogue,
 )
 
 __all__ = [
@@ -45,6 +47,8 @@ __all__ = [
     "history_thinking_marker",
     "iter_responses_sse_events",
     "note_responses_event_shape",
+    "regex_construct",
     "responses_tool_call_to_anthropic",
     "responses_tool_name_codec",
+    "sweep_tool_catalogue",
 ]

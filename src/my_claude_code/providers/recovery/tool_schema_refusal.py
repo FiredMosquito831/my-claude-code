@@ -171,6 +171,29 @@ def _has_backreference(pattern: str) -> bool:
 
 _BACKREFERENCE = re.compile(r"\\[1-9]|\\k<|\(\?P=")
 
+
+def _has_nul_escape(pattern: str) -> bool:
+    """``\\0`` as a regex escape: an unescaped backslash, then the digit zero.
+
+    The construct, not one spelling of it: ``^[^\\0]*$`` (Claude Code's
+    ``Artifact`` file paths), ``[\\0-\\x1f]`` and ``\\00`` all carry it. A
+    backslash that is itself escaped is a literal backslash, so ``\\\\0`` -- a
+    pattern matching a backslash followed by ``0`` -- does not; the scan steps
+    over every escape pair so the parity of a run of backslashes decides.
+    """
+
+    index = 0
+    last = len(pattern) - 1
+    while index < last:
+        if pattern[index] != "\\":
+            index += 1
+            continue
+        if pattern[index + 1] == "0":
+            return True
+        index += 2
+    return False
+
+
 #: Every construct a JavaScript-authored MCP schema routinely carries and a
 #: Rust ``regex``-backed validator has no support for, with the words the
 #: hosts measured so far use for each. Adding a row is the whole of adding a
@@ -219,11 +242,26 @@ REGEX_CONSTRUCTS: tuple[RegexConstruct, ...] = (
         host_words=("\\z anchor", "end of text anchor", "absolute anchor"),
         markers=("\\Z", "\\z", "\\A"),
     ),
+    RegexConstruct(
+        name="nul_escape",
+        # No host words, deliberately. The one host measured refusing it --
+        # Command Code's DeepSeek back end, 445 refusals of Claude Code's
+        # ``Artifact`` tool on 2026-10-20/21 -- says only ``Invalid schema
+        # for function 'Artifact': "^[^\\0]*$" is not a "regex"`` (20 times;
+        # the other 425 hid it behind a trace id). That quotes the client's
+        # own regex and names no construct, and a needle read off the quote
+        # would be the unicode_property mistake above. So no refusal can name
+        # this row: a host *declares* it (``ToolSchemaDialect``), and nothing
+        # the rung or the learned facts did before this row existed changes.
+        host_words=(),
+        refine="nul_escape",
+    ),
 )
 
 _REFINERS = {
     "backreference": _has_backreference,
     "named_group": _has_named_group,
+    "nul_escape": _has_nul_escape,
 }
 
 
