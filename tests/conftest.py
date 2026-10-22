@@ -738,11 +738,12 @@ def _isolate_proxy_sources(monkeypatch, tmp_path):
     must never put another test's provider in a republish.
     """
     from my_claude_code.application.proxy_check import reset_direct_exits
+    from my_claude_code.application.proxy_runner_state import reset_runner_state
     from my_claude_code.application.proxy_vendor_sources import (
         reset_vendor_source_state,
     )
     from my_claude_code.application.tor_control import reset_tor_control_state
-    from my_claude_code.config import proxy_sources
+    from my_claude_code.config import proxy_runner_bins, proxy_sources
     from my_claude_code.config.proxy_chains import reset_built_chain_labels
 
     path = tmp_path / "fcc-config" / "proxy_sources.json"
@@ -754,12 +755,25 @@ def _isolate_proxy_sources(monkeypatch, tmp_path):
     reset_tor_control_state()
     # 7.91.0: the schedule hook a runtime attaches, and fetches in flight.
     reset_vendor_source_state()
+    # 7.108.0: no supervisor attached, no runner readings; and the pinned
+    # wireproxy download can never reach GitHub from a test -- a test that
+    # exercises it hands install_wireproxy() its own loopback downloader.
+    reset_runner_state()
+
+    def _no_download(url: str, timeout: float) -> bytes:
+        raise proxy_runner_bins.RunnerBinaryError(
+            f"tests may not download {url}: pass a downloader"
+        )
+
+    monkeypatch.setattr(proxy_runner_bins, "_download", _no_download)
+    monkeypatch.delenv(proxy_runner_bins.WIREPROXY_BASE_URL_ENV, raising=False)
     yield path
     proxy_sources.reset_proxy_sources_cache()
     reset_direct_exits()
     reset_built_chain_labels()
     reset_tor_control_state()
     reset_vendor_source_state()
+    reset_runner_state()
 
 
 @pytest.fixture(autouse=True)

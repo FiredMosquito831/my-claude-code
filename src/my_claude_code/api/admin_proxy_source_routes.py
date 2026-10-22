@@ -41,9 +41,28 @@ sentence). MCC never starts tor and never presses either button by itself.
 
 A save contacts nothing. A fetch happens only on that press, or on the
 source's own schedule, which is off until the operator picks one.
+
+7.108.0 (PR-R1...R5, WireGuard runners) adds the ``runner`` kind -- a
+WireGuard file MCC runs through the pinned wireproxy -- created, changed and
+removed by the same ``PUT`` with ``kind: "runner"`` and a ``runner`` block
+(the file's text is write-only), and these, loopback-only like the rest:
+
+* ``POST /admin/api/proxy-sources/runner/start`` | ``stop`` | ``restart``
+  -- the card's buttons; Start and Stop also record whether the runner comes
+  back with the server;
+* ``GET /admin/api/proxy-sources/runner-binary`` -- the pinned wireproxy, what
+  is installed and the import form's vendor list (data; contacts nothing);
+* ``POST /admin/api/proxy-sources/runner-binary/install`` -- *Download
+  wireproxy*: the only thing that downloads it (``checksums.txt`` and the
+  archive, both checked against the pin);
+* ``POST /admin/api/proxy-sources/runner-binary/own`` -- *Use my own binary*.
+
+A runner's private key, preshared key and local login are never in any
+answer: a card says whether a profile is stored and nothing more.
 """
 
 import asyncio
+import threading
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
@@ -61,6 +80,17 @@ from my_claude_code.api.admin_proxy_routes import (
 from my_claude_code.api.admin_routes import require_loopback_admin
 from my_claude_code.api.dependencies import get_services
 from my_claude_code.api.ports import ApiServices
+from my_claude_code.application.proxy_runner_sources import (
+    RunnerEdit,
+    remove_runner_source,
+    save_runner_source,
+    set_runner_enabled,
+)
+from my_claude_code.application.proxy_runner_state import (
+    RUNNERS,
+    RunnerReading,
+    RunnerUnavailableError,
+)
 from my_claude_code.application.proxy_sources import (
     ScanAnswer,
     SourceEditError,
@@ -103,12 +133,20 @@ from my_claude_code.config.proxy_chains import (
     save_proxy_chains,
 )
 from my_claude_code.config.proxy_presets import presets_document
+from my_claude_code.config.proxy_runner_bins import (
+    RunnerBinaryError,
+    choose_own_binary,
+    install_wireproxy,
+    remove_runner_files,
+    wireproxy_status,
+)
 from my_claude_code.config.proxy_source_readers import url_host
 from my_claude_code.config.proxy_sources import (
     BUILT_KINDS,
     KIND_ACCOUNT,
     KIND_GATEWAY,
     KIND_LIST,
+    KIND_RUNNER,
     KIND_TOR,
     PROXY_SOURCES_WRITE_LOCK,
     SOURCE_KINDS,
@@ -121,6 +159,7 @@ from my_claude_code.config.proxy_sources import (
     save_proxy_sources,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.config.wireguard_profiles import vendors_document
 from my_claude_code.core.loop_health import loop_health
 
 router = APIRouter()
@@ -242,13 +281,31 @@ class ListSourcePayload(BaseModel):
     refresh_hours: int = 0
 
 
+class RunnerSourcePayload(BaseModel):
+    """A WireGuard file to run (7.108.0). ``profile`` (the file's text) and
+    ``account`` (a ``wgcf-account.toml``) are write-only: empty keeps the
+    stored profile, and nothing ever sends either back. ``None`` keeps a
+    field as it is."""
+
+    profile: str = ""
+    filename: str = ""
+    account: str = ""
+    name: str | None = None
+    vendor: str | None = None
+    #: In-tunnel exits (R4), one ``host[:port]`` per line.
+    exits: str | None = None
+    auto_restart: bool | None = None
+    repick_ports: bool = False
+
+
 class ProxySourcePayload(BaseModel):
     """One edit to one source."""
 
     source: str
     #: Only to say which kind a NEW source would be; refused for every kind
     #: this release does not build. ``tor`` with a ``tor`` block creates one,
-    #: and since 7.91.0 ``account`` / ``gateway`` / ``list`` with theirs.
+    #: since 7.91.0 ``account`` / ``gateway`` / ``list`` with theirs, and
+    #: since 7.108.0 ``runner`` with a ``runner`` block.
     kind: str = ""
     remove: bool = False
     credentials: list[SourceCredentialPayload] = Field(default_factory=list)
@@ -256,6 +313,7 @@ class ProxySourcePayload(BaseModel):
     account: AccountSourcePayload | None = None
     gateway: GatewaySourcePayload | None = None
     proxy_list: ListSourcePayload | None = None
+    runner: RunnerSourcePayload | None = None
 
     def vendor_block(
         self,
@@ -293,6 +351,9 @@ async def put_proxy_source(
     source_id = payload.source.strip()
     existing = current_proxy_sources().source(source_id)
     kind = payload.kind.strip().lower()
+    runner_reply = await _runner_put(services, source_id, existing, kind, payload)
+    if runner_reply is not None:
+        return runner_reply
     if (
         existing is None
         and kind == KIND_TOR
@@ -797,3 +858,345 @@ async def fetch_proxy_source(
         "sentence": outcome.sentence,
     }
     return refreshed
+
+
+# ------------------------------------------------- WireGuard runners (7.108.0)
+
+
+async def _runner_put(
+    services: ApiServices,
+    source_id: str,
+    existing: ProxySource | None,
+    kind: str,
+    payload: ProxySourcePayload,
+) -> dict[str, Any] | None:
+    """The ``PUT`` for a runner source, or ``None`` when it is not about one."""
+
+    if existing is None and kind == KIND_RUNNER and not payload.remove:
+        if payload.runner is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Send the runner source's settings in a 'runner' block, with "
+                    "the WireGuard file to import."
+                ),
+            )
+        return await _put_runner(services, "", payload.runner)
+    if existing is None:
+        return None
+    if existing.runner is None:
+        if payload.runner is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{existing.name or source_id} is not a WireGuard runner.",
+            )
+        return None
+    if payload.remove:
+        return await _remove_runner(services, source_id)
+    if payload.credentials or payload.tor is not None or payload.vendor_block():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{existing.name or source_id} is a WireGuard runner: its settings "
+                "go in a 'runner' block, and its local login is MCC's own."
+            ),
+        )
+    if payload.runner is not None:
+        return await _put_runner(services, source_id, payload.runner)
+    return None
+
+
+def _runner_edit(block: RunnerSourcePayload) -> RunnerEdit:
+    return RunnerEdit(
+        profile_text=block.profile,
+        filename=block.filename,
+        account_text=block.account,
+        name=block.name,
+        vendor=block.vendor,
+        exits=block.exits,
+        auto_restart=block.auto_restart,
+        repick_ports=block.repick_ports,
+    )
+
+
+def _commit_runner(
+    source_id: str, edit: RunnerEdit, port_range: str
+) -> tuple[frozenset[str], str, int]:
+    with PROXY_CHAINS_WRITE_LOCK, PROXY_SOURCES_WRITE_LOCK:
+        before = load_proxy_chains()
+        chains, sources, saved = save_runner_source(
+            before, load_proxy_sources(), source_id, edit, port_range=port_range
+        )
+        save_proxy_sources(sources)
+        save_proxy_chains(chains)
+    offered = len(chains.source_offers.get(saved, ()))
+    logger.info(
+        "PROXY SOURCES: WireGuard runner {} saved: {} address(es) on offer",
+        saved,
+        offered,
+    )
+    return changed_chain_providers(before, chains), saved, offered
+
+
+async def _put_runner(
+    services: ApiServices, source_id: str, block: RunnerSourcePayload
+) -> dict[str, Any]:
+    """Import (``source_id`` empty) or change a runner. Contacts nothing.
+
+    A running runner whose settings changed is restarted with them -- the
+    operator's own edit -- so the card never shows settings it is not using.
+    """
+
+    edit = _runner_edit(block)
+    settings = services.requests.current_settings()
+    try:
+        changed, saved, offered = await asyncio.to_thread(
+            _commit_runner, source_id, edit, str(settings.proxy_runner_ports)
+        )
+    except SourceEditError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    restarted = False
+    reading = RUNNERS.reading(saved)
+    if source_id and reading is not None and reading.running and RUNNERS.attached:
+        with loop_health().working("a WireGuard runner is being restarted"):
+            await asyncio.to_thread(RUNNERS.control().restart, saved)
+        restarted = True
+    failure = await _republish(services, changed) if changed else ""
+    refreshed = await asyncio.to_thread(_payload, services)
+    if failure:
+        refreshed["republish_failed"] = failure
+    if source_id:
+        sentence = "Saved." + (
+            " The runner was restarted with the new settings." if restarted else ""
+        )
+    else:
+        sentence = (
+            f"Imported: {offered} address{'' if offered == 1 else 'es'} on offer. "
+            "Press Start to run the tunnel, then choose a chain and press Add to "
+            "chain -- each is tested against that provider's own host first. "
+            "Nothing was contacted."
+        )
+    refreshed["runner_result"] = {
+        "action": "saved",
+        "source": saved,
+        "offered": offered,
+        "sentence": sentence,
+    }
+    return refreshed
+
+
+def _commit_runner_removal(source_id: str) -> frozenset[str]:
+    with PROXY_CHAINS_WRITE_LOCK, PROXY_SOURCES_WRITE_LOCK:
+        before = load_proxy_chains()
+        chains, sources = remove_runner_source(before, load_proxy_sources(), source_id)
+        save_proxy_sources(sources)
+        save_proxy_chains(chains)
+    logger.info("PROXY SOURCES: removed WireGuard runner {}", source_id)
+    return changed_chain_providers(before, chains)
+
+
+async def _remove_runner(services: ApiServices, source_id: str) -> dict[str, Any]:
+    """Stop it, delete its config, its pid file and its log, then forget it."""
+
+    with loop_health().working("a WireGuard runner is being removed"):
+        if RUNNERS.attached:
+            await asyncio.to_thread(RUNNERS.control().remove, source_id)
+        else:
+            await asyncio.to_thread(remove_runner_files, source_id)
+            RUNNERS.forget(source_id)
+    try:
+        changed = await asyncio.to_thread(_commit_runner_removal, source_id)
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    failure = await _republish(services, changed) if changed else ""
+    refreshed = await asyncio.to_thread(_payload, services)
+    if failure:
+        refreshed["republish_failed"] = failure
+    refreshed["runner_result"] = {
+        "action": "removed",
+        "source": source_id,
+        "sentence": (
+            "Removed: the runner is stopped, its config (with the private key) "
+            "and its log are deleted, and its offers are withdrawn. A chain that "
+            "took one keeps it."
+        ),
+    }
+    return refreshed
+
+
+class RunnerButtonPayload(BaseModel):
+    """Which runner a button press is for."""
+
+    source: str
+
+
+def _runner_source(source_id: str) -> ProxySource:
+    source = current_proxy_sources().source(source_id.strip())
+    if source is None or source.runner is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No WireGuard runner {source_id!r}. Import its file first.",
+        )
+    return source
+
+
+def _record_enabled(source_id: str, enabled: bool) -> None:
+    with PROXY_SOURCES_WRITE_LOCK:
+        sources = load_proxy_sources()
+        updated = set_runner_enabled(sources, source_id, enabled)
+        if updated is not sources:
+            save_proxy_sources(updated)
+
+
+async def _runner_button(
+    services: ApiServices, source_id: str, action: str
+) -> dict[str, Any]:
+    source = _runner_source(source_id)
+    try:
+        control = RUNNERS.control()
+    except RunnerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    try:
+        await asyncio.to_thread(_record_enabled, source.id, action != "stop")
+    except SourceEditError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    press: Callable[[str], RunnerReading] = {
+        "start": control.start,
+        "stop": control.stop,
+        "restart": control.restart,
+    }[action]
+    with loop_health().working(f"a WireGuard runner's {action} button was pressed"):
+        reading = await asyncio.to_thread(press, source.id)
+    logger.info(
+        "PROXY RUNNERS: {} pressed for {}: {}",
+        action.capitalize(),
+        source.id,
+        reading.state,
+    )
+    refreshed = await asyncio.to_thread(_payload, services)
+    refreshed["runner_result"] = {
+        "action": action,
+        "source": source.id,
+        "state": reading.state,
+        "sentence": reading.sentence,
+    }
+    return refreshed
+
+
+@router.post("/admin/api/proxy-sources/runner/start")
+async def start_runner(
+    payload: RunnerButtonPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """*Start*: run this source's wireproxy now, and with every server start."""
+
+    require_loopback_admin(request)
+    return await _runner_button(services, payload.source, "start")
+
+
+@router.post("/admin/api/proxy-sources/runner/stop")
+async def stop_runner(
+    payload: RunnerButtonPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """*Stop*: stop the exact process MCC started for it, and keep it stopped."""
+
+    require_loopback_admin(request)
+    return await _runner_button(services, payload.source, "stop")
+
+
+@router.post("/admin/api/proxy-sources/runner/restart")
+async def restart_runner(
+    payload: RunnerButtonPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """*Restart*: stop it, then start it again with the stored settings."""
+
+    require_loopback_admin(request)
+    return await _runner_button(services, payload.source, "restart")
+
+
+def _runner_binary_document() -> dict[str, Any]:
+    return {"binary": wireproxy_status(), "vendors": vendors_document()}
+
+
+@router.get("/admin/api/proxy-sources/runner-binary")
+async def get_runner_binary(request: Request) -> dict[str, Any]:
+    """The pinned wireproxy, what is installed, the vendor list. Contacts nobody."""
+
+    require_loopback_admin(request)
+    return await asyncio.to_thread(_runner_binary_document)
+
+
+#: One download at a time: a second press while one runs is refused.
+_INSTALLING = threading.Lock()
+
+
+def _install_once() -> dict[str, Any]:
+    if not _INSTALLING.acquire(blocking=False):
+        return {
+            "ok": False,
+            "downloaded": False,
+            "sentence": "A download is already running.",
+        }
+    try:
+        outcome = install_wireproxy()
+    except RunnerBinaryError as exc:
+        logger.warning("PROXY RUNNERS: wireproxy not installed: {}", exc)
+        return {"ok": False, "downloaded": False, "sentence": str(exc)}
+    finally:
+        _INSTALLING.release()
+    logger.info("PROXY RUNNERS: {}", outcome.sentence)
+    return {
+        "ok": outcome.installed,
+        "downloaded": outcome.downloaded,
+        "sentence": outcome.sentence,
+    }
+
+
+@router.post("/admin/api/proxy-sources/runner-binary/install")
+async def install_runner_binary(request: Request) -> dict[str, Any]:
+    """*Download wireproxy*: the one place it is ever downloaded.
+
+    The release's ``checksums.txt`` first, which must agree with the digest
+    pinned in this build; then the archive, which must match both.
+    """
+
+    require_loopback_admin(request)
+    with loop_health().working("wireproxy is being downloaded"):
+        result = await asyncio.to_thread(_install_once)
+    document = await asyncio.to_thread(_runner_binary_document)
+    document["install_result"] = result
+    return document
+
+
+class OwnBinaryPayload(BaseModel):
+    """A path to the operator's own wireproxy; empty forgets it."""
+
+    path: str = ""
+
+
+@router.post("/admin/api/proxy-sources/runner-binary/own")
+async def choose_runner_binary(
+    payload: OwnBinaryPayload, request: Request
+) -> dict[str, Any]:
+    """*Use my own binary*: it must run and report a version; its digest is kept."""
+
+    require_loopback_admin(request)
+    try:
+        sentence = await asyncio.to_thread(choose_own_binary, payload.path)
+    except RunnerBinaryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    logger.info("PROXY RUNNERS: {}", sentence)
+    document = await asyncio.to_thread(_runner_binary_document)
+    document["own_result"] = {"sentence": sentence}
+    return document

@@ -33,6 +33,7 @@ from my_claude_code.application.proxy_health_store import (
     install_listener,
     remove_listener,
 )
+from my_claude_code.application.proxy_runner_state import RUNNERS
 from my_claude_code.application.proxy_speed_store import load_speed
 from my_claude_code.application.proxy_vendor_sources import SOURCE_SCHEDULE
 from my_claude_code.config.admin.manifest import update_affects_providers
@@ -118,6 +119,7 @@ from .provider_manager import ProviderRuntimeManager
 from .proxy_check_timer import ProxyCheckTimer, ProxyHealthTimer
 from .proxy_feed_timer import ProxyFeedTimer
 from .proxy_order import ProxyOrderTimer
+from .proxy_runners import ProxyRunnerSupervisor
 from .proxy_source_timer import ProxySourceTimer
 from .stall_watchdog import StallWatchdog
 
@@ -394,6 +396,12 @@ class ApplicationRuntime:
             lambda: self.settings,
             lambda provider_ids: republish_chains(self, provider_ids),
         )
+        # The WireGuard runners (7.108.0). Nothing runs unless the operator
+        # imported a WireGuard file and pressed Start: after readiness, on a
+        # worker thread, this starts the runners left switched on; the
+        # shutdown stops every one, bounded, before the process exits.
+        self._proxy_runners = ProxyRunnerSupervisor()
+        self._runner_start_task: asyncio.Task[list[str]] | None = None
 
     @property
     def settings(self) -> Settings:
@@ -541,6 +549,13 @@ class ApplicationRuntime:
             # BUG-0's symptom was silence -- the wheel updated itself fifteen
             # times while the window did not, and nothing anywhere said so.
             self._shell_pin_task = asyncio.create_task(self._report_stale_desktop_app())
+            # Behind readiness and off the loop, like the pin check above: the
+            # runners the operator left switched on (none on an install with
+            # no WireGuard source, which reads one file and does nothing).
+            RUNNERS.attach(self._proxy_runners)
+            self._runner_start_task = asyncio.create_task(
+                asyncio.to_thread(self._proxy_runners.start_enabled)
+            )
             self._started = True
         except asyncio.CancelledError:
             await self.close()
@@ -1523,6 +1538,19 @@ class ApplicationRuntime:
         await self._proxy_order_timer.close()
         SOURCE_SCHEDULE.detach()
         await self._proxy_source_timer.close()
+        # The WireGuard runners (7.108.0): no more button presses reach the
+        # supervisor, a start still in flight finishes, then every runner is
+        # stopped -- graceful, then its exact process tree, each step bounded.
+        RUNNERS.detach()
+        start_task, self._runner_start_task = self._runner_start_task, None
+        if start_task is not None:
+            with suppress(asyncio.CancelledError, Exception):
+                await start_task
+        await best_effort(
+            "proxy_runners.stop",
+            asyncio.to_thread(self._proxy_runners.stop_all),
+            log_verbose_errors=self.settings.log_api_error_tracebacks,
+        )
         remove_listener()
         await best_effort(
             "learned_facts.flush",

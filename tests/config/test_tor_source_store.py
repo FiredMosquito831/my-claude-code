@@ -98,7 +98,9 @@ def test_tor_is_not_one_of_the_kinds_the_sources_payload_lists() -> None:
     install with no tor source answers the Sources routes byte for byte.
 
     7.91.0 builds ``account``, ``gateway`` and ``list``, so those three now
-    say so; ``tor`` is still not in the list and ``runner`` still unbuilt."""
+    say so; 7.108.0 builds ``runner`` (WireGuard runners), the last of the
+    five -- its ``available`` is the one flip of that release. ``tor`` is
+    still not in the list."""
 
     assert SOURCE_KINDS == ("local", "account", "gateway", "list", "runner")
     document = sources_document(ProxyChains(), ProxySources.from_document(DOCUMENT))
@@ -107,7 +109,7 @@ def test_tor_is_not_one_of_the_kinds_the_sources_payload_lists() -> None:
         {"id": "account", "available": True},
         {"id": "gateway", "available": True},
         {"id": "list", "available": True},
-        {"id": "runner", "available": False},
+        {"id": "runner", "available": True},
     ]
 
 

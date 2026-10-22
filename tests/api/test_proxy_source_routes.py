@@ -187,14 +187,15 @@ def test_a_login_change_on_a_chained_offer_rebuilds_that_provider(
     assert asked == [frozenset({"nvidia_nim"})]
 
 
-def test_a_kind_a_later_release_builds_is_refused() -> None:
-    # ``runner`` since 7.91.0, which builds ``account``, ``gateway`` and ``list``.
+def test_a_runner_without_its_block_is_refused() -> None:
+    # Until 7.108.0 a ``runner`` was "a later release"; it is built now, and a
+    # new one needs its ``runner`` block (the WireGuard file).
     response = _client().put(
         "/admin/api/proxy-sources", json={"source": "src_proton", "kind": "runner"}
     )
 
     assert response.status_code == 422
-    assert "later release" in response.json()["detail"]
+    assert "'runner' block" in response.json()["detail"]
 
 
 def test_a_login_for_a_port_that_did_not_ask_is_refused() -> None:

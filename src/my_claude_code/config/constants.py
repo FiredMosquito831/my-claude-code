@@ -488,6 +488,13 @@ PROXY_CHECK_INTERVAL_MINUTES_MAX = 1440
 # address, and it is an outbound request to a stranger. MCC names no default
 # host for it; the operator types one or the check does not happen.
 PROXY_CHECK_EXIT_IP_URL_DEFAULT = ""
+# The loopback ports a WireGuard runner source (7.108.0) may listen on: its
+# SOCKS5 port, its health port and one per in-tunnel exit, chosen once per
+# source from this range and kept, so the addresses and their names survive
+# every restart. Written "first-last". Only ports that bind on 127.0.0.1 when
+# a source is imported are taken; on Windows, ranges `netsh int ipv4 show
+# excludedportrange protocol=tcp` lists never bind.
+PROXY_RUNNER_PORTS_DEFAULT = "41000-41999"
 # Whether the named proxy feeds an operator switched on are re-read on a timer.
 # OFF, and it is the second of two switches: this one only decides whether the
 # reading happens without a button press. Which feeds may be read at all is a

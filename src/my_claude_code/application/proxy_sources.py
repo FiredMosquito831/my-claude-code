@@ -35,6 +35,10 @@ from urllib.parse import urlsplit
 
 from loguru import logger
 
+from my_claude_code.application.proxy_runner_state import (
+    RUNNERS,
+    RunnerReading,
+)
 from my_claude_code.application.tor_control import (
     NEWNYM_GUARD,
     TOR_READINGS,
@@ -57,6 +61,7 @@ from my_claude_code.config.proxy_sources import (
     LOCAL_SOURCE_NAME,
     PROTOCOL_HTTP,
     PROTOCOL_SOCKS5,
+    RUNNER_SOCKS_KEY,
     SECRET_USERPASS,
     SOURCE_KINDS,
     TOR_SOURCE_PREFIX,
@@ -67,12 +72,14 @@ from my_claude_code.config.proxy_sources import (
     LocalListener,
     ProxySource,
     ProxySources,
+    RunnerSettings,
     SourceSecret,
     TorSettings,
     account_host_key,
     mint_secret_id,
     vendor_offer_id,
 )
+from my_claude_code.config.wireguard_profiles import wireguard_vendor
 
 #: How long one port gets to answer each question. Loopback answers in well
 #: under a millisecond; this bounds a listener that accepts and never speaks.
@@ -113,6 +120,35 @@ VENDOR_SEES = (
 IN_TUNNEL_SEES = (
     "These addresses answer only while the {name} app's tunnel is connected; "
     "the proxy needs no login because only the tunnel reaches it."
+)
+#: A WireGuard runner (7.108.0): what it is, and what its VPN sees.
+RUNNER_SEES = (
+    "MCC runs wireproxy, a WireGuard client that lives entirely inside one "
+    "program: no network adapter, no route change, no service, no "
+    "administrator. Only the chains you add these addresses to go through "
+    "the tunnel. The VPN provider sees your real address, so it knows you "
+    "talked to this provider."
+)
+#: Its own SOCKS5 port asks for a login only MCC knows.
+RUNNER_LOGIN_LINE = (
+    "The tunnel's SOCKS5 port, on 127.0.0.1, asks for a random username and "
+    "password only MCC holds, so no other program on this computer can use it."
+)
+#: Its in-tunnel exits (R4) forward bytes to the vendor's login-free proxy.
+RUNNER_EXITS_LINE = (
+    "Each exit forwards to {name}'s own SOCKS5 proxy inside the tunnel, which "
+    "takes no login, so while the runner runs any program on this computer "
+    "could use these ports too."
+)
+#: Not yet run against the real vendor.
+RUNNER_UNVERIFIED_LINE = (
+    "UNVERIFIED: MCC has been tested with this vendor's file shape only, not "
+    "against {name} itself."
+)
+#: What a ready runner proves, and what it does not (spec §5.7).
+RUNNER_READY_LINE = (
+    "Ready means the tunnel answered (wireproxy's /readyz), not that a "
+    "provider is reachable through it: Test on a chain proves that."
 )
 
 
@@ -761,11 +797,80 @@ def _vendor_payload(
     return payload
 
 
+def _runner_payload(
+    source: ProxySource,
+    runner: RunnerSettings,
+    chains: ProxyChains,
+    sources: ProxySources,
+) -> dict[str, Any]:
+    """A WireGuard runner's card (7.108.0): masked through and through.
+
+    Its state, ports and pid; each address's name and state; the vendor's
+    caveat. Never the private key, a preshared key, the local login or an
+    address's URL -- whether a profile is stored is all the page learns.
+    """
+
+    offered = set(chains.source_offers.get(source.id, ()))
+    vendor = wireguard_vendor(runner.vendor)
+    secret = sources.secret(runner.profile)
+    profile = secret.profile if secret is not None else None
+    reading = RUNNERS.reading(source.id) or RunnerReading()
+    offers: list[dict[str, Any]] = [
+        {"role": "socks", "local_port": runner.socks_port, "login": True}
+        | _offer_payload(vendor_offer_id(source.id, RUNNER_SOCKS_KEY), chains, offered)
+    ]
+    offers.extend(
+        {
+            "role": "exit",
+            "host": item.host,
+            "port": item.port,
+            "local_port": item.local_port,
+            "login": False,
+        }
+        | _offer_payload(vendor_offer_id(source.id, item.key), chains, offered)
+        for item in runner.exits
+    )
+    lines = [RUNNER_LOGIN_LINE]
+    if runner.exits:
+        lines.append(RUNNER_EXITS_LINE.format(name=vendor.short_name))
+    if not vendor.verified and vendor.id != "other":
+        lines.append(RUNNER_UNVERIFIED_LINE.format(name=vendor.name))
+    return {
+        "id": source.id,
+        "kind": source.kind,
+        "built": True,
+        "name": source.name,
+        "enabled": source.enabled,
+        "added_at": source.added_at,
+        "runner": runner.runner,
+        "vendor": vendor.id,
+        "vendor_name": vendor.name,
+        "doc": vendor.doc,
+        "caveat": vendor.caveat,
+        "in_tunnel_shape": vendor.in_tunnel_shape,
+        "in_tunnel_doc": vendor.in_tunnel_doc,
+        "auto_restart": runner.auto_restart,
+        "profile_set": profile is not None,
+        "server": profile.endpoint if profile is not None else "",
+        "warp": bool(profile is not None and profile.is_warp),
+        "check_alive": profile.check_alive if profile is not None else "",
+        "socks_port": runner.socks_port,
+        "health_port": runner.health_port,
+        "offers": offers,
+        "status": reading.as_payload(),
+        "sees": RUNNER_SEES,
+        "lines": lines,
+        "ready_line": RUNNER_READY_LINE,
+    }
+
+
 def _source_payload(
     source: ProxySource, chains: ProxyChains, sources: ProxySources
 ) -> dict[str, Any]:
     if source.tor is not None:
         return _tor_payload(source, source.tor, chains, sources)
+    if source.runner is not None:
+        return _runner_payload(source, source.runner, chains, sources)
     if source.vendor is not None:
         return _vendor_payload(source, chains, sources)
     offered = set(chains.source_offers.get(source.id, ()))

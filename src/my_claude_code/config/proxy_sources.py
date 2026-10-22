@@ -92,6 +92,29 @@ release keeps the source and its credential::
 ``host_list`` and a ``list`` source can be fetched on a schedule the operator
 switches on (``refresh_hours``, 0 -- off -- unless they choose one) and
 through the chain of a provider they name (``fetch_via``).
+
+7.108.0 (PR-R1...R5) builds the last of the spec's five kinds, ``runner``: a
+WireGuard file MCC runs through the pinned wireproxy
+(:mod:`~my_claude_code.config.proxy_runner_bins`), whose loopback SOCKS5
+port is offered as a chain address -- and, for a vendor with SOCKS5 proxies
+inside its tunnel (Mullvad, IVPN), one more address per in-tunnel exit::
+
+    "src_runner_proton_nl_free_12": {
+        "kind": "runner", "runner": "wireproxy", "name": "Proton NL-FREE#12",
+        "enabled": false, "added_at": "...Z", "vendor": "proton",
+        "profile": "sec_...", "login": "sec_...",
+        "socks_port": 41000, "health_port": 41001,
+        "exits": [{"host": "se-sto-wg-socks5-001.relays.mullvad.net",
+                   "port": 1080, "local_port": 41002}]}
+
+``profile`` names a ``wireguard`` secret -- the private key, the addresses
+and the peer, the only place besides the generated owner-only wireproxy
+config that the key is kept -- and ``login`` a ``userpass`` secret: the random
+local username and password the SOCKS5 port asks for, so no other program on
+this computer can borrow the tunnel. ``auto_restart`` is written only when
+the operator ticked it (off by default, the user's decision of 2026-10-20).
+A ``runner`` document this release cannot read -- an older shape, a hand edit
+-- is kept verbatim and shown as unbuilt, exactly as before.
 """
 
 import hashlib
@@ -124,6 +147,7 @@ from my_claude_code.config.proxy_source_readers import (
     normalise_host,
     parse_typed_host,
 )
+from my_claude_code.config.wireguard_profiles import WireGuardProfile
 
 PROXY_SOURCES_FILENAME = "proxy_sources.json"
 DOCUMENT_VERSION = 1
@@ -139,6 +163,11 @@ KIND_ACCOUNT = "account"
 KIND_GATEWAY = "gateway"
 KIND_LIST = "list"
 VENDOR_KINDS: tuple[str, ...] = (KIND_ACCOUNT, KIND_GATEWAY, KIND_LIST)
+#: A WireGuard file MCC runs through wireproxy (7.108.0, PR-R1...R5).
+KIND_RUNNER = "runner"
+RUNNER_WIREPROXY = "wireproxy"
+#: The offer key of a runner's own SOCKS5 port (its exits are ``exit:...``).
+RUNNER_SOCKS_KEY = "socks"
 #: Every kind the store knows the name of, in the spec's order (§5.1). Only
 #: :data:`BUILT_KINDS` are read, written and offered by this release.
 SOURCE_KINDS: tuple[str, ...] = (
@@ -146,9 +175,9 @@ SOURCE_KINDS: tuple[str, ...] = (
     KIND_ACCOUNT,
     KIND_GATEWAY,
     KIND_LIST,
-    "runner",
+    KIND_RUNNER,
 )
-BUILT_KINDS: tuple[str, ...] = (KIND_LOCAL, KIND_TOR, *VENDOR_KINDS)
+BUILT_KINDS: tuple[str, ...] = (KIND_LOCAL, KIND_TOR, *VENDOR_KINDS, KIND_RUNNER)
 #: Every kind a document may hold: the spec's five, and ``tor``.
 KNOWN_KINDS: tuple[str, ...] = (*SOURCE_KINDS, KIND_TOR)
 #: Tor sources are ``src_tor``, then ``src_tor_2``, ``src_tor_3`` ...
@@ -172,7 +201,9 @@ AUTH_KINDS: tuple[str, ...] = (AUTH_NONE, AUTH_USERPASS, AUTH_UNSUPPORTED)
 SECRET_USERPASS = "userpass"
 #: A tor control password (7.90.0): no username, so nothing to mask either.
 SECRET_PASSWORD = "password"
-SECRET_TYPES: tuple[str, ...] = (SECRET_USERPASS, SECRET_PASSWORD)
+#: A runner's WireGuard profile (7.108.0): the private key and the peer.
+SECRET_WIREGUARD = "wireguard"
+SECRET_TYPES: tuple[str, ...] = (SECRET_USERPASS, SECRET_PASSWORD, SECRET_WIREGUARD)
 
 #: The one local source an install has: this computer.
 LOCAL_SOURCE_ID = "src_local"
@@ -206,20 +237,25 @@ class SourceSecret:
     type: str = SECRET_USERPASS
     username: str = ""
     password: str = ""
+    #: A ``wireguard`` secret's profile (7.108.0); ``None`` for the others.
+    profile: WireGuardProfile | None = None
 
     @property
     def label(self) -> str:
         """The masked name a page may show: the username's ``first4…last4``.
 
         A control password has no username, and no part of a password is
-        ever shown, so its label is empty.
+        ever shown, so its label is empty. Neither is any part of a
+        WireGuard key.
         """
 
-        if self.type == SECRET_PASSWORD:
+        if self.type in {SECRET_PASSWORD, SECRET_WIREGUARD}:
             return ""
         return mask_key_label(self.username)
 
     def as_document(self) -> dict[str, Any]:
+        if self.type == SECRET_WIREGUARD and self.profile is not None:
+            return {"type": self.type} | self.profile.as_document()
         if self.type == SECRET_PASSWORD:
             return {"type": self.type, "password": self.password}
         return {"type": self.type, "username": self.username, "password": self.password}
@@ -231,6 +267,9 @@ class SourceSecret:
         kind = str(raw.get("type") or "").strip().lower()
         if kind not in SECRET_TYPES:
             return None
+        if kind == SECRET_WIREGUARD:
+            profile = WireGuardProfile.from_document(raw)
+            return None if profile is None else cls(type=kind, profile=profile)
         return cls(
             type=kind,
             username="" if kind == SECRET_PASSWORD else str(raw.get("username") or ""),
@@ -818,6 +857,122 @@ class ListSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RunnerExit:
+    """One in-tunnel exit of a runner (R4): a SOCKS5 host only the tunnel
+    reaches, and the loopback port wireproxy forwards to it."""
+
+    host: str
+    port: int
+    local_port: int
+
+    @property
+    def key(self) -> str:
+        return f"exit:{self.host}:{self.port}"
+
+    def as_document(self) -> dict[str, Any]:
+        return {"host": self.host, "port": self.port, "local_port": self.local_port}
+
+    @classmethod
+    def from_document(cls, raw: object) -> Self | None:
+        if not isinstance(raw, Mapping):
+            return None
+        host = normalise_host(raw.get("host"))
+        port = _port_number(raw.get("port"))
+        local_port = _port_number(raw.get("local_port"))
+        if not host or port is None or local_port is None:
+            return None
+        return cls(host=host, port=port, local_port=local_port)
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerSettings:
+    """A WireGuard file MCC runs (7.108.0): which secrets, which ports.
+
+    The ports are chosen once, from ``PROXY_RUNNER_PORTS``, and kept: the
+    offered addresses -- their URLs and their names -- stay the same across
+    every restart.
+    """
+
+    profile: str
+    login: str
+    socks_port: int
+    health_port: int
+    runner: str = RUNNER_WIREPROXY
+    vendor: str = ""
+    exits: tuple[RunnerExit, ...] = ()
+    #: Restart on its own after an unexpected exit, with back-off. Off by
+    #: default: the user's decision of 2026-10-20 14:32.
+    auto_restart: bool = False
+
+    def ports(self) -> tuple[int, ...]:
+        return (
+            self.socks_port,
+            self.health_port,
+            *(item.local_port for item in self.exits),
+        )
+
+    def as_document(self) -> dict[str, Any]:
+        document: dict[str, Any] = {"runner": self.runner}
+        if self.vendor:
+            document["vendor"] = self.vendor
+        document |= {
+            "profile": self.profile,
+            "login": self.login,
+            "socks_port": self.socks_port,
+            "health_port": self.health_port,
+        }
+        if self.exits:
+            document["exits"] = [item.as_document() for item in self.exits]
+        if self.auto_restart:
+            document["auto_restart"] = True
+        return document
+
+    @classmethod
+    def from_document(cls, raw: Mapping[Any, object]) -> Self | None:
+        """This release's runner shape, or ``None`` (kept verbatim instead)."""
+
+        runner = str(raw.get("runner") or "").strip().lower()
+        profile = str(raw.get("profile") or "").strip()
+        login = str(raw.get("login") or "").strip()
+        socks_port = _port_number(raw.get("socks_port"))
+        health_port = _port_number(raw.get("health_port"))
+        if (
+            runner != RUNNER_WIREPROXY
+            or not profile
+            or not login
+            or socks_port is None
+            or health_port is None
+            or socks_port == health_port
+        ):
+            return None
+        exits: list[RunnerExit] = []
+        taken = {socks_port, health_port}
+        raw_exits = raw.get("exits")
+        if isinstance(raw_exits, Sequence) and not isinstance(raw_exits, str):
+            seen: set[str] = set()
+            for item in raw_exits:
+                parsed = RunnerExit.from_document(item)
+                if (
+                    parsed is not None
+                    and parsed.key not in seen
+                    and parsed.local_port not in taken
+                ):
+                    seen.add(parsed.key)
+                    taken.add(parsed.local_port)
+                    exits.append(parsed)
+        return cls(
+            profile=profile,
+            login=login,
+            socks_port=socks_port,
+            health_port=health_port,
+            runner=runner,
+            vendor=str(raw.get("vendor") or "").strip().lower()[:24],
+            exits=tuple(exits[:FEED_MAX_ENDPOINTS]),
+            auto_restart=raw.get("auto_restart") is True,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProxySource:
     """One source. ``raw`` keeps a kind this release does not build, verbatim."""
 
@@ -835,9 +990,14 @@ class ProxySource:
     account: AccountSettings | None = None
     gateway: GatewaySettings | None = None
     proxy_list: ListSettings | None = None
+    #: A ``runner`` source's secrets and ports (7.108.0); ``None`` otherwise,
+    #: and for a runner document this release cannot read (kept in ``raw``).
+    runner: RunnerSettings | None = None
 
     @property
     def built(self) -> bool:
+        if self.kind == KIND_RUNNER:
+            return self.runner is not None
         return self.kind in BUILT_KINDS
 
     @property
@@ -852,6 +1012,8 @@ class ProxySource:
             return (str(value),) if isinstance(value, str) and value else ()
         if self.tor is not None:
             return (self.tor.secret,) if self.tor.secret else ()
+        if self.runner is not None:
+            return (self.runner.profile, self.runner.login)
         vendor = self.vendor
         if vendor is not None:
             return (vendor.secret,) if vendor.secret else ()
@@ -870,6 +1032,13 @@ class ProxySource:
                 "enabled": self.enabled,
                 "added_at": self.added_at,
             } | self.tor.as_document()
+        if self.runner is not None:
+            return {
+                "kind": self.kind,
+                "name": self.name,
+                "enabled": self.enabled,
+                "added_at": self.added_at,
+            } | self.runner.as_document()
         vendor = self.vendor
         if vendor is not None:
             return {
@@ -920,6 +1089,29 @@ class ProxySource:
             )
         if kind in VENDOR_KINDS:
             return cls._vendor_from_document(source_id, kind, raw)
+        if kind == KIND_RUNNER:
+            runner = RunnerSettings.from_document(raw)
+            if runner is not None:
+                return cls(
+                    id=source_id,
+                    kind=kind,
+                    name=str(raw.get("name") or "").strip()[:SOURCE_NAME_MAX_LENGTH]
+                    or source_id,
+                    enabled=raw.get("enabled") is True,
+                    added_at=str(raw.get("added_at") or "").strip(),
+                    runner=runner,
+                )
+            # Not this release's shape: kept verbatim, as every release
+            # before 7.108.0 kept it.
+            return cls(
+                id=source_id,
+                kind=kind,
+                name=str(raw.get("name") or "").strip(),
+                enabled=raw.get("enabled") is not False,
+                added_at=str(raw.get("added_at") or "").strip(),
+                scanned_at=str(raw.get("scanned_at") or "").strip(),
+                raw={str(key): value for key, value in raw.items()},
+            )
         listeners: list[LocalListener] = []
         raw_listeners = raw.get("listeners")
         if (
@@ -1192,6 +1384,7 @@ __all__ = [
     "KIND_GATEWAY",
     "KIND_LIST",
     "KIND_LOCAL",
+    "KIND_RUNNER",
     "KIND_TOR",
     "KNOWN_KINDS",
     "LOCAL_HOST",
@@ -1202,9 +1395,12 @@ __all__ = [
     "PROXY_SOURCES_FILENAME",
     "PROXY_SOURCES_WRITE_LOCK",
     "REFRESH_HOURS_MAX",
+    "RUNNER_SOCKS_KEY",
+    "RUNNER_WIREPROXY",
     "SECRET_PASSWORD",
     "SECRET_TYPES",
     "SECRET_USERPASS",
+    "SECRET_WIREGUARD",
     "SESSION_ID_PATTERN",
     "SOURCE_KINDS",
     "SOURCE_NAME_MAX_LENGTH",
@@ -1225,6 +1421,8 @@ __all__ = [
     "ProxySource",
     "ProxySources",
     "ProxySourcesUnreadableError",
+    "RunnerExit",
+    "RunnerSettings",
     "SourceSecret",
     "TorPort",
     "TorSettings",
