@@ -6,6 +6,7 @@ from .auth import (
     ApiKeyAuth,
     BearerTokenAuth,
 )
+from .prompt_cache import refused_prompt_cache_lifetimes
 from .provider import AnthropicMessagesProvider
 from .request import build_anthropic_messages_body
 from .streaming import iter_anthropic_sse_frames
@@ -18,4 +19,5 @@ __all__ = [
     "BearerTokenAuth",
     "build_anthropic_messages_body",
     "iter_anthropic_sse_frames",
+    "refused_prompt_cache_lifetimes",
 ]

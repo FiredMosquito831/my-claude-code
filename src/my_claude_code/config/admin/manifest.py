@@ -55,8 +55,13 @@ _PROMPT_CACHE_TTL_RULE = (
     "asked for, else the host's longest. Anthropic (the Claude API and the "
     "Claude subscription) keeps a cache for 5 min or 1 h, so 1-5 sends 5 min "
     "and 6-60 sends 1 h; a cache write costs 1.25x input at 5 min and 2x at "
-    "1 h. Every other host gets nothing from this setting yet, and a host "
-    "that refuses a lifetime is remembered on the Models page."
+    "1 h. Claude models on OpenRouter take the same two, sent as one "
+    "top-level cache marker (caching starts there only when this is set); "
+    "Azure OpenAI takes its retention word, in_memory for 1-5 and 24h for "
+    "6-60. The ChatGPT subscription, Gemini, Vertex, DeepSeek, Nous Portal, "
+    "OpenCode Zen and Go, NVIDIA NIM, Agnes, B.AI, HyperCharm and OpenRouter's "
+    "other models cache automatically and get nothing. A host that refuses a "
+    "lifetime is remembered on the Models page and sent its next accepted one."
 )
 
 

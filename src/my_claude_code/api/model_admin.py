@@ -121,9 +121,14 @@ from my_claude_code.config.model_refs import (
     parse_provider_type,
 )
 from my_claude_code.config.prompt_cache_lifetimes import (
+    AUTOMATIC_PROMPT_CACHE,
+    AUTOMATIC_PROMPT_CACHE_PROVIDERS,
+    CHAT_PROVIDER_PROMPT_CACHE_FAMILY,
     MESSAGES_GATEWAY_PROMPT_CACHE_FAMILY,
     PROMPT_CACHE_LIFETIME_FAMILIES,
     PROVIDER_PROMPT_CACHE_FAMILY,
+    UPSTREAM_ALIAS_PREFIX,
+    UPSTREAM_PROMPT_CACHE_FAMILY,
     PromptCacheLifetimeFamily,
 )
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -279,6 +284,14 @@ PROMPT_CACHE_GATEWAY_NOTE = (
     "none is added. Whether the host passes it on is not known: the first "
     "refusal stops lifetimes for the whole host until you Forget it."
 )
+#: A host that caches on its own and takes no lifetime (7.106.0, the user's
+#: Q11): what the row's source column says, and why.
+PROMPT_CACHE_AUTOMATIC_LABEL = "caches automatically; no lifetime control"
+PROMPT_CACHE_AUTOMATIC_NOTE = (
+    "This host caches prompts on its own and takes no cache lifetime, so a "
+    "lifetime set on Model Config or on an override row sends it nothing: the "
+    "request goes exactly as it would with none set."
+)
 #: What each control on the overridable row says (model row, provider row).
 PROMPT_CACHE_TTL_PREFERENCE_NOTE = (
     "Whole minutes from 1 to 60, adapted to the lifetimes this host takes. "
@@ -330,6 +343,10 @@ def _family_payload(family: PromptCacheLifetimeFamily) -> dict[str, Any]:
         "rows_only": family.rows_only,
         "refusal_per_host": family.refusal_per_host,
         "default_wire": family.default_wire,
+        # 7.106.0, appended: where a lifetime lands, and whether the host
+        # takes none at all (it caches on its own).
+        "placement": family.placement,
+        "automatic": family.automatic,
     }
 
 
@@ -436,6 +453,20 @@ def prompt_cache_lifetimes_payload(
         "routes": routes,
         "route_note": PROMPT_CACHE_ROUTE_NOTE,
         "global_setting": "PROMPT_CACHE_TTL",
+        # 7.106.0, appended: the OpenAI-shaped hosts. ``providers`` above keeps
+        # exactly the Anthropic declarations it always had; a model is joined
+        # here, after them -- by the upstream its gateway id names, then by
+        # its provider's own declaration, then by "caches automatically".
+        "chat_providers": dict(CHAT_PROVIDER_PROMPT_CACHE_FAMILY),
+        "upstreams": {
+            provider_id: dict(authors)
+            for provider_id, authors in UPSTREAM_PROMPT_CACHE_FAMILY.items()
+        },
+        "upstream_alias_prefix": UPSTREAM_ALIAS_PREFIX,
+        "automatic_providers": sorted(AUTOMATIC_PROMPT_CACHE_PROVIDERS),
+        "automatic_family": AUTOMATIC_PROMPT_CACHE,
+        "automatic_label": PROMPT_CACHE_AUTOMATIC_LABEL,
+        "automatic_note": PROMPT_CACHE_AUTOMATIC_NOTE,
     }
 
 

@@ -117,6 +117,11 @@ from .messages_transport import MessagesTransport
 from .opencode_catalogue import STAND_IN_INPUT_SCHEMA, model_is_zero_cost
 from .opencode_identity import identity_wire_record
 from .profiles import OpenAIChatProfile
+from .prompt_cache import (
+    apply_chat_prompt_cache_lifetime,
+    chat_prompt_cache_choice,
+    note_chat_prompt_cache_refusal,
+)
 from .request_policy import build_openai_chat_request_body, chat_tool_schema_note
 from .response_surface import (
     alternative_surfaces,
@@ -746,7 +751,7 @@ class OpenAIChatProvider(BaseProvider):
         body: dict,
         *,
         surface_label: str = "",
-        wire_notes: Mapping[str, str] | None = None,
+        wire_notes: Mapping[str, Any] | None = None,
     ) -> tuple[Any, dict]:
         """Create a streaming chat completion with bounded request fallbacks.
 
@@ -1358,10 +1363,17 @@ class _OpenAIChatStreamRunner:
         # recording nothing, for every request with nothing left out. The
         # schema note (7.105.1) is ``{}`` on every host without a declared
         # Chat schema dialect.
-        self._wire_notes = {
+        self._wire_notes: dict[str, Any] = {
             **empty_system_messages_note(request.messages),
             **provider.tool_schema_wire_note(request),
         }
+        # The prompt-cache lifetime this attempt sends (7.106.0), or ``None``
+        # -- every request while nothing is set, and every host but
+        # OpenRouter's Claude upstreams and Azure OpenAI -- which leaves the
+        # body exactly as built and records nothing.
+        self._prompt_cache = chat_prompt_cache_choice(
+            request, provider_id=provider._provider_id
+        )
         self._input_tokens = input_tokens
         self._request_id = request_id
         self._reasoning = reasoning
@@ -1399,6 +1411,10 @@ class _OpenAIChatStreamRunner:
         body = self._provider._build_request_body(
             self._request,
             reasoning=self._reasoning,
+        )
+        # The same body back -- not a copy -- when no lifetime was chosen.
+        body = apply_chat_prompt_cache_lifetime(
+            body, self._prompt_cache, self._wire_notes
         )
         request_stream_usage(body)
         output_reasoning = self._reasoning.output_enabled
@@ -1574,6 +1590,15 @@ class _OpenAIChatStreamRunner:
                 except asyncio.CancelledError, GeneratorExit:
                     raise
                 except Exception as error:
+                    if self._prompt_cache is not None and not stream_opened:
+                        # Recording only: the error below is handled exactly
+                        # as it would be with no lifetime chosen.
+                        note_chat_prompt_cache_refusal(
+                            error,
+                            provider_id=self._provider._provider_id,
+                            model_id=self._request.model,
+                            choice=self._prompt_cache,
+                        )
                     generated_output = has_committed_sse_output(ledger)
                     complete_tool_salvageable = (
                         generated_output
