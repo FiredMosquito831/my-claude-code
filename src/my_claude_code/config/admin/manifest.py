@@ -3201,6 +3201,27 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_RUNNER_PORTS",
+        "Loopback ports for WireGuard runners (first-last)",
+        "credential_health",
+        "text",
+        settings_attr="proxy_runner_ports",
+        default="41000-41999",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Where a WireGuard file you import on the Proxying page listens on "
+            "this computer: its SOCKS5 port, its health port and one port per "
+            "in-tunnel exit, all on 127.0.0.1, chosen from this range when you "
+            "import the file and kept for good, so its addresses keep their "
+            "names. Only ports that bind at that moment are taken; on Windows, "
+            "the ranges `netsh int ipv4 show excludedportrange protocol=tcp` "
+            "lists never do. A change applies to the next import or to Pick "
+            "new ports on a card; a running tunnel keeps its ports."
+        ),
+    ),
+    ConfigFieldSpec(
         "PROXY_FEED_REFRESH_ENABLED",
         "Refresh proxy feeds in the background",
         "credential_health",

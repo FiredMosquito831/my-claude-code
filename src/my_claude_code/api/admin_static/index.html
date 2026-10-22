@@ -418,7 +418,12 @@
                     provider, each prefilled from the vendor's documentation and
                     contacted only when you press <em>Fetch now</em> (see
                     <a href="#guide-proxy-vendors">VPN accounts, gateways and proxy
-                    lists</a>).
+                    lists</a>). Last: a WireGuard file from your VPN account, which MCC
+                    runs for you through the pinned wireproxy &mdash; downloaded only when
+                    you press <em>Download wireproxy</em>, started only when you press
+                    <em>Start</em> (see <a href="#guide-proxy-runners">WireGuard files MCC
+                    runs</a>) &mdash; and a guide for gluetun, a VPN in Docker you run
+                    yourself.
                   </p>
                   <p class="proxy-sources-terms">
                     Spreading requests over many exits can conflict with a
@@ -2138,6 +2143,7 @@
                 <a href="#guide-proxy-sources">Proxies on this computer, and where each exit comes out</a>
                 <a href="#guide-proxy-tor">Bring your own Tor</a>
                 <a href="#guide-proxy-vendors">VPN accounts, gateways and proxy lists</a>
+                <a href="#guide-proxy-runners">WireGuard files MCC runs (wireproxy)</a>
                 <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
@@ -4101,9 +4107,11 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 <p>
                   For a provider that counts a free allowance per address (OpenCode
                   Zen's free models), refuses your country, or should not see your home
-                  address. MCC never installs, starts or signs in to a VPN, WARP or tor:
-                  it uses what you run, and TLS stays strict, so no proxy or VPN can read
-                  your keys, prompts or replies. Find your row, then follow its steps.
+                  address. MCC never installs, starts or signs in to a VPN app, WARP or
+                  tor: it uses what you run &mdash; except row 7, where MCC runs the pinned
+                  wireproxy with a WireGuard file you exported, only after you press its
+                  buttons &mdash; and TLS stays strict, so no proxy or VPN can read your
+                  keys, prompts or replies. Find your row, then follow its steps.
                 </p>
                 <table class="guide-table">
                   <thead><tr><th>What you have</th><th>What MCC can do</th><th>Steps</th></tr></thead>
@@ -4114,6 +4122,7 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                     <tr><td>Cloudflare WARP</td><td>Its proxy mode is a proxy on this computer</td><td><a href="#guide-vpn-warp">4</a></td></tr>
                     <tr><td>A tor you run</td><td>Each SOCKS port is one identity and one entry</td><td><a href="#guide-proxy-tor">5</a></td></tr>
                     <tr><td>A VPN that only gives OpenVPN or WireGuard files</td><td>Run gluetun in Docker yourself; one entry per container</td><td><a href="#guide-vpn-gluetun">6</a></td></tr>
+                    <tr><td>A WireGuard file from your VPN account (Proton VPN Free or Plus, Mullvad, IVPN, Surfshark, Windscribe, AirVPN, PIA's script, wgcf for WARP)</td><td>MCC runs wireproxy with it: its port is one entry, and Mullvad's or IVPN's in-tunnel proxies one entry each</td><td><a href="#guide-proxy-runners">7</a></td></tr>
                   </tbody>
                 </table>
 
@@ -4627,6 +4636,81 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Terms.</strong> No VPN vendor found allows automated API traffic
                   in its terms, and commercial proxies bind you to the use you declared to
                   them: using them for a coding assistant is your call.
+                </p>
+
+                <h3 id="guide-proxy-runners">WireGuard files MCC runs (wireproxy)</h3>
+                <p>
+                  Since 7.108.0 a WireGuard file your VPN account exports becomes a chain
+                  address: MCC runs <strong>wireproxy</strong> with it, a WireGuard client
+                  that lives entirely inside one program &mdash; no network adapter, no
+                  route change, no service, no administrator &mdash; and offers its SOCKS5
+                  port on <code>127.0.0.1</code>. Only the chains you add it to go through
+                  the tunnel; everything else on this computer is untouched.
+                </p>
+                <ol>
+                  <li><strong>Export a WireGuard file</strong> from your account:
+                    Proton VPN (account.protonvpn.com &rarr; Downloads &rarr; WireGuard
+                    configuration; the Free plan included), Mullvad's or IVPN's generator,
+                    Surfshark, Windscribe (Pro), AirVPN, PIA's
+                    <code>manual-connections</code> script, or <code>wgcf generate</code>'s
+                    <code>wgcf-profile.conf</code> for Cloudflare WARP.</li>
+                  <li>On the Proxying page press <em>Import a WireGuard file</em>, upload
+                    or paste it and press <em>Import</em>. That contacts nothing and starts
+                    nothing. The private key is kept in <code>proxy_sources.json</code> and
+                    in the config MCC writes for wireproxy, both readable by you only, and
+                    is never shown again. Commands a file names (<code>PostUp</code> and the
+                    like) are dropped.</li>
+                  <li>Press <em>Download wireproxy</em> once. MCC fetches the pinned
+                    release (wireproxy 1.1.3) from GitHub: the release's
+                    <code>checksums.txt</code> first, which must agree with the sha256 this
+                    MCC pins, then the archive, which must match both; one executable is
+                    installed under your MCC folder with a receipt, and both are checked
+                    again at every start. Or give the path of a wireproxy of your own
+                    (<em>Use my own binary</em>). There is no Windows arm64 build of
+                    wireproxy, and MCC does not fall back to the 32-bit one.</li>
+                  <li>Press <em>Start</em>. The card says <em>Starting</em>, then
+                    <em>Ready</em> once the SOCKS5 port answers and wireproxy's own check
+                    hears the tunnel &mdash; which proves the tunnel is up, not that a
+                    provider is reachable through it.</li>
+                  <li>Choose a chain and press <em>Add to chain</em>: the address is
+                    tested against that provider's own host first, like any other.</li>
+                </ol>
+                <p>
+                  The SOCKS5 port asks for a random username and password only MCC holds,
+                  so no other program on this computer can borrow the tunnel. Its port is
+                  chosen once from <code>PROXY_RUNNER_PORTS</code> (Limits &amp;
+                  Resilience &rarr; Credential health; 41000&ndash;41999 by default) and
+                  kept, so the address keeps its name; <em>Pick new ports</em> chooses
+                  again if another program took one. A started runner starts again with
+                  the server; <em>Stop</em> keeps it stopped. If wireproxy exits on its
+                  own the card says so with its exit code and a <em>Restart</em> button;
+                  tick <em>Restart automatically after a crash</em> (off by default) and
+                  MCC restarts it after 1 s, 5 s, 30 s and 5 minutes, then leaves it
+                  stopped. The server's own shutdown stops every runner, and on Windows a
+                  server that is killed takes its runners with it.
+                </p>
+                <p>
+                  <strong>Proton VPN Free allows one device:</strong> disconnect the Proton
+                  app before you start a Proton runner, or one of the two may be refused
+                  or disconnected. <strong>Mullvad and IVPN</strong> run a SOCKS5 proxy on
+                  each server that only their tunnel reaches: on the card's form, type the
+                  servers you want, one per line, in the vendor's documented shape
+                  (<code>&lt;country&gt;-&lt;city&gt;-wg-socks5-&lt;NNN&gt;.relays.mullvad.net</code>),
+                  and each becomes its own address through the one tunnel &mdash; one key,
+                  many exits. Those forwarded ports take no login, because the vendor's
+                  proxy takes none. <strong>WARP</strong>: import a
+                  <code>wgcf-profile.conf</code> you made yourself; MCC never registers a
+                  WARP device. Cloudflare's own trace shows <code>warp=on</code> once the
+                  address is tested with exit identity on. Every vendor here &mdash;
+                  Proton VPN included &mdash; has so far been tested only with files of its
+                  shape against stand-in servers, never against the real service; the
+                  card says so.
+                </p>
+                <p>
+                  <strong>gluetun</strong>, for a VPN that gives only OpenVPN files: the
+                  Proxying page's gluetun card has a two-container
+                  <code>docker-compose.yml</code>; MCC never runs Docker for you. See
+                  <a href="#guide-vpn-gluetun">step 6</a>.
                 </p>
 
                 <h3 id="guide-advanced">Where the advanced settings went</h3>

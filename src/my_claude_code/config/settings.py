@@ -185,6 +185,7 @@ from .constants import (
     PROXY_ORDER_RESORT_MINUTES_MAX,
     PROXY_ORDER_RESORT_MINUTES_MIN,
     PROXY_REACHABILITY_TIERS_DEFAULT,
+    PROXY_RUNNER_PORTS_DEFAULT,
     RATE_LIMIT_COOLDOWN_MAX_SECONDS_DEFAULT,
     RATE_LIMIT_COOLDOWN_MODE_DEFAULT,
     RATE_LIMIT_COOLDOWN_MODE_NAMES,
@@ -327,6 +328,27 @@ def parse_lockout_tiers(value: str) -> tuple[float, ...]:
             raise ValueError(f"{part!r} must be greater than 0")
         tiers.append(seconds)
     return tuple(tiers)
+
+
+def parse_port_range(value: str) -> tuple[int, int]:
+    """``"41000-41999"`` -> ``(41000, 41999)``: the runner sources' loopback ports.
+
+    Both ends included, both unprivileged (1024 or more) and the first no
+    larger than the last; a single port (``"41000"``) is a range of one.
+    """
+    text = (value or "").strip()
+    first, separator, last = text.partition("-")
+    try:
+        low = int(first.strip())
+        high = int(last.strip()) if separator else low
+    except ValueError as exc:
+        raise ValueError(f"{text!r} is not 'first-last', e.g. 41000-41999") from exc
+    if not 1024 <= low <= high <= 65535:
+        raise ValueError(
+            f"{text!r} must be ports from 1024 to 65535, the first no larger "
+            "than the last"
+        )
+    return low, high
 
 
 def _require_provider_prefixed_model_ref(model_ref: str) -> None:
@@ -1346,6 +1368,13 @@ class Settings(BaseSettings):
     proxy_check_exit_ip_url: str = Field(
         default=PROXY_CHECK_EXIT_IP_URL_DEFAULT,
         validation_alias="PROXY_CHECK_EXIT_IP_URL",
+    )
+    # The loopback ports WireGuard runner sources (7.108.0) are given, once
+    # per source and then kept. Read when a source is imported or its ports
+    # are picked again; a running tunnel keeps the ports it has.
+    proxy_runner_ports: str = Field(
+        default=PROXY_RUNNER_PORTS_DEFAULT,
+        validation_alias="PROXY_RUNNER_PORTS",
     )
     # Whether the named proxy feeds are re-read on a timer. Off, and it is only
     # half the consent: which feeds may be read at all is chosen on the
@@ -2563,6 +2592,16 @@ class Settings(BaseSettings):
         except ValueError as exc:
             raise ValueError(f"PROXY_REACHABILITY_TIERS: {exc}") from exc
         return v
+
+    @field_validator("proxy_runner_ports")
+    @classmethod
+    def validate_proxy_runner_ports(cls, v: str) -> str:
+        """Rejected at load, not at the first import, and kept as typed."""
+        try:
+            parse_port_range(v)
+        except ValueError as exc:
+            raise ValueError(f"PROXY_RUNNER_PORTS: {exc}") from exc
+        return v.strip()
 
     @field_validator("rate_limit_cooldown_mode")
     @classmethod

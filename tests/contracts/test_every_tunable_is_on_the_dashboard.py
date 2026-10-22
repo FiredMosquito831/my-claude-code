@@ -187,6 +187,9 @@ BOOTSTRAP_ENVIRONMENT = frozenset(
         "MCC_DESKTOP_SKIP_AUTOSTART",
         "MCC_DESKTOP_SHELL_DIR",
         "MCC_DESKTOP_SHELL_BASE_URL",
+        # 7.108.0: the same proof seam for the pinned wireproxy download.
+        # The digests stay pinned in source whatever it points at.
+        "MCC_WIREPROXY_BASE_URL",
         "MCC_DESKTOP_SHELL_TRAY",
         "MCC_SHELL_DESKTOP_COMMAND",
         "MCC_SHELL_SERVER_COMMAND",
