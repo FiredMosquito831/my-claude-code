@@ -1086,12 +1086,13 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             ),
             note=(
                 "The Codex CLI reads this file too, so plain codex gets the "
-                "server as well; mcc-codex adds its own for one launch from "
-                "the Codex CLI card. Measured 2026-10-18 with Codex on MCC's "
-                "models: Codex lists the server, but offers MCP tools to its "
-                "model only through its tool search, which MCC does not "
-                "carry, and gives a server about one second to start -- so a "
-                "model served by MCC may not see the tools yet. With Codex's "
+                "server as well. This entry is never marked required, so a "
+                "broken mcc-mcp cannot stop Codex from starting; Codex then "
+                "gives the server only about one second before a turn, and "
+                "mcc-mcp takes about three, so a prompt sent at once may not "
+                "see the tools. For the tools in every mcc-codex session, "
+                "press Add MCP server on the Codex CLI card instead (7.107.0). "
+                "Plain codex and the desktop app on MCC's provider, and Codex's "
                 "own models: not measured."
             ),
         ),

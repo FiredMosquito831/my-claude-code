@@ -1,9 +1,10 @@
-"""``mcc-codex`` and MCC's media MCP server (7.99.0).
+"""``mcc-codex`` and MCC's media MCP server (7.99.0, 7.107.0).
 
 While Codex's Add MCP server button is on, the launch carries the server as
 ``-c mcp_servers.mcc_media.*`` settings -- for that launch only, so the user's
 ``config.toml`` is never rewritten -- placed after MCC's own provider settings
-and before the user's arguments. Off, the command is what it always was.
+and before the user's arguments, and marked ``required`` (7.107.0). Off, the
+command is what it always was.
 """
 
 import tomllib
@@ -52,6 +53,9 @@ def test_the_server_is_passed_only_while_the_button_is_on(tmp_path: Path) -> Non
         "mcp_servers.mcc_media.command": command,
         "mcp_servers.mcc_media.args": ["--app", "codex"],
         "mcp_servers.mcc_media.env": {"MCC_CONFIG_DIR": str(tmp_path / "cfg")},
+        # 7.107.0, decision 3: Codex waits for the server before the session
+        # starts (its optional-server grace is ~1 s, mcc-mcp takes ~3 s).
+        "mcp_servers.mcc_media.required": True,
     }
     assert "proxy-secret-token" not in " ".join(on)
 
