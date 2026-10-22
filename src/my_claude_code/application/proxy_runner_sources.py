@@ -80,13 +80,19 @@ def port_binds(port: int) -> bool:
     """Whether ``127.0.0.1:<port>`` can be bound right now, by anybody.
 
     Exclusive on Windows, so a port another program holds is never reported
-    free (``SO_REUSEADDR`` there would let us bind over it).
+    free (``SO_REUSEADDR`` there would let us bind over it). Elsewhere
+    ``SO_REUSEADDR`` is set, as wireproxy's own listener sets it: it never
+    binds over a listening socket, but a port left in TIME_WAIT by the
+    runner just stopped (its ``/readyz`` closes each connection first) is
+    free for the runner that replaces it, so Restart is not refused.
     """
 
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         if sys.platform == "win32":
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind((LOCAL_HOST, port))
     except OSError:
         return False

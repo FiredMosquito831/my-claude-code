@@ -8,6 +8,8 @@ are one address each; a WARP account file is read only to match keys.
 """
 
 import json
+import socket
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ from my_claude_code.application.proxy_runner_sources import (
     SOCKS_KEY,
     RunnerEdit,
     allocate_ports,
+    port_binds,
     remove_runner_source,
     runner_launch,
     save_runner_source,
@@ -314,3 +317,25 @@ def test_removal_drops_both_secrets_and_the_offers_start_and_stop_record_enabled
     assert sources.sources == {} and sources.secrets == {}
     assert source_id not in chains.source_offers
     assert chains.proxies == {}
+
+
+def test_a_port_in_time_wait_is_free_and_a_listening_one_is_not() -> None:
+    """Restart right after Ready: ``/readyz`` closed first, so the health port
+    sits in TIME_WAIT; that is free for the new runner. A listener is not."""
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if sys.platform != "win32":
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    assert port_binds(port) is False
+
+    client = socket.create_connection(("127.0.0.1", port))
+    accepted, _ = listener.accept()
+    accepted.close()  # the server side closes first -> its port in TIME_WAIT
+    client.recv(1)
+    client.close()
+    listener.close()
+
+    assert port_binds(port) is True
