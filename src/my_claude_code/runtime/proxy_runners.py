@@ -185,6 +185,8 @@ class _Runner:
     stop_requested: bool = False
     stop_sentence: str = ""
     ready_since: datetime | None = None
+    #: Reads its output and, at its end, records the exit.
+    reader: threading.Thread | None = None
 
     @property
     def pid(self) -> int:
@@ -310,6 +312,14 @@ class ProxyRunnerSupervisor:
             runner.stop_requested = True
             runner.stop_sentence = sentence
         self._terminate(runner)
+        # Its exit is recorded (pid unregistered, pid.json gone, the log's
+        # last line written) before a stop returns, so a removal that follows
+        # deletes everything and a restart starts from a clean slate.
+        if (
+            runner.reader is not None
+            and runner.reader is not threading.current_thread()
+        ):
+            runner.reader.join(self._graceful)
         return self._stopped(source_id, sentence, exit_code=runner.popen.returncode)
 
     def restart(self, source_id: str) -> RunnerReading:
@@ -519,9 +529,10 @@ class ProxyRunnerSupervisor:
             popen.pid,
             launch.socks_port,
         )
-        threading.Thread(
+        runner.reader = threading.Thread(
             target=self._read_output, args=(runner,), daemon=True, name="mcc-runner-log"
-        ).start()
+        )
+        runner.reader.start()
         threading.Thread(
             target=self._await_ready,
             args=(runner,),
