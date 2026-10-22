@@ -6224,6 +6224,9 @@ Gotchas:
   `warp=` flag. wireproxy has no field for WARP's reserved bytes; whether WARP
   answers without them is reported by users, not documented. Tested against
   fake servers only so far.
+- **Not yet run against a real VPN.** Every vendor's file shape, Proton VPN's
+  included, has been tested with a stand-in WireGuard server only; the card
+  says UNVERIFIED until a real one has been tried.
 - **Remove** stops the runner and deletes its config (with the key) and its
   log. The reference is [WireGuard runners](ROUTING-REFERENCE.md#wireguard-runners-71080).
 
