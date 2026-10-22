@@ -5638,7 +5638,7 @@ function proxyRunnerCard(source) {
     offers.forEach((row) => {
       const item = proxyVendorOfferRow(row);
       const check = row.last_check || {};
-      if (check.exit_warp) {
+      if (source.warp && check.exit_warp) {
         const warp = document.createElement("span");
         warp.className = "proxy-vendor-offer-state";
         warp.textContent = ` · warp=${check.exit_warp}`;
