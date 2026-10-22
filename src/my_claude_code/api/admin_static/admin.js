@@ -25522,6 +25522,29 @@ function appendBenchReason(item, bench) {
   item.appendChild(why);
 }
 
+/** The id a gateway passed on instead of the model's reason, or null.
+ *
+ * Parsed server-side out of the recorded message (`params.gateway_trace_id`,
+ * 7.105.2) and written only when the host's body said nothing but a generic
+ * phrase and that id -- Command Code's `invalid request error trace_id: ...`.
+ * Every other attempt has no such key and renders exactly as before.
+ */
+function gatewayTraceIdOf(attempt) {
+  const params = attempt && attempt.params;
+  const id = params && params.gateway_trace_id;
+  return typeof id === "string" && id ? id : null;
+}
+
+function gatewayNoReasonText(traceId) {
+  return `the gateway gave no reason (trace id ${traceId})`;
+}
+
+const GATEWAY_NO_REASON_TITLE =
+  "The gateway answered with a generic refusal and an id, and passed on no" +
+  " reason: the model host's own error was hidden before it reached MCC." +
+  " Quote the trace id to the gateway's support to learn the reason. The" +
+  " host's text is kept below exactly as it arrived.";
+
 /** What ended this attempt, in two or three words rather than a sentence.
  *
  * The prose underneath stays where it is -- it carries the host's own message
@@ -25531,6 +25554,8 @@ function appendBenchReason(item, bench) {
 function attemptEndedBy(attempt) {
   const bench = benchOf(attempt);
   if (bench) return bench.last_kind ? `benched (${bench.last_kind})` : "benched";
+  const traceId = gatewayTraceIdOf(attempt);
+  if (traceId) return gatewayNoReasonText(traceId);
   if (attempt.error_kind) return String(attempt.error_kind);
   const ladder = ladderOf(attempt);
   if (ladder && ladder.root_cause) return String(ladder.root_cause);
@@ -25592,6 +25617,9 @@ function appendAttemptMetrics(item, attempt) {
     shown.className = "req-chain-metric-value";
     shown.textContent = value;
     cell.append(name, shown);
+    if (label === "ended" && gatewayTraceIdOf(attempt)) {
+      cell.title = `${value}. ${GATEWAY_NO_REASON_TITLE}`;
+    }
     row.appendChild(cell);
   });
   row.title =
@@ -25599,6 +25627,21 @@ function appendAttemptMetrics(item, attempt) {
     " taken: attempts recorded before 7.4.0 carry no first-token time, and a" +
     " model that was never asked has no latency at all.";
   item.appendChild(row);
+}
+
+/* The trace id on its own line, selectable and copyable, under the host's
+ * verbatim text: the one thing the reader can take to the gateway's support. */
+function appendGatewayTraceId(item, attempt) {
+  const traceId = gatewayTraceIdOf(attempt);
+  if (!traceId) return;
+  const line = document.createElement("p");
+  line.className = "req-chain-traceid";
+  line.title = GATEWAY_NO_REASON_TITLE;
+  line.appendChild(document.createTextNode("The gateway gave no reason. Trace id "));
+  const code = document.createElement("code");
+  code.textContent = traceId;
+  line.append(code, desktopCopyButton(traceId));
+  item.appendChild(line);
 }
 
 function renderRequestChain(row) {
@@ -25778,6 +25821,7 @@ function renderRequestChain(row) {
       why.appendChild(document.createTextNode(reason));
       item.appendChild(why);
     }
+    appendGatewayTraceId(item, attempt);
 
     appendBenchReason(item, benchOf(attempt));
     appendLadder(item, ladderOf(attempt));

@@ -7450,6 +7450,23 @@ function driveDetail(row) {
     dialClasses: Array.from(chain.querySelectorAll(".req-chain-dial")).map(
       (el) => el.className,
     ),
+    endedCells: Array.from(chain.querySelectorAll(".req-chain-metric"))
+      .filter(
+        (cell) =>
+          (cell.querySelector(".req-chain-metric-label") || {}).textContent === "ended",
+      )
+      .map((cell) => ({
+        value: cell.querySelector(".req-chain-metric-value").textContent,
+        title: cell.title,
+      })),
+    traceLines: Array.from(chain.querySelectorAll(".req-chain-traceid")).map((el) => ({
+      text: (el.textContent || "").replace(/\s+/g, " ").trim(),
+      code: el.querySelector("code") ? el.querySelector("code").textContent : null,
+      button: el.querySelector("button")
+        ? el.querySelector("button").getAttribute("aria-label")
+        : null,
+      title: el.title,
+    })),
   };
 }
 
@@ -8145,7 +8162,71 @@ const requestDetail = {
       detailAttempt({ attempt: 1, model_ref: "commandcode/kimi-k3" }),
     ],
   }),
+  /* 7.105.2: Command Code passed on only `invalid request error trace_id: …`.
+     The server parsed the id into params.gateway_trace_id; the row says the
+     gateway gave no reason, the host's text stays verbatim, the id copies. */
+  gatewayNoReason: driveDetail(gatewayDetailRow()),
+  /* The same route refusing WITH a reason: no key, so nothing changes. */
+  gatewayWithReason: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        model_ref: "commandcode/deepseek/deepseek-v4.1-flash",
+        outcome: "failed",
+        error_kind: "model_rejected",
+        error_message:
+          "Upstream provider COMMANDCODE returned HTTP 400.\n" +
+          "Category: invalid_request_error\n" +
+          "Mapped message: This model rejected the request.\n\nUpstream error:\n" +
+          '{"message":"Invalid schema for function \'Artifact\': is not a \\"regex\\"' +
+          ' (request_id: 1b2c3d4e-0000-4000-8000-123456789abc)","type":"invalid_request_error"}',
+        params: { ladder: { tries: [], credentials: [], summary: null, root_cause: "" } },
+      }),
+      detailAttempt({ attempt: 1, model_ref: "custom_agnes/agnes-3.0-flash" }),
+    ],
+  }),
 };
+
+function gatewayDetailRow() {
+  return {
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        model_ref: "commandcode/deepseek/deepseek-v4.1-flash",
+        outcome: "failed",
+        error_kind: "model_rejected",
+        error_message:
+          "Upstream provider COMMANDCODE returned HTTP 400.\n" +
+          "Category: invalid_request_error\n" +
+          "Mapped message: This model rejected the request.\n\nUpstream error:\n" +
+          '{"message":"{\\"message\\":\\"invalid request error trace_id: ' +
+          'b5162a9f0c1d4e2f8a7b6c5d4e3f2a1b\\",\\"type\\":\\"invalid_request_error\\"}\\n",' +
+          '"type":"invalid_request_error"}',
+        params: { gateway_trace_id: "b5162a9f0c1d4e2f8a7b6c5d4e3f2a1b" },
+      }),
+      detailAttempt({ attempt: 1, model_ref: "custom_agnes/agnes-3.0-flash" }),
+    ],
+  };
+}
+
+// Click the trace id's Copy button and read what reached the clipboard.
+requestDetail.gatewayCopied = await (async () => {
+  driveDetail(gatewayDetailRow());
+  const clipboard = window.navigator.clipboard;
+  const original = clipboard.writeText;
+  const written = [];
+  clipboard.writeText = (text) => {
+    written.push(text);
+    return Promise.resolve();
+  };
+  const button = doc.querySelector("#reqDetailChain .req-chain-traceid button");
+  if (button) button.click();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  clipboard.writeText = original;
+  return { written, label: button ? button.textContent : null };
+})();
 
 /* ------------------------------------------------- Models page dialect panel
    Driven directly, because the panel's whole job is to say WHERE a dialect
