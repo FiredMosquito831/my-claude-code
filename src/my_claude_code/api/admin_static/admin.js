@@ -31664,7 +31664,12 @@ const MODELS_FIELD_LABELS = {
   context_length: "context length",
   max_output_tokens: "output limit",
   reasoning_preference: "reasoning",
+  prompt_cache_ttl: "prompt cache lifetime",
 };
+
+/* The preference kind of the prompt-cache lifetime override (7.105.0): whole
+   minutes, bounded by the row's own `minimum`/`maximum`. */
+const PROMPT_CACHE_TTL_KIND = "minutes";
 
 const OVERRIDE_ROW_WORDS = {
   model: "this model's override row",
@@ -32335,17 +32340,27 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
       name,
       kinds[name] === "integer"
         ? buildOutputLimitField(ctx, name)
-        : buildReasoningField(ctx, name),
+        : kinds[name] === PROMPT_CACHE_TTL_KIND
+          ? buildPromptCacheLifetimeField(ctx, name)
+          : buildReasoningField(ctx, name),
     );
   });
   (editable || []).forEach((name) => fields.set(name, buildRequestParameterField(ctx, name)));
+  /* The prompt-cache lifetime (7.105.0) is drawn and sent LAST: drawn after
+     the nine, where 7.104.0's read-only lifetimes row sat, and sent after
+     them, so every other key keeps the place 7.104.0 sent it in. */
+  const minuteNames = preferenceNames.filter((name) => kinds[name] === PROMPT_CACHE_TTL_KIND);
+  const otherPreferences = preferenceNames.filter(
+    (name) => kinds[name] !== PROMPT_CACHE_TTL_KIND,
+  );
 
   // Drawn: the limits, then the reasoning word, then the nine.
   [
     CONTEXT_WINDOW_OVERRIDE,
-    ...preferenceNames.filter((name) => kinds[name] === "integer"),
-    ...preferenceNames.filter((name) => kinds[name] !== "integer"),
+    ...otherPreferences.filter((name) => kinds[name] === "integer"),
+    ...otherPreferences.filter((name) => kinds[name] !== "integer"),
     ...(editable || []),
+    ...minuteNames,
   ].forEach((name) => {
     const field = fields.get(name);
     if (field) fieldsGroupBody(table, field.group).appendChild(field.tr);
@@ -32354,9 +32369,10 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
   // Sent: 7.100.0's order, whatever the drawing order (see above).
   const inputs = new Map();
   [
-    ...preferenceNames,
+    ...otherPreferences,
     ...(isModel ? [CONTEXT_WINDOW_OVERRIDE] : []),
     ...(editable || []),
+    ...minuteNames,
   ].forEach((name) => {
     const field = fields.get(name);
     if (field) inputs.set(name, field.input);
@@ -32369,10 +32385,7 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
     if (isModel) {
       placeReadonlyFieldRows(
         table,
-        [
-          ...modelReadonlyFieldEntries(ctx.capabilities, ctx.model),
-          ...promptCacheLifetimeEntries(ctx.model),
-        ],
+        modelReadonlyFieldEntries(ctx.capabilities, ctx.model),
         ctx.model,
       );
     }
@@ -32394,6 +32407,7 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
     const blank = [];
     const overCap = [];
     const notWhole = [];
+    const outOfRange = [];
     inputs.forEach((control, name) => {
       if (control.mode.value === "inherit") {
         updates[name] =
@@ -32412,7 +32426,20 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
            request would fail on. It is still refused here, because saving a
            number that silently means a different number is the surprise this
            control exists to remove. */
-        if (control.integer && !(Number.isInteger(parsed) && parsed > 0)) {
+        if (
+          control.minutes &&
+          !(
+            Number.isInteger(parsed) &&
+            parsed >= control.minutes.minimum &&
+            parsed <= control.minutes.maximum
+          )
+        ) {
+          // The lifetime (7.105.0): whole minutes in Model Config's range.
+          outOfRange.push(
+            `${name} must be whole minutes from ${control.minutes.minimum} to ` +
+              `${control.minutes.maximum}`,
+          );
+        } else if (control.integer && !(Number.isInteger(parsed) && parsed > 0)) {
           notWhole.push(name);
         } else if (control.max != null && Number(parsed) > control.max) {
           overCap.push(`${name} (limit ${control.max.toLocaleString()})`);
@@ -32421,6 +32448,13 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
         }
       }
     });
+    if (outOfRange.length) {
+      const message = `${outOfRange.join("; ")}.`;
+      status.textContent = message;
+      status.className = "models-status error";
+      showMessage(message, "error");
+      return;
+    }
     if (notWhole.length) {
       const message = `${notWhole.join(", ")} must be a whole number of tokens greater than zero.`;
       status.textContent = message;
@@ -32626,53 +32660,280 @@ function modelReadonlyFieldEntries(capabilities, model) {
   return entries;
 }
 
-/* 7.104.0: which prompt-cache lifetimes this model's host takes -- the
-   declared table the server sends beside the page (`prompt_cache_lifetimes`),
-   joined by provider id and narrowed by this model's own learned refusals,
-   each named "refused by this host" while the fact is fresh. A provider the
-   table does not list says "lifetime control not known for this host":
-   unknown, never "unsupported". A payload without the table (an older
-   server) draws no row at all. Read-only in this release; it is a fact about
-   the host, not something the model discovered, so it never counts towards
-   "Nothing discovered for this model". */
-function promptCacheLifetimeEntries(model) {
-  const table = modelsState.data && modelsState.data.prompt_cache_lifetimes;
+/* 7.105.0: the prompt-cache lifetime as an overridable row -- the 14th
+   override key, `prompt_cache_ttl`, on model rows and provider rows. It
+   replaces 7.104.0's read-only "prompt cache lifetimes" row and keeps
+   everything it said: which lifetimes this host takes (the table the server
+   sends beside the page, `prompt_cache_lifetimes`, joined by the model's own
+   ref for a gateway's Messages models and by provider id otherwise), each
+   one this host refused named while the fact is fresh -- now with the Forget
+   that re-opens it -- and "lifetime control not known for this host" where
+   nothing is declared (unknown, never "unsupported").
+
+   Columns as every overridable row: the lifetime MCC would send, the host's
+   family as the badge with what decided it as the note, then Inherit / Force
+   unset ("From client" on this row) / Force value in minutes, with the
+   default it replaces always written under the control -- the Model Config
+   lifetime each route that names this model reads, and what this host would
+   be sent for it ("default 30 min — PROMPT_CACHE_TTL_OPUS → sent 1 h").
+   The minutes are adapted exactly as the provider adapts them: the shortest
+   lifetime at least the minutes asked, else the longest (adaptPromptCacheMinutes,
+   pinned to the server's rule by a jsdom parity test). */
+function promptCacheTable() {
+  return (modelsState.data && modelsState.data.prompt_cache_lifetimes) || null;
+}
+
+function promptCacheFamilyFor(table, providerId, modelRef) {
+  if (!table) return null;
+  const familyId =
+    (modelRef && (table.models || {})[modelRef]) || (table.providers || {})[providerId];
+  return familyId ? (table.families || {})[familyId] || null : null;
+}
+
+// The fresh refusals this model's host taught MCC (a gateway's are host-wide
+// and arrive on every model's row with their own subject, `model_id: "*"`).
+function promptCacheRefusals(table, model) {
   if (!table || !model) return [];
-  const familyId = (table.providers || {})[modelProviderId(model)];
-  const family = familyId ? (table.families || {})[familyId] : null;
-  const entry = (field) => [
-    {
-      group: "request",
-      key: "prompt_cache_lifetimes",
-      label: "prompt cache lifetimes",
-      field,
-    },
-  ];
-  if (!family) {
-    return entry({
-      value: table.unknown_label,
-      source: "unknown",
-      source_label: "not declared",
-      note: table.unknown_note,
-    });
-  }
-  const refused = new Set(
-    (model.learned || [])
-      .filter((fact) => fact.fact_kind === table.refused_fact_kind && !fact.stale)
-      .map((fact) => String(fact.detail || "")),
+  return (model.learned || []).filter(
+    (fact) => fact.fact_kind === table.refused_fact_kind && !fact.stale,
   );
-  const words = (family.lifetimes || []).map((lifetime) => {
-    const price = lifetime.write_price ? ` (writes ${lifetime.write_price})` : "";
-    return refused.has(lifetime.wire)
-      ? `${lifetime.label} — refused by this host`
-      : `${lifetime.label}${price}`;
+}
+
+function adaptPromptCacheMinutes(minutes, lifetimes) {
+  const ordered = (lifetimes || []).slice().sort((a, b) => a.minutes - b.minutes);
+  if (!ordered.length) return null;
+  return ordered.find((lifetime) => lifetime.minutes >= minutes) || ordered[ordered.length - 1];
+}
+
+// The lifetimes still worth sending: a host that published none and refused
+// the one it was sent takes none at all until the refusal is forgotten.
+function promptCacheUsable(family, refusals) {
+  const refused = new Set(refusals.map((fact) => String(fact.detail || "")));
+  if (!family.lifetimes_known && refusals.length) return [];
+  return (family.lifetimes || []).filter((lifetime) => !refused.has(lifetime.wire));
+}
+
+function promptCacheSentText(minutes, usable) {
+  const sent = adaptPromptCacheMinutes(minutes, usable);
+  return sent ? `sent ${sent.label}` : "nothing sent (refused by this host)";
+}
+
+/* What one Model Config setting asks for: its stored word, or the global's
+   when a tier inherits. `null` values (a page served without settings) read
+   as the shipped defaults. */
+function promptCacheSettingAsk(table, setting) {
+  const settings = (table && table.settings) || {};
+  const globalName = (table && table.global_setting) || "PROMPT_CACHE_TTL";
+  let word = String(settings[setting] == null ? "" : settings[setting]).trim().toLowerCase();
+  let inherited = null;
+  if (setting !== globalName && (!word || word === "inherit")) {
+    inherited = globalName;
+    word = String(settings[globalName] == null ? "" : settings[globalName]).trim().toLowerCase();
+  }
+  const minutes = /^\d+$/.test(word) ? Number(word) : null;
+  return { setting, inherited, minutes };
+}
+
+function promptCacheDefaultLine(ask, usable) {
+  const where = ask.inherited ? `${ask.setting} inherits ${ask.inherited}` : ask.setting;
+  if (ask.minutes == null) {
+    return fieldsDefaultLine("From client", `${where}; the client's own markers go as sent`);
+  }
+  return fieldsDefaultLine(`${ask.minutes} min`, `${where} → ${promptCacheSentText(ask.minutes, usable)}`);
+}
+
+function promptCacheHostWords(family, refusals) {
+  const refused = new Set(refusals.map((fact) => String(fact.detail || "")));
+  return (family.lifetimes || [])
+    .map((lifetime) => {
+      const price = lifetime.write_price ? ` (writes ${lifetime.write_price})` : "";
+      return refused.has(lifetime.wire)
+        ? `${lifetime.label} — refused by this host`
+        : `${lifetime.label}${price}`;
+    })
+    .join(", ");
+}
+
+/* One Forget per refusal, beside the badge it narrows: the fact's own
+   subject, so a host-wide one is forgotten once for the whole host. */
+function appendPromptCacheForgets(sourceCell, model, refusals) {
+  const stack = sourceCell.querySelector(".models-fields-source") || sourceCell;
+  refusals.forEach((fact) => {
+    const line = document.createElement("span");
+    line.className = "models-approx-note";
+    const scope = fact.model_id === "*" ? "this whole host" : "this model";
+    line.textContent =
+      `refused ${fact.detail || "a lifetime"} for ${scope} — learned from its own 400`;
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "ghost-button models-learned-forget";
+    forget.textContent = "Forget";
+    forget.title = "Forget this refusal; the next request may send the lifetime again";
+    forget.addEventListener("click", () =>
+      forgetLearnedFacts(
+        {
+          providerId: providerIdOf(model.model_ref),
+          modelId: fact.model_id || modelIdOf(model.model_ref),
+          factKind: fact.fact_kind,
+        },
+        forget,
+      ),
+    );
+    stack.appendChild(document.createTextNode(" "));
+    stack.appendChild(line);
+    stack.appendChild(document.createTextNode(" "));
+    stack.appendChild(forget);
   });
-  return entry({
-    value: words.join(", "),
-    source: "declared",
-    source_label: `declared for the ${family.label} family`,
-    note: table.note,
-  });
+}
+
+function buildPromptCacheLifetimeField(ctx, name) {
+  const spec = ctx.preferences[name];
+  const boxId = fieldsBoxId("pref", ctx.scope, ctx.key, name);
+  const mode = buildFieldModeSelect(`${boxId}-mode`, spec.state);
+  const minimum = typeof spec.minimum === "number" ? spec.minimum : 1;
+  const maximum = typeof spec.maximum === "number" ? spec.maximum : 60;
+  const box = document.createElement("input");
+  box.type = "number";
+  box.min = String(minimum);
+  box.max = String(maximum);
+  box.step = "1";
+  box.className = "models-override-value";
+  box.id = `${boxId}-value`;
+  box.setAttribute("aria-label", "prompt cache lifetime in minutes");
+  box.value = spec.state === "value" && spec.value != null ? String(spec.value) : "";
+  let note = null;
+  if (spec.note) {
+    note = document.createElement("p");
+    note.className = "models-preference-note";
+    note.textContent = spec.note;
+  }
+  const shell = buildOverrideFieldRow(
+    name,
+    MODELS_FIELD_LABELS[name] || name,
+    name,
+    boxId,
+    mode,
+    box,
+    [note],
+  );
+  return {
+    group: "request",
+    tr: shell.tr,
+    input: { mode: mode, box: box, max: null, minutes: { minimum, maximum } },
+    paint(next) {
+      const labels = fieldsLabels();
+      const table = promptCacheTable();
+      if (next.scope !== "model") {
+        const own = next.row[name];
+        fillFieldCells(
+          shell.value,
+          shell.source,
+          providerStateField(own, "From client", (value) => `${value} min`),
+          labels,
+        );
+        shell.tr.classList.toggle("is-forced", Boolean(own));
+        const providerId = String(next.key || "");
+        const family = promptCacheFamilyFor(table, providerId, null);
+        const gatewayModels = Object.keys((table && table.models) || {}).filter(
+          (ref) => ref.startsWith(`${providerId}/`),
+        );
+        let host;
+        if (!table) host = null;
+        else if (family) host = `this host: declared for the ${family.label} family`;
+        else if (gatewayModels.length)
+          host = `its Anthropic Messages models: ${table.gateway_label}`;
+        else host = `this host: ${table.unknown_label}; a value here changes nothing`;
+        writeDefaultLines(shell.defaults, [
+          fieldsDefaultLine("per model", "open a model to see its default"),
+          host ? fieldsNoteLine(host) : null,
+        ]);
+        return;
+      }
+      const model = next.model || {};
+      const family = promptCacheFamilyFor(
+        table,
+        modelProviderId(model),
+        model.model_ref || String(next.key || ""),
+      );
+      const refusals = family ? promptCacheRefusals(table, model) : [];
+      const usable = family ? promptCacheUsable(family, refusals) : [];
+      const resolved = resolvedOverride(next.row, fieldsProviderRow(next), name);
+      const rowWords = resolved ? OVERRIDE_ROW_WORDS[resolved.from] : null;
+      /* What decides: an override row's minutes or its Force unset, else the
+         Model Config lifetime each route reads -- never for a host that takes
+         one only from a row. */
+      const asks =
+        !table || !family || family.rows_only
+          ? []
+          : ((table.routes || {})[model.model_ref] || [table.global_setting]).map(
+              (setting) => promptCacheSettingAsk(table, setting),
+            );
+      let value = "From client";
+      let decided = "Nothing sets a lifetime here: the client's own markers go as sent.";
+      if (resolved && resolved.state === "value" && family) {
+        const minutes = Number(resolved.value);
+        const sent = adaptPromptCacheMinutes(minutes, usable);
+        value = sent ? `${sent.label} (asked ${minutes} min)` : `nothing sent (asked ${minutes} min)`;
+        decided = `From ${rowWords}: asked ${minutes} min → ${promptCacheSentText(minutes, usable)}.`;
+      } else if (resolved && resolved.state === "value") {
+        value = `From client (asked ${resolved.value} min)`;
+        decided = `Asked ${resolved.value} min on ${rowWords}, but nothing is known to take a lifetime here.`;
+      } else if (resolved) {
+        decided = `Forced unset on ${rowWords}: MCC sets no lifetime for this model.`;
+      } else if (asks.length) {
+        const shown = asks.map((ask) =>
+          ask.minutes == null
+            ? "From client"
+            : (() => {
+                const sent = adaptPromptCacheMinutes(ask.minutes, usable);
+                return sent ? `${sent.label} (asked ${ask.minutes} min)` : `nothing sent (asked ${ask.minutes} min)`;
+              })(),
+        );
+        value = shown.every((text) => text === shown[0]) ? shown[0] : "per route";
+        decided =
+          value === "From client"
+            ? "Nothing sets a lifetime here: the client's own markers go as sent."
+            : "From Model Config (see the default under the control).";
+      }
+      let field;
+      if (!table || !family) {
+        field = {
+          value,
+          source: "unknown",
+          source_label: "not declared",
+          note: table ? `${table.unknown_label}. ${table.unknown_note}` : null,
+        };
+      } else {
+        const lifetimes = `This host takes: ${promptCacheHostWords(family, refusals)}.`;
+        field = {
+          value,
+          source: "declared",
+          source_label: family.lifetimes_known
+            ? `declared for the ${family.label} family`
+            : table.gateway_label,
+          note: `${decided} ${lifetimes} ${family.lifetimes_known ? table.note : table.gateway_note}`,
+        };
+      }
+      fillFieldCells(shell.value, shell.source, field, labels);
+      if (refusals.length) appendPromptCacheForgets(shell.source, model, refusals);
+      shell.tr.classList.toggle("is-forced", Boolean(resolved));
+      let lines;
+      if (!table || !family) {
+        lines = [fieldsDefaultLine("From client", "no lifetime control known for this host")];
+      } else if (family.rows_only) {
+        lines = [
+          fieldsDefaultLine(
+            "From client",
+            "Model Config's lifetimes never reach this host; only this row or its provider's row sends one",
+          ),
+        ];
+      } else {
+        lines = asks.map((ask) => promptCacheDefaultLine(ask, usable));
+        if (table.route_note) lines.push(fieldsNoteLine(table.route_note));
+      }
+      writeDefaultLines(shell.defaults, lines);
+    },
+  };
 }
 
 /* Whether ANY field was discovered for this model -- the rows above plus the
