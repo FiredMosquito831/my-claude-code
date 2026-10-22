@@ -2799,7 +2799,7 @@ empty, the default, adds it nowhere), which is also on that page.
 | With the button on | What MCC changes, and only that |
 |---|---|
 | `mcc-claude` | adds `--mcp-config=<MCC's mcp-claude.json>` before your arguments (always the `=` form) |
-| `mcc-codex` | adds `-c mcp_servers.mcc_media.command=…` and `-c mcp_servers.mcc_media.args=[…]` |
+| `mcc-codex` | adds `-c mcp_servers.mcc_media.command=…`, `-c mcp_servers.mcc_media.args=[…]` and `-c mcp_servers.mcc_media.required=true`; MCC's Codex model list says its models have no tool search (7.107.0) |
 | `mcc-opencode`, `mcc-opencode2`, `mcc-kilo` | MCC's config layer gains `mcp.mcc_media` and `permission` `ask` for the paid tools |
 | `mcc-crush` | MCC's global config gains `mcp.mcc_media` |
 | `mcc-qwen`, `mcc-gemini` | MCC's system settings gain `mcpServers.mcc_media` (never `trust`) |
@@ -2809,8 +2809,10 @@ The agent's next session lists `media_status` and one tool per job whose rail ha
 model. Each spending tool goes through the agent's own "allow this tool?" prompt; the
 tool list adds a few KB to each of that agent's requests and stays the same from turn
 to turn. Results are saved in the agent's working folder, never over an existing file.
-Gemini CLI starts MCP servers only in a folder you trusted. Codex lists the server but
-its model does not see the tools yet ([Known limits](MEDIA.md#known-limits-today)). The
+Gemini CLI starts MCP servers only in a folder you trusted. With its button on, every
+Codex start waits up to about 3 seconds for the server, Codex also lists its own sub-agent
+tools, and a broken `mcc-mcp` stops Codex until you press **Remove MCP server**
+([Known limits](MEDIA.md#known-limits-today)). The
 full reference: [docs/MEDIA.md](MEDIA.md#coding-agents-the-media-server-mcp-7990).
 
 ### Install an agent from the dashboard

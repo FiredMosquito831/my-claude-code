@@ -553,7 +553,7 @@ already owns:
 | Agent | Where MCC puts it | Asks before a tool that spends money |
 |---|---|---|
 | Claude Code (`mcc-claude`) | MCC's own file, passed as `--mcp-config=<file>` (the `=` form: the option takes several files, so `--mcp-config <file> mcp list` would eat your own arguments) | yes, Claude Code's own prompt |
-| Codex (`mcc-codex`) | `-c mcp_servers.mcc_media.command=... -c mcp_servers.mcc_media.args=[...]`, for that launch only (listed, but the model does not see the tools yet: [Known limits](#known-limits-today)) | yes: no tool that spends is marked read-only |
+| Codex (`mcc-codex`) | `-c mcp_servers.mcc_media.command=... -c mcp_servers.mcc_media.args=[...] -c mcp_servers.mcc_media.required=true`, for that launch only; while the button is on, MCC's Codex model list also says its models have no tool search, so the tools reach the model (7.107.0; every start waits up to about 3 s for the server: [Known limits](#known-limits-today)) | yes: no tool that spends is marked read-only |
 | OpenCode, OpenCode 2, Kilo | MCC's config layer (`OPENCODE_CONFIG` / `KILO_CONFIG`) under `mcp`, plus `permission` set to `ask` for the paid tools, because these apps do not ask by default | yes, set by MCC's layer |
 | Crush | MCC's `CRUSH_GLOBAL_CONFIG` document under `mcp` | yes, Crush's own prompt |
 | Qwen Code, Gemini CLI | MCC's system settings file under `mcpServers` (never `trust`) | yes; Gemini CLI starts MCP servers only in a folder you trusted |
@@ -840,13 +840,23 @@ on 7.95.0; the last item on 7.98.0):
   shows a server from that file in third-party mode is the same one relaunch; Command
   Code's and the two desktop apps' own reading of the entry is checked with each app's
   `mcp list` against a scratch home, not in the running apps.
-- **Codex lists the media server but its model does not see the tools yet** (measured
-  2026-10-18 with the Codex CLI on this machine). `mcc-codex mcp list` shows `mcc_media`
-  enabled, but MCC's Codex catalogue tells Codex its models support tool search, so Codex
-  offers MCP tools only through its `tool_search` tool, which MCC's Responses door does not
-  carry; and Codex gives a server that is not `required` about one second to start, where
-  `mcc-mcp` takes about three. With both changed by hand on a scratch install the call
-  worked end to end. Which of them MCC should change is a decision for a later release.
+- **Codex and the media server (7.107.0).** Before 7.107.0 Codex listed the media server
+  but its model never saw the tools (measured 2026-10-18): MCC's Codex model list said its
+  models support tool search, so Codex offered MCP tools only through its own `tool_search`
+  tool, which MCC's Responses door does not carry; and before a turn Codex waits only about
+  one second for a server that is not `required`, where `mcc-mcp` takes about three. Since
+  7.107.0, while Codex's **Add MCP server** button is on, MCC's Codex model list says
+  `supports_search_tool: false` on every model and the launch line marks the server
+  `required = true`. What to expect with the button on: every `mcc-codex` start, interactive
+  or `exec`, waits for the server (1.4 s measured warm, about 3.4 s cold); Codex also lists
+  its own sub-agent tools, which tool search used to hide; the tool list each Codex request
+  sends the provider grows from about 9.5 KB (8 tools) to about 31 KB (24 tools), and stays
+  the same from turn to turn and session to session; and if `mcc-mcp` cannot start,
+  Codex refuses to start and names `mcc_media` -- press **Remove MCP server** and it starts
+  again. With the button off, every byte is what it was. The entry the Codex desktop card
+  writes into your own `config.toml` is never marked required, so a broken `mcc-mcp` cannot
+  stop plain `codex` or the desktop app; there Codex keeps its one-second wait, so a prompt
+  sent at once may not see the tools (not measured with MCC's provider).
 - **OpenCode 2 (preview)** offers MCP tools inside its Code Mode, through its `execute`
   tool, once its background service has connected the server. The first `mcc-opencode2 run`
   after the service starts sent its turn before `mcc-mcp` had connected, so that turn had no

@@ -179,10 +179,10 @@ MCP_MEDIA_APP_TABLE: tuple[McpMediaApp, ...] = (
             "MCC's Codex model list says its models have no tool search, so "
             "Codex gives its model the media tools directly -- and its own "
             "sub-agent tools with them -- and the server is marked required: "
-            "every Codex start waits about 3 seconds for it, and if mcc-mcp is "
-            "broken Codex will not start until you press Remove MCP server. "
-            "The tools Codex sends grow from about 9.5 KB to about 31 KB per "
-            "request."
+            "every Codex start waits for it, up to about 3 seconds, and if "
+            "mcc-mcp is broken Codex will not start until you press Remove MCP "
+            "server. The tool list each Codex request sends the provider grows "
+            "from about 9.5 KB to about 31 KB."
         ),
     ),
     McpMediaApp(

@@ -127,9 +127,7 @@ def test_codex_on_only_tool_search_changes_to_false_on_each_model(
     assert all(entry["supports_search_tool"] is True for entry in before["models"])
     assert all(entry["supports_search_tool"] is False for entry in after["models"])
     # Every other key, the entries' order and their keys' order are as before.
-    flipped = [
-        {**entry, "supports_search_tool": True} for entry in after["models"]
-    ]
+    flipped = [{**entry, "supports_search_tool": True} for entry in after["models"]]
     assert flipped == before["models"]
     assert [list(entry) for entry in after["models"]] == [
         list(entry) for entry in before["models"]
