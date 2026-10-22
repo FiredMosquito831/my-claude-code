@@ -233,7 +233,7 @@ PROMPT_CACHE_LIFETIME_FAMILIES: Mapping[str, PromptCacheLifetimeFamily] = {
             CacheLifetime(
                 minutes=5,
                 wire="in_memory",
-                label="in memory (about 5-10 min)",
+                label="in memory, about 5-10 min",
                 write_price="",
             ),
             CacheLifetime(minutes=24 * 60, wire="24h", label="24 h", write_price=""),

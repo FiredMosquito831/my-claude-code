@@ -46,6 +46,16 @@ const GATEWAY_PLAIN_REF = "commandcode/claude-opus-5-5";
 const GATEWAY_ROW_REF = "commandcode/claude-sonnet-5-5";
 const GATEWAY_OPEN_REF = "commandcode/deepseek/deepseek-v4-flash";
 const GATEWAY_REFUSED_REF = "opencode/claude-fable-5-1";
+// 7.106.0: the OpenAI-shaped hosts -- OpenRouter's Claude upstreams (alias
+// ids too) and its other models, an Azure OpenAI deployment, and a host that
+// caches automatically.
+const OR_CLAUDE_REF = "open_router/anthropic/claude-haiku-5.5";
+const OR_ALIAS_REF = "open_router/~anthropic/claude-sonnet-latest";
+const OR_OPEN_REF = "open_router/moonshotai/kimi-k2.6";
+const AZURE_REF = "azure_openai/my-gpt-5-4";
+const AZURE_SMALL_REF = "azure_openai/my-gpt-5-4-mini";
+const GEMINI_REF = "gemini/gemini-3.6-flash";
+const GEMINI_ROW_REF = "gemini/gemini-3.6-pro";
 
 const HOST_REFUSAL_FACT = {
   fact_kind: "prompt_cache_lifetime_refused",
@@ -142,6 +152,19 @@ export function preparePromptCacheScenario({ window, ROUTES }) {
     ]),
     providerEntry("opencode", { prompt_cache_ttl: 20 }, [
       modelEntry(GATEWAY_REFUSED_REF, {}, [clone(HOST_REFUSAL_FACT)]),
+    ]),
+    providerEntry("open_router", {}, [
+      modelEntry(OR_CLAUDE_REF, { prompt_cache_ttl: 30 }),
+      modelEntry(OR_ALIAS_REF, { prompt_cache_ttl: 3 }),
+      modelEntry(OR_OPEN_REF, { prompt_cache_ttl: 30 }),
+    ]),
+    providerEntry("azure_openai", {}, [
+      modelEntry(AZURE_REF, { prompt_cache_ttl: 30 }),
+      modelEntry(AZURE_SMALL_REF, { prompt_cache_ttl: 4 }),
+    ]),
+    providerEntry("gemini", {}, [
+      modelEntry(GEMINI_REF, {}),
+      modelEntry(GEMINI_ROW_REF, { prompt_cache_ttl: 30 }),
     ]),
   );
   page.prompt_cache_lifetimes = clone(fixture.prompt_cache_lifetimes);
@@ -392,6 +415,26 @@ export function preparePromptCacheScenario({ window, ROUTES }) {
       alpha: await providerRow(providerNodes.alpha),
       commandcode: await providerRow(providerNodes.commandcode),
       opencode: await providerRow(providerNodes.opencode),
+    };
+
+    // 7.106.0: the OpenAI-shaped hosts' rows and provider rows.
+    const hostNodes = {};
+    for (const id of ["open_router", "azure_openai", "gemini"]) {
+      hostNodes[id] = await openProvider(id);
+    }
+    out.hosts = {
+      orClaude: await lifetimeRow(OR_CLAUDE_REF),
+      orAlias: await lifetimeRow(OR_ALIAS_REF),
+      orOpen: await lifetimeRow(OR_OPEN_REF),
+      azure: await lifetimeRow(AZURE_REF),
+      azureSmall: await lifetimeRow(AZURE_SMALL_REF),
+      gemini: await lifetimeRow(GEMINI_REF),
+      geminiRow: await lifetimeRow(GEMINI_ROW_REF),
+    };
+    out.hostProviders = {
+      open_router: await providerRow(hostNodes.open_router),
+      azure_openai: await providerRow(hostNodes.azure_openai),
+      gemini: await providerRow(hostNodes.gemini),
     };
 
     // Saves: refused out of range (nothing posted), then 20 minutes, sent last.
