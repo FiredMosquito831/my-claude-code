@@ -19,6 +19,10 @@ second release (decision 11, 7.100.0): Codex's ``config.toml``, OpenCode's
 Desktop's ``claude_desktop_config.json`` -- each through its card under
 Desktop apps, with the plan diff first, a one-time backup and Undo
 (``config/desktop_apply.py``). :func:`desktop_file_entry` builds those entries.
+Codex is the one app whose generated document changes in another way while
+its button is on (7.107.0): MCC's Codex model list says "no tool search", and
+the launch line marks the server required (:func:`mcp_media_document`,
+:func:`codex_config_arguments`).
 
 What is never written: the proxy token (``mcc-mcp`` reads it from MCC's own
 settings at run time), a timeout or limit of MCC's choosing (IV.1), a
@@ -171,10 +175,14 @@ MCP_MEDIA_APP_TABLE: tuple[McpMediaApp, ...] = (
         ),
         note=(
             "Takes effect at the next mcc-codex launch, as -c settings for that "
-            "launch only; your config.toml is not touched. Measured 2026-10-18: "
-            "Codex lists the server, but its model does not see the tools yet "
-            "-- Codex offers MCP tools only through its tool search, which MCC "
-            "does not carry, and gives a server about one second to start."
+            "launch only; your config.toml is not touched. While it is added, "
+            "MCC's Codex model list says its models have no tool search, so "
+            "Codex gives its model the media tools directly -- and its own "
+            "sub-agent tools with them -- and the server is marked required: "
+            "every Codex start waits for it, up to about 3 seconds, and if "
+            "mcc-mcp is broken Codex will not start until you press Remove MCP "
+            "server. The tool list each Codex request sends the provider grows "
+            "from about 9.5 KB to about 31 KB."
         ),
     ),
     McpMediaApp(
@@ -433,6 +441,19 @@ def codex_config_arguments(command: str, environ: Mapping[str, str]) -> list[str
     Codex parses each right-hand side as TOML, whose basic string, array of
     strings and inline-table forms are written here with ``json.dumps`` for
     every string -- the same quoting rule the launcher's own assignments use.
+
+    ``required = true`` (7.107.0, user decision 3 of 2026-10-19): before a
+    turn Codex waits only about one second for a server that is not
+    required (its ``mcp_optional_startup_grace_ms``), and ``mcc-mcp``
+    answers ``initialize`` after about three, so ``mcc-codex exec`` and a
+    quick first prompt never saw the tools. ``required`` makes Codex wait for
+    the server at the start of the session, under Codex's own startup
+    deadline -- a declaration Codex documents, not a timeout of MCC's (IV.1).
+    The cost, stated on the card: a server that cannot start stops Codex
+    until *Remove MCP server*. Only this launch line carries it; the entry
+    the Desktop apps card writes into the user's own ``config.toml``
+    (:func:`desktop_file_entry`) never does, so a broken ``mcc-mcp`` cannot
+    stop plain ``codex`` or the Codex desktop app (risk R6).
     """
 
     prefix = f"mcp_servers.{MCP_MEDIA_SERVER_NAME}"
@@ -448,6 +469,7 @@ def codex_config_arguments(command: str, environ: Mapping[str, str]) -> list[str
             f"{json.dumps(name)}={json.dumps(value)}" for name, value in env.items()
         )
         arguments.extend(["-c", f"{prefix}.env={{{pairs}}}"])
+    arguments.extend(["-c", f"{prefix}.required=true"])
     return arguments
 
 
@@ -635,6 +657,39 @@ def with_mcp_media_block(
     return result
 
 
+#: The key in each entry of Codex's ``model_catalog_json`` that tells Codex
+#: the model takes its ``tool_search`` tool (``application/catalogues/codex``).
+CODEX_SEARCH_TOOL_KEY = "supports_search_tool"
+
+
+def codex_catalogue_without_tool_search(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    """A copy of MCC's Codex model list whose models say "no tool search".
+
+    7.107.0, user decision 1 of 2026-10-19 (option D of the Codex MCP
+    investigation). A model that supports tool search gets every MCP
+    tool -- and Codex's own sub-agent tools -- only behind Codex's
+    ``tool_search`` tool, which MCC's Responses door does not carry
+    (``core/openai_responses/tools.py``), so the model never saw
+    ``generate_image``. With the key ``false`` Codex lists those tools
+    directly. Only that one key changes, on every entry; every other key,
+    the entries' order and the rest of the document are as the serialiser
+    wrote them.
+    """
+
+    result = dict(document)
+    models = document.get("models")
+    if isinstance(models, list):
+        result["models"] = [
+            {**entry, CODEX_SEARCH_TOOL_KEY: False}
+            if isinstance(entry, Mapping)
+            else entry
+            for entry in models
+        ]
+    return result
+
+
 def mcp_media_document(
     app_id: str,
     document: Mapping[str, Any],
@@ -650,6 +705,12 @@ def mcp_media_document(
     Called **after** the catalogue serialiser and outside it (risk R13): the
     OpenCode desktop app's Configure document comes from the same serialiser
     and must never carry a launcher's switch.
+
+    Codex (7.107.0) is told about the server on its launch line
+    (:func:`codex_config_arguments`), so its document -- the model list --
+    does not gain an entry: while its button is on, the list says its models
+    have no tool search (:func:`codex_catalogue_without_tool_search`), so the
+    tools the launch line adds reach the model.
     """
 
     app = mcp_media_app(app_id)
@@ -657,6 +718,7 @@ def mcp_media_document(
         McpMediaShape.OPENCODE_MCP,
         McpMediaShape.CRUSH_MCP,
         McpMediaShape.MCP_SERVERS,
+        McpMediaShape.CODEX_CONFIG_ARGS,
     ):
         return document
     if not mcp_media_on(apps_value, app_id):
@@ -664,5 +726,7 @@ def mcp_media_document(
     resolved = command if command is not None else mcp_media_command()
     if not resolved:
         return document
+    if app.shape is McpMediaShape.CODEX_CONFIG_ARGS:
+        return codex_catalogue_without_tool_search(document)
     assert app.shape is not None
     return with_mcp_media_block(app.shape, app_id, document, resolved, environ)

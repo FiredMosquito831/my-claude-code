@@ -212,6 +212,20 @@ def test_codex_add_appends_only_the_table_and_keeps_every_comment(tmp_path):
     )
 
 
+def test_the_codex_user_file_entry_is_never_marked_required(tmp_path):
+    """Risk R6 (7.107.0): only ``mcc-codex``'s own launch line marks the server
+    ``required``. The entry in the user's own ``config.toml`` is read by plain
+    ``codex`` and the Codex desktop app too, and a required server that cannot
+    start would stop both -- so it carries the command and arguments only."""
+
+    spec, env, path, record, entry = _setup(tmp_path, "codex_desktop", CODEX_SEED)
+    assert sorted(entry) == ["args", "command"]
+    _add(spec, env, record, entry)
+    written = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert "required" not in written["mcp_servers"]["mcc_media"]
+    assert "required" not in path.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     "seed",
     [

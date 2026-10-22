@@ -1,4 +1,4 @@
-"""MCC's media MCP server in the config layers MCC owns (7.99.0).
+"""MCC's media MCP server in the config layers MCC owns (7.99.0, 7.107.0).
 
 For OpenCode, OpenCode 2, Kilo, Crush, Qwen Code and Gemini CLI the server is
 an entry in the document MCC already writes under its config folder, added by
@@ -6,7 +6,9 @@ the background publisher and by ``GET /admin/api/catalogue-models`` (the
 launcher's fallback) alike -- after the serialiser and outside it, so the
 desktop apps' Configure documents never carry it (risk R13). Off, every
 document is the one it always was. Never ``trust`` (R16); OpenCode and Kilo
-get their own ``ask`` for the tools that spend money (decision 8).
+get their own ``ask`` for the tools that spend money (decision 8). Codex's
+document is its model list: with its button on, only ``supports_search_tool``
+changes, to ``false`` on every model (7.107.0).
 """
 
 import json
@@ -108,11 +110,50 @@ def test_on_only_the_named_apps_documents_change(tmp_path: Path) -> None:
     )
 
 
+def test_codex_on_only_tool_search_changes_to_false_on_each_model(
+    tmp_path: Path,
+) -> None:
+    """7.107.0, decision 1: Codex's button on → its model list says "no tool
+    search", so the launch line's tools reach the model; nothing else moves."""
+
+    off = _publish(tmp_path, "", "off")
+    on = _publish(tmp_path, "codex", "on")
+
+    changed = sorted(app for app in off if off[app] != on[app])
+    assert changed == ["codex"]
+    before = json.loads(off["codex"])
+    after = json.loads(on["codex"])
+    assert before["models"], "the fake runtime gives Codex at least one model"
+    assert all(entry["supports_search_tool"] is True for entry in before["models"])
+    assert all(entry["supports_search_tool"] is False for entry in after["models"])
+    # Every other key, the entries' order and their keys' order are as before.
+    flipped = [{**entry, "supports_search_tool": True} for entry in after["models"]]
+    assert flipped == before["models"]
+    assert [list(entry) for entry in after["models"]] == [
+        list(entry) for entry in before["models"]
+    ]
+    assert {k: v for k, v in after.items() if k != "models"} == {
+        k: v for k, v in before.items() if k != "models"
+    }
+    # The model list carries no server entry: Codex gets it on the launch line.
+    assert b"mcc_media" not in on["codex"]
+
+
 def test_remove_puts_every_document_back_byte_for_byte(tmp_path: Path) -> None:
     before = _publish(tmp_path, "", "same")
-    _publish(tmp_path, ",".join(OWNED), "same")
+    _publish(tmp_path, ",".join((*OWNED, "codex")), "same")
     after = _publish(tmp_path, "", "same")
     assert after == before
+
+
+def test_codex_without_mcc_mcp_keeps_tool_search(tmp_path: Path, monkeypatch) -> None:
+    """The launcher leaves the server out when ``mcc-mcp`` is missing, so the
+    model list keeps tool search then too: the two always agree."""
+
+    off = _publish(tmp_path, "", "off")
+    monkeypatch.setattr(mcp_media, "mcp_media_command", lambda **_kw: None)
+    missing = _publish(tmp_path, "codex", "missing")
+    assert missing == off
 
 
 def test_gemini_and_qwen_never_mark_the_server_trusted(tmp_path: Path) -> None:
@@ -176,3 +217,16 @@ def test_mcp_media_document_is_the_same_object_when_off() -> None:
         mcp_media_document("aider", document, apps_value="aider", environ={})
         is document
     )
+
+
+def test_codexs_model_list_is_the_same_object_while_its_button_is_off() -> None:
+    document = {"models": [{"slug": "a", "supports_search_tool": True}]}
+    for apps in ("", "claude,opencode", "aider,pi"):
+        assert (
+            mcp_media_document("codex", document, apps_value=apps, environ={})
+            is document
+        )
+    on = mcp_media_document("codex", document, apps_value="codex", environ={})
+    assert on == {"models": [{"slug": "a", "supports_search_tool": False}]}
+    # A copy: the caller's document is never changed in place.
+    assert document == {"models": [{"slug": "a", "supports_search_tool": True}]}

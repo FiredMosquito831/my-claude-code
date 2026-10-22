@@ -48,8 +48,9 @@ your own files, and the token never goes into any of them: `mcc-mcp` reads it fr
 settings. Each agent asks before a tool that spends money; for OpenCode and Kilo MCC's
 layer turns that ask on. The agent sends a few KB of tool text with each request while it
 has the server -- the **MCC media server** card on the same page shows the figure, the
-tools your rails give, and a line to add `mcc-mcp` to any other MCP app. Codex lists the
-server but its model does not see the tools yet, and OpenCode 2's first `run` after its
+tools your rails give, and a line to add `mcc-mcp` to any other MCP app. With its button
+on, every Codex start waits up to about 3 seconds for the server and a broken `mcc-mcp` stops
+Codex until you press **Remove MCP server** (7.107.0), and OpenCode 2's first `run` after its
 service starts can begin before the server connects ([Known limits](MEDIA.md#known-limits-today)). Details:
 [Coding agents: the media server](MEDIA.md#coding-agents-the-media-server-mcp-7990).
 
