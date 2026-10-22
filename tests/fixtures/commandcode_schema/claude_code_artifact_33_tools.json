@@ -1,0 +1,1601 @@
+{
+ "source": "The 33 tool schemas of the user-run probe p6 (2026-10-21, INVESTIGATION-COMMANDCODE-DEEPSEEK-RESUMED-400.md section 16): the union of the two refused Claude Code 2.1.304 catalogues c419c0e269 and bb85caeff4, schemas and patterns untouched, every description replaced by invented text. Command Code answered this catalogue HTTP 400; the same catalogue without only Artifact.file_paths.items.pattern (^[^\\0]*$) HTTP 200.",
+ "tool_count": 33,
+ "tools": [
+  {
+   "description": "Invented test tool 1.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "effort": {
+      "description": "Test field.",
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ],
+      "type": "string"
+     },
+     "isolation": {
+      "description": "Test field.",
+      "enum": [
+       "worktree",
+       "remote"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": "Test field.",
+      "enum": [
+       "sonnet",
+       "opus",
+       "haiku",
+       "fable"
+      ],
+      "type": "string"
+     },
+     "prompt": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "description",
+     "prompt"
+    ],
+    "type": "object"
+   },
+   "name": "Agent"
+  },
+  {
+   "description": "Invented test tool 2.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "action": {
+      "description": "Test field.",
+      "enum": [
+       "publish",
+       "list",
+       "read",
+       "delete",
+       "open",
+       "pin",
+       "unpin",
+       "quickstart"
+      ],
+      "type": "string"
+     },
+     "after": {
+      "description": "Test field.",
+      "pattern": "^[A-Za-z0-9_=-]{1,4096}$",
+      "type": "string"
+     },
+     "asset": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "asset_ids": {
+      "description": "Test field.",
+      "items": {
+       "pattern": "^[0-9a-f]{32}$",
+       "type": "string"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "type": "array"
+     },
+     "auto_open": {
+      "description": "Test field.",
+      "enum": [
+       "at_create",
+       "after_first_write"
+      ],
+      "type": "string"
+     },
+     "capabilities": {
+      "additionalProperties": {},
+      "description": "Test field.",
+      "propertyNames": {
+       "maxLength": 64,
+       "minLength": 1,
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "contract": {
+      "anyOf": [
+       {
+        "const": "latest",
+        "type": "string"
+       },
+       {
+        "pattern": "^(0|[1-9]\\d{0,3})\\.(0|[1-9]\\d{0,4})\\.(0|[1-9]\\d{0,5})$",
+        "type": "string"
+       }
+      ],
+      "description": "Test field."
+     },
+     "description": {
+      "description": "Test field.",
+      "maxLength": 1000,
+      "type": "string"
+     },
+     "design_systems": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "edits": {
+      "description": "Test field.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "new_str": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "old_str": {
+         "description": "Test field.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "old_str",
+        "new_str"
+       ],
+       "type": "object"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+     },
+     "favicon": {
+      "description": "Test field.",
+      "maxLength": 32,
+      "minLength": 1,
+      "type": "string"
+     },
+     "file_path": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "file_paths": {
+      "description": "Test field.",
+      "items": {
+       "maxLength": 1024,
+       "minLength": 1,
+       "pattern": "^[^\\0]*$",
+       "type": "string"
+      },
+      "maxItems": 25,
+      "minItems": 1,
+      "type": "array"
+     },
+     "files": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "contentType": {
+           "description": "Test field.",
+           "type": "string"
+          },
+          "path": {
+           "description": "Test field.",
+           "maxLength": 512,
+           "minLength": 1,
+           "type": "string"
+          }
+         },
+         "required": [
+          "path"
+         ],
+         "type": "object"
+        },
+        "maxItems": 255,
+        "type": "array"
+       },
+       {
+        "additionalProperties": {
+         "anyOf": [
+          {
+           "maxLength": 512,
+           "minLength": 1,
+           "type": "string"
+          },
+          {
+           "additionalProperties": false,
+           "properties": {
+            "contentType": {
+             "description": "Test field.",
+             "type": "string"
+            },
+            "from": {
+             "description": "Test field.",
+             "maxLength": 512,
+             "minLength": 1,
+             "type": "string"
+            }
+           },
+           "required": [
+            "from"
+           ],
+           "type": "object"
+          },
+          {
+           "additionalProperties": false,
+           "properties": {
+            "artifact": {
+             "description": "Test field.",
+             "maxLength": 512,
+             "minLength": 1,
+             "type": "string"
+            },
+            "path": {
+             "description": "Test field.",
+             "maxLength": 512,
+             "minLength": 1,
+             "type": "string"
+            },
+            "ver": {
+             "description": "Test field.",
+             "maxLength": 64,
+             "minLength": 1,
+             "type": "string"
+            }
+           },
+           "required": [
+            "artifact",
+            "path"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "propertyNames": {
+         "maxLength": 512,
+         "minLength": 1,
+         "type": "string"
+        },
+        "type": "object"
+       }
+      ],
+      "description": "Test field."
+     },
+     "force": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "from_url": {
+      "description": "Test field.",
+      "maxLength": 512,
+      "type": "string"
+     },
+     "icon": {
+      "description": "Test field.",
+      "maxLength": 40,
+      "type": "string"
+     },
+     "intent": {
+      "description": "Test field.",
+      "enum": [
+       "document",
+       "slides",
+       "design",
+       "other"
+      ],
+      "type": "string"
+     },
+     "label": {
+      "description": "Test field.",
+      "maxLength": 60,
+      "type": "string"
+     },
+     "limit": {
+      "description": "Test field.",
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "out_dir": {
+      "description": "Test field.",
+      "maxLength": 4096,
+      "type": "string"
+     },
+     "overwrite_unread": {
+      "description": "Test field.",
+      "items": {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+     },
+     "page": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "path": {
+      "description": "Test field.",
+      "maxLength": 512,
+      "type": "string"
+     },
+     "paths": {
+      "description": "Test field.",
+      "items": {
+       "maxLength": 512,
+       "type": "string"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+     },
+     "pin": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "prompt": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "root": {
+      "description": "Test field.",
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string"
+     },
+     "scope": {
+      "description": "Test field.",
+      "enum": [
+       "mine",
+       "shared",
+       "all",
+       "types",
+       "files",
+       "assets"
+      ],
+      "type": "string"
+     },
+     "title": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "type": {
+      "description": "Test field.",
+      "maxLength": 200,
+      "type": "string"
+     },
+     "type_query": {
+      "description": "Test field.",
+      "maxLength": 200,
+      "type": "string"
+     },
+     "type_url": {
+      "description": "Test field.",
+      "maxLength": 2048,
+      "type": "string"
+     },
+     "url": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "Artifact"
+  },
+  {
+   "description": "Invented test tool 3.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "annotations": {
+      "additionalProperties": {
+       "additionalProperties": false,
+       "properties": {
+        "notes": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "preview": {
+         "description": "Test field.",
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "description": "Test field.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "answers": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Test field.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "metadata": {
+      "additionalProperties": false,
+      "description": "Test field.",
+      "properties": {
+       "source": {
+        "description": "Test field.",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "questions": {
+      "description": "Test field.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "header": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "multiSelect": {
+         "default": false,
+         "description": "Test field.",
+         "type": "boolean"
+        },
+        "options": {
+         "description": "Test field.",
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "description": {
+            "description": "Test field.",
+            "type": "string"
+           },
+           "label": {
+            "description": "Test field.",
+            "type": "string"
+           },
+           "preview": {
+            "description": "Test field.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "type": "object"
+         },
+         "maxItems": 4,
+         "minItems": 2,
+         "type": "array"
+        },
+        "question": {
+         "description": "Test field.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "question",
+        "header",
+        "options",
+        "multiSelect"
+       ],
+       "type": "object"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "type": "object"
+   },
+   "name": "AskUserQuestion"
+  },
+  {
+   "description": "Invented test tool 4.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "command": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "dangerouslyDisableSandbox": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "description": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "timeout": {
+      "description": "Test field.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   },
+   "name": "Bash"
+  },
+  {
+   "description": "Invented test tool 5.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "file_path": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "new_string": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "old_string": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "replace_all": {
+      "default": false,
+      "description": "Test field.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string",
+     "new_string"
+    ],
+    "type": "object"
+   },
+   "name": "Edit"
+  },
+  {
+   "description": "Invented test tool 6.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "path": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   },
+   "name": "Glob"
+  },
+  {
+   "description": "Invented test tool 7.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "-A": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "-B": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "-C": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "-i": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "-n": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "-o": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "context": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "glob": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "head_limit": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "multiline": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "offset": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "output_mode": {
+      "description": "Test field.",
+      "enum": [
+       "content",
+       "files_with_matches",
+       "count"
+      ],
+      "type": "string"
+     },
+     "path": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "type": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   },
+   "name": "Grep"
+  },
+  {
+   "description": "Invented test tool 8.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "channel": {
+      "description": "Test field.",
+      "maxLength": 256,
+      "type": "string"
+     },
+     "q": {
+      "description": "Test field.",
+      "maxLength": 256,
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "ListAgents"
+  },
+  {
+   "description": "Invented test tool 9.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "command": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "dangerouslyDisableSandbox": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "description": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "timeout": {
+      "description": "Test field.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   },
+   "name": "PowerShell"
+  },
+  {
+   "description": "Invented test tool 10.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "allow_large": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "file_path": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "limit": {
+      "description": "Test field.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "offset": {
+      "description": "Test field.",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "pages": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   },
+   "name": "Read"
+  },
+  {
+   "description": "Invented test tool 11.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "findings": {
+      "description": "Test field.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "category": {
+         "description": "Test field.",
+         "maxLength": 40,
+         "type": "string"
+        },
+        "failure_scenario": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "file": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "line": {
+         "description": "Test field.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "outcome": {
+         "description": "Test field.",
+         "enum": [
+          "fixed",
+          "skipped",
+          "no_change_needed"
+         ],
+         "type": "string"
+        },
+        "short_summary": {
+         "description": "Test field.",
+         "maxLength": 60,
+         "type": "string"
+        },
+        "summary": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "verdict": {
+         "description": "Test field.",
+         "enum": [
+          "CONFIRMED",
+          "PLAUSIBLE"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "file",
+        "summary",
+        "failure_scenario"
+       ],
+       "type": "object"
+      },
+      "maxItems": 32,
+      "type": "array"
+     },
+     "level": {
+      "description": "Test field.",
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "findings"
+    ],
+    "type": "object"
+   },
+   "name": "ReportFindings"
+  },
+  {
+   "description": "Invented test tool 12.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "delaySeconds": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "noop": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "prompt": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "reason": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "stop": {
+      "description": "Test field.",
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "name": "ScheduleWakeup"
+  },
+  {
+   "description": "Invented test tool 13.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "args": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "skill": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "skill"
+    ],
+    "type": "object"
+   },
+   "name": "Skill"
+  },
+  {
+   "description": "Invented test tool 14.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "max_results": {
+      "default": 5,
+      "description": "Test field.",
+      "type": "number"
+     },
+     "query": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query",
+     "max_results"
+    ],
+    "type": "object"
+   },
+   "name": "ToolSearch"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 15.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "offset": {
+      "description": "Test field.",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "prompt": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "url": {
+      "description": "Test field.",
+      "format": "uri",
+      "type": "string"
+     }
+    },
+    "required": [
+     "url",
+     "prompt"
+    ],
+    "type": "object"
+   },
+   "name": "WebFetch"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 16.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "allowed_domains": {
+      "description": "Test field.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "blocked_domains": {
+      "description": "Test field.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "query": {
+      "description": "Test field.",
+      "minLength": 2,
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "name": "WebSearch"
+  },
+  {
+   "description": "Invented test tool 17.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "args": {
+      "description": "Test field."
+     },
+     "description": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "name": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "resumeFromRunId": {
+      "description": "Test field.",
+      "pattern": "^wf_[a-z0-9-]{6,}$",
+      "type": "string"
+     },
+     "script": {
+      "description": "Test field.",
+      "maxLength": 524288,
+      "type": "string"
+     },
+     "scriptPath": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "title": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "Workflow"
+  },
+  {
+   "description": "Invented test tool 18.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "content": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "file_path": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "type": "object"
+   },
+   "name": "Write"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 19.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "language": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "libraryId": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "query": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "libraryId",
+     "query"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__context7__query-docs"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 20.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+     "libraryName": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "query": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query",
+     "libraryName"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__context7__resolve-library-id"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 21.",
+   "input_schema": {
+    "properties": {
+     "fields": {
+      "description": "Test field.",
+      "items": {
+       "enum": [
+        "type",
+        "name",
+        "path",
+        "size",
+        "sha",
+        "url",
+        "git_url",
+        "html_url",
+        "download_url"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "owner": {
+      "description": "Test field.",
+      "type": "string",
+      "x-mcp-header": "owner"
+     },
+     "path": {
+      "default": "/",
+      "description": "Test field.",
+      "type": "string"
+     },
+     "ref": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "repo": {
+      "description": "Test field.",
+      "type": "string",
+      "x-mcp-header": "repo"
+     },
+     "sha": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__plugin_github_github__get_file_contents"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 22.",
+   "input_schema": {
+    "properties": {
+     "minimal_output": {
+      "default": true,
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "order": {
+      "description": "Test field.",
+      "enum": [
+       "asc",
+       "desc"
+      ],
+      "type": "string"
+     },
+     "page": {
+      "description": "Test field.",
+      "minimum": 1,
+      "type": "number"
+     },
+     "perPage": {
+      "description": "Test field.",
+      "maximum": 100,
+      "minimum": 1,
+      "type": "number"
+     },
+     "query": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "sort": {
+      "description": "Test field.",
+      "enum": [
+       "stars",
+       "forks",
+       "help-wanted-issues",
+       "updated"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__plugin_github_github__search_repositories"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 23.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "button": {
+      "description": "Test field.",
+      "enum": [
+       "left",
+       "right",
+       "middle"
+      ],
+      "type": "string"
+     },
+     "doubleClick": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "element": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "modifiers": {
+      "description": "Test field.",
+      "items": {
+       "enum": [
+        "Alt",
+        "Control",
+        "ControlOrMeta",
+        "Meta",
+        "Shift"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "target": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "target"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__plugin_playwright_playwright__browser_click"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 24.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "fields": {
+      "description": "Test field.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "element": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "name": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "target": {
+         "description": "Test field.",
+         "type": "string"
+        },
+        "type": {
+         "description": "Test field.",
+         "enum": [
+          "textbox",
+          "checkbox",
+          "radio",
+          "combobox",
+          "slider"
+         ],
+         "type": "string"
+        },
+        "value": {
+         "description": "Test field.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "target",
+        "name",
+        "type",
+        "value"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "fields"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__plugin_playwright_playwright__browser_fill_form"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 25.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "url": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__plugin_playwright_playwright__browser_navigate"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 26.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "boxes": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "depth": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "filename": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "target": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "mcp__plugin_playwright_playwright__browser_snapshot"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 27.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "action": {
+      "description": "Test field.",
+      "enum": [
+       "list",
+       "new",
+       "close",
+       "select"
+      ],
+      "type": "string"
+     },
+     "index": {
+      "description": "Test field.",
+      "type": "number"
+     },
+     "url": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__plugin_playwright_playwright__browser_tabs"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 28.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "element": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "filename": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "fullPage": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "scale": {
+      "default": "css",
+      "description": "Test field.",
+      "enum": [
+       "css",
+       "device"
+      ],
+      "type": "string"
+     },
+     "target": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "type": {
+      "description": "Test field.",
+      "enum": [
+       "png",
+       "jpeg",
+       "webp"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "scale"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__plugin_playwright_playwright__browser_take_screenshot"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 29.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "element": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "slowly": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "submit": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "target": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "text": {
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "target",
+     "text"
+    ],
+    "type": "object"
+   },
+   "name": "mcp__plugin_playwright_playwright__browser_type"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 30.",
+   "input_schema": {
+    "properties": {},
+    "type": "object"
+   },
+   "name": "DeferredToolPlaceholder"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 31.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "text": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "textGone": {
+      "description": "Test field.",
+      "type": "string"
+     },
+     "time": {
+      "description": "Test field.",
+      "type": "number"
+     }
+    },
+    "type": "object"
+   },
+   "name": "mcp__plugin_playwright_playwright__browser_wait_for"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 32.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "message": {
+      "description": "Test field.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "status": {
+      "const": "proactive",
+      "type": "string"
+     }
+    },
+    "required": [
+     "message",
+     "status"
+    ],
+    "type": "object"
+   },
+   "name": "PushNotification"
+  },
+  {
+   "defer_loading": true,
+   "description": "Invented test tool 33.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "message": {
+      "default": "",
+      "description": "Test field.",
+      "type": "string"
+     },
+     "notify_when_idle": {
+      "description": "Test field.",
+      "type": "boolean"
+     },
+     "summary": {
+      "description": "Test field.",
+      "maxLength": 200,
+      "type": "string"
+     },
+     "to": {
+      "allOf": [
+       {
+        "pattern": "^[^\\n\\r]*$"
+       },
+       {
+        "pattern": "^[\\s\\S]{0,300}$"
+       }
+      ],
+      "description": "Test field.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "to",
+     "message"
+    ],
+    "type": "object"
+   },
+   "name": "SendMessage"
+  }
+ ]
+}
