@@ -3960,6 +3960,9 @@ function renderProxySources() {
   renderProxyTor(panel, data);
   // 7.91.0: VPN accounts, commercial gateways and proxy lists.
   PROXY_VENDOR_KINDS.forEach((kind) => renderProxyVendorKind(panel, data, kind));
+  // 7.108.0: WireGuard files MCC runs (wireproxy), then the gluetun guide.
+  renderProxyRunners(panel, data);
+  renderProxyGluetun(panel);
 }
 
 function renderProxyLocalSource(panel, data) {
@@ -5373,6 +5376,597 @@ async function removeProxyVendor(source, button) {
     announceProxy(error.message);
     showMessage(error.message, "error");
   }
+}
+
+/* ----------------------------------- WireGuard runners (7.108.0, R1-R5)
+   A WireGuard file the user exported from their VPN account becomes a
+   loopback SOCKS5 address: MCC runs the pinned wireproxy with it. Nothing is
+   downloaded until Download wireproxy is pressed, nothing is started until
+   Start is, and the file's text is write-only: sent once on Import, never
+   held by the page afterwards. The binary's card is fetched only when a
+   runner exists or the user opens the import form, so a page with no runner
+   asks the server nothing new. */
+
+const PROXY_RUNNER_STATE_TEXT = {
+  stopped: "Stopped",
+  starting: "Starting",
+  ready: "Ready",
+  restarting: "Restarting",
+  crashed: "Crashed",
+};
+
+function proxyRunnerSources(data) {
+  return data ? (data.sources || []).filter((source) => source.kind === "runner" && source.built) : [];
+}
+
+async function loadProxyRunnerBinary(force = false) {
+  if (proxyState.runnerBinary && !force) return proxyState.runnerBinary;
+  if (proxyState.runnerBinaryLoading) return null;
+  proxyState.runnerBinaryLoading = true;
+  try {
+    proxyState.runnerBinary = await api("/admin/api/proxy-sources/runner-binary");
+  } catch (error) {
+    proxyState.runnerBinary = null;
+    proxyState.runnerBinaryFailed = error.message;
+    announceProxy(error.message);
+  } finally {
+    proxyState.runnerBinaryLoading = false;
+  }
+  renderProxySources();
+  return proxyState.runnerBinary;
+}
+
+function renderProxyRunners(panel, data) {
+  const block = document.createElement("div");
+  block.className = "proxy-runners";
+  const title = document.createElement("h4");
+  title.className = "proxy-vendor-title";
+  title.textContent = "WireGuard files MCC runs for you";
+  const intro = document.createElement("p");
+  intro.className = "proxy-note proxy-runners-intro";
+  intro.textContent =
+    "Export a WireGuard file from your VPN account (Proton VPN, Mullvad, IVPN, " +
+    "Surfshark, Windscribe, AirVPN, PIA's script, or wgcf for WARP), import it " +
+    "here, and MCC runs wireproxy with it: a WireGuard client inside one " +
+    "program, with no network adapter, no route change, no service and no " +
+    "administrator. Its SOCKS5 port on 127.0.0.1 becomes a chain address; only " +
+    "chains you add it to go through the tunnel.";
+  block.append(title, intro);
+  const sources = proxyRunnerSources(data);
+  if (
+    (sources.length || proxyState.runnerEditing) &&
+    !proxyState.runnerBinary &&
+    !proxyState.runnerBinaryFailed
+  ) {
+    loadProxyRunnerBinary();
+  }
+  if (sources.length || proxyState.runnerEditing) {
+    block.appendChild(proxyRunnerBinaryCard());
+  }
+  sources.forEach((source) => block.appendChild(proxyRunnerCard(source)));
+  if (proxyState.runnerEditing === "new") {
+    block.appendChild(proxyRunnerForm(null));
+  } else {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "ghost-button proxy-runner-import-open";
+    add.textContent = "Import a WireGuard file";
+    add.addEventListener("click", () => {
+      proxyState.runnerEditing = "new";
+      renderProxySources();
+    });
+    block.appendChild(add);
+  }
+  panel.appendChild(block);
+}
+
+function proxyRunnerBinaryCard() {
+  const card = document.createElement("div");
+  card.className = "proxy-runner-binary";
+  const document_ = proxyState.runnerBinary;
+  const line = document.createElement("p");
+  line.className = "proxy-runner-binary-line";
+  if (!document_) {
+    line.textContent = proxyState.runnerBinaryFailed
+      ? `Could not read which wireproxy is installed: ${proxyState.runnerBinaryFailed}`
+      : "Reading which wireproxy is installed...";
+    card.appendChild(line);
+    return card;
+  }
+  const binary = document_.binary || {};
+  const pin =
+    `wireproxy ${binary.version} (${binary.repository}, ${binary.license}, ` +
+    `released ${binary.released}; MCC pins its sha256)`;
+  if (binary.unavailable && !binary.own) {
+    line.textContent = `${pin}: ${binary.unavailable}`;
+  } else if (binary.using === "own" && binary.own) {
+    line.textContent =
+      `Runners use your own wireproxy ${binary.own.version} at ${binary.own.path}. ` +
+      "Its digest was recorded when you chose it and is checked at every start.";
+  } else if (binary.managed && binary.managed.installed) {
+    line.textContent =
+      `${pin}: installed at ${binary.managed.path} and verified against the ` +
+      "pin and its receipt. It is checked again at every start.";
+  } else {
+    line.textContent =
+      `${pin}: not installed. Download wireproxy fetches the release's ` +
+      "checksums.txt and the archive from GitHub, refuses either if it does " +
+      "not match the digest this MCC pins, and installs one executable under " +
+      "your MCC folder. Nothing is downloaded until you press it.";
+  }
+  card.appendChild(line);
+  const actions = document.createElement("div");
+  actions.className = "proxy-runner-actions";
+  if (!(binary.managed && binary.managed.installed) && !binary.unavailable) {
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "secondary-button proxy-runner-download";
+    download.textContent = "Download wireproxy";
+    download.addEventListener("click", () => installProxyRunnerBinary(download));
+    actions.appendChild(download);
+  }
+  const own = document.createElement("input");
+  own.type = "text";
+  own.className = "proxy-vendor-input proxy-runner-own-path";
+  own.autocomplete = "off";
+  own.placeholder = "Or the path of your own wireproxy";
+  own.setAttribute("aria-label", "Path of your own wireproxy binary");
+  const useOwn = document.createElement("button");
+  useOwn.type = "button";
+  useOwn.className = "ghost-button proxy-runner-own";
+  useOwn.textContent = "Use my own binary";
+  useOwn.title = "MCC runs it once with -v to read its version, and records its digest.";
+  useOwn.addEventListener("click", () => chooseProxyRunnerBinary(own.value, useOwn));
+  actions.append(own, useOwn);
+  if (binary.own) {
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "ghost-button proxy-runner-own-forget";
+    forget.textContent = "Forget my binary";
+    forget.addEventListener("click", () => chooseProxyRunnerBinary("", forget));
+    actions.appendChild(forget);
+  }
+  card.appendChild(actions);
+  return card;
+}
+
+async function installProxyRunnerBinary(button) {
+  button.disabled = true;
+  button.textContent = "Downloading...";
+  try {
+    proxyState.runnerBinary = await api("/admin/api/proxy-sources/runner-binary/install", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    const result = proxyState.runnerBinary.install_result || {};
+    renderProxySources();
+    announceProxy(result.sentence || "Done.");
+    if (!result.ok) showMessage(result.sentence || "Not installed.", "error");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Download wireproxy";
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function chooseProxyRunnerBinary(path, button) {
+  button.disabled = true;
+  try {
+    proxyState.runnerBinary = await api("/admin/api/proxy-sources/runner-binary/own", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+    renderProxySources();
+    announceProxy((proxyState.runnerBinary.own_result || {}).sentence || "Saved.");
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+function proxyRunnerStateLine(source) {
+  const status = source.status || {};
+  const word = PROXY_RUNNER_STATE_TEXT[status.state] || status.state || "Stopped";
+  const parts = [word];
+  if (status.pid) parts.push(`pid ${status.pid}`);
+  parts.push(`SOCKS5 127.0.0.1:${source.socks_port}`);
+  return `${parts.join(" · ")} -- ${status.sentence || ""}`.trim();
+}
+
+function proxyRunnerCard(source) {
+  const card = document.createElement("div");
+  card.className = "proxy-runner-card";
+  card.dataset.source = source.id;
+  card.dataset.state = (source.status && source.status.state) || "stopped";
+  const head = document.createElement("p");
+  head.className = "proxy-vendor-head";
+  const name = document.createElement("strong");
+  name.className = "proxy-vendor-name";
+  name.textContent = source.name;
+  const detail = document.createElement("span");
+  detail.className = "proxy-vendor-detail";
+  const parts = [source.vendor_name, `server ${source.server || "unknown"}`];
+  if (source.warp) parts.push("Cloudflare WARP");
+  parts.push(source.profile_set ? "key stored, never shown" : "key missing: import the file again");
+  detail.textContent = ` · ${parts.join(" · ")}`;
+  head.append(name, detail);
+  card.appendChild(head);
+
+  const state = document.createElement("p");
+  state.className = "proxy-runner-state";
+  state.textContent = proxyRunnerStateLine(source);
+  card.appendChild(state);
+
+  const actions = document.createElement("div");
+  actions.className = "proxy-runner-actions";
+  const running = ["starting", "ready"].includes((source.status || {}).state);
+  [
+    ["start", "Start", !running],
+    ["stop", "Stop", running || (source.status || {}).state === "restarting"],
+    ["restart", "Restart", true],
+  ].forEach(([action, label, enabled]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `${action === "start" ? "secondary-button" : "ghost-button"} proxy-runner-${action}`;
+    button.textContent = label;
+    button.disabled = !enabled;
+    button.addEventListener("click", () => pressProxyRunner(source, action, button));
+    actions.appendChild(button);
+  });
+  const auto = document.createElement("label");
+  auto.className = "proxy-runner-auto";
+  const tick = document.createElement("input");
+  tick.type = "checkbox";
+  tick.className = "proxy-runner-auto-tick";
+  tick.checked = Boolean(source.auto_restart);
+  tick.addEventListener("change", () =>
+    saveProxyRunner(source, { auto_restart: tick.checked }, tick),
+  );
+  auto.append(
+    tick,
+    " Restart automatically after a crash (after 1 s, 5 s, 30 s and 5 min, then it stays stopped)",
+  );
+  actions.appendChild(auto);
+  card.appendChild(actions);
+
+  const offers = source.offers || [];
+  if (offers.length) {
+    const list = document.createElement("ul");
+    list.className = "proxy-vendor-offers";
+    offers.forEach((row) => {
+      const item = proxyVendorOfferRow(row);
+      const check = row.last_check || {};
+      if (check.exit_warp) {
+        const warp = document.createElement("span");
+        warp.className = "proxy-vendor-offer-state";
+        warp.textContent = ` · warp=${check.exit_warp}`;
+        item.appendChild(warp);
+      }
+      list.appendChild(item);
+    });
+    card.appendChild(list);
+  }
+  if (source.warp && !offers.some((row) => (row.last_check || {}).exit_warp)) {
+    const warpNote = document.createElement("p");
+    warpNote.className = "proxy-note proxy-runner-note";
+    warpNote.textContent =
+      "Cloudflare's own trace says warp=on or off once this address is tested with " +
+      "exit identity on (Use each provider's own trace, above).";
+    card.appendChild(warpNote);
+  }
+  [source.caveat, ...(source.lines || []), source.ready_line, source.sees]
+    .filter(Boolean)
+    .forEach((text) => {
+      const note = document.createElement("p");
+      note.className = "proxy-note proxy-runner-note";
+      note.textContent = text;
+      card.appendChild(note);
+    });
+  const log = (source.status || {}).log || [];
+  if (log.length) {
+    const wrap = document.createElement("details");
+    wrap.className = "proxy-vendor-offers-wrap";
+    const summary = document.createElement("summary");
+    summary.className = "proxy-vendor-offers-summary";
+    summary.textContent = `wireproxy's last ${log.length} line${log.length === 1 ? "" : "s"} (redacted)`;
+    const pre = document.createElement("pre");
+    pre.className = "proxy-runner-log";
+    pre.textContent = log.join("\n");
+    wrap.append(summary, pre);
+    card.appendChild(wrap);
+  }
+  if (proxyState.runnerEditing === source.id) {
+    card.appendChild(proxyRunnerForm(source));
+  } else {
+    const edit = document.createElement("div");
+    edit.className = "proxy-runner-actions";
+    const change = document.createElement("button");
+    change.type = "button";
+    change.className = "ghost-button proxy-runner-change";
+    change.textContent = "Change";
+    change.addEventListener("click", () => {
+      proxyState.runnerEditing = source.id;
+      renderProxySources();
+    });
+    const ports = document.createElement("button");
+    ports.type = "button";
+    ports.className = "ghost-button proxy-runner-repick";
+    ports.textContent = "Pick new ports";
+    ports.title =
+      "Choose new loopback ports from PROXY_RUNNER_PORTS: for a port another " +
+      "program took. The addresses keep their names.";
+    ports.addEventListener("click", () => saveProxyRunner(source, { repick_ports: true }, ports));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost-button proxy-runner-remove";
+    remove.textContent = "Remove";
+    remove.title =
+      "Stop it, delete its config (which holds the private key) and its log, and " +
+      "withdraw its offers. A chain that took one keeps it.";
+    remove.addEventListener("click", () => removeProxyRunner(source, remove));
+    edit.append(change, ports, remove);
+    card.appendChild(edit);
+  }
+  return card;
+}
+
+function proxyRunnerVendors() {
+  const document_ = proxyState.runnerBinary;
+  return (document_ && document_.vendors) || [];
+}
+
+function proxyRunnerForm(source) {
+  const form = document.createElement("div");
+  form.className = "proxy-runner-form";
+  const vendors = proxyRunnerVendors();
+  const vendor = document.createElement("select");
+  vendor.className = "proxy-vendor-select proxy-runner-vendor";
+  vendor.setAttribute("aria-label", "Whose WireGuard file this is");
+  [["", "Recognise it from the file"]]
+    .concat(vendors.map((item) => [item.id, item.name]))
+    .forEach(([value, text]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      vendor.appendChild(option);
+    });
+  vendor.value = source ? source.vendor : "";
+  const name = document.createElement("input");
+  name.type = "text";
+  name.className = "proxy-vendor-input proxy-runner-name";
+  name.autocomplete = "off";
+  name.placeholder = "Name (optional: taken from the file)";
+  name.setAttribute("aria-label", "Name of this WireGuard runner");
+  name.value = source ? source.name : "";
+  const file = document.createElement("input");
+  file.type = "file";
+  file.className = "proxy-runner-file";
+  file.accept = ".conf,.txt,text/plain";
+  file.setAttribute("aria-label", "Upload a WireGuard .conf file");
+  const paste = document.createElement("textarea");
+  paste.className = "proxy-runner-paste";
+  paste.rows = 6;
+  paste.spellcheck = false;
+  paste.autocomplete = "off";
+  paste.placeholder = source
+    ? "Stored -- paste a new WireGuard file here only to replace it"
+    : "[Interface]\nPrivateKey = ...\nAddress = ...\n\n[Peer]\nPublicKey = ...\nEndpoint = ...";
+  paste.setAttribute("aria-label", "The WireGuard file's text");
+  let filename = "";
+  file.addEventListener("change", () => {
+    const chosen = file.files && file.files[0];
+    if (!chosen) return;
+    filename = chosen.name;
+    const reader = new FileReader();
+    reader.onload = () => {
+      paste.value = String(reader.result || "");
+    };
+    reader.readAsText(chosen);
+  });
+  const account = document.createElement("textarea");
+  account.className = "proxy-runner-account";
+  account.rows = 3;
+  account.spellcheck = false;
+  account.placeholder =
+    "Optional for WARP: the wgcf-account.toml beside the profile. Only its private_key is read, to check it matches; its token and licence are never stored.";
+  account.setAttribute("aria-label", "wgcf-account.toml, optional");
+  const exits = document.createElement("textarea");
+  exits.className = "proxy-runner-exits";
+  exits.rows = 3;
+  exits.spellcheck = false;
+  exits.setAttribute("aria-label", "In-tunnel SOCKS5 exits, one host per line");
+  exits.value = source
+    ? (source.offers || [])
+        .filter((row) => row.role === "exit")
+        .map((row) => `${row.host}:${row.port}`)
+        .join("\n")
+    : "";
+  const exitsNote = document.createElement("p");
+  exitsNote.className = "proxy-note proxy-runner-note";
+  const showFor = () => {
+    const picked = vendors.find((item) => item.id === vendor.value);
+    const shape = picked && picked.in_tunnel_shape;
+    exits.hidden = !shape && !exits.value;
+    exitsNote.hidden = exits.hidden;
+    exits.placeholder = shape
+      ? `In-tunnel exits, one per line, in ${picked.name}'s documented shape: ${shape}`
+      : "In-tunnel SOCKS5 exits, one host[:port] per line";
+    exitsNote.textContent = shape
+      ? `Optional: ${picked.name} runs a SOCKS5 proxy on each of its servers that only its ` +
+        "tunnel reaches, so one key can give many exits. Type the servers you want, from " +
+        `${picked.name}'s own list (${picked.in_tunnel_doc}); MCC ships none. Untested ` +
+        `against ${picked.name} itself.`
+      : "";
+    account.hidden = vendor.value !== "warp";
+  };
+  vendor.addEventListener("change", showFor);
+  showFor();
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary-button proxy-runner-save";
+  save.textContent = source ? "Save" : "Import";
+  save.addEventListener("click", () => {
+    const fields = {
+      vendor: vendor.value || null,
+      name: name.value.trim() || null,
+      profile: paste.value,
+      filename,
+      account: account.value,
+    };
+    if (!exits.hidden || (source && exits.value !== "")) fields.exits = exits.value;
+    saveProxyRunner(source, fields, save);
+  });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost-button proxy-runner-cancel";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    proxyState.runnerEditing = "";
+    renderProxySources();
+  });
+  const note = document.createElement("p");
+  note.className = "proxy-note proxy-runner-note";
+  note.textContent =
+    "Importing contacts nothing and starts nothing. The private key is kept in " +
+    "proxy_sources.json and in the config MCC writes when it starts the runner, " +
+    "both readable by you only, and is never shown again. Commands a WireGuard " +
+    "file names (PostUp and the like) are dropped: MCC never runs them.";
+  form.append(vendor, name, file, paste, account, exits, exitsNote, save, cancel, note);
+  return form;
+}
+
+async function saveProxyRunner(source, fields, control) {
+  control.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources", {
+      method: "PUT",
+      body: JSON.stringify({ source: source ? source.id : "", kind: "runner", runner: fields }),
+    });
+    proxyState.runnerEditing = "";
+    renderProxying();
+    announceProxy((proxyState.data.runner_result || {}).sentence || "Saved.");
+  } catch (error) {
+    control.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function pressProxyRunner(source, action, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api(`/admin/api/proxy-sources/runner/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ source: source.id }),
+    });
+    renderProxying();
+    announceProxy((proxyState.data.runner_result || {}).sentence || "Done.");
+    if (action !== "stop") scheduleProxyRunnerRefresh();
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+function scheduleProxyRunnerRefresh(remaining = 20) {
+  // A starting tunnel turns ready on its own: re-read the page for a little
+  // while after Start, and stop as soon as no runner is still on its way.
+  if (proxyState.runnerRefresh) clearTimeout(proxyState.runnerRefresh);
+  proxyState.runnerRefresh = setTimeout(async () => {
+    proxyState.runnerRefresh = 0;
+    try {
+      proxyState.data = await api("/admin/api/proxy-chains");
+      renderProxying();
+    } catch (error) {
+      return;
+    }
+    const busy = proxyRunnerSources(proxyState.data && proxyState.data.sources).some((source) =>
+      ["starting", "restarting"].includes((source.status || {}).state),
+    );
+    if (busy && remaining > 1) scheduleProxyRunnerRefresh(remaining - 1);
+  }, 1500);
+}
+
+async function removeProxyRunner(source, button) {
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-sources", {
+      method: "PUT",
+      body: JSON.stringify({ source: source.id, remove: true }),
+    });
+    renderProxying();
+    announceProxy((proxyState.data.runner_result || {}).sentence || "Removed.");
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+/* --------------------------------------- gluetun, a guide (7.108.0, T2)
+   For a VPN that only gives OpenVPN files, or one gluetun knows by name: the
+   user runs gluetun in Docker; MCC never runs Docker. One container is one
+   tunnel, so N exits are N containers on N ports. */
+
+const PROXY_GLUETUN_COMPOSE = [
+  "services:",
+  "  gluetun-nl:",
+  "    image: qmcgaw/gluetun",
+  "    cap_add: [NET_ADMIN]",
+  "    devices: [/dev/net/tun:/dev/net/tun]",
+  "    ports: [\"127.0.0.1:8888:8888/tcp\"]",
+  "    environment:",
+  "      - VPN_SERVICE_PROVIDER=<your provider, as gluetun's wiki names it>",
+  "      - VPN_TYPE=wireguard",
+  "      - WIREGUARD_PRIVATE_KEY=<from your provider>",
+  "      - SERVER_COUNTRIES=Netherlands",
+  "      - HTTPPROXY=on",
+  "  gluetun-se:",
+  "    image: qmcgaw/gluetun",
+  "    cap_add: [NET_ADMIN]",
+  "    devices: [/dev/net/tun:/dev/net/tun]",
+  "    ports: [\"127.0.0.1:8889:8888/tcp\"]",
+  "    environment:",
+  "      - VPN_SERVICE_PROVIDER=<your provider>",
+  "      - VPN_TYPE=wireguard",
+  "      - WIREGUARD_PRIVATE_KEY=<a second key, or the same one if your plan allows>",
+  "      - SERVER_COUNTRIES=Sweden",
+  "      - HTTPPROXY=on",
+].join("\n");
+
+function renderProxyGluetun(panel) {
+  const block = document.createElement("div");
+  block.className = "proxy-gluetun";
+  const title = document.createElement("h4");
+  title.className = "proxy-vendor-title";
+  title.textContent = "gluetun: any VPN, in Docker, run by you";
+  const intro = document.createElement("p");
+  intro.className = "proxy-note proxy-gluetun-intro";
+  intro.textContent =
+    "For a VPN that gives only OpenVPN files, or one gluetun knows by name: run " +
+    "gluetun (github.com/qdm12/gluetun) in Docker with its HTTP proxy on, published " +
+    "on 127.0.0.1 only. MCC never runs Docker or gluetun for you. One container is " +
+    "one tunnel, so two exits are two containers on two ports, as below.";
+  const wrap = document.createElement("details");
+  wrap.className = "proxy-vendor-offers-wrap";
+  const summary = document.createElement("summary");
+  summary.className = "proxy-vendor-offers-summary";
+  summary.textContent = "A docker-compose.yml with two exits";
+  const compose = document.createElement("pre");
+  compose.className = "proxy-gluetun-compose";
+  compose.textContent = PROXY_GLUETUN_COMPOSE;
+  wrap.append(summary, compose);
+  const then = document.createElement("p");
+  then.className = "proxy-note proxy-gluetun-intro";
+  then.textContent =
+    "Then press Scan this computer -- 8888 is one of the ports it asks -- and add " +
+    "http://127.0.0.1:8889 (and any further port) to a chain with Add proxy. The " +
+    "VPN provider sees your real address; the proxy relays MCC's TLS untouched.";
+  block.append(title, intro, wrap, then);
+  panel.appendChild(block);
 }
 
 function renderProxying() {

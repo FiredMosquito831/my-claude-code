@@ -5965,8 +5965,10 @@ Why you would: a provider that counts a free allowance **per address** (OpenCode
 Zen's free models answer a spent address with `429 FreeUsageLimitError` while
 other addresses still get answers), a provider that refuses your country, or a
 provider you would rather not show your home address. MCC never installs,
-starts, signs in to or registers a VPN, WARP or tor: it uses what you run, and
-it never weakens TLS for any of it — a proxy relays an encrypted tunnel and
+starts, signs in to or registers a VPN app, WARP or tor: it uses what you run
+— the one exception is step F, where MCC runs wireproxy with a WireGuard file
+you exported, downloaded only when you press its button and started only when
+you press Start — and it never weakens TLS for any of it — a proxy relays an encrypted tunnel and
 cannot read your keys, prompts or replies. The reference for every switch named
 here is [Proxy Chains](ROUTING-REFERENCE.md#proxy-chains-more-than-one-way-out).
 
@@ -5982,7 +5984,8 @@ here is [Proxy Chains](ROUTING-REFERENCE.md#proxy-chains-more-than-one-way-out).
 | **Webshare**'s free plan, or any `ip:port:username:password` list | Each row becomes a chain entry | C |
 | **Cloudflare WARP** | Its proxy mode is a SOCKS5 proxy on this computer | D |
 | A **tor** you run | Each `SocksPort` is one identity and one chain entry; a button asks tor for new circuits | E |
-| A VPN that only gives you OpenVPN or WireGuard files | Run **gluetun** in Docker yourself and point an entry at its proxy | F |
+| A **WireGuard file** from your VPN account (Proton VPN Free or Plus, Surfshark, Windscribe, AirVPN, PIA, Mullvad or IVPN without their app, wgcf for WARP) | MCC runs wireproxy with it: one chain entry, or one per in-tunnel exit for Mullvad and IVPN | F |
+| A VPN that only gives you OpenVPN files | Run **gluetun** in Docker yourself and point an entry at its proxy | G |
 
 #### A. Proton VPN Free: turn the app on
 
@@ -6016,7 +6019,7 @@ Gotchas:
 - **A system proxy is followed.** A VPN or corporate tool that sets the Windows
   or macOS *proxy* setting (rather than a tunnel) carries every Direct dial; the
   request log then names it `direct via system proxy host:port`.
-- **One device.** Running a second Proton Free connection (gluetun, step F)
+- **One device.** Running a second Proton Free connection (a runner, step F, or gluetun, step G)
   while the app is connected may be refused or disconnect the app; that has not
   been tested with MCC.
 
@@ -6152,7 +6155,79 @@ prints) and choose **Log in with a control password**. The Tor Project asks
 people not to push heavy or automated traffic through its volunteer exits. The
 reference is [Bring your own Tor](ROUTING-REFERENCE.md#bring-your-own-tor-7900).
 
-#### F. gluetun: any VPN's OpenVPN or WireGuard file, in Docker
+#### F. A WireGuard file MCC runs for you (wireproxy)
+
+For a VPN that gives you WireGuard files but no proxy — **Proton VPN Free and
+Plus**, Surfshark, Windscribe (Pro), AirVPN, PIA through its
+`manual-connections` script, Mullvad and IVPN without their app, or a
+`wgcf-profile.conf` for Cloudflare WARP. MCC runs **wireproxy** with the file:
+a WireGuard client inside one program, with no network adapter, no route
+change, no service and no administrator. Its SOCKS5 port on `127.0.0.1` is a
+chain entry; only the chains you add it to use the tunnel, and the rest of
+this computer is untouched.
+
+1. **Export one WireGuard file** from your account. Proton VPN:
+   account.protonvpn.com → **Downloads** → **WireGuard configuration**, choose a
+   server and download the `.conf` (the Free plan included). Mullvad, IVPN,
+   Surfshark, Windscribe and AirVPN have a generator in their account area;
+   `wgcf generate` writes WARP's.
+2. On the **Proxying** page, under **WireGuard files MCC runs for you**, press
+   **Import a WireGuard file**, upload or paste it, and press **Import**. That
+   contacts nothing and starts nothing. The private key is kept in
+   `proxy_sources.json` and in the config MCC writes for wireproxy, both
+   readable by you only, and is never shown again. Commands the file names
+   (`PostUp` and the like) are dropped: MCC never runs them.
+3. Press **Download wireproxy** once. MCC fetches the release it pins
+   (wireproxy 1.1.3, from `github.com/windtf/wireproxy`): the release's
+   `checksums.txt` first, which must agree with the sha256 MCC pins, then the
+   archive, which must match both. One executable lands under your MCC folder
+   (`bin/wireproxy/1.1.3/`) with a receipt, and both are checked again at every
+   start. Prefer your own build? Type its path and press **Use my own binary**.
+   There is no Windows arm64 build of wireproxy.
+4. **Proton VPN Free allows one device**: disconnect the Proton app first.
+5. Press **Start**. The card goes **Starting** → **Ready** once the SOCKS5 port
+   answers and wireproxy's own check hears the tunnel (an answer from the
+   file's DNS server, through it). Ready proves the tunnel is up, not that a
+   provider answers through it.
+6. Choose a chain and press **Add to chain**: the entry (`Proton · NL-FREE#12`,
+   named from the file) is tested against that provider's own host first.
+
+<div align="center">
+  <img src="../assets/admin-proxy-runner.png" alt="A WireGuard runner card on the Proxying page: Proton NL-FREE#12, Ready with its pid and SOCKS5 port, Start, Stop and Restart buttons, the Restart automatically after a crash box unticked, the address Proton · NL-FREE#12 with Add to chain, and the one-device caveat" width="860">
+  <p><em>A runner after Start: its state, pid and port, its one address, and what its VPN sees. (Screenshot from a test install; the WireGuard server was a stand-in.)</em></p>
+</div>
+
+Gotchas:
+
+- **Ports.** The SOCKS5 port, a health port and one per in-tunnel exit come
+  from `PROXY_RUNNER_PORTS` (Limits & Resilience → Credential health; default
+  `41000-41999`), are chosen once and kept, so the entry keeps its name. If
+  another program takes one, press **Pick new ports**.
+- **The local login.** The SOCKS5 port asks for a random username and
+  password only MCC holds, so no other program here can borrow the tunnel.
+- **Crashes.** If wireproxy exits on its own the card says so with its exit
+  code and a **Restart** button. Tick **Restart automatically after a crash**
+  (off by default) to have MCC restart it after 1 s, 5 s, 30 s and 5 minutes,
+  then leave it stopped.
+- **With the server.** A started runner starts again with the server; **Stop**
+  keeps it stopped. Stopping the server stops every runner; on Windows a server
+  that is killed takes its runners with it.
+- **Mullvad and IVPN: many exits from one key.** On the import form (or
+  **Change**), list the vendor's in-tunnel SOCKS5 servers you want, one per
+  line, in its documented shape
+  (`se-sto-wg-socks5-001.relays.mullvad.net`, `socks5.<server>.gw.ivpn.net`);
+  each becomes its own entry through the one tunnel. Those ports take no login,
+  because the vendor's proxy takes none. Tested against fake servers only so
+  far.
+- **WARP.** MCC never registers a WARP device; import a profile you made with
+  wgcf. Test the entry with exit identity on and the card shows Cloudflare's
+  `warp=` flag. wireproxy has no field for WARP's reserved bytes; whether WARP
+  answers without them is reported by users, not documented. Tested against
+  fake servers only so far.
+- **Remove** stops the runner and deletes its config (with the key) and its
+  log. The reference is [WireGuard runners](ROUTING-REFERENCE.md#wireguard-runners-71080).
+
+#### G. gluetun: any VPN's OpenVPN or WireGuard file, in Docker
 
 [gluetun](https://github.com/qdm12/gluetun) is a VPN client in a Docker
 container with an optional HTTP proxy. You run it; MCC does not install or
@@ -6185,7 +6260,7 @@ Gotchas:
 - **Proton VPN Free allows one device**: gluetun with a Free WireGuard key while
   the Proton app is connected may be refused (not tested).
 
-#### G. Check that it worked
+#### H. Check that it worked
 
 <div align="center">
   <img src="../assets/admin-proxy-chain-card.png" alt="The OpenCode Zen chain card with four entries (two Tor ports, a gluetun HTTP proxy and WARP proxy mode), its What OpenCode Zen can see box, Fall back to this machine's own address unticked and Keep trying exits until one answers ticked" width="860">
@@ -6211,7 +6286,7 @@ Gotchas:
   <p><em>The request detail: four proxy dials, each exit marked unreachable, and the one sentence saying the key was not charged.</em></p>
 </div>
 
-#### H. Defaults worth knowing
+#### I. Defaults worth knowing
 
 - **Keep trying exits until one answers** is on for every chain (since 7.81.1):
   a free-usage 429, a refusal for the exit's country, an exit that cannot be

@@ -10,6 +10,7 @@ new route is loopback-only.
 """
 
 import json
+import os
 import sys
 import time
 from collections.abc import Iterator
@@ -25,6 +26,9 @@ from my_claude_code.config.proxy_runner_bins import ResolvedBinary
 from my_claude_code.config.settings import Settings
 from my_claude_code.runtime.proxy_runners import CONFIG_FILENAME, ProxyRunnerSupervisor
 from tests.api.support import create_test_app
+
+# Several of these start real child processes (the fake wireproxy).
+pytestmark = pytest.mark.local_serial
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "wireguard"
 FAKE = Path(__file__).resolve().parents[1] / "support" / "fake_wireproxy.py"
@@ -76,7 +80,17 @@ def supervisor(tmp_path: Path) -> Iterator[ProxyRunnerSupervisor]:
     RUNNERS.detach()
 
 
-def _client(host: str = "127.0.0.1", ports: str = "41000-41099") -> TestClient:
+def _worker_range() -> str:
+    """A port range of this xdist worker's own, so two workers' runners never
+    pick the same free port before either has started."""
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0").removeprefix("gw")
+    low = 42000 + 100 * (int(worker) if worker.isdigit() else 0)
+    return f"{low}-{low + 99}"
+
+
+def _client(host: str = "127.0.0.1", ports: str = "") -> TestClient:
+    ports = ports or _worker_range()
     settings = Settings.model_validate(
         {
             "model": "nvidia_nim/primary",
@@ -208,7 +222,8 @@ def test_start_stop_restart_drive_the_supervisor_and_record_enabled(
     restarted = client.post(
         "/admin/api/proxy-sources/runner/restart", json={"source": source}
     )
-    assert restarted.json()["runner_result"]["state"] == "starting"
+    result = restarted.json()["runner_result"]
+    assert result["state"] == "starting", result["sentence"]
 
     stopped = client.post(
         "/admin/api/proxy-sources/runner/stop", json={"source": source}
