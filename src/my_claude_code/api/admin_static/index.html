@@ -1096,7 +1096,11 @@
                   model row beats its provider row per parameter, so one parameter can be
                   forced off while the rest inherit. Each model's fields are one table,
                   and the default MCC would use is always shown under each control,
-                  with where it came from.
+                  with where it came from. The <strong>prompt cache lifetime</strong>
+                  row is not sent as itself: its minutes are adapted to the lifetimes
+                  the host takes, and <strong>Force unset</strong> there means
+                  <em>From client</em> (<a href="#guide-prompt-cache-lifetime">Prompt
+                  cache lifetime</a>).
                 </p>
                 <div id="modelsOwnedElsewhere" class="models-owned" hidden></div>
               </details>
@@ -3270,18 +3274,46 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <strong>A longer cache costs more to write.</strong> Anthropic bills
                   a cache write at 1.25&times; the input price for 5 min and at
                   2&times; for 1 h; reads are cheap either way. MCC's cost figures
-                  still price every cache write at the 5-minute rate for now. Every
-                  other host &mdash; ChatGPT, OpenRouter, Command Code, OpenCode, custom
-                  providers &mdash; gets nothing from this setting in this release, and
-                  its model rows on the <strong>Models</strong> page say
-                  <em>lifetime control not known for this host</em>; a model of a
-                  declared host shows the lifetimes it takes. If a host answers 400
-                  naming the lifetime field, that lifetime is remembered as refused
-                  (Models page, with Forget, 30 days) and later requests use the
-                  lifetime that remains; the refused request itself fails over exactly
-                  as any 400 does. Each request's detail records
-                  <code>prompt_cache_ttl</code>: the minutes asked, the lifetime sent
-                  and the lifetimes the host takes.
+                  still price every cache write at the 5-minute rate for now. Hosts
+                  with no lifetime control known &mdash; ChatGPT, OpenRouter, NIM and
+                  the rest &mdash; get nothing from this setting, and their rows on the
+                  <strong>Models</strong> page say <em>lifetime control not known for
+                  this host</em>. If a host answers 400 naming the lifetime field, that
+                  lifetime is remembered as refused (Models page, with Forget, 30 days)
+                  and later requests use the lifetime that remains; the refused request
+                  itself fails over exactly as any 400 does. Each request's detail
+                  records <code>prompt_cache_ttl</code>: the minutes asked, which
+                  setting or row asked them (<code>from</code>), the lifetime sent and
+                  the lifetimes the host takes.
+                </p>
+                <h4 id="guide-prompt-cache-lifetime-overrides">Set it for one provider or
+                  one model</h4>
+                <p>
+                  On the <strong>Models</strong> page, every model row and every
+                  provider's table has a <strong>prompt cache lifetime</strong> row
+                  (<code>prompt_cache_ttl</code> in <code>model_overrides.json</code>):
+                  <em>Inherit</em>, <em>Force value</em> in minutes from 1 to 60, or
+                  <em>Force unset</em>, which is <em>From client</em> on that row
+                  &mdash; MCC sets no lifetime there even when a tier asks. Who decides:
+                  <strong>the model's row, then its provider's row, then the tier, then
+                  <code>PROMPT_CACHE_TTL</code>, then the client</strong>. Under the
+                  control the default is always written: the Model Config lifetime each
+                  route that names the model reads, and what the host would be sent
+                  (<em>default 30 min &mdash; PROMPT_CACHE_TTL_OPUS &rarr; sent 1
+                  h</em>).
+                </p>
+                <p class="guide-note">
+                  <strong>Gateways that speak Anthropic's protocol</strong> &mdash;
+                  Command Code's <code>claude-*</code> models, OpenCode Zen's Messages
+                  door, custom providers with the Messages door &mdash; publish no
+                  cache lifetime, so their rows say <em>lifetimes unknown &mdash; sent
+                  only when set on this row</em>. Model Config's lifetimes never reach
+                  them; a provider or model row does, sent in Anthropic's own spelling
+                  of the nearest Anthropic lifetime (1&ndash;5 min sends 5 min,
+                  6&ndash;60 sends 1 h) on the markers the client wrote, with none
+                  added. Whether the gateway passes it on is not known: the first
+                  refusal stops lifetimes for that whole host until you press
+                  <strong>Forget</strong> on any of its rows.
                 </p>
 
                 <h3 id="guide-cli">Point Claude Code here</h3>

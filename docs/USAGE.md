@@ -4158,7 +4158,7 @@ It is read when you open it, for that one model, by `GET /admin/api/models/knowl
 |---|---|---|
 | Limits | context length, output limit | yes (`context_length`, `max_output_tokens`) |
 | Reasoning | the reasoning word, then the seven reasoning facts (can reason, supports effort / toggle / budget control, supported efforts, mandatory, default enabled) | the word (`reasoning_preference`) |
-| Request parameters (sent in the body) | `frequency_penalty`, `min_p`, `presence_penalty`, `repetition_penalty`, `seed`, `stop`, `temperature`, `top_k`, `top_p` | yes |
+| Request parameters (sent in the body) | `frequency_penalty`, `min_p`, `presence_penalty`, `repetition_penalty`, `seed`, `stop`, `temperature`, `top_k`, `top_p`, then the prompt cache lifetime (7.105.0) | yes (the lifetime is `prompt_cache_ttl`, see [Prompt cache lifetime](#prompt-cache-lifetime)) |
 | Wire surface | which endpoint the model is posted to, only on a provider that serves more than one | its own *Pin endpoint* |
 | What the model is | kind, accepts → produces, model type, endpoints, reads images | no |
 | Prices | input, output, cache read, cache write, reasoning (USD per million tokens) | no |
@@ -4174,13 +4174,14 @@ These are the rows the earlier override editor, *What this forces onto the reque
 - **Context length:** the window the ladder extracted and its rung (*default 524,288 -- provider /models, exact id*). Where nothing states one: *default not reported -- asked: provider /models, models.dev (own bucket, reference, vote), OpenRouter live*.
 - **Output limit:** the number routing bounds requests by -- the provider's list, then models.dev, with the rung -- or *default not reported* with the same list of rungs asked. Where OpenRouter's live list states a different number, a second line says so (*OpenRouter live also states 131,072 (shown, never acted on)*): the page shows it, routing never uses it. While you cap the output, the row's value is your cap and the badge and rung the row showed before move under the default. The sentence about a cap not being a request stays under the control.
 - **Reasoning:** *default the route's own answer*, then the model's published effort words with their rung (or *not reported*), then what the host parses. The options you cannot pick are still listed, disabled, with the reason.
+- **Prompt cache lifetime** (7.105.0): the Model Config lifetime each route that names this model reads, and what this host would be sent for it (*default 30 min -- PROMPT_CACHE_TTL_OPUS → sent 1 h*), or *From client* with the reason -- the host has no lifetime control known, or it is a gateway that takes a lifetime only from an override row.
 - **Each of the nine:** the provider's own `default_parameters` value for that name (*default 0.7 -- provider /models (default_parameters)*). Only OpenRouter-style lists publish those -- OpenRouter, Kilo and Nous Portal -- so for most providers the row honestly says *default not reported -- only the provider's /models states one*; a list that names no value for that parameter says it pins none. Where the provider publishes its `supported_parameters`, a second line says whether that parameter is on it (shown, never acted on).
 
 A provider's own table (*Parameter overrides for every <provider> model*) has the same rows except the context window, which is set per model; its value column is that provider row's own setting, and the default reads *per model -- open a model to see its default*, because a provider has no single capability record.
 
 **Saving is unchanged.** *Save overrides* sends the same body to the same route, key for key, and writes `model_overrides.json` exactly as before; a value the page refuses (a fraction for a window, an output cap above the published limit, *Force value* with an empty box) is refused with the same message. After a save the value columns and the default lines repaint in place and *Saved* stays on screen. *Pin endpoint* on the Wire surface row keeps its own save, checked against what the host serves.
 
-**The *override(s) active* chip** beside a model's name counts every key you set that reaches that model -- the output cap, the context window, the reasoning word and a pinned endpoint as well as the nine request parameters, from the model's own row and from its provider's. Before 7.101.0 it counted only the nine.
+**The *override(s) active* chip** beside a model's name counts every key you set that reaches that model -- the output cap, the context window, the reasoning word, the prompt cache lifetime and a pinned endpoint as well as the nine request parameters, from the model's own row and from its provider's. Before 7.101.0 it counted only the nine.
 
 Display only: nothing a request sends, routes or lists changes, and no new source of defaults is read.
 
@@ -4259,6 +4260,19 @@ launchers read, pick it up at the next model-list refresh or restart, as they
 do any catalogue change. `/v1/models` carries no window, and Claude Code
 launched by `mcc` keeps its own fixed compaction window.
 
+**New in 7.105.0: a prompt cache lifetime, the 14th key.** A provider row or a
+model row may carry `prompt_cache_ttl` -- whole minutes from `1` to `60`:
+`{"providers": {"anthropic_oauth": {"prompt_cache_ttl": 45}}, "models": {"anthropic_oauth/claude-haiku-5-5": {"prompt_cache_ttl": null}}}`.
+The same three states: absent inherits; a number forces those minutes; `null`
+is *From client* at that row -- MCC sets no lifetime for that model even where
+a Model Config tier asks for one. The model row wins over the provider row,
+which wins over the tier and global settings on Model Config. A 0, 61, a
+fraction or a string is refused with a 422 by the page's save and ignored with
+a log line if written by hand. It is never a body field: the provider writes
+the host's own lifetime instead, adapted as [Prompt cache
+lifetime](#prompt-cache-lifetime) describes. An untouched lifetime leaves the
+file byte for byte as it was.
+
 > **Downgrading.** An MCC below 7.25.0 does not know these two keys: it reads
 > the file, logs that they are not known request parameters, and ignores them,
 > so the preference simply stops applying. But if you then **edit any override
@@ -4335,13 +4349,21 @@ A tier's value wins over the default, and `client` at any level stops there: MCC
 - a request that carries **no marker at all** gets Anthropic's single top-level `cache_control: {"type": "ephemeral", "ttl": …}`, which Anthropic places on the last cacheable block;
 - no beta header is added: `ttl` is a field of Anthropic's generally available `cache_control` object.
 
-**Which hosts.** In this release only the two first-party Anthropic providers, `anthropic` and `anthropic_oauth`, have a declared lifetime list (a table kept as data in `config/prompt_cache_lifetimes.py`). Every other host — ChatGPT, OpenRouter, Command Code, OpenCode's Messages door, custom providers — receives the client's bytes as before, and its model rows on the **Models** page say *lifetime control not known for this host*. A model of a declared host shows a read-only **prompt cache lifetimes** row with the lifetimes it takes and what each costs to write.
+**Per provider and per model (7.105.0).** On the **Models** page every model row and every provider's table has a **prompt cache lifetime** row (`prompt_cache_ttl` in `model_overrides.json`, see [Per-model reasoning and output preferences](#per-model-reasoning-and-output-preferences)): *Inherit*, *Force value* in minutes, or *Force unset* — *From client* on that row. Who decides, per request and per fallback attempt: **the model's row, then its provider's row, then the tier, then `PROMPT_CACHE_TTL`, then the client**. The row shows the lifetime MCC would send and why, the lifetimes the host takes, any it refused (with **Forget**), and — always, whatever the mode — the Model Config lifetime each route that names the model reads, as the default it replaces (*default 30 min — PROMPT_CACHE_TTL_OPUS → sent 1 h*).
+
+**Which hosts.** The two first-party Anthropic providers, `anthropic` and `anthropic_oauth`, have a declared lifetime list (a table kept as data in `config/prompt_cache_lifetimes.py`): Model Config's settings and the override rows both reach them. Every other host — ChatGPT, OpenRouter, NIM, Agnes, … — receives the client's bytes as before, and its rows say *lifetime control not known for this host*.
+
+**Gateways that speak Anthropic's protocol (7.105.0).** Command Code's `claude-*` models, OpenCode Zen's models on its Messages door and every custom provider with the Messages door speak Anthropic's Messages protocol without being Anthropic, and none of them publishes a cache lifetime (Command Code's Provider API page says its bodies "follow the Anthropic Messages schema" and names no `ttl`; Zen's page lists cache read and write prices and no lifetime). Their rows say *lifetimes unknown — sent only when set on this row*:
+
+- **Model Config's lifetimes never reach them.** With no override row their bodies are exactly the client's.
+- **A provider or model row does.** Your minutes are sent in Anthropic's own spelling of the nearest Anthropic lifetime — the same rule, so 1–5 sends `5m` and 6–60 sends `1h` — on the markers the client wrote. No marker is added to a request that has none.
+- **Whether the gateway passes it on is not known** (no live call has tested it). The first 400 that names the lifetime field is learned for **the whole host** — every model behind that gateway stops getting a lifetime — with no extra retry, and **Forget** on any of its rows re-opens it.
 
 **Price.** Anthropic bills a cache write at **1.25×** the input price for 5 minutes and **2×** for 1 hour; a cache read is the same either way. A 1-hour lifetime pays off only when the cache is read again more than about 5 minutes after it was written. MCC's cost figures still price every cache write at the 5-minute rate for now.
 
 **A host that refuses a lifetime.** If the host answers **400** naming the lifetime field of a marker that carried the lifetime MCC chose (`messages.2.content.1.text.cache_control.ttl: …`), or the top-level marker MCC added, that lifetime is recorded as refused for that model (*cache lifetime refused* on the Models page, 30 days, with Forget), and later requests are adapted to the lifetimes that remain — a refused `1h` means `5m` next time. The refused request itself is not retried by this: it fails over exactly as any 400 does. A 400 that mentions `cache_control` for another reason (too many markers, a marker on a block that cannot carry one) records nothing.
 
-Each attempt's request detail records `prompt_cache_ttl` beside the body whenever a setting applied: the minutes asked and which setting asked them, the lifetime sent, the lifetimes the host takes, how many markers there were and how many were changed, whether one was added, and any lifetime the host refused. With nothing set the key is absent and every stored row is exactly what it was.
+Each attempt's request detail records `prompt_cache_ttl` beside the body whenever a setting applied: the minutes asked and which setting asked them (`from`: `model_override`, `provider_override`, the tier setting such as `PROMPT_CACHE_TTL_OPUS`, or `PROMPT_CACHE_TTL`), the lifetime sent, the lifetimes the host takes, how many markers there were and how many were changed, whether one was added, and any lifetime the host refused. With nothing set the key is absent and every stored row is exactly what it was.
 
 ---
 
