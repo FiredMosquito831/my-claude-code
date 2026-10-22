@@ -11,10 +11,17 @@
  *    in the tier order of the thinking levels, each a select whose default is
  *    "From client" (global) or "Inherit" (tiers);
  *  - a Save of two edits posts exactly those two keys and values;
- *  - the Models page: a model of a declared provider draws the read-only
- *    "prompt cache lifetimes" row with the host's lifetimes, a fresh learned
- *    refusal names the refused one, and a model of an undeclared provider says
- *    "lifetime control not known for this host".
+ *  - the Models page (7.105.0): the "prompt cache lifetime" row is the 14th
+ *    overridable key, `prompt_cache_ttl`. For a declared provider it shows
+ *    what the host would be sent, the host's lifetimes (a fresh learned
+ *    refusal named, with Forget) and the Model Config lifetime each route
+ *    reads as its default; a model row's minutes, a provider row's minutes
+ *    and a model row's Force unset each decide; the gateways' Messages models
+ *    say "lifetimes unknown — sent only when set on this row", and a
+ *    host-wide refusal stops them; an undeclared provider says "lifetime
+ *    control not known for this host". The provider editor carries the same
+ *    row, the "override(s) active" chip counts the key, and a Save sends it
+ *    last, validated to whole minutes 1-60.
  *
  * Prints nothing itself: `run()` returns the measurements.
  */
@@ -28,6 +35,35 @@ const DECLARED = "anthropic_oauth";
 const REFUSED_REF = `${DECLARED}/claude-opus-5-5`;
 const PLAIN_REF = `${DECLARED}/claude-haiku-5-5`;
 const UNDECLARED_REF = "alpha/model-01";
+const UNSET_REF = `${DECLARED}/claude-sonnet-5-5`;
+// The rule's edges, each forced on its own model row (parity with the server's
+// adapt_prompt_cache_minutes, asserted by the Python test).
+const MINUTE_REFS = [1, 4, 5, 6, 30, 59, 60].map((minutes) => [
+  `${DECLARED}/edge-${minutes}`,
+  minutes,
+]);
+const GATEWAY_PLAIN_REF = "commandcode/claude-opus-5-5";
+const GATEWAY_ROW_REF = "commandcode/claude-sonnet-5-5";
+const GATEWAY_OPEN_REF = "commandcode/deepseek/deepseek-v4-flash";
+const GATEWAY_REFUSED_REF = "opencode/claude-fable-5-1";
+
+const HOST_REFUSAL_FACT = {
+  fact_kind: "prompt_cache_lifetime_refused",
+  fact_label: "cache lifetime refused",
+  model_id: "*",
+  value: true,
+  detail: "1h",
+  source: "rejection",
+  source_label: "the host's own rejection",
+  learned_at: "2026-10-22T07:00:00Z",
+  last_confirmed_at: "2026-10-22T07:00:00Z",
+  age_seconds: 60,
+  ttl_seconds: 2592000,
+  stale: false,
+  retired: false,
+  hits: 1,
+  evidence: "system.1.cache_control.ephemeral.ttl: Extra inputs are not permitted",
+};
 
 const REFUSAL_FACT = {
   fact_kind: "prompt_cache_lifetime_refused",
@@ -63,34 +99,72 @@ export function preparePromptCacheScenario({ window, ROUTES }) {
 
   const page = clone(ROUTES["/admin/api/model-admin"]);
   const alpha = page.providers.find((entry) => entry.provider_id === "alpha");
-  const declaredModels = [REFUSED_REF, PLAIN_REF].map((ref, index) => ({
-    ...clone(alpha.models[1 + index]),
+  const rowState = (row) =>
+    Object.fromEntries(
+      Object.keys(row)
+        .sort()
+        .map((name) => [
+          name,
+          { state: row[name] === null ? "unset" : "value", value: row[name] },
+        ]),
+    );
+  // Rows in the server's own shapes; the lifetime's control comes from the
+  // table beside the page, its state from each row's `override`.
+  const modelEntry = (ref, row, learned) => ({
+    ...clone(alpha.models[1]),
     model_ref: ref,
-    model_id: ref.split("/")[1],
+    model_id: ref.slice(ref.indexOf("/") + 1),
     configured: false,
-    override: {},
+    override: rowState(row),
     effective: [],
-    learned: ref === REFUSED_REF ? [clone(REFUSAL_FACT)] : [],
-  }));
-  page.providers.push({
-    ...clone(alpha),
-    provider_id: DECLARED,
-    model_count: declaredModels.length,
-    hidden_count: 0,
-    models: declaredModels,
+    learned: learned || [],
   });
+  const providerEntry = (providerId, row, models) => ({
+    ...clone(alpha),
+    provider_id: providerId,
+    model_count: models.length,
+    hidden_count: 0,
+    override: rowState(row),
+    models,
+  });
+  const declaredModels = [
+    modelEntry(REFUSED_REF, { prompt_cache_ttl: 10 }, [clone(REFUSAL_FACT)]),
+    modelEntry(PLAIN_REF, {}),
+    modelEntry(UNSET_REF, { prompt_cache_ttl: null }),
+    ...MINUTE_REFS.map(([ref, minutes]) => modelEntry(ref, { prompt_cache_ttl: minutes })),
+  ];
+  page.providers.push(
+    providerEntry(DECLARED, { prompt_cache_ttl: 45 }, declaredModels),
+    providerEntry("commandcode", {}, [
+      modelEntry(GATEWAY_PLAIN_REF, {}),
+      modelEntry(GATEWAY_ROW_REF, { prompt_cache_ttl: 20 }),
+      modelEntry(GATEWAY_OPEN_REF, { prompt_cache_ttl: 20 }),
+    ]),
+    providerEntry("opencode", { prompt_cache_ttl: 20 }, [
+      modelEntry(GATEWAY_REFUSED_REF, {}, [clone(HOST_REFUSAL_FACT)]),
+    ]),
+  );
   page.prompt_cache_lifetimes = clone(fixture.prompt_cache_lifetimes);
   ROUTES["/admin/api/model-admin"] = page;
+  ROUTES["/admin/api/model-admin/overrides"] = clone(page);
+  ROUTES["/admin/api/model-admin/learned/forget"] = { forgotten: 1 };
 
   const doc = window.document;
   const flat = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim() : "");
   const settle = () => wait(200);
 
   const applied = [];
+  const posts = [];
   const installRecorder = () => {
     const realFetch = window.fetch;
     window.fetch = async (url, options = {}) => {
       const path = String(url).split("?")[0];
+      if (
+        path === "/admin/api/model-admin/overrides" ||
+        path === "/admin/api/model-admin/learned/forget"
+      ) {
+        posts.push({ path, body: options.body });
+      }
       if (path === "/admin/api/config/apply") {
         applied.push(JSON.parse(options.body));
         const body = { applied: true, errors: [], warnings: [], pending_fields: [], restart: {} };
@@ -130,24 +204,102 @@ export function preparePromptCacheScenario({ window, ROUTES }) {
     if (!node) return { missing: ref };
     node.open = true;
     await settle();
-    const tr = node.querySelector('tr[data-field="prompt_cache_lifetimes"]');
-    if (!tr) return { ref, row: null };
-    const cells = Array.from(tr.children);
-    const badge = tr.querySelector(".models-source");
-    const group = tr.closest("tbody");
+    const chip = node.querySelector("summary .models-chip-forced");
     return {
       ref,
-      row: {
-        label: flat(cells[0]),
-        value: flat(cells[1]),
-        badgeClass: badge ? badge.className : null,
-        badge: flat(badge),
-        notes: Array.from(tr.querySelectorAll(".models-approx-note")).map(flat),
-        readonly: tr.classList.contains("models-fields-readonly"),
-        group: group ? group.dataset.group : null,
-        srOnly: Array.from(tr.querySelectorAll(".sr-only")).map(flat),
-      },
+      row: describeRow(node.querySelector('tr[data-field="prompt_cache_ttl"]')),
+      // 7.104.0's read-only row is gone: the overridable one replaces it.
+      oldRow: Boolean(node.querySelector('tr[data-field="prompt_cache_lifetimes"]')),
+      chip: chip ? flat(chip) : null,
       emptyNote: flat(node.querySelector(".models-empty-note")),
+    };
+  };
+
+  function describeRow(tr) {
+    if (!tr) return null;
+    const cells = Array.from(tr.children);
+    const badge = cells[2] ? cells[2].querySelector(".models-source") : null;
+    const group = tr.closest("tbody");
+    const mode = tr.querySelector("select.models-override-mode");
+    const box = tr.querySelector("input.models-override-value");
+    const label = tr.querySelector("th label");
+    return {
+      label: flat(label),
+      fileKey: flat(tr.querySelector(".models-fields-key")),
+      labelForResolves: label ? Boolean(doc.getElementById(label.htmlFor)) : null,
+      value: flat(cells[1]),
+      badgeClass: badge ? badge.className : null,
+      badge: flat(badge),
+      notes: Array.from((cells[2] || tr).querySelectorAll(".models-approx-note")).map(flat),
+      forgets: Array.from((cells[2] || tr).querySelectorAll("button.models-learned-forget")).map(
+        flat,
+      ),
+      overridable: tr.classList.contains("is-overridable"),
+      forced: tr.classList.contains("is-forced"),
+      readonly: tr.classList.contains("models-fields-readonly"),
+      group: group ? group.dataset.group : null,
+      lastInGroup: group ? group.lastElementChild === tr : null,
+      mode: mode ? mode.value : null,
+      modeId: mode ? mode.id : null,
+      boxId: box ? box.id : null,
+      boxValue: box ? box.value : null,
+      boxMin: box ? box.getAttribute("min") : null,
+      boxMax: box ? box.getAttribute("max") : null,
+      boxAria: box ? box.getAttribute("aria-label") : null,
+      boxDisabled: box ? box.disabled : null,
+      describedBy: box ? flat(doc.getElementById(box.getAttribute("aria-describedby"))) : null,
+      defaults: Array.from(tr.querySelectorAll(".models-fields-default")).map(flat),
+      controlNotes: Array.from(tr.querySelectorAll(".models-preference-note")).map(flat),
+    };
+  }
+
+  const openProvider = async (id) => {
+    const tree = doc.getElementById("modelsTree");
+    const node = Array.from(tree.querySelectorAll(".models-provider")).find(
+      (el) => el.dataset.provider === id,
+    );
+    const toggle = node ? node.querySelector(".models-provider-toggle") : null;
+    if (toggle) {
+      toggle.click();
+      await settle();
+    }
+    return node;
+  };
+
+  const providerRow = async (node) => {
+    const settings = node ? node.querySelector("details.models-provider-settings") : null;
+    if (!settings) return null;
+    settings.open = true;
+    await settle();
+    return describeRow(settings.querySelector('tr[data-field="prompt_cache_ttl"]'));
+  };
+
+  const modelNode = (ref) =>
+    Array.from(doc.querySelectorAll("details.models-model")).find(
+      (el) => flat(el.querySelector(".models-ref")) === ref,
+    ) || null;
+
+  const saveWith = async (ref, mode, value) => {
+    const node = modelNode(ref);
+    const tr = node ? node.querySelector('tr[data-field="prompt_cache_ttl"]') : null;
+    if (!tr) return { missing: ref };
+    const select = tr.querySelector("select.models-override-mode");
+    const box = tr.querySelector("input.models-override-value");
+    select.value = mode;
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    box.value = value;
+    box.dispatchEvent(new window.Event("input", { bubbles: true }));
+    const before = posts.length;
+    const button = Array.from(node.querySelectorAll(".models-actions button")).find(
+      (el) => flat(el) === "Save overrides",
+    );
+    button.click();
+    await wait(300);
+    const status = button.parentElement.querySelector(".models-status");
+    return {
+      status: flat(status),
+      statusClass: status ? status.className : null,
+      posted: posts.slice(before).map((entry) => JSON.parse(entry.body)),
     };
   };
 
@@ -216,22 +368,55 @@ export function preparePromptCacheScenario({ window, ROUTES }) {
     const modelsLink = navLinks.find((link) => link.dataset.view === "models");
     modelsLink.click();
     await wait(600);
-    const tree = doc.getElementById("modelsTree");
-    for (const id of [DECLARED, "alpha"]) {
-      const node = Array.from(tree.querySelectorAll(".models-provider")).find(
-        (el) => el.dataset.provider === id,
-      );
-      const toggle = node ? node.querySelector(".models-provider-toggle") : null;
-      if (toggle) {
-        toggle.click();
-        await settle();
-      }
+    const providerNodes = {};
+    for (const id of [DECLARED, "alpha", "commandcode", "opencode"]) {
+      providerNodes[id] = await openProvider(id);
     }
     out.models = {
       refused: await lifetimeRow(REFUSED_REF),
       plain: await lifetimeRow(PLAIN_REF),
+      unset: await lifetimeRow(UNSET_REF),
       undeclared: await lifetimeRow(UNDECLARED_REF),
+      gatewayPlain: await lifetimeRow(GATEWAY_PLAIN_REF),
+      gatewayRow: await lifetimeRow(GATEWAY_ROW_REF),
+      gatewayOpen: await lifetimeRow(GATEWAY_OPEN_REF),
+      gatewayRefused: await lifetimeRow(GATEWAY_REFUSED_REF),
     };
+    out.edges = {};
+    for (const [ref, minutes] of MINUTE_REFS) {
+      const described = await lifetimeRow(ref);
+      out.edges[String(minutes)] = described.row ? described.row.value : null;
+    }
+    out.providers = {
+      declared: await providerRow(providerNodes[DECLARED]),
+      alpha: await providerRow(providerNodes.alpha),
+      commandcode: await providerRow(providerNodes.commandcode),
+      opencode: await providerRow(providerNodes.opencode),
+    };
+
+    // Saves: refused out of range (nothing posted), then 20 minutes, sent last.
+    out.saves = {
+      zero: await saveWith(PLAIN_REF, "value", "0"),
+      tooMany: await saveWith(PLAIN_REF, "value", "61"),
+      fraction: await saveWith(PLAIN_REF, "value", "2.5"),
+      twenty: await saveWith(PLAIN_REF, "value", "20"),
+      unset: await saveWith(PLAIN_REF, "unset", ""),
+    };
+
+    // Forget on the host-wide refusal names the fact's own subject.
+    const refusedNode = modelNode(GATEWAY_REFUSED_REF);
+    const forget = refusedNode
+      ? refusedNode.querySelector('tr[data-field="prompt_cache_ttl"] button.models-learned-forget')
+      : null;
+    const beforeForget = posts.length;
+    if (forget) {
+      forget.click();
+      await wait(400);
+    }
+    out.forgetPosted = posts.slice(beforeForget).map((entry) => ({
+      path: entry.path,
+      body: JSON.parse(entry.body),
+    }));
 
     out.scriptErrors = scriptErrors;
     out.consoleErrors = consoleErrors;

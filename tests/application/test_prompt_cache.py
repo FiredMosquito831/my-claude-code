@@ -96,10 +96,10 @@ def test_the_levels_win_in_the_documented_order() -> None:
 
     assert resolve_prompt_cache_ask(
         model_row="3", provider_row="10", tier=tier, global_value="40"
-    ) == PromptCacheAsk(3, "model override")
+    ) == PromptCacheAsk(3, "model_override")
     assert resolve_prompt_cache_ask(
         provider_row="10", tier=tier, global_value="40"
-    ) == PromptCacheAsk(10, "provider override")
+    ) == PromptCacheAsk(10, "provider_override")
     assert resolve_prompt_cache_ask(tier=tier, global_value="40") == PromptCacheAsk(
         20, "PROMPT_CACHE_TTL_OPUS"
     )

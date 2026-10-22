@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.config.prompt_cache_lifetimes import prompt_cache_gateway_family
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
@@ -110,6 +111,10 @@ class CommandCodeProvider(BaseProvider):
             provider_name="COMMANDCODE",
             rate_limiter=rate_limiter,
             provider_id=COMMANDCODE_PROVIDER_ID,
+            # Anthropic's protocol on a host that publishes no cache lifetime
+            # (7.105.0): a lifetime only where an override row sets one, and
+            # only on the models this delegate serves.
+            prompt_cache_family=prompt_cache_gateway_family(),
         )
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:

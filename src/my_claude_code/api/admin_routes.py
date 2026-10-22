@@ -46,6 +46,7 @@ from my_claude_code.api.model_admin import (
     model_knowledge_payload,
     model_refs_by_provider,
     override_update_problem,
+    prompt_cache_gateway_models,
     prompt_cache_lifetimes_payload,
     render_patterns,
     speakable_surfaces,
@@ -1751,8 +1752,14 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     )
     # The declared prompt-cache lifetimes (7.104.0): a fact about providers,
     # joined to each model on the page. Outside the capability half, so the
-    # ladder's cached and pinned output is exactly what it was.
-    merged["prompt_cache_lifetimes"] = prompt_cache_lifetimes_payload()
+    # ladder's cached and pinned output is exactly what it was. Since 7.105.0
+    # it also names the gateways' Messages models and carries the Model Config
+    # lifetimes each route reads, which a settings save moves.
+    merged["prompt_cache_lifetimes"] = prompt_cache_lifetimes_payload(
+        settings,
+        configured,
+        prompt_cache_gateway_models(merged),
+    )
     return merged
 
 

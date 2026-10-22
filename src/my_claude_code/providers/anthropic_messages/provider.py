@@ -12,6 +12,7 @@ from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.application.prompt_cache import (
     PromptCacheLifetimeChoice,
     choose_prompt_cache_lifetime,
+    prompt_cache_ask_for_attempt,
 )
 from my_claude_code.config.prompt_cache_lifetimes import PromptCacheLifetimeFamily
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -134,10 +135,11 @@ class AnthropicMessagesProvider(BaseProvider):
         # subscription), so every other body is built exactly as before.
         self._forward_thinking_display = forward_thinking_display
         # The prompt-cache lifetimes this host is declared to accept
-        # (``config/prompt_cache_lifetimes.py``, 7.104.0). ``None`` -- every
-        # host in this family but the two first-party Anthropic providers:
-        # Command Code, the OpenCode and custom Messages doors -- means an
-        # operator's lifetime setting never reaches this body at all.
+        # (``config/prompt_cache_lifetimes.py``, 7.104.0). ``None`` -- the
+        # default, for any caller that declares nothing -- means an operator's
+        # lifetime never reaches this body at all. Since 7.105.0 Command Code
+        # and the OpenCode and custom Messages doors pass the gateway family:
+        # a lifetime only from an override row, never from Model Config.
         self._prompt_cache_family = prompt_cache_family
         self._base_url = config.base_url.rstrip("/")
         # Default preserves the bearer-token shape every existing caller uses;
@@ -247,22 +249,33 @@ class AnthropicMessagesProvider(BaseProvider):
     ) -> PromptCacheLifetimeChoice | None:
         """The lifetime this attempt sends, or ``None`` to leave the body alone.
 
-        Cheapest test first: a host with no declared lifetimes, or a request
-        that carries no ask (nothing is set), is ``None`` before anything is
-        looked up. Otherwise the ask is adapted to the declared lifetimes,
-        less the ones this model's host refused (learned, still fresh).
+        Cheapest test first: a host with no lifetime family is ``None`` before
+        anything is looked up. Otherwise this attempt's own override rows
+        (7.105.0: the model's, then its provider's) are put over what the door
+        stamped from Model Config -- which a gateway family never reads -- and
+        an ask that survives is adapted to the family's lifetimes, less the
+        ones this host refused (learned, still fresh).
         """
 
         family = self._prompt_cache_family
         if family is None:
             return None
-        ask = request.prompt_cache_ask
+        ask = prompt_cache_ask_for_attempt(
+            request.prompt_cache_ask,
+            family,
+            provider_id=self._provider_id,
+            model_id=request.model,
+        )
         if ask is None:
             return None
         return choose_prompt_cache_lifetime(
             ask,
             family,
-            refused=refused_prompt_cache_lifetimes(self._provider_id, request.model),
+            refused=refused_prompt_cache_lifetimes(
+                self._provider_id,
+                request.model,
+                host_wide=family.refusal_per_host,
+            ),
         )
 
     def preflight_stream(

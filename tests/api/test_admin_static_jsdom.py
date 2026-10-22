@@ -20,12 +20,21 @@ from typing import NoReturn
 
 import pytest
 
-from my_claude_code.api.model_admin import prompt_cache_lifetimes_payload
+from my_claude_code.api.model_admin import (
+    prompt_cache_gateway_models,
+    prompt_cache_lifetimes_payload,
+)
+from my_claude_code.application.prompt_cache import adapt_prompt_cache_minutes
 from my_claude_code.config.admin.manifest import (
     FIELD_BY_KEY,
     FIELDS,
     SECTIONS,
     ConfigOptionSpec,
+)
+from my_claude_code.config.model_refs import ConfiguredChatModelRef
+from my_claude_code.config.prompt_cache_lifetimes import (
+    ANTHROPIC_MESSAGES_LIFETIMES,
+    PROMPT_CACHE_LIFETIME_FAMILIES,
 )
 from my_claude_code.core.upstream_ladder import _TIMES
 
@@ -10547,6 +10556,67 @@ def _served_field(key: str) -> dict:
     }
 
 
+def _prompt_cache_table() -> dict:
+    """The server's own table, for the routes and gateways the scenario draws.
+
+    ``settings`` is the one part a real ``Settings`` object would supply: the
+    stored words of the six Model Config lifetimes (Opus at 30 minutes, every
+    other tier inheriting the global "from client").
+    """
+
+    configured = [
+        ConfiguredChatModelRef(
+            "anthropic_oauth/claude-haiku-5-5",
+            "anthropic_oauth",
+            "claude-haiku-5-5",
+            ("MODEL_OPUS",),
+        ),
+        ConfiguredChatModelRef(
+            "anthropic_oauth/claude-opus-5-5",
+            "anthropic_oauth",
+            "claude-opus-5-5",
+            ("MODEL_HAIKU", "MODEL_FALLBACKS"),
+        ),
+    ]
+    page = {
+        "providers": [
+            {
+                "provider_id": "commandcode",
+                "models": [
+                    {"model_ref": f"commandcode/{model_id}", "model_id": model_id}
+                    for model_id in (
+                        "claude-opus-5-5",
+                        "claude-sonnet-5-5",
+                        "deepseek/deepseek-v4-flash",
+                    )
+                ],
+            },
+            {
+                "provider_id": "opencode",
+                "models": [
+                    {
+                        "model_ref": "opencode/claude-fable-5-1",
+                        "model_id": "claude-fable-5-1",
+                        "capabilities": {"response_surface": {"value": "messages"}},
+                    }
+                ],
+            },
+        ]
+    }
+    table = prompt_cache_lifetimes_payload(
+        None, configured, prompt_cache_gateway_models(page)
+    )
+    table["settings"] = {
+        "PROMPT_CACHE_TTL": "client",
+        "PROMPT_CACHE_TTL_MYTHOS": "inherit",
+        "PROMPT_CACHE_TTL_FABLE": "inherit",
+        "PROMPT_CACHE_TTL_OPUS": "30",
+        "PROMPT_CACHE_TTL_SONNET": "inherit",
+        "PROMPT_CACHE_TTL_HAIKU": "inherit",
+    }
+    return table
+
+
 @pytest.fixture(scope="module")
 def prompt_cache(tmp_path_factory: pytest.TempPathFactory) -> dict:
     section = next(spec for spec in SECTIONS if spec.section_id == "reasoning")
@@ -10562,7 +10632,7 @@ def prompt_cache(tmp_path_factory: pytest.TempPathFactory) -> dict:
             for field in FIELDS
             if field.section_id == "reasoning"
         ],
-        "prompt_cache_lifetimes": prompt_cache_lifetimes_payload(),
+        "prompt_cache_lifetimes": _prompt_cache_table(),
     }
     path = tmp_path_factory.mktemp("prompt_cache") / "fixture.json"
     path.write_text(json.dumps(fixture), encoding="utf-8")
@@ -10637,28 +10707,290 @@ def test_jsdom_a_save_posts_exactly_the_two_lifetimes_edited(prompt_cache) -> No
     ]
 
 
-def test_jsdom_a_declared_host_shows_its_lifetimes_read_only(prompt_cache) -> None:
-    plain = prompt_cache["models"]["plain"]["row"]
-    assert plain["label"] == "prompt cache lifetimes"
-    assert plain["value"] == "5 min (writes 1.25x), 1 h (writes 2x)"
+def test_jsdom_a_declared_host_shows_its_lifetimes_on_the_overridable_row(
+    prompt_cache,
+) -> None:
+    """7.104.0's read-only row is now the 14th overridable key's row (7.105.0)."""
+
+    entry = prompt_cache["models"]["plain"]
+    plain = entry["row"]
+    assert entry["oldRow"] is False
+    assert plain["label"] == "prompt cache lifetime"
+    assert plain["fileKey"] == "prompt_cache_ttl"
+    assert plain["overridable"] is True
+    assert plain["readonly"] is False
     assert plain["badge"] == "declared for the Anthropic Messages family"
     assert "models-source-declared" in plain["badgeClass"]
-    assert plain["readonly"] is True
-    assert plain["srOnly"] == ["read-only"]
     assert plain["group"] == "request"
-    assert any("shortest that is at least" in note for note in plain["notes"])
+    assert plain["lastInGroup"] is True
+    # Everything the read-only row said is still said, on the source column.
+    assert any(
+        "This host takes: 5 min (writes 1.25x), 1 h (writes 2x)." in note
+        and "shortest that is at least" in note
+        for note in plain["notes"]
+    )
 
 
-def test_jsdom_a_learned_refusal_names_the_refused_lifetime(prompt_cache) -> None:
+def test_jsdom_the_provider_row_decides_and_the_tier_is_the_default(prompt_cache):
+    plain = prompt_cache["models"]["plain"]["row"]
+    # The provider row (45 min) decides; the Opus route's 30 min is the default.
+    assert plain["value"] == "1 h (asked 45 min)"
+    assert plain["forced"] is True
+    assert plain["mode"] == "inherit"
+    assert plain["boxDisabled"] is True
+    assert any(
+        note.startswith("From this provider's override row: asked 45 min → sent 1 h.")
+        for note in plain["notes"]
+    )
+    assert plain["defaults"][0] == "default 30 min — PROMPT_CACHE_TTL_OPUS → sent 1 h"
+    assert "chosen by the model name the client sends" in plain["defaults"][1]
+    assert plain["describedBy"].startswith("default 30 min — PROMPT_CACHE_TTL_OPUS")
+
+
+def test_jsdom_a_learned_refusal_is_named_with_its_forget(prompt_cache) -> None:
     refused = prompt_cache["models"]["refused"]["row"]
-    assert refused["value"] == "5 min (writes 1.25x), 1 h — refused by this host"
+    # Model row 10 min; the host refused 1 h, so the next one it takes: 5 min.
+    assert refused["value"] == "5 min (asked 10 min)"
+    assert refused["mode"] == "value"
+    assert refused["boxValue"] == "10"
+    assert any(
+        "This host takes: 5 min (writes 1.25x), 1 h — refused by this host." in note
+        for note in refused["notes"]
+    )
+    assert "refused 1h for this model — learned from its own 400" in refused["notes"]
+    assert refused["forgets"] == ["Forget"]
+    # Two routes name it: Haiku (inheriting the global) and the default route.
+    assert refused["defaults"][:2] == [
+        "default From client — PROMPT_CACHE_TTL_HAIKU inherits PROMPT_CACHE_TTL; "
+        "the client's own markers go as sent",
+        "default From client — PROMPT_CACHE_TTL; the client's own markers go as sent",
+    ]
+
+
+def test_jsdom_force_unset_on_a_model_row_is_from_client(prompt_cache) -> None:
+    unset = prompt_cache["models"]["unset"]["row"]
+    assert unset["value"] == "From client"
+    assert unset["mode"] == "unset"
+    assert unset["forced"] is True
+    assert any(
+        note.startswith("Forced unset on this model's override row")
+        for note in unset["notes"]
+    )
+    assert unset["defaults"][0] == (
+        "default From client — PROMPT_CACHE_TTL; the client's own markers go as sent"
+    )
 
 
 def test_jsdom_an_undeclared_host_says_lifetime_control_is_not_known(
     prompt_cache,
 ) -> None:
     row = prompt_cache["models"]["undeclared"]["row"]
-    assert row["value"] == "lifetime control not known for this host"
+    assert row["value"] == "From client"
     assert row["badge"] == "not declared"
-    assert row["readonly"] is True
-    assert any("changes nothing on its requests" in note for note in row["notes"])
+    assert row["overridable"] is True
+    assert any(
+        "lifetime control not known for this host" in note
+        and "changes nothing on its requests" in note
+        for note in row["notes"]
+    )
+    assert row["defaults"] == [
+        "default From client — no lifetime control known for this host"
+    ]
+
+
+def test_jsdom_a_gateway_says_lifetimes_unknown_and_takes_one_only_from_a_row(
+    prompt_cache,
+) -> None:
+    models = prompt_cache["models"]
+    plain, with_row = models["gatewayPlain"]["row"], models["gatewayRow"]["row"]
+    for row in (plain, with_row):
+        assert row["badge"] == "lifetimes unknown — sent only when set on this row"
+        assert row["defaults"] == [
+            "default From client — Model Config's lifetimes never reach this host; "
+            "only this row or its provider's row sends one"
+        ]
+        assert any(
+            "This host takes: 5 min, 1 h." in note
+            and "Anthropic's own spelling of the nearest Anthropic lifetime" in note
+            and "the first refusal stops lifetimes for the whole host" in note
+            for note in row["notes"]
+        )
+    # Model Config asks 30 min on the Opus route; the gateway still gets nothing.
+    assert plain["value"] == "From client"
+    assert with_row["value"] == "1 h (asked 20 min)"
+    # Command Code's open models are not on the Messages protocol at all.
+    assert models["gatewayOpen"]["row"]["badge"] == "not declared"
+
+
+def test_jsdom_a_host_wide_refusal_stops_a_gateway_and_forget_names_the_host(
+    prompt_cache,
+) -> None:
+    row = prompt_cache["models"]["gatewayRefused"]["row"]
+    assert row["value"] == "nothing sent (asked 20 min)"
+    assert "refused 1h for this whole host — learned from its own 400" in row["notes"]
+    assert row["forgets"] == ["Forget"]
+    assert prompt_cache["forgetPosted"] == [
+        {
+            "path": "/admin/api/model-admin/learned/forget",
+            "body": {
+                "providerId": "opencode",
+                "modelId": "*",
+                "factKind": "prompt_cache_lifetime_refused",
+            },
+        }
+    ]
+
+
+def test_jsdom_the_rule_on_the_page_is_the_servers_rule(prompt_cache) -> None:
+    lifetimes = PROMPT_CACHE_LIFETIME_FAMILIES[ANTHROPIC_MESSAGES_LIFETIMES].lifetimes
+    for minutes, shown in prompt_cache["edges"].items():
+        sent = adapt_prompt_cache_minutes(int(minutes), lifetimes)
+        assert sent is not None
+        assert shown == f"{sent.label} (asked {minutes} min)", minutes
+
+
+def test_jsdom_the_provider_editor_carries_the_same_row(prompt_cache) -> None:
+    providers = prompt_cache["providers"]
+    declared = providers["declared"]
+    assert declared["value"] == "45 min"
+    assert declared["badge"] == "operator override"
+    assert declared["mode"] == "value"
+    assert declared["modeId"] == "pref-provider-anthropic_oauth-prompt_cache_ttl-mode"
+    assert declared["defaults"] == [
+        "default per model — open a model to see its default",
+        "this host: declared for the Anthropic Messages family",
+    ]
+    assert (
+        "Force unset is From client for the whole provider."
+        in (declared["controlNotes"][0])
+    )
+    assert providers["alpha"]["value"] == "not set"
+    assert providers["alpha"]["defaults"][1] == (
+        "this host: lifetime control not known for this host; a value here "
+        "changes nothing"
+    )
+    for gateway in ("commandcode", "opencode"):
+        assert providers[gateway]["defaults"][1] == (
+            "its Anthropic Messages models: lifetimes unknown — sent only when "
+            "set on this row"
+        )
+
+
+def test_jsdom_the_override_chip_counts_the_lifetime_key(prompt_cache) -> None:
+    """A provider row's lifetime alone is one key set on its models (X2 7.101.0)."""
+
+    models = prompt_cache["models"]
+    assert models["plain"]["chip"] == "1 override(s) active"
+    assert models["gatewayRefused"]["chip"] == "1 override(s) active"
+    assert models["gatewayRow"]["chip"] == "1 override(s) active"
+    assert models["gatewayPlain"]["chip"] is None
+
+
+def test_jsdom_a_lifetime_save_is_validated_and_sent_last(prompt_cache) -> None:
+    saves = prompt_cache["saves"]
+    for refused in ("zero", "tooMany", "fraction"):
+        assert saves[refused]["posted"] == [], refused
+        assert saves[refused]["status"] == (
+            "prompt_cache_ttl must be whole minutes from 1 to 60."
+        )
+        assert saves[refused]["statusClass"] == "models-status error"
+    for name, value in (("twenty", 20), ("unset", None)):
+        posted = saves[name]["posted"]
+        assert saves[name]["status"] == "Saved"
+        assert len(posted) == 1
+        updates = posted[0]["updates"]
+        # The harness payload names its preferences in this order; the body
+        # keeps the server's order and puts the lifetime after everything.
+        assert list(updates) == [
+            "reasoning_preference",
+            "max_output_tokens",
+            "context_length",
+            "temperature",
+            "prompt_cache_ttl",
+        ]
+        assert updates["prompt_cache_ttl"] == value
+
+
+# --------------------------------------------------------------------------- #
+# The 14th key against the 7.104.0 page (7.105.0)
+#
+# tests/fixtures/models_fields_7_104_0.json is the models_fields scenario run
+# once against the v7.104.0 admin_static (2ab06ec9). Replayed here twice: on a
+# 7.104.0-shaped payload the 7.105.0 page draws and sends exactly that; on the
+# 7.105.0 payload -- the new key's kind, its control on every row, the server's
+# table -- it draws every other row identically, keeps the media block and the
+# MCP notes byte for byte, and its POST bodies differ only by the new key,
+# sent last as "inherit" (which writes nothing: test_prompt_cache_ttl_admin).
+# --------------------------------------------------------------------------- #
+
+MODELS_FIELDS_7_104_0 = json.loads(
+    (
+        Path(__file__).resolve().parents[1] / "fixtures" / "models_fields_7_104_0.json"
+    ).read_text(encoding="utf-8")
+)
+_VOLATILE_CAPTURE_KEYS = {"harnessWallMs", "scriptErrors", "consoleErrors", "_captured"}
+
+
+def _capture(payload: dict) -> dict:
+    return {k: v for k, v in payload.items() if k not in _VOLATILE_CAPTURE_KEYS}
+
+
+def _without_the_lifetime(node: object) -> object:
+    """Every trace of the 14th key's row and of its key in a POST body."""
+
+    if isinstance(node, dict):
+        if node.get("field") == "prompt_cache_ttl":
+            return None
+        out: dict = {}
+        for key, value in node.items():
+            if key == "fields" and isinstance(value, list):
+                out[key] = [field for field in value if field != "prompt_cache_ttl"]
+            elif key == "body" and isinstance(value, str) and value.startswith("{"):
+                body = json.loads(value)
+                if isinstance(body.get("updates"), dict):
+                    assert list(body["updates"])[-1] == "prompt_cache_ttl"
+                    assert body["updates"].pop("prompt_cache_ttl") == "inherit"
+                out[key] = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+            else:
+                out[key] = _without_the_lifetime(value)
+        return out
+    if isinstance(node, list):
+        kept = (_without_the_lifetime(item) for item in node)
+        return [item for item in kept if item is not None]
+    return node
+
+
+@pytest.fixture(scope="module")
+def models_fields_with_lifetime(tmp_path_factory: pytest.TempPathFactory) -> dict:
+    path = tmp_path_factory.mktemp("models_fields_lifetime") / "table.json"
+    path.write_text(json.dumps(prompt_cache_lifetimes_payload()), encoding="utf-8")
+    return _run(
+        MCC_JSDOM_SCENARIO="models_fields",
+        MCC_JSDOM_MODELS_FIELDS_PROMPT_CACHE=str(path),
+    )
+
+
+def test_jsdom_a_7_104_0_payload_draws_and_sends_what_7_104_0_did(
+    models_fields,
+) -> None:
+    assert _capture(models_fields) == _capture(MODELS_FIELDS_7_104_0)
+
+
+def test_jsdom_the_14th_key_moves_no_other_row_body_or_block(
+    models_fields_with_lifetime,
+) -> None:
+    run = models_fields_with_lifetime
+    assert run["scriptErrors"] == []
+    assert run["consoleErrors"] == []
+    # The new row is there on every opened model and on the provider table...
+    for ref in (REF_A, REF_B, REF_C):
+        fields = [row["field"] for row in run["models"][ref]["table"]["rows"]]
+        assert "prompt_cache_ttl" in fields, ref
+    provider_fields = [row["field"] for row in run["provider"]["table"]["rows"]]
+    assert "prompt_cache_ttl" in provider_fields
+    # ...and with it taken out, everything is the 7.104.0 capture, byte for byte:
+    # every row, every default line, every POST body, the media block's hash and
+    # the MCP notes.
+    assert _without_the_lifetime(_capture(run)) == _capture(MODELS_FIELDS_7_104_0)
+    assert run["mediaSection"] == MODELS_FIELDS_7_104_0["mediaSection"]
+    assert run["mcpNotes"] == MODELS_FIELDS_7_104_0["mcpNotes"]

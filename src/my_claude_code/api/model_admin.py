@@ -94,12 +94,17 @@ from my_claude_code.application.openrouter_live import (
     live_fills_gap,
     live_wins_intrinsic,
 )
+from my_claude_code.config.constants import (
+    PROMPT_CACHE_TTL_MAX_MINUTES,
+    PROMPT_CACHE_TTL_MIN_MINUTES,
+)
 from my_claude_code.config.model_overrides import (
     ALLOWED_OVERRIDE_PARAMETERS,
     CONTEXT_LENGTH_OVERRIDE,
     MAX_OUTPUT_TOKENS_OVERRIDE,
     OWNED_ELSEWHERE_PARAMETERS,
     PREFERENCE_OVERRIDE_PARAMETERS,
+    PROMPT_CACHE_TTL_OVERRIDE,
     REASONING_PREFERENCE_OVERRIDE,
     RESPONSE_SURFACE_OVERRIDE,
     ModelParameterOverrides,
@@ -108,6 +113,7 @@ from my_claude_code.config.model_overrides import (
     current_model_overrides,
     model_ref_for,
     normalize_override_key,
+    prompt_cache_ttl_problem,
 )
 from my_claude_code.config.model_refs import (
     ConfiguredChatModelRef,
@@ -115,11 +121,14 @@ from my_claude_code.config.model_refs import (
     parse_provider_type,
 )
 from my_claude_code.config.prompt_cache_lifetimes import (
+    MESSAGES_GATEWAY_PROMPT_CACHE_FAMILY,
     PROMPT_CACHE_LIFETIME_FAMILIES,
     PROVIDER_PROMPT_CACHE_FAMILY,
+    PromptCacheLifetimeFamily,
 )
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.reasoning import ReasoningPreference
+from my_claude_code.config.settings import Settings
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.model_visibility import (
     MODEL_PATTERN_SEPARATOR,
@@ -131,7 +140,12 @@ from my_claude_code.core.reasoning import (
     ReasoningDialectOrigin,
     ReasoningEffort,
 )
+from my_claude_code.core.tier_refs import TIER_PROMPT_CACHE_TTL_SETTINGS
 from my_claude_code.core.wire_capture import redact_wire_value
+from my_claude_code.providers.commandcode import (
+    COMMANDCODE_PROVIDER_ID,
+    is_anthropic_messages_model,
+)
 from my_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
     catalogue_surface,
@@ -253,35 +267,150 @@ PROMPT_CACHE_LIFETIMES_NOTE = (
     "at least the minutes asked for, else the longest. With none set, the "
     "client's own cache markers go exactly as sent."
 )
+#: A host that speaks Anthropic's Messages protocol and publishes no lifetime
+#: (7.105.0, the user's Q7): what the row's source column says, and why.
+PROMPT_CACHE_GATEWAY_LABEL = "lifetimes unknown — sent only when set on this row"
+PROMPT_CACHE_GATEWAY_NOTE = (
+    "This host speaks Anthropic's Messages protocol but publishes no cache "
+    "lifetime, so Model Config's lifetimes never reach it. A lifetime set on "
+    "this model's or its provider's override row is sent in Anthropic's own "
+    "spelling of the nearest Anthropic lifetime (5 min or 1 h: the shortest at "
+    "least the minutes asked, else 1 h) on the cache markers the client wrote; "
+    "none is added. Whether the host passes it on is not known: the first "
+    "refusal stops lifetimes for the whole host until you Forget it."
+)
+#: What each control on the overridable row says (model row, provider row).
+PROMPT_CACHE_TTL_PREFERENCE_NOTE = (
+    "Whole minutes from 1 to 60, adapted to the lifetimes this host takes. "
+    "Force unset is From client on this row: MCC sets no lifetime for this "
+    "model, even where a Model Config tier asks for one."
+)
+PROVIDER_PROMPT_CACHE_TTL_NOTE = (
+    "A lifetime for every model under this provider, in whole minutes from 1 to "
+    "60. Each model's own row wins where it states one, and each model's host "
+    "adapts it to the lifetimes it takes. Force unset is From client for the "
+    "whole provider."
+)
+#: Which Model Config lifetime a request on a route reads, as the page says it.
+PROMPT_CACHE_ROUTE_NOTE = (
+    "Which Model Config lifetime applies is chosen by the model name the client "
+    "sends, as the thinking level is; the default shown is the one for each "
+    "route that names this model, or PROMPT_CACHE_TTL for a direct "
+    "provider/model ref."
+)
+
+#: Providers that send some of their models over Anthropic's Messages protocol
+#: by a rule of their own rather than through a declared wire surface
+#: (7.105.0). Each value is the very function the provider delegates on, so the
+#: page and the request can never disagree about which models a lifetime can
+#: reach. Every other gateway's Messages models are the ones whose resolved
+#: wire surface is ``messages``.
+MESSAGES_PROTOCOL_MODEL_RULES: Mapping[str, Callable[[str], bool]] = {
+    COMMANDCODE_PROVIDER_ID: is_anthropic_messages_model,
+}
 
 
-def prompt_cache_lifetimes_payload() -> dict[str, Any]:
-    """The declared lifetime table, for the Models page's read-only row (7.104.0).
+def _family_payload(family: PromptCacheLifetimeFamily) -> dict[str, Any]:
+    return {
+        "label": family.label,
+        "wire_field": family.wire_field,
+        "lifetimes": [
+            {
+                "wire": lifetime.wire,
+                "label": lifetime.label,
+                "minutes": lifetime.minutes,
+                "write_price": lifetime.write_price,
+            }
+            for lifetime in family.lifetimes
+        ],
+        "automatic_marker": family.automatic_marker,
+        "source": family.source,
+        # 7.105.0, appended: what decides for the family, and how it learns.
+        "lifetimes_known": family.lifetimes_known,
+        "rows_only": family.rows_only,
+        "refusal_per_host": family.refusal_per_host,
+        "default_wire": family.default_wire,
+    }
+
+
+def _route_lifetime_setting(route: str) -> str:
+    """The Model Config lifetime a route env key's requests read.
+
+    ``MODEL_OPUS`` and ``MODEL_OPUS_FALLBACKS`` are the Opus route, whose
+    requests carry an Opus name and so read ``PROMPT_CACHE_TTL_OPUS``; the
+    default and the vision routes have no tier of their own here and read
+    ``PROMPT_CACHE_TTL``. Derived from the tier table, never typed again.
+    """
+
+    for attr in TIER_PROMPT_CACHE_TTL_SETTINGS.values():
+        tier_route = attr.replace("prompt_cache_ttl_", "model_").upper()
+        if route in (tier_route, f"{tier_route}_FALLBACKS"):
+            return attr.upper()
+    return "PROMPT_CACHE_TTL"
+
+
+def prompt_cache_gateway_models(page: Mapping[str, Any]) -> dict[str, str]:
+    """Each model a non-Anthropic host serves over Anthropic's protocol (7.105.0).
+
+    Read off the page itself: a model whose resolved wire surface is
+    ``messages`` (OpenCode Zen's, a custom provider's Messages door), or one
+    its provider's own delegation rule sends there (Command Code's
+    ``claude-*``). The first-party Anthropic providers are declared by id and
+    are not listed here.
+    """
+
+    found: dict[str, str] = {}
+    for provider in page.get("providers", []) or []:
+        provider_id = str(provider.get("provider_id") or "")
+        if provider_id in PROVIDER_PROMPT_CACHE_FAMILY:
+            continue
+        rule = MESSAGES_PROTOCOL_MODEL_RULES.get(provider_id)
+        for model in provider.get("models", []) or []:
+            model_ref = str(model.get("model_ref") or "")
+            model_id = str(model.get("model_id") or "")
+            capabilities = model.get("capabilities") or {}
+            surface = capabilities.get("response_surface") or {}
+            on_messages = surface.get("value") == ResponseSurface.MESSAGES.value
+            if on_messages or (rule is not None and rule(model_id)):
+                found[model_ref] = MESSAGES_GATEWAY_PROMPT_CACHE_FAMILY
+    return found
+
+
+def prompt_cache_lifetimes_payload(
+    settings: Settings | None = None,
+    configured: Iterable[ConfiguredChatModelRef] = (),
+    gateway_models: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """The lifetime table and what decides it, for the Models page (7.104.0).
 
     Served beside the page's capability half rather than inside it: the table
     is a fact about providers, not about any one model, and nothing in the
     capability ladder (or its pinned snapshot) moves for it. The page joins it
-    to a model by the model's provider id, and narrows it by that model's own
-    learned refusals, which it already carries.
+    to a model by the model's provider id -- or, for a gateway's Messages
+    models, by the model's own ref (``models``) -- and narrows it by that
+    model's own learned refusals, which it already carries.
+
+    7.105.0 adds what the overridable row's default line needs: the stored
+    value of each Model Config lifetime (``settings``) and, for each route that
+    names a model, the lifetime setting its requests read (``routes``). Both
+    move with a settings save, so they are never part of the cached half.
     """
 
+    attrs = ("prompt_cache_ttl", *TIER_PROMPT_CACHE_TTL_SETTINGS.values())
+    values = {
+        attr.upper(): str(getattr(settings, attr)) if settings is not None else None
+        for attr in attrs
+    }
+    routes: dict[str, list[str]] = {}
+    for ref in configured:
+        named = routes.setdefault(ref.model_ref, [])
+        for source in ref.sources:
+            setting = _route_lifetime_setting(source)
+            if setting not in named:
+                named.append(setting)
     return {
         "families": {
-            family_id: {
-                "label": family.label,
-                "wire_field": family.wire_field,
-                "lifetimes": [
-                    {
-                        "wire": lifetime.wire,
-                        "label": lifetime.label,
-                        "minutes": lifetime.minutes,
-                        "write_price": lifetime.write_price,
-                    }
-                    for lifetime in family.lifetimes
-                ],
-                "automatic_marker": family.automatic_marker,
-                "source": family.source,
-            }
+            family_id: _family_payload(family)
             for family_id, family in PROMPT_CACHE_LIFETIME_FAMILIES.items()
         },
         "providers": dict(PROVIDER_PROMPT_CACHE_FAMILY),
@@ -289,6 +418,24 @@ def prompt_cache_lifetimes_payload() -> dict[str, Any]:
         "note": PROMPT_CACHE_LIFETIMES_NOTE,
         "unknown_label": PROMPT_CACHE_LIFETIMES_UNKNOWN,
         "unknown_note": PROMPT_CACHE_LIFETIMES_UNKNOWN_NOTE,
+        # 7.105.0, appended. The override row's control: the 14th key, its
+        # kind and bounds, and what it says on a model row and a provider row.
+        # Its state is each row's own ``override`` entry, already on the page.
+        "override_key": PROMPT_CACHE_TTL_OVERRIDE,
+        "control": {
+            "kind": PROMPT_CACHE_TTL_KIND,
+            "minimum": PROMPT_CACHE_TTL_MIN_MINUTES,
+            "maximum": PROMPT_CACHE_TTL_MAX_MINUTES,
+            "model_note": PROMPT_CACHE_TTL_PREFERENCE_NOTE,
+            "provider_note": PROVIDER_PROMPT_CACHE_TTL_NOTE,
+        },
+        "models": dict(gateway_models or {}),
+        "gateway_label": PROMPT_CACHE_GATEWAY_LABEL,
+        "gateway_note": PROMPT_CACHE_GATEWAY_NOTE,
+        "settings": values,
+        "routes": routes,
+        "route_note": PROMPT_CACHE_ROUTE_NOTE,
+        "global_setting": "PROMPT_CACHE_TTL",
     }
 
 
@@ -403,11 +550,16 @@ MODEL_SCOPE = "model"
 # The two non-body preferences the editor may write, and the shape of each,
 # so the page does not hardcode either name. ``enum`` is checked against the
 # option list the row itself publishes; ``integer`` is bounded by the row's
-# own resolved output limit.
+# own resolved output limit. The prompt-cache lifetime (7.105.0) is not here:
+# its control is described beside the page, in ``prompt_cache_lifetimes``,
+# so the cached and pinned half of the page is byte for byte 7.104.0's.
 PREFERENCE_PARAMETER_KINDS: dict[str, str] = {
     REASONING_PREFERENCE_OVERRIDE: "enum",
     MAX_OUTPUT_TOKENS_OVERRIDE: "integer",
 }
+
+#: The kind the page gives the prompt-cache lifetime's control (7.105.0).
+PROMPT_CACHE_TTL_KIND = "minutes"
 
 # The controls, which are not efforts: they say *how* to decide rather than
 # how hard to think, and every row offers all three regardless of capability
@@ -881,6 +1033,10 @@ ROW_WIDE_FACT_KINDS: frozenset[str] = frozenset(
         # A tools-count ceiling decides how many tools the next body offers
         # every model behind this host, so it is on every model's row too.
         "responses_tools_max_count",
+        # A gateway's refused cache lifetime (7.105.0) is learned for the
+        # whole host and stops lifetimes on every model behind it, so each of
+        # those rows shows it -- with the Forget that re-opens it.
+        "prompt_cache_lifetime_refused",
     }
 )
 
@@ -2785,24 +2941,32 @@ def _image_estimate_row(
 
 
 #: Every key the parameter grid may write: the nine body parameters, the two
-#: preferences, and the operator's context window (7.87.0, model rows only --
-#: :func:`override_update_problem` refuses it on a provider row).
+#: preferences, the operator's context window (7.87.0, model rows only --
+#: :func:`override_update_problem` refuses it on a provider row) and the
+#: prompt-cache lifetime (7.105.0, provider and model rows).
 EDITOR_OVERRIDE_PARAMETERS: frozenset[str] = (
     ALLOWED_OVERRIDE_PARAMETERS
     | PREFERENCE_OVERRIDE_PARAMETERS
-    | frozenset({CONTEXT_LENGTH_OVERRIDE})
+    | frozenset({CONTEXT_LENGTH_OVERRIDE, PROMPT_CACHE_TTL_OVERRIDE})
 )
 
 
 def override_update_problem(scope: str, updates: Mapping[str, Any]) -> str | None:
     """Why one editor submission cannot be saved, or ``None`` if it can.
 
-    Only the context window is checked here: it is the one key whose value
+    Two keys are checked here. The context window is the one key whose value
     is a number every reader trusts as a model fact, so a 0, a negative or a
-    fraction is refused at the door rather than stored and ignored later.
-    ``null`` (force unknown) and the inherit sentinel are always accepted.
+    fraction is refused at the door rather than stored and ignored later. The
+    prompt-cache lifetime (7.105.0) is whole minutes from 1 to 60, the range
+    Model Config offers, on either scope. ``null`` (force unknown / from
+    client) and the inherit sentinel are always accepted.
     """
 
+    lifetime = updates.get(PROMPT_CACHE_TTL_OVERRIDE, INHERIT_SENTINEL)
+    if lifetime != INHERIT_SENTINEL and lifetime is not None:
+        lifetime_problem = prompt_cache_ttl_problem(lifetime)
+        if lifetime_problem is not None:
+            return f"{PROMPT_CACHE_TTL_OVERRIDE} {lifetime_problem}"
     if CONTEXT_LENGTH_OVERRIDE not in updates:
         return None
     value = updates[CONTEXT_LENGTH_OVERRIDE]

@@ -30,6 +30,8 @@
  * prints them as one JSON object.
  */
 
+import { readFileSync } from "node:fs";
+
 const clone = (value) => (value === undefined ? value : JSON.parse(JSON.stringify(value)));
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -469,7 +471,26 @@ function providerEntry(providerId, models, row) {
   };
 }
 
+/* MCC_JSDOM_MODELS_FIELDS_PROMPT_CACHE names a file holding the server's
+   real `prompt_cache_lifetimes` table (7.105.0). When it is set, the payload
+   is the 7.105.0 server's: 7.104.0's page -- whose cached half the 14th key
+   does not touch -- with the table beside it, which carries the lifetime
+   control; no row of this scenario sets the key. When it is not set, the
+   payload is byte for byte the one 7.104.0 captured, which is how the same
+   file records the old page and replays the new one. */
+const PROMPT_CACHE_TABLE_PATH = process.env.MCC_JSDOM_MODELS_FIELDS_PROMPT_CACHE || "";
+
+function withPromptCache(payload) {
+  if (!PROMPT_CACHE_TABLE_PATH) return payload;
+  payload.prompt_cache_lifetimes = JSON.parse(readFileSync(PROMPT_CACHE_TABLE_PATH, "utf-8"));
+  return payload;
+}
+
 function page(rows) {
+  return withPromptCache(plainPage(rows));
+}
+
+function plainPage(rows) {
   const zetaModels = ["zeta/one", "zeta/two", "zeta/three"].map((ref) => ({
     ...modelC({}),
     model_ref: ref,
