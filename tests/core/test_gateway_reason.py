@@ -178,7 +178,7 @@ def test_a_400_that_names_a_field_is_not_labelled() -> None:
             "error": {
                 "message": "Provider returned error",
                 "code": 400,
-                "metadata": {"raw": "{\"error\":\"bad\"}", "provider_name": "X"},
+                "metadata": {"raw": '{"error":"bad"}', "provider_name": "X"},
             }
         },
         # An id-only message beside a code that IS the reason.
@@ -253,7 +253,9 @@ def test_a_pathologically_nested_body_is_total() -> None:
     message = (
         "Upstream provider COMMANDCODE returned HTTP 400.\n"
         "Category: invalid_request_error\n\nUpstream error:\n"
-        + '{"message":"' + "[" * 50_000 + '"}'
+        + '{"message":"'
+        + "[" * 50_000
+        + '"}'
     )
 
     assert gateway_trace_id(message) is None

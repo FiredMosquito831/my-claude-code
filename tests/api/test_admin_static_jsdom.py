@@ -783,6 +783,56 @@ def test_a_benched_row_says_why_it_was_benched(rendered) -> None:
     ]
 
 
+GATEWAY_TRACE = "b5162a9f0c1d4e2f8a7b6c5d4e3f2a1b"
+
+
+def test_a_gateway_refusal_with_no_reason_says_so_and_shows_the_trace_id(
+    rendered,
+) -> None:
+    """7.105.2: Command Code passed on only a trace id; the row says exactly that."""
+    detail = rendered["requestDetail"]["gatewayNoReason"]
+
+    label = f"the gateway gave no reason (trace id {GATEWAY_TRACE})"
+    first, second = detail["endedCells"]
+    assert first["value"] == label
+    assert first["title"].startswith(f"{label}. The gateway answered")
+    assert "kept below exactly as it arrived" in first["title"]
+    # The other attempt is untouched: its cell carries no title of its own.
+    assert second == {"value": "answered", "title": ""}
+    # The host's text is still shown whole, kind first, as before.
+    assert detail["chainReasons"][0].startswith(
+        "model_rejectedUpstream provider COMMANDCODE returned HTTP 400."
+    )
+    assert f"invalid request error trace_id: {GATEWAY_TRACE}" in (
+        detail["chainReasons"][0].replace('\\"', '"')
+    )
+    # And the id is on its own line, selectable, with a Copy control.
+    (line,) = detail["traceLines"]
+    assert line["code"] == GATEWAY_TRACE
+    assert line["text"] == f"The gateway gave no reason. Trace id {GATEWAY_TRACE}Copy"
+    assert line["button"] == f"Copy {GATEWAY_TRACE}"
+
+
+def test_the_trace_id_copy_button_copies_the_id(rendered) -> None:
+    copied = rendered["requestDetail"]["gatewayCopied"]
+
+    assert copied["written"] == [GATEWAY_TRACE]
+    assert copied["label"] == "Copied"
+
+
+def test_a_gateway_refusal_with_a_reason_renders_as_before(rendered) -> None:
+    """No ``gateway_trace_id`` key: the kind under "ended", no trace line."""
+    detail = rendered["requestDetail"]["gatewayWithReason"]
+
+    assert [cell["value"] for cell in detail["endedCells"]] == [
+        "model_rejected",
+        "answered",
+    ]
+    assert all(cell["title"] == "" for cell in detail["endedCells"])
+    assert detail["traceLines"] == []
+    assert "is not a" in detail["chainReasons"][0]
+
+
 def test_the_chain_panel_counts_the_models_that_were_benched(rendered) -> None:
     """The incident in one line: capable models removed before the request ran."""
     detail = rendered["requestDetail"]["benchReason"]
