@@ -247,8 +247,7 @@ def test_the_snapshot_covers_every_chat_provider_and_answer() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "key",
-    sorted(BASELINE)
-    + sorted(f"{p}/{k}" for p in ADDED_SINCE_RECORDING for k in KINDS),
+    sorted(BASELINE) + sorted(f"{p}/{k}" for p in ADDED_SINCE_RECORDING for k in KINDS),
 )
 async def test_only_a_written_calls_name_moved(key: str) -> None:
     provider_id, kind = key.split("/")

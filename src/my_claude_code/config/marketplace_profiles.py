@@ -204,10 +204,10 @@ def _side(value: float | None) -> str:
 def _positive_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
+    if not math.isfinite(float(value)) or value <= 0:
         return None
-    return number
+    # The operator's own number, as written: 10 stays 10 in the file.
+    return value
 
 
 def profile_name_problem(name: object) -> str | None:
