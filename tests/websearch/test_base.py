@@ -12,6 +12,7 @@ from my_claude_code.websearch.errors import (
 from my_claude_code.websearch.rotation import KeyHealthState
 from tests.websearch.support import (
     DomainStubWebSearchProvider,
+    FakeClock,
     StubWebSearchProvider,
     build_config,
 )
@@ -149,3 +150,136 @@ async def test_close_releases_client() -> None:
     await provider.close()
     assert provider._client is None
     await provider.close()  # idempotent
+
+
+# ---------------------------------------------- 7.112.1: no outage, model rules
+
+
+def _model_rules(error: BaseException) -> str | None:
+    """A stand-in judge: charge only the key-shaped kinds."""
+    kind = getattr(error, "kind", None)
+    return kind if kind in ("auth", "rate_limit") else None
+
+
+def _with_clock(provider: StubWebSearchProvider) -> FakeClock:
+    clock = FakeClock()
+    provider.key_pool._clock = clock
+    provider.key_pool._engine._clock = clock
+    return clock
+
+
+@pytest.mark.asyncio
+async def test_a_failure_the_judge_declines_leaves_the_only_key_usable() -> None:
+    provider = StubWebSearchProvider(
+        build_config(), behavior={0: WebSearchUpstreamError("stub", "HTTP 500")}
+    )
+    with pytest.raises(WebSearchUpstreamError):
+        await provider.search("q", key_charge=_model_rules)
+    assert provider.key_pool.health_at(0).state is KeyHealthState.HEALTHY
+    provider._behavior = {}
+    response = await provider.search("q", key_charge=_model_rules)
+    assert response.key_index == 0
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_locked_out_only_key_is_still_tried_by_the_next_search() -> None:
+    provider = StubWebSearchProvider(
+        build_config(), behavior={0: WebSearchAuthError("stub", "bad key")}
+    )
+    for _ in range(2):
+        with pytest.raises(WebSearchAuthError):
+            await provider.search("q", key_charge=_model_rules)
+    assert len(provider.calls) == 2  # one call each: tried again, not looped
+    health = provider.key_pool.health_at(0)
+    assert health.state is KeyHealthState.LOCKED_OUT
+    assert health.lockouts == 2  # the lockout ladder still climbs
+
+
+@pytest.mark.asyncio
+async def test_inside_a_429_wait_the_only_key_answers_without_a_call() -> None:
+    provider = StubWebSearchProvider(
+        build_config(),
+        behavior={
+            0: WebSearchRateLimitError(
+                "stub", "slow down", status_code=429, retry_after_seconds=7.0
+            )
+        },
+    )
+    clock = _with_clock(provider)
+    with pytest.raises(WebSearchRateLimitError):
+        await provider.search("q", key_charge=_model_rules)
+    provider._behavior = {}
+    clock.advance(0.5)
+    with pytest.raises(WebSearchRateLimitError, match=r"retry after 7s") as caught:
+        await provider.search("q", key_charge=_model_rules)
+    assert caught.value.retry_after_seconds == 7.0
+    assert len(provider.calls) == 1  # no call inside the wait
+    clock.advance(7.0)
+    response = await provider.search("q", key_charge=_model_rules)
+    assert response.key_index == 0
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_keyless_provider_is_never_benched() -> None:
+    provider = StubWebSearchProvider(
+        build_config(api_keys=(), rotation="single"),
+        behavior={0: WebSearchRateLimitError("stub", "slow down", status_code=429)},
+    )
+    with pytest.raises(WebSearchRateLimitError):
+        await provider.search("q")
+    assert provider.key_pool.health_at(0).state is KeyHealthState.HEALTHY
+    provider._behavior = {}
+    await provider.search("q")
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_two_key_pool_still_rotates_and_benches_a_rejected_key() -> None:
+    provider = StubWebSearchProvider(
+        build_config(api_keys=("k1-secret-0001", "k2-secret-0002")),
+        behavior={0: WebSearchAuthError("stub", "bad key")},
+    )
+    response = await provider.search("q", key_charge=_model_rules)
+    assert response.key_index == 1
+    assert provider.key_pool.health_at(0).state is KeyHealthState.LOCKED_OUT
+    await provider.search("q", key_charge=_model_rules)
+    assert [call["key_index"] for call in provider.calls] == [0, 1, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_fully_benched_pool_says_what_is_benched_and_for_how_long() -> None:
+    provider = StubWebSearchProvider(
+        build_config(api_keys=("k1-secret-0001", "k2-secret-0002")),
+        behavior={
+            0: WebSearchAuthError("stub", "bad key"),
+            1: WebSearchRateLimitError("stub", "slow", retry_after_seconds=30.0),
+        },
+    )
+    with pytest.raises(WebSearchRateLimitError):
+        await provider.search("q", key_charge=_model_rules)
+    with pytest.raises(WebSearchUpstreamError) as caught:
+        await provider.search("q", key_charge=_model_rules)
+    assert len(provider.calls) == 2  # the second search made no call
+    assert caught.value.message == (
+        "all 2 keys are benched: 1 locked out (the provider rejected the key "
+        "or reported no credits), 1 rate limited; the first is usable again "
+        "in 30s; no call made"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_pool_benched_only_by_429s_is_rate_limited() -> None:
+    provider = StubWebSearchProvider(
+        build_config(api_keys=("k1-secret-0001", "k2-secret-0002")),
+        behavior={
+            0: WebSearchRateLimitError("stub", "slow", retry_after_seconds=7.0),
+            1: WebSearchRateLimitError("stub", "slow", retry_after_seconds=9.0),
+        },
+    )
+    with pytest.raises(WebSearchRateLimitError):
+        await provider.search("q", key_charge=_model_rules)
+    with pytest.raises(WebSearchRateLimitError, match=r"all 2 keys are inside"):
+        await provider.search("q", key_charge=_model_rules)
+    assert len(provider.calls) == 2

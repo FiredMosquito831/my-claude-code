@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.api.web_tools.search_key_charge import no_chain_key_charge
 from my_claude_code.core.websearch.models import (
     WebSearchResponse,
     WebSearchResultItem,
@@ -227,7 +228,10 @@ def test_websearch_provider_test_reports_latency_and_titles(monkeypatch, tmp_pat
     assert body["result_count"] == 3
     assert body["titles"] == ["Alpha", "Beta", "Gamma"]
     assert body["latency_ms"] >= 0
-    search_with_logging.assert_awaited_once_with(provider, "web search", max_results=3)
+    # 7.112.1: the Test button charges keys by the same rules as a search.
+    search_with_logging.assert_awaited_once_with(
+        provider, "web search", max_results=3, key_charge=no_chain_key_charge
+    )
 
 
 def test_websearch_provider_test_reports_structured_error(monkeypatch, tmp_path):

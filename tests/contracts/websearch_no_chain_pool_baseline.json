@@ -1,0 +1,6830 @@
+{
+ "bad_json|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "searxng: response body is not valid JSON",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "bad_json|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: response body is not valid JSON",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "bad_json|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: response body is not valid JSON",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "bad_json|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: response body is not valid JSON",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "bad_json|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: response body is not valid JSON",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "bad_json|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "bad_json|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: response body is not valid JSON",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "bad_json|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "connect|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "searxng: transport error (ConnectError)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "connect|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: transport error (ConnectError)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "connect|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: transport error (ConnectError)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "connect|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: transport error (ConnectError)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "connect|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: transport error (ConnectError)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "connect|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "connect|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: transport error (ConnectError)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "connect|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "ok|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "ok|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "ok|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "ok|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "ok|two_failover_both_fail": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "ok|two_failover_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "ok|two_least_used_both_fail": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "ok|two_round_robin_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "raw_error|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "unclassified failure",
+  "s1_result": "RuntimeError:internal",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "raw_error|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "unclassified failure",
+  "s1_result": "RuntimeError:internal",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "raw_error|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "unclassified failure",
+  "s1_result": "RuntimeError:internal",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "raw_error|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "unclassified failure",
+  "s1_result": "RuntimeError:internal",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "raw_error|two_failover_both_fail": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "unclassified failure",
+  "s1_result": "RuntimeError:internal",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "raw_error|two_failover_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "unclassified failure",
+  "s1_result": "RuntimeError:internal",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "raw_error|two_least_used_both_fail": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "unclassified failure",
+  "s1_result": "RuntimeError:internal",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "raw_error|two_round_robin_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "unclassified failure",
+  "s1_result": "RuntimeError:internal",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400_credits|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "searxng: insufficient credits",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400_credits|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400_credits|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400_credits|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400_credits|two_failover_both_fail": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400_credits|two_failover_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400_credits|two_least_used_both_fail": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400_credits|two_round_robin_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "searxng: unsupported parameter: depth",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: unsupported parameter: depth",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: unsupported parameter: depth",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: unsupported parameter: depth",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400|two_failover_both_fail": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: unsupported parameter: depth",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400|two_failover_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: unsupported parameter: depth",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   0
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400|two_least_used_both_fail": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: unsupported parameter: depth",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s400|two_round_robin_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "invalid_tool_input",
+  "s1_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: unsupported parameter: depth",
+  "s1_result": "WebSearchInvalidRequestError:invalid",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s401|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "searxng: SearXNG instance rejected the request; enable format=json in its settings.yml (invalid api key)",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s401|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: invalid api key",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s401|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: invalid api key",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s401|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: invalid api key",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s401|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: invalid api key",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s401|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s401|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: invalid api key",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s401|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s402_bare|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "searxng: plan limit reached",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_bare|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: plan limit reached",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_bare|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: plan limit reached",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_bare|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: plan limit reached",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_bare|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: plan limit reached",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_bare|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s402_bare|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: plan limit reached",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_bare|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s402_credits|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "searxng: insufficient credits",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_credits|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_credits|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_credits|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_credits|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_credits|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s402_credits|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: insufficient credits",
+  "s1_result": "WebSearchQuotaError:quota",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s402_credits|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s403_region|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "searxng: SearXNG instance rejected the request; enable format=json in its settings.yml (This service is not available in your country)",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403_region|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: This service is not available in your country",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403_region|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: This service is not available in your country",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403_region|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: This service is not available in your country",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403_region|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: This service is not available in your country",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403_region|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s403_region|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: This service is not available in your country",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403_region|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s403|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "searxng: SearXNG instance rejected the request; enable format=json in its settings.yml (forbidden)",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: forbidden",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: forbidden",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: forbidden",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: forbidden",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s403|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s1_message": "exa: forbidden",
+  "s1_result": "WebSearchAuthError:auth",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "locked_out",
+    300,
+    1
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "locked_out",
+    292,
+    1
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s403|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "locked_out",
+    300,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "locked_out",
+    292,
+    1
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429_ra7|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    7,
+    0
+   ]
+  ],
+  "s1_message": "searxng: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    6,
+    0
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429_ra7|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    7,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    6,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429_ra7|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    7,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    6,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429_ra7|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    7,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    6,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429_ra7|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    7,
+    0
+   ],
+   [
+    "cooldown",
+    7,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    6,
+    0
+   ],
+   [
+    "cooldown",
+    6,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429_ra7|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    7,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    6,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429_ra7|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    7,
+    0
+   ],
+   [
+    "cooldown",
+    7,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    6,
+    0
+   ],
+   [
+    "cooldown",
+    6,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429_ra7|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    7,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    6,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   0
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s1_message": "searxng: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    52,
+    0
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s429|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    52,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s429|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    52,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s429|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    52,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s429|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    52,
+    0
+   ],
+   [
+    "cooldown",
+    52,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s429|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    52,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s429|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "too_many_requests",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s1_message": "exa: too many requests",
+  "s1_result": "WebSearchRateLimitError:rate_limit",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "cooldown",
+    60,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    52,
+    0
+   ],
+   [
+    "cooldown",
+    52,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s429|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    60,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    52,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s500|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "searxng: internal error",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s500|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: internal error",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s500|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: internal error",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s500|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: internal error",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s500|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: internal error",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s500|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s500|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: internal error",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s500|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s503|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "searxng: unavailable",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s503|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: unavailable",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s503|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: unavailable",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s503|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: unavailable",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s503|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: unavailable",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s503|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "s503|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: unavailable",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "s503|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "timeout|keyless": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "searxng: request timed out (ReadTimeout)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "searxng: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "searxng: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "timeout|one_key_failover": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: request timed out (ReadTimeout)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "timeout|one_key_single": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: request timed out (ReadTimeout)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "timeout|three_single_first_fails": {
+  "s1_calls": [
+   0
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": "exa: request timed out (ReadTimeout)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "timeout|two_failover_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: request timed out (ReadTimeout)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "timeout|two_failover_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ },
+ "timeout|two_least_used_both_fail": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": "unavailable",
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s1_message": "exa: request timed out (ReadTimeout)",
+  "s1_result": "WebSearchUpstreamError:upstream",
+  "s1_text": "Web tool request failed.",
+  "s2_calls": [],
+  "s2_code": "unavailable",
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "cooldown",
+    10,
+    0
+   ]
+  ],
+  "s2_message": "exa: no API keys available to serve the search",
+  "s2_result": "WebSearchUpstreamError:upstream",
+  "s2_text": "Web tool request failed.",
+  "s3_calls": [],
+  "s3_code": "unavailable",
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "cooldown",
+    2,
+    0
+   ]
+  ],
+  "s3_message": "exa: no API keys available to serve the search",
+  "s3_result": "WebSearchUpstreamError:upstream",
+  "s3_text": "Web tool request failed."
+ },
+ "timeout|two_round_robin_first_fails": {
+  "s1_calls": [
+   0,
+   1
+  ],
+  "s1_code": null,
+  "s1_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s1_message": null,
+  "s1_result": "results",
+  "s1_text": null,
+  "s2_calls": [
+   1
+  ],
+  "s2_code": null,
+  "s2_keys_after": [
+   [
+    "cooldown",
+    10,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s2_message": null,
+  "s2_result": "results",
+  "s2_text": null,
+  "s3_calls": [
+   1
+  ],
+  "s3_code": null,
+  "s3_keys_after": [
+   [
+    "cooldown",
+    2,
+    0
+   ],
+   [
+    "healthy",
+    0,
+    0
+   ]
+  ],
+  "s3_message": null,
+  "s3_result": "results",
+  "s3_text": null
+ }
+}

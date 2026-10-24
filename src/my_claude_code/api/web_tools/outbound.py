@@ -1,6 +1,7 @@
 """Outbound HTTP for web_search / web_fetch (client, body caps, logging)."""
 
 import asyncio
+import math
 import socket
 import time
 from collections.abc import AsyncIterator
@@ -17,7 +18,15 @@ from loguru import logger
 
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.websearch.models import WebSearchResponse
-from my_claude_code.websearch.errors import WebSearchConfigError, WebSearchError
+from my_claude_code.websearch.errors import (
+    KIND_DETAIL_BAD_JSON,
+    KIND_DETAIL_BENCHED,
+    KIND_DETAIL_TIMEOUT,
+    KIND_DETAIL_TRANSPORT,
+    WebSearchConfigError,
+    WebSearchError,
+    WebSearchRateLimitError,
+)
 from my_claude_code.websearch.registry import (
     SearchOutcome,
     SearchRouteOutcome,
@@ -44,6 +53,7 @@ from .egress import (
 )
 from .parsers import HTMLTextParser, SearchResultParser
 from .search_chain import run_search_chain
+from .search_key_charge import no_chain_key_charge
 from .search_providers import runtime_provider
 
 _LEGACY_PROVIDER_ID = "legacy"
@@ -157,6 +167,13 @@ def _web_tool_client_error_summary(
 ) -> str:
     if tool_name == "web_search" and isinstance(error, WebSearchConfigError):
         return f"web_search unavailable: {error.message}"
+    if (
+        tool_name == "web_search"
+        and isinstance(error, WebSearchError)
+        and error.client_summary is not None
+    ):
+        # Worded by the search route used with no chain set (7.112.1).
+        return error.client_summary
     if verbose:
         return f"{tool_name} failed: {type(error).__name__}"
     return "Web tool request failed."
@@ -346,9 +363,61 @@ async def _run_web_search(
         raise
     except Exception as error:
         trace.fail(trace.terminal_provider, error)
+        if isinstance(error, WebSearchError) and not isinstance(
+            error, WebSearchConfigError
+        ):
+            error.client_summary = _no_chain_failure_summary(error)
         raise
     finally:
         emit_route_outcome(trace.outcome())
+
+
+#: What a search service did, in MCC's own words (7.112.1). The provider's
+#: own error text never reaches the client here.
+_DETAIL_WORDS = {
+    KIND_DETAIL_TIMEOUT: "did not answer in time",
+    KIND_DETAIL_TRANSPORT: "could not be reached",
+    KIND_DETAIL_BAD_JSON: "answered with a body that is not JSON",
+}
+
+
+def _what_the_service_did(error: WebSearchError) -> str:
+    status = error.status_code
+    if error.kind == "auth":
+        return "refused access" if status == 403 else "rejected the API key"
+    if error.kind == "quota":
+        return "refused the search for a billing or plan limit"
+    if error.kind == "invalid":
+        return "refused the query or one of its parameters"
+    detail = _DETAIL_WORDS.get(error.kind_detail or "")
+    if detail is not None:
+        return detail
+    if status is not None and status >= 500:
+        return "answered with a server error"
+    return "failed"
+
+
+def _no_chain_failure_summary(error: WebSearchError) -> str:
+    """The client's sentence for a search that failed with no chain set.
+
+    Before 7.112.1 every failure read "Web tool request failed." whatever
+    happened. The ``error_code`` beside it is unchanged
+    (``streaming._web_search_error_code``); this says what the code means:
+    the provider, what it did, and for a 429 how long to wait.
+    """
+    provider = error.provider
+    if isinstance(error, WebSearchRateLimitError):
+        wait = error.retry_after_seconds
+        if wait is not None and wait > 0:
+            return (
+                f"web_search rate limited by {provider}: retry after "
+                f"{max(1, math.ceil(wait))}s"
+            )
+        return f"web_search rate limited by {provider}"
+    if error.kind_detail == KIND_DETAIL_BENCHED:
+        return f"web_search unavailable: {provider}: {error.message}"
+    status = f" (HTTP {error.status_code})" if error.status_code is not None else ""
+    return f"web_search unavailable: {provider} {_what_the_service_did(error)}{status}"
 
 
 async def _chain_route_search(
@@ -434,6 +503,7 @@ async def _provider_web_search(
                 route_id=trace.route_id,
                 attempt_number=attempt_number,
                 route_context=route_context,
+                key_charge=no_chain_key_charge,
             )
         except WebSearchConfigError as error:
             # A selected provider missing credentials/base URL is an operator

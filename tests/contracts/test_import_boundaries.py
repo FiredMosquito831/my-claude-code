@@ -372,6 +372,26 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "scraper's raw httpx failures are classified by the model path's own "
         "classify_provider_failure."
     ),
+    # 7.112.1: with no search chain set, search keys are charged by the same
+    # judgement (specs/INVESTIGATION-WEBSEARCH-ROUTING.md, decision Q8).
+    (
+        "my_claude_code.api.web_tools.search_key_charge",
+        "my_claude_code.providers.credential_rotation",
+    ): (
+        "Owner: the web search route used with no chain. "
+        "Reason: a failed search charges its key exactly when the model "
+        "provider pool would; credential_failure_class is that pool's own "
+        "reader, read here, never restated."
+    ),
+    (
+        "my_claude_code.api.web_tools.search_key_charge",
+        "my_claude_code.providers.recovery",
+    ): (
+        "Owner: the web search route used with no chain. "
+        "Reason: the model provider pool leaves a key uncharged for a "
+        "country refusal (7.96.0); region_refusal_on_cause_chain is that "
+        "pool's own reader, read here, never restated."
+    ),
     (
         "my_claude_code.api.admin_custom_routes",
         "my_claude_code.providers.runtime.rotating",
