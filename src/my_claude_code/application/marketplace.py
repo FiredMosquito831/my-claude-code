@@ -41,7 +41,6 @@ from my_claude_code.config.marketplace_profiles import (
     current_marketplace_profiles,
 )
 from my_claude_code.config.marketplaces import (
-    KIND_CHEAPEST_LEVEL_MIN_ACCOUNTS,
     KIND_CHEAPEST_LEVEL_NOW,
     KIND_MARKETPLACE_DECIDES,
     KIND_MAX_PRICE,
@@ -171,7 +170,11 @@ def market_model_from_document(entry: Any) -> MarketModel | None:
     if not isinstance(entry, Mapping):
         return None
     minimum = entry.get("min")
-    if isinstance(minimum, Sequence) and not isinstance(minimum, str) and len(minimum) == 2:
+    if (
+        isinstance(minimum, Sequence)
+        and not isinstance(minimum, str)
+        and len(minimum) == 2
+    ):
         min_ask = (_price(minimum[0]), _price(minimum[1]))
     else:
         min_ask = (None, None)
@@ -304,7 +307,9 @@ def _usd(value: float | None) -> str:
 
 def _short_model(model_id: str) -> str:
     text = model_id.strip()
-    return text if len(text) <= _MAX_MODEL_CHARS else text[: _MAX_MODEL_CHARS - 3] + "..."
+    return (
+        text if len(text) <= _MAX_MODEL_CHARS else text[: _MAX_MODEL_CHARS - 3] + "..."
+    )
 
 
 def bounded_refusal(text: str) -> str:
@@ -525,7 +530,8 @@ def check_request_cost(
             f"case for {_short_model(model_id)} is not bounded. MCC does not send it."
         )
     worst = (
-        max(0, input_tokens) * choice.ceiling_in + max(0, max_tokens) * choice.ceiling_out
+        max(0, input_tokens) * choice.ceiling_in
+        + max(0, max_tokens) * choice.ceiling_out
     ) / 1_000_000
     if worst <= choice.max_usd_per_request + _PRICE_EPSILON:
         return

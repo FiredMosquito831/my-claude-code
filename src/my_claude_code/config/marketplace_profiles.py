@@ -137,17 +137,21 @@ class MarketplaceProfile:
         """The on-disk shape: ``kind`` first, then only the fields set."""
 
         out: dict[str, Any] = {FIELD_KIND: self.kind}
-        for name, value in (
-            (FIELD_PERCENT, self.percent),
-            (FIELD_MAX_INPUT, self.max_input_usd),
-            (FIELD_MAX_OUTPUT, self.max_output_usd),
-            (FIELD_MIN_ACCOUNTS, self.min_accounts),
-            (FIELD_CAP_PERCENT, self.cap_percent),
-            (FIELD_CAP_INPUT, self.cap_input_usd),
-            (FIELD_CAP_OUTPUT, self.cap_output_usd),
-        ):
-            if value is not None:
-                out[name] = value
+        out.update(
+            {
+                name: value
+                for name, value in (
+                    (FIELD_PERCENT, self.percent),
+                    (FIELD_MAX_INPUT, self.max_input_usd),
+                    (FIELD_MAX_OUTPUT, self.max_output_usd),
+                    (FIELD_MIN_ACCOUNTS, self.min_accounts),
+                    (FIELD_CAP_PERCENT, self.cap_percent),
+                    (FIELD_CAP_INPUT, self.cap_input_usd),
+                    (FIELD_CAP_OUTPUT, self.cap_output_usd),
+                )
+                if value is not None
+            }
+        )
         if self.exclude_upstreams:
             out[FIELD_EXCLUDE] = list(self.exclude_upstreams)
         if self.max_usd_per_request is not None:
@@ -217,14 +221,15 @@ def profile_name_problem(name: object) -> str | None:
     return None
 
 
-def parse_profile(name: str, raw: object) -> tuple[MarketplaceProfile | None, str]:
+def parse_profile(name: str, document: object) -> tuple[MarketplaceProfile | None, str]:
     """Validate one profile; ``(profile, "")`` or ``(None, why)``."""
 
     problem = profile_name_problem(name)
     if problem is not None:
         return None, f"name {problem}"
-    if not isinstance(raw, Mapping):
+    if not isinstance(document, Mapping):
         return None, "must be an object"
+    raw: dict[str, Any] = {str(key): value for key, value in document.items()}
     kind = raw.get(FIELD_KIND)
     if kind not in PROFILE_KINDS:
         return None, f"kind must be one of {', '.join(PROFILE_KINDS)}"
@@ -267,7 +272,10 @@ def parse_profile(name: str, raw: object) -> tuple[MarketplaceProfile | None, st
         for value in values:
             prefix = value.strip().lower() if isinstance(value, str) else ""
             if not UPSTREAM_PREFIX_PATTERN.match(prefix):
-                return None, f"{FIELD_EXCLUDE} entry {value!r} is not an upstream prefix"
+                return (
+                    None,
+                    f"{FIELD_EXCLUDE} entry {value!r} is not an upstream prefix",
+                )
             if prefix not in excluded:
                 excluded.append(prefix)
         if not excluded:

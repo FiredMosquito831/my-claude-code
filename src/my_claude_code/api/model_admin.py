@@ -94,6 +94,7 @@ from my_claude_code.application.openrouter_live import (
     live_fills_gap,
     live_wins_intrinsic,
 )
+from my_claude_code.api.marketplace_admin import marketplace_profile_update_problem
 from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_MAX_MINUTES,
     PROMPT_CACHE_TTL_MIN_MINUTES,
@@ -101,6 +102,7 @@ from my_claude_code.config.constants import (
 from my_claude_code.config.model_overrides import (
     ALLOWED_OVERRIDE_PARAMETERS,
     CONTEXT_LENGTH_OVERRIDE,
+    MARKETPLACE_PROFILE_OVERRIDE,
     MAX_OUTPUT_TOKENS_OVERRIDE,
     OWNED_ELSEWHERE_PARAMETERS,
     PREFERENCE_OVERRIDE_PARAMETERS,
@@ -2978,7 +2980,14 @@ def _image_estimate_row(
 EDITOR_OVERRIDE_PARAMETERS: frozenset[str] = (
     ALLOWED_OVERRIDE_PARAMETERS
     | PREFERENCE_OVERRIDE_PARAMETERS
-    | frozenset({CONTEXT_LENGTH_OVERRIDE, PROMPT_CACHE_TTL_OVERRIDE})
+    | frozenset(
+        {
+            CONTEXT_LENGTH_OVERRIDE,
+            PROMPT_CACHE_TTL_OVERRIDE,
+            # 7.109.0: the marketplace profile, by name, provider and model rows.
+            MARKETPLACE_PROFILE_OVERRIDE,
+        }
+    )
 )
 
 
@@ -2998,6 +3007,13 @@ def override_update_problem(scope: str, updates: Mapping[str, Any]) -> str | Non
         lifetime_problem = prompt_cache_ttl_problem(lifetime)
         if lifetime_problem is not None:
             return f"{PROMPT_CACHE_TTL_OVERRIDE} {lifetime_problem}"
+    # 7.109.0: a marketplace profile name must name a profile that exists;
+    # ``null`` ("the marketplace decides") and inherit are always accepted.
+    profile = updates.get(MARKETPLACE_PROFILE_OVERRIDE, INHERIT_SENTINEL)
+    if profile != INHERIT_SENTINEL and profile is not None:
+        profile_problem = marketplace_profile_update_problem(profile)
+        if profile_problem is not None:
+            return profile_problem
     if CONTEXT_LENGTH_OVERRIDE not in updates:
         return None
     value = updates[CONTEXT_LENGTH_OVERRIDE]

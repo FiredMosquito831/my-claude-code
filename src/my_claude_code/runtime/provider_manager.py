@@ -1,6 +1,7 @@
 """Single-owner provider generations and application model catalog."""
 
 import asyncio
+import json
 import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -32,12 +33,21 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.ports import RequestRuntimePort
+from my_claude_code.config.credentials import parse_credential_keys
+from my_claude_code.config.marketplaces import (
+    PROVIDER_MARKETPLACE,
+    MarketplaceDialect,
+    marketplace_for_provider,
+)
 from my_claude_code.config.model_overrides import (
     ModelParameterOverrides,
     current_model_overrides,
     model_ref_for,
 )
-from my_claude_code.config.provider_catalog import configured_credential_values
+from my_claude_code.config.provider_catalog import (
+    PROVIDER_CATALOG,
+    configured_credential_values,
+)
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.loop_health import loop_health
@@ -62,6 +72,9 @@ from my_claude_code.providers.runtime.litellm_prices import (
     litellm_refresh_is_due,
     refresh_litellm_cache,
 )
+from my_claude_code.providers.runtime.marketplace_market import (
+    refresh_market_snapshot,
+)
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.models_dev import (
     declared_modalities_lookup,
@@ -85,9 +98,11 @@ from my_claude_code.runtime.catalogue_store import (
     catalogue_scope_key,
     provider_rows_mark,
     provider_rows_source_digest,
+    read_market_snapshot,
     read_stored_catalogue,
     read_stored_provider_rows,
     store_catalogue,
+    store_market_snapshot,
     store_provider_rows,
 )
 
@@ -196,6 +211,9 @@ class ProviderRuntimeManager:
         # ``COST_SOURCE_LITELLM_ENABLED`` is on (7.97.0). Held for the same two
         # reasons: one download at a time, and a close can cancel it.
         self._litellm_task: asyncio.Task[None] | None = None
+        # A marketplace's market snapshot (7.109.0), built after a sweep while
+        # that marketplace has a key. Held for the same two reasons.
+        self._market_task: asyncio.Task[None] | None = None
         # When the last sweep finished, for the dashboard's "last refreshed"
         # readout. None until one has completed in this process.
         self._last_refresh_at: float | None = None
@@ -617,6 +635,78 @@ class ProviderRuntimeManager:
         if not litellm_refresh_is_due(current, path):
             return
         self._litellm_task = asyncio.create_task(self._refresh_litellm(path))
+
+    def schedule_market_snapshot_refresh(
+        self, settings: Settings | None = None
+    ) -> None:
+        """Build every keyed marketplace's market snapshot in the background (7.109.0).
+
+        After each sweep -- hourly, and on the operator's models refresh --
+        for each provider that declares a marketplace AND has a key. With no
+        key nothing is scheduled, so an install without InferHub reads nothing
+        and writes nothing. One build at a time; never on a request path.
+        """
+        if self._closing or self._closed:
+            return
+        task = self._market_task
+        if task is not None and not task.done():
+            return
+        current = settings if settings is not None else self._current.settings
+        targets: list[tuple[str, MarketplaceDialect]] = []
+        for provider_id in PROVIDER_MARKETPLACE:
+            dialect = marketplace_for_provider(provider_id)
+            descriptor = PROVIDER_CATALOG.get(provider_id)
+            if dialect is None or descriptor is None:
+                continue
+            credential = getattr(current, descriptor.credential_attr or "", "")
+            if not parse_credential_keys(
+                credential if isinstance(credential, str) else ""
+            ):
+                continue
+            targets.append((provider_id, dialect))
+        if not targets:
+            return
+        self._market_task = asyncio.create_task(
+            self._refresh_market_snapshots(current, tuple(targets))
+        )
+
+    async def _refresh_market_snapshots(
+        self,
+        settings: Settings,
+        targets: tuple[tuple[str, MarketplaceDialect], ...],
+    ) -> None:
+        for provider_id, dialect in targets:
+            try:
+                rows: dict[str, dict[str, Any]] = {}
+                infos = self._model_cache.cached_model_infos_by_provider().get(
+                    provider_id, ()
+                )
+                for info in infos:
+                    if info.published_row is None:
+                        continue
+                    try:
+                        row = json.loads(info.published_row)
+                    except ValueError:
+                        continue
+                    if isinstance(row, dict):
+                        rows[info.model_id] = row
+                previous = await asyncio.to_thread(read_market_snapshot, dialect)
+                outcome = await refresh_market_snapshot(
+                    settings, provider_id, dialect, rows, previous
+                )
+                if outcome.payload is not None:
+                    await asyncio.to_thread(
+                        store_market_snapshot,
+                        dialect,
+                        outcome.payload,
+                        computed_at=time.time(),
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug(
+                    "Market snapshot refresh failed: exc_type={}", type(exc).__name__
+                )
 
     async def _refresh_litellm(self, path: Path) -> None:
         try:
@@ -1121,6 +1211,7 @@ class ProviderRuntimeManager:
                 await self._cancel_refresh()
                 await self._cancel_openrouter_live()
                 await self._cancel_litellm()
+                await self._cancel_market_snapshot()
                 current = self._current
                 if not current.retired:
                     current.retired = True
@@ -1218,6 +1309,8 @@ class ProviderRuntimeManager:
             self.schedule_openrouter_live_refresh(generation.settings)
             # So does LiteLLM's price table while its source is on (7.97.0).
             self.schedule_litellm_refresh(generation.settings)
+            # And a keyed marketplace's market snapshot (7.109.0).
+            self.schedule_market_snapshot_refresh(generation.settings)
             return result
         finally:
             await self._release(generation)
@@ -1249,6 +1342,14 @@ class ProviderRuntimeManager:
     async def _cancel_openrouter_live(self) -> None:
         task = self._openrouter_live_task
         self._openrouter_live_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _cancel_market_snapshot(self) -> None:
+        task = self._market_task
+        self._market_task = None
         if task is None or task.done():
             return
         task.cancel()

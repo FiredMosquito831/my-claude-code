@@ -247,6 +247,16 @@ def snapshot_key(dialect: MarketplaceDialect) -> str:
     return f"{dialect.dialect_id}:{SNAPSHOT_SCHEMA}"
 
 
+def same_snapshot(left: object, right: Mapping[str, object]) -> bool:
+    """Whether two snapshot documents say the same, whenever they were read."""
+
+    if not isinstance(left, Mapping):
+        return False
+    return {key: value for key, value in left.items() if key != "fetched_at"} == {
+        key: value for key, value in right.items() if key != "fetched_at"
+    }
+
+
 def upstream_prefix(model_id: str) -> str:
     """The upstream a marketplace model id names (``cc`` of ``cc/claude-…``).
 
@@ -278,6 +288,7 @@ __all__ = [
     "MarketSource",
     "MarketplaceDialect",
     "marketplace_for_provider",
+    "same_snapshot",
     "snapshot_key",
     "upstream_prefix",
 ]

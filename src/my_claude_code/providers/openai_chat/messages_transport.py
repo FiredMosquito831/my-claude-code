@@ -71,7 +71,6 @@ from loguru import logger
 from my_claude_code.application.marketplace import MarketplaceChoice
 from my_claude_code.config.marketplaces import MarketplaceDialect
 from my_claude_code.config.prompt_cache_lifetimes import prompt_cache_gateway_family
-from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
     EMPTY_TOOL_CATALOGUE,
@@ -79,6 +78,7 @@ from my_claude_code.core.anthropic.openai_tool_names import (
     OpenAIToolNameCodec,
 )
 from my_claude_code.core.client_fingerprint import current_fingerprint
+from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.core.upstream_ladder import note_recovery_rung
 from my_claude_code.providers.anthropic_messages import (
@@ -107,6 +107,7 @@ from .marketplace import (
 def _attempt_choice() -> MarketplaceChoice | None:
     attempt = current_marketplace_attempt()
     return None if attempt is None else attempt.choice
+
 
 #: The two rungs this surface adds, named once so the ladder row, the log line
 #: and the learning all agree on the word the operator reads. Spelled for the

@@ -42,6 +42,7 @@ from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.wire_capture import record_marketplace_readback
 from my_claude_code.providers.model_listing import model_list_items
 
+
 @dataclass(frozen=True, slots=True)
 class MarketplaceAttempt:
     """The model one marketplace attempt is for, and its ceiling (or none)."""
@@ -145,7 +146,9 @@ def summarise_listing_payload(
     """The model-list payload with every row's asks regrouped into levels."""
 
     rows: list[Any] = []
-    for item in model_list_items(payload, provider_name=provider_name, collection_field="data"):
+    for item in model_list_items(
+        payload, provider_name=provider_name, collection_field="data"
+    ):
         row = _row_dict(item)
         if row is None:
             rows.append(item)
@@ -200,7 +203,9 @@ def _at(body: Mapping[str, Any], path: tuple[str, ...]) -> Any:
     return current
 
 
-def _carrier(dialect: MarketplaceDialect, error: BaseException) -> Mapping[str, Any] | None:
+def _carrier(
+    dialect: MarketplaceDialect, error: BaseException
+) -> Mapping[str, Any] | None:
     """The body of a no-offer refusal behind ``error``, or ``None``."""
 
     current: BaseException | None = error
@@ -258,9 +263,7 @@ def no_offer_failure(
 # ------------------------------------------------------------ the read-back
 
 
-def marketplace_headers_of(
-    dialect: MarketplaceDialect, headers: Any
-) -> dict[str, str]:
+def marketplace_headers_of(dialect: MarketplaceDialect, headers: Any) -> dict[str, str]:
     """The allow-listed response headers, verbatim, in the order they came."""
 
     if headers is None:

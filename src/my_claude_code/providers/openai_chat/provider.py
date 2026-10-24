@@ -22,6 +22,11 @@ from my_claude_code.application.errors import (
     ApplicationUnavailableError,
     InvalidRequestError,
 )
+from my_claude_code.application.marketplace import (
+    MarketplaceChoice,
+    check_request_cost,
+    marketplace_choice,
+)
 from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
     ResolvedResponseSurface,
@@ -59,11 +64,6 @@ from my_claude_code.core.reasoning import (
     ReasoningDialect,
     ReasoningPolicy,
     narrow_dialect_by_rejections,
-)
-from my_claude_code.application.marketplace import (
-    MarketplaceChoice,
-    check_request_cost,
-    marketplace_choice,
 )
 from my_claude_code.core.reported_cost import (
     record_reported_usage,
@@ -1375,7 +1375,7 @@ class OpenAIChatProvider(BaseProvider):
                 await self._responses.probe(model_id)
             return
         inbound = current_fingerprint()
-        identity = (
+        identity: dict[str, Any] = (
             {
                 "extra_headers": identity_headers_for_body(
                     self._profile.client_identity,
@@ -1392,12 +1392,9 @@ class OpenAIChatProvider(BaseProvider):
             # the attempt's ceiling like every other call.
             attempt = current_marketplace_attempt()
             if attempt is not None and attempt.headers:
-                identity = {
-                    "extra_headers": {
-                        **identity.get("extra_headers", {}),
-                        **attempt.headers,
-                    }
-                }
+                ceiling: dict[str, str] = dict(identity.get("extra_headers", {}))
+                ceiling.update(attempt.headers)
+                identity = {"extra_headers": ceiling}
         if not free_tier_tools:
             await self._client.chat.completions.create(
                 model=model_id,
