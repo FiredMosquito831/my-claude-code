@@ -3450,8 +3450,9 @@ all three doors, whenever a profile with a ceiling applies.
 each InferHub model's table have a **marketplace profile** row (the 15th
 override key, `marketplace_profile`): *Inherit*, *Force value* (a profile's
 name) or *Force unset* — "InferHub decides", no ceiling, shown in red. The
-model's row wins over the provider row. Profiles live in
-`marketplace_profiles.json` in the config folder:
+model's row wins over the provider row. Since 7.110.0 the
+[InferHub page](#the-inferhub-page) edits the same rows and the profiles
+themselves. Profiles live in `marketplace_profiles.json` in the config folder:
 
 ```json
 {"version": 1, "profiles": {
@@ -3518,6 +3519,76 @@ its body (`params.wire.marketplace`). Requests to every other provider carry no
 > documentation and public pages; nothing keyed has been observed yet — the
 > exact `402` body, the header values, and `usage.cost` on the Messages and
 > Responses doors are still unknown.
+
+### The InferHub page
+
+New in 7.110.0. While InferHub has a key, the left nav has an **InferHub**
+link: one page for everything that is not like an ordinary provider. With no
+key the link is not there and nothing on it is read. Its blocks, top to
+bottom:
+
+1. **What this is** — the overcharge mechanism in plain words. InferHub
+   resells pooled subscriptions (its terms say it is run by an individual);
+   with no ceiling it may route you to any live ask, up to its platform cap of
+   50 % of the official price; a conversation keeps its seller for up to 30
+   minutes and then pays that seller's *current* ask, which may have been
+   raised meanwhile. The ceiling is enforced by InferHub itself through the
+   two headers MCC sends. Each route's own **route note** is quoted here word
+   for word — some upstreams rewrite or prepend your system prompt. When the
+   provider row names no profile, a red line says so above the blocks.
+2. **Account** — balance and spend (InferHub's own account-usage read, which
+   any inference key may make), which kind of key it is (`inference`, `inference_only`,
+   `config`, `config_read`), InferHub's own budgets and alias groups and your
+   combos — read-only here; MCC never writes them. A read your key may not
+   make says *not readable with this key* (never a zero, never a blank), and
+   every value carries *not verified on a real account*. Read when you open
+   the page and when you press **Refresh**, and at no other time.
+3. **Profiles** — each profile with its rule in words, the rows that name it
+   and **would match now**: for every model it applies to, the ceiling it
+   would send and how many seller accounts ask at or under it (or *matches
+   nothing*, with the refusal a request would get). **New profile** and
+   **Edit** open the editor: the five kinds and the two modifiers above, the
+   store's own checks before anything is sent, and *follows the market — add
+   a cap to be sure* on a cheapest-level kind until it has a cap. A save
+   writes the whole `marketplace_profiles.json`; it refuses — rather than
+   loses anything — when the file changed since the page read it, when the
+   file cannot be parsed, when it holds entries MCC cannot use (you can tick
+   *Remove these entries when I save*), or when you remove a profile a row
+   still names (a second press confirms; those requests are then refused,
+   never sent uncapped).
+4. **Assignments** — the provider default and each model's own row, saved as
+   the `marketplace_profile` override through the same route the Models page
+   uses: *Inherit (no row)*, *InferHub decides (no ceiling)* or a profile.
+   **Add row** gives one more model its own row.
+5. **Offer explorer** — one model at a time, searchable, grouped by prefix
+   (`cc/`, `cx/`, …): the price ladder (each level and how many accounts ask
+   it) with your ceiling drawn on it as a dashed line, official, cheapest,
+   dearest and last rate, the platform cap in dollars, success, time to first
+   token and tokens per second over the last 30 minutes, the prompt-cache hit
+   rate, the route note, and the combos and alias groups the model is in. When
+   the cheapest price moved between two snapshots this page showed, it says
+   *offers moved since …*.
+6. **Last requests** — the last 10–100 requests InferHub served: time, model,
+   `X-Inferhub-Model`, `X-Inferhub-Publisher`, the attempt (and InferHub's own
+   hop), the ceiling sent, the charge InferHub reported and *over the
+   ceiling* when that charge is above every token at the ceiling sent (cached
+   tokens counted at the input price, the worst case; never below InferHub's
+   minimum charge of $0.00001 per billed request) — evidence, never an
+   action. A dash means not reported. **Fetch the charged ask** reads
+   InferHub's usage log for these rows (it keeps 7 days; an `inference_only`
+   key may not read it) and shows the ask each was charged at — only when
+   pressed.
+7. **Snapshot** — when the market snapshot was read, each source's state (a
+   source that failed keeps its last copy), the platform cap, **Refresh**, and
+   the `MARKETPLACE_PUBLIC_MARKET` switch — the same setting as on the
+   InferHub card.
+
+The page's routes are local-only like every admin route:
+`GET /admin/api/marketplaces`, `PUT /admin/api/marketplaces/profiles`,
+`POST /admin/api/marketplaces/refresh`,
+`GET /admin/api/marketplaces/{provider}/offers`,
+`GET /admin/api/marketplaces/{provider}/recent` and
+`POST /admin/api/marketplaces/{provider}/charged`.
 
 ### Local providers
 

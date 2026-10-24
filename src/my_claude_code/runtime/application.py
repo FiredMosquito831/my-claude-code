@@ -103,6 +103,7 @@ from my_claude_code.providers.runtime.discovery import cache_enriched_model_info
 from my_claude_code.providers.runtime.identity_probe import (
     probe_client_identity,
 )
+from my_claude_code.providers.runtime.marketplace_account import read_marketplace
 from my_claude_code.providers.runtime.opencode_credentials import (
     probe_credential,
     probe_fallback_credential,
@@ -1203,6 +1204,35 @@ class ApplicationRuntime:
         # exactly this call, and a second frame around it put the same sweep in
         # the Server responsiveness readout twice under two names.
         return await self.provider_manager.refresh_model_list_cache()
+
+    async def marketplace_reads(
+        self,
+        provider_id: str,
+        reads: tuple[str, ...],
+        params: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """The marketplace page's reads for one provider (7.110.0).
+
+        ``"snapshot"`` among ``reads`` rebuilds the market snapshot now (the
+        page's Refresh; the same build the hourly sweep starts, awaited);
+        every other name is a keyed read ``config/marketplace_reads.py``
+        declares. Nothing is read without a key, and nothing here is on a
+        request path.
+        """
+        answer: dict[str, Any] = {}
+        if "snapshot" in reads:
+            with loop_health().working("the marketplace snapshot is being rebuilt"):
+                answer[
+                    "snapshot_built"
+                ] = await self.provider_manager.refresh_market_snapshot_now(
+                    self.settings
+                )
+        keyed = tuple(name for name in reads if name != "snapshot")
+        if keyed:
+            answer.update(
+                await read_marketplace(self.settings, provider_id, keyed, params)
+            )
+        return answer
 
     async def request_restart(self) -> None:
         callback = self._restart_callback

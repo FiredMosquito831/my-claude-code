@@ -670,6 +670,27 @@ class ProviderRuntimeManager:
             self._refresh_market_snapshots(current, tuple(targets))
         )
 
+    async def refresh_market_snapshot_now(
+        self, settings: Settings | None = None
+    ) -> bool:
+        """Build the market snapshot now, for the marketplace page's Refresh (7.110.0).
+
+        The same build :meth:`schedule_market_snapshot_refresh` starts after
+        a sweep -- same targets, same key rule, one at a time -- awaited: a
+        build already running is joined rather than doubled. Returns whether
+        a build ran; ``False`` when nothing was scheduled (no marketplace
+        has a key, or the manager is closing). Shielded, so a page that stops
+        waiting does not cancel the build.
+        """
+        task = self._market_task
+        if task is None or task.done():
+            self.schedule_market_snapshot_refresh(settings)
+            task = self._market_task
+        if task is None or task.done():
+            return False
+        await asyncio.shield(task)
+        return True
+
     async def _refresh_market_snapshots(
         self,
         settings: Settings,

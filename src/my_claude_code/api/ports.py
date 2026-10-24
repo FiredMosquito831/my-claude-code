@@ -60,6 +60,13 @@ class AdminRuntimePort(Protocol):
 
     async def refresh_models(self) -> ProviderModelRefreshResult: ...
 
+    async def marketplace_reads(
+        self,
+        provider_id: str,
+        reads: tuple[str, ...],
+        params: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> dict[str, Any]: ...
+
     async def request_restart(self) -> None: ...
 
     async def request_process_restart(self) -> None: ...

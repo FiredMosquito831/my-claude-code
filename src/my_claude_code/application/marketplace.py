@@ -384,6 +384,28 @@ def marketplace_choice(
     return _choice_for_profile(dialect, profile, origin, model_id)
 
 
+def profile_choice(
+    dialect: MarketplaceDialect,
+    profile: MarketplaceProfile,
+    model_id: str,
+    *,
+    origin: str = FROM_PROVIDER_OVERRIDE,
+) -> MarketplaceChoice | None:
+    """What ``profile`` would send for ``model_id`` right now (7.110.0).
+
+    The marketplace page's "would match now": the very computation an
+    attempt makes once a row has named this profile -- same ceiling, same
+    snapshot, same refusals -- asked for a profile and a model directly
+    rather than through the override rows. ``None`` for the kind that sends
+    nothing; :class:`InvalidRequestError` where a request would be refused.
+    Reads only; the request path does not call it.
+    """
+
+    if profile.kind == KIND_MARKETPLACE_DECIDES:
+        return None
+    return _choice_for_profile(dialect, profile, origin, model_id)
+
+
 def _choice_for_profile(
     dialect: MarketplaceDialect,
     profile: MarketplaceProfile,
@@ -594,6 +616,7 @@ __all__ = [
     "marketplace_choice",
     "no_offer_message",
     "price_text",
+    "profile_choice",
     "reset_market_snapshot_cache",
     "stated_profile",
 ]

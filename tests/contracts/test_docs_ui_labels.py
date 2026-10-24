@@ -64,6 +64,11 @@ DOCUMENTED_CONTROLS: tuple[str, ...] = (
     # name the two saves a model's table has (7.101.0).
     "Save overrides",
     "Pin endpoint",
+    # The InferHub page (7.110.0): the Guide's "InferHub: set a price ceiling"
+    # and USAGE's "The InferHub page" send the reader to these by name.
+    "New profile",
+    "Add row",
+    "Fetch the charged ask",
 )
 
 
