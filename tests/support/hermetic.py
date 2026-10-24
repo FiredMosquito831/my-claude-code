@@ -48,9 +48,12 @@ swallowed and the test stayed green while the file was written. A guard that
 production code can catch is not a guard.
 """
 
+import asyncio
+import asyncio.proactor_events
 import builtins
 import contextlib
 import io
+import ipaddress
 import os
 import shutil
 import socket
@@ -58,10 +61,13 @@ import subprocess
 import sys
 import tempfile
 import types
+import urllib.parse
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from ddgs import http_client as ddgs_http_client
 
 from tests.support.token_host_block import (
     HermeticityViolation,
@@ -73,7 +79,10 @@ __all__ = [
     "REAL_HOME",
     "HermeticityViolation",
     "hermetic_marker_gates",
+    "is_local_host",
     "isolate_the_machine",
+    "isolate_the_network",
+    "network_refusals",
     "protected_root_for",
     "pytest_configure",
     "pytest_runtest_setup",
@@ -302,7 +311,7 @@ def _refuse(operation: str, target: Any, root: str) -> None:
 # Opt-in markers are read once per test into module state, because the
 # interceptors are process-wide and cannot take a fixture argument.
 
-_gates = {"registry": False, "subprocess": False, "port": False}
+_gates = {"registry": False, "subprocess": False, "port": False, "network": False}
 
 
 def _open_gates_for(node: Any) -> None:
@@ -311,6 +320,7 @@ def _open_gates_for(node: Any) -> None:
     _gates["registry"] = node.get_closest_marker("touches_registry") is not None
     _gates["subprocess"] = node.get_closest_marker("spawns_process") is not None
     _gates["port"] = node.get_closest_marker("binds_reserved_port") is not None
+    _gates["network"] = node.get_closest_marker("reaches_network") is not None
 
 
 # ---------------------------------------------------------------- winreg fake
@@ -787,6 +797,238 @@ def _install_interceptors() -> None:
     _intercept(socket.socket, "bind", guarded_bind)
 
 
+# ------------------------------------------------------------- network gate
+#
+# 2026-10-21: an audit run (a DNS audit hook over the suite) found existing
+# tests resolving ``opencode.ai`` 49 times and ``integrate.api.nvidia.com`` 25
+# times. Dropping the proxy variables (``isolate_the_machine``) does not stop
+# that: the NIM client and the models.dev fetch never read ``HTTP(S)_PROXY``,
+# and the Gemini door resolves providers through its own
+# ``gemini_routes.resolve_provider``, so a test that patched only
+# ``routes.resolve_provider`` built a real provider. Nor does Python's
+# ``socket.connect`` audit event see everything: an asyncio connection on
+# Windows goes through the proactor's ``ConnectEx`` and raises no event.
+#
+# So the gate sits at the three places every connection has to pass:
+#
+# * name resolution -- ``socket.getaddrinfo`` (which ``asyncio``'s
+#   ``loop.getaddrinfo`` calls at call time, so anyio and httpx are covered),
+#   ``gethostbyname``/``gethostbyname_ex`` and the reverse ``gethostbyaddr``;
+# * the connection -- ``socket.socket.connect``/``connect_ex`` (sync sockets,
+#   ``create_connection``, ssl, and asyncio's selector loop, which calls
+#   ``sock.connect``) and the proactor loop's ``sock_connect`` (``ConnectEx``);
+# * the one client that does neither: ``ddgs``' ``HttpClient`` drives
+#   ``primp``, a Rust HTTP stack with its own resolver.
+#
+# Loopback is always allowed -- the suite serves fake upstreams, proxies and
+# SOCKS servers on 127.0.0.1 -- and so are IP literals for a *lookup* (no query
+# leaves the machine for one); a *connection* to a non-loopback literal is
+# refused like a name. A refusal raises ``HermeticityViolation`` (a
+# ``BaseException``: ``except Exception`` in the application cannot swallow it)
+# AND is recorded, and ``isolate_the_network`` fails the test at teardown even
+# when something swallowed the raise anyway -- a ``gather(return_exceptions=
+# True)`` or a worker thread that died with it. A test that genuinely needs the
+# network opts out with ``@pytest.mark.reaches_network``; none on CI should.
+
+#: Names that never leave the machine.
+_LOOPBACK_NAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
+
+#: Every refusal this process made, newest last ("<operation> <target>").
+_network_refusals: list[str] = []
+
+
+def _host_name(host: object) -> str | None:
+    if isinstance(host, bytes | bytearray):
+        host = bytes(host).decode("ascii", "ignore")
+    if not isinstance(host, str):
+        return None
+    return host.strip().strip("[]").rstrip(".").lower()
+
+
+def _ip_literal(name: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(name.split("%", 1)[0])
+    except ValueError:
+        return None
+
+
+def is_local_host(host: object) -> bool:
+    """Whether a lookup of, or a connection to, ``host`` stays on this machine.
+
+    ``None`` and ``""`` are the wildcard a server binds to; the unspecified
+    address connects to the local machine where it connects at all.
+    """
+
+    if host is None:
+        return True
+    name = _host_name(host)
+    if name is None:
+        return False
+    if name == "" or name in _LOOPBACK_NAMES or name.endswith(".localhost"):
+        return True
+    address = _ip_literal(name)
+    if address is None:
+        return False
+    if address.is_loopback or address.is_unspecified:
+        return True
+    mapped = getattr(address, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_loopback
+
+
+def _lookup_stays_local(host: object) -> bool:
+    """A lookup sends no query for a loopback name or for any IP literal."""
+
+    if is_local_host(host):
+        return True
+    name = _host_name(host)
+    return name is not None and _ip_literal(name) is not None
+
+
+def _refuse_network(operation: str, target: object) -> None:
+    if _gates["network"]:
+        return
+    _network_refusals.append(f"{operation} {target!r}")
+    raise HermeticityViolation(
+        f"HERMETICITY VIOLATION: {operation} {target!r} refused.\n"
+        f"  The test suite reaches nothing but this machine: a lookup or a "
+        f"connection to a real host is a live call -- it spends nothing today "
+        f"and a quota tomorrow, and it makes the result depend on the network.\n"
+        f"  Patch the resolver the code under test uses (a provider factory, "
+        f"``gemini_routes.resolve_provider``, a fetch function) or serve a fake "
+        f"on 127.0.0.1. Mark the test @pytest.mark.reaches_network only if the "
+        f"network itself is the thing under test.\n"
+        f"  See tests/support/hermetic.py (network gate)."
+    )
+
+
+def network_refusals() -> tuple[str, ...]:
+    """The refusals this process has made so far (the gate's self-test reads it)."""
+
+    return tuple(_network_refusals)
+
+
+def _connect_target(address: Any) -> Any:
+    """The host of a socket address, or ``None`` for a local (AF_UNIX) one."""
+
+    if isinstance(address, tuple) and address:
+        return address[0]
+    return None
+
+
+_network_gate_installed = False
+
+
+def _install_network_gate() -> None:
+    """Install the gate for this process. Idempotent.
+
+    Installed BEFORE the token-host block, so the block's wrappers stay the
+    outermost ``socket.getaddrinfo``/``create_connection`` (its self-test
+    checks their names) and a token host still gets the block's own message.
+    """
+
+    global _network_gate_installed
+    if _network_gate_installed:
+        return
+    _network_gate_installed = True
+
+    real_getaddrinfo = socket.getaddrinfo
+    real_gethostbyname = socket.gethostbyname
+    real_gethostbyname_ex = socket.gethostbyname_ex
+    real_gethostbyaddr = socket.gethostbyaddr
+
+    def gated_getaddrinfo(host, *args, **kwargs):
+        if not _lookup_stays_local(host):
+            _refuse_network("name lookup of", host)
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def gated_gethostbyname(host):
+        if not _lookup_stays_local(host):
+            _refuse_network("name lookup of", host)
+        return real_gethostbyname(host)
+
+    def gated_gethostbyname_ex(host):
+        if not _lookup_stays_local(host):
+            _refuse_network("name lookup of", host)
+        return real_gethostbyname_ex(host)
+
+    def gated_gethostbyaddr(host):
+        if not is_local_host(host):
+            _refuse_network("reverse lookup of", host)
+        return real_gethostbyaddr(host)
+
+    _intercept(socket, "getaddrinfo", gated_getaddrinfo)
+    _intercept(socket, "gethostbyname", gated_gethostbyname)
+    _intercept(socket, "gethostbyname_ex", gated_gethostbyname_ex)
+    _intercept(socket, "gethostbyaddr", gated_gethostbyaddr)
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def gated_connect(self, address):
+        target = _connect_target(address)
+        if target is not None and not is_local_host(target):
+            _refuse_network("connection to", address)
+        return real_connect(self, address)
+
+    def gated_connect_ex(self, address):
+        target = _connect_target(address)
+        if target is not None and not is_local_host(target):
+            _refuse_network("connection to", address)
+        return real_connect_ex(self, address)
+
+    _intercept(socket.socket, "connect", gated_connect)
+    _intercept(socket.socket, "connect_ex", gated_connect_ex)
+
+    # The proactor loop (Windows' default) connects with ``ConnectEx`` and
+    # never calls ``socket.connect``: gate its ``sock_connect``, which every
+    # ``loop.create_connection`` -- anyio, httpcore, aiohttp -- goes through.
+    proactor = asyncio.proactor_events.BaseProactorEventLoop
+    real_proactor_connect = proactor.sock_connect
+
+    async def gated_proactor_sock_connect(self, sock, address):
+        target = _connect_target(address)
+        if target is not None and not is_local_host(target):
+            _refuse_network("connection to", address)
+        return await real_proactor_connect(self, sock, address)
+
+    _intercept(proactor, "sock_connect", gated_proactor_sock_connect)
+
+    # ``ddgs`` (the DuckDuckGo web-search adapter) drives ``primp``: Rust,
+    # with its own resolver and sockets, invisible to everything above.
+    real_ddgs_request = ddgs_http_client.HttpClient.request
+
+    def gated_ddgs_request(self, *args, **kwargs):
+        url = kwargs.get("url", args[1] if len(args) > 1 else "")
+        host = urllib.parse.urlsplit(str(url)).hostname
+        if not is_local_host(host):
+            _refuse_network("ddgs (primp) request to", str(url))
+        return real_ddgs_request(self, *args, **kwargs)
+
+    _intercept(ddgs_http_client.HttpClient, "request", gated_ddgs_request)
+
+
+@pytest.fixture(autouse=True)
+def isolate_the_network(request: pytest.FixtureRequest):
+    """Fail a test that tried to reach past this machine, even if it swallowed it.
+
+    The gate raises at the call; this catches the refusals nobody re-raised
+    -- an application ``except BaseException``, a ``gather(return_exceptions=
+    True)``, a background thread that died with the violation.
+    """
+
+    refused_before = len(_network_refusals)
+    yield
+    refused = _network_refusals[refused_before:]
+    if refused and request.node.get_closest_marker("reaches_network") is None:
+        pytest.fail(
+            "HERMETICITY VIOLATION: this test (or a thread it left running) "
+            f"tried to reach past this machine: {'; '.join(refused)}. Patch the "
+            "resolver the code under test uses or serve a fake on 127.0.0.1. "
+            "See tests/support/hermetic.py (network gate).",
+            pytrace=False,
+        )
+
+
 # ------------------------------------------------------------------- plugin
 
 
@@ -839,7 +1081,21 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "binds_reserved_port: the test may bind My Claude Code's default port",
     )
+    config.addinivalue_line(
+        "markers",
+        "reaches_network: the test may resolve or connect to a host that is not "
+        "this machine (the network gate's opt-out; nothing on CI may need it)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_model_sweep: a catalogue sweep in this test lists real providers "
+        "(over a fake the test serves) instead of meeting them offline "
+        "(tests/conftest.py _isolate_model_sweeps)",
+    )
     _install_interceptors()
+    # 2026-10-21: no test may resolve or connect past this machine. Before the
+    # token-host block, so the block's wrappers stay outermost.
+    _install_network_gate()
     # 7.69.1: no test may reach an OAuth token host. Below httpx, so mocked
     # transports keep working; see ``tests/support/token_host_block.py``.
     install_token_host_block()
@@ -927,6 +1183,7 @@ def hermetic_marker_gates(request: pytest.FixtureRequest):
     _gates["registry"] = False
     _gates["subprocess"] = False
     _gates["port"] = False
+    _gates["network"] = False
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -946,30 +1203,52 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     _open_gates_for(item)
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
-    """Fail a test that resolved the config directory to the real home.
-
-    ``tryfirst`` so this runs *before* the fixture finalisers, one of which
-    (``_reset_config_dir_cache``) clears the very state being inspected. The
-    identical assertion used to live in a fixture finaliser and never fired
-    once, across 1619 tests that did resolve the real home.
-    """
+def _real_config_dir_resolved() -> Any:
+    """The config directory resolved inside the real home, or ``None``."""
 
     paths = sys.modules.get("my_claude_code.config.paths")
     if paths is None:
-        return
+        return None
     resolution = getattr(paths, "_resolution", None)
     if resolution is None:
-        return
+        return None
     resolved = getattr(resolution, "path", None)
     if resolved is not None and under_real_config_dir(resolved):
-        raise HermeticityViolation(
-            f"HERMETICITY VIOLATION: this test resolved the config directory "
-            f"to {resolved}, which is inside the real home. It reads the "
-            f"developer's own .env, requests.db and custom_providers.json, so "
-            f"it passes or fails for a reason that is not in the repository.\n"
-            f"  HOME/USERPROFILE are redirected for every test; something here "
-            f"put them back or resolved the path before the redirect.\n"
-            f"  See tests/README.md for the hermeticity contract."
-        )
+        return resolved
+    return None
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(
+    item: pytest.Item, nextitem: pytest.Item | None
+) -> Generator[None, object, object]:
+    """Fail a test that resolved the config directory to the real home.
+
+    Read *before* the fixture finalisers, one of which
+    (``_reset_config_dir_cache``) clears the very state being inspected. The
+    identical assertion used to live in a fixture finaliser and never fired
+    once, across 1619 tests that did resolve the real home.
+
+    Raised only *after* pytest's own teardown has run, though (a wrapper, not
+    a plain ``tryfirst`` hook): a plain hook that raised here skipped pytest's
+    teardown of the item, and every later test on that worker then failed
+    setup with "previous item was not torn down properly" -- one leak became
+    10,000-13,000 errors on three Windows suite runs (v7.103.1, v7.105.0, the
+    2026-10-24 nightly).
+    """
+
+    resolved = _real_config_dir_resolved()
+    try:
+        return (yield)
+    finally:
+        if resolved is not None:
+            raise HermeticityViolation(
+                f"HERMETICITY VIOLATION: this test resolved the config directory "
+                f"to {resolved}, which is inside the real home. It reads the "
+                f"developer's own .env, requests.db and custom_providers.json, so "
+                f"it passes or fails for a reason that is not in the repository.\n"
+                f"  HOME/USERPROFILE are redirected for every test; something "
+                f"here (or a thread an earlier test left running) put them back "
+                f"or resolved the path before the redirect.\n"
+                f"  See tests/README.md for the hermeticity contract."
+            )

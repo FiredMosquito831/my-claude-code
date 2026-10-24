@@ -21,6 +21,7 @@ and a wiretapping one, all on loopback, all torn down in the fixture.
 """
 
 import asyncio
+import ipaddress
 import threading
 import time
 from collections.abc import Iterator
@@ -29,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from my_claude_code.application import proxy_check
 from my_claude_code.application.proxy_check import check_endpoints, check_proxy
 from my_claude_code.config.proxy_chains import (
     ProxyChains,
@@ -52,6 +54,39 @@ pytestmark = pytest.mark.asyncio
 #: A dead address that cannot be routed anywhere, so the check spends its
 #: connect timeout and nothing else. RFC 5737 documentation space.
 BLACK_HOLE = "http://192.0.2.201:8080"
+
+#: RFC 5737 TEST-NET-1, every black hole this file names.
+_TEST_NET_1 = ipaddress.ip_network("192.0.2.0/24")
+
+
+@pytest.fixture(autouse=True)
+def _black_holes_answer_nothing_without_a_packet(monkeypatch) -> None:
+    """A documentation address times out here, without a SYN leaving the machine.
+
+    The real dial sent one to 192.0.2.x through the default route and waited
+    for nothing (the network gate refuses that connection). This stands in for
+    exactly that outcome -- the timeout spent as a pending await, the same
+    "no answer ... within Ns" connect-timeout verdict -- through the seam
+    ``_DialReason`` documents for stand-ins; every loopback rig address still
+    takes the real dial.
+    """
+
+    real_dial = proxy_check._tcp_connect
+
+    async def dial(host: str, port: int, timeout: float) -> str:
+        try:
+            black_hole = ipaddress.ip_address(host) in _TEST_NET_1
+        except ValueError:
+            black_hole = False
+        if not black_hole:
+            return await real_dial(host, port, timeout)
+        await asyncio.sleep(timeout)
+        return proxy_check._DialReason(
+            f"no answer from {host}:{port} within {timeout:.0f}s",
+            proxy_check.FAILURE_CONNECT_TIMEOUT,
+        )
+
+    monkeypatch.setattr(proxy_check, "_tcp_connect", dial)
 
 
 @pytest.fixture

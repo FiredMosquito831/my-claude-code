@@ -22,7 +22,8 @@ from my_claude_code.core import request_log
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
-from my_claude_code.providers.runtime import ProviderRuntime
+from my_claude_code.providers.runtime import ProviderRuntime, reasoning_probe
+from my_claude_code.runtime import application as application_runtime
 from my_claude_code.runtime.application import ApplicationRuntime, RestartCallback
 from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
 
@@ -130,6 +131,32 @@ class ModelListingProviderDouble(BaseProvider):
         return self.model_ids
 
 
+def offline_dialect_probe(monkeypatch) -> list[str]:
+    """Answer the custom-provider dialect probe the way an offline machine does.
+
+    Creating a custom provider through the route runs one reasoning-dialect
+    probe against its base URL (two tiny chat requests). With a fixture host
+    such as ``api.acme.example`` that is a real DNS query from the suite, which
+    the network gate refuses. The probe's own failure path answers
+    ``unknown`` with the exception's name, so this returns exactly that, and
+    the route, the registry update and the card all run as they do offline.
+    Returns the base URLs that were "probed".
+    """
+
+    probed: list[str] = []
+
+    async def offline(base_url: str, *_args: Any, **_kwargs: Any) -> Any:
+        probed.append(base_url)
+        return reasoning_probe.ReasoningProbeOutcome(
+            status="unknown",
+            detail="ConnectError",
+            probed_at=reasoning_probe._now(),
+        )
+
+    monkeypatch.setattr(application_runtime, "probe_reasoning_dialect", offline)
+    return probed
+
+
 def create_custom_provider_app(
     monkeypatch,
     tmp_path: Path,
@@ -149,6 +176,8 @@ def create_custom_provider_app(
     monkeypatch.delenv("MCC_ENV_FILE", raising=False)
     registry = ProviderRegistry(tmp_path / "custom_providers.json")
     monkeypatch.setattr("my_claude_code.config.provider_registry._registry", registry)
+    # The create route's dialect probe is upstream HTTP too.
+    offline_dialect_probe(monkeypatch)
     return create_test_app(Settings(), providers=providers), registry
 
 

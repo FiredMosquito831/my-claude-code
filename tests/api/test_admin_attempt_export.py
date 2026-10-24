@@ -23,6 +23,7 @@ from my_claude_code.core.request_log import (
     get_request_log_store,
 )
 from tests.api.support import create_test_app
+from tests.support.request_log_writes import close_and_drain
 
 
 @pytest.fixture
@@ -138,7 +139,11 @@ def chain_store(tmp_path):
             status="success",
         )
     )
-    store.close()
+    # Every row committed before a test reads it through the app, which opens
+    # a fresh store on this file: ``close()`` alone returns after 10 s with
+    # the writer still draining, and three tests read 0 rows under load in
+    # 7.111.2's gate (31/31 alone).
+    close_and_drain(store)
     yield store
 
 
@@ -517,7 +522,7 @@ class TestRedaction:
                 ),
             )
         )
-        store.close()
+        close_and_drain(store)
 
         for fmt in ("json", "csv", "txt"):
             body = _export(client, format=fmt, scope="attempts").content
@@ -557,7 +562,7 @@ class TestStreamingIsBounded:
                     ),
                 )
             )
-        store.close()
+        close_and_drain(store)
 
         rows = _export(client, format="json", scope="attempts").json()
 
@@ -587,7 +592,7 @@ class TestStreamingIsBounded:
                     ),
                 )
             )
-        store.close()
+        close_and_drain(store)
 
         # page_size 2 over 5 requests exercises the keyset cursor three times.
         rows = list(store.iter_export_attempt_rows(page_size=2))

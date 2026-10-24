@@ -60,6 +60,7 @@ from tests.support.fake_programs import (
     launcher_name,
     write_fake_program,
 )
+from tests.support.install_jobs import wait_for_job
 
 HERE_OS = (
     InstallOs.WINDOWS
@@ -116,11 +117,10 @@ def _env(bin_dir: Path, tmp_path: Path) -> dict[str, str]:
 
 
 def _wait_for(job, *, seconds: float = 60.0):
-    deadline = time.monotonic() + seconds
-    while job.stage == "running" and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert job.stage != "running", job.payload()
-    return job
+    # On the worker thread, not on ``job.stage``: ``_finish`` sets the stage
+    # before it frees the one-install slot, so a stage-only wait let the next
+    # ``start_job`` meet this job still installing (three Windows suite runs).
+    return wait_for_job(job, seconds=seconds)
 
 
 # ------------------------------------------------------------------ dry run

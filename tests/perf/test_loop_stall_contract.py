@@ -29,6 +29,8 @@ pytestmark = pytest.mark.local_serial
 #: coroutine held the loop, which is the only thing under test here.
 MAX_LOOP_GAP_MS = 150.0
 MEAN_LOOP_GAP_MS = 30.0
+#: Measurements of the concurrent-streams case; one under both bounds passes.
+_ATTEMPTS = 3
 
 
 class _Heartbeat:
@@ -140,13 +142,22 @@ async def test_loop_gap_under_concurrent_streams(
         async for _chunk in capture.wrap(_stream()):
             pass
 
-    async with _Heartbeat() as beat:
-        await asyncio.gather(*(one(index) for index in range(16)))
-
-    assert beat.max_gap < MAX_LOOP_GAP_MS, (
-        f"max loop gap {beat.max_gap:.0f}ms over {len(beat.gaps)} ticks"
-    )
-    assert beat.mean_gap < MEAN_LOOP_GAP_MS
+    # Best of three, the bounds unchanged (the #266 loop-lag pattern): a
+    # coroutine holding the loop holds it on every attempt -- finalisation on
+    # the loop is 1.6 s of frozen server each time -- while a process the OS
+    # descheduled misses one tick once ("max loop gap 385ms over 17 ticks"
+    # on a loaded run).
+    attempts: list[str] = []
+    for attempt in range(_ATTEMPTS):
+        async with _Heartbeat() as beat:
+            await asyncio.gather(*(one(attempt * 16 + index) for index in range(16)))
+        attempts.append(
+            f"max {beat.max_gap:.0f}ms mean {beat.mean_gap:.1f}ms "
+            f"over {len(beat.gaps)} ticks"
+        )
+        if beat.max_gap < MAX_LOOP_GAP_MS and beat.mean_gap < MEAN_LOOP_GAP_MS:
+            return
+    pytest.fail(f"the loop was held on all {_ATTEMPTS} attempts: {'; '.join(attempts)}")
 
 
 @pytest.mark.asyncio

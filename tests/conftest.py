@@ -25,7 +25,10 @@ from tests.support.fake_winreg import fake_winreg  # noqa: F401  (shared fixture
 
 # The hermeticity guard. Importing its fixtures and hook implementations here is
 # what installs them for the whole suite: ``isolate_the_machine`` gives every
-# test its own HOME/APPDATA, ``hermetic_marker_gates`` projects the opt-in
+# test its own HOME/APPDATA, ``isolate_the_network`` fails a test that resolved
+# or connected to a host that is not this machine (the network gate; the
+# 2026-10-21 audit found opencode.ai x49 and integrate.api.nvidia.com x25),
+# ``hermetic_marker_gates`` projects the opt-in
 # markers into the process-wide interceptors, ``pytest_configure`` installs
 # those interceptors, ``pytest_runtest_setup`` opens the opt-in gates before any
 # fixture of any scope is built, and ``pytest_runtest_teardown`` fails a test
@@ -36,11 +39,13 @@ from tests.support.fake_winreg import fake_winreg  # noqa: F401  (shared fixture
 from tests.support.hermetic import (  # noqa: F401  (re-exported fixtures/hooks)
     hermetic_marker_gates,
     isolate_the_machine,
+    isolate_the_network,
     pytest_configure,
     pytest_runtest_setup,
     pytest_runtest_teardown,
 )
 from tests.support.hermetic import under_real_config_dir as _under_real_home
+from tests.support.install_jobs import join_leftover_install_jobs
 
 # Set mock environment BEFORE any imports that use Settings
 os.environ.setdefault("NVIDIA_NIM_API_KEY", "test_key")
@@ -233,7 +238,15 @@ def _reset_agent_install_jobs():
 
     agent_installer.reset_for_tests()
     yield
+    # A job a test started and did not wait for must not finish in the next
+    # test: its ``_finish`` resolves the config directory, and between two
+    # tests HOME is the real one (three Windows suite runs leaked that way).
+    # This runs before ``isolate_the_machine`` puts HOME back.
+    still_running = join_leftover_install_jobs()
     agent_installer.reset_for_tests()
+    assert not still_running, (
+        f"install job thread(s) still running after the test: {still_running}"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -833,6 +846,98 @@ def _isolate_proxy_sources(monkeypatch, tmp_path):
     reset_tor_control_state()
     reset_vendor_source_state()
     reset_runner_state()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_models_dev_refresh(monkeypatch):
+    """No test may download the models.dev index in the background.
+
+    Enriching a listing with no fresh models.dev cache -- every listing in a
+    hermetic home -- schedules a fire-and-forget refresh of
+    ``models.dev/api.json``, and the network gate found 14 tests doing that
+    lookup (2026-10-24). The refresh only ever writes the cache a later read
+    uses, and offline it fails silently, so the schedule is recorded and
+    nothing is fetched. The fetch and refresh themselves stay real:
+    ``tests/providers/test_models_dev.py`` drives them over doubled clients.
+    """
+    from my_claude_code.providers.runtime import models_dev
+
+    scheduled: list[object] = []
+    monkeypatch.setattr(models_dev, "schedule_models_dev_refresh", scheduled.append)
+    yield scheduled
+
+
+class _OfflineListing:
+    """A shipped provider as an offline machine's sweep meets it."""
+
+    def __init__(self, provider_id: str, provider: object) -> None:
+        self.provider_id = provider_id
+        self.provider = provider
+
+    async def list_model_infos(self) -> frozenset[Any]:
+        import httpx
+
+        raise httpx.ConnectError(
+            f"tests never list {self.provider_id}'s models over the network "
+            f"({type(self.provider).__name__}); see _isolate_model_sweeps"
+        )
+
+
+def _lists_over_the_network(provider: object) -> bool:
+    """A shipped provider whose listing nobody in the test replaced."""
+
+    module = type(provider).__module__
+    if not module.startswith("my_claude_code."):
+        return False  # a test double: it answers for itself
+    overridden = vars(provider) if hasattr(provider, "__dict__") else {}
+    return "list_model_infos" not in overridden and "list_model_ids" not in overridden
+
+
+@pytest.fixture(autouse=True)
+def _isolate_model_sweeps(monkeypatch, request):
+    """No catalogue sweep may list a real provider's models over the network.
+
+    A runtime built from ``Settings()`` -- ``create_test_app()``, every
+    ``ProviderRuntimeManager(settings)`` -- holds real providers: NVIDIA NIM
+    (the suite's ``NVIDIA_NIM_API_KEY=test_key``), OpenCode's ``public``
+    credential, and whatever key a dashboard-apply test writes. Its start-up
+    sweep and the sweep after every apply then asked each of them for its
+    model list: the network gate found ``integrate.api.nvidia.com`` and
+    ``opencode.ai`` looked up from ~70 tests, and ``api.cerebras.ai`` & co.
+    from the apply tests (2026-10-24). So the sweeps' and the start-up
+    validator's provider resolver hands back, for a shipped provider nobody
+    stubbed, one whose listing fails as an offline machine's does
+    (``httpx.ConnectError``); the sweep records the failure exactly as it would
+    offline. Test doubles, and providers whose listing a test replaced, are
+    untouched. A test whose subject is a real provider's listing through a
+    sweep, over a fake it serves, marks itself ``real_model_sweep``.
+    """
+
+    if request.node.get_closest_marker("real_model_sweep") is not None:
+        yield
+        return
+    from my_claude_code.providers.runtime import discovery, validation
+
+    def offline(resolve: Any) -> Any:
+        def resolved(provider_id: str) -> Any:
+            provider = resolve(provider_id)
+            if _lists_over_the_network(provider):
+                return _OfflineListing(provider_id, provider)
+            return provider
+
+        return resolved
+
+    for owner in (
+        discovery.ProviderModelDiscovery,
+        validation.ConfiguredModelValidator,
+    ):
+        real_init = owner.__init__
+
+        def init(self, settings, provider_resolver, *args, _real=real_init, **kwargs):
+            _real(self, settings, offline(provider_resolver), *args, **kwargs)
+
+        monkeypatch.setattr(owner, "__init__", init)
+    yield
 
 
 @pytest.fixture(autouse=True)

@@ -8,6 +8,11 @@ import pytest_asyncio
 
 from my_claude_code.messaging.limiter import MessagingRateLimiter
 
+#: A hang guard for stopping a limiter whose stop is not under test. The
+#: cancelled worker ends on the loop's next turn; 0.1 s of wall clock is not
+#: always a turn on a shared runner.
+_STOP_BOUND_SECONDS = 30.0
+
 
 class TestMessagingRateLimiter:
     """Tests for MessagingRateLimiter."""
@@ -31,7 +36,7 @@ class TestMessagingRateLimiter:
         self.create_limiter: Callable[..., MessagingRateLimiter] = create
         yield
         for limiter in reversed(instances):
-            await limiter.shutdown(timeout=0.1)
+            await limiter.shutdown(timeout=_STOP_BOUND_SECONDS)
 
     @pytest.mark.asyncio
     async def test_instances_are_independent(self):
@@ -45,7 +50,9 @@ class TestMessagingRateLimiter:
         assert limiter2.limiter._rate_limit == 99
         assert limiter2.limiter._rate_window == 99.0
 
-        await limiter1.shutdown(timeout=0.1)
+        # Independence is the subject, not how fast a worker stops: a 0.1 s
+        # bound here timed out on a loaded CI runner (PR #306's pytest job).
+        await limiter1.shutdown(timeout=_STOP_BOUND_SECONDS)
 
         async def succeed() -> str:
             return "still running"
@@ -65,8 +72,8 @@ class TestMessagingRateLimiter:
         limiter.start()
         limiter.start()
         assert await limiter.enqueue(succeed) == "ok"
-        await limiter.shutdown(timeout=0.1)
-        await limiter.shutdown(timeout=0.1)
+        await limiter.shutdown(timeout=_STOP_BOUND_SECONDS)
+        await limiter.shutdown(timeout=_STOP_BOUND_SECONDS)
 
         with pytest.raises(RuntimeError, match="is closed"):
             await limiter.enqueue(succeed)
@@ -309,7 +316,7 @@ class TestMessagingRateLimiter:
         limiter.fire_and_forget(queued_operation, dedup_key="background")
         await asyncio.sleep(0)
 
-        await limiter.shutdown(timeout=0.1)
+        await limiter.shutdown(timeout=_STOP_BOUND_SECONDS)
         results = await asyncio.gather(active, queued, return_exceptions=True)
 
         assert all(isinstance(result, asyncio.CancelledError) for result in results)
@@ -329,7 +336,9 @@ class TestMessagingRateLimiter:
             limiter.enqueue(succeed, dedup_key="shutdown-race")
         )
         await asyncio.sleep(0)
-        shutdown_task = asyncio.create_task(limiter.shutdown(timeout=0.1))
+        shutdown_task = asyncio.create_task(
+            limiter.shutdown(timeout=_STOP_BOUND_SECONDS)
+        )
         await asyncio.sleep(0)
         assert limiter._closed is True
 
@@ -399,7 +408,7 @@ class TestMessagingRateLimiter:
             await shutdown_task
         limiter._condition.release()
 
-        await limiter.shutdown(timeout=0.1)
+        await limiter.shutdown(timeout=_STOP_BOUND_SECONDS)
         results = await asyncio.gather(active, queued, return_exceptions=True)
 
         assert all(isinstance(result, asyncio.CancelledError) for result in results)
