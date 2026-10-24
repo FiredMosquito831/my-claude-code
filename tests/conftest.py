@@ -585,6 +585,32 @@ def _isolate_marketplace(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_marketplace_page(monkeypatch):
+    """7.110.0: the InferHub page's keyed reads and its process memory.
+
+    The account reads reach a provider host, so no test reaches them unless
+    it supplies its own fetch; what the page last read and the last snapshot
+    it saw are process-wide, so no test inherits another's.
+    """
+    from my_claude_code.api.marketplace_page import (
+        reset_account_memory,
+        reset_market_memory,
+    )
+    from my_claude_code.providers.runtime import marketplace_account
+    from tests.support.token_host_block import HermeticityViolation
+
+    async def refuse(url: str, **_kwargs: Any) -> Any:
+        raise HermeticityViolation(f"a test reached the marketplace page read: {url}")
+
+    monkeypatch.setattr(marketplace_account, "fetch_marketplace_json", refuse)
+    reset_account_memory()
+    reset_market_memory()
+    yield
+    reset_account_memory()
+    reset_market_memory()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_exit_memory():
     """What a ticked chain remembers about its exits (7.81.0) is process-wide.
 
