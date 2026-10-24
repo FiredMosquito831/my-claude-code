@@ -1,0 +1,59 @@
+<!-- SOURCE: origin=authored for My Claude Code in this repository (synthetic; not a capture); licence=MCC-own; fetched=2026-10-25; what=an html-endpoint-shaped results page written from the public class names of DuckDuckGo's no-JavaScript results page (result, result--ad, result__a, result__snippet, //duckduckgo.com/l/?uddg= and //duckduckgo.com/y.js links) to exercise edge cases no recorded page has: two ad blocks (scheme-relative and https y.js forms), a normal redirect result, a result whose title link is direct, a result with no snippet, and a destination with its own query string and an entity in the title. 4 real results, 2 ads. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <title>harness edge cases at DuckDuckGo</title>
+</head>
+<body class="body--html">
+  <div id="links" class="results">
+    <div class="result results_links results_links_deep result--ad result--ad--small">
+      <div class="links_main links_deep result__body">
+        <h2 class="result__title">
+          <a rel="nofollow" class="result__a" href="//duckduckgo.com/y.js?ad_domain=ads.example.com&amp;ad_provider=bingv7aa&amp;u3=https%3A%2F%2Fads.example.com%2Fpromo">Sponsored harness offer</a>
+        </h2>
+        <a class="result__snippet" href="//duckduckgo.com/y.js?ad_domain=ads.example.com&amp;ad_provider=bingv7aa&amp;u3=https%3A%2F%2Fads.example.com%2Fpromo">An advertisement that is never a search result.</a>
+      </div>
+    </div>
+    <div class="result results_links results_links_deep result--ad">
+      <div class="links_main links_deep result__body">
+        <h2 class="result__title">
+          <a rel="nofollow" class="result__a" href="https://duckduckgo.com/y.js?ad_domain=shop.example.com&amp;u3=https%3A%2F%2Fshop.example.com%2Fsale">Second sponsored offer</a>
+        </h2>
+        <a class="result__snippet" href="https://duckduckgo.com/y.js?ad_domain=shop.example.com&amp;u3=https%3A%2F%2Fshop.example.com%2Fsale">Another advertisement, in the https form.</a>
+      </div>
+    </div>
+    <div class="result results_links results_links_deep web-result ">
+      <div class="links_main links_deep result__body">
+        <h2 class="result__title">
+          <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fguide&amp;rut=0000000000000000000000000000000000000000000000000000000000000001">Example guide to harness testing</a>
+        </h2>
+        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fguide&amp;rut=0000000000000000000000000000000000000000000000000000000000000001">A step-by-step guide to <b>harness</b> testing with recorded pages.</a>
+      </div>
+    </div>
+    <div class="result results_links results_links_deep web-result ">
+      <div class="links_main links_deep result__body">
+        <h2 class="result__title">
+          <a rel="nofollow" class="result__a" href="https://example.net/direct">A result whose title link is direct</a>
+        </h2>
+        <a class="result__snippet" href="https://example.net/direct">This result links straight to its destination, with no redirect.</a>
+      </div>
+    </div>
+    <div class="result results_links results_links_deep web-result ">
+      <div class="links_main links_deep result__body">
+        <h2 class="result__title">
+          <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.edu%2Fno-snippet&amp;rut=0000000000000000000000000000000000000000000000000000000000000002">A result with no snippet</a>
+        </h2>
+      </div>
+    </div>
+    <div class="result results_links results_links_deep web-result ">
+      <div class="links_main links_deep result__body">
+        <h2 class="result__title">
+          <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Da%2Bb%26page%3D2&amp;rut=0000000000000000000000000000000000000000000000000000000000000003">Tom &amp; Jerry: a destination with its own query</a>
+        </h2>
+        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Da%2Bb%26page%3D2&amp;rut=0000000000000000000000000000000000000000000000000000000000000003">The destination carries <b>q=a+b&amp;page=2</b> of its own.</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

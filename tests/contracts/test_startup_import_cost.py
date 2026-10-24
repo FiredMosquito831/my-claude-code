@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.api.support import create_test_app
+from tests.support.ddg_harness import first_use
 
 # Top-level package name -> why the startup path must not import it.
 DEFERRED_UNTIL_FIRST_USE: dict[str, str] = {
@@ -36,6 +37,20 @@ DEFERRED_UNTIL_FIRST_USE: dict[str, str] = {
         "Only a token count needs it, and the encoder build (the BPE table) "
         "costs more than the import. Nothing counts tokens before the first "
         "request."
+    ),
+    # Declared ahead of the code that will import them (DDG-1, 2026-10-25):
+    # the check is "not in sys.modules", so an entry for a package that is not
+    # installed, or not imported by anything yet, holds today and binds the PR
+    # that brings it in.
+    "trafilatura": (
+        "Not a dependency yet. RESEARCH-DDG-WEBSEARCH.md R3 / USER DECISIONS Q6 "
+        "take it for web_fetch extraction, imported inside the fetch path on "
+        "first use only: 280-618 ms and ~300 modules measured on 2026-10-24."
+    ),
+    "lxml": (
+        "Installed today only as a dependency of ddgs and imported by nothing "
+        "on the startup path; the DuckDuckGo html/lite profile (R2) parses "
+        "with it, imported lazily (42-73 ms measured), and trafilatura needs it."
     ),
 }
 
@@ -68,6 +83,30 @@ def test_building_the_asgi_app_imports_no_deferred_heavyweight() -> None:
         "wait for their first real caller: "
         + "; ".join(f"{name}: {DEFERRED_UNTIL_FIRST_USE[name]}" for name in loaded)
     )
+
+
+@pytest.mark.local_serial
+def test_the_first_web_fetch_of_a_process_is_timed(tmp_path, record_property) -> None:
+    """The second probe: what the first use of the fetch extractor costs today.
+
+    A fresh interpreter builds the app, then imports the fetch path and runs
+    one real ``web_fetch`` of a recorded article from a loopback server
+    (``tests/support/ddg_harness/first_use_probe.py``). Its numbers are the
+    "before" DDG-4 compares a lazily imported extractor against; the probe
+    pins only what holds on any machine: the fetch path is not loaded before
+    its first use, and that first use works and loads it.
+    """
+
+    probe = first_use.run_probe(tmp_path)
+    for key, value in probe.items():
+        record_property(key, value)
+    print(f"first web_fetch of a process: {probe}")
+
+    assert probe["aiohttp_loaded_before_first_use"] is False
+    assert "aiohttp" in probe["packages_loaded_by_first_use"]
+    assert probe["first_data_chars"] > 0
+    assert probe["second_equals_first"] is True
+    assert probe["first_use_total_ms"] > 0
 
 
 def test_openai_failure_classification_still_answers_after_the_deferral() -> None:

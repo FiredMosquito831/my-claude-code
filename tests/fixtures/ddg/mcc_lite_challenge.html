@@ -1,0 +1,19 @@
+<!-- SOURCE: origin=authored for My Claude Code in this repository (synthetic; not a capture); licence=MCC-own; fetched=2026-10-25; what=a lite-endpoint bot-check page written only from the publicly documented marker strings of DuckDuckGo's "anomaly" check (an anomaly-modal block, a form posting to /anomaly.js, the heading "Unfortunately, bots use DuckDuckGo too."), RESEARCH-DDG-WEBSEARCH.md 2.1/2.4; no third-party fixture was copied. It holds no result links. -->
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <title>DuckDuckGo</title>
+</head>
+<body>
+  <div class="anomaly-modal__mask">
+    <div class="anomaly-modal__modal" data-testid="anomaly-modal">
+      <div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div>
+      <div class="anomaly-modal__description">Please complete the following challenge to confirm this search was made by a human.</div>
+      <form id="challenge-form" action="//duckduckgo.com/anomaly.js?sv=lite&amp;cc=harness" method="POST">
+        <button class="anomaly-modal__submit" type="submit">Submit</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

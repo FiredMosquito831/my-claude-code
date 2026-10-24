@@ -1,0 +1,30 @@
+{
+  "SOURCE": "origin=authored for My Claude Code in this repository; licence=MCC-own; fetched=2026-10-25; what=the search scenarios of the DDG harness (tests/support/ddg_harness): which recorded page or fake body each scenario serves, with which HTTP status or transport failure, and the outcome class the spec asks for (RESEARCH-DDG-WEBSEARCH.md 5 R2 and USER DECISIONS Q4: a challenge is rate_limit, 403/429/5xx go through the shared map_status_error, a normal page with no results is an honest empty answer). The expected classes are the TARGET, not today's behaviour; today's behaviour is pinned separately in tests/contracts/ddg_harness_baseline.json.",
+  "query": "omarchy linux",
+  "max_results": 10,
+  "pages": {
+    "octos_html_live_2026-09-28.html": {"real_results": 10, "challenge": false, "ad_destination_hosts": []},
+    "octos_html_challenge_reconstructed.html": {"real_results": 0, "challenge": true, "ad_destination_hosts": []},
+    "mcc_html_ads_and_edge_cases.html": {"real_results": 4, "challenge": false, "ad_destination_hosts": ["ads.example.com", "shop.example.com"]},
+    "mcc_lite_results.html": {"real_results": 3, "challenge": false, "ad_destination_hosts": []},
+    "mcc_lite_challenge.html": {"real_results": 0, "challenge": true, "ad_destination_hosts": []}
+  },
+  "scenarios": [
+    {"id": "live_html_200", "status": 200, "page": "octos_html_live_2026-09-28.html", "expect": "results"},
+    {"id": "edge_html_200", "status": 200, "page": "mcc_html_ads_and_edge_cases.html", "expect": "results"},
+    {"id": "lite_results_200", "status": 200, "page": "mcc_lite_results.html", "expect": "results"},
+    {"id": "challenge_html_202", "status": 202, "page": "octos_html_challenge_reconstructed.html", "expect": "rate_limit"},
+    {"id": "challenge_html_200", "status": 200, "page": "octos_html_challenge_reconstructed.html", "expect": "rate_limit"},
+    {"id": "challenge_lite_202", "status": 202, "page": "mcc_lite_challenge.html", "expect": "rate_limit"},
+    {"id": "challenge_lite_200", "status": 200, "page": "mcc_lite_challenge.html", "expect": "rate_limit"},
+    {"id": "http_403", "status": 403, "body": "Forbidden", "expect": "auth"},
+    {"id": "http_429", "status": 429, "body": "Too Many Requests", "expect": "rate_limit"},
+    {"id": "http_500", "status": 500, "body": "Internal Server Error", "expect": "upstream"},
+    {"id": "http_502", "status": 502, "body": "Bad Gateway", "expect": "upstream"},
+    {"id": "http_503", "status": 503, "body": "Service Unavailable", "expect": "upstream"},
+    {"id": "empty_200", "status": 200, "body": "", "expect": "empty"},
+    {"id": "garbage_200", "status": 200, "body": "<html><body>nothing here</body></html>", "expect": "empty"},
+    {"id": "transport_timeout", "transport": "timeout", "expect": "upstream"},
+    {"id": "transport_refused", "transport": "refused", "expect": "upstream"}
+  ]
+}
