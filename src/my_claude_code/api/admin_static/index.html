@@ -525,6 +525,118 @@
             </p>
           </section>
 
+          <!-- 7.110.0: the marketplace page (InferHub). Filled from
+               /admin/api/marketplaces when the view is opened; it owns no
+               manifest settings section, so renderSections() skips it and
+               `containerId` stays null. Shown in the sidebar only while a
+               marketplace provider has a key. Nothing here uses innerHTML:
+               route notes, model ids and combo names are a third party's
+               text, and are drawn as text. -->
+          <section id="view-marketplaces" class="admin-view" data-view="marketplaces" hidden>
+            <p class="view-intro">
+              Price ceilings for a marketplace provider: who decides what you
+              pay for each model, what the market asks right now, and what the
+              last requests were actually charged. Everything else about the
+              provider &mdash; its key, its models, its rails &mdash; works like
+              any other provider.
+            </p>
+            <div id="marketplaceTabs" class="mkt-tabs" role="tablist" aria-label="Marketplaces" hidden></div>
+            <div class="mkt-honesty" id="marketplaceHonesty">
+              <p>
+                <strong>What this is.</strong>
+                InferHub is not one seller. It resells pooled subscriptions
+                &mdash; other people's Claude Code, Codex and other accounts
+                &mdash; behind one key, and its own terms say it is run by an
+                individual. For one model there can be thousands of seller
+                accounts, grouped into a handful of price levels.
+              </p>
+              <p>
+                <strong>How you can be overcharged.</strong>
+                With no ceiling, InferHub routes to the best-scoring seller
+                <em>regardless of price</em>: any live ask, up to its platform
+                cap of half the official price. A conversation keeps its seller
+                for up to 30 minutes, then pays that seller's <em>current</em>
+                ask &mdash; which may have been raised meanwhile.
+              </p>
+              <p>
+                <strong>What MCC does about it.</strong>
+                A profile below sets a ceiling, and MCC sends it with every
+                request, on every attempt and every door, as two headers
+                InferHub enforces: <code>x-max-input-price</code> and
+                <code>x-max-output-price</code>. When nothing on the market is
+                under it, the request ends with a short 400 &mdash; MCC never
+                sends it uncapped and never raises your ceiling by itself.
+              </p>
+              <p>
+                <strong>Some routes change your prompt.</strong>
+                Some upstreams rewrite or prepend your system prompt. Each
+                route's own words, as InferHub states them:
+              </p>
+              <div id="marketplaceRouteNotes" class="mkt-route-notes"></div>
+              <p class="mkt-unverified" id="marketplaceUnverified">
+                Not verified on a real account: built from InferHub's
+                documentation and public pages.
+              </p>
+            </div>
+            <p id="marketplaceWarning" class="mkt-warning" hidden></p>
+            <p id="marketplaceStatus" class="mkt-status" role="status" aria-live="polite"></p>
+
+            <section class="mkt-card" id="marketplaceAccount" aria-labelledby="marketplaceAccountTitle">
+              <h3 id="marketplaceAccountTitle" class="mkt-card-title">Account</h3>
+              <div id="marketplaceAccountBody"></div>
+            </section>
+
+            <section class="mkt-card" id="marketplaceProfiles" aria-labelledby="marketplaceProfilesTitle">
+              <h3 id="marketplaceProfilesTitle" class="mkt-card-title">Profiles</h3>
+              <p class="field-description">
+                A profile is one rule for the ceiling. Profiles are kept in
+                <code>marketplace_profiles.json</code> in the config folder; a
+                provider or model row below names one. <em>Would match now</em>
+                is what each assigned model would be sent, read from the
+                market snapshot.
+              </p>
+              <div id="marketplaceProfilesBody"></div>
+              <div id="marketplaceEditor" class="mkt-editor" hidden></div>
+            </section>
+
+            <section class="mkt-card" id="marketplaceAssignments" aria-labelledby="marketplaceAssignmentsTitle">
+              <h3 id="marketplaceAssignmentsTitle" class="mkt-card-title">Assignments</h3>
+              <p class="field-description">
+                Which profile each model uses: the provider row is the default,
+                a model's own row wins over it. Saved as the
+                <code>marketplace_profile</code> override &mdash; the same row
+                the Models page edits.
+              </p>
+              <div id="marketplaceAssignmentsBody"></div>
+            </section>
+
+            <section class="mkt-card" id="marketplaceExplorer" aria-labelledby="marketplaceExplorerTitle">
+              <h3 id="marketplaceExplorerTitle" class="mkt-card-title">Offer explorer</h3>
+              <p class="field-description">
+                One model at a time: its price levels and how many seller
+                accounts ask each, with the ceiling it would be sent drawn on
+                the ladder. No source names the seller behind a level.
+              </p>
+              <div id="marketplaceExplorerBody"></div>
+            </section>
+
+            <section class="mkt-card" id="marketplaceRecent" aria-labelledby="marketplaceRecentTitle">
+              <h3 id="marketplaceRecentTitle" class="mkt-card-title">Last requests</h3>
+              <p class="field-description">
+                What InferHub said served each request, the ceiling MCC sent and
+                the charge InferHub reported. <em>Fetch the charged ask</em>
+                reads InferHub's own usage log for these rows, only when pressed
+                (it keeps them 7 days).
+              </p>
+              <div id="marketplaceRecentBody"></div>
+            </section>
+
+            <section class="mkt-card" id="marketplaceSnapshot" aria-labelledby="marketplaceSnapshotTitle">
+              <h3 id="marketplaceSnapshotTitle" class="mkt-card-title">Snapshot</h3>
+              <div id="marketplaceSnapshotBody"></div>
+            </section>
+          </section>
+
           <section id="view-claude" class="admin-view" data-view="claude" hidden>
             <div class="observability-heading">
               <div>

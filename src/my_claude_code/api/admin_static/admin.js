@@ -178,6 +178,19 @@ const VIEW_GROUPS = [
     containerId: null,
   },
   {
+    // 7.110.0: a price marketplace's own page (InferHub). Backed by
+    // marketplace_profiles.json, the market snapshot and the request log, not
+    // by settings keys, so it claims no manifest section -- the Proxying
+    // shape. In the sidebar only while a marketplace provider has a key; the
+    // link's words are the declared dialect's label (two marketplaces would
+    // be two tabs of this one page).
+    id: "marketplaces",
+    label: "InferHub",
+    title: "InferHub",
+    sections: [],
+    containerId: null,
+  },
+  {
     id: "claude",
     label: "Configure Claude Code",
     title: "Configure Claude Code",
@@ -704,6 +717,9 @@ async function loadDashboardState() {
       .filter(Boolean),
   );
   renderNav();
+  // 7.110.0: whether the marketplace page belongs in the sidebar. Its own
+  // small request, not awaited: a failure leaves the link hidden.
+  refreshMarketplaceNav();
   mountGuideLinks();
   renderSections(config.sections, config.fields);
   // The rails were just rebuilt and are in the document now. Paint every pause
@@ -775,6 +791,11 @@ function renderNav() {
       badge.className = "nav-badge";
       badge.hidden = true;
       button.appendChild(badge);
+    }
+    if (view.id === MARKETPLACE_VIEW_ID) {
+      // 7.110.0: only while a marketplace provider has a key (the user's
+      // Q16), named after its declared dialect. Hidden until the server says.
+      paintMarketplaceNavButton(button);
     }
     if (index === 0) {
       button.setAttribute("aria-current", "page");
@@ -888,6 +909,1468 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "proxying") {
     loadProxying().catch((error) => showMessage(error.message, "error"));
   }
+
+  if (activeView.id === MARKETPLACE_VIEW_ID) {
+    // Opening the page is one of the two moments the account is read (the
+    // other is Refresh); the last requests are a local read of the log.
+    openMarketplaces().catch((error) => showMessage(error.message, "error"));
+  }
+}
+
+/* ----------------------------------------------------------- marketplaces
+   7.110.0: a price marketplace's own page (InferHub), driven by what the
+   server declares: one tab per marketplace provider with a key, the same
+   code for each. Seven blocks, in order: what this is (static markup plus
+   each route's own note), the account, the profiles and their editor, the
+   assignments, the offer explorer, the last requests, the snapshot.
+
+   Writes go through three doors and no others:
+   - the profile store: PUT /admin/api/marketplaces/profiles, the whole store;
+   - assignments: the Models page's own override route, through
+     saveMarketplaceAssignment() -- the one write path of model_overrides.json;
+   - the public-market switch: the ordinary settings apply.
+
+   Nothing in this block uses innerHTML: route notes, model ids, combo names
+   and every header value are a third party's text, and are drawn as text.
+   A value nobody reported is a dash, never a zero. */
+
+const MARKETPLACE_VIEW_ID = "marketplaces";
+const MARKETPLACE_UPSTREAM_PREFIX = /^[a-z0-9][a-z0-9._-]{0,31}$/;
+const MARKETPLACE_RECENT_LIMITS = [10, 20, 50, 100];
+// How many "would match now" lines one profile shows before "Show all".
+const MARKETPLACE_MATCH_LINES = 8;
+const MARKETPLACE_CAP_FIELDS = ["cap_percent", "cap_input_usd", "cap_output_usd"];
+
+const marketplaceState = {
+  // GET /admin/api/marketplaces?summary=true: which marketplaces exist and
+  // which have a key. Decides the sidebar link.
+  views: [],
+  // GET /admin/api/marketplaces: the page.
+  data: null,
+  // The provider whose tab is on show.
+  provider: "",
+  loading: false,
+  // The profile being edited: { original, name, kind, values }, or null.
+  // `original` is "" for a new profile. Held in state so a re-render keeps
+  // half-typed input.
+  editing: null,
+  editorProblems: [],
+  // The profile whose Remove is waiting for its second press.
+  confirmingRemove: "",
+  // Profiles whose "would match now" list is shown whole.
+  expanded: new Set(),
+  // Whether a Save may drop the entries MCC cannot use (the operator ticked it).
+  dropUnusable: false,
+  explorer: { query: "", model: "", offers: null, loading: false, error: "" },
+  recent: { limit: 20, rows: null, enabled: true, charged: null, chargedWords: "", busy: false },
+  // The assignment row being added: { model, value }.
+  addRow: { model: "", value: "" },
+};
+
+function mktNode(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
+}
+
+function mktButton(label, className, onClick) {
+  const button = mktNode("button", className || "secondary-button", label);
+  button.type = "button";
+  if (onClick) button.addEventListener("click", onClick);
+  return button;
+}
+
+/* A price as the market states it: "$0.75", or a dash when nobody said. */
+function mktPrice(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const text = value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  return `$${text || "0"}`;
+}
+
+function mktPair(pair) {
+  if (!Array.isArray(pair) || pair.length !== 2) return "—";
+  return `${mktPrice(pair[0])} / ${mktPrice(pair[1])}`;
+}
+
+function mktNumber(value, unit) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const rounded = Math.round(value * 100) / 100;
+  return unit ? `${rounded} ${unit}` : String(rounded);
+}
+
+function mktText(value) {
+  return value === null || value === undefined || value === "" ? "—" : String(value);
+}
+
+function marketplaceKeyedViews() {
+  return (marketplaceState.views || []).filter((view) => view && view.has_key);
+}
+
+function paintMarketplaceNavButton(button) {
+  const keyed = marketplaceKeyedViews();
+  button.hidden = keyed.length === 0;
+  const label = keyed.length === 1 ? keyed[0].label : keyed.length > 1 ? "Marketplaces" : null;
+  if (label) button.textContent = label;
+}
+
+async function refreshMarketplaceNav() {
+  try {
+    const answer = await api("/admin/api/marketplaces?summary=true");
+    marketplaceState.views = Array.isArray(answer && answer.views) ? answer.views : [];
+  } catch {
+    // An older server, or one that cannot answer: no link, nothing broken.
+    marketplaceState.views = [];
+  }
+  const button = document.querySelector(`.nav-link[data-view="${MARKETPLACE_VIEW_ID}"]`);
+  if (button) paintMarketplaceNavButton(button);
+}
+
+function marketplaceProviders() {
+  const data = marketplaceState.data;
+  return data && Array.isArray(data.providers) ? data.providers : [];
+}
+
+function marketplaceCurrent() {
+  return (
+    marketplaceProviders().find((entry) => entry.provider_id === marketplaceState.provider) ||
+    null
+  );
+}
+
+function adoptMarketplacePage(data) {
+  marketplaceState.data = data && typeof data === "object" ? data : {};
+  const providers = marketplaceProviders();
+  if (!providers.some((entry) => entry.provider_id === marketplaceState.provider)) {
+    const keyed = providers.find((entry) => entry.has_key);
+    marketplaceState.provider = ((keyed || providers[0]) || {}).provider_id || "";
+  }
+}
+
+function announceMarketplace(text, kind) {
+  const line = byId("marketplaceStatus");
+  if (!line) return;
+  line.textContent = text || "";
+  line.className = `mkt-status${kind ? ` mkt-status-${kind}` : ""}`;
+}
+
+async function openMarketplaces() {
+  await loadMarketplaces({ account: true });
+  await loadMarketplaceRecent();
+}
+
+async function loadMarketplaces({ account = false } = {}) {
+  if (marketplaceState.loading) return;
+  marketplaceState.loading = true;
+  try {
+    const data = await api(`/admin/api/marketplaces${account ? "?account=true" : ""}`);
+    adoptMarketplacePage(data);
+  } finally {
+    marketplaceState.loading = false;
+  }
+  renderMarketplaces();
+}
+
+function renderMarketplaces() {
+  const current = marketplaceCurrent();
+  const title = byId("pageTitle");
+  if (title && state.activeView === MARKETPLACE_VIEW_ID && current && current.label) {
+    title.textContent = current.label;
+  }
+  renderMarketplaceTabs();
+  renderMarketplaceRouteNotes(current);
+  renderMarketplaceWarning(current);
+  renderMarketplaceAccount(current);
+  renderMarketplaceProfiles(current);
+  renderMarketplaceEditor();
+  renderMarketplaceAssignments(current);
+  renderMarketplaceExplorer(current);
+  renderMarketplaceRecent(current);
+  renderMarketplaceSnapshot(current);
+}
+
+function renderMarketplaceTabs() {
+  const box = byId("marketplaceTabs");
+  if (!box) return;
+  box.textContent = "";
+  const keyed = marketplaceProviders().filter((entry) => entry.has_key);
+  box.hidden = keyed.length < 2;
+  keyed.forEach((entry) => {
+    const tab = mktButton(entry.label || entry.provider_id, "mkt-tab", () => {
+      marketplaceState.provider = entry.provider_id;
+      marketplaceState.explorer = { query: "", model: "", offers: null, loading: false, error: "" };
+      marketplaceState.recent.rows = null;
+      marketplaceState.recent.charged = null;
+      renderMarketplaces();
+      loadMarketplaceRecent().catch((error) => announceMarketplace(error.message, "error"));
+    });
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", entry.provider_id === marketplaceState.provider ? "true" : "false");
+    box.appendChild(tab);
+  });
+}
+
+/* ------------------------------------------------------- 1. what this is */
+
+function renderMarketplaceRouteNotes(current) {
+  const box = byId("marketplaceRouteNotes");
+  if (!box) return;
+  box.textContent = "";
+  const notes = current && current.notes && typeof current.notes === "object" ? current.notes : {};
+  const prefixes = Object.keys(notes).sort();
+  if (!prefixes.length) {
+    box.appendChild(
+      mktNode(
+        "p",
+        "field-description",
+        "No route notes read yet: they come from InferHub's catalog, read with your key.",
+      ),
+    );
+    return;
+  }
+  prefixes.forEach((prefix) => {
+    const quote = mktNode("blockquote", "mkt-route-note");
+    quote.appendChild(mktNode("code", "mkt-route-prefix", `${prefix}/`));
+    quote.appendChild(document.createTextNode(" "));
+    quote.appendChild(mktNode("span", "mkt-route-words", notes[prefix]));
+    box.appendChild(quote);
+  });
+}
+
+/* The provider row's answer decides every model without its own row: when
+   that answer is "no ceiling", the page says so in red, first. */
+function renderMarketplaceWarning(current) {
+  const line = byId("marketplaceWarning");
+  if (!line) return;
+  const row = current && current.assignments ? current.assignments.provider : null;
+  const decides = !row || row.state !== "value";
+  const warning = (marketplaceState.data && marketplaceState.data.editor || {}).warning;
+  line.hidden = !(current && current.has_key && decides && warning);
+  line.textContent = line.hidden
+    ? ""
+    : `${warning} Choose a provider default under Assignments to cap it.`;
+}
+
+/* ------------------------------------------------------------- 2. account */
+
+function mktFactRow(list, label, value, note) {
+  const term = mktNode("dt", "mkt-fact-label", label);
+  const detail = mktNode("dd", "mkt-fact-value", value);
+  if (note) {
+    detail.appendChild(document.createTextNode(" "));
+    detail.appendChild(mktNode("span", "mkt-fact-note", note));
+  }
+  list.append(term, detail);
+}
+
+function renderMarketplaceAccount(current) {
+  const body = byId("marketplaceAccountBody");
+  if (!body) return;
+  body.textContent = "";
+  const account = current && current.account ? current.account : null;
+  if (!current || !account) {
+    body.appendChild(mktNode("p", "field-description", "No marketplace provider is declared."));
+    return;
+  }
+  if (account.state !== "read") {
+    body.appendChild(mktNode("p", "mkt-account-state", account.words || "Not read."));
+    if (account.unverified) body.appendChild(mktNode("p", "mkt-unverified", account.unverified));
+    return;
+  }
+  const facts = mktNode("dl", "mkt-facts");
+  const usage = account.usage || {};
+  const values = usage.values || null;
+  if (usage.state === "read" && values) {
+    mktFactRow(
+      facts,
+      "Balance",
+      values.balance !== null && values.balance !== undefined
+        ? `${values.balance} ${values.currency || "USDC"}`
+        : "not reported",
+      "UNVERIFIED — not verified on a real account",
+    );
+    mktFactRow(
+      facts,
+      `Spend (${values.window || "window"})`,
+      values.window_spend !== null && values.window_spend !== undefined
+        ? `${values.window_spend} ${values.currency || "USDC"}`
+        : "not reported",
+      values.window_requests !== null && values.window_requests !== undefined
+        ? `${values.window_requests} requests`
+        : null,
+    );
+    mktFactRow(
+      facts,
+      "Spend, all time",
+      values.all_time_spend !== null && values.all_time_spend !== undefined
+        ? `${values.all_time_spend} ${values.currency || "USDC"}`
+        : "not reported",
+    );
+  } else {
+    mktFactRow(facts, "Balance and spend", usage.words || "not read");
+  }
+  const kind = account.key_kind || {};
+  mktFactRow(facts, "Key kind", kind.state === "read" ? kind.words : kind.words || "not read", kind.how || null);
+  const budgets = account.budgets || {};
+  if (budgets.state === "read") {
+    const rows = Array.isArray(budgets.rows) ? budgets.rows : [];
+    mktFactRow(
+      facts,
+      "InferHub budgets",
+      rows.length ? `${rows.length} set on InferHub (read-only here)` : "none set on InferHub",
+    );
+  } else {
+    mktFactRow(facts, "InferHub budgets", budgets.words || "not read");
+  }
+  const fallback = budgets.default || {};
+  if (fallback.state === "read" && fallback.values) {
+    mktFactRow(
+      facts,
+      "Default budget",
+      fallback.values.min_discount_pct !== null && fallback.values.min_discount_pct !== undefined
+        ? `at least ${fallback.values.min_discount_pct} % off official`
+        : "none set",
+    );
+  } else if (fallback.words) {
+    mktFactRow(facts, "Default budget", fallback.words);
+  }
+  const combos = Array.isArray(current.combos) ? current.combos : [];
+  const comboSource = ((current.snapshot || {}).sources || []).find((source) => source.name === "combos");
+  mktFactRow(
+    facts,
+    "Combos",
+    comboSource && comboSource.status === "ok"
+      ? combos.length
+        ? combos.map((combo) => `${combo.id}${combo.selection ? ` (${combo.selection})` : ""}`).join(", ")
+        : "none on this account"
+      : comboSource
+        ? comboSource.words
+        : "not read yet",
+  );
+  const aliases = account.aliases || {};
+  mktFactRow(
+    facts,
+    "Alias groups",
+    aliases.state === "read"
+      ? `${(aliases.groups || []).length} groups`
+      : aliases.words || "not read",
+  );
+  body.appendChild(facts);
+  if (Array.isArray(budgets.rows) && budgets.rows.length) {
+    const table = mktNode("table", "mkt-table mkt-budgets");
+    const head = table.createTHead().insertRow();
+    ["Model", "Max in", "Max out", "Min % off", "Enabled"].forEach((label) =>
+      head.appendChild(mktNode("th", null, label)),
+    );
+    const tbody = table.createTBody();
+    budgets.rows.forEach((row) => {
+      const tr = tbody.insertRow();
+      [
+        row.model_id,
+        mktText(row.max_input),
+        mktText(row.max_output),
+        mktText(row.min_discount_pct),
+        row.enabled === null || row.enabled === undefined ? "—" : row.enabled ? "yes" : "no",
+      ].forEach((value) => tr.appendChild(mktNode("td", null, value)));
+    });
+    body.appendChild(table);
+  }
+  const stamp = account.read_at ? `Read ${account.read_at}. ` : "";
+  body.appendChild(mktNode("p", "mkt-unverified", `${stamp}${account.unverified || ""}`));
+}
+
+/* ------------------------------------------------------------ 3. profiles */
+
+function marketplaceEditorRules() {
+  return (marketplaceState.data && marketplaceState.data.editor) || { kinds: [], fields: {} };
+}
+
+function marketplaceKindRule(kind) {
+  return (marketplaceEditorRules().kinds || []).find((entry) => entry.kind === kind) || null;
+}
+
+function marketplaceProfileList() {
+  const data = marketplaceState.data;
+  return data && Array.isArray(data.profiles) ? data.profiles : [];
+}
+
+function marketplaceStore() {
+  return (marketplaceState.data && marketplaceState.data.store) || {};
+}
+
+function renderMarketplaceProfiles(current) {
+  const body = byId("marketplaceProfilesBody");
+  if (!body) return;
+  body.textContent = "";
+  const store = marketplaceStore();
+  if (store.unreadable) {
+    body.appendChild(
+      mktNode(
+        "p",
+        "mkt-warning",
+        `${store.file_name || "The profile file"} cannot be read (${store.unreadable}). ` +
+          "Fix or move it by hand: this page will not overwrite it.",
+      ),
+    );
+  }
+  const unusable = Array.isArray(store.unusable) ? store.unusable : [];
+  if (unusable.length) {
+    const box = mktNode("div", "mkt-unusable");
+    box.appendChild(
+      mktNode(
+        "p",
+        "mkt-warning",
+        "The file holds entries MCC cannot use. Saving from this page removes them unless you fix them first:",
+      ),
+    );
+    unusable.forEach((entry) => {
+      const line = mktNode("p", "mkt-unusable-entry");
+      line.appendChild(mktNode("code", null, entry.name));
+      line.appendChild(document.createTextNode(` — ${entry.why}: `));
+      line.appendChild(mktNode("code", "mkt-unusable-document", entry.document));
+      box.appendChild(line);
+    });
+    const label = mktNode("label", "mkt-check");
+    const tick = document.createElement("input");
+    tick.type = "checkbox";
+    tick.id = "marketplaceDropUnusable";
+    tick.checked = marketplaceState.dropUnusable;
+    tick.addEventListener("change", () => {
+      marketplaceState.dropUnusable = tick.checked;
+    });
+    label.append(tick, document.createTextNode(" Remove these entries when I save"));
+    box.appendChild(label);
+    body.appendChild(box);
+  }
+  const profiles = marketplaceProfileList();
+  if (!profiles.length) {
+    body.appendChild(
+      mktNode("p", "field-description", "No profiles yet. Every model is \"InferHub decides\": no ceiling."),
+    );
+  }
+  const list = mktNode("div", "mkt-profile-list");
+  profiles.forEach((profile) => list.appendChild(marketplaceProfileCard(profile)));
+  body.appendChild(list);
+  const add = mktButton("New profile", "secondary-button mkt-profile-new", () => {
+    marketplaceState.editing = { original: "", name: "", kind: "pct_of_official", values: {} };
+    marketplaceState.editorProblems = [];
+    renderMarketplaceEditor();
+  });
+  add.disabled = Boolean(store.unreadable);
+  body.appendChild(add);
+}
+
+function marketplaceProfileCard(profile) {
+  const card = mktNode("article", "mkt-profile");
+  card.dataset.profile = profile.name;
+  const head = mktNode("div", "mkt-profile-head");
+  head.appendChild(mktNode("code", "mkt-profile-name", profile.name));
+  const rule = marketplaceKindRule(profile.kind);
+  head.appendChild(mktNode("span", "mkt-profile-kind", rule ? rule.label : profile.kind));
+  card.appendChild(head);
+  card.appendChild(mktNode("p", "mkt-profile-summary", profile.summary));
+  if (profile.follows_market) {
+    card.appendChild(
+      mktNode("p", "mkt-follows", (marketplaceEditorRules().follows_market_note || "")),
+    );
+  }
+  const rows = Array.isArray(profile.rows) ? profile.rows : [];
+  card.appendChild(
+    mktNode(
+      "p",
+      "mkt-profile-rows",
+      rows.length
+        ? `Named on: ${rows.map((row) => `${row.scope} ${row.key}`).join(", ")}`
+        : "Not assigned to any row yet.",
+    ),
+  );
+  const matches = Array.isArray(profile.would_match) ? profile.would_match : [];
+  if (matches.length) {
+    const counts = profile.counts || {};
+    card.appendChild(
+      mktNode(
+        "p",
+        "mkt-match-counts",
+        `Would match now: ${counts.matches || 0} match · ${counts.nothing || 0} match nothing · ` +
+          `${counts.unknown || 0} not countable`,
+      ),
+    );
+    const listed = mktNode("ul", "mkt-match-list");
+    const shown = marketplaceState.expanded.has(profile.name)
+      ? matches
+      : matches.slice(0, MARKETPLACE_MATCH_LINES);
+    shown.forEach((entry) => {
+      const item = mktNode("li", `mkt-match mkt-match-${entry.state}`);
+      item.appendChild(mktNode("code", "mkt-match-model", entry.model_id));
+      item.appendChild(document.createTextNode(" "));
+      item.appendChild(mktNode("span", "mkt-match-text", entry.text));
+      listed.appendChild(item);
+    });
+    card.appendChild(listed);
+    if (matches.length > MARKETPLACE_MATCH_LINES) {
+      const open = marketplaceState.expanded.has(profile.name);
+      card.appendChild(
+        mktButton(open ? "Show fewer" : `Show all ${matches.length}`, "ghost-button mkt-match-more", () => {
+          if (open) marketplaceState.expanded.delete(profile.name);
+          else marketplaceState.expanded.add(profile.name);
+          renderMarketplaces();
+        }),
+      );
+    }
+  }
+  const actions = mktNode("div", "mkt-profile-actions");
+  actions.appendChild(
+    mktButton("Edit", "secondary-button mkt-profile-edit", () => {
+      marketplaceState.editing = {
+        original: profile.name,
+        name: profile.name,
+        kind: profile.kind,
+        values: marketplaceValuesFromDocument(profile.document || {}),
+      };
+      marketplaceState.editorProblems = [];
+      renderMarketplaceEditor();
+    }),
+  );
+  const confirming = marketplaceState.confirmingRemove === profile.name;
+  const remove = mktButton(
+    confirming
+      ? rows.length
+        ? `Press again: ${rows.length} row(s) name it and their requests will be refused`
+        : "Press again to remove"
+      : "Remove",
+    confirming
+      ? "secondary-button mkt-profile-remove mkt-confirming"
+      : "secondary-button mkt-profile-remove",
+    () => {
+      if (marketplaceState.confirmingRemove !== profile.name) {
+        marketplaceState.confirmingRemove = profile.name;
+        renderMarketplaces();
+        return;
+      }
+      marketplaceState.confirmingRemove = "";
+      removeMarketplaceProfile(profile.name, rows.length > 0).catch((error) =>
+        announceMarketplace(error.message, "error"),
+      );
+    },
+  );
+  remove.disabled = Boolean(marketplaceStore().unreadable);
+  actions.appendChild(remove);
+  card.appendChild(actions);
+  return card;
+}
+
+/* The editor holds text, exactly as typed; a document is built only on Save. */
+function marketplaceValuesFromDocument(document_) {
+  const values = {};
+  Object.keys(document_).forEach((name) => {
+    if (name === "kind") return;
+    const value = document_[name];
+    values[name] = Array.isArray(value) ? value.join(", ") : String(value);
+  });
+  return values;
+}
+
+function marketplaceDocumentFromEditor(editing) {
+  const rule = marketplaceKindRule(editing.kind);
+  const document_ = { kind: editing.kind };
+  (rule ? rule.fields : []).forEach((name) => {
+    const raw = String(editing.values[name] || "").trim();
+    if (!raw) return;
+    if (name === "exclude_upstreams") {
+      document_[name] = raw
+        .split(",")
+        .map((part) => part.trim().toLowerCase())
+        .filter(Boolean);
+    } else if (name === "min_accounts") {
+      document_[name] = Number(raw);
+    } else {
+      document_[name] = Number(raw);
+    }
+  });
+  return document_;
+}
+
+/* The store's own rules, checked before anything is sent; the server checks
+   them again and has the last word (its 422 is shown as it is). */
+function marketplaceEditorProblems(editing) {
+  const problems = [];
+  const rules = marketplaceEditorRules();
+  const pattern = new RegExp(rules.name_pattern || "^[a-z0-9][a-z0-9_-]{0,63}$");
+  const name = String(editing.name || "").trim();
+  if (!pattern.test(name)) {
+    problems.push("Name: 1-64 characters of a-z, 0-9, '_' or '-', starting with a letter or digit.");
+  } else if (
+    name !== editing.original &&
+    marketplaceProfileList().some((profile) => profile.name === name)
+  ) {
+    problems.push(`A profile named ${name} already exists.`);
+  }
+  const rule = marketplaceKindRule(editing.kind);
+  if (!rule) {
+    problems.push("Choose a kind.");
+    return problems;
+  }
+  const filled = (field) => String(editing.values[field] || "").trim() !== "";
+  rule.fields.forEach((field) => {
+    if (!filled(field)) return;
+    const raw = String(editing.values[field]).trim();
+    const words = (rules.fields[field] || {}).label || field;
+    if (field === "exclude_upstreams") {
+      const parts = raw.split(",").map((part) => part.trim().toLowerCase()).filter(Boolean);
+      if (!parts.length) problems.push(`${words}: name at least one upstream prefix.`);
+      parts
+        .filter((part) => !MARKETPLACE_UPSTREAM_PREFIX.test(part))
+        .forEach((part) => problems.push(`${words}: "${part}" is not an upstream prefix.`));
+      return;
+    }
+    const number = Number(raw);
+    if (field === "min_accounts") {
+      if (!Number.isInteger(number) || number < 1) {
+        problems.push(`${words}: a whole number of at least 1.`);
+      }
+      return;
+    }
+    if (!Number.isFinite(number) || number <= 0) {
+      problems.push(`${words}: a number greater than zero.`);
+    } else if ((field === "percent" || field === "cap_percent") && number > 100) {
+      problems.push(`${words}: at most 100.`);
+    }
+  });
+  if (editing.kind === "pct_of_official" && !filled("percent")) {
+    problems.push("At most N % of official needs the percent.");
+  }
+  if (editing.kind === "max_price") {
+    if (!filled("max_input_usd") && !filled("max_output_usd")) {
+      problems.push("A dollar ceiling needs the input ceiling, the output ceiling, or both.");
+    }
+    if (filled("max_usd_per_request") && !(filled("max_input_usd") && filled("max_output_usd"))) {
+      problems.push("A per-request limit needs both ceilings: an uncapped side has no worst case.");
+    }
+  }
+  if (editing.kind === "cheapest_level_min_accounts" && !filled("min_accounts")) {
+    problems.push("The cheapest level with at least N accounts needs N.");
+  }
+  if (filled("cap_percent") && (filled("cap_input_usd") || filled("cap_output_usd"))) {
+    problems.push("A cap is a percent of official or the two dollar caps, not both.");
+  }
+  return problems;
+}
+
+function marketplaceFollowsMarket(editing) {
+  const rule = marketplaceKindRule(editing.kind);
+  if (!rule || !rule.derived) return false;
+  return !MARKETPLACE_CAP_FIELDS.some((field) => String(editing.values[field] || "").trim() !== "");
+}
+
+function renderMarketplaceEditor() {
+  const box = byId("marketplaceEditor");
+  if (!box) return;
+  box.textContent = "";
+  const editing = marketplaceState.editing;
+  box.hidden = !editing;
+  if (!editing) return;
+  const rules = marketplaceEditorRules();
+  box.appendChild(
+    mktNode("h4", "mkt-editor-title", editing.original ? `Edit ${editing.original}` : "New profile"),
+  );
+  const grid = mktNode("div", "mkt-editor-grid");
+  const nameField = mktNode("label", "mkt-editor-field");
+  nameField.appendChild(mktNode("span", "mkt-editor-label", "Name"));
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.id = "marketplaceEditorName";
+  nameInput.value = editing.name;
+  nameInput.disabled = Boolean(editing.original);
+  nameInput.addEventListener("input", () => {
+    editing.name = nameInput.value;
+    paintMarketplaceEditorChecks();
+  });
+  nameField.appendChild(nameInput);
+  grid.appendChild(nameField);
+
+  const kindField = mktNode("label", "mkt-editor-field");
+  kindField.appendChild(mktNode("span", "mkt-editor-label", "Kind"));
+  const kindSelect = document.createElement("select");
+  kindSelect.id = "marketplaceEditorKind";
+  (rules.kinds || []).forEach((kind) => {
+    const option = mktNode("option", null, kind.label);
+    option.value = kind.kind;
+    kindSelect.appendChild(option);
+  });
+  kindSelect.value = editing.kind;
+  kindSelect.addEventListener("change", () => {
+    editing.kind = kindSelect.value;
+    marketplaceState.editorProblems = [];
+    renderMarketplaceEditor();
+  });
+  kindField.appendChild(kindSelect);
+  grid.appendChild(kindField);
+  box.appendChild(grid);
+
+  const rule = marketplaceKindRule(editing.kind);
+  if (rule) box.appendChild(mktNode("p", "field-description mkt-editor-help", rule.help));
+  const fields = mktNode("div", "mkt-editor-grid");
+  (rule ? rule.fields : []).forEach((name) => {
+    const words = (rules.fields || {})[name] || { label: name, unit: "", help: "" };
+    const field = mktNode("label", "mkt-editor-field");
+    field.appendChild(mktNode("span", "mkt-editor-label", `${words.label}${words.unit ? ` (${words.unit})` : ""}`));
+    const input = document.createElement("input");
+    input.type = "text";
+    input.inputMode = name === "exclude_upstreams" ? "text" : "decimal";
+    input.dataset.field = name;
+    input.className = "mkt-editor-input";
+    input.value = editing.values[name] || "";
+    input.addEventListener("input", () => {
+      editing.values[name] = input.value;
+      paintMarketplaceEditorChecks();
+    });
+    field.appendChild(input);
+    if (words.help) field.appendChild(mktNode("span", "mkt-editor-hint", words.help));
+    fields.appendChild(field);
+  });
+  box.appendChild(fields);
+  box.appendChild(mktNode("p", "mkt-follows mkt-editor-follows", ""));
+  box.appendChild(mktNode("ul", "mkt-editor-problems"));
+  const actions = mktNode("div", "mkt-profile-actions");
+  actions.appendChild(
+    mktButton("Save profile", "primary-button mkt-editor-save", () => {
+      saveMarketplaceProfile().catch((error) => announceMarketplace(error.message, "error"));
+    }),
+  );
+  actions.appendChild(
+    mktButton("Cancel", "ghost-button mkt-editor-cancel", () => {
+      marketplaceState.editing = null;
+      marketplaceState.editorProblems = [];
+      renderMarketplaceEditor();
+    }),
+  );
+  box.appendChild(actions);
+  paintMarketplaceEditorChecks();
+}
+
+/* Repaints only the live checks, never the inputs: re-rendering the whole
+   editor on every keystroke would move the caret out of the field. */
+function paintMarketplaceEditorChecks() {
+  const box = byId("marketplaceEditor");
+  const editing = marketplaceState.editing;
+  if (!box || !editing) return;
+  const follows = box.querySelector(".mkt-editor-follows");
+  if (follows) {
+    follows.textContent = marketplaceFollowsMarket(editing)
+      ? marketplaceEditorRules().follows_market_note || ""
+      : "";
+    follows.hidden = !follows.textContent;
+  }
+  const list = box.querySelector(".mkt-editor-problems");
+  if (list) {
+    list.textContent = "";
+    [...marketplaceEditorProblems(editing), ...marketplaceState.editorProblems].forEach((problem) =>
+      list.appendChild(mktNode("li", "mkt-editor-problem", problem)),
+    );
+  }
+}
+
+/* The whole store as the server last sent it, with `changes` applied. */
+function marketplaceStoreDocument(changes) {
+  const profiles = {};
+  marketplaceProfileList().forEach((profile) => {
+    profiles[profile.name] = profile.document;
+  });
+  return changes(profiles);
+}
+
+async function putMarketplaceProfiles(profiles, { confirmRemoval = false } = {}) {
+  const store = marketplaceStore();
+  const data = await api("/admin/api/marketplaces/profiles", {
+    method: "PUT",
+    body: JSON.stringify({
+      profiles,
+      expected_digest: typeof store.digest === "string" ? store.digest : null,
+      drop_unusable: marketplaceState.dropUnusable,
+      confirm_removal: confirmRemoval,
+    }),
+  });
+  adoptMarketplacePage(data);
+  renderMarketplaces();
+}
+
+async function saveMarketplaceProfile() {
+  const editing = marketplaceState.editing;
+  if (!editing) return;
+  const problems = marketplaceEditorProblems(editing);
+  if (problems.length) {
+    paintMarketplaceEditorChecks();
+    announceMarketplace("Not saved: the profile has problems listed under the form.", "error");
+    return;
+  }
+  const name = String(editing.name).trim();
+  const profiles = marketplaceStoreDocument((all) => {
+    if (editing.original && editing.original !== name) delete all[editing.original];
+    all[name] = marketplaceDocumentFromEditor(editing);
+    return all;
+  });
+  try {
+    await putMarketplaceProfiles(profiles);
+  } catch (error) {
+    marketplaceState.editorProblems = [error.message];
+    paintMarketplaceEditorChecks();
+    announceMarketplace(`Not saved: ${error.message}`, "error");
+    return;
+  }
+  marketplaceState.editing = null;
+  marketplaceState.editorProblems = [];
+  renderMarketplaceEditor();
+  announceMarketplace(`Saved profile ${name}.`, "ok");
+}
+
+async function removeMarketplaceProfile(name, assigned) {
+  const profiles = marketplaceStoreDocument((all) => {
+    delete all[name];
+    return all;
+  });
+  await putMarketplaceProfiles(profiles, { confirmRemoval: assigned });
+  announceMarketplace(`Removed profile ${name}.`, "ok");
+}
+
+/* --------------------------------------------------------- 4. assignments */
+
+/* The ONE place this page writes an override row: the Models page's own
+   route, one row per call, the 15th key only. "inherit" removes the key, null
+   forces "InferHub decides", a name forces that profile. */
+async function saveMarketplaceAssignment(scope, key, value) {
+  const data = marketplaceState.data || {};
+  const updates = { [data.override_key || "marketplace_profile"]: value };
+  await api("/admin/api/model-admin/overrides", {
+    method: "POST",
+    body: JSON.stringify({ scope, key, updates }),
+  });
+  await loadMarketplaces();
+}
+
+function marketplaceChoiceSelect(id, row) {
+  const select = document.createElement("select");
+  select.id = id;
+  select.className = "mkt-assign-select";
+  const data = marketplaceState.data || {};
+  const choices = [
+    ["inherit", "Inherit (no row)"],
+    ["__decides__", "InferHub decides (no ceiling)"],
+    ...marketplaceProfileList().map((profile) => [profile.name, `${profile.name} — ${profile.summary}`]),
+  ];
+  const stored = row && row.state === "value" ? row.value : null;
+  if (stored && !choices.some(([value]) => value === stored)) {
+    choices.push([stored, `${stored} — no such profile: its requests are refused`]);
+  }
+  choices.forEach(([value, label]) => {
+    const option = mktNode("option", null, label);
+    option.value = value;
+    select.appendChild(option);
+  });
+  select.value = !row || row.state === "inherit" ? data.inherit || "inherit" : row.state === "unset" ? "__decides__" : stored;
+  return select;
+}
+
+function marketplaceChoiceValue(select) {
+  if (select.value === "__decides__") return null;
+  return select.value;
+}
+
+function marketplaceAssignmentRow(table, label, scope, key, row, rowId) {
+  const tr = table.insertRow();
+  tr.dataset.scope = scope;
+  tr.dataset.key = key;
+  tr.appendChild(mktNode("th", "mkt-assign-label", label));
+  const cell = tr.insertCell();
+  const select = marketplaceChoiceSelect(rowId, row);
+  select.setAttribute("aria-label", `marketplace profile for ${label}`);
+  cell.appendChild(select);
+  const save = mktButton("Save", "secondary-button mkt-assign-save", () => {
+    save.disabled = true;
+    saveMarketplaceAssignment(scope, key, marketplaceChoiceValue(select))
+      .then(() => announceMarketplace(`Saved the ${label} row.`, "ok"))
+      .catch((error) => {
+        save.disabled = false;
+        announceMarketplace(`Not saved: ${error.message}`, "error");
+      });
+  });
+  tr.insertCell().appendChild(save);
+  const decides = !row || row.state !== "value";
+  tr.insertCell().appendChild(
+    mktNode(
+      "span",
+      decides && scope === "provider" ? "mkt-warning-inline" : "mkt-assign-note",
+      !row || row.state === "inherit"
+        ? scope === "provider"
+          ? "No row: InferHub decides — no ceiling."
+          : "Inherits the provider row."
+        : row.state === "unset"
+          ? "Forced: InferHub decides — no ceiling."
+          : `Forced: ${row.value}.`,
+    ),
+  );
+}
+
+function renderMarketplaceAssignments(current) {
+  const body = byId("marketplaceAssignmentsBody");
+  if (!body) return;
+  body.textContent = "";
+  if (!current) return;
+  const assignments = current.assignments || { provider: null, models: [] };
+  const table = mktNode("table", "mkt-table mkt-assign-table");
+  const tbody = table.createTBody();
+  marketplaceAssignmentRow(
+    tbody,
+    `${current.label || current.provider_id} (provider default)`,
+    "provider",
+    current.provider_id,
+    assignments.provider,
+    "marketplaceAssignProvider",
+  );
+  (assignments.models || []).forEach((row, index) =>
+    marketplaceAssignmentRow(
+      tbody,
+      row.model_id,
+      "model",
+      row.model_ref,
+      row,
+      `marketplaceAssignModel${index}`,
+    ),
+  );
+  body.appendChild(table);
+  const models = Array.isArray(current.models) ? current.models : [];
+  const own = new Set((assignments.models || []).map((row) => row.model_id));
+  const free = models.filter((model) => !own.has(model));
+  const add = mktNode("div", "mkt-assign-add");
+  add.appendChild(mktNode("span", "mkt-editor-label", "Add a model row"));
+  const pick = document.createElement("select");
+  pick.id = "marketplaceAssignAddModel";
+  pick.className = "mkt-assign-select";
+  const empty = mktNode("option", null, free.length ? "Choose a model" : "No other model in the catalogue");
+  empty.value = "";
+  pick.appendChild(empty);
+  free.forEach((model) => {
+    const option = mktNode("option", null, model);
+    option.value = model;
+    pick.appendChild(option);
+  });
+  pick.value = free.includes(marketplaceState.addRow.model) ? marketplaceState.addRow.model : "";
+  pick.addEventListener("change", () => {
+    marketplaceState.addRow.model = pick.value;
+  });
+  const choice = marketplaceChoiceSelect("marketplaceAssignAddValue", null);
+  const save = mktButton("Add row", "secondary-button mkt-assign-add-save", () => {
+    if (!pick.value) {
+      announceMarketplace("Choose a model first.", "error");
+      return;
+    }
+    const value = marketplaceChoiceValue(choice);
+    if (value === "inherit") {
+      announceMarketplace("Inherit is what a model without a row already does.", "error");
+      return;
+    }
+    save.disabled = true;
+    const model = pick.value;
+    saveMarketplaceAssignment("model", `${current.provider_id}/${model}`, value)
+      .then(() => {
+        marketplaceState.addRow = { model: "", value: "" };
+        announceMarketplace(`Added the ${model} row.`, "ok");
+      })
+      .catch((error) => {
+        save.disabled = false;
+        announceMarketplace(`Not saved: ${error.message}`, "error");
+      });
+  });
+  add.append(pick, choice, save);
+  body.appendChild(add);
+}
+
+/* ------------------------------------------------------ 5. offer explorer */
+
+function marketplaceModelGroups(models, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  const groups = new Map();
+  models
+    .filter((model) => !needle || model.toLowerCase().includes(needle))
+    .forEach((model) => {
+      const slash = model.indexOf("/");
+      const prefix = slash > 0 ? model.slice(0, slash) : "(no prefix)";
+      if (!groups.has(prefix)) groups.set(prefix, []);
+      groups.get(prefix).push(model);
+    });
+  return groups;
+}
+
+async function loadMarketplaceOffers(model) {
+  const current = marketplaceCurrent();
+  if (!current || !model) return;
+  const explorer = marketplaceState.explorer;
+  explorer.model = model;
+  explorer.loading = true;
+  explorer.error = "";
+  renderMarketplaceExplorer(current);
+  try {
+    explorer.offers = await api(
+      `/admin/api/marketplaces/${encodeURIComponent(current.provider_id)}/offers?model=${encodeURIComponent(model)}`,
+    );
+  } catch (error) {
+    explorer.offers = null;
+    explorer.error = error.message;
+  } finally {
+    explorer.loading = false;
+  }
+  renderMarketplaceExplorer(marketplaceCurrent());
+}
+
+function renderMarketplaceExplorer(current) {
+  const body = byId("marketplaceExplorerBody");
+  if (!body) return;
+  body.textContent = "";
+  if (!current) return;
+  const explorer = marketplaceState.explorer;
+  const picker = mktNode("div", "mkt-explorer-picker");
+  const search = document.createElement("input");
+  search.type = "search";
+  search.id = "marketplaceExplorerSearch";
+  search.placeholder = "Search models (cc/, cx/, claude ...)";
+  search.value = explorer.query;
+  search.setAttribute("aria-label", "Search models");
+  const select = document.createElement("select");
+  select.id = "marketplaceExplorerModel";
+  select.setAttribute("aria-label", "Model");
+  const fill = () => {
+    select.textContent = "";
+    const none = mktNode("option", null, "Choose a model");
+    none.value = "";
+    select.appendChild(none);
+    const groups = marketplaceModelGroups(current.market_models || [], explorer.query);
+    [...groups.keys()].sort().forEach((prefix) => {
+      const group = document.createElement("optgroup");
+      group.label = prefix;
+      groups.get(prefix).forEach((model) => {
+        const option = mktNode("option", null, model);
+        option.value = model;
+        group.appendChild(option);
+      });
+      select.appendChild(group);
+    });
+    const listed = Array.from(select.options).some((option) => option.value === explorer.model);
+    select.value = explorer.model && listed ? explorer.model : "";
+  };
+  fill();
+  search.addEventListener("input", () => {
+    explorer.query = search.value;
+    fill();
+  });
+  select.addEventListener("change", () => {
+    if (select.value) {
+      loadMarketplaceOffers(select.value).catch((error) => announceMarketplace(error.message, "error"));
+    }
+  });
+  picker.append(search, select);
+  body.appendChild(picker);
+  if (!(current.market_models || []).length) {
+    body.appendChild(
+      mktNode("p", "field-description", "No models yet: the snapshot and the model list fill after the next models refresh."),
+    );
+  }
+  if (explorer.loading) {
+    body.appendChild(mktNode("p", "field-description", `Reading ${explorer.model}…`));
+    return;
+  }
+  if (explorer.error) {
+    body.appendChild(mktNode("p", "mkt-warning", explorer.error));
+    return;
+  }
+  if (explorer.offers) body.appendChild(marketplaceOffersView(explorer.offers, current));
+}
+
+function marketplaceLadder(offers) {
+  const box = mktNode("div", "mkt-ladder");
+  const levels = Array.isArray(offers.levels) ? offers.levels : [];
+  const ceiling = offers.ceiling || {};
+  const capIn = Array.isArray(ceiling.ceiling) ? ceiling.ceiling[0] : null;
+  const capOut = Array.isArray(ceiling.ceiling) ? ceiling.ceiling[1] : null;
+  if (!levels.length) {
+    box.appendChild(
+      mktNode("p", "field-description", "No price levels in the snapshot for this model (your key's model list fills them)."),
+    );
+  }
+  const most = Math.max(1, ...levels.map((level) => (typeof level.accounts === "number" ? level.accounts : 0)));
+  const ceilingLine = () => {
+    const line = mktNode("div", "mkt-ladder-ceiling");
+    line.appendChild(
+      mktNode(
+        "span",
+        "mkt-ladder-ceiling-label",
+        `Your ceiling ${mktPrice(capIn)} / ${mktPrice(capOut)}` +
+          (ceiling.state === "matches" ? ` — ${ceiling.accounts} of ${ceiling.of_accounts} accounts at or under it` : ""),
+      ),
+    );
+    return line;
+  };
+  let drawn = false;
+  const side = capIn !== null && capIn !== undefined ? "price_in" : "price_out";
+  const sideCap = side === "price_in" ? capIn : capOut;
+  levels.forEach((level) => {
+    const price = level[side];
+    if (!drawn && ceiling.state === "matches" && typeof sideCap === "number" && typeof price === "number" && price > sideCap + 1e-9) {
+      box.appendChild(ceilingLine());
+      drawn = true;
+    }
+    const row = mktNode("div", "mkt-ladder-level");
+    if (ceiling.state === "matches" && typeof sideCap === "number" && typeof price === "number" && price > sideCap + 1e-9) {
+      row.classList.add("mkt-ladder-over");
+    }
+    row.appendChild(mktNode("span", "mkt-ladder-price", `${mktPrice(level.price_in)} / ${mktPrice(level.price_out)}`));
+    const bar = mktNode("span", "mkt-ladder-bar");
+    const fillBar = mktNode("span", "mkt-ladder-fill");
+    const count = typeof level.accounts === "number" ? level.accounts : 0;
+    fillBar.style.width = `${Math.max(2, Math.round((count / most) * 100))}%`;
+    bar.appendChild(fillBar);
+    row.appendChild(bar);
+    row.appendChild(mktNode("span", "mkt-ladder-count", `${mktText(level.accounts)} accounts`));
+    box.appendChild(row);
+  });
+  if (!drawn && ceiling.state === "matches") box.appendChild(ceilingLine());
+  if (ceiling.state === "decides") {
+    box.appendChild(
+      mktNode(
+        "p",
+        "mkt-warning",
+        `No ceiling: InferHub may pick any of these, up to its platform cap` +
+          (Array.isArray(offers.cap_prices) ? ` (${mktPair(offers.cap_prices)}).` : "."),
+      ),
+    );
+  }
+  return box;
+}
+
+function marketplaceOffersView(offers, current) {
+  const view = mktNode("div", "mkt-offers");
+  view.dataset.model = offers.model_id || "";
+  view.appendChild(mktNode("h4", "mkt-offers-title", offers.model_id));
+  const ceiling = offers.ceiling || {};
+  const assignment = offers.assignment;
+  const who = assignment
+    ? assignment.profile
+      ? `profile ${assignment.profile} (from ${assignment.origin === "model_override" ? "this model's row" : "the provider row"})`
+      : `InferHub decides (forced on ${assignment.origin === "model_override" ? "this model's row" : "the provider row"})`
+    : "no row names a profile";
+  view.appendChild(mktNode("p", "mkt-offers-who", `Ceiling: ${who}.`));
+  view.appendChild(
+    mktNode(
+      "p",
+      ceiling.state === "nothing" || ceiling.state === "decides" ? "mkt-warning" : "mkt-offers-ceiling",
+      ceiling.text || "",
+    ),
+  );
+  view.appendChild(marketplaceLadder(offers));
+  const facts = mktNode("dl", "mkt-facts");
+  const perf = offers.perf || {};
+  mktFactRow(facts, "Official", mktPair(offers.official));
+  mktFactRow(facts, "Cheapest now", mktPair(offers.min));
+  mktFactRow(facts, "Dearest now", mktPair(offers.max));
+  mktFactRow(facts, "Last rate", mktPrice(offers.last), "blended, last 24 h");
+  mktFactRow(
+    facts,
+    "Platform cap",
+    typeof offers.platform_cap === "number" ? `${Math.round(offers.platform_cap * 1000) / 10} % of official` : "—",
+    Array.isArray(offers.cap_prices) ? `= ${mktPair(offers.cap_prices)}` : null,
+  );
+  mktFactRow(facts, "Success", mktNumber(perf.success_pct, "%"), "last 30 min, this model");
+  mktFactRow(facts, "Time to first token", mktNumber(perf.ttft_ms, "ms"));
+  mktFactRow(facts, "Speed", mktNumber(perf.tps, "tok/s"));
+  mktFactRow(
+    facts,
+    "Prompt-cache hit",
+    typeof offers.cache_hit === "number" ? `${Math.round(offers.cache_hit * 1000) / 10} %` : "—",
+    "24 h, all traffic",
+  );
+  const combos = Array.isArray(offers.combos) ? offers.combos : [];
+  mktFactRow(
+    facts,
+    "In your combos",
+    combos.length ? combos.map((combo) => `${combo.id}${combo.selection ? ` (${combo.selection})` : ""}`).join(", ") : "none",
+  );
+  const aliases = offers.aliases || {};
+  mktFactRow(
+    facts,
+    "In alias groups",
+    aliases.state === "read"
+      ? (aliases.names || []).length
+        ? aliases.names.join(", ")
+        : "none"
+      : aliases.words || "not read",
+  );
+  view.appendChild(facts);
+  if (offers.note) {
+    const quote = mktNode("blockquote", "mkt-route-note");
+    quote.appendChild(mktNode("code", "mkt-route-prefix", `${offers.prefix}/`));
+    quote.appendChild(document.createTextNode(" "));
+    quote.appendChild(mktNode("span", "mkt-route-words", offers.note));
+    view.appendChild(quote);
+  }
+  const moved = current && current.moved && current.moved.models ? current.moved.models[offers.model_id] : null;
+  if (moved) {
+    view.appendChild(
+      mktNode(
+        "p",
+        "mkt-moved",
+        `Offers moved since ${current.moved.since}: cheapest was ${mktPair(moved.before)}, now ${mktPair(moved.after)}.`,
+      ),
+    );
+  }
+  view.appendChild(mktNode("p", "mkt-unverified", `Snapshot ${offers.stamp}.`));
+  return view;
+}
+
+/* -------------------------------------------------------- 6. last requests */
+
+async function loadMarketplaceRecent() {
+  const current = marketplaceCurrent();
+  if (!current) {
+    renderMarketplaceRecent(null);
+    return;
+  }
+  const recent = marketplaceState.recent;
+  const answer = await api(
+    `/admin/api/marketplaces/${encodeURIComponent(current.provider_id)}/recent?limit=${recent.limit}`,
+  );
+  recent.rows = Array.isArray(answer && answer.rows) ? answer.rows : [];
+  recent.enabled = !answer || answer.enabled !== false;
+  recent.charged = null;
+  recent.chargedWords = "";
+  renderMarketplaceRecent(marketplaceCurrent());
+}
+
+async function fetchMarketplaceCharged() {
+  const current = marketplaceCurrent();
+  const recent = marketplaceState.recent;
+  if (!current || !recent.rows || !recent.rows.length) return;
+  recent.busy = true;
+  renderMarketplaceRecent(current);
+  try {
+    const answer = await api(
+      `/admin/api/marketplaces/${encodeURIComponent(current.provider_id)}/charged`,
+      {
+        method: "POST",
+        body: JSON.stringify({ request_ids: recent.rows.map((row) => row.request_id) }),
+      },
+    );
+    recent.charged = answer && answer.rows ? answer.rows : {};
+    recent.chargedWords = (answer && answer.words) || "";
+  } finally {
+    recent.busy = false;
+  }
+  renderMarketplaceRecent(marketplaceCurrent());
+}
+
+function marketplaceChargedCell(requestId) {
+  const charged = marketplaceState.recent.charged;
+  if (!charged) return "—";
+  const found = charged[requestId];
+  if (!found) return "—";
+  if (!found.found) return "not in InferHub's log";
+  return `$${mktText(found.ask_in)} / $${mktText(found.ask_out)} (by ${found.matched_by})`;
+}
+
+function renderMarketplaceRecent(current) {
+  const body = byId("marketplaceRecentBody");
+  if (!body) return;
+  body.textContent = "";
+  if (!current) return;
+  const recent = marketplaceState.recent;
+  const bar = mktNode("div", "mkt-recent-bar");
+  const limit = document.createElement("select");
+  limit.id = "marketplaceRecentLimit";
+  limit.setAttribute("aria-label", "How many requests");
+  MARKETPLACE_RECENT_LIMITS.forEach((value) => {
+    const option = mktNode("option", null, `Last ${value}`);
+    option.value = String(value);
+    limit.appendChild(option);
+  });
+  limit.value = String(recent.limit);
+  limit.addEventListener("change", () => {
+    recent.limit = Number(limit.value);
+    loadMarketplaceRecent().catch((error) => announceMarketplace(error.message, "error"));
+  });
+  bar.appendChild(limit);
+  bar.appendChild(
+    mktButton("Reload", "secondary-button mkt-recent-reload", () =>
+      loadMarketplaceRecent().catch((error) => announceMarketplace(error.message, "error")),
+    ),
+  );
+  const fetchButton = mktButton(
+    recent.busy ? "Reading InferHub's usage log…" : "Fetch the charged ask",
+    "secondary-button mkt-recent-charged",
+    () => fetchMarketplaceCharged().catch((error) => announceMarketplace(error.message, "error")),
+  );
+  fetchButton.disabled = recent.busy || !recent.rows || !recent.rows.length || !current.has_key;
+  bar.appendChild(fetchButton);
+  body.appendChild(bar);
+  if (recent.chargedWords) body.appendChild(mktNode("p", "mkt-recent-words", recent.chargedWords));
+  if (!recent.enabled) {
+    body.appendChild(mktNode("p", "field-description", "The request log is off, so there is nothing to show."));
+    return;
+  }
+  if (!recent.rows) {
+    body.appendChild(mktNode("p", "field-description", "Not read yet."));
+    return;
+  }
+  if (!recent.rows.length) {
+    body.appendChild(mktNode("p", "field-description", `No request has been served by ${current.label || current.provider_id} yet.`));
+    return;
+  }
+  const table = mktNode("table", "mkt-table mkt-recent-table");
+  const head = table.createTHead().insertRow();
+  [
+    "Time",
+    "Model",
+    "X-Inferhub-Model",
+    "X-Inferhub-Publisher",
+    "Attempt",
+    "Ceiling sent",
+    "Charged",
+    "vs ceiling",
+    "Charged ask",
+  ].forEach((label) => head.appendChild(mktNode("th", null, label)));
+  const tbody = table.createTBody();
+  recent.rows.forEach((row) => {
+    const tr = tbody.insertRow();
+    tr.dataset.request = row.request_id;
+    const when = typeof row.ts_epoch === "number" ? new Date(row.ts_epoch * 1000).toLocaleString() : mktText(row.ts_iso);
+    const attempt =
+      row.attempt === null || row.attempt === undefined
+        ? "—"
+        : `${row.attempt}${row.inferhub_attempt ? ` (InferHub hop ${row.inferhub_attempt})` : ""}`;
+    const ceiling = row.ceiling
+      ? `${mktPrice(row.ceiling.in)} / ${mktPrice(row.ceiling.out)}${row.ceiling.profile ? ` (${row.ceiling.profile})` : ""}`
+      : "none";
+    const charged = typeof row.charged_usd === "number" ? `$${row.charged_usd.toFixed(6)}` : "—";
+    const flag =
+      row.charged_vs_ceiling === "over"
+        ? "over the ceiling"
+        : row.charged_vs_ceiling === "within"
+          ? "within"
+          : "—";
+    [
+      when,
+      mktText(row.model),
+      mktText(row.inferhub_model),
+      mktText(row.inferhub_publisher),
+      attempt,
+      ceiling,
+      charged,
+      flag,
+      marketplaceChargedCell(row.request_id),
+    ].forEach((value, index) => {
+      const cell = mktNode("td", null, value);
+      if (index === 7 && row.charged_vs_ceiling) cell.className = `mkt-flag-${row.charged_vs_ceiling}`;
+      if (index === 6 && typeof row.bound_usd === "number") {
+        cell.title = `At most $${row.bound_usd.toFixed(6)} at the ceiling sent`;
+      }
+      tr.appendChild(cell);
+    });
+  });
+  body.appendChild(table);
+}
+
+/* ------------------------------------------------------------- 7. snapshot */
+
+function renderMarketplaceSnapshot(current) {
+  const body = byId("marketplaceSnapshotBody");
+  if (!body) return;
+  body.textContent = "";
+  if (!current) return;
+  const snapshot = current.snapshot || {};
+  const age = typeof snapshot.age_seconds === "number" ? formatAge(snapshot.age_seconds) : "never";
+  body.appendChild(
+    mktNode(
+      "p",
+      "mkt-snapshot-age",
+      snapshot.fetched_at
+        ? `Read ${snapshot.stamp} (${age}), ${snapshot.models} models.`
+        : "No snapshot yet: it is read after a models refresh while the provider has a key.",
+    ),
+  );
+  const table = mktNode("table", "mkt-table mkt-sources");
+  const head = table.createTHead().insertRow();
+  ["Source", "Key", "What it gives", "State"].forEach((label) => head.appendChild(mktNode("th", null, label)));
+  const tbody = table.createTBody();
+  (snapshot.sources || []).forEach((source) => {
+    const tr = tbody.insertRow();
+    tr.dataset.source = source.name;
+    [source.name, source.keyed ? "your key" : "public", source.purpose, source.words].forEach((value) =>
+      tr.appendChild(mktNode("td", null, value)),
+    );
+  });
+  body.appendChild(table);
+  if (typeof snapshot.platform_cap === "number") {
+    body.appendChild(
+      mktNode(
+        "p",
+        "field-description",
+        `Platform cap on any ask: ${Math.round(snapshot.platform_cap * 1000) / 10} % of official (InferHub's own setting; shown, never used as your ceiling).`,
+      ),
+    );
+  }
+  const bar = mktNode("div", "mkt-snapshot-bar");
+  const refresh = mktButton("Refresh", "secondary-button mkt-snapshot-refresh", () => {
+    refresh.disabled = true;
+    refreshMarketplaces()
+      .catch((error) => announceMarketplace(error.message, "error"))
+      .finally(() => {
+        refresh.disabled = false;
+      });
+  });
+  refresh.disabled = !current.has_key;
+  bar.appendChild(refresh);
+  const label = mktNode("label", "mkt-check");
+  const tick = document.createElement("input");
+  tick.type = "checkbox";
+  tick.id = "marketplacePublicMarket";
+  tick.checked = Boolean(snapshot.public_market);
+  label.append(tick, document.createTextNode(` Read InferHub's public market pages (${snapshot.public_market_setting || "MARKETPLACE_PUBLIC_MARKET"})`));
+  bar.appendChild(label);
+  const save = mktButton("Save", "secondary-button mkt-public-save", () => {
+    save.disabled = true;
+    saveMarketplacePublicMarket(tick.checked, snapshot.public_market_setting || "MARKETPLACE_PUBLIC_MARKET")
+      .catch((error) => announceMarketplace(`Not saved: ${error.message}`, "error"))
+      .finally(() => {
+        save.disabled = false;
+      });
+  });
+  bar.appendChild(save);
+  body.appendChild(bar);
+  body.appendChild(
+    mktNode(
+      "p",
+      "field-description",
+      "The same setting is on the InferHub card on the Providers page. Off: only the price levels in your key's own model list are used.",
+    ),
+  );
+}
+
+async function refreshMarketplaces() {
+  announceMarketplace("Rebuilding the snapshot and re-reading the account…");
+  const data = await api("/admin/api/marketplaces/refresh", { method: "POST", body: "{}" });
+  adoptMarketplacePage(data);
+  renderMarketplaces();
+  announceMarketplace((data.refresh && data.refresh.words) || "Refreshed.", "ok");
+  const explorer = marketplaceState.explorer;
+  if (explorer.model) await loadMarketplaceOffers(explorer.model);
+}
+
+async function saveMarketplacePublicMarket(on, key) {
+  const result = await api("/admin/api/config/apply", {
+    method: "POST",
+    body: JSON.stringify({ values: { [key]: on ? "true" : "false" } }),
+  });
+  if (!result.applied) {
+    throw new Error((result.errors || []).join("; ") || "Not applied.");
+  }
+  await loadMarketplaces();
+  announceMarketplace(`${key}=${on ? "true" : "false"} saved.`, "ok");
 }
 
 /* --------------------------------------------------------------- proxying
