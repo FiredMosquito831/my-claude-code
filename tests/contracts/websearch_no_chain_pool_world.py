@@ -47,6 +47,11 @@ from my_claude_code.websearch.base import (
     WebSearchProviderConfig,
 )
 from my_claude_code.websearch.errors import WebSearchError
+from my_claude_code.websearch.registry import (
+    SearchRecorder,
+    SearchRouteOutcome,
+    SearchRouteRecorder,
+)
 
 BASELINE_NAME = "websearch_no_chain_pool_baseline.json"
 
@@ -216,25 +221,32 @@ async def _world(answer: Answer, setup: Setup) -> _World:
 def _route_to(provider: BaseWebSearchProvider) -> Iterator[None]:
     """Serve the route from ``provider``; record no analytics rows."""
 
-    async def runtime_provider(_settings: Settings, _provider_id: str):
+    async def runtime_provider(
+        settings: Settings, provider_id: str
+    ) -> BaseWebSearchProvider:
         return provider
 
-    saved = (
-        outbound.runtime_provider,
-        outbound.emit_route_outcome,
-        registry._default_recorder,
+    def emit_route_outcome(
+        outcome: SearchRouteOutcome, recorder: SearchRouteRecorder | None = None
+    ) -> None:
+        return None
+
+    def default_recorder() -> SearchRecorder | None:
+        return None
+
+    replacements: tuple[tuple[dict[str, Any], str, object], ...] = (
+        (vars(outbound), "runtime_provider", runtime_provider),
+        (vars(outbound), "emit_route_outcome", emit_route_outcome),
+        (vars(registry), "_default_recorder", default_recorder),
     )
-    outbound.runtime_provider = runtime_provider
-    outbound.emit_route_outcome = lambda _outcome, _recorder=None: None
-    registry._default_recorder = lambda: None
+    saved = [(namespace, name, namespace[name]) for namespace, name, _ in replacements]
+    for namespace, name, value in replacements:
+        namespace[name] = value
     try:
         yield
     finally:
-        (
-            outbound.runtime_provider,
-            outbound.emit_route_outcome,
-            registry._default_recorder,
-        ) = saved
+        for namespace, name, value in saved:
+            namespace[name] = value
 
 
 def _key_health(provider: BaseWebSearchProvider) -> list[list[Any]]:

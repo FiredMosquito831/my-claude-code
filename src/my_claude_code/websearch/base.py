@@ -231,8 +231,7 @@ class BaseWebSearchProvider(ABC):
         when = f"; the first is usable again in {seconds}s" if seconds else ""
         error = WebSearchUpstreamError(
             self.provider_id,
-            f"all {count} keys are benched: {', '.join(parts)}{when}; "
-            "no call made",
+            f"all {count} keys are benched: {', '.join(parts)}{when}; no call made",
             kind_detail=KIND_DETAIL_BENCHED,
         )
         error.key_index = 0

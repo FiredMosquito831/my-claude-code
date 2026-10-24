@@ -104,9 +104,8 @@ def _expected_changed_cells() -> set[str]:
     for answer in ANSWERS:
         for setup in SETUPS:
             name = answer.name
-            if (
-                name in NOT_KEY_SHAPED
-                or (name in KEY_SHAPED and (setup.one_slot or _all_fail(setup)))
+            if name in NOT_KEY_SHAPED or (
+                name in KEY_SHAPED and (setup.one_slot or _all_fail(setup))
             ):
                 changed.add(cell_id(answer, setup))
     return changed
