@@ -387,6 +387,7 @@ from my_claude_code.websearch.registry import search_with_logging
 
 from .dependencies import get_services, get_settings
 from .ports import ApiServices
+from .web_tools.search_key_charge import no_chain_key_charge
 from .web_tools.search_providers import cached_key_pool_snapshot, runtime_provider
 
 router = APIRouter()
@@ -2825,7 +2826,14 @@ async def test_websearch_provider(
     started = time.perf_counter()
     try:
         provider = await runtime_provider(settings, provider_id)
-        response = await search_with_logging(provider, "web search", max_results=3)
+        # The same key rules as a search (7.112.1): a failed test must not
+        # bench a key that a real search would have left alone.
+        response = await search_with_logging(
+            provider,
+            "web search",
+            max_results=3,
+            key_charge=no_chain_key_charge,
+        )
     except WebSearchError as error:
         return {
             "provider_id": provider_id,

@@ -8,12 +8,18 @@ from typing import ClassVar
 
 #: What kind of ``upstream`` failure carried no HTTP status: the request timed
 #: out, the connection itself failed, or the provider answered a body that is
-#: not JSON. ``None`` on every other error. Read only by the search chain's
+#: not JSON. ``None`` on every other error. Read by the search chain's
 #: translation (``api/web_tools/search_books.py``), which needs the same facts
-#: the model path's classifier sees; nothing on the default route reads it.
+#: the model path's classifier sees, and -- since 7.112.1 -- by the wording of
+#: a failed search when no chain is set (``api/web_tools/outbound.py``).
 KIND_DETAIL_TIMEOUT = "timeout"
 KIND_DETAIL_TRANSPORT = "transport"
 KIND_DETAIL_BAD_JSON = "bad_json"
+#: 7.112.1: MCC refused the search itself, with no call made -- every key of
+#: the provider is benched, or its only key is inside the wait a 429 asked
+#: for. Set only by :meth:`BaseWebSearchProvider.search` (the route used when
+#: no chain is set); the search chain never raises it.
+KIND_DETAIL_BENCHED = "benched"
 
 
 class WebSearchError(Exception):
@@ -42,6 +48,11 @@ class WebSearchError(Exception):
         # was JSON, else its text), so the quota phrase reader and the
         # Retry-After body reader see what the model path's classifier sees.
         self.upstream_body = upstream_body
+        # 7.112.1, additive: the sentence the client is shown for this
+        # failure, in MCC's own words (never the provider's body). Set only by
+        # the route used when no chain is set (``api/web_tools/outbound.py``);
+        # None everywhere else, which keeps every other summary as it was.
+        self.client_summary: str | None = None
 
     def __str__(self) -> str:
         return f"{self.provider}: {self.message}"

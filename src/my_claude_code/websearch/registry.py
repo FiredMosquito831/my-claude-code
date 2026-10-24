@@ -26,7 +26,7 @@ from my_claude_code.config.websearch_catalog import (
 from my_claude_code.core.websearch.models import WebSearchResponse
 
 from .adapters import ADAPTER_CLASSES
-from .base import BaseWebSearchProvider, WebSearchProviderConfig
+from .base import BaseWebSearchProvider, KeyChargeJudge, WebSearchProviderConfig
 from .errors import WebSearchConfigError, WebSearchError
 from .options import read_websearch_options
 from .rotation import (
@@ -234,8 +234,12 @@ async def search(
     route_id: str | None = None,
     attempt_number: int = 1,
     route_context: Mapping[str, object] | None = None,
+    key_charge: KeyChargeJudge | None = None,
 ) -> WebSearchResponse:
-    """Run ``provider.search`` and optionally record the outcome via ``recorder``."""
+    """Run ``provider.search`` and optionally record the outcome via ``recorder``.
+
+    ``key_charge`` is handed to :meth:`BaseWebSearchProvider.search` (7.112.1).
+    """
 
     ts_epoch = time.time()
     started = time.perf_counter()
@@ -252,6 +256,7 @@ async def search(
             max_results=max_results,
             allowed_domains=allowed_domains,
             blocked_domains=blocked_domains,
+            key_charge=key_charge,
         )
     except Exception as error:
         key_index = (
@@ -320,6 +325,7 @@ async def search_with_logging(
     route_id: str | None = None,
     attempt_number: int = 1,
     route_context: Mapping[str, object] | None = None,
+    key_charge: KeyChargeJudge | None = None,
 ) -> WebSearchResponse:
     """Search with analytics recording; defaults to the shared attempt recorder."""
 
@@ -333,6 +339,7 @@ async def search_with_logging(
         route_id=route_id,
         attempt_number=attempt_number,
         route_context=route_context,
+        key_charge=key_charge,
     )
 
 

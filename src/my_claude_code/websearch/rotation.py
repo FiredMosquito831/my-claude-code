@@ -18,10 +18,19 @@ KeyPool health semantics (in-memory only):
   provider's own Retry-After, tracked separately from the ladder.
 
 Expired states lazily return to ``HEALTHY`` on the next acquire.
+
+Which failures reach the pool at all is the caller's decision. Since 7.112.1
+a search provider's own pool (:data:`SEARCH_POOL_TUNING`) hears only the
+model path's three key-shaped signals -- a rejected key, a 429, an exact
+out-of-credits phrase -- and a pool with one usable slot is never benched into
+an outage (``BaseWebSearchProvider.search``). The ladder and the breaker above
+stay as the engine defines them and are reached only by a caller that still
+reports a generic failure.
 """
 
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from my_claude_code.config.credentials import mask_key_label
@@ -30,10 +39,12 @@ from my_claude_code.core.credential_rotation import (
     PoolHealthState,
     PoolSlot,
     RotationEngine,
+    RotationTuning,
 )
 
 __all__ = [
     "ROTATION_POLICIES",
+    "SEARCH_POOL_TUNING",
     "KeyHealth",
     "KeyHealthState",
     "KeyPool",
@@ -52,6 +63,21 @@ CIRCUIT_OPEN_SECONDS = WEBSEARCH_TUNING.circuit_fixed_seconds
 RATE_LIMIT_COOLDOWN_SECONDS = WEBSEARCH_TUNING.rate_limit_seconds
 LOCKOUT_BASE_SECONDS = WEBSEARCH_TUNING.lockout_tiers[0]
 LOCKOUT_MAX_SECONDS = max(WEBSEARCH_TUNING.lockout_tiers)
+
+#: The pool every search provider runs on when no ``WEB_SEARCH_CHAIN`` is set
+#: (7.112.1, user decision Q8): ``WEBSEARCH_TUNING`` with the two single-key
+#: flags the model provider pool runs with (``PROVIDER_TUNING`` keeps the
+#: engine's defaults for both). A one-key pool, or the ``single`` policy, keeps
+#: handing out its slot whatever its health -- "single-key pools bypass the
+#: health gate; benching your only key turns a blip into a guaranteed outage"
+#: (IV.4). The frozen preset itself is untouched: this is data passed in from
+#: the web-search side. Every number (lockout ladder, 429 window and cap)
+#: stays the preset's.
+SEARCH_POOL_TUNING: RotationTuning = replace(
+    WEBSEARCH_TUNING,
+    single_ignores_blocklist=True,
+    single_key_forces_slot_zero=True,
+)
 
 
 def default_rotation_policy(key_count: int) -> str:
@@ -151,6 +177,7 @@ class KeyPool:
         *,
         policy: str = DEFAULT_MULTI_KEY_POLICY,
         clock: Callable[[], float] = time.monotonic,
+        tuning: RotationTuning = WEBSEARCH_TUNING,
     ) -> None:
         if policy not in ROTATION_POLICIES:
             raise ValueError(
@@ -161,8 +188,12 @@ class KeyPool:
         self._keys = tuple(keys)
         self._clock = clock
         self._engine = RotationEngine(
-            len(self._keys), policy=policy, tuning=WEBSEARCH_TUNING, clock=clock
+            len(self._keys), policy=policy, tuning=tuning, clock=clock
         )
+        # The cooldown deadline each slot's last 429 installed, so a COOLDOWN
+        # can be told apart from a generic-ladder one (a caller that still
+        # reports generic failures shares the same state and deadline field).
+        self._rate_limited_until: dict[int, float] = {}
 
     @property
     def policy(self) -> str:
@@ -187,10 +218,61 @@ class KeyPool:
         """Return the next usable ``(index, key)`` per policy, or None when exhausted."""
 
         index = self._engine.choose(exclude)
-        if index is None:
+        # The single-key bypass hands out slot 0 even when it is excluded; a
+        # search that already tried it this time must stop, not loop on it.
+        if index is None or index in exclude:
             return None
         self._engine.mark_acquired(index)
         return index, self._keys[index]
+
+    def bypass_rate_limit_wait(self) -> float:
+        """Seconds left on a 429 bench of a slot the single-key bypass serves.
+
+        0.0 unless the pool can hand out exactly one slot *because* the bypass
+        ignores its health (one key, or the ``single`` policy) and that slot is
+        inside the wait its last 429 asked for. The bypass exists so a rejected
+        or failing only key is tried again; a key the provider told to wait is
+        not worth a call before the wait ends, and the caller answers "rate
+        limited, retry after N s" instead of calling.
+        """
+
+        ready = self._engine.selectable_indexes()
+        if len(ready) != 1:
+            return 0.0
+        return self._rate_limit_remaining(ready[0])
+
+    def _rate_limit_remaining(self, index: int) -> float:
+        slot = self._engine.slot(index)
+        until = self._rate_limited_until.get(index)
+        if (
+            until is None
+            or slot.state is not KeyHealthState.COOLDOWN
+            or slot.cooldown_until != until
+        ):
+            return 0.0
+        return max(0.0, until - self._clock())
+
+    def bench_summary(self) -> tuple[int, int, int, float]:
+        """Why nothing can serve: (rate limited, locked out, other, wait).
+
+        How many slots are inside a 429 window, how many are locked out (a
+        rejected key or an empty balance), how many sit out any other bench,
+        and the seconds until the first of them may serve again (the engine's
+        own ``shortest_bench_remaining``).
+        """
+
+        wait = self._engine.shortest_bench_remaining()
+        rate_limited = locked_out = other = 0
+        for index, slot in enumerate(self._engine.slots()):
+            if slot.state is KeyHealthState.HEALTHY:
+                continue
+            if self._rate_limit_remaining(index) > 0:
+                rate_limited += 1
+            elif slot.state is KeyHealthState.LOCKED_OUT:
+                locked_out += 1
+            else:
+                other += 1
+        return rate_limited, locked_out, other, wait
 
     def report_success(self, index: int) -> None:
         self._engine.succeed(index)
@@ -224,6 +306,10 @@ class KeyPool:
         self._engine.note_rate_limit(
             index, message=message, retry_after=retry_after_seconds
         )
+        if 0 <= index < len(self._keys):
+            slot = self._engine.slot(index)
+            if slot.state is KeyHealthState.COOLDOWN:
+                self._rate_limited_until[index] = slot.cooldown_until
 
     def snapshot(self) -> dict[str, Any]:
         """Health snapshot for admin UI / diagnostics (keys masked)."""
