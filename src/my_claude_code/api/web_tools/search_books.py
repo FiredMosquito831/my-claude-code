@@ -205,7 +205,12 @@ class _UpstreamRefusal(Exception):
     """
 
     def __init__(self, error: WebSearchError) -> None:
-        super().__init__(error.message)
+        # Worded like an HTTP client's error ("HTTP 403 ..."), never as the
+        # bare complaint: the country-refusal reader trusts only words that
+        # came out of a structured body, and tells them apart from the text
+        # of the exception by exactly that difference.
+        status = "" if error.status_code is None else f"HTTP {error.status_code} "
+        super().__init__(f"{status}{error.message}")
         self.body = error.upstream_body
         self.status_code = error.status_code
 
@@ -234,9 +239,20 @@ def translate_search_error(
       a 5xx -> UPSTREAM with that status (retryable); any other status ->
       UPSTREAM, retryable as a 429/5xx would be; no status at all -> UPSTREAM
       502, not retryable.
+
+    The failure carries the provider's refusal on ``__cause__``, as every
+    model-path classifier raises its failure ``from`` the host's error: the
+    pool reads a country refusal (a 403 whose body says so) there, and leaves
+    the key uncharged exactly as it does for a model key.
     """
     if not isinstance(error, WebSearchError) or isinstance(error, WebSearchConfigError):
         return None
+    failure = _translate(error, cooldown)
+    failure.__cause__ = _UpstreamRefusal(error)
+    return failure
+
+
+def _translate(error: WebSearchError, cooldown: RateLimitCooldown) -> ExecutionFailure:
     message = str(error)
     status = error.status_code
     if error.kind == "quota" or (

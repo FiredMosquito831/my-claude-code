@@ -225,7 +225,7 @@ def _diff(expected: dict[str, str], actual: dict[str, str]) -> list[str]:
 def test_the_baseline_covers_every_cell_once() -> None:
     baseline = _baseline()
     ids = [cell.cell_id for cell in cells()]
-    assert len(ids) == len(set(ids)) == len(baseline) == 4104
+    assert len(ids) == len(set(ids)) == len(baseline) == 4320
     assert set(ids) == set(baseline)
 
 

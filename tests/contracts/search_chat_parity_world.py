@@ -110,6 +110,12 @@ ANSWERS: tuple[Answer, ...] = (
     Answer("s402_credits", status=402, body=_error_body("insufficient credits")),
     Answer("s403", status=403, body=_error_body("forbidden")),
     Answer("s403_credits", status=403, body=_error_body("out of credits")),
+    # A country refusal: rotates, and charges the key nothing (7.96.0).
+    Answer(
+        "s403_region",
+        status=403,
+        body=_error_body("This service is not available in your country"),
+    ),
     Answer("s404", status=404, body=_error_body("not found")),
     Answer("s422", status=422, body=_error_body("unprocessable")),
     Answer("s429", status=429, body=_error_body("too many requests")),
