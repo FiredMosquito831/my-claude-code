@@ -4,6 +4,7 @@ from typing import Any
 
 from my_claude_code.config.admin.spec import ConfigOptionSpec
 from my_claude_code.config.constants import (
+    MARKETPLACE_PUBLIC_MARKET_DEFAULT,
     OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
     OPENCODE_CLIENT_RUNTIME_DEFAULT,
@@ -13,6 +14,7 @@ from my_claude_code.config.constants import (
 )
 from my_claude_code.config.provider_catalog import (
     AZURE_OPENAI_BASE_URL_EXAMPLE,
+    INFERHUB_MARKET_DEFAULT_BASE,
     PROVIDER_CATALOG,
 )
 from my_claude_code.config.settings import Settings
@@ -355,6 +357,23 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
             "Defaults to https://api.b.ai/v1."
         ),
     },
+    "INFERHUB_API_KEY": {
+        "label": "InferHub API Key",
+        "description": (
+            "InferHub marketplace key (sk-airo-...), for api.inferhub.dev on all "
+            "three doors. Without a price ceiling InferHub picks a seller "
+            "regardless of price -- up to the highest live ask, half the "
+            "official price -- so set a Marketplace profile on the Models page "
+            "(provider row, or per model) before relying on it. Not verified "
+            "on a real account."
+        ),
+    },
+    "INFERHUB_BASE_URL": {
+        "description": (
+            "InferHub inference base URL for Chat Completions, Anthropic "
+            "Messages and Responses. Defaults to https://api.inferhub.dev/v1."
+        ),
+    },
     "QWENCLOUD_API_KEY": {
         "label": "QwenCloud Token Plan API Key",
         "description": (
@@ -460,6 +479,7 @@ def provider_field_specs() -> tuple[dict[str, Any], ...]:
         *_anthropic_oauth_login_field_specs(),
         *_cloudflare_account_field_specs(),
         *_vertex_field_specs(),
+        *_inferhub_market_field_specs(),
         *_base_url_field_specs(),
         *_proxy_field_specs(),
     )
@@ -704,6 +724,51 @@ def _rotation_field_specs() -> tuple[dict[str, Any], ...]:
             }
         )
     return tuple(specs)
+
+
+def _inferhub_market_field_specs() -> tuple[dict[str, Any], ...]:
+    """Where InferHub's market snapshot is read from, and whether publicly (7.109.0).
+
+    On the InferHub card, beside the key: the snapshot exists only while
+    InferHub has a key, and nothing is read for an install without one.
+    """
+    return (
+        {
+            "key": "MARKETPLACE_PUBLIC_MARKET",
+            "label": "Read InferHub's Public Market Pages",
+            "section_id": "providers",
+            "provider": "inferhub",
+            "field_type": "boolean",
+            "default": "true" if MARKETPLACE_PUBLIC_MARKET_DEFAULT else "false",
+            "settings_attr": "marketplace_public_market",
+            "affects_providers": False,
+            "description": (
+                "While InferHub has a key, MCC reads InferHub's keyless public "
+                "market pages -- the cheapest and dearest ask per model, speed "
+                "and success per model, prompt-cache hit rates and the "
+                "platform's cap on any ask -- hourly and on a models refresh, "
+                "into the market snapshot the 'cheapest level' profiles and the "
+                "free pre-check use. No key, nothing is read. Off: only the "
+                "price levels in your key's own model list are used."
+            ),
+        },
+        {
+            "key": "INFERHUB_MARKET_BASE_URL",
+            "label": "InferHub Management API Base URL",
+            "section_id": "providers",
+            "provider": "inferhub",
+            "settings_attr": "inferhub_market_base_url",
+            "default": INFERHUB_MARKET_DEFAULT_BASE,
+            "advanced": True,
+            "affects_providers": False,
+            "description": (
+                "Where the market snapshot, your combos and each route's prompt "
+                f"note are read: InferHub's management API, {INFERHUB_MARKET_DEFAULT_BASE} "
+                "by default. Never on a request path; the read leaves through "
+                "the InferHub proxy chain like its requests do."
+            ),
+        },
+    )
 
 
 def _base_url_field_specs() -> tuple[dict[str, Any], ...]:

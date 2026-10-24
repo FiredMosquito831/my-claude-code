@@ -32285,6 +32285,8 @@ const MODELS_FIELD_GROUPS = [
   ["prices", "Prices"],
   ["dates", "Dates"],
   ["lists", "Gateway lists"],
+  // 7.109.0: drawn only on a marketplace provider's rows (InferHub).
+  ["marketplace", "Marketplace"],
 ];
 
 /* "not reported" names the rungs that were asked, so it never reads as
@@ -32303,11 +32305,16 @@ const MODELS_FIELD_LABELS = {
   max_output_tokens: "output limit",
   reasoning_preference: "reasoning",
   prompt_cache_ttl: "prompt cache lifetime",
+  marketplace_profile: "marketplace profile",
 };
 
 /* The preference kind of the prompt-cache lifetime override (7.105.0): whole
    minutes, bounded by the row's own `minimum`/`maximum`. */
 const PROMPT_CACHE_TTL_KIND = "minutes";
+
+/* The preference kind of the marketplace profile override (7.109.0): a
+   profile name from the list the server sends beside the page. */
+const MARKETPLACE_PROFILE_KIND = "profile";
 
 const OVERRIDE_ROW_WORDS = {
   model: "this model's override row",
@@ -32967,11 +32974,19 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
      `preference_parameters`, every row's `preferences` -- is 7.104.0's byte
      for byte; it joins the preferences here. Its state is the row's own. */
   const lifetime = promptCacheControl(scope, row);
+  /* The marketplace profile (7.109.0) joins the same way, and only on a
+     marketplace provider's rows (InferHub): every other row is drawn and
+     sent exactly as before. */
+  const market = marketplaceControl(scope, key, row);
+  let rowPreferences = lifetime
+    ? { ...(preferences || {}), [lifetime.name]: lifetime.spec }
+    : preferences;
+  if (market) rowPreferences = { ...(rowPreferences || {}), [market.name]: market.spec };
   const ctx = {
     scope,
     key,
     row: row || {},
-    preferences: lifetime ? { ...(preferences || {}), [lifetime.name]: lifetime.spec } : preferences,
+    preferences: rowPreferences,
     capabilities,
     model,
   };
@@ -32981,6 +32996,7 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
       modelsState.data.overrides.preference_parameters) ||
       {}),
     ...(lifetime ? { [lifetime.name]: PROMPT_CACHE_TTL_KIND } : {}),
+    ...(market ? { [market.name]: MARKETPLACE_PROFILE_KIND } : {}),
   };
   const preferenceNames = Object.keys(kinds).filter(
     (name) => ctx.preferences && ctx.preferences[name],
@@ -32994,7 +33010,9 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
         ? buildOutputLimitField(ctx, name)
         : kinds[name] === PROMPT_CACHE_TTL_KIND
           ? buildPromptCacheLifetimeField(ctx, name)
-          : buildReasoningField(ctx, name),
+          : kinds[name] === MARKETPLACE_PROFILE_KIND
+            ? buildMarketplaceProfileField(ctx, name, market)
+            : buildReasoningField(ctx, name),
     );
   });
   (editable || []).forEach((name) => fields.set(name, buildRequestParameterField(ctx, name)));
@@ -33002,8 +33020,13 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
      the nine, where 7.104.0's read-only lifetimes row sat, and sent after
      them, so every other key keeps the place 7.104.0 sent it in. */
   const minuteNames = preferenceNames.filter((name) => kinds[name] === PROMPT_CACHE_TTL_KIND);
+  /* The marketplace profile (7.109.0) is drawn and sent after everything
+     else, so every other key keeps its place. */
+  const profileNames = preferenceNames.filter(
+    (name) => kinds[name] === MARKETPLACE_PROFILE_KIND,
+  );
   const otherPreferences = preferenceNames.filter(
-    (name) => kinds[name] !== PROMPT_CACHE_TTL_KIND,
+    (name) => kinds[name] !== PROMPT_CACHE_TTL_KIND && kinds[name] !== MARKETPLACE_PROFILE_KIND,
   );
 
   // Drawn: the limits, then the reasoning word, then the nine.
@@ -33013,6 +33036,7 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
     ...otherPreferences.filter((name) => kinds[name] !== "integer"),
     ...(editable || []),
     ...minuteNames,
+    ...profileNames,
   ].forEach((name) => {
     const field = fields.get(name);
     if (field) fieldsGroupBody(table, field.group).appendChild(field.tr);
@@ -33025,6 +33049,7 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
     ...(isModel ? [CONTEXT_WINDOW_OVERRIDE] : []),
     ...(editable || []),
     ...minuteNames,
+    ...profileNames,
   ].forEach((name) => {
     const field = fields.get(name);
     if (field) inputs.set(name, field.input);
@@ -33071,6 +33096,9 @@ function buildOverrideEditor(scope, key, row, editable, preferences, capabilitie
         updates[name] = null;
       } else if (!control.box.value.trim()) {
         blank.push(name);
+      } else if (control.profile) {
+        // 7.109.0: a profile name, sent as typed -- never read as a number.
+        updates[name] = control.box.value.trim();
       } else {
         const parsed = parseOverrideValue(name, control.box.value);
         /* The published limit is a bound the server applies anyway --
@@ -33309,6 +33337,8 @@ function modelReadonlyFieldEntries(capabilities, model) {
   add("dates", "retires_at", "retires", capabilities.retires_at);
   add("lists", "supported_parameters", "supported parameters", capabilities.supported_parameters);
   add("lists", "default_parameters", "gateway default parameters", capabilities.default_parameters);
+  // 7.109.0: a marketplace model's offers and route note; [] for every other.
+  entries.push(...marketplaceReadonlyEntries(model));
   return entries;
 }
 
@@ -33667,6 +33697,204 @@ function buildPromptCacheLifetimeField(ctx, name) {
       writeDefaultLines(shell.defaults, lines);
     },
   };
+}
+
+/* 7.109.0: the marketplace profile as an overridable row -- the 15th
+   override key, `marketplace_profile`, on a marketplace provider's row
+   (InferHub) and on each of its models' rows. The value is a profile NAME
+   from marketplace_profiles.json; Force unset is "InferHub decides" (no
+   ceiling at all), drawn with its warning in red wherever it is the answer.
+   Everything the row needs is served beside the page as `marketplaces`, so
+   the cached half of the payload is untouched; on any other provider's rows
+   this row does not exist. */
+function marketplaceTable() {
+  return (modelsState.data && modelsState.data.marketplaces) || null;
+}
+
+function marketplaceControl(scope, key, row) {
+  const table = marketplaceTable();
+  if (!table || !table.override_key || !table.control) return null;
+  const text = String(key || "");
+  const slash = text.indexOf("/");
+  const providerId = scope === "model" ? (slash > 0 ? text.slice(0, slash) : "") : text;
+  const dialectId = (table.providers || {})[providerId];
+  if (!dialectId) return null;
+  const name = table.override_key;
+  const own = (row || {})[name];
+  const state =
+    own && typeof own === "object" && (own.state === "value" || own.state === "unset")
+      ? own.state
+      : "inherit";
+  return {
+    name,
+    dialect: (table.dialects || {})[dialectId] || {},
+    spec: {
+      state,
+      value: state === "value" ? own.value : null,
+      note: scope === "model" ? table.control.model_note : table.control.provider_note,
+    },
+  };
+}
+
+function marketplaceProfileWords(table, name) {
+  const found = ((table && table.profiles) || []).find((profile) => profile.name === name);
+  if (!found) return `${name} — no such profile: its requests are refused until it exists`;
+  return `${name} — ${found.summary}`;
+}
+
+function marketplaceWarningLine(text) {
+  if (!text) return null;
+  const line = fieldsNoteLine(text);
+  line.classList.add("models-fields-warning");
+  return line;
+}
+
+function buildMarketplaceProfileField(ctx, name, market) {
+  const table = marketplaceTable();
+  const dialect = (market && market.dialect) || {};
+  const decides = dialect.decides_label || "InferHub decides (no ceiling)";
+  const spec = ctx.preferences[name];
+  const boxId = fieldsBoxId("pref", ctx.scope, ctx.key, name);
+  const mode = buildFieldModeSelect(`${boxId}-mode`, spec.state);
+  const box = document.createElement("select");
+  box.className = "models-override-value";
+  box.id = `${boxId}-value`;
+  box.setAttribute("aria-label", "marketplace profile");
+  const names = ((table && table.profiles) || []).map((profile) => profile.name);
+  const stored = spec.state === "value" && spec.value != null ? String(spec.value) : "";
+  if (stored && !names.includes(stored)) names.push(stored);
+  if (!names.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "no profiles yet (marketplace_profiles.json)";
+    box.appendChild(option);
+  }
+  names.forEach((profileName) => {
+    const option = document.createElement("option");
+    option.value = profileName;
+    option.textContent = marketplaceProfileWords(table, profileName);
+    box.appendChild(option);
+  });
+  box.value = stored || names[0] || "";
+  let note = null;
+  if (spec.note) {
+    note = document.createElement("p");
+    note.className = "models-preference-note";
+    note.textContent = spec.note;
+  }
+  const shell = buildOverrideFieldRow(
+    name,
+    MODELS_FIELD_LABELS[name] || name,
+    name,
+    boxId,
+    mode,
+    box,
+    [note],
+  );
+  return {
+    group: "marketplace",
+    tr: shell.tr,
+    input: { mode: mode, box: box, max: null, profile: true },
+    paint(next) {
+      const labels = fieldsLabels();
+      if (next.scope !== "model") {
+        const own = next.row[name];
+        fillFieldCells(
+          shell.value,
+          shell.source,
+          providerStateField(own, decides, (value) => marketplaceProfileWords(table, value)),
+          labels,
+        );
+        shell.tr.classList.toggle("is-forced", Boolean(own));
+        const decided = !own || own.state === "unset";
+        writeDefaultLines(shell.defaults, [
+          fieldsDefaultLine(decides, "no row names a profile"),
+          decided ? marketplaceWarningLine(dialect.warning) : null,
+          fieldsNoteLine(dialect.unverified_note || ""),
+        ]);
+        return;
+      }
+      const resolved = resolvedOverride(next.row, fieldsProviderRow(next), name);
+      const rowWords = resolved ? OVERRIDE_ROW_WORDS[resolved.from] : null;
+      let field;
+      if (resolved && resolved.state === "value") {
+        field = operatorField(
+          marketplaceProfileWords(table, String(resolved.value)),
+          `From ${rowWords}: the ceiling goes on every request to this model.`,
+        );
+      } else if (resolved) {
+        field = operatorField(decides, `Forced unset on ${rowWords}.`);
+      } else {
+        field = inheritedField(decides, "No row names a profile.");
+      }
+      fillFieldCells(shell.value, shell.source, field, labels);
+      shell.tr.classList.toggle("is-forced", Boolean(resolved));
+      const providerRow = fieldsProviderRow(next) || {};
+      const inherited = providerRow[name];
+      const lines = [];
+      if (inherited && typeof inherited === "object" && inherited.state === "value") {
+        const named = String(inherited.value);
+        const found = ((table && table.profiles) || []).find((profile) => profile.name === named);
+        lines.push(
+          fieldsDefaultLine(
+            named,
+            `from the provider row: ${found ? found.summary : "no such profile: its requests are refused until it exists"}`,
+          ),
+        );
+      } else {
+        lines.push(
+          fieldsDefaultLine(
+            decides,
+            inherited ? "the provider row forces it" : "no row names a profile",
+          ),
+        );
+      }
+      // `resolved` already falls back to the provider row, so it is the
+      // answer this model gets: the warning goes wherever that is no ceiling.
+      if (!resolved || resolved.state === "unset") {
+        lines.push(marketplaceWarningLine(dialect.warning));
+      }
+      lines.push(fieldsNoteLine(dialect.unverified_note || ""));
+      writeDefaultLines(shell.defaults, lines);
+    },
+  };
+}
+
+/* The read-only marketplace rows of one model (7.109.0): what the market
+   snapshot says about its offers, and its upstream's prompt note word for
+   word. Only for a model the server lists under `marketplaces.models`. */
+function marketplaceReadonlyEntries(model) {
+  const table = marketplaceTable();
+  const ref = model && model.model_ref;
+  const entry = table && ref ? (table.models || {})[ref] : null;
+  if (!entry) return [];
+  const out = [];
+  const field = (value, note) => ({
+    value,
+    source: "declared",
+    source_label: "InferHub",
+    approximate: false,
+    tier: null,
+    tier_label: null,
+    note: note || null,
+  });
+  if (entry.offers) {
+    out.push({
+      group: "marketplace",
+      key: "marketplace_offers",
+      label: "offers",
+      field: field(entry.offers, "From the market snapshot; the InferHub page shows every level."),
+    });
+  }
+  if (entry.route_note) {
+    out.push({
+      group: "marketplace",
+      key: "marketplace_route_note",
+      label: "route note",
+      field: field(entry.route_note, "This upstream's own words about what it does to your prompt."),
+    });
+  }
+  return out;
 }
 
 /* Whether ANY field was discovered for this model -- the rows above plus the

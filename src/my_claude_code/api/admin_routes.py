@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from my_claude_code.api.credential_display import credential_name_index
 from my_claude_code.api.docs_content import available_documents
 from my_claude_code.api.docs_render import render_document
+from my_claude_code.api.marketplace_admin import marketplaces_payload
 from my_claude_code.api.model_admin import (
     INHERIT_SENTINEL,
     MODEL_SCOPE,
@@ -1760,6 +1761,10 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
         configured,
         prompt_cache_gateway_models(merged),
     )
+    # 7.109.0: the marketplace profile row and the read-only offers and
+    # route-note rows, beside the cached half for the same reason: the market
+    # snapshot moves hourly and the pinned half must not.
+    merged["marketplaces"] = marketplaces_payload(merged)
     return merged
 
 

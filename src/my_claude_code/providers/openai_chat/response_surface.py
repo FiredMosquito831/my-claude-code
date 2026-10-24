@@ -41,6 +41,7 @@ from my_claude_code.application.model_metadata import (
     ResponseSurface,
     ResponseSurfaceSource,
 )
+from my_claude_code.config.marketplaces import upstream_prefix
 from my_claude_code.config.model_overrides import (
     RESPONSE_SURFACE_OVERRIDE,
     current_model_overrides,
@@ -208,6 +209,7 @@ def resolve_response_surface(
     registry_provider: str = "",
     declared: tuple[ResponseSurface, ...] = (),
     no_information: ResponseSurface | None = None,
+    by_upstream: tuple[tuple[str, ResponseSurface], ...] = (),
 ) -> ResolvedResponseSurface:
     """Resolve one model's surface, and say where the answer came from.
 
@@ -243,6 +245,20 @@ def resolve_response_surface(
     if published is not None:
         surface, npm = published
         return _constrain(surface, ResponseSurfaceSource.REGISTRY, npm, speakable)
+
+    if by_upstream:
+        # 7.109.0: a marketplace's declared door per upstream (data on the
+        # profile, ``surface_by_upstream``). Empty for every other profile,
+        # so this block is never entered for them.
+        prefix = upstream_prefix(model_id)
+        for name, surface in by_upstream:
+            if prefix and name == prefix:
+                return _constrain(
+                    surface,
+                    ResponseSurfaceSource.PROFILE,
+                    f"the {prefix} upstream's own door, declared on the profile",
+                    speakable,
+                )
 
     if no_information is None:
         return ResolvedResponseSurface(DEFAULT_SURFACE, ResponseSurfaceSource.DEFAULT)
@@ -298,6 +314,7 @@ def catalogue_surface(
         registry_provider=profile.surface_registry_provider,
         declared=profile.response_surfaces,
         no_information=profile.no_information_surface,
+        by_upstream=profile.surface_by_upstream,
     )
 
 

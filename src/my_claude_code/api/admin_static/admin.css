@@ -7900,6 +7900,12 @@ audio.req-media-preview {
   color: var(--text);
 }
 
+/* 7.109.0: the marketplace profile row's "no ceiling" warning, in red. */
+.models-fields-warning {
+  color: var(--error);
+  font-weight: 600;
+}
+
 .models-fields-default-source .models-source {
   display: inline-block;
 }

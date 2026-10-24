@@ -108,7 +108,8 @@ def test_no_other_profile_declares_one() -> None:
         for provider_id, profile in OPENAI_CHAT_PROFILES.items()
         if profile.no_information_surface is not None
     }
-    assert declaring == {"opencode", "opencode_go"}
+    # 7.109.0: InferHub's three doors declare one too (Chat Completions).
+    assert declaring == {"inferhub", "opencode", "opencode_go"}
 
 
 # --------------------------------------------------------------------------

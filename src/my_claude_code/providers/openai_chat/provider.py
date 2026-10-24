@@ -22,6 +22,11 @@ from my_claude_code.application.errors import (
     ApplicationUnavailableError,
     InvalidRequestError,
 )
+from my_claude_code.application.marketplace import (
+    MarketplaceChoice,
+    check_request_cost,
+    marketplace_choice,
+)
 from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
     ResolvedResponseSurface,
@@ -60,7 +65,10 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
     narrow_dialect_by_rejections,
 )
-from my_claude_code.core.reported_cost import record_reported_usage
+from my_claude_code.core.reported_cost import (
+    record_reported_usage,
+    reported_usage_cost,
+)
 from my_claude_code.core.request_log import (
     RECOVERY_EARLY_RETRIES,
     RECOVERY_MIDSTREAM_RECOVERIES,
@@ -72,6 +80,7 @@ from my_claude_code.core.upstream_ladder import paused_ladder
 from my_claude_code.core.wire_capture import (
     ResponseShape,
     paused_wire_trace,
+    record_marketplace_readback,
     record_reasoning_adaptation,
     record_response_shape,
     record_wire_request,
@@ -113,6 +122,16 @@ from my_claude_code.providers.stream_recovery import (
 from .chunks import adopt_chat_stream
 from .client_identity import identity_headers_for_body
 from .identity_enforcement import observe_identity_enforcement
+from .marketplace import (
+    MarketplaceAttempt,
+    current_marketplace_attempt,
+    marketplace_attempt,
+    no_offer_failure,
+    record_marketplace_error_headers,
+    record_marketplace_headers,
+    refusal_failure,
+    summarise_listing_payload,
+)
 from .messages_transport import MessagesTransport
 from .opencode_catalogue import STAND_IN_INPUT_SCHEMA, model_is_zero_cost
 from .opencode_identity import identity_wire_record
@@ -435,6 +454,8 @@ class OpenAIChatProvider(BaseProvider):
                 # output cap does and shows up on the same Models page row.
                 memory=self._recovery_memory,
                 tool_schema_dialect=self._profile.tool_schema_dialect,
+                # ``None`` for every profile but a marketplace's (7.109.0).
+                marketplace=self._profile.marketplace,
             )
             self._responses_transport = transport
         return transport
@@ -458,6 +479,8 @@ class OpenAIChatProvider(BaseProvider):
                 # this host stated on one surface is applied on all three and
                 # shows up once on the Models page.
                 memory=self._recovery_memory,
+                # ``None`` for every profile but a marketplace's (7.109.0).
+                marketplace=self._profile.marketplace,
             )
             self._messages_transport = transport
         return transport
@@ -476,6 +499,14 @@ class OpenAIChatProvider(BaseProvider):
         payload = await self._list_models_payload()
         if not self._profile.model_ids_are_routable:
             return frozenset()
+        marketplace = self._profile.marketplace
+        if marketplace is not None:
+            # 7.109.0: a marketplace row's per-seller asks are regrouped into
+            # price levels before the row is read, so the row kept beside the
+            # catalogue is the row's own numbers, not tens of thousands of them.
+            payload = summarise_listing_payload(
+                payload, marketplace, provider_name=self._provider_name
+            )
         listing = self._profile.model_listing
         return extract_openai_model_infos(
             payload,
@@ -686,6 +717,18 @@ class OpenAIChatProvider(BaseProvider):
     ) -> None:
         """Validate OpenAI-chat request conversion before streaming."""
         self._build_request_body(request, reasoning=reasoning)
+        if self._profile.marketplace is not None:
+            # 7.109.0: a ceiling that cannot be computed, or that the market
+            # snapshot already shows nothing under, refuses here -- before any
+            # upstream call, as the short 400 that ends the route.
+            self.marketplace_choice_for(request.model)
+
+    def marketplace_choice_for(self, model_id: str) -> MarketplaceChoice | None:
+        """The ceiling one attempt on ``model_id`` sends, ``None``, or a 400."""
+
+        return marketplace_choice(
+            self._profile.marketplace, self._provider_id, model_id
+        )
 
     def _handle_extra_reasoning(
         self, delta: Any, ledger: AnthropicStreamLedger, *, output_reasoning: bool
@@ -733,7 +776,19 @@ class OpenAIChatProvider(BaseProvider):
         # provider of its own. Nothing below names a host: a gateway that
         # reports ``usage.cost`` is read exactly like one that does not, and
         # one that does not costs a dictionary lookup.
-        record_reported_usage(usage_info)
+        marketplace = self._profile.marketplace
+        if marketplace is None:
+            record_reported_usage(usage_info)
+        else:
+            # 7.109.0: a marketplace declares whether its ``usage.cost`` is the
+            # whole bill, and its charge is kept on the attempt whatever the
+            # cost-tracking setting says (NULL = not reported, never 0).
+            record_reported_usage(
+                usage_info, whole_bill=marketplace.reported_cost_is_whole_bill
+            )
+            charged = reported_usage_cost(usage_info)
+            if charged is not None:
+                record_marketplace_readback(charged_usd=charged)
         details = prompt_tokens_details(usage_info)
         fields: dict[str, int] = {}
         cached = usage_int(details, "cached_tokens")
@@ -752,8 +807,15 @@ class OpenAIChatProvider(BaseProvider):
         *,
         surface_label: str = "",
         wire_notes: Mapping[str, Any] | None = None,
+        marketplace: MarketplaceChoice | None = None,
     ) -> tuple[Any, dict]:
         """Create a streaming chat completion with bounded request fallbacks.
+
+        ``marketplace`` (7.109.0) is the price ceiling this attempt carries,
+        sent as request headers after the declared identity on every try of
+        the loop below, create-level retries included. ``None`` -- every
+        request on every host but a marketplace with a profile set -- makes
+        the very call this loop has always made.
 
         ``surface_label`` is recorded beside the body so the request log can
         say which of a multi-surface gateway's endpoints served the attempt and
@@ -800,7 +862,10 @@ class OpenAIChatProvider(BaseProvider):
                     inbound.session_id,
                     inbound_sessions=inbound.opencode_session_ids,
                 )
-                extra = {"extra_headers": identity} if identity else {}
+                sent_headers = identity
+                if marketplace is not None and marketplace.headers:
+                    sent_headers = {**identity, **marketplace.headers}
+                extra = {"extra_headers": sent_headers} if sent_headers else {}
                 record_wire_request(
                     create_body,
                     stream=True,
@@ -821,6 +886,11 @@ class OpenAIChatProvider(BaseProvider):
                         **extra,
                     )
                 )
+                if self._profile.marketplace is not None:
+                    response = getattr(stream, "response", None)
+                    record_marketplace_headers(
+                        self._profile.marketplace, getattr(response, "headers", None)
+                    )
                 if stripped_reasoning is not None:
                     self._remember_reasoning_rejection(
                         body,
@@ -842,6 +912,19 @@ class OpenAIChatProvider(BaseProvider):
                 observe_identity_enforcement(
                     self._provider_id, self._profile.client_identity, error
                 )
+                if self._profile.marketplace is not None:
+                    # 7.109.0: what the refusal said, and the one 402 that is
+                    # not out of credits as the door's short 400 -- before the
+                    # ladder, which must never rewrite a body over a price.
+                    record_marketplace_error_headers(self._profile.marketplace, error)
+                    refusal = no_offer_failure(
+                        self._profile.marketplace,
+                        error,
+                        model_id=str(body.get("model") or ""),
+                        choice=marketplace,
+                    )
+                    if refusal is not None:
+                        raise refusal from error
                 decision = self._recovery_ladder.next_body(
                     error, body, used_retry_kinds
                 )
@@ -990,12 +1073,63 @@ class OpenAIChatProvider(BaseProvider):
                 reasoning=reasoning,
             )
             return runner.run()
+        if self._profile.marketplace is not None:
+            return self._stream_with_ceiling(
+                request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                reasoning=reasoning,
+            )
         return self._stream_across_surfaces(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
             reasoning=reasoning,
         )
+
+    async def _stream_with_ceiling(
+        self,
+        request: MessagesRequest,
+        *,
+        input_tokens: int,
+        request_id: str | None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        """A marketplace attempt: its ceiling decided once, then any door.
+
+        7.109.0, and only for a profile that declares a marketplace. The
+        ceiling is chosen for this attempt's model before anything is sent --
+        a refusal here is the short 400, with no upstream call -- and the
+        worst case is checked against the profile's per-request limit. The
+        Chat door carries it as a keyword of its own create loop; the Messages
+        and Responses doors (and a surface probe) read it from the attempt in
+        flight. Everything else is :meth:`_stream_across_surfaces` unchanged.
+        """
+
+        try:
+            choice = self.marketplace_choice_for(request.model)
+            check_request_cost(
+                choice,
+                model_id=request.model,
+                input_tokens=input_tokens,
+                max_tokens=request.max_tokens,
+            )
+        except InvalidRequestError as refused:
+            # Inside the stream now: the classified failure, so the door
+            # answers its short 400 rather than a 500.
+            raise refusal_failure(refused.message) from refused
+        if choice is not None:
+            # The ceiling this attempt carries, on the attempt's own record,
+            # whichever door ends up sending it.
+            record_marketplace_readback(ceiling=choice.wire_note()["marketplace"])
+        with marketplace_attempt(MarketplaceAttempt(request.model, choice)):
+            async for event in self._stream_across_surfaces(
+                request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                reasoning=reasoning,
+            ):
+                yield event
 
     def resolved_surface(self, model_id: str) -> ResolvedResponseSurface:
         """Which endpoint this provider will use for one model, and why."""
@@ -1006,6 +1140,7 @@ class OpenAIChatProvider(BaseProvider):
             registry_provider=self._profile.surface_registry_provider,
             declared=self._profile.response_surfaces,
             no_information=self._profile.no_information_surface,
+            by_upstream=self._profile.surface_by_upstream,
         )
 
     async def _stream_across_surfaces(
@@ -1250,7 +1385,7 @@ class OpenAIChatProvider(BaseProvider):
                 await self._responses.probe(model_id)
             return
         inbound = current_fingerprint()
-        identity = (
+        identity: dict[str, Any] = (
             {
                 "extra_headers": identity_headers_for_body(
                     self._profile.client_identity,
@@ -1262,6 +1397,14 @@ class OpenAIChatProvider(BaseProvider):
             if self._profile.client_identity is not None
             else {}
         )
+        if self._profile.marketplace is not None:
+            # 7.109.0: a probe on a marketplace is billed too, so it carries
+            # the attempt's ceiling like every other call.
+            attempt = current_marketplace_attempt()
+            if attempt is not None and attempt.headers:
+                ceiling: dict[str, str] = dict(identity.get("extra_headers", {}))
+                ceiling.update(attempt.headers)
+                identity = {"extra_headers": ceiling}
         if not free_tier_tools:
             await self._client.chat.completions.create(
                 model=model_id,
@@ -1374,6 +1517,21 @@ class _OpenAIChatStreamRunner:
         self._prompt_cache = chat_prompt_cache_choice(
             request, provider_id=provider._provider_id
         )
+        # The price ceiling this attempt sends (7.109.0), or ``None`` -- every
+        # request on every host but a marketplace with a profile set -- which
+        # adds no keyword to any create call and records nothing.
+        self._marketplace: MarketplaceChoice | None = None
+        if provider._profile.marketplace is not None:
+            attempt = current_marketplace_attempt()
+            if attempt is not None and attempt.model_id == request.model:
+                self._marketplace = attempt.choice
+            else:
+                try:
+                    self._marketplace = provider.marketplace_choice_for(request.model)
+                except InvalidRequestError as refused:
+                    raise refusal_failure(refused.message) from refused
+            if self._marketplace is not None:
+                self._wire_notes.update(self._marketplace.wire_note())
         self._input_tokens = input_tokens
         self._request_id = request_id
         self._reasoning = reasoning
@@ -1384,6 +1542,13 @@ class _OpenAIChatStreamRunner:
             # halves of one translation cannot disagree.
             tool_names=provider.tool_name_codec(request),
         )
+
+    def _marketplace_kwargs(self) -> dict[str, Any]:
+        """``{}`` -- the call as it always was -- unless a ceiling applies."""
+
+        if self._marketplace is None:
+            return {}
+        return {"marketplace": self._marketplace}
 
     async def run(self) -> AsyncIterator[str]:
         """Convert the upstream OpenAI-chat stream into Anthropic SSE."""
@@ -1451,6 +1616,7 @@ class _OpenAIChatStreamRunner:
                         body,
                         surface_label=self._surface_label,
                         wire_notes=self._wire_notes,
+                        **self._marketplace_kwargs(),
                     )
                     stream_opened = True
                     # Opposite the wire body recorded at the commit boundary:
@@ -1819,6 +1985,7 @@ class _OpenAIChatStreamRunner:
                     body,
                     surface_label=self._surface_label,
                     wire_notes=self._wire_notes,
+                    **self._marketplace_kwargs(),
                 )
                 text_parts: list[str] = []
                 thinking_parts: list[str] = []

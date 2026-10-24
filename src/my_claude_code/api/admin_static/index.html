@@ -2126,6 +2126,7 @@
                 <a href="#guide-agent-tiers">Tiers for every agent</a>
                 <a href="#guide-reasoning">Reasoning</a>
                 <a href="#guide-prompt-cache-lifetime">Prompt cache lifetime</a>
+                <a href="#guide-inferhub">InferHub: set a price ceiling</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
                 <a href="#guide-desktop-apps">Point a desktop app here</a>
@@ -3343,6 +3344,41 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   take no lifetime: their rows say <em>caches automatically; no lifetime
                   control</em> and nothing is ever sent to them. Any other host says
                   <em>lifetime control not known for this host</em>.
+                </p>
+
+                <h3 id="guide-inferhub">InferHub: set a price ceiling</h3>
+                <p>
+                  InferHub is a marketplace: for one model there are many sellers'
+                  accounts at a handful of price levels, and with no ceiling InferHub
+                  picks one <em>regardless of price</em> &mdash; up to half the
+                  model's official price, and a conversation that stays with its
+                  seller later pays that seller's current price. MCC's answer is a
+                  ceiling sent with every InferHub request, chosen by a
+                  <strong>marketplace profile</strong>.
+                </p>
+                <ol>
+                  <li>Add <code>INFERHUB_API_KEY</code> on the InferHub card.</li>
+                  <li>Write your profiles into <code>marketplace_profiles.json</code> in
+                    the config folder &mdash; for example
+                    <code>{"version": 1, "profiles": {"opus-cap": {"kind": "pct_of_official", "percent": 10}}}</code>
+                    (at most 10&nbsp;% of each model's official price).</li>
+                  <li>On the <strong>Models</strong> page, open InferHub's provider
+                    table and set its <strong>marketplace profile</strong> row to
+                    <em>Force value</em> &rarr; your profile. A model's own row can name
+                    another profile, or <em>Force unset</em> &mdash; "InferHub decides",
+                    shown in red.</li>
+                </ol>
+                <p>
+                  The kinds: <code>pct_of_official</code>, <code>max_price</code>
+                  (dollars per million tokens), <code>cheapest_level_now</code> and
+                  <code>cheapest_level_min_accounts</code> (follow the market &mdash; add a
+                  cap to be sure), with <code>exclude_upstreams</code> and
+                  <code>max_usd_per_request</code> on any of them. When nothing on the
+                  market is under your ceiling, the request ends with a short 400 that
+                  names your ceiling and the cheapest price &mdash; MCC never sends it
+                  without a ceiling and never raises yours by itself. Each InferHub
+                  model's table also shows its <strong>offers</strong> and the route's
+                  own <strong>route note</strong>. Not verified on a real account yet.
                 </p>
 
                 <h3 id="guide-cli">Point Claude Code here</h3>

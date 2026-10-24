@@ -162,17 +162,34 @@ def _as_int(value: Any) -> int | None:
     return value
 
 
-def record_reported_usage(usage_info: Any) -> None:
+def record_reported_usage(usage_info: Any, *, whole_bill: bool = False) -> None:
     """Fold one host usage block into the collector, if one is installed.
 
     A no-op outside a tracked request and on a usage block that reports no
     cost, so every provider may call it unconditionally and a host that says
     nothing costs nothing.
+
+    ``whole_bill`` (7.109.0) is a host's *declared* statement that the cost it
+    reports is the whole charge -- there is no bring-your-own-key split on it
+    (InferHub: "Only consumer cost is exposed"). It answers the BYOK question
+    for that host alone, and only where the block itself left it open. False
+    -- every caller but a declaring marketplace -- reads the block exactly as
+    before, so a bare ``cost`` from any other host is still declined.
     """
     slot = _REPORTED_COST.get()
     if slot is None or usage_info is None:
         return
     _fold_usage(slot, usage_info)
+    if whole_bill and slot.cost_usd is not None and slot.is_byok is None:
+        slot.is_byok = False
+
+
+def reported_usage_cost(usage_info: Any) -> float | None:
+    """The ``cost`` one usage block names, in USD, or ``None`` when it names none."""
+
+    if usage_info is None:
+        return None
+    return _as_float(_lookup(usage_info, COST_KEY))
 
 
 def reported_reasoning_tokens(usage_info: Any) -> int | None:
@@ -264,4 +281,5 @@ __all__ = [
     "reported_cost",
     "reported_cost_from_usage",
     "reported_reasoning_tokens",
+    "reported_usage_cost",
 ]

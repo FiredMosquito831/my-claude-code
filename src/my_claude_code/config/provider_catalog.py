@@ -126,6 +126,15 @@ HYPERCHARM_DEFAULT_BASE = "https://hyper.charm.land/v1"
 # a reseller over many vendors' models. It also documents /v1/messages and
 # /v1/responses; chat completions is the only protocol wired.
 BAI_DEFAULT_BASE = "https://api.b.ai/v1"
+# InferHub (7.109.0), a price marketplace over pooled upstream subscriptions
+# (inferhub.dev/docs). One key, three doors under this base: Chat Completions,
+# Anthropic Messages (``{base}/messages`` = the docs' "API root" for Anthropic
+# SDKs, which append ``/v1/messages``) and Responses. The price ceiling MCC
+# sends is declared in ``config/marketplaces.py``.
+INFERHUB_DEFAULT_BASE = "https://api.inferhub.dev/v1"
+# Its management API, where the public market snapshot and the account's
+# combos and route notes are read (never on a request path).
+INFERHUB_MARKET_DEFAULT_BASE = "https://inferhub.dev/api"
 # xAI OpenAI-compatible Chat Completions API.
 XAI_DEFAULT_BASE = "https://api.x.ai/v1"
 # Together AI OpenAI-compatible Chat Completions API.
@@ -777,6 +786,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=BAI_DEFAULT_BASE,
         base_url_attr="bai_base_url",
         proxy_attr="bai_proxy",
+        group="gateway",
+    ),
+    "inferhub": ProviderDescriptor(
+        provider_id="inferhub",
+        display_name="InferHub",
+        credential_env="INFERHUB_API_KEY",
+        credential_url="https://inferhub.dev/dashboard",
+        credential_attr="inferhub_api_key",
+        default_base_url=INFERHUB_DEFAULT_BASE,
+        base_url_attr="inferhub_base_url",
+        proxy_attr="inferhub_proxy",
         group="gateway",
     ),
     "xai": ProviderDescriptor(

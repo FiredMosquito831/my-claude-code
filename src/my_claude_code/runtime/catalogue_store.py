@@ -37,6 +37,12 @@ from my_claude_code.application.model_metadata import (
     model_info_document,
     model_info_from_document,
 )
+from my_claude_code.config.marketplaces import (
+    MARKETPLACE_DIALECTS,
+    MarketplaceDialect,
+    same_snapshot,
+    snapshot_key,
+)
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.core.derived_cache import DerivedCache, DerivedEntry
 from my_claude_code.core.version import package_version
@@ -359,8 +365,58 @@ def store_provider_rows(
     )
 
 
+# -- 7.109.0: a marketplace's market snapshot, beside the catalogue -----------
+#
+# One small document per declared marketplace (``config/marketplaces.py``),
+# under the entry name the dialect declares -- ``marketplace-inferhub`` -- and
+# the dialect's own schema key, so a writer and a reader of different schemas
+# never meet. Never inside the catalogue or the provider rows (whose bytes stay
+# what 7.108.0 wrote) and never inside the cached Models-page payload.
+# Rewritten only when what it says changed, as the catalogue is.
+
+#: The snapshot entries, by dialect id.
+MARKETPLACE_SNAPSHOT_ENTRIES: dict[str, str] = {
+    dialect.dialect_id: dialect.snapshot_entry
+    for dialect in MARKETPLACE_DIALECTS.values()
+}
+
+
+def read_market_snapshot(
+    dialect: MarketplaceDialect, *, cache: DerivedCache | None = None
+) -> dict[str, Any] | None:
+    """The stored snapshot payload for one marketplace, or ``None``."""
+
+    store = catalogue_cache() if cache is None else cache
+    entry = store.read(MARKETPLACE_SNAPSHOT_ENTRIES[dialect.dialect_id])
+    if entry is None or not entry.matches(snapshot_key(dialect)):
+        return None
+    return entry.payload if isinstance(entry.payload, dict) else None
+
+
+def store_market_snapshot(
+    dialect: MarketplaceDialect,
+    payload: Mapping[str, Any],
+    *,
+    computed_at: float,
+    cache: DerivedCache | None = None,
+) -> bool:
+    """Write the snapshot unless the stored one says the same. Returns whether written."""
+
+    store = catalogue_cache() if cache is None else cache
+    if same_snapshot(read_market_snapshot(dialect, cache=store), payload):
+        return False
+    return store.write(
+        MARKETPLACE_SNAPSHOT_ENTRIES[dialect.dialect_id],
+        key=snapshot_key(dialect),
+        payload=dict(payload),
+        computed_at=computed_at,
+        compact=True,
+    )
+
+
 __all__ = [
     "CATALOGUE_ENTRY",
+    "MARKETPLACE_SNAPSHOT_ENTRIES",
     "PROVIDER_ROWS_ENTRY",
     "catalogue_cache",
     "catalogue_document",
@@ -369,8 +425,10 @@ __all__ = [
     "provider_rows_document",
     "provider_rows_from_document",
     "provider_rows_source_digest",
+    "read_market_snapshot",
     "read_stored_catalogue",
     "read_stored_provider_rows",
     "store_catalogue",
+    "store_market_snapshot",
     "store_provider_rows",
 ]

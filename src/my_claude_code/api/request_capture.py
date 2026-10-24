@@ -563,6 +563,11 @@ class RequestCapture:
         shape = (
             None if self._wire is None else self._wire.responses.get(attempt.attempt)
         )
+        # 7.109.0: what a price marketplace said about this attempt. Absent
+        # for every attempt on every other host, so their params are unchanged.
+        marketplace = (
+            None if self._wire is None else self._wire.marketplace.get(attempt.attempt)
+        )
         ladder = self._ladder_payload(attempt)
         key_index, key_label = self._attempt_credential(ladder)
         self._attempts.append(
@@ -592,6 +597,7 @@ class RequestCapture:
                     attempt.continuation,
                     shape,
                     error_message=attempt.error_message,
+                    marketplace=marketplace,
                 ),
                 wire_body=None if wire is None else wire.body_json,
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
@@ -667,6 +673,7 @@ class RequestCapture:
         shape: dict[str, Any] | None = None,
         *,
         error_message: str | None = None,
+        marketplace: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Merge what the provider survived with what it actually sent.
 
@@ -729,6 +736,12 @@ class RequestCapture:
         trace_id = gateway_trace_id(error_message)
         if trace_id is not None:
             params["gateway_trace_id"] = trace_id
+        # 7.109.0: a marketplace's own response headers, verbatim, and the
+        # charge it reported -- recorded whatever the cost-tracking setting
+        # says, because it is the host's statement rather than MCC's price.
+        # Written only for an attempt on a host that declares a marketplace.
+        if marketplace:
+            params["marketplace"] = dict(marketplace)
         return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:

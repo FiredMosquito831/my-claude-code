@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from my_claude_code.providers.deepseek.client import DeepSeekProvider
+from my_claude_code.providers.openai_chat import GENERIC_OPENAI_PROFILE
 from my_claude_code.providers.openai_chat.provider import OpenAIChatProvider
 
 
@@ -29,8 +30,14 @@ class _Details:
 
 
 def _fields(provider_class: type, usage: Any) -> dict[str, int]:
-    """Call the mapping on a bare instance; it reads usage, not provider state."""
+    """Call the mapping on a bare instance; it reads usage, not provider state.
+
+    Since 7.109.0 it reads one declaration off the profile -- whether the host
+    is a price marketplace -- so the bare instance carries the generic profile,
+    which declares none, exactly as these providers do.
+    """
     provider = object.__new__(provider_class)
+    vars(provider)["_profile"] = GENERIC_OPENAI_PROFILE
     return provider._anthropic_usage_fields(usage)
 
 

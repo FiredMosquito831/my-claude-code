@@ -8,6 +8,7 @@ from typing import Any, Literal
 from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.application.model_metadata import ResponseSurface
 from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+from my_claude_code.config.marketplaces import INFERHUB_MARKETPLACE, MarketplaceDialect
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
@@ -254,6 +255,23 @@ class OpenAIChatProfile:
     # in any decision this profile drives. See
     # ``openai_chat/opencode_catalogue.py`` for the measurements.
     free_tier_tool_catalogue: FreeTierToolCatalogue | None = None
+    # Which door each *upstream* of a multi-surface marketplace is behind, as
+    # ``(prefix, surface)`` pairs: the first segment of a model id names the
+    # upstream (``cc`` in ``cc/claude-opus-4-6``), and the marketplace serves
+    # that upstream natively on one door. Consulted after the operator's pin,
+    # a learned fact and the vendor registry, before
+    # ``no_information_surface`` -- so a pin on the Models page always wins.
+    # Empty -- every profile but InferHub's -- means the rung is never read
+    # and the resolver answers exactly what it always did. Data, never a
+    # model-name branch: the prefix is the marketplace's own namespace.
+    surface_by_upstream: tuple[tuple[str, ResponseSurface], ...] = ()
+    # The price marketplace this host is (``config/marketplaces.py``,
+    # 7.109.0): how it takes a ceiling, what its refusal looks like, what its
+    # reported cost means. ``None`` -- every profile but InferHub's -- means
+    # no marketplace code runs for this host at all: no profile is looked up,
+    # no header is added, no error is read differently, no cost is read
+    # differently. The ``client_identity`` rule, for the same reason.
+    marketplace: MarketplaceDialect | None = None
 
     @property
     def provider_name(self) -> str:
@@ -951,6 +969,39 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         OPENAI_STANDARD_REASONING,
+    ),
+    # InferHub (7.109.0): a price marketplace over pooled upstream
+    # subscriptions, behind one key on three doors -- Chat Completions,
+    # Anthropic Messages and Responses at api.inferhub.dev (RES §2.1). The
+    # body is the generic custom-provider profile's, field for field
+    # (``<think>`` replay until a probe says otherwise -- the user's Q13 --
+    # the standard four-rung field, ``max_tokens``, which InferHub enforces
+    # where it ignores ``max_completion_tokens``); what is InferHub's own is
+    # declared beside it: the three doors, which upstream each door is native
+    # for (Claude Code's ``cc`` on Messages keeps cache markers and signed
+    # thinking; Codex's ``cx`` on Responses keeps instructions as instructions
+    # -- the user's Q12), and the marketplace dialect that carries the price
+    # ceiling. No reasoning-mode header is sent (Q14).
+    "inferhub": OpenAIChatProfile(
+        _policy(
+            "INFERHUB",
+            ReasoningReplayMode.THINK_TAGS,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+        ),
+        OPENAI_STANDARD_REASONING,
+        response_surfaces=(
+            ResponseSurface.CHAT_COMPLETIONS,
+            ResponseSurface.MESSAGES,
+            ResponseSurface.RESPONSES,
+        ),
+        # InferHub translates every model on Chat Completions (RES §8.5).
+        no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
+        surface_by_upstream=(
+            ("cc", ResponseSurface.MESSAGES),
+            ("cx", ResponseSurface.RESPONSES),
+        ),
+        marketplace=INFERHUB_MARKETPLACE,
     ),
     "tokenrouter": OpenAIChatProfile(
         _policy(

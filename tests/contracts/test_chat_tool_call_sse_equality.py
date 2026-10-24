@@ -228,13 +228,29 @@ BASELINE: dict[str, str] = (
 )
 
 
+#: Chat providers added after the recording, each held to the recorded
+#: provider whose answers it must stream byte for byte. The baseline file is a
+#: frozen recording and is not rewritten (the ``test_outbound_identity``
+#: precedent for B.AI).
+ADDED_SINCE_RECORDING: dict[str, str] = {
+    # 7.109.0: InferHub, the generic profile B.AI runs on, on its Chat door.
+    "inferhub": "bai",
+}
+
+
 def test_the_snapshot_covers_every_chat_provider_and_answer() -> None:
-    assert set(BASELINE) == {f"{p}/{k}" for p in CHAT_PROVIDERS for k in KINDS}
+    recorded = tuple(p for p in CHAT_PROVIDERS if p not in ADDED_SINCE_RECORDING)
+    assert set(BASELINE) == {f"{p}/{k}" for p in recorded for k in KINDS}
+    assert set(ADDED_SINCE_RECORDING) <= set(CHAT_PROVIDERS)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", sorted(BASELINE))
+@pytest.mark.parametrize(
+    "key",
+    sorted(BASELINE) + sorted(f"{p}/{k}" for p in ADDED_SINCE_RECORDING for k in KINDS),
+)
 async def test_only_a_written_calls_name_moved(key: str) -> None:
     provider_id, kind = key.split("/")
     sse, _wire = await stream_once(provider_id, kind)
-    assert digest(sse) == BASELINE[key]
+    recorded = ADDED_SINCE_RECORDING.get(provider_id, provider_id)
+    assert digest(sse) == BASELINE[f"{recorded}/{kind}"]

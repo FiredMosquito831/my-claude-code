@@ -558,6 +558,33 @@ def _isolate_media_books():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_marketplace(monkeypatch):
+    """7.109.0: the marketplace profile store, the parsed market snapshot and
+    the snapshot's network reads.
+
+    The store and the snapshot are read through stat-keyed process caches, so
+    no test may inherit another's parse; and the snapshot refresher reaches a
+    provider host, so no test reaches it unless it supplies its own fetch.
+    """
+    from my_claude_code.application.marketplace import reset_market_snapshot_cache
+    from my_claude_code.config.marketplace_profiles import (
+        reset_marketplace_profiles_cache,
+    )
+    from my_claude_code.providers.runtime import marketplace_market
+    from tests.support.token_host_block import HermeticityViolation
+
+    async def refuse(url: str, **_kwargs: Any) -> Any:
+        raise HermeticityViolation(f"a test reached the market snapshot fetch: {url}")
+
+    monkeypatch.setattr(marketplace_market, "fetch_marketplace_source", refuse)
+    reset_marketplace_profiles_cache()
+    reset_market_snapshot_cache()
+    yield
+    reset_marketplace_profiles_cache()
+    reset_market_snapshot_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_exit_memory():
     """What a ticked chain remembers about its exits (7.81.0) is process-wide.
 

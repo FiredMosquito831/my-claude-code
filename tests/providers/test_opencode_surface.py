@@ -251,7 +251,8 @@ def test_a_single_surface_profile_resolves_nothing_and_changes_nothing() -> None
     """39 of the 41 profiles. Their behaviour must be untouched."""
 
     for provider_id, profile in OPENAI_CHAT_PROFILES.items():
-        if provider_id.startswith("opencode"):
+        # 7.109.0: InferHub is the third multi-surface profile.
+        if provider_id.startswith("opencode") or provider_id == "inferhub":
             continue
         assert profile.response_surfaces == ()
         assert profile.surface_registry_provider == ""

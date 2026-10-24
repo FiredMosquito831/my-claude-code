@@ -72,6 +72,7 @@ from .constants import (
     LITELLM_FETCH_TIMEOUT_SECONDS_DEFAULT,
     LITELLM_FETCH_TIMEOUT_SECONDS_MAX,
     LITELLM_FETCH_TIMEOUT_SECONDS_MIN,
+    MARKETPLACE_PUBLIC_MARKET_DEFAULT,
     MAX_OUTPUT_TOKENS_CEILING,
     MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
@@ -697,6 +698,25 @@ class Settings(BaseSettings):
     bai_base_url: str = Field(
         default="https://api.b.ai/v1",
         validation_alias="BAI_BASE_URL",
+    )
+
+    # ==================== InferHub Config (7.109.0) ====================
+    inferhub_api_key: str = Field(default="", validation_alias="INFERHUB_API_KEY")
+    inferhub_base_url: str = Field(
+        default="https://api.inferhub.dev/v1",
+        validation_alias="INFERHUB_BASE_URL",
+    )
+    # Where the market snapshot is read: InferHub's management API.
+    inferhub_market_base_url: str = Field(
+        default="https://inferhub.dev/api",
+        validation_alias="INFERHUB_MARKET_BASE_URL",
+    )
+    # Whether the keyless public market pages (min/max asks, speed, cache hit
+    # rate, the platform cap) are read for the snapshot while InferHub has a
+    # key. Off: only the keyed list's own price levels are used.
+    marketplace_public_market: bool = Field(
+        default=MARKETPLACE_PUBLIC_MARKET_DEFAULT,
+        validation_alias="MARKETPLACE_PUBLIC_MARKET",
     )
 
     # ==================== QwenCloud Token Plan (OpenAI-compatible) ====================
@@ -1645,6 +1665,7 @@ class Settings(BaseSettings):
     nararoute_proxy: str = Field(default="", validation_alias="NARAROUTE_PROXY")
     hypercharm_proxy: str = Field(default="", validation_alias="HYPERCHARM_PROXY")
     bai_proxy: str = Field(default="", validation_alias="BAI_PROXY")
+    inferhub_proxy: str = Field(default="", validation_alias="INFERHUB_PROXY")
     xai_proxy: str = Field(default="", validation_alias="XAI_PROXY")
     together_proxy: str = Field(default="", validation_alias="TOGETHER_PROXY")
     deepinfra_proxy: str = Field(default="", validation_alias="DEEPINFRA_PROXY")
