@@ -45,6 +45,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from my_claude_code.cli.port_diagnostics import (
+    PortOwnerUndetermined,
+    undetermined_raises,
+)
 from my_claude_code.cli.port_takeover import identify_port_holder
 from my_claude_code.config.constants import SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT
 from my_claude_code.core.mcc_processes import (
@@ -106,9 +110,12 @@ class HolderVerdict:
     reason: str
     #: Every pid of this one launch, innermost last. Empty when not ours.
     chain_pids: tuple[int, ...] = ()
+    #: (7.111.3) The port lookup could not tell who holds the port -- which is
+    #: not "nobody". ``pid`` is then ``None`` and ``reason`` says why.
+    undetermined: bool = False
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        document: dict[str, Any] = {
             "pid": self.pid,
             "image": self.image,
             "command": self.command,
@@ -116,8 +123,13 @@ class HolderVerdict:
             "reason": self.reason,
             "chain_pids": list(self.chain_pids),
         }
+        if self.undetermined:
+            document["undetermined"] = True
+        return document
 
     def describe(self) -> str:
+        if self.undetermined:
+            return self.reason
         if self.pid is None:
             return "nothing is listening on that port"
         name = self.image or "an unidentified process"
@@ -166,10 +178,22 @@ def classify_holder(
     6.59.0 for exactly this question.
 
     "Cannot tell" is always **not ours**. A process this module failed to read
-    is never stopped.
+    is never stopped. And a port lookup that could not tell (7.111.3) is not
+    an empty port: it is reported as undetermined, with the reason.
     """
 
-    holder = identify_port_holder(host, port, timeout=timeout)
+    try:
+        with undetermined_raises():
+            holder = identify_port_holder(host, port, timeout=timeout)
+    except PortOwnerUndetermined as exc:
+        return HolderVerdict(
+            pid=None,
+            image=None,
+            command=None,
+            is_mcc_server=False,
+            reason=str(exc),
+            undetermined=True,
+        )
     if holder is None or holder.pid is None:
         return HolderVerdict(
             pid=None,
@@ -291,9 +315,16 @@ def report_document(host: str, port: int, *, timeout: float = 5.0) -> dict[str, 
 
 
 def port_is_free(host: str, port: int, *, timeout: float = 5.0) -> bool:
-    """Whether nothing is listening on ``host:port`` right now."""
+    """Whether nothing is listening on ``host:port`` right now.
 
-    return identify_port_holder(host, port, timeout=timeout) is None
+    A lookup that could not tell (7.111.3) is not "free".
+    """
+
+    try:
+        with undetermined_raises():
+            return identify_port_holder(host, port, timeout=timeout) is None
+    except PortOwnerUndetermined:
+        return False
 
 
 def stop_document(
@@ -319,9 +350,16 @@ def stop_document(
         "holder_description": holder.describe(),
         "other_servers": other_server_reports(holder, processes=facts),
         "stopped": False,
-        "port_free": holder.pid is None,
+        "port_free": holder.pid is None and not holder.undetermined,
         "budget_seconds": default_stop_budget(graceful_seconds),
     }
+    if holder.undetermined:
+        # The 2026-10-21 lie: a timed-out netstat used to come back here as
+        # "Nothing was listening" while the old server kept listening.
+        document["message"] = (
+            f"{holder.reason[:1].upper()}{holder.reason[1:]}, so nothing was stopped."
+        )
+        return document
     if holder.pid is None:
         document["message"] = "Nothing was listening on that port."
         return document
@@ -388,6 +426,8 @@ def shell_lines(document: dict[str, Any]) -> list[str]:
         f"MCC_HOLDER_DESCRIPTION={one_line(document.get('holder_description', ''))}",
         f"MCC_HOLDER_REASON={one_line(holder.get('reason', ''))}",
     ]
+    if holder.get("undetermined"):
+        lines.append("MCC_HOLDER_UNDETERMINED=1")
     if "stopped" in document:
         lines.append(f"MCC_STOPPED={'1' if document.get('stopped') else '0'}")
     if "port_free" in document:
