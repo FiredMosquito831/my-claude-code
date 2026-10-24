@@ -19,6 +19,10 @@ PERPLEXITY_SEARCH_DEFAULT_BASE = "https://api.perplexity.ai"
 PARALLEL_DEFAULT_BASE = "https://api.parallel.ai"
 SEARCHAPI_DEFAULT_BASE = "https://www.searchapi.io"
 SERPAPI_DEFAULT_BASE = "https://serpapi.com"
+#: Context7's REST API root, as both of its own clients default to it
+#: (``@upstash/context7-mcp`` 4.4.4 ``dist/lib/constants.js`` and
+#: ``@upstash/context7-sdk`` 0.6.0 ``DEFAULT_BASE_URL``).
+CONTEXT7_DEFAULT_BASE = "https://context7.com/api"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +67,12 @@ class WebSearchDescriptor:
     free_tier: str  # short human note for UI
     notes: str
     advanced_options: tuple[WebSearchOptionSpec, ...] = ()
+    #: Whether ``WEB_SEARCH_PROVIDER=auto`` may pick this provider (7.113.0).
+    #: False only for a provider that answers something other than a web
+    #: search -- Context7 returns library documentation -- so a key added for
+    #: it, or exported for another tool, never turns every web search into a
+    #: documentation lookup. It stays selectable by name and as a chain entry.
+    auto_select: bool = True
 
 
 WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
@@ -950,6 +960,26 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 cost_note="Empty = en. Interface language of the results.",
             ),
         ),
+    ),
+    "context7": WebSearchDescriptor(
+        provider_id="context7",
+        display_name="Context7",
+        credential_env="CONTEXT7_API_KEY",
+        credential_url="https://context7.com/dashboard",
+        settings_attr="context7_api_key",
+        default_base_url=CONTEXT7_DEFAULT_BASE,
+        base_url_attr=None,
+        requires_key=True,
+        supports_domains=False,
+        free_tier="Free API key from the Context7 dashboard; paid plans raise the limits",
+        notes=(
+            "Library documentation, not web pages: GET /v2/libs/search resolves "
+            "the query to a library id, then GET /v2/context returns that "
+            "library's documentation snippets (Bearer auth; two calls per "
+            "search). Never picked by Auto; choose it by name or put it in "
+            "the Search Chain."
+        ),
+        auto_select=False,
     ),
 }
 

@@ -305,6 +305,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "parallel_api_key",
     "searchapi_api_key",
     "serpapi_api_key",
+    "context7_api_key",
     "searxng_base_url",
 )
 
@@ -2016,6 +2017,11 @@ class Settings(BaseSettings):
     )
     serpapi_api_key: str | None = Field(
         default=None, validation_alias="SERPAPI_API_KEY"
+    )
+    # Context7 (7.113.0): library documentation as a search provider; keys
+    # start with ``ctx7sk``. Never chosen by Auto (see the catalogue entry).
+    context7_api_key: str | None = Field(
+        default=None, validation_alias="CONTEXT7_API_KEY"
     )
     # Base URL of a self-hosted SearXNG instance (format=json must be enabled).
     searxng_base_url: str | None = Field(

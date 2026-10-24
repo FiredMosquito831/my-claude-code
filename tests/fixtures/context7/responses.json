@@ -1,0 +1,126 @@
+{
+  "provenance": {
+    "what": "Context7 REST responses for the context7 web-search adapter's tests and the scratch fake upstream (7.113.0). No byte here came from a live Context7 call: 0 calls were made. Every field name, nesting and header name is the one Context7's own clients read, and every value is invented.",
+    "read_from": [
+      "@upstash/context7-mcp 4.4.4 (npm, tarball sha256 2ae37c3a2b41ff4d591a275ff1dc56883cb60bfc71e34c399c14ebd38837bb38): dist/lib/constants.js (CONTEXT7_API_BASE_URL = https://context7.com/api), dist/lib/api.js (GET /v2/libs/search?query&libraryName -> {results: [...]}; GET /v2/context?query&libraryId; error bodies {message}; 401 'API keys should start with ctx7sk'; 404 unknown library; 429 'Rate limited or quota exceeded'), dist/lib/encryption.js (Authorization: Bearer <key>), dist/lib/utils.js (library fields title, id, description, totalSnippets, trustScore, benchmarkScore, versions, source)",
+      "@upstash/context7-sdk 0.6.0 (npm, tarball sha256 1eb66dc42394bf1be9fc6b44a5aca28a089f0f3f7cd58196a3491fb4e54ff970): dist/client.d.ts (ApiCodeSnippet {codeTitle, codeDescription, codeLanguage, codeList [{language, code}], codeId, codeTokens?, pageTitle?}; ApiInfoSnippet {content, breadcrumb?, pageId, contentTokens?}), dist/client.js (GET v2/context with type=json -> {codeSnippets, infoSnippets}; error body {error, message}; rate-limit headers ratelimit-limit / ratelimit-remaining / ratelimit-reset / retry-after; retryable statuses 408 425 429 500 502 503 504; key prefix ctx7sk)"
+    ],
+    "packed": "2026-10-24 with npm pack into D:/mcc-scratch-websearch-b/npm/ (the one allowed registry read; neither package was run)",
+    "not_verified": "Context7's real 5xx body and the exact JSON keys outside the clients' declared types are not known; this adapter was not run against a real key."
+  },
+  "responses": {
+    "libs_search_ok": {
+      "status": 200,
+      "headers": {"content-type": "application/json", "ratelimit-limit": "60", "ratelimit-remaining": "59", "ratelimit-reset": "1792800060"},
+      "body": {
+        "results": [
+          {
+            "id": "/vercel/next.js",
+            "title": "Next.js",
+            "description": "The React framework for the web (invented description)",
+            "totalSnippets": 3201,
+            "trustScore": 10,
+            "benchmarkScore": 91.2,
+            "versions": ["v15.1.8"],
+            "source": "https://github.com/vercel/next.js"
+          },
+          {
+            "id": "/websites/nextjs_org",
+            "title": "Next.js docs site",
+            "description": "A second, weaker match (invented)",
+            "totalSnippets": 900,
+            "trustScore": 7,
+            "benchmarkScore": 70.0
+          }
+        ]
+      }
+    },
+    "libs_search_empty": {
+      "status": 200,
+      "headers": {"content-type": "application/json"},
+      "body": {"results": []}
+    },
+    "context_ok": {
+      "status": 200,
+      "headers": {"content-type": "application/json"},
+      "body": {
+        "codeSnippets": [
+          {
+            "codeTitle": "Cache a fetch request",
+            "codeDescription": "Opt one fetch into the data cache (invented example).",
+            "codeLanguage": "typescript",
+            "codeList": [
+              {"language": "typescript", "code": "const res = await fetch(url, { cache: 'force-cache' })"}
+            ],
+            "codeId": "https://github.com/vercel/next.js/blob/canary/docs/fetch.mdx#snippet-1",
+            "codeTokens": 41,
+            "pageTitle": "Data fetching"
+          },
+          {
+            "codeTitle": "A long example",
+            "codeDescription": "A snippet longer than the excerpt bound (invented).",
+            "codeLanguage": "javascript",
+            "codeList": [
+              {"language": "javascript", "code": "LONG_CODE_PLACEHOLDER"}
+            ],
+            "codeId": "https://github.com/vercel/next.js/blob/canary/docs/long.mdx#snippet-2"
+          },
+          {
+            "codeTitle": "A snippet with no source",
+            "codeDescription": "Has no codeId, so it cannot be cited (invented).",
+            "codeLanguage": "text",
+            "codeList": [{"language": "text", "code": "x"}],
+            "codeId": ""
+          }
+        ],
+        "infoSnippets": [
+          {
+            "content": "Revalidation refreshes cached data on an interval (invented).",
+            "breadcrumb": "Caching > Revalidation",
+            "pageId": "https://github.com/vercel/next.js/blob/canary/docs/revalidate.mdx",
+            "contentTokens": 12
+          },
+          {
+            "content": "An info snippet with no breadcrumb (invented).",
+            "pageId": "https://github.com/vercel/next.js/blob/canary/docs/plain.mdx"
+          }
+        ]
+      }
+    },
+    "context_empty": {
+      "status": 200,
+      "headers": {"content-type": "application/json"},
+      "body": {"codeSnippets": [], "infoSnippets": []}
+    },
+    "unauthorized": {
+      "status": 401,
+      "headers": {"content-type": "application/json"},
+      "body": {"error": "unauthorized", "message": "Invalid API key. Please check your API key. API keys should start with 'ctx7sk' prefix."}
+    },
+    "rate_limited": {
+      "status": 429,
+      "headers": {"content-type": "application/json", "retry-after": "7", "ratelimit-limit": "60", "ratelimit-remaining": "0", "ratelimit-reset": "1792800067"},
+      "body": {"error": "rate_limited", "message": "Rate limited or quota exceeded. Upgrade your plan at https://context7.com/plans for higher limits."}
+    },
+    "server_error": {
+      "status": 503,
+      "headers": {"content-type": "text/plain"},
+      "body_text": "service unavailable (invented)"
+    },
+    "not_found": {
+      "status": 404,
+      "headers": {"content-type": "application/json"},
+      "body": {"error": "not_found", "message": "The library you are trying to access does not exist. Please try with a different library ID."}
+    },
+    "malformed_not_json": {
+      "status": 200,
+      "headers": {"content-type": "text/html"},
+      "body_text": "<html><body>not the API</body></html>"
+    },
+    "malformed_shape": {
+      "status": 200,
+      "headers": {"content-type": "application/json"},
+      "body": {"libraries": "not the documented shape"}
+    }
+  }
+}

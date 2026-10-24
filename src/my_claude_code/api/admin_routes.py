@@ -387,8 +387,20 @@ from my_claude_code.websearch.registry import search_with_logging
 
 from .dependencies import get_services, get_settings
 from .ports import ApiServices
+from .web_tools.search_books import cached_search_key_books
 from .web_tools.search_key_charge import no_chain_key_charge
-from .web_tools.search_providers import cached_key_pool_snapshot, runtime_provider
+from .web_tools.search_key_health import (
+    POOL_CHAIN,
+    books_health,
+    books_match,
+    serving_pool,
+)
+from .web_tools.search_providers import (
+    cached_key_pool_facts,
+    cached_key_pool_snapshot,
+    reset_cached_pool_key,
+    runtime_provider,
+)
 
 router = APIRouter()
 
@@ -735,6 +747,14 @@ def _config_response() -> dict[str, Any]:
     # the Model Config rail headings. A route with no alias -- MODEL_FABLE --
     # simply is not a key here, and the page shows no alias for it.
     payload["route_tier_aliases"] = tier_alias_by_route_env_var()
+    # 7.113.0: the search providers Auto never picks (Context7 answers with
+    # library documentation), so the Web Search page resolves "Auto" exactly
+    # as ``websearch.registry.resolve_provider_id`` does.
+    payload["websearch_manual_only"] = [
+        provider_id
+        for provider_id, descriptor in WEBSEARCH_CATALOG.items()
+        if not descriptor.auto_select
+    ]
     return payload
 
 
@@ -2678,13 +2698,20 @@ async def update_rtk(payload: RtkUpdatePayload, request: Request):
 
 
 @router.get("/admin/api/websearch/credentials/{env_key}/keys")
-async def list_websearch_credential_keys(env_key: str, request: Request):
+async def list_websearch_credential_keys(
+    env_key: str,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
     require_loopback_admin(request)
     descriptor = _websearch_descriptor_for_env(env_key)
     state = load_value_state()
     entry = state.get(env_key, {"value": "", "source": "default"})
     keys = parse_credential_keys(entry["value"])
     names = pool_names(websearch_pool_id(env_key))
+    health, key_health = _websearch_key_health(
+        services.requests.current_settings(), descriptor.provider_id, keys
+    )
     return {
         "provider_id": descriptor.provider_id,
         "env_key": env_key,
@@ -2706,8 +2733,35 @@ async def list_websearch_credential_keys(env_key: str, request: Request):
             }
             for index, key in enumerate(keys)
         ],
-        "health": cached_key_pool_snapshot(descriptor.provider_id),
+        # The pool that serves today's route, in the shape and the state
+        # spelling the page has always read (7.113.0: the chain's books are
+        # projected into it; with no chain this is the snapshot it always was).
+        "health": health,
+        # 7.113.0, additive: which pool that is, and why each key is benched.
+        "key_health": key_health,
     }
+
+
+def _websearch_key_health(
+    settings: Settings, provider_id: str, keys: tuple[str, ...]
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """``health`` and ``key_health`` for one provider, from the pool that serves.
+
+    ``key_health.keys`` is None while that pool has never served (nothing
+    measured), exactly as ``health`` is.
+    """
+
+    pool = serving_pool(settings, provider_id)
+    health: dict[str, Any] | None = None
+    facts: list[dict[str, Any]] | None = None
+    if pool == POOL_CHAIN:
+        books = cached_search_key_books(provider_id)
+        if books is not None and books_match(books, keys):
+            health, facts = books_health(books)
+    else:
+        health = cached_key_pool_snapshot(provider_id)
+        facts = cached_key_pool_facts(provider_id)
+    return health, {"pool": pool, "keys": facts}
 
 
 @router.put("/admin/api/websearch/credentials/{env_key}/keys/order")
@@ -2810,6 +2864,59 @@ async def delete_websearch_credential_key(
     return result | {
         "provider_id": descriptor.provider_id,
         "keys": _masked_keys(env_key),
+    }
+
+
+@router.post("/admin/api/websearch/credentials/{env_key}/keys/{index}/reset")
+async def reset_websearch_credential_key(
+    env_key: str,
+    index: int,
+    request: Request,
+    key_id: str | None = Query(default=None, alias="id"),
+    services: ApiServices = Depends(get_services),
+):
+    """Put one benched web search key back in service (7.113.0).
+
+    Resets the key in the pool that serves today's route: with the search
+    chain listing the provider, its books' ``CredentialRotationState.reset_key``
+    -- the model pool's own reset; otherwise the provider's ``KeyPool`` through
+    the same engine restore. Nothing is written to the settings file. A pool
+    that has never served has nothing to reset and says so.
+    """
+
+    require_loopback_admin(request)
+    descriptor = _websearch_descriptor_for_env(env_key)
+    entry = load_value_state().get(env_key, {"value": "", "source": "default"})
+    keys = parse_credential_keys(entry["value"])
+    if index < 0 or index >= len(keys):
+        raise HTTPException(status_code=404, detail="Web search key index out of range")
+    if key_id is not None and credential_fingerprint(keys[index]) != key_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The key list changed - reopen the pool and try again.",
+        )
+    settings = services.requests.current_settings()
+    pool = serving_pool(settings, descriptor.provider_id)
+    restored: bool | None = None
+    if pool == POOL_CHAIN:
+        books = cached_search_key_books(descriptor.provider_id)
+        if books is not None and books_match(books, keys):
+            restored = await books.state.reset_key(index)
+    else:
+        restored = reset_cached_pool_key(descriptor.provider_id, index)
+    health, key_health = _websearch_key_health(
+        settings, descriptor.provider_id, keys
+    )
+    return {
+        "provider_id": descriptor.provider_id,
+        "env_key": env_key,
+        "index": index,
+        "pool": pool,
+        # None: that pool has not served this key list yet, so no key in it
+        # carries any health to reset.
+        "reset": restored,
+        "health": health,
+        "key_health": key_health,
     }
 
 

@@ -11,6 +11,9 @@ FieldType = Literal[
     "model",
     "optional_model",
     "model_chain",
+    # 7.113.0: WEB_SEARCH_CHAIN, drawn by the model chain editor with a
+    # search-service picker; its pauses live in WEB_SEARCH_CHAIN_PAUSED.
+    "websearch_chain",
     "select",
     "textarea",
     "oauth_login",

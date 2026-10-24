@@ -187,6 +187,7 @@ class KeyPool:
             raise ValueError("KeyPool requires at least one key slot")
         self._keys = tuple(keys)
         self._clock = clock
+        self._lockout_tiers = len(tuning.lockout_tiers)
         self._engine = RotationEngine(
             len(self._keys), policy=policy, tuning=tuning, clock=clock
         )
@@ -194,6 +195,10 @@ class KeyPool:
         # can be told apart from a generic-ladder one (a caller that still
         # reports generic failures shares the same state and deadline field).
         self._rate_limited_until: dict[int, float] = {}
+        # 7.113.0, read only by ``health_facts``: what last locked each slot
+        # out -- "auth" (the provider rejected the key) or "quota" (it said
+        # the balance is empty). Both walk the same lockout ladder.
+        self._lockout_kind: dict[int, str] = {}
 
     @property
     def policy(self) -> str:
@@ -276,6 +281,7 @@ class KeyPool:
 
     def report_success(self, index: int) -> None:
         self._engine.succeed(index)
+        self._lockout_kind.pop(index, None)
 
     def report_failure(
         self, index: int, *, kind: str, message: str | None = None
@@ -286,7 +292,67 @@ class KeyPool:
             self.report_rate_limit(index, message=message)
             return
         failure_class = "auth" if kind in ("auth", "quota") else "transient"
+        if failure_class == "auth":
+            self._lockout_kind[index] = kind
         self._engine.fail(index, failure_class, message=message)
+
+    def reset_key(self, index: int) -> bool:
+        """Restore one key to healthy by hand (the Web Search page's Reset).
+
+        The engine's own ``restore`` -- the call
+        ``CredentialRotationState.reset_key`` makes for a model key -- so a
+        reset here means exactly what it means on a model pool.
+        """
+
+        restored = self._engine.restore(index)
+        if restored:
+            self._rate_limited_until.pop(index, None)
+            self._lockout_kind.pop(index, None)
+        return restored
+
+    def health_facts(self) -> list[dict[str, Any]]:
+        """Why each slot is benched, in the page's one spelling (7.113.0).
+
+        ``state`` is the snapshot's own lowercase value; ``reason`` is
+        ``None`` (healthy), ``"rate_limited"`` (inside a 429 wait),
+        ``"out_of_credits"`` or ``"rejected"`` (locked out by an empty
+        balance or a rejected key) or ``"failures"`` (the generic ladder or
+        the breaker); ``lockout_tier`` is the step of the lockout ladder the
+        slot is on (0 when it has none) out of ``lockout_tiers``.
+        """
+
+        self._engine.refresh()
+        now = self._clock()
+        facts: list[dict[str, Any]] = []
+        for index, slot in enumerate(self._engine.slots()):
+            state = slot.state
+            if state is KeyHealthState.HEALTHY:
+                reason: str | None = None
+            elif state is KeyHealthState.LOCKED_OUT:
+                reason = (
+                    "out_of_credits"
+                    if self._lockout_kind.get(index) == "quota"
+                    else "rejected"
+                )
+            elif self._rate_limit_remaining(index) > 0:
+                reason = "rate_limited"
+            else:
+                reason = "failures"
+            facts.append(
+                {
+                    "index": index,
+                    "state": state.value,
+                    "remaining_s": (
+                        0.0
+                        if state is KeyHealthState.HEALTHY
+                        else round(max(0.0, slot.deadline - now), 3)
+                    ),
+                    "reason": reason,
+                    "lockout_tier": min(slot.auth_failures, self._lockout_tiers),
+                    "lockout_tiers": self._lockout_tiers,
+                }
+            )
+        return facts
 
     def report_rate_limit(
         self,

@@ -197,7 +197,12 @@ def _fallback_policy_spec() -> dict[str, Any]:
 
 
 def _search_chain_field_specs() -> tuple[dict[str, Any], ...]:
-    """The search chain (7.112.0), as plain text fields until its editor ships."""
+    """The search chain (7.112.0) and its pauses.
+
+    Since 7.113.0 the chain is drawn by the model chain editor on the Web
+    Search page's Search chain card (``websearch_chain``); the card's Pause
+    buttons edit the paused list, so that field has no control of its own.
+    """
 
     entries = " | ".join((*WEBSEARCH_CATALOG, "legacy"))
     return (
@@ -205,6 +210,7 @@ def _search_chain_field_specs() -> tuple[dict[str, Any], ...]:
             "key": "WEB_SEARCH_CHAIN",
             "label": "Search Chain",
             "section_id": "websearch",
+            "field_type": "websearch_chain",
             "settings_attr": "web_search_chain",
             "description": (
                 "Optional ordered list of search services, comma-separated, "

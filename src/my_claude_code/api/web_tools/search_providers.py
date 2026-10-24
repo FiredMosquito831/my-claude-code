@@ -46,6 +46,24 @@ def cached_key_pool_snapshot(provider_id: str) -> dict[str, Any] | None:
     return cached[1].key_pool.snapshot()
 
 
+def cached_key_pool_facts(provider_id: str) -> list[dict[str, Any]] | None:
+    """Why each key of a cached provider is benched (7.113.0); None when never used."""
+
+    cached = _cache.get(provider_id)
+    if cached is None:
+        return None
+    return cached[1].key_pool.health_facts()
+
+
+def reset_cached_pool_key(provider_id: str, index: int) -> bool | None:
+    """Restore one key of a cached provider's pool; None when never used."""
+
+    cached = _cache.get(provider_id)
+    if cached is None:
+        return None
+    return cached[1].key_pool.reset_key(index)
+
+
 async def reset_runtime_providers() -> None:
     """Close and drop every cached provider (tests, teardown)."""
 

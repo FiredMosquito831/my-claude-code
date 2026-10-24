@@ -24,6 +24,9 @@ _EXPECTED_WEBSEARCH_ORDER: tuple[str, ...] = (
     "parallel",
     "searchapi",
     "serpapi",
+    # 7.113.0: library documentation, appended so Auto's order is unchanged
+    # (and Auto never picks it: ``auto_select=False``).
+    "context7",
 )
 
 
@@ -192,7 +195,19 @@ _EXPECTED_ADVANCED_ENVS: dict[str, tuple[str, ...]] = {
         "SERPAPI_GL",
         "SERPAPI_HL",
     ),
+    # Its API takes a query and a library and nothing else MCC would set.
+    "context7": (),
 }
+
+
+def test_only_context7_is_kept_out_of_auto() -> None:
+    """Auto picks a web search; a documentation provider is chosen by name."""
+
+    assert [
+        provider_id
+        for provider_id, desc in WEBSEARCH_CATALOG.items()
+        if not desc.auto_select
+    ] == ["context7"]
 
 _FIELD_TYPES = frozenset({"select", "text", "number", "boolean"})
 
