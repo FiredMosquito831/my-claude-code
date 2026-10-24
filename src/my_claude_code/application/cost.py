@@ -26,7 +26,7 @@ no source ever stated. Such a request falls to the next rung entire.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 #: ``cost_source`` values, in ladder order. Stored in the request log and
 #: rendered by the dashboard, so they are a wire contract: renaming one
@@ -219,8 +219,17 @@ class RateCard:
     tier_label: str | None = None
     #: 7.111.0: the 1-hour write rate, where a source states one. Read only for
     #: a usage that reports 1-hour writes; ``cache_write_price`` stays the
-    #: 5-minute rate every other write is priced at.
-    cache_write_1h: OneHourWriteRate | None = None
+    #: 5-minute rate every other write is priced at. Outside equality, repr and
+    #: the canonical encoding (``model_metadata._canonical``), so a card is
+    #: everywhere the card it was before 7.111.0 -- the pinned ladder snapshots
+    #: included -- and only the 1-hour branch of the arithmetic ever reads it.
+    cache_write_1h: OneHourWriteRate | None = field(
+        default=None,
+        compare=False,
+        hash=False,
+        repr=False,
+        metadata={"canonical": False},
+    )
 
     def covers(self, usage: TokenUsage) -> bool:
         """Whether this card states every rate this usage actually needs.

@@ -202,6 +202,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | Analytics | Range-aware rollups, p50/p95 latency, provider and model breakdowns, top errors, auto-refresh | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Cost with provenance | Each request priced once as it is logged, with the rung of the pricing ladder that answered stored beside it | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Honest totals | Reported and estimated shown side by side, never summed; an unpriceable request shows a dash, every total an "N of M priced" denominator | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
+| 1-hour cache writes priced as 1-hour writes | Anthropic's 5 min / 1 h split of each request's cache writes is recorded, and 1-hour writes are priced at a rate a source states (the provider's own list, LiteLLM when on, OpenRouter's live list) or shown as not priced with the reason; requests before 7.111.0 keep their 5-minute price | **Analytics** page | [Guide](docs/USAGE.md#what-a-request-cost) |
 | Exports | JSON export of anything the filters currently select | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Attempt-level export | One row per model the chain tried, not per request, so the fallbacks that spent the time are in the file too | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Web search analytics | Separate route and attempt analytics with full captured input/output | **Web Search** page | [Guide](docs/USAGE.md#10-web-search) |

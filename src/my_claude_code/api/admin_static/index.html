@@ -3392,8 +3392,11 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                 <p class="guide-note">
                   <strong>A longer cache costs more to write.</strong> Anthropic bills
                   a cache write at 1.25&times; the input price for 5 min and at
-                  2&times; for 1 h; reads are cheap either way. MCC's cost figures
-                  still price every cache write at the 5-minute rate for now. Hosts
+                  2&times; for 1 h; reads are cheap either way. Since 7.111.0 MCC's
+                  cost figures price each write at the rate of the lifetime it was
+                  written with, as Anthropic reports it, or say <em>not priced</em>
+                  where no source states the 1-hour rate (see <a
+                  href="#guide-cost">What a request cost</a>). Hosts
                   that cache automatically, and hosts nothing is known about, get
                   nothing from this setting (see <a
                   href="#guide-prompt-cache-lifetime-hosts">Other hosts</a>). If a host
@@ -5632,6 +5635,7 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                     <tr><td>3</td><td><code>est.</code> LiteLLM</td><td>LiteLLM's published price map, if you turn that source on</td></tr>
                     <tr><td>4</td><td><code>est.</code> cross-provider</td><td>a vote across same-named rows in <em>other</em> providers' catalogues. The model is the same; the seller is not</td></tr>
                     <tr><td>&mdash;</td><td><code>&mdash;</code> <strong>not priced</strong></td><td>nothing published a rate</td></tr>
+                    <tr><td>&mdash;</td><td><code>&mdash;</code> <strong>not priced</strong>: no source states the 1 h write rate</td><td>the request wrote 1-hour cache entries and no source states that rate for this model on this host (7.111.0)</td></tr>
                   </tbody>
                 </table>
                 <p class="guide-note">
@@ -5662,6 +5666,22 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                     <strong>Nothing is backfilled.</strong> Requests logged before 6.54.0
                     stay unpriced forever. Pricing them at today's rates would produce a
                     confident number that was never anybody's bill.
+                  </li>
+                  <li>
+                    <strong>1-hour cache writes take the 1-hour rate (7.111.0).</strong>
+                    Anthropic says in every answer how many cache tokens it wrote for
+                    5 minutes and how many for 1 hour (the request detail's
+                    <em>Cache writes by lifetime</em> line), and bills them differently.
+                    The 1-hour writes are priced at a rate a source states for that model
+                    on that host &mdash; the provider's own list, LiteLLM's map while its
+                    pricing is on, then OpenRouter's live list to fill a gap; models.dev
+                    states only the 5-minute rate. Where no source states it the request
+                    is <strong>not priced</strong>, and says why &mdash; never priced at the
+                    5-minute rate. The cost line names the rate each part took, and the
+                    <a href="#guide-prompt-cache-lifetime">Cache lifetime</a> row on the
+                    Models page shows the 1-hour write price and its source. Requests
+                    logged before 7.111.0 priced 1-hour writes at the 5-minute rate and
+                    keep that price.
                   </li>
                   <li>
                     <strong>A <a href="#guide-images">describe</a> hop is its own
