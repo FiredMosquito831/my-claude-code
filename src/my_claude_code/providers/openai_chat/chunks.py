@@ -32,8 +32,21 @@ is part of the observable shape, so a field the SDK declares must stay
 declared here, not silently become an extra.
 """
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
+
+#: How long a finished stream waits, after ``data: [DONE]``, for the rest of
+#: its body -- in practice only the chunked terminator, which a host writes in
+#: the same breath as ``[DONE]``. Read to its end, the response hands its
+#: connection back to the pool; closed before it, the connection is thrown
+#: away (7.111.1). A body that is already complete ends at once and never
+#: comes near this; a host that holds its body open after ``[DONE]`` is
+#: waited for this long and then closed exactly as before. Half a second
+#: covers a terminator that travels in its own segment behind a delayed ACK
+#: (200 ms on Windows) through a slow proxy, and is the most a host that
+#: never ends its body can add to the end of a reply.
+END_OF_BODY_WAIT_SECONDS = 0.5
 
 #: Shared empty extras. Never mutated: ``model_extra`` is read-only to every
 #: consumer in this repo, and handing out one object keeps the common case
@@ -281,6 +294,17 @@ class MccChatChunkStream:
     Like ``AsyncStream`` this exposes ``close`` and no ``aclose``, so
     ``maybe_await_aclose`` treats it exactly as it treats the SDK's stream and
     the response is still closed by the generator's own ``finally``.
+
+    One deliberate difference since 7.111.1: at ``[DONE]`` the SDK breaks and
+    closes the response before its body has ended (``openai/_streaming.py``
+    ``AsyncStream.__stream__``), and ``httpcore`` keeps a connection only when
+    both sides of the exchange are done -- otherwise it closes it. So no Chat
+    Completions stream ever reused its connection, whatever
+    ``PROXY_KEEPALIVE_SECONDS`` said. Here the body is first read to its end
+    (:func:`_read_to_end_of_body`), bounded by ``END_OF_BODY_WAIT_SECONDS``.
+    Only on that one path: every chunk has already been yielded, and an error
+    frame, a cancellation or a consumer that stops early still closes the
+    response at once, exactly as before.
     """
 
     __slots__ = ("_decoder", "_iterator", "response")
@@ -299,9 +323,11 @@ class MccChatChunkStream:
 
     async def __stream__(self) -> AsyncIterator[Any]:
         response = self.response
+        events = self._decoder.aiter_bytes(response.aiter_bytes())
         try:
-            async for sse in self._decoder.aiter_bytes(response.aiter_bytes()):
+            async for sse in events:
                 if sse.data.startswith("[DONE]"):
+                    await _read_to_end_of_body(events)
                     break
                 data = sse.json()
                 if isinstance(data, Mapping) and data.get("error"):
@@ -319,6 +345,25 @@ class MccChatChunkStream:
     async def close(self) -> None:
         """Close the response and release the connection."""
         await self.response.aclose()
+
+
+async def _read_to_end_of_body(events: AsyncIterator[Any]) -> None:
+    """Read what follows ``[DONE]`` to the body's end, bounded, and discard it.
+
+    Called only once ``[DONE]`` has arrived, when the stream's outcome is
+    settled: every chunk has been yielded, and anything after ``[DONE]`` was
+    never read before either. So nothing that happens here may change that
+    outcome -- a host that closes without the terminator, a decoding error,
+    or the bound running out all end the read, and the caller closes the
+    response as it always did. A cancellation is not one of those: it is the
+    request being abandoned, and it propagates unchanged.
+    """
+    try:
+        async with asyncio.timeout(END_OF_BODY_WAIT_SECONDS):
+            async for _ in events:
+                pass
+    except Exception:
+        return
 
 
 def _stream_api_error(data: Mapping[Any, Any], response: Any) -> Exception:

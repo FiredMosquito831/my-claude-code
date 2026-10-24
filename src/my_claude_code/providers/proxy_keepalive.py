@@ -37,12 +37,14 @@ What it cannot do
 
 A connection only goes back to the pool when its response was read to the
 end. Responses and Messages streams are (their readers run the body out), and
-so is every request that is not a stream. A Chat Completions stream is not:
-the OpenAI SDK's ``AsyncStream`` stops at ``data: [DONE]`` and closes the
+so is every request that is not a stream. Until 7.111.1 a Chat Completions
+stream was not: its reader (``openai_chat/chunks.py``, a transcription of the
+OpenAI SDK's ``AsyncStream``) stopped at ``data: [DONE]`` and closed the
 response before the chunked body's terminator, which closes the connection
 whatever its keep-alive says (measured on the 7.94.0 scratch chain: one new
-tunnel per Chat Completions stream with the setting at 0 and at 60). Changing
-how that stream ends is not a constructor argument and is not done here.
+tunnel per Chat Completions stream with the setting at 0 and at 60). That
+reader now reads the body to its end after ``[DONE]``, bounded; how a stream
+ends is not a constructor argument, so nothing here changed for it.
 
 Nothing about trust, timeouts, redirects or the proxy itself is touched. The
 SOCKS5 handshake bound and the dial clock wrap the pool's network backend

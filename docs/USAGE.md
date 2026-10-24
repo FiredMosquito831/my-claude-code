@@ -6491,9 +6491,9 @@ Gotchas:
   Resilience → Credential health). `PROXY_KEEPALIVE_SECONDS` keeps an idle
   connection through each proxy exit open so the next request through it skips
   the proxy's tunnel handshake and the TLS handshake — the HTTP library's own
-  default closes it after 5 seconds; **60 is recommended**. Responses and
-  Messages streams and non-streamed requests reuse the connection; a Chat
-  Completions stream closes it when it ends, so it gains nothing. It reaches
+  default closes it after 5 seconds; **60 is recommended**. Chat Completions,
+  Responses and Messages streams and non-streamed requests reuse the
+  connection (a Chat Completions stream did not before 7.111.1). It reaches
   only the proxy entries of a chain with two or more entries.
   `PROXY_ORDER_RECENCY_HALF_LIFE_MINUTES` makes **Keep the fastest healthy
   proxy first** and **Sort by speed now** prefer exits a real request (answered,
