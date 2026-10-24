@@ -10051,6 +10051,8 @@ function appendTierAlias(heading, modelKey) {
 
 /** The name this route is called on the page, for a sentence about it. */
 function routeLabelFor(modelKey) {
+  // 7.113.0: the Web Search page's chain shares the rails' drag and sentences.
+  if (modelKey === "WEB_SEARCH_CHAIN") return "Web search";
   const tier = ROUTE_TIERS.find((candidate) => candidate.modelKey === modelKey);
   if (tier) return tier.label;
   const media = MEDIA_RAILS.find((spec) => spec.modelKey === modelKey);
@@ -10453,13 +10455,13 @@ function applyRouteDrop(target, ids, copy) {
     });
     const where = `at position ${firstAt + 1}`;
     if (dest === usable[0].editor && copy) {
-      sentence = `Copied ${landed} model${landed === 1 ? "" : "s"} inside the ${routeLabelFor(dest.modelKey)} chain, ${where}. The rail now lists ${landed === 1 ? "it" : "them"} more than once, and each listing is one more try.`;
+      sentence = `Copied ${landed} ${routeThing(dest, landed)} inside the ${routeLabelFor(dest.modelKey)} chain, ${where}. The rail now lists ${landed === 1 ? "it" : "them"} more than once, and each listing is one more try.`;
     } else if (dest === usable[0].editor) {
-      sentence = `Moved ${landed} model${landed === 1 ? "" : "s"} inside the ${routeLabelFor(dest.modelKey)} chain, ${where}.`;
+      sentence = `Moved ${landed} ${routeThing(dest, landed)} inside the ${routeLabelFor(dest.modelKey)} chain, ${where}.`;
     } else if (copy) {
-      sentence = `Copied ${landed} model${landed === 1 ? "" : "s"} into the ${routeLabelFor(dest.modelKey)} chain, ${where}. They are still in the ${sourceLabel} chain.`;
+      sentence = `Copied ${landed} ${routeThing(dest, landed)} into the ${routeLabelFor(dest.modelKey)} chain, ${where}. They are still in the ${sourceLabel} chain.`;
     } else {
-      sentence = `Moved ${landed} model${landed === 1 ? "" : "s"} into the ${routeLabelFor(dest.modelKey)} chain, ${where}.`;
+      sentence = `Moved ${landed} ${routeThing(dest, landed)} into the ${routeLabelFor(dest.modelKey)} chain, ${where}.`;
     }
   }
   state.routeUndo = snapshot;
@@ -10470,6 +10472,13 @@ function applyRouteDrop(target, ids, copy) {
     "Undo",
   );
   return true;
+}
+
+/** What a rail's rows are, for a sentence: models, or (7.113.0) the search
+ *  chain's services. */
+function routeThing(editor, count) {
+  const noun = (editor && editor.options && editor.options.thing) || "model";
+  return count === 1 ? noun : `${noun}s`;
 }
 
 /** Put the last drag back. One drag is one entry, however many rows it moved. */
@@ -10744,6 +10753,17 @@ function announceRoutePauseFailure(modelKey, ref, paused, reason) {
   );
 }
 
+/** Where a rail sentence is read: the Web Search page's own panel while that
+ *  page is on screen (7.113.0, its search chain), else Model Config's. */
+function routeStatusTarget() {
+  const web = byId("view-web_search");
+  if (web && !web.hidden) {
+    const own = byId("webSearchChainStatus");
+    if (own) return own;
+  }
+  return byId("routeStatus");
+}
+
 /** One live region for the whole Model Config page: drag and pause both.
  *
  * Whole sentences, never a bare number, and a persistent panel rather than a
@@ -10751,7 +10771,7 @@ function announceRoutePauseFailure(modelKey, ref, paused, reason) {
  * `hidden` is toggled rather than `style.display`.
  */
 function announceRoute(sentence, undoLabel, undoAction) {
-  const target = byId("routeStatus");
+  const target = routeStatusTarget();
   if (!target) return;
   target.textContent = "";
   if (!sentence) {
@@ -12257,6 +12277,8 @@ const SECTION_RENDERERS = {
   credential_health: renderCredentialHealth,
   loop_health: renderLoopHealth,
   request_log: renderRequestLogSection,
+  // 7.113.0: the Search chain card above the grid it always had.
+  websearch: renderWebSearchSettings,
 };
 
 /* ------------------------------------------------------------------ *
@@ -13099,7 +13121,12 @@ function buildFieldControl(field) {
   // The chain editor is returned as well as rendered: a route's primary model
   // is a separate setting sitting on the same rail, and the editor is what
   // owns the ordering rules that let the two trade places.
-  const editor = field.type === "model_chain" ? new ModelChainEditor(input, field) : null;
+  const editor =
+    field.type === "model_chain"
+      ? new ModelChainEditor(input, field)
+      : field.type === "websearch_chain"
+        ? new ModelChainEditor(input, field, webSearchChainEditorOptions())
+        : null;
   const control =
     field.type === "model" || field.type === "optional_model"
       ? new ModelCombobox(input, field).element
@@ -13221,7 +13248,11 @@ function fieldMetaRow(field, input) {
  *  either from here would be a second, contradictory way to edit them. */
 function fieldCanResetToDefault(field) {
   if (!field.set || field.locked || field.secret) return false;
-  return field.type !== "model_chain" && field.type !== "oauth_login";
+  return (
+    field.type !== "model_chain" &&
+    field.type !== "websearch_chain" &&
+    field.type !== "oauth_login"
+  );
 }
 
 function resetFieldToDefault(input) {
@@ -14094,7 +14125,7 @@ function inputForField(field) {
     return input;
   }
 
-  if (field.type === "model_chain") {
+  if (field.type === "model_chain" || field.type === "websearch_chain") {
     // Wire value is the comma-joined chain string; the chain editor UI
     // (built in renderField) reads/writes this hidden input so the normal
     // dirty-state/apply machinery needs no special-casing for this type.
@@ -14409,7 +14440,18 @@ class ModelCombobox {
 // source of truth for changedValues()/apply; rows themselves carry no
 // data-key so they never get picked up as standalone settings.
 class ModelChainEditor {
-  constructor(input, field) {
+  /** `options` (7.113.0) lets one other chain reuse this editor -- the Web
+   *  Search page's search chain -- with its own row picker, row controls and
+   *  words. With none, every node and label is exactly what a model chain has
+   *  always rendered:
+   *   - picker(value, rowField) -> { input, element }: the row's control;
+   *   - rowControls(wrapper, routeId, label, editor) -> { grip, cell };
+   *   - rowNoun / addLabel: the words ("fallback", "Add fallback");
+   *   - modelKey: the name the drag machinery and its sentences use;
+   *   - onChange(editor): called after every change to the value. */
+  constructor(input, field, options = {}) {
+    this.options = options;
+    this.rowNoun = options.rowNoun || "fallback";
     this.input = input;
     this.field = field;
     this.rows = [];
@@ -14417,7 +14459,7 @@ class ModelChainEditor {
     // The two settings identifying this rail, so a route id resolves back to
     // an editor without walking the DOM.
     this.chainKey = field.key;
-    this.modelKey = "";
+    this.modelKey = options.modelKey || "";
     // Set by setPrimary() when this chain sits on a route rail. Null for a
     // chain rendered on its own, which then has nothing to trade places with.
     this.primary = null;
@@ -14428,11 +14470,12 @@ class ModelChainEditor {
     this.rowsEl = document.createElement("div");
     this.rowsEl.className = "model-chain-rows";
 
+    const addLabel = options.addLabel || "Add fallback";
     this.addButton = document.createElement("button");
     this.addButton.type = "button";
     this.addButton.className = "secondary-button model-chain-add";
-    this.addButton.textContent = "Add fallback";
-    this.addButton.setAttribute("aria-label", `Add fallback to ${field.label}`);
+    this.addButton.textContent = addLabel;
+    this.addButton.setAttribute("aria-label", `${addLabel} to ${field.label}`);
     this.addButton.addEventListener("click", () => this.addRow("", true));
 
     // The hidden input carries this field's value and its data-key, so it
@@ -14462,6 +14505,7 @@ class ModelChainEditor {
     // A row's ref is what a pause names, and editing the combobox changes it.
     syncRoutePauseUi();
     this.markRepeats();
+    if (this.options.onChange) this.options.onChange(this);
   }
 
   /** Mark every row of a model this rail lists more than once (7.82.0).
@@ -14501,17 +14545,25 @@ class ModelChainEditor {
     const rowField = {
       type: "model",
       key: `${this.field.key}__chain_${seq}`,
-      label: `${this.field.label} fallback`,
+      label: `${this.field.label} ${this.rowNoun}`,
     };
 
-    const rowInput = document.createElement("input");
-    rowInput.type = "text";
-    rowInput.autocomplete = "off";
-    rowInput.value = value;
-    // No data-key: this row is not an independent setting, only a fragment
-    // of the parent hidden input's comma-joined value.
+    let rowInput;
+    let combobox;
+    if (this.options.picker) {
+      // The picker owns its control; it carries no data-key either.
+      combobox = this.options.picker(value, rowField);
+      rowInput = combobox.input;
+    } else {
+      rowInput = document.createElement("input");
+      rowInput.type = "text";
+      rowInput.autocomplete = "off";
+      rowInput.value = value;
+      // No data-key: this row is not an independent setting, only a fragment
+      // of the parent hidden input's comma-joined value.
 
-    const combobox = new ModelCombobox(rowInput, rowField);
+      combobox = new ModelCombobox(rowInput, rowField);
+    }
     rowInput.addEventListener("input", () => this.syncValue());
     rowInput.addEventListener("change", () => this.syncValue());
 
@@ -14543,7 +14595,9 @@ class ModelChainEditor {
     // identity is the sequence number rather than the value.
     const routeId = `chain:${this.chainKey}#${seq}`;
     wrapper.dataset.chainKey = this.chainKey;
-    const controls = routeNodeControls(wrapper, routeId, rowField.label);
+    const controls = this.options.rowControls
+      ? this.options.rowControls(wrapper, routeId, rowField.label, this)
+      : routeNodeControls(wrapper, routeId, rowField.label);
     wrapper.append(
       controls.grip,
       numberEl,
@@ -14610,18 +14664,19 @@ class ModelChainEditor {
       // live whenever a primary is attached -- it is only the top of the list
       // for a chain rendered without one.
       row.upButton.disabled = index === 0 && !this.canPromoteFirst();
+      const noun = this.rowNoun;
       row.upButton.setAttribute(
         "aria-label",
         index === 0 && this.canPromoteFirst()
-          ? `Promote fallback 1 to ${this.primaryLabel()}`
-          : `Move fallback ${index + 1} up`,
+          ? `Promote ${noun} 1 to ${this.primaryLabel()}`
+          : `Move ${noun} ${index + 1} up`,
       );
       row.downButton.disabled = index === this.rows.length - 1;
-      row.downButton.setAttribute("aria-label", `Move fallback ${index + 1} down`);
-      row.removeButton.setAttribute("aria-label", `Remove fallback ${index + 1}`);
+      row.downButton.setAttribute("aria-label", `Move ${noun} ${index + 1} down`);
+      row.removeButton.setAttribute("aria-label", `Remove ${noun} ${index + 1}`);
       row.combobox.input.setAttribute(
         "aria-label",
-        `${this.field.label} fallback ${index + 1}`,
+        `${this.field.label} ${noun} ${index + 1}`,
       );
       // Which route a pause on this row belongs to. Known only once the rail
       // has adopted a primary, which happens after the rows are built.
@@ -16144,21 +16199,57 @@ function webSearchProviders() {
     });
 }
 
+/** Providers Auto never picks (7.113.0: Context7), from the config payload,
+ *  so "Auto" resolves here exactly as the server resolves it. */
+function webSearchManualOnly() {
+  const ids = state.config && state.config.websearch_manual_only;
+  return new Set(Array.isArray(ids) ? ids : []);
+}
+
 function effectiveWebSearchProvider(providers, activeSelection) {
   if (activeSelection === "disabled") return null;
+  // 7.113.0: with a chain set, the card that serves first is the chain's.
+  const chain = webSearchChainState();
+  if (chain.entries.length) return chain.serving ? chain.serving.id : null;
   if (activeSelection === "off") return "legacy";
   if (activeSelection !== "auto") return activeSelection;
+  const manualOnly = webSearchManualOnly();
   return (
-    providers.find((provider) => provider.id !== "ddgs" && provider.configured)?.id ||
-    "ddgs"
+    providers.find(
+      (provider) =>
+        provider.id !== "ddgs" && provider.configured && !manualOnly.has(provider.id),
+    )?.id || "ddgs"
   );
 }
 
 function webSearchProviderMeta(provider, activeSelection, effectiveProvider) {
   const parts = [];
+  const chain = webSearchChainState();
+  if (chain.entries.length) {
+    // Where this service sits in the chain, which is all routing reads now.
+    const places = [];
+    chain.entries.forEach((entry, index) => {
+      if (entry.id === provider.id) places.push(`#${index + 1}`);
+    });
+    const paused = chain.entries.some((entry) => entry.id === provider.id && entry.paused);
+    parts.push(
+      places.length
+        ? `Search chain ${places.join(", ")}${paused ? " (paused)" : ""}`
+        : "Not in the search chain",
+    );
+    parts.push(
+      provider.envKey ||
+        (provider.id === "searxng" ? "SEARXNG_BASE_URL" : "No key required"),
+    );
+    return parts.join(" · ");
+  }
+  const manualOnly = webSearchManualOnly().has(provider.id);
+  if (manualOnly) {
+    parts.push("Library docs · never picked by Auto");
+  }
   if (effectiveProvider === provider.id) {
     parts.push(activeSelection === "auto" ? "Effective via auto" : "Selected");
-  } else if (activeSelection === "auto" && provider.configured) {
+  } else if (activeSelection === "auto" && provider.configured && !manualOnly) {
     parts.push("Available");
   }
   parts.push(
@@ -16202,6 +16293,13 @@ function webSearchConfiguredRoute(providers, activeSelection, effectiveProvider)
 function renderWebSearchRouteSummary(providers, activeSelection, effectiveProvider) {
   const summary = byId("webSearchRouteSummary");
   if (!summary) return;
+  // 7.113.0: a set chain is the route; with none, everything below is the
+  // summary this page has always drawn.
+  const chain = webSearchChainState();
+  if (chain.entries.length) {
+    renderWebSearchChainSummary(summary, activeSelection, chain);
+    return;
+  }
   const effectiveDescriptor = providers.find(
     (provider) => provider.id === effectiveProvider,
   );
@@ -16320,6 +16418,10 @@ function renderWebSearchObservedRoute(lastRoute, configuredRouteIds = null) {
   // ran -- that gap is the operationally true thing worth flagging here,
   // not just a timestamped restatement of the same fact as the headline.
   let routeIds = configuredRouteIds;
+  const chain = routeIds ? null : webSearchChainState();
+  if (chain && chain.entries.length) {
+    routeIds = chain.entries.filter((entry) => !entry.paused).map((entry) => entry.id);
+  }
   if (!routeIds) {
     const allProviders = webSearchProviders();
     const activeSelection = state.fields.get("WEB_SEARCH_PROVIDER")?.value || "auto";
@@ -16568,6 +16670,336 @@ function updateWebSearchCardsFromState() {
   });
 }
 
+/* --------------------------------------------------------- search chain --
+   7.113.0. WEB_SEARCH_CHAIN on the Web Search page, drawn by the model chain
+   editor (ModelChainEditor) with a search-service picker instead of the model
+   combobox. Order, the arrows, drag (the route rail machinery: one drop
+   function, one Undo), repeats (the "×N" chip) are the editor's own. A row's
+   Pause edits WEB_SEARCH_CHAIN_PAUSED, a set of service ids: pausing an entry
+   pauses every place it is listed, which is what that setting means. Nothing
+   is saved until Apply, through the one settings write path. With no chain
+   set, every other part of this page renders exactly as before. */
+
+const WEB_SEARCH_CHAIN_KEY = "WEB_SEARCH_CHAIN";
+const WEB_SEARCH_LEGACY_ENTRY = "legacy";
+
+/** The services a chain row can name: every catalogue provider, then the
+ *  old scraper (a chain entry, not a provider card). */
+function webSearchChainChoices() {
+  return [
+    ...webSearchProviders().map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      configured: provider.configured,
+      envKey: provider.envKey,
+    })),
+    {
+      id: WEB_SEARCH_LEGACY_ENTRY,
+      label: "Legacy DuckDuckGo scraper",
+      configured: true,
+      envKey: null,
+    },
+  ];
+}
+
+function webSearchChainIds(value) {
+  return String(value || "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** The chain as configured right now (the live value, before Apply too). */
+function webSearchChainState() {
+  const chainField = state.fields ? state.fields.get(WEB_SEARCH_CHAIN_KEY) : null;
+  const pausedField = state.fields
+    ? state.fields.get(`${WEB_SEARCH_CHAIN_KEY}_PAUSED`)
+    : null;
+  const paused = new Set(webSearchChainIds(pausedField && pausedField.value));
+  const choices = new Map(webSearchChainChoices().map((choice) => [choice.id, choice]));
+  const entries = webSearchChainIds(chainField && chainField.value).map((id) => {
+    const choice = choices.get(id);
+    return {
+      id,
+      label: choice ? choice.label : id,
+      known: Boolean(choice),
+      configured: Boolean(choice && choice.configured),
+      paused: paused.has(id),
+    };
+  });
+  const serving = entries.find((entry) => !entry.paused && entry.configured) || null;
+  return { entries, serving };
+}
+
+/** One row's picker: a closed list of search services. */
+function webSearchChainPicker(value) {
+  const select = document.createElement("select");
+  select.className = "ws-chain-select";
+  const wanted = String(value || "").trim();
+  const choices = webSearchChainChoices();
+  const match = choices.find((choice) => choice.id === wanted.toLowerCase());
+  if (!wanted) select.appendChild(option("", "Choose a search service…"));
+  if (wanted && !match) {
+    // Kept verbatim and selected: a value this page does not know is never
+    // dropped from the chain by an unrelated save.
+    select.appendChild(option(wanted, `${wanted} (unknown to this page)`));
+  }
+  choices.forEach((choice) => select.appendChild(option(choice.id, choice.label)));
+  select.value = match ? match.id : wanted;
+  return { input: select, element: select };
+}
+
+/** Grip (the route rails' own drag and selection) and a pause cell. */
+function webSearchChainRowControls(wrapper, routeId, label, editor) {
+  const { grip } = routeNodeControls(wrapper, routeId, label);
+  // The rails' class, so the "×N" repeat chip lands in it (paintRouteRepeat);
+  // the button is this chain's own, so the model routes' pause painter never
+  // touches it.
+  const cell = document.createElement("div");
+  cell.className = "route-pause-cell";
+  const chip = document.createElement("span");
+  chip.className = "route-pause-chip";
+  chip.textContent = "Paused";
+  chip.hidden = true;
+  const pause = document.createElement("button");
+  pause.type = "button";
+  pause.className = "ghost-button ws-chain-pause";
+  pause.textContent = "Pause";
+  pause.setAttribute("aria-pressed", "false");
+  pause.addEventListener("click", () => toggleWebSearchChainPause(wrapper, editor));
+  cell.append(chip, pause);
+  return { grip, cell };
+}
+
+function webSearchChainEditorOptions() {
+  return {
+    picker: webSearchChainPicker,
+    rowControls: webSearchChainRowControls,
+    rowNoun: "entry",
+    thing: "search service",
+    addLabel: "Add search service",
+    modelKey: WEB_SEARCH_CHAIN_KEY,
+    onChange: (editor) => {
+      const field = state.fields ? state.fields.get(WEB_SEARCH_CHAIN_KEY) : null;
+      if (field) field.value = editor.input.value;
+      paintWebSearchChain(editor);
+      updateWebSearchCardsFromState();
+    },
+  };
+}
+
+function toggleWebSearchChainPause(wrapper, editor) {
+  const input = editor.pausedInput;
+  const row = editor.rows.find((candidate) => candidate.wrapper === wrapper);
+  const ref = row ? row.combobox.input.value.trim().toLowerCase() : "";
+  if (!input || !ref) return;
+  const listed = String(input.value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const paused = listed.some((entry) => entry.toLowerCase() === ref);
+  input.value = (
+    paused ? listed.filter((entry) => entry.toLowerCase() !== ref) : [...listed, ref]
+  ).join(",");
+  // The hidden input's own listener marks the page dirty.
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  const pausedField = state.fields
+    ? state.fields.get(`${WEB_SEARCH_CHAIN_KEY}_PAUSED`)
+    : null;
+  if (pausedField) pausedField.value = input.value;
+  paintWebSearchChain(editor);
+  updateWebSearchCardsFromState();
+  const label =
+    webSearchChainChoices().find((choice) => choice.id === ref)?.label || ref;
+  announceRoute(
+    paused
+      ? `Resumed ${label} in the search chain. Nothing was saved yet -- press Apply.`
+      : `Paused ${label} in the search chain: a search skips it at every place it is listed, without spending an attempt. Nothing was saved yet -- press Apply.`,
+    null,
+  );
+}
+
+/** Repaint every row's pause state and "no key configured" hint. */
+function paintWebSearchChain(editor) {
+  if (!editor) return;
+  const paused = new Set(webSearchChainIds(editor.pausedInput && editor.pausedInput.value));
+  const choices = new Map(webSearchChainChoices().map((choice) => [choice.id, choice]));
+  editor.rows.forEach((row) => {
+    const ref = row.combobox.input.value.trim().toLowerCase();
+    const isPaused = Boolean(ref) && paused.has(ref);
+    row.wrapper.classList.toggle("is-paused", isPaused);
+    const button = row.wrapper.querySelector(".ws-chain-pause");
+    if (button) {
+      button.textContent = isPaused ? "Resume" : "Pause";
+      button.setAttribute("aria-pressed", isPaused ? "true" : "false");
+      button.setAttribute(
+        "aria-label",
+        `${isPaused ? "Resume" : "Pause"} ${ref || "this entry"} in the search chain`,
+      );
+      button.disabled = !ref || !editor.pausedInput;
+    }
+    const chip = row.wrapper.querySelector(".route-pause-chip");
+    if (chip) chip.hidden = !isPaused;
+    const choice = choices.get(ref);
+    let hint = row.wrapper.querySelector(".ws-chain-hint");
+    if (!choice || choice.configured) {
+      if (hint) hint.remove();
+      return;
+    }
+    if (!hint) {
+      hint = document.createElement("p");
+      hint.className = "ws-chain-hint";
+      row.wrapper.appendChild(hint);
+    }
+    hint.textContent =
+      `no key configured — a search skips this entry ("not configured") ` +
+      `until ${choice.envKey || "its key"} is set`;
+  });
+  const pill = editor.element.closest(".ws-chain-card")?.querySelector(".ws-chain-state");
+  if (pill) {
+    const ids = webSearchChainIds(editor.input.value);
+    const pausedCount = ids.filter((id) => paused.has(id)).length;
+    pill.className = `status-pill ${ids.length ? "ok" : "neutral"} ws-chain-state`;
+    pill.textContent = ids.length
+      ? `${ids.length} ${ids.length === 1 ? "entry" : "entries"}` +
+        (pausedCount ? ` · ${pausedCount} paused` : "")
+      : "Not set";
+  }
+}
+
+/** The Search chain card: the editor, its pause list, and what it means. */
+function renderWebSearchChainCard(field, pausedField) {
+  const card = document.createElement("div");
+  card.className = "ws-chain-card";
+  const head = document.createElement("div");
+  head.className = "ws-chain-head";
+  const title = document.createElement("h4");
+  title.textContent = "Search chain";
+  const pill = document.createElement("span");
+  pill.className = "status-pill ws-chain-state";
+  pill.textContent = "Not set";
+  head.append(title, pill);
+  const lead = document.createElement("p");
+  lead.className = "ws-chain-lead";
+  lead.textContent =
+    "The search services a web search tries, top first; a service may be " +
+    "listed twice. Empty keeps the route above exactly as it is. Set, it " +
+    "replaces Web Search Provider and Fallback Policy (Disabled still " +
+    "disables), and each service's keys follow your model providers' rules.";
+  const { control, editor } = buildFieldControl(field);
+  card.append(head, lead, control);
+  if (pausedField) {
+    // The pause list has no control of its own: the rows' Pause buttons are
+    // it. A hidden input keeps it on the one Apply path.
+    const built = buildFieldControl(pausedField);
+    built.input.type = "hidden";
+    card.appendChild(built.input);
+    if (editor) editor.pausedInput = built.input;
+  }
+  const description = document.createElement("div");
+  description.className = "field-description";
+  description.textContent = field.description || "";
+  card.appendChild(description);
+  if (editor) {
+    // A route rail like the model ones, so the drag, the selection and the
+    // Undo of a drop are theirs.
+    state.routeRails.set(field.key, editor);
+    paintWebSearchChain(editor);
+  }
+  return card;
+}
+
+/** The Web Search settings section: the Search chain card, then the grid
+ *  every other field has always rendered in. */
+function renderWebSearchSettings(fields) {
+  const fragment = document.createDocumentFragment();
+  const chainField = fields.find((field) => field.type === "websearch_chain") || null;
+  const pausedField = chainField
+    ? fields.find((field) => field.key === `${chainField.key}_PAUSED`) || null
+    : null;
+  if (chainField) fragment.appendChild(renderWebSearchChainCard(chainField, pausedField));
+  const grid = document.createElement("div");
+  grid.className = "field-grid";
+  fields
+    .filter((field) => field !== chainField && field !== pausedField)
+    .forEach((field) => grid.appendChild(renderField(field)));
+  fragment.appendChild(grid);
+  return fragment;
+}
+
+/** The route summary while a chain is set: the chain, and what it replaces. */
+function renderWebSearchChainSummary(summary, activeSelection, chain) {
+  const disabled = activeSelection === "disabled";
+  const serving = chain.serving;
+  summary.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "ws-hero-head";
+  const eyebrow = document.createElement("span");
+  eyebrow.className = "eyebrow";
+  eyebrow.textContent = "Active web search route";
+  const note = document.createElement("span");
+  const allPaused = chain.entries.every((entry) => entry.paused);
+  note.className = `status-pill ${disabled ? "neutral" : serving ? "ok" : "warn"}`;
+  note.textContent = disabled
+    ? "Search disabled"
+    : serving
+      ? "Ready"
+      : allPaused
+        ? "Every entry paused"
+        : "Needs configuration";
+  head.append(eyebrow, note);
+
+  const headlineEl = document.createElement("strong");
+  headlineEl.className = "ws-hero-provider";
+  headlineEl.textContent = disabled
+    ? "Web search disabled"
+    : serving
+      ? serving.label
+      : "No chain entry can serve";
+
+  const route = document.createElement("div");
+  route.className = "route-summary-main";
+  const path = document.createElement("span");
+  path.className = "ws-hero-path";
+  const pathLabel = document.createElement("span");
+  pathLabel.className = "ws-hero-path-label";
+  pathLabel.textContent = "Search chain: ";
+  path.appendChild(pathLabel);
+  chain.entries.forEach((entry, index) => {
+    if (index > 0) {
+      const arrow = document.createElement("span");
+      arrow.className = "ws-hero-path-arrow";
+      arrow.textContent = " → ";
+      path.appendChild(arrow);
+    }
+    const hop = document.createElement("span");
+    hop.className =
+      !disabled && serving && entry === serving
+        ? "ws-hero-path-primary"
+        : entry.paused || !entry.configured
+          ? "ws-hero-path-skipped"
+          : "ws-hero-path-fallback";
+    hop.textContent =
+      entry.label +
+      (entry.paused ? " (paused)" : !entry.configured ? " (not configured)" : "");
+    path.appendChild(hop);
+  });
+  const detail = document.createElement("span");
+  detail.className = "ws-hero-chain-note";
+  detail.textContent = disabled
+    ? "Web Search Provider is Disabled, so no search runs and the search chain is not used."
+    : "A search chain is set: Web Search Provider and Fallback Policy are not used " +
+      "while it is. Each service's keys follow your model providers' rules, a " +
+      "paused or unconfigured entry is skipped, and configuration errors skip " +
+      "the entry instead of stopping the route.";
+  route.append(path, detail);
+  summary.append(head, headlineEl, route);
+  renderWebSearchObservedRoute(
+    state.webSearchLastRoute,
+    chain.entries.filter((entry) => !entry.paused).map((entry) => entry.id),
+  );
+}
+
 async function refreshConfigState() {
   const config = await api("/admin/api/config");
   state.config = config;
@@ -16606,10 +17038,43 @@ function keyHealthClass(health) {
   return "error";
 }
 
-function keyHealthText(health) {
+function keyHealthText(health, facts = null) {
   if (!health) return "Unused";
-  const stateName = String(health.state || "unknown").replace(/_/g, " ");
+  // 7.113.0: a benched key says why, in the model rules' words; a healthy
+  // one reads exactly as it always did.
+  const words = keyBenchWords(facts);
+  const stateName = words || String(health.state || "unknown").replace(/_/g, " ");
   return `${stateName} · ${health.requests} req · ${health.failures} err`;
+}
+
+/** "60 s" under two minutes, else the page's usual "5m" / "1h 2m". */
+function benchDuration(seconds) {
+  const s = Math.max(0, Math.ceil(Number(seconds) || 0));
+  return s < 120 ? `${s} s` : formatSeconds(s);
+}
+
+/** Why one search key is benched, or "" while it is not (7.113.0).
+ *
+ * `facts` is one entry of the key list's `key_health.keys`: the same reason
+ * vocabulary for the provider's own pool and for the search chain's books,
+ * so both read alike. */
+function keyBenchWords(facts) {
+  if (!facts || !facts.reason) return "";
+  const left = benchDuration(facts.remaining_s);
+  if (facts.reason === "rate_limited") return `benched ${left}: rate limited`;
+  if (facts.reason === "out_of_credits") return `benched ${left}: out of credits`;
+  if (facts.reason === "rejected") {
+    const tier = Number(facts.lockout_tier) || 1;
+    const tiers = Number(facts.lockout_tiers) || tier;
+    return (
+      `locked out, tier ${tier} of ${tiers}: key rejected` +
+      (Number(facts.remaining_s) > 0 ? ` (${left} left)` : "")
+    );
+  }
+  if (facts.state === "circuit_open") {
+    return `benched ${left}: circuit open after repeated failures`;
+  }
+  return `benched ${left}: after failures`;
 }
 
 async function loadKeyManager(provider, panel) {
@@ -16630,10 +17095,31 @@ async function loadKeyManager(provider, panel) {
       entry,
     ]),
   );
+  // 7.113.0: why each key is benched, and which pool serves today's route.
+  const keyHealth = result.key_health || null;
+  const factsByIndex = new Map(
+    ((keyHealth && keyHealth.keys) || []).map((entry) => [entry.index, entry]),
+  );
+  const chainSet = webSearchChainState().entries.length > 0;
+  const inChain = webSearchChainState().entries.some((entry) => entry.id === provider.id);
+  if (chainSet && keyHealth) {
+    const note = document.createElement("div");
+    note.className = "ws-key-pool-note";
+    note.textContent =
+      keyHealth.pool === "chain"
+        ? "Health from the search chain: these keys follow your model providers' " +
+          "rules (benched only for a rejected key, a 429 or an out-of-credits message)."
+        : "Not in the search chain: health is this provider's own pool, used by " +
+          "Test provider and by searches when no chain is set.";
+    panel.insertBefore(note, list);
+  }
   if (result.keys.length === 0) {
     const empty = document.createElement("div");
     empty.className = "ws-key-empty";
-    empty.textContent = "No keys configured.";
+    empty.textContent =
+      chainSet && inChain
+        ? "No keys configured, so a search skips this chain entry (not configured)."
+        : "No keys configured.";
     list.appendChild(empty);
   }
   const pool = {
@@ -16663,9 +17149,14 @@ async function loadKeyManager(provider, panel) {
       : null;
     paintKeyReference(label, entry.key_label || "(empty)", entry.name || "");
     const health = healthByIndex.get(entry.index);
+    const facts = factsByIndex.get(entry.index) || null;
     const healthEl = document.createElement("span");
     healthEl.className = `status-pill ${keyHealthClass(health)}`;
-    healthEl.textContent = keyHealthText(health);
+    healthEl.textContent = keyHealthText(health, facts);
+    // Only a benched key has anything to reset; a healthy row renders the
+    // nodes it always did.
+    const reset =
+      facts && facts.reason ? webSearchKeyResetButton(provider, entry, panel) : null;
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ghost-button";
@@ -16676,6 +17167,7 @@ async function loadKeyManager(provider, panel) {
     );
     if (controls) row.append(controls.grip, controls.name);
     row.append(label, healthEl);
+    if (reset) row.append(reset);
     if (controls) row.append(controls.up, controls.down);
     row.append(remove);
     list.appendChild(row);
@@ -16756,6 +17248,48 @@ async function deleteWebSearchKey(provider, index, panel, button, id) {
     showMessage(`Could not delete key: ${error.message}`, "error");
   } finally {
     button.disabled = false;
+  }
+}
+
+/** A benched key's Reset (7.113.0): back in service now, nothing saved.
+ *
+ * The server resets the key in whichever pool serves today's route -- the
+ * search chain's books through the model pool's own reset, or the
+ * provider's own pool -- and answers with the health the page then shows. */
+function webSearchKeyResetButton(provider, entry, panel) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost-button ws-key-reset";
+  button.textContent = "Reset";
+  button.setAttribute(
+    "aria-label",
+    `Reset key ${entry.index + 1} of ${provider.label} to healthy`,
+  );
+  button.addEventListener("click", () =>
+    resetWebSearchKey(provider, entry, panel, button),
+  );
+  return button;
+}
+
+async function resetWebSearchKey(provider, entry, panel, button) {
+  button.disabled = true;
+  const guard = entry.id ? `?id=${encodeURIComponent(entry.id)}` : "";
+  try {
+    const result = await api(
+      `/admin/api/websearch/credentials/${provider.envKey}/keys/${entry.index}/reset${guard}`,
+      { method: "POST", body: "{}" },
+    );
+    const which = result.pool === "chain" ? "the search chain's books" : "its own pool";
+    showMessage(
+      result.reset
+        ? `Key ${entry.index + 1} of ${provider.label} is healthy again (${which}). Nothing was saved.`
+        : `Key ${entry.index + 1} of ${provider.label} had nothing to reset in ${which}.`,
+      result.reset ? "ok" : "warn",
+    );
+    await loadKeyManager(provider, panel);
+  } catch (error) {
+    button.disabled = false;
+    showMessage(`Could not reset the key: ${error.message}`, "error");
   }
 }
 
@@ -17173,38 +17707,57 @@ function renderWebSearchAnalytics(
   const requestItems = requests
     ? requests.requests || requests.items || (Array.isArray(requests) ? requests : [])
     : [];
-  const requestRows = requestItems.map((entry) => [
-    formatRequestTime(entry),
-    entry.route_id ? String(entry.route_id).slice(0, 8) : "—",
-    entry.attempt_number ?? "—",
-    entry.provider || "—",
-    entry.key_label || "—",
-    entry.query || "—",
-    entry.results_count ?? 0,
-    entry.duration_ms != null ? `${Math.round(entry.duration_ms)} ms` : "—",
-    entry.status || "—",
-    entry.error_kind || "—",
-    formatAnalyticsCost(entry.cost_usd),
-    webSearchDetailButton(entry),
-  ]);
+  // 7.113.0: the search chain's columns, once a chain has written a row on
+  // this page. A row with no chain value -- every row a search without a
+  // chain wrote, every row from before 7.112.0 -- reads "—" in them, never 0;
+  // a page with none of them renders the table it always did.
+  const chainColumns = requestItems.some(webSearchRowHasChain);
+  const requestRows = requestItems.map((entry) => {
+    const cells = [
+      formatRequestTime(entry),
+      entry.route_id ? String(entry.route_id).slice(0, 8) : "—",
+      entry.attempt_number ?? "—",
+      entry.provider || "—",
+      entry.key_label || "—",
+      entry.query || "—",
+      entry.results_count ?? 0,
+      entry.duration_ms != null ? `${Math.round(entry.duration_ms)} ms` : "—",
+      entry.status || "—",
+      entry.error_kind || "—",
+      formatAnalyticsCost(entry.cost_usd),
+      webSearchDetailButton(entry),
+    ];
+    if (chainColumns) {
+      cells.splice(3, 0, webSearchChainPosition(entry));
+      cells.splice(6, 0, webSearchTriesCell(entry));
+      cells.splice(12, 0, entry.failure_kind || "—");
+    }
+    return cells;
+  });
+  const requestHeaders = [
+    "Time",
+    "Route",
+    "Attempt",
+    "Provider",
+    "Key",
+    "Query",
+    "Results",
+    "Latency",
+    "Status",
+    "Error",
+    "Cost",
+    "Details",
+  ];
+  if (chainColumns) {
+    requestHeaders.splice(3, 0, "Position");
+    requestHeaders.splice(6, 0, "Key tries");
+    requestHeaders.splice(12, 0, "Failure kind");
+  }
   container.appendChild(
     analyticsBlock(
       "Recent requests",
       analyticsTable(
-        [
-          "Time",
-          "Route",
-          "Attempt",
-          "Provider",
-          "Key",
-          "Query",
-          "Results",
-          "Latency",
-          "Status",
-          "Error",
-          "Cost",
-          "Details",
-        ],
+        requestHeaders,
         requestRows,
         requests ? "No recent provider attempts." : "Recent attempts unavailable.",
       ),
@@ -17229,6 +17782,124 @@ function renderWebSearchAnalytics(
         + "payload) guards against pathological sizes."
       : "Search I/O capture is disabled; only lengths and SHA-256 hashes are retained.");
   container.appendChild(footer);
+}
+
+/* ------------------------------------------- search chain attempt rows --
+   7.113.0. A row the search chain wrote (7.112.0) carries its place in the
+   chain, how it ended, the FailureKind it was decided on, and its per-key
+   tries (`tries_json`). The tries are drawn with the request-detail ladder's
+   own line builders, so a search try reads like a model try. Every value is
+   third-party text and lands in a text node. */
+
+function webSearchRowHasChain(entry) {
+  return Boolean(
+    entry &&
+      (entry.chain_position != null ||
+        entry.outcome != null ||
+        entry.failure_kind != null ||
+        entry.tries_json != null),
+  );
+}
+
+/** 1-based, as the chain card numbers its rows; NULL is a dash. */
+function webSearchChainPosition(entry) {
+  return entry.chain_position == null ? "—" : String(Number(entry.chain_position) + 1);
+}
+
+/** The per-key tries of one row, or null when none were recorded. */
+function webSearchTries(entry) {
+  if (!entry || entry.tries_json == null) return null;
+  try {
+    const parsed = JSON.parse(String(entry.tries_json));
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One stored try in the request ladder's own words (ladderTryText). */
+function webSearchTryText(entry, position) {
+  return ladderTryText(
+    {
+      key_index: entry.key_index,
+      key_label: entry.key_label,
+      status: entry.status,
+      kind: entry.kind,
+      // A try that met no error carries no status: it is the one that served.
+      source: entry.ok ? "served" : "failed",
+      upstream_ms: entry.ms,
+      waited_ms: entry.slept_s == null ? null : Number(entry.slept_s) * 1000,
+      retry_after: entry.retry_after,
+    },
+    position,
+  );
+}
+
+/** What the pool decided after a key's last try, in ladderDecisionText's words. */
+function webSearchTryDecision(entry) {
+  if (!("charged" in entry) && !("rotated" in entry)) return "";
+  const text = ladderDecisionText({
+    key_index: entry.key_index,
+    key_label: entry.key_label,
+    class: entry.charged,
+    benched_for_s: entry.benched_for_s,
+    reason: entry.decision,
+  });
+  return entry.rotated ? `${text} → next key` : text;
+}
+
+/** The tries as the ladder's list: one line per try, the decision under it. */
+function webSearchTriesList(tries) {
+  const list = document.createElement("ol");
+  list.className = "req-chain-tries ws-tries-list";
+  tries.forEach((entry, index) => {
+    const item = document.createElement("li");
+    item.className = `req-chain-try is-${entry.ok ? "served" : entry.status ?? entry.kind ?? "failed"}`;
+    item.appendChild(document.createTextNode(webSearchTryText(entry, index + 1)));
+    const decision = webSearchTryDecision(entry);
+    if (decision) {
+      const note = document.createElement("div");
+      note.className = "ws-try-decision";
+      note.textContent = decision;
+      item.appendChild(note);
+    }
+    list.appendChild(item);
+  });
+  return list;
+}
+
+/** The table's "Key tries" cell: a count that expands to the ladder. */
+function webSearchTriesCell(entry) {
+  const tries = webSearchTries(entry);
+  if (!tries || tries.length === 0) return "—";
+  const details = document.createElement("details");
+  details.className = "ws-tries";
+  const summary = document.createElement("summary");
+  summary.textContent = `${tries.length} ${tries.length === 1 ? "try" : "tries"}`;
+  details.append(summary, webSearchTriesList(tries));
+  return details;
+}
+
+/** The detail modal's chain lines and ladder; nothing on a row without a chain. */
+function renderWebSearchDetailTries(row) {
+  const pane = byId("webSearchDetailTriesPane");
+  const body = byId("webSearchDetailTries");
+  if (!pane || !body) return;
+  body.textContent = "";
+  if (!webSearchRowHasChain(row)) {
+    pane.hidden = true;
+    return;
+  }
+  pane.hidden = false;
+  const tries = webSearchTries(row);
+  if (!tries || tries.length === 0) {
+    const none = document.createElement("p");
+    none.className = "ws-tries-none";
+    none.textContent = "—";
+    body.appendChild(none);
+    return;
+  }
+  body.appendChild(webSearchTriesList(tries));
 }
 
 function webSearchDetailButton(entry) {
@@ -17614,10 +18285,20 @@ async function openWebSearchDetail(requestId) {
     `Web search ${String(row.route_id || "route").slice(0, 8)} · attempt ${
       row.attempt_number
     }`;
+  // 7.113.0: a search chain row says where it sat and how it ended ("—" for
+  // a value the row does not carry); a row without a chain shows none of it.
+  const chainMeta = webSearchRowHasChain(row)
+    ? [
+        ["Chain position", webSearchChainPosition(row)],
+        ["Outcome", row.outcome || "—"],
+        ["Failure kind", row.failure_kind || "—"],
+      ]
+    : [];
   appendWebSearchDetailMeta(byId("webSearchDetailMeta"), [
     ["Time", formatRequestTime(row)],
     ["Route ID", row.route_id],
     ["Attempt", row.attempt_number],
+    ...chainMeta,
     ["Provider", row.provider],
     // A dash, not "keyless": the field was not recorded, which is not the
     // same claim as the provider having needed no key.
@@ -17639,6 +18320,7 @@ async function openWebSearchDetail(requestId) {
   configPane.hidden = !row.provider_config;
   configPane.querySelector(".guide-copy-button")?.remove();
   if (row.provider_config) addCopyButton(configPane, () => configText, { inSummary: true });
+  renderWebSearchDetailTries(row);
   renderWebSearchInputSummary(row.input);
   renderWebSearchRawOutput(row);
   renderWebSearchResponseSummary(row.output);
@@ -36608,6 +37290,9 @@ function initRouteRails() {
   // over a drop target.
   const agents = byId("view-coding_agents");
   if (agents) agents.addEventListener("pointerover", continueRouteDrag);
+  // 7.113.0: the Web Search page's search chain is a rail too.
+  const webSearch = byId("view-web_search");
+  if (webSearch) webSearch.addEventListener("pointerover", continueRouteDrag);
   document.addEventListener("pointerup", endRouteDrag);
   // The key rails live on other views entirely, so they get their own
   // document-level release rather than sharing the route one.

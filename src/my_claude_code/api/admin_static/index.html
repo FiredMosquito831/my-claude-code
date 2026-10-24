@@ -2061,6 +2061,10 @@
               </label>
               <div id="webSearchGrid" class="provider-grid"></div>
             </section>
+            <!-- 7.113.0: what a drag or a Pause on the Search chain card did,
+                 and its Undo -- the Model Config rails' panel, on this page. -->
+            <div id="webSearchChainStatus" class="route-status" role="status"
+              aria-live="polite" aria-atomic="true" hidden></div>
             <div
               id="webSearchSections"
               class="form-sections"
@@ -2169,6 +2173,13 @@
                   id="webSearchDetailMeta"
                   class="requests-detail-meta"
                 ></dl>
+
+                <!-- 7.113.0: a search chain row's per-key tries, drawn like
+                     the request-detail ladder. Hidden for every other row. -->
+                <section id="webSearchDetailTriesPane" class="ws-detail-tries" hidden>
+                  <h4>Key tries</h4>
+                  <div id="webSearchDetailTries"></div>
+                </section>
 
                 <details id="webSearchDetailConfigPane" class="ws-detail-pane">
                   <summary>Effective provider configuration</summary>

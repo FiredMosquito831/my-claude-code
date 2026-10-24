@@ -56,6 +56,8 @@ from my_claude_code.config.prompt_cache_lifetimes import (
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.upstream_ladder import _TIMES
+from tests.support.websearch_page_fixture import PROBE as WS_PROBE
+from tests.support.websearch_page_fixture import websearch_page_fixture
 
 HARNESS = Path(__file__).with_name("admin_jsdom_harness.mjs")
 LOCK = Path(__file__).with_name(".admin_jsdom.lock")
@@ -11742,3 +11744,337 @@ def test_jsdom_with_no_key_every_keyed_control_is_off(marketplaces) -> None:
     assert no_key["recent"]["text"].endswith(
         "No request has been served by InferHub yet."
     )
+
+
+# --------------------------------------------------------------------------
+# 7.113.0: the Web Search page's search chain, key health words and Reset, the
+# Context7 card, and the Analytics tries ladder. One run of
+# admin_jsdom_websearch_chain.mjs (MCC_JSDOM_SCENARIO=websearch_chain) on the
+# payloads tests/support/websearch_page_fixture.py builds from this tree's own
+# manifest. The chain-unset DOM is compared with the one the BASE tree
+# (7.112.1, 0f0d7908) drew from the same fixture built by ITS manifest.
+
+WS_BASELINE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "websearch_page_dom_7_112_1.json"
+)
+WS_CHOICES = [
+    "ddgs",
+    "ollama",
+    "exa",
+    "tavily",
+    "brave",
+    "searxng",
+    "jina",
+    "serper",
+    "firecrawl",
+    "linkup",
+    "perplexity",
+    "parallel",
+    "searchapi",
+    "serpapi",
+    "context7",
+    "legacy",
+]
+
+
+@pytest.fixture(scope="module")
+def websearch_chain(tmp_path_factory: pytest.TempPathFactory) -> dict:
+    path = tmp_path_factory.mktemp("websearch_chain") / "fixture.json"
+    path.write_text(json.dumps(websearch_page_fixture()), encoding="utf-8")
+    return _run(
+        MCC_JSDOM_SCENARIO="websearch_chain", MCC_JSDOM_WEBSEARCH_FIXTURE=str(path)
+    )
+
+
+def test_jsdom_the_websearch_chain_scenario_runs_clean(websearch_chain) -> None:
+    assert websearch_chain["fatal"] is None
+    assert websearch_chain["scenarioFatal"] is None
+    assert websearch_chain["scriptErrors"] == []
+    assert websearch_chain["consoleErrors"] == []
+    assert websearch_chain["hasChainCard"] is True
+
+
+def test_jsdom_with_no_chain_the_web_search_page_is_the_base_trees(
+    websearch_chain,
+) -> None:
+    """E4: the route summary, the provider cards (Exa's key manager open), the
+    settings section and the Recent requests table, as text, equal what
+    7.112.1 drew -- once this release's additive nodes (the Search chain card
+    and its status panel, the Context7 card, field and option) and 7.112.0's
+    two plain chain fields are taken out on both sides."""
+
+    baseline = json.loads(WS_BASELINE.read_text(encoding="utf-8"))
+    assert "BASE tree 0f0d7908" in baseline["written_by"]
+    unset = websearch_chain["unset"]
+    for name, base_dom in baseline["unset"]["dom"].items():
+        assert unset["dom"][name] == base_dom, name
+    assert unset["dirty"] == baseline["unset"]["dirty"] == "No changes"
+    assert unset["recent"] == baseline["unset"]["recent"]
+    assert unset["keys"] == baseline["unset"]["keys"]
+    # No chain row on the page: the table keeps its twelve columns.
+    assert len(unset["recent"]["headers"]) == 12
+
+
+def test_jsdom_the_search_chain_card_sits_above_the_grid_and_owns_both_settings(
+    websearch_chain,
+) -> None:
+    chain = websearch_chain["unset"]["chain"]
+    assert chain["exists"] is True
+    assert chain["inSection"] is True
+    assert chain["pill"] == "Not set"
+    assert chain["add"] == "Add search service"
+    assert chain["rows"] == []
+    assert chain["value"] == ""
+    # The pause list has no control of its own: a hidden input on Apply's path.
+    assert chain["pausedType"] == "hidden"
+    assert "WEB_SEARCH_CHAIN" not in chain["gridKeys"]
+    assert "WEB_SEARCH_CHAIN_PAUSED" not in chain["gridKeys"]
+    assert chain["gridKeys"][:2] == ["WEB_SEARCH_PROVIDER", "WEB_SEARCH_FALLBACK_POLICY"]
+
+
+def test_jsdom_the_chain_editor_keeps_order_and_repeats(websearch_chain) -> None:
+    edited = websearch_chain["edited"]
+    # A repeat is a second try at its place: never collapsed.
+    assert edited["value"] == "exa,context7,tavily,exa"
+    assert [row["value"] for row in edited["rows"]] == [
+        "exa",
+        "context7",
+        "tavily",
+        "exa",
+    ]
+    assert [row["repeat"] for row in edited["rows"]] == ["×2", "", "", "×2"]
+    assert [row["index"] for row in edited["rows"]] == ["1", "2", "3", "4"]
+    assert all(row["grip"] for row in edited["rows"])
+    # Every catalogue provider and the old scraper, nothing else.
+    assert edited["rows"][0]["options"] == ["", *WS_CHOICES]
+    assert edited["pill"] == "4 entries"
+    assert websearch_chain["editedDirty"] == "1 unsaved change"
+
+
+def test_jsdom_while_a_chain_is_set_the_summary_shows_it_and_says_what_it_replaces(
+    websearch_chain,
+) -> None:
+    summary = websearch_chain["editedSummary"]
+    assert summary["headline"] == "Exa"
+    assert summary["pill"] == "Ready"
+    assert summary["path"] == "Search chain: Exa → Context7 → Tavily → Exa"
+    assert (
+        "Web Search Provider and Fallback Policy are not used while it is"
+        in summary["note"]
+    )
+    cards = websearch_chain["editedCards"]
+    assert cards["exa"] == "Search chain #1, #4 · EXA_API_KEY"
+    assert cards["context7"] == "Search chain #2 · CONTEXT7_API_KEY"
+    assert cards["brave"] == "Not in the search chain · BRAVE_SEARCH_API_KEY"
+    assert cards["exaActive"] is True
+
+
+def test_jsdom_a_pause_writes_the_paused_setting_for_every_listing(
+    websearch_chain,
+) -> None:
+    paused = websearch_chain["pausedOnce"]
+    assert paused["paused"] == "tavily"
+    assert paused["value"] == "exa,context7,tavily,exa"
+    assert [row["paused"] for row in paused["rows"]] == [False, False, True, False]
+    assert [row["pause"] for row in paused["rows"]] == [
+        "Pause",
+        "Pause",
+        "Resume",
+        "Pause",
+    ]
+    assert paused["pill"] == "4 entries · 1 paused"
+    assert websearch_chain["pausedStatus"].startswith(
+        "Paused Tavily in the search chain"
+    )
+    assert websearch_chain["pausedSummary"]["skipped"] == ["Tavily (paused)"]
+
+
+def test_jsdom_the_arrows_the_drag_and_its_undo_reorder_the_chain(
+    websearch_chain,
+) -> None:
+    assert websearch_chain["afterDown"] == "context7,exa,tavily,exa"
+    assert websearch_chain["afterUp"] == "context7,exa,exa,tavily"
+    assert websearch_chain["afterDrag"] == "tavily,context7,exa,exa"
+    assert websearch_chain["dragStatus"] == (
+        "Moved 1 search service inside the Web search chain, at position 1. "
+        "Nothing was saved yet -- press Apply."
+    )
+    assert websearch_chain["afterUndo"] == "context7,exa,exa,tavily"
+    assert websearch_chain["afterRemove"] == "context7,exa,tavily"
+
+
+def test_jsdom_apply_writes_the_two_chain_settings_and_nothing_else(
+    websearch_chain,
+) -> None:
+    assert websearch_chain["finalDirty"] == "2 unsaved changes"
+    assert websearch_chain["applyPosts"] == [
+        {
+            "values": {
+                "WEB_SEARCH_CHAIN": "context7,exa,tavily",
+                "WEB_SEARCH_CHAIN_PAUSED": "tavily",
+            }
+        }
+    ]
+
+
+def test_jsdom_a_saved_chain_renders_unchanged_and_unsaved_nothing(
+    websearch_chain,
+) -> None:
+    saved = websearch_chain["saved"]
+    # An unchanged Save would send nothing: no field reads as edited.
+    assert saved["dirty"] == "No changes"
+    assert saved["chain"]["value"] == "exa,context7,tavily"
+    assert [row["value"] for row in saved["chain"]["rows"]] == [
+        "exa",
+        "context7",
+        "tavily",
+    ]
+    assert saved["summary"]["path"] == "Search chain: Exa → Context7 → Tavily"
+    assert saved["summary"]["headline"] == "Exa"
+    assert saved["cards"]["exa"] == "Search chain #1 · EXA_API_KEY"
+    assert saved["cards"]["exaActive"] is True
+
+
+def test_jsdom_disabled_still_disables_with_a_chain_set(websearch_chain) -> None:
+    disabled = websearch_chain["disabled"]
+    assert disabled["headline"] == "Web search disabled"
+    assert disabled["pill"] == "Search disabled"
+    assert "search chain is not used" in disabled["note"]
+    assert disabled["primary"] == ""
+
+
+def test_jsdom_key_health_speaks_the_model_rules_words(websearch_chain) -> None:
+    words = websearch_chain["words"]
+    assert words["note"].startswith("Health from the search chain")
+    assert [row["health"] for row in words["rows"]] == [
+        "benched 60 s: rate limited · 4 req · 1 err",
+        "benched 30 s: out of credits · 4 req · 1 err",
+        "locked out, tier 2 of 3: key rejected (1h left) · 4 req · 1 err",
+        "benched 45 s: circuit open after repeated failures · 4 req · 1 err",
+        "healthy · 3 req · 0 err",
+    ]
+    # Only a benched key offers Reset.
+    assert [row["reset"] for row in words["rows"]] == [True, True, True, True, False]
+
+
+def test_jsdom_reset_posts_to_the_reset_route_with_the_key_guard(
+    websearch_chain,
+) -> None:
+    assert websearch_chain["resetPosts"] == [
+        {
+            "path": (
+                "/admin/api/websearch/credentials/EXA_API_KEY/keys/0/reset"
+                "?id=sha256%3Aexa_000000000000"
+            ),
+            "method": "POST",
+            "body": {},
+        }
+    ]
+    after = websearch_chain["afterReset"]["rows"]
+    assert after[0] == {"health": "healthy · 3 req · 0 err", "reset": False}
+
+
+def test_jsdom_context7_has_a_card_and_auto_never_picks_it(websearch_chain) -> None:
+    card = websearch_chain["context7"]
+    assert card["label"] == "Context7"
+    assert card["pill"] == "Configured"
+    assert card["meta"] == "Library docs · never picked by Auto · CONTEXT7_API_KEY"
+    assert card["buttons"] == ["Use provider", "Test provider", "Manage keys"]
+    assert websearch_chain["cardOrder"][-1] == "context7"
+    # Auto with Exa, Tavily and Context7 keyed: Exa, as the server resolves it.
+    assert websearch_chain["autoActive"] == ["exa"]
+
+
+def test_jsdom_analytics_shows_position_key_tries_and_failure_kind(
+    websearch_chain,
+) -> None:
+    recent = websearch_chain["chainRecent"]
+    assert recent["headers"] == [
+        "Time",
+        "Route",
+        "Attempt",
+        "Position",
+        "Provider",
+        "Key",
+        "Key tries",
+        "Query",
+        "Results",
+        "Latency",
+        "Status",
+        "Error",
+        "Failure kind",
+        "Cost",
+        "Details",
+    ]
+    position = [row[3] for row in recent["rows"]]
+    tries = [row[6] for row in recent["rows"]]
+    kinds = [row[12] for row in recent["rows"]]
+    # Rows: tavily served, context7 skipped, exa failed, a 7.112.0 row with
+    # no chain (the columns NULL), a row from before 7.112.0 (no columns).
+    assert position == ["3", "2", "1", "—", "—"]
+    assert kinds == ["—", "—", "upstream", "—", "—"]
+    assert tries[0].startswith("1 try")
+    assert tries[1] == "—"
+    assert tries[2].startswith("3 tries")
+    assert tries[3:] == ["—", "—"]
+    # NULL is a dash, never a zero.
+    assert "0" not in position
+
+
+def test_jsdom_the_key_tries_expand_to_the_request_ladder(websearch_chain) -> None:
+    cells = websearch_chain["triesCells"]
+    assert [cell["summary"] for cell in cells] == ["1 try", "3 tries"]
+    assert cells[0]["lines"] == [
+        {
+            "cls": "req-chain-try is-served",
+            "text": "#1 · key 0 tvly-…0001 · served · 80ms",
+            "decision": "",
+        }
+    ]
+    lines = cells[1]["lines"]
+    assert [line["cls"] for line in lines] == [
+        "req-chain-try is-429",
+        "req-chain-try is-503",
+        "req-chain-try is-served",
+    ]
+    assert lines[0]["decision"] == (
+        f"key 0 {WS_PROBE} — benched 7s (rate_limit): "
+        "429 with Retry-After 7 → next key"
+    )
+    assert lines[1]["text"] == "#2 · key 1 exa-…0002 · 503 · 13ms"
+    assert lines[2]["text"] == "#3 · key 1 exa-…0002 · served · 30ms · waited 500ms"
+
+
+def test_jsdom_the_detail_modal_renders_the_ladder_and_null_as_a_dash(
+    websearch_chain,
+) -> None:
+    failed = websearch_chain["detailFailed"]
+    assert failed["meta"]["Chain position"] == "1"
+    assert failed["meta"]["Outcome"] == "failed"
+    assert failed["meta"]["Failure kind"] == "upstream"
+    assert failed["triesHidden"] is False
+    assert len(failed["tries"]) == 3
+    skipped = websearch_chain["detailSkipped"]
+    assert skipped["meta"]["Failure kind"] == "—"
+    assert skipped["triesHidden"] is False
+    assert skipped["triesText"] == "—"
+    # A row without a chain shows none of it.
+    for name in ("detailNoChain", "detailOld"):
+        row = websearch_chain[name]
+        assert row["triesHidden"] is True
+        assert "Chain position" not in row["meta"]
+        assert "Outcome" not in row["meta"]
+
+
+def test_jsdom_third_party_text_on_the_chain_surfaces_stays_text(
+    websearch_chain,
+) -> None:
+    """Key labels and kinds in tries_json, a provider's error, a documentation
+    excerpt: markup-shaped text renders as characters, never as elements."""
+
+    assert websearch_chain["recentMarkup"] == 0
+    assert websearch_chain["detailFailed"]["markup"] == 0
+    assert websearch_chain["xssRan"] is False
+    assert WS_PROBE in websearch_chain["detailFailed"]["summary"]
+    assert WS_PROBE in websearch_chain["detailFailed"]["meta"]["Error"]
+    assert WS_PROBE in websearch_chain["triesCells"][1]["lines"][0]["text"]

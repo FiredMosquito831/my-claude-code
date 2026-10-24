@@ -12085,3 +12085,145 @@ audio.req-media-preview {
     grid-template-columns: 1fr;
   }
 }
+
+/* ------------------------------------------------- Web Search: chain ---
+   7.113.0. The Search chain card reuses the model chain editor's rows
+   (.model-chain-row); only the card, the picker, its pause button and the
+   "no key configured" line are its own. */
+.ws-chain-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-strong);
+  padding: 16px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-chain-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ws-chain-head h4 {
+  margin: 0;
+}
+
+.ws-chain-state {
+  white-space: nowrap;
+}
+
+.ws-chain-lead {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 72ch;
+}
+
+/* The hint takes a line of its own under the row, never a column of it. */
+.ws-chain-card .model-chain-row {
+  flex-wrap: wrap;
+}
+
+.ws-chain-select {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--input);
+  color: var(--text-strong);
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.ws-chain-select:focus {
+  border-color: var(--accent);
+  background: var(--input-focus);
+  outline: none;
+}
+
+/* Paused stays fully readable, dimmed and struck, like a paused model. */
+.model-chain-row.is-paused .ws-chain-select {
+  opacity: 0.65;
+  text-decoration: line-through;
+}
+
+.ws-chain-pause {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.model-chain-row.is-paused .ws-chain-pause {
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+.ws-chain-hint {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ws-hero-path-skipped {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.ws-hero-chain-note {
+  color: var(--muted);
+}
+
+/* Web Search key rows: which pool the health is from, and a benched key's
+   Reset. */
+.ws-key-pool-note {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.ws-key-reset {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Web Search analytics: a chain row's per-key tries, drawn with the request
+   ladder's own .req-chain-tries list. */
+.ws-tries summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ws-tries-list {
+  min-width: 260px;
+}
+
+.ws-try-decision {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.ws-tries-none {
+  margin: 0;
+  color: var(--muted);
+}
+
+.ws-detail-tries h4 {
+  margin-bottom: 4px;
+}
