@@ -1,0 +1,12 @@
+{
+  "SOURCE": "origin=authored for My Claude Code in this repository; licence=MCC-own; fetched=2026-10-25; what=the web_fetch response-shape scenarios of the DDG harness: small MCC-authored bodies served from the loopback fixture server with a given status, Content-Type and extra headers, for the cases the recorded corpora do not cover (no charset parameter, non-HTML types, an error status, a Cloudflare challenge 403; RESEARCH-DDG-WEBSEARCH.md gaps G14/G15). Bodies are UTF-8 text unless body_base64 is given.",
+  "scenarios": [
+    {"id": "html_with_charset", "status": 200, "content_type": "text/html; charset=utf-8", "body": "<!DOCTYPE html><html><head><title>With a charset</title></head><body><nav>Home | About</nav><main><h1>Heading</h1><p>Served as text/html with a charset parameter.</p></main><footer>Footer text</footer></body></html>"},
+    {"id": "html_without_charset", "status": 200, "content_type": "text/html", "body": "<!DOCTYPE html><html><head><title>No charset</title></head><body><p>Served as text/html with no charset parameter.</p></body></html>"},
+    {"id": "plain_text", "status": 200, "content_type": "text/plain; charset=utf-8", "body": "A plain text body.\nSecond line."},
+    {"id": "json_body", "status": 200, "content_type": "application/json", "body": "{\"answer\": 42, \"items\": [1, 2, 3]}"},
+    {"id": "pdf_bytes", "status": 200, "content_type": "application/pdf", "body_base64": "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyA+PgplbmRvYmoKJSVFT0YK"},
+    {"id": "http_404", "status": 404, "content_type": "text/html; charset=utf-8", "body": "<html><body>Not Found</body></html>"},
+    {"id": "http_403_cf_challenge", "status": 403, "content_type": "text/html; charset=utf-8", "headers": {"cf-mitigated": "challenge"}, "body": "<html><head><title>Just a moment...</title></head><body>Checking your browser.</body></html>"}
+  ]
+}

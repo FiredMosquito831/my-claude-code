@@ -11,3 +11,10 @@ desktop-shell/src-tauri/icons/** binary
 # with the published ones, so a checkout that rewrote their line endings would
 # be comparing a copy of itself.
 tests/fixtures/desktop_shell/** -text
+
+# Recorded pages for the DuckDuckGo search / page-extraction harness
+# (tests/support/ddg_harness). They are served byte for byte to MCC's real
+# parsers and `tests/contracts/ddg_harness_baseline.json` pins digests of what
+# comes back, so a checkout that rewrote LF to CRLF would move every cell.
+tests/fixtures/ddg/** -text
+tests/fixtures/extraction/** -text
