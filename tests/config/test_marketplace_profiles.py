@@ -134,9 +134,11 @@ def test_the_15th_key_never_reaches_a_body() -> None:
             "models": {"inferhub/cc/a": {"marketplace_profile": None}},
         }
     )
-    body: dict[str, Any] = {"model": "cc/a"}
-    applied = apply_model_parameter_overrides(
-        body, provider_id="inferhub", model_ref="inferhub/cc/a", overrides=table
-    )
-    assert body == {"model": "cc/a", "top_p": 0.9}
-    assert applied == {"top_p": 0.9}
+    for model in ("cc/a", "cc/b"):
+        # cc/a: its own null row; cc/b: the provider row's name reaches it.
+        body: dict[str, Any] = {"model": model}
+        applied = apply_model_parameter_overrides(
+            body, provider_id="inferhub", model_ref=f"inferhub/{model}", overrides=table
+        )
+        assert body == {"model": model, "top_p": 0.9}
+        assert applied == {"top_p": 0.9}

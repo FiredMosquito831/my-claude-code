@@ -456,7 +456,7 @@ async def test_the_other_two_doors_send_the_ceiling(model: str, door: str) -> No
         else provider._responses._client
     )
     seen = _capture_send(client)
-    with pytest.raises(BaseException):
+    with pytest.raises(ExecutionFailure):
         await _drain(provider.stream_response(make_messages_request(model=model)))
     assert seen, door
     assert seen[0].url.path.endswith(f"/{door}")
@@ -477,7 +477,7 @@ async def test_with_no_profile_the_other_doors_carry_no_ceiling(
         else provider._responses._client
     )
     seen = _capture_send(client)
-    with pytest.raises(BaseException):
+    with pytest.raises(ExecutionFailure):
         await _drain(provider.stream_response(make_messages_request(model=model)))
     names = {name.lower() for name in seen[0].headers}
     assert not names & {"x-max-input-price", "x-max-output-price", "x-ignore-upstream"}
